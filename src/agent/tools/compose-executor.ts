@@ -22,6 +22,7 @@ import { type ComposeExecutorContext } from './compose-executor.context.js';
 export type { ComposeExecutorContext } from './compose-executor.context.js';
 
 import { resolveComposeNodeAgent, COMPOSE_LEAF_STRIPPED_TOOLS } from './compose-agent-resolve.js';
+import { checkComposeReadOnlyDispatchIntent } from './subagent-executor.dispatch-intent.js';
 import { splitComposeNodeResults } from './compose-node-results.js';
 import { formatDAGResult, cleanupComposeSpills } from './compose-executor.format.js';
 // Re-export for callers that import cleanupComposeSpills from compose-executor.ts
@@ -234,6 +235,10 @@ export class ComposeExecutor {
         const message = errorMessage(resolveErr);
         return { content: message, isError: true };
       }
+      // #3754: same pre-dispatch implementation-intent gate as the agent tool,
+      // applied eagerly so no node forks when any read-only node is misbriefed.
+      const intentRefusal = checkComposeReadOnlyDispatchIntent(parsed.nodes, resolvedAgents);
+      if (intentRefusal !== undefined) return intentRefusal;
       emitLeafToolStrips(parsed.nodes, resolvedAgents, this.ctx.traceWriter);
       // Invariant: attachment resolution errors are isolated per-node so a bad
       // path or unknown image id on one node never aborts siblings. Each callback

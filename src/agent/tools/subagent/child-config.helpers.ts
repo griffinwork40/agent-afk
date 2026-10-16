@@ -14,6 +14,7 @@ import { CHILD_ALLOWED_TOOLS, buildSkillRestrictedProvider, createStubParentSess
 import { resolveAgentToolAccess } from '../../agents/index.js';
 import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
 import { isChildReplaySafe } from './retry-safety.js';
+import { isChildWriteCapable } from './write-capability.js';
 import { SubagentManager } from '../../subagent.js';
 import type { RegisteredAgent, AgentRegistry } from '../../agents/index.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
@@ -96,14 +97,7 @@ export function resolveChildToolAccess(
   const effectiveReadOnlyBash =
     cageReadOnlyBash === true || resolvedAccess?.bashReadOnly === true;
 
-  const canWriteFiles =
-    effectiveAllowedTools === undefined ||
-    effectiveAllowedTools.includes('write_file') ||
-    effectiveAllowedTools.includes('edit_file');
-  const canMutateViaBash =
-    (effectiveAllowedTools === undefined || effectiveAllowedTools.includes('bash')) &&
-    effectiveReadOnlyBash !== true;
-  const childWriteCapable = canWriteFiles || canMutateViaBash;
+  const childWriteCapable = isChildWriteCapable(effectiveAllowedTools, effectiveReadOnlyBash);
 
   const childSideEffectFree = isChildReplaySafe({
     effectiveAllowedTools,

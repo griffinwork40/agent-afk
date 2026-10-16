@@ -75,3 +75,19 @@ describe('resolveComposeNodeAgent — executor-backed tool stripping', () => {
   // undefined agent_type and unknown agent_type cases are covered in
   // compose-leaf-tool-strip.test.ts (returns {} / throws 'not found').
 });
+
+// #3754: `readOnly` mirrors the agent path's `childWriteCapable` (shared
+// isChildWriteCapable predicate) and drives compose's dispatch-intent gate.
+describe('resolveComposeNodeAgent — readOnly flag', () => {
+  it('marks a read-only allowlist (no write tools, no bash) as readOnly', () => {
+    expect(resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'grep'])).readOnly).toBe(true);
+  });
+
+  it('does not mark an allowlist with write_file as readOnly', () => {
+    expect(resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'write_file'])).readOnly).toBeUndefined();
+  });
+
+  it('does not mark an allowlist with unrestricted bash as readOnly', () => {
+    expect(resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'bash'])).readOnly).toBeUndefined();
+  });
+});

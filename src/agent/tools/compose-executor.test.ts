@@ -2233,6 +2233,38 @@ describe('ComposeExecutor', () => {
       expect(dagOpts.nodes[0].replaySafe).toBe(false);
     });
 
+    it('refuses an implementation brief to a read-only agent_type before any node starts (#3754)', async () => {
+      const executor = new ComposeExecutor(makeContext({ agentRegistry: registry }));
+      const result = await executor.execute(makeCall({
+        nodes: [
+          { id: 'recon', prompt: 'grep for TODO comments', agent_type: 'research-agent' },
+          { id: 'impl', prompt: 'edit src/foo.ts to add the flag', agent_type: 'research-agent' },
+        ],
+      }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('Compose node "impl"');
+      expect(result.content).toContain('research-agent');
+      expect(result.content).toContain('matched: "edit src/foo.ts"');
+      expect(mockRunSubagentDAG).not.toHaveBeenCalled();
+    });
+
+    it('passes a review brief through to a read-only agent_type (#3754)', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({ agentRegistry: registry }));
+      const result = await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'Review the fix commit 4b6babb on branch afk/pr-3889 for correctness.', agent_type: 'research-agent' }],
+      }));
+      expect(result.isError).toBe(false);
+      expect(mockRunSubagentDAG).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not gate bare nodes with implementation briefs (#3754)', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({ agentRegistry: registry }));
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'edit src/foo.ts' }] }));
+      expect(mockRunSubagentDAG).toHaveBeenCalledTimes(1);
+    });
+
     it('returns error when agent_type set but no registry wired', async () => {
       const executor = new ComposeExecutor(makeContext()); // no agentRegistry
       const result = await executor.execute(makeCall({
