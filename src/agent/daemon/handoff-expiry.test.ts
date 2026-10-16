@@ -20,6 +20,7 @@ import {
   type HandoffRecord,
 } from './handoff-store.js';
 import { getTaskRecord } from './lease-store.js';
+import { listPending } from './queue-store.js';
 import { getHandoffsDir } from '../../paths.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 
@@ -140,7 +141,7 @@ describe('expireHandoff', () => {
     expect(String(vi.mocked(pushIfConfigured).mock.calls[0]?.[0])).toContain('question details unavailable');
   });
 
-  it('restores a lease parked in the resume queue', async () => {
+  it('reclaims (dead-letters) a lease parked in the resume queue when attempts exhausted', async () => {
     const resumeDir = join(queueDir, RESUME_QUEUE_SUBDIR);
     const dir = join(resumeDir, 'leased');
     mkdirSync(dir, { recursive: true });
@@ -150,7 +151,22 @@ describe('expireHandoff', () => {
     }));
     await writeHandoff(record('q-resumed', 25 * HOUR), handoffsDir);
     expect(await expireHandoff('q-resumed', { handoffsDir, queueDir, now: NOW })).toBe(true);
-    expect(getTaskRecord('q-resumed', resumeDir)?.state).toBe('leased');
+    // recoverExpiredLeases ran: exhausted attempts → dead-letter, not stranded in leased/
+    expect(getTaskRecord('q-resumed', resumeDir)?.state).toBe('dead-letter');
+  });
+
+  it('re-enqueues a resume-queue lease when attempts remain', async () => {
+    const resumeDir = join(queueDir, RESUME_QUEUE_SUBDIR);
+    const leasedDir = join(resumeDir, 'leased');
+    mkdirSync(leasedDir, { recursive: true });
+    writeFileSync(join(leasedDir, 'q-retry.json'), JSON.stringify({
+      id: 'q-retry', command: '/x', state: 'waiting_human_input', attempts: 1, maxAttempts: 3,
+      leaseExpiry: NOW - 1, createdAt: NOW, updatedAt: NOW,
+    }));
+    await writeHandoff(record('q-retry', 25 * HOUR), handoffsDir);
+    expect(await expireHandoff('q-retry', { handoffsDir, queueDir, now: NOW })).toBe(true);
+    // recoverExpiredLeases ran: attempts < maxAttempts → re-enqueued into resume queue
+    expect(listPending(resumeDir).map((t) => t.id)).toContain('q-retry');
   });
 
   it('leaves a fresh record pending', async () => {
@@ -203,13 +219,36 @@ describe('expireHandoff', () => {
     expect(expired && answered.won).toBe(false);
   });
 
-  it('restores a lease parked in waiting_human_input to leased', async () => {
+  it('reclaims a parked lease immediately: dead-letters when attempts exhausted', async () => {
     await writeHandoff(record('q-parked', 25 * HOUR), handoffsDir);
     writeLease('q-parked', 'waiting_human_input');
 
     await expireHandoff('q-parked', { handoffsDir, queueDir, now: NOW });
 
-    expect(getTaskRecord('q-parked', queueDir)?.state).toBe('leased');
+    // recoverExpiredLeases ran after setLeaseState restored the lease (#3880):
+    // attempts:1 >= maxAttempts:1 → dead-lettered, not stranded in leased/
+    expect(getTaskRecord('q-parked', queueDir)?.state).toBe('dead-letter');
+  });
+
+  it('re-enqueues a parked main-queue lease immediately when attempts remain', async () => {
+    await writeHandoff(record('q-parked-retry', 25 * HOUR), handoffsDir);
+    const dir = join(queueDir, 'leased');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'q-parked-retry.json'), JSON.stringify({
+      id: 'q-parked-retry',
+      command: '/original',
+      state: 'waiting_human_input',
+      attempts: 1,
+      maxAttempts: 3,
+      leaseExpiry: NOW - 1,
+      createdAt: NOW - 25 * HOUR,
+      updatedAt: NOW - 25 * HOUR,
+    }));
+
+    await expireHandoff('q-parked-retry', { handoffsDir, queueDir, now: NOW });
+
+    // recoverExpiredLeases ran: attempts < maxAttempts → re-enqueued
+    expect(listPending(queueDir).map((t) => t.id)).toContain('q-parked-retry');
   });
 
   it('does not touch a lease another path has already moved on', async () => {

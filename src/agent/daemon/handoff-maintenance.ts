@@ -54,6 +54,14 @@ export interface HandoffMaintenanceOpts {
    * `executePullTick` so resumes share its idle/mutex/overlap guards.
    */
   drainResumeQueue: (resumeDir: string) => Promise<void>;
+  /**
+   * Optional: recover expired leases from the main pull queue after handoff
+   * recovery completes. Pull-mode daemons pass `recoverDaemonQueues` here so
+   * the main-queue lease recovery runs AFTER `recoverPendingHandoffs` (which
+   * unparks waiting_human_input leases), matching the ordering already used for
+   * the resume queue in `runStartupRecovery`.
+   */
+  recoverMainQueue?: () => void;
   /** Tick interval override (defaults to `HANDOFF_MAINTENANCE_INTERVAL_MS`). */
   intervalMs?: number;
 }
@@ -68,11 +76,13 @@ function log(msg: string): void {
 }
 
 /**
- * Invariant: handoff recovery (re-notify + expiry) runs BEFORE the resume
- * queue's lease recovery. Expiring a handoff moves a lease parked in
- * 'waiting_human_input' back to 'leased'; `recoverExpiredLeases` skips parked
- * leases, so running it first would leave that lease stranded until the next
- * daemon restart.
+ * Invariant: handoff recovery (re-notify + expiry) runs BEFORE any lease
+ * recovery. Expiring a handoff moves a lease parked in 'waiting_human_input'
+ * back to 'leased'; `recoverExpiredLeases` skips parked leases, so running it
+ * first would leave that lease stranded until the next daemon restart.
+ *
+ * Order: recoverPendingHandoffs → recoverExpiredLeases(resumeDir) →
+ *        opts.recoverMainQueue() (main pull queue, pull-mode only).
  */
 export async function runStartupRecovery(opts: HandoffMaintenanceOpts, resumeDir: string): Promise<void> {
   try {
@@ -86,6 +96,13 @@ export async function runStartupRecovery(opts: HandoffMaintenanceOpts, resumeDir
     if (recovered.length > 0) log(`recovered ${recovered.length} expired resume lease(s)`);
   } catch (err) {
     log(`resume lease recovery failed: ${errorMessage(err)}`);
+  }
+  if (opts.recoverMainQueue !== undefined) {
+    try {
+      opts.recoverMainQueue();
+    } catch (err) {
+      log(`main queue recovery failed: ${errorMessage(err)}`);
+    }
   }
 }
 

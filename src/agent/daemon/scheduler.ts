@@ -222,6 +222,7 @@ export class CronScheduler {
   private pullPollTimer: ReturnType<typeof setInterval> | undefined;
   private handoffMaintenance: HandoffMaintenanceHandle | undefined;
   private isDequeuing = false;
+
   private readonly queueDir: string;
   /**
    * Per-task in-flight guard: maps task id → start timestamp (ms) for tasks
@@ -397,7 +398,7 @@ export class CronScheduler {
     const interval = this.options.pullPollIntervalMs;
     if (!interval || interval <= 0) return;
 
-    recoverDaemonQueues(this.queueDir);
+    // Main-queue lease recovery is deferred — see startHandoffMaintenance (#3880).
 
     // Pick up any answers that arrived while the daemon was down.
     sweepAnsweredHandoffs(this.queueDir, this.options.handoffsDir);
@@ -417,6 +418,7 @@ export class CronScheduler {
       ...(this.options.bot !== undefined ? { bot: this.options.bot } : {}),
       ...(intervalMs !== undefined ? { intervalMs } : {}),
       drainResumeQueue: (resumeDir) => this.pullTick(resumeDir),
+      ...((this.options.pullPollIntervalMs ?? 0) > 0 ? { recoverMainQueue: () => recoverDaemonQueues(this.queueDir) } : {}),
     });
   }
 

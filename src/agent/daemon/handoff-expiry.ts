@@ -44,7 +44,7 @@ import {
   writeHandoff,
   type HandoffRecord,
 } from './handoff-store.js';
-import { setLeaseState } from './lease-store.js';
+import { setLeaseState, recoverExpiredLeases } from './lease-store.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { isChatAllowed, parseAllowedChatIds } from '../../telegram/allowlist.js';
 import { env } from '../../config/env.js';
@@ -121,14 +121,28 @@ export async function expireHandoff(
   if (expired === null) return false;
 
   // Crash path only: a lease still parked in waiting_human_input goes back to
-  // 'leased' so lease recovery can re-enqueue or dead-letter it. Safe outside
+  // 'leased' so it can be immediately re-enqueued or dead-lettered. Safe outside
   // the handoff lock: the record is already non-pending, so no answer can land.
   // A resumed task's lease lives in the resume queue (handoff-maintenance.ts),
   // so try both; task ids are unique, so at most one lease matches.
+  //
+  // After restoring the state, call recoverExpiredLeases on that queue dir so
+  // the lease is reclaimed right away rather than waiting until next startup.
+  // recoverExpiredLeases skips tasks whose leaseExpiry > now, so a genuinely
+  // in-flight task (renewed lease) is never double-run — only an expired lease
+  // (left over from the crash) is processed.
   const root = opts.queueDir ?? getQueueDir();
   for (const dir of [root, join(root, RESUME_QUEUE_SUBDIR)]) {
     try {
-      setLeaseState(taskId, 'leased', dir, 'waiting_human_input');
+      const restored = setLeaseState(taskId, 'leased', dir, 'waiting_human_input');
+      if (restored) {
+        try {
+          recoverExpiredLeases(dir);
+        } catch (recoverErr) {
+          // eslint-disable-next-line no-console
+          console.error(`[handoff-expiry] lease reclaim failed for task ${taskId}: ${errorMessage(recoverErr)}`);
+        }
+      }
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(`[handoff-expiry] lease restore failed for task ${taskId}: ${errorMessage(err)}`);
