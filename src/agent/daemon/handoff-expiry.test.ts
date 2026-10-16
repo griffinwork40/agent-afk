@@ -251,6 +251,47 @@ describe('expireHandoff', () => {
     expect(listPending(queueDir).map((t) => t.id)).toContain('q-parked-retry');
   });
 
+  it('does not reclaim an unrelated long-running task whose lease has expired (no renewLease caller)', async () => {
+    // Simulate: two tasks in the queue dir.
+    //   - q-expired-handoff: parked in waiting_human_input; its handoff is stale → expireHandoff fires
+    //   - q-long-running: a genuine in-flight task running >10 min, leaseExpiry < now (no renewal)
+    // After expireHandoff for q-expired-handoff, q-long-running must remain in leased/ untouched.
+    await writeHandoff(record('q-expired-handoff', 25 * HOUR), handoffsDir);
+    writeLease('q-expired-handoff', 'waiting_human_input');
+
+    const leasedDir = join(queueDir, 'leased');
+    mkdirSync(leasedDir, { recursive: true });
+    writeFileSync(join(leasedDir, 'q-long-running.json'), JSON.stringify({
+      id: 'q-long-running',
+      command: '/long-task',
+      state: 'leased',
+      attempts: 1,
+      maxAttempts: 1,
+      leaseExpiry: NOW - 1, // expired — no renewLease in production
+      createdAt: NOW - 25 * HOUR,
+      updatedAt: NOW - 25 * HOUR,
+    }));
+
+    await expireHandoff('q-expired-handoff', { handoffsDir, queueDir, now: NOW });
+
+    // The unrelated long-running task must be untouched — only q-expired-handoff was reclaimed.
+    expect(getTaskRecord('q-long-running', queueDir)?.state).toBe('leased');
+  });
+
+  it('does not reclaim the restored lease when the task is still in-flight', async () => {
+    // Even after setLeaseState restores the lease to 'leased', if isInFlight returns
+    // true for that task id, reclaimSingleLease must leave it alone.
+    await writeHandoff(record('q-inflight', 25 * HOUR), handoffsDir);
+    writeLease('q-inflight', 'waiting_human_input');
+
+    const isInFlight = (id: string) => id === 'q-inflight';
+
+    await expireHandoff('q-inflight', { handoffsDir, queueDir, now: NOW, isInFlight });
+
+    // Lease was restored to 'leased' but NOT reclaimed — task is in-flight.
+    expect(getTaskRecord('q-inflight', queueDir)?.state).toBe('leased');
+  });
+
   it('does not touch a lease another path has already moved on', async () => {
     await writeHandoff(record('q-moved', 25 * HOUR), handoffsDir);
     writeLease('q-moved', 'retrying');

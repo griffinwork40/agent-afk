@@ -62,6 +62,13 @@ export interface HandoffMaintenanceOpts {
    * the resume queue in `runStartupRecovery`.
    */
   recoverMainQueue?: () => void;
+  /**
+   * Optional in-flight predicate from the scheduler's per-task map.
+   * Passed through to `expireHandoff` via `sweepExpiredHandoffs` so that a
+   * restored lease is not reclaimed while the task is still executing.
+   * See `ExpireHandoffOpts.isInFlight` for the full rationale.
+   */
+  isInFlight?: (taskId: string) => boolean;
   /** Tick interval override (defaults to `HANDOFF_MAINTENANCE_INTERVAL_MS`). */
   intervalMs?: number;
 }
@@ -131,7 +138,7 @@ export function startHandoffMaintenance(opts: HandoffMaintenanceOpts): HandoffMa
   let resuming = false;
   const timer = setInterval(() => {
     // Expiry runs every tick, even while a long resume run is in progress.
-    sweepExpiredHandoffs(opts.queueDir, Date.now(), opts.handoffsDir);
+    sweepExpiredHandoffs(opts.queueDir, Date.now(), opts.handoffsDir, opts.isInFlight);
     if (resuming) return;
     resuming = true;
     void consumeAndResume(opts, resumeDir).finally(() => { resuming = false; });

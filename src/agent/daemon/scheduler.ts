@@ -419,6 +419,7 @@ export class CronScheduler {
       ...(intervalMs !== undefined ? { intervalMs } : {}),
       drainResumeQueue: (resumeDir) => this.pullTick(resumeDir),
       ...((this.options.pullPollIntervalMs ?? 0) > 0 ? { recoverMainQueue: () => recoverDaemonQueues(this.queueDir) } : {}),
+      isInFlight: (id) => this.inFlightTasks.has(id),
     });
   }
 

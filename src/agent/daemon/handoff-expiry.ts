@@ -44,7 +44,8 @@ import {
   writeHandoff,
   type HandoffRecord,
 } from './handoff-store.js';
-import { setLeaseState, recoverExpiredLeases } from './lease-store.js';
+import { setLeaseState } from './lease-store.js';
+import { reclaimSingleLease } from './lease-reclaim.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { isChatAllowed, parseAllowedChatIds } from '../../telegram/allowlist.js';
 import { env } from '../../config/env.js';
@@ -75,6 +76,15 @@ export interface ExpireHandoffOpts {
   ttlMs?: number;
   /** Clock override for tests. */
   now?: number;
+  /**
+   * Optional in-flight predicate threaded from the scheduler's per-task map.
+   * When provided and it returns true for the restored lease's task id, the
+   * lease is left in place — the task is still executing and must not be
+   * reclaimed (renewLease has no production caller, so any task running longer
+   * than the 10-minute lease TTL has leaseExpiry < now; sweeping the whole dir
+   * with recoverExpiredLeases would double-run it).
+   */
+  isInFlight?: (taskId: string) => boolean;
 }
 
 /**
@@ -121,23 +131,24 @@ export async function expireHandoff(
   if (expired === null) return false;
 
   // Crash path only: a lease still parked in waiting_human_input goes back to
-  // 'leased' so it can be immediately re-enqueued or dead-lettered. Safe outside
-  // the handoff lock: the record is already non-pending, so no answer can land.
+  // 'leased' and is immediately reclaimed (re-enqueued or dead-lettered) for
+  // THIS ONE task. Safe outside the handoff lock: the record is already
+  // non-pending, so no answer can land.
   // A resumed task's lease lives in the resume queue (handoff-maintenance.ts),
   // so try both; task ids are unique, so at most one lease matches.
   //
-  // After restoring the state, call recoverExpiredLeases on that queue dir so
-  // the lease is reclaimed right away rather than waiting until next startup.
-  // recoverExpiredLeases skips tasks whose leaseExpiry > now, so a genuinely
-  // in-flight task (renewed lease) is never double-run — only an expired lease
-  // (left over from the crash) is processed.
+  // IMPORTANT: do NOT call recoverExpiredLeases(dir) here. renewLease has no
+  // production caller, so any task running longer than the 10-minute lease TTL
+  // has leaseExpiry < now and would be reclaimed mid-run and double-run.
+  // reclaimSingleLease targets only the one restored lease and skips it when
+  // the scheduler's isInFlight predicate reports the task is still executing.
   const root = opts.queueDir ?? getQueueDir();
   for (const dir of [root, join(root, RESUME_QUEUE_SUBDIR)]) {
     try {
       const restored = setLeaseState(taskId, 'leased', dir, 'waiting_human_input');
       if (restored) {
         try {
-          recoverExpiredLeases(dir);
+          reclaimSingleLease(taskId, dir, opts.isInFlight);
         } catch (recoverErr) {
           // eslint-disable-next-line no-console
           console.error(`[handoff-expiry] lease reclaim failed for task ${taskId}: ${errorMessage(recoverErr)}`);
@@ -194,11 +205,12 @@ export function sweepExpiredHandoffs(
   queueDir: string,
   now: number = Date.now(),
   handoffsDir?: string,
+  isInFlight?: (taskId: string) => boolean,
 ): void {
   if (sweepInFlight || now - lastSweepAt < EXPIRY_SWEEP_INTERVAL_MS) return;
   lastSweepAt = now;
   sweepInFlight = true;
-  void expireStaleHandoffs({ queueDir, now, ...(handoffsDir !== undefined ? { handoffsDir } : {}) })
+  void expireStaleHandoffs({ queueDir, now, ...(handoffsDir !== undefined ? { handoffsDir } : {}), ...(isInFlight !== undefined ? { isInFlight } : {}) })
     .catch((err: unknown) => {
       // eslint-disable-next-line no-console
       console.error(`[daemon] handoff-expiry: sweep failed: ${errorMessage(err)}`);
