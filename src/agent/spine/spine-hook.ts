@@ -35,7 +35,7 @@ import {
   addEntry,
   findEntry,
 } from './spine-store.js';
-import { classifyDiff, MAX_DESCRIPTION_LEN } from './spine-classifier.js';
+import { classifyDiff } from './spine-classifier.js';
 import type {
   SpineClassifierItem,
   SpineRelationItem,
@@ -305,16 +305,22 @@ function handleContradiction(
 
 /**
  * Strip all existing annotation fragments from `description`, then append
- * `suffix` (the new annotation) outside the `MAX_DESCRIPTION_LEN` body cap.
+ * `suffix` (the new annotation).
  *
- * Handles two bug classes (#2867) and a third (#2921):
- * - Bug 1: the suffix is placed outside the body cap so it never eats body text.
+ * Handles two bug classes (#2867), a third (#2921), and a fourth (#3894):
+ * - Bug 1: the suffix is appended after stripping, never inside the body.
  * - Bug 2: dangling `" (label "` fragments (label + trailing space, no date) left
  *   by the old 120-char truncation are removed via `stripAnnotationLabelPlusSpace`.
  * - Bug 3 (#2921): same-label stacks (`base (reinforced D1) (reinforced D2)`) left
  *   a buried stale annotation because a single primaryLabel pass only removed the
  *   outermost entry. Fix: loop both passes until the description stops changing
  *   (bounded to MAX_STRIP_ITERATIONS to prevent runaway on pathological input).
+ * - Bug 4 (#3894): the old `current.slice(0, MAX_DESCRIPTION_LEN)` call truncated
+ *   existing bodies that were already longer than 300 chars (e.g. after a manual
+ *   amendment). The cap must NOT apply to existing bodies — only the classifier's
+ *   `sanitizeField` caps new classifier-generated text. Removing the slice here
+ *   preserves the full existing body byte-for-byte and appends the annotation
+ *   outside it, matching the #2867 contract.
  *
  * Invariant: the loop terminates in at most MAX_STRIP_ITERATIONS rounds because
  * each iteration that makes progress removes at least one `" ("` token, and the
@@ -345,7 +351,10 @@ function applyAnnotation(
     if (next === current) break;
     current = next;
   }
-  return current.slice(0, MAX_DESCRIPTION_LEN) + suffix;
+  // #3894: do NOT cap `current` — existing bodies may legitimately exceed
+  // MAX_DESCRIPTION_LEN (e.g. after a manual amendment). The cap belongs only
+  // on classifier-generated text (sanitizeField in spine-classifier.ts).
+  return current + suffix;
 }
 
 function buildSpineText(doc: import('./spine-store.js').SpineDocument | null): string {
