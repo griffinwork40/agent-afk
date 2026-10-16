@@ -31,8 +31,6 @@ const ctx = {
   getConsoleErrorCountFn: vi.fn() as ReturnType<typeof vi.fn>,
   getLastHttpStatusFn: vi.fn() as ReturnType<typeof vi.fn>,
   hasOpenDialogFn: vi.fn() as ReturnType<typeof vi.fn>,
-  consumeRequestGuardErrorFn: vi.fn() as ReturnType<typeof vi.fn>,
-  clearRequestGuardErrorFn: vi.fn() as ReturnType<typeof vi.fn>,
   egressLogFn: vi.fn() as ReturnType<typeof vi.fn>,
 };
 
@@ -53,10 +51,6 @@ vi.mock('./launcher.js', () => {
         (ctx.getLastHttpStatusFn as (...a: unknown[]) => unknown)(...args),
       hasOpenDialog: (...args: unknown[]) =>
         (ctx.hasOpenDialogFn as (...a: unknown[]) => unknown)(...args),
-      consumeRequestGuardError: (...args: unknown[]) =>
-        (ctx.consumeRequestGuardErrorFn as (...a: unknown[]) => unknown)(...args),
-      clearRequestGuardError: (...args: unknown[]) =>
-        (ctx.clearRequestGuardErrorFn as (...a: unknown[]) => unknown)(...args),
       egressLog: (...args: unknown[]) => (ctx.egressLogFn as (...a: unknown[]) => unknown)(...args),
     };
   }
@@ -94,11 +88,6 @@ vi.mock('../../http-client/egress-guard.js', () => ({
   EgressBlockedError: class EgressBlockedError extends Error {},
 }));
 
-vi.mock('./egress-gate.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./egress-gate.js')>();
-  return { ...actual, checkRedirectChain: vi.fn() };
-});
-
 // ---------------------------------------------------------------------------
 // Import subjects AFTER mocks
 // ---------------------------------------------------------------------------
@@ -108,8 +97,7 @@ import { observePage } from './observe.js';
 import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
 import { writeScreenshotSidecar } from '../witness.js';
-import { checkEgressTarget, EgressBlockedError } from '../../http-client/egress-guard.js';
-import { checkRedirectChain } from './egress-gate.js';
+import { checkEgressTarget } from '../../http-client/egress-guard.js';
 
 // ---------------------------------------------------------------------------
 // Type helpers
@@ -210,8 +198,6 @@ function resetCtx(): void {
   ctx.getConsoleErrorCountFn = vi.fn().mockReturnValue(0);
   ctx.getLastHttpStatusFn = vi.fn().mockReturnValue(200);
   ctx.hasOpenDialogFn = vi.fn().mockReturnValue(false);
-  ctx.consumeRequestGuardErrorFn = vi.fn().mockReturnValue(undefined);
-  ctx.clearRequestGuardErrorFn = vi.fn().mockReturnValue(undefined);
   ctx.egressLogFn = vi.fn().mockReturnValue(undefined);
 }
 
@@ -231,7 +217,6 @@ beforeEach(() => {
   asMock(observePage).mockResolvedValue(makeStubObservation());
   asMock(enforceDomainPolicy).mockReturnValue({ allowed: true });
   asMock(checkEgressTarget).mockResolvedValue({ allowed: true });
-  asMock(checkRedirectChain).mockResolvedValue(null);
   asMock(writeScreenshotSidecar).mockResolvedValue({ path: '/fake/screenshot.png', bytes: 100 });
   asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
 });
@@ -989,115 +974,6 @@ describe('describeTarget (via thrown error messages)', () => {
         target: { kind: 'selector', selector: '#submit' },
       }),
     ).rejects.toThrow('selector(#submit)');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Egress guard provider tests (items 1, 4, 5, 6)
-// ---------------------------------------------------------------------------
-
-describe('open() egress guard provider tests', () => {
-  it('returns blocked_by_policy when navError is an EgressBlockedError (guard abort)', async () => {
-    const guardErr = new EgressBlockedError('blocked: 127.0.0.1');
-    asMock(ctx.page?.['goto']).mockRejectedValue(new Error('net::ERR_BLOCKED_BY_CLIENT'));
-    ctx.consumeRequestGuardErrorFn = vi.fn().mockReturnValue(guardErr);
-
-    const provider = makeProvider();
-    const result = await provider.open({ sessionId: 's1', url: 'https://example.com' });
-    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: 'blocked: 127.0.0.1' });
-    expect(ctx.ensurePageFn).toHaveBeenCalled();
-  });
-
-  it('returns blocked_by_policy when checkRedirectChain detects a private hop', async () => {
-    asMock(checkRedirectChain).mockResolvedValue({
-      outcome: 'blocked_by_policy',
-      url: 'https://example.com',
-      reason: 'private hop detected',
-    });
-
-    const provider = makeProvider();
-    const result = await provider.open({ sessionId: 's1', url: 'https://example.com' });
-    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: 'private hop detected' });
-    expect(observePage).not.toHaveBeenCalled();
-  });
-
-  it('clear() is called at start of open() to discard stale latch (item 4)', async () => {
-    const provider = makeProvider();
-    await provider.open({ sessionId: 's1', url: 'https://example.com' });
-    expect(ctx.clearRequestGuardErrorFn).toHaveBeenCalledWith('s1');
-  });
-
-  it('stale latch from successful open() is consumed and does not poison next op (item 4)', async () => {
-    // First open succeeds but had an iframe refusal latched.
-    const guardErr = new EgressBlockedError('iframe blocked');
-    let consumeCallCount = 0;
-    ctx.consumeRequestGuardErrorFn = vi.fn().mockImplementation(() => {
-      consumeCallCount += 1;
-      // Return the error on first consume (post-success cleanup), undefined after.
-      return consumeCallCount === 1 ? guardErr : undefined;
-    });
-
-    const provider = makeProvider();
-    const result = await provider.open({ sessionId: 's1', url: 'https://example.com' });
-    // Successful op despite the iframe refusal.
-    expect(result).toMatchObject({ observationId: 'obs_1' });
-
-    // Second open: clearRequestGuardError is called, so stale error is gone.
-    ctx.consumeRequestGuardErrorFn = vi.fn().mockReturnValue(undefined);
-    const result2 = await provider.open({ sessionId: 's1', url: 'https://example.com' });
-    expect(result2).toMatchObject({ observationId: 'obs_1' });
-  });
-});
-
-describe('act() egress guard provider tests', () => {
-  it('returns blocked_by_policy immediately without retry when first attempt is guard-aborted (item 5)', async () => {
-    const guardErr = new EgressBlockedError('blocked: 10.0.0.1');
-    asMock(ctx.locator?.['click']).mockRejectedValue(new Error('net::ERR_BLOCKED_BY_CLIENT'));
-    ctx.consumeRequestGuardErrorFn = vi.fn().mockReturnValue(guardErr);
-    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
-
-    const provider = makeProvider();
-    const result = await provider.act({
-      sessionId: 's1',
-      action: 'click',
-      target: { kind: 'semantic', text: 'Go' },
-    });
-
-    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: 'blocked: 10.0.0.1' });
-    // Only one attempt — no retry when guard fires.
-    expect(asMock(ctx.locator?.['click'])).toHaveBeenCalledTimes(1);
-  });
-
-  it('clear() is called at start of act() to discard stale latch (item 4)', async () => {
-    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
-
-    const provider = makeProvider();
-    await provider.act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'OK' } });
-    expect(ctx.clearRequestGuardErrorFn).toHaveBeenCalledWith('s1');
-  });
-
-  it('checks the redirect chain of an action-triggered main-frame navigation (items 1, 3)', async () => {
-    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
-    const navResponse = {
-      request: () => ({ isNavigationRequest: () => true }),
-      frame: () => MAIN_FRAME,
-    };
-    asMock(ctx.locator?.['click']).mockImplementation(async () => {
-      const onCall = asMock(ctx.page?.['on']).mock.calls.find((c) => c[0] === 'response');
-      (onCall?.[1] as (r: unknown) => void)(navResponse);
-    });
-    asMock(checkRedirectChain).mockResolvedValue({
-      outcome: 'blocked_by_policy',
-      url: 'https://example.com',
-      reason: 'hop touched 127.0.0.1',
-    });
-
-    const provider = makeProvider();
-    const result = await provider.act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'Go' } });
-
-    expect(asMock(checkRedirectChain)).toHaveBeenCalledWith(navResponse, expect.any(String), false);
-    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: 'hop touched 127.0.0.1' });
-    expect(asMock(ctx.page?.['off'])).toHaveBeenCalledWith('response', expect.any(Function));
   });
 });
 

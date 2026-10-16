@@ -51,6 +51,7 @@ import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
 import { isBackgroundBashLaunch } from './bash-background-flag.js';
+import { isReadOnlyGitToolEnabled, READONLY_BASH_DISABLED_REASON } from './readonly-git-surface.js';
 import { isPeerToolBlocked, peerToolChildDenial } from './peer-tool-gate.js';
 import type { HookBlockRepeatState } from './hook-block-repeat-breaker.js';
 import { applyHookBlockRepeatGate as applyHookBlockRepeat } from './dispatcher.hook-block-repeat-gate.js';
@@ -282,6 +283,13 @@ async function checkReadOnlyBash(
     typeof input === 'object' && input !== null
       ? (input as Record<string, unknown>)['command']
       : undefined;
+  // #3754 backstop: with AFK_READONLY_GIT_TOOL on, read-only surfaces get no
+  // shell at all (the allowlist swap normally hides it; this covers any path
+  // that reached the dispatcher with bash still admitted).
+  if (isReadOnlyGitToolEnabled()) {
+    await emitPreToolUseBlock(call.name, READONLY_BASH_DISABLED_REASON, deps);
+    return { content: READONLY_BASH_DISABLED_REASON, isError: true, failureClass: 'permission-denied' };
+  }
   if (typeof command !== 'string') return null;
   // A background launch outlives the call and is never read-only recon,
   // whatever the command text says.

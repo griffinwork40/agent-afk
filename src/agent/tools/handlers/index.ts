@@ -49,6 +49,7 @@ import { testRunHandler } from './test-run.js';
 import { getFacetHandler } from './get-facet.js';
 import { jsonQueryHandler, createJsonQueryHandler } from './json-query.js';
 import { modelCompleteHandler, createModelCompleteHandler } from './model-complete.js';
+import { remoteAgentHandler } from './remote-agent.js';
 import {
   clipboardWriteHandler,
   clipboardReadHandler,
@@ -56,6 +57,8 @@ import {
   createClipboardReadHandler,
 } from './clipboard.js';
 import { listSessionsHandler, sendToSessionHandler } from './peer.js';
+import { createGitReadHandler } from './git-read.js';
+import { isReadOnlyGitToolEnabled, GIT_READ_TOOL_NAME } from '../readonly-git-surface.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -98,7 +101,7 @@ export function createBuiltinHandlers(
   const patchApply = cwd !== undefined ? createPatchApplyHandler(cwd) : patchApplyHandler;
   const jsonQuery = cwd !== undefined ? createJsonQueryHandler(cwd) : jsonQueryHandler;
   const modelComplete = cwd !== undefined ? createModelCompleteHandler(cwd) : modelCompleteHandler;
-  return new Map<string, ToolHandler>([
+  const handlers = new Map<string, ToolHandler>([
     ['bash', bash],
     ['read_file', readFile],
     ['view_image', viewImage],
@@ -136,11 +139,15 @@ export function createBuiltinHandlers(
     ['get_facet', getFacetHandler],
     ['json_query', jsonQuery],
     ['model_complete', modelComplete],
+    ['remote_agent', remoteAgentHandler],
     ['clipboard_write', clipboardWriteHandler],
     ['clipboard_read', clipboardReadHandler],
     ['list_sessions', listSessionsHandler],
     ['send_to_session', sendToSessionHandler],
   ]);
+  // Opt-in structured read-only git tool (#3754); absent unless AFK_READONLY_GIT_TOOL is on.
+  if (isReadOnlyGitToolEnabled()) handlers.set(GIT_READ_TOOL_NAME, createGitReadHandler(cwd));
+  return handlers;
 }
 
 export {
@@ -181,6 +188,7 @@ export {
   getFacetHandler,
   jsonQueryHandler,
   modelCompleteHandler,
+  remoteAgentHandler,
   createJsonQueryHandler,
   clipboardWriteHandler,
   clipboardReadHandler,

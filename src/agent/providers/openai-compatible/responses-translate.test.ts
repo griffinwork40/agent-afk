@@ -147,6 +147,59 @@ describe('translateResponsesEvent — tool calls', () => {
     ]);
     expect(finalizedToolCalls(state)[0]).toMatchObject({ argumentsRaw: '{"x":1}' });
   });
+
+  // #3808: last-chance fallback. response.completed carries the final output[];
+  // a call whose args never arrived on any delta/*.done event is filled from it.
+  it('fills empty args from response.completed output[] by output index', () => {
+    const { state } = collect([
+      { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', call_id: 'c1', name: 'read_file', arguments: '' } },
+      {
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          output: [
+            { type: 'reasoning', id: 'r0' },
+            { type: 'function_call', call_id: 'c1', name: 'read_file', arguments: '{"file_path":"/a"}' },
+          ],
+        },
+      },
+    ]);
+    expect(finalizedToolCalls(state).map((c) => [c.index, c.id, c.name, c.argumentsRaw])).toEqual([
+      [1, 'c1', 'read_file', '{"file_path":"/a"}'],
+    ]);
+    expect(isToolCallStop(state)).toBe(true);
+  });
+
+  it('seeds id/name from response.completed output[] when no earlier event named the call', () => {
+    const { state } = collect([
+      {
+        type: 'response.completed',
+        response: { status: 'completed', output: [{ type: 'function_call', call_id: 'c0', name: 'bash', arguments: '{"command":"ls"}' }] },
+      },
+    ]);
+    expect(finalizedToolCalls(state)[0]).toMatchObject({ index: 0, id: 'c0', name: 'bash', argumentsRaw: '{"command":"ls"}' });
+    expect(isToolCallStop(state)).toBe(true);
+  });
+
+  it('never overwrites accumulated delta or *.done args from response.completed output[]', () => {
+    const { state } = collect([
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'c0', name: 'fn', arguments: '' } },
+      { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"x":1}' },
+      { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', call_id: 'c1', name: 'fn', arguments: '' } },
+      { type: 'response.function_call_arguments.done', output_index: 1, arguments: '{"y":2}' },
+      {
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          output: [
+            { type: 'function_call', call_id: 'c0', name: 'fn', arguments: '{"x":"CLOBBER"}' },
+            { type: 'function_call', call_id: 'c1', name: 'fn', arguments: '{"y":"CLOBBER"}' },
+          ],
+        },
+      },
+    ]);
+    expect(finalizedToolCalls(state).map((c) => c.argumentsRaw)).toEqual(['{"x":1}', '{"y":2}']);
+  });
 });
 
 describe('translateResponsesEvent — usage', () => {

@@ -117,6 +117,13 @@ export interface ScheduledTask {
   maxAttempts?: number;
   /** Backoff base (ms) between retry attempts; doubles per attempt. See `maxAttempts`. */
   retryDelayMs?: number;
+  /**
+   * Overlap identity for the scheduler's in-flight guard; defaults to `taskId`.
+   * Set only on the synthetic task that resumes an answered handoff: it runs
+   * under a fresh queue id but must overlap-guard as the ORIGINAL task, so a
+   * cron fire of that task is skipped while its resume is in flight (#1416).
+   */
+  overlapKey?: string;
 }
 
 /**

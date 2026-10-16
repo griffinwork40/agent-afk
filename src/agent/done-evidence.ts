@@ -12,6 +12,8 @@
  * @module agent/done-evidence
  */
 
+import { classifyBashCommand } from './tools/readonly-bash.js';
+
 /**
  * Minimal tool-event shape. The session layer supplies
  * `successfulToolNames` from `ResponseMetadata`; the REPL supplies full
@@ -113,8 +115,19 @@ export function classifyDoneEvidence(
 
     if (CODE_MUTATION_TOOLS.has(e.toolName)) {
       lastMutationIndex = i;
-    } else if (e.toolName === 'bash' && isVerificationCommand(e.input)) {
-      lastVerificationIndex = i;
+    } else if (e.toolName === 'bash') {
+      // Verification check takes priority: a command that matches a verification
+      // pattern (pnpm test, cargo check, …) counts as verification regardless of
+      // whether classifyBashCommand also considers it mutating (it generally won't,
+      // but the ordering is deliberate — a test runner is never a stale-write risk).
+      // Only when it is NOT a verification command do we check whether it mutates;
+      // a mutating bash call (sed -i, rm, git commit, …) advances lastMutationIndex
+      // so a verification that ran BEFORE it is not counted as post-mutation.
+      if (isVerificationCommand(e.input)) {
+        lastVerificationIndex = i;
+      } else if (classifyBashCommand(e.input).mutating) {
+        lastMutationIndex = i;
+      }
     }
   }
 

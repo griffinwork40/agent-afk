@@ -66,6 +66,8 @@ const READ_TOOLS = new Set([
   'get_facet',
   // json_query — read-only: reads a JSON file and evaluates a bounded query.
   'json_query',
+  // git_read — structured read-only git (#3754, opt-in via AFK_READONLY_GIT_TOOL).
+  'git_read',
   // state-tools.ts — read-only queries against the durable cross-session KV store.
   'state_get', 'state_query',
 ]);
@@ -160,6 +162,8 @@ const WEB_TOOLS = new Set([
   'image_edit',
   // model_complete: one billed chat completion to a model provider.
   'model_complete',
+  // remote_agent: runs an afk agent on another host over SSH (outbound + billed).
+  'remote_agent',
 ]);
 const BROWSER_TOOLS = new Set([
   // agent-afk native browser-control tools (src/browser/, src/agent/tools/handlers/browser-*.ts).

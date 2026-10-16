@@ -457,6 +457,12 @@ export function classifyRiskDetailed(
     // Can't be unsent — medium risk.
     return { level: 'medium' };
   }
+  // remote_agent executes arbitrary code on another machine over SSH. The
+  // remote afk process runs in headless/bypassPermissions mode by default
+  // (no --permission-mode flag is injected by the launcher), so a destructive
+  // prompt could bypass the local AFK gate by routing through the remote.
+  // High risk ensures autonomous mode (AFK gate) holds this tool for approval.
+  if (tool === 'remote_agent') return { level: 'high' };
 
   // ---- MCP tools ----------------------------------------------------------
   // Any `mcp__*` tool is an externally-contributed function from a third-party

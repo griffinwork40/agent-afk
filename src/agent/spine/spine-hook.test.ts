@@ -1767,3 +1767,81 @@ describe('createSpineSessionEndHook — duplicate-fingerprint skips classifyDiff
     expect(classifyDiff).toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #3894 regression: reinforcing an entry >300 chars must not truncate the body
+// ---------------------------------------------------------------------------
+
+describe('createSpineSessionEndHook — #3894 regression', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    _capturedAppendCalls.length = 0;
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
+  });
+
+  it('#3894: reinforcing a 320-char existing entry leaves the original body byte-for-byte intact', async () => {
+    // Regression: applyAnnotation previously did `current.slice(0, MAX_DESCRIPTION_LEN)`,
+    // which silently truncated existing entries longer than 300 chars (e.g. after a
+    // manual amendment). The suffix was then appended onto the cut body, destroying
+    // the tail — exactly the symptom in #3894.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    // 320-char body — 20 chars longer than MAX_DESCRIPTION_LEN (300).
+    // Mirrors the issue: "... see src/agent/trace/hook-tally.ts)" was the truncated tail.
+    const body320 = 'C'.repeat(285) + ' see src/agent/trace/hook-tally.ts)';
+    expect(body320.length).toBe(320);
+
+    const mockEntry = {
+      id: 'INV-019',
+      date: '2026-10-14',
+      sessionId: 'old-session',
+      description: body320,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'strengthens' as const,
+          existingId: 'INV-019',
+          existingDescription: body320.slice(0, MAX_DESCRIPTION_LEN), // classifier capped its copy
+          description: 'New evidence strengthens this invariant',
+          rationale: 'See new test coverage',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // The original 320-char body must be preserved byte-for-byte
+    const desc = mockEntry.description;
+    const annotationStart = desc.lastIndexOf(' (reinforced ');
+    expect(annotationStart).toBeGreaterThan(0);
+    const bodyPart = desc.slice(0, annotationStart);
+    expect(bodyPart).toBe(body320); // must equal the full 320-char original
+    expect(bodyPart.length).toBe(320); // must not have been truncated to 300
+
+    // Annotation must be complete (closing paren present, not cut off)
+    expect(desc).toMatch(/\(reinforced \d{4}-\d{2}-\d{2}\)$/);
+
+    // Exactly one annotation
+    const matches = desc.match(/\(reinforced /g) ?? [];
+    expect(matches).toHaveLength(1);
+
+    expect(writeSpine).toHaveBeenCalled();
+  });
+});

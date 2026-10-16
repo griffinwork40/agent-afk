@@ -12,6 +12,7 @@ import * as fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { guardedFetch } from '../../../http-client/egress-guard.js';
 import { classifyRisk } from '../../risk-classifier.js';
+import { pollRefusalReason } from './wait-for-command-policy.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import type { SpawnedPidRegistry } from './pid-registry.js';
 import { errorMessage, extractEgressBlockedError, fetchFailedMessage, isErrnoCode } from '../../../utils/errors.js';
@@ -239,16 +240,17 @@ export function evaluateProcess(
 // ---------------------------------------------------------------------------
 
 export function evaluateCommand(cond: CommandCondition): WaitResult {
-  // H-1: Apply the same risk classification used for bash commands. Only 'safe'
-  // commands are allowed — medium-risk commands (git push, npm install, mv, cp,
-  // mkdir, shell redirects) and unknown commands (which default to 'medium') are
-  // blocked. Previously, only 'high' was blocked, allowing all medium-risk and
-  // unknown commands through execSync unguarded.
-  const risk = classifyRisk('bash', { command: cond.command }, { cwd: cond.cwd ?? process.cwd() });
-  if (risk !== 'safe') {
+  // Invariant: retain the bash classifier's high-risk veto. Only wait_for gets
+  // the tokenized read-only supplement; unknown commands still fail closed.
+  const cwd = cond.cwd ?? process.cwd();
+  const risk = classifyRisk('bash', { command: cond.command }, { cwd });
+  // pollRefusalReason owns the whole gate (background `&`, syntax, mutation,
+  // per-command argv, read-only supplement); see its Invariant.
+  const reason = pollRefusalReason(cond.command, risk, cwd);
+  if (reason !== undefined) {
     return {
       met: false,
-      detail: `command blocked by risk classifier (${risk} risk): ${cond.command}`,
+      detail: `command blocked by risk classifier (${risk} risk): ${reason}: ${cond.command}. Use wait_for type=file for file existence/content, type=url for HTTP probes, or a simple read-only command without redirects or substitutions.`,
       data: { command: cond.command, blocked: true },
     };
   }

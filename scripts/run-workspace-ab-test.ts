@@ -24,6 +24,7 @@ import { existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { errorMessage } from '../src/utils/errors.js';
+import { providerForModel } from '../src/agent/providers/index.js';
 import { EXPERIMENT_PROMPT, promptHash } from './workspace-ab/prompt.js';
 import { runArm } from './workspace-ab/run-arm.js';
 import type { ArmResult } from './workspace-ab/run-arm.js';
@@ -134,7 +135,22 @@ function assertAfkBinExists(afkBin: string): void {
 
 // ─── Credential check ──────────────────────────────────────────────────────
 
-function assertCredentialPresent(): void {
+/**
+ * Guard against missing Anthropic credentials, but only when the chosen model
+ * actually routes to Anthropic.  Non-Anthropic slots (local, openai-compatible,
+ * xai, …) never touch api.anthropic.com, so blocking them here is wrong.
+ * The check is also intentionally skipped for the `auto` sentinel — it resolves
+ * dynamically at run-time and the provider is unknown at pre-flight time.
+ *
+ * Note: credentials stored via `afk login` / `afk.env` are loaded by the afk
+ * binary at startup, not by this script.  The check here only covers variables
+ * already present in the shell environment.
+ */
+function assertCredentialPresent(model: string): void {
+  const provider = providerForModel(model);
+  // Skip the check for non-Anthropic providers — they use their own credentials.
+  if (provider !== 'anthropic-direct') return;
+
   const { ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN } = process.env;
   if (!ANTHROPIC_API_KEY && !CLAUDE_CODE_OAUTH_TOKEN) {
     console.error([
@@ -144,6 +160,8 @@ function assertCredentialPresent(): void {
       '  export ANTHROPIC_API_KEY=sk-ant-...',
       '  afk login',
       '  afk config set env ANTHROPIC_API_KEY <key>',
+      '',
+      'If you intended a non-Anthropic model, pass --model local or another slot.',
     ].join('\n'));
     process.exit(1);
   }
@@ -174,7 +192,7 @@ async function main(): Promise<void> {
 
   // Pre-flight
   assertAfkBinExists(afkBin);
-  assertCredentialPresent();
+  assertCredentialPresent(model);
 
   const hash = promptHash(EXPERIMENT_PROMPT);
   const startedAt = new Date().toISOString();

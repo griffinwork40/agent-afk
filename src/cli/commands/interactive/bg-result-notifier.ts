@@ -38,6 +38,7 @@ import { extractOutputText } from '../../../agent/background-registry.result.js'
 import { redactSecrets } from '../../../agent/redact-secrets.js';
 import { env, isPlainOutputRequested } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
+import { escapeXmlAttr } from './process-job-notifier.js';
 import { DetachedToolNotifier } from './detached-tool-notifier.js';
 import type { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
 import type { ToolEvent } from '../../slash/types.js';
@@ -137,8 +138,8 @@ export function buildBgResultInjection(job: BackgroundJob): string {
   const output = truncateBytes(escapeXml(extractOutput(job)), MAX_INJECTION_BYTES, job.jobId);
   const lines: string[] = [];
   lines.push(
-    `<background-subagent-result jobId="${escapeXml(job.jobId)}" status="${escapeXml(job.status)}" ` +
-      `model="${escapeXml(job.model)}" duration="${duration}">`,
+    `<background-subagent-result jobId="${escapeXmlAttr(job.jobId)}" status="${escapeXmlAttr(job.status)}" ` +
+      `model="${escapeXmlAttr(job.model)}" duration="${escapeXmlAttr(duration)}">`,
   );
   lines.push(`<task>${escapeXml(job.label)}</task>`);
   lines.push('<output>');

@@ -46,3 +46,55 @@ describe('SessionShutdown — assistantTexts threading', () => {
     expect('assistantTexts' in ctx).toBe(false);
   });
 });
+
+describe('SessionShutdown — background SessionEnd lane (/clear latency)', () => {
+  function withBackground(parentSessionId?: string) {
+    const registry = createHookRegistry();
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    const finished: string[] = [];
+    registry.register('SessionEnd', async (ctx) => {
+      await held;
+      if (ctx.event === 'SessionEnd') finished.push(ctx.reason ?? '');
+      return {};
+    }, { background: true });
+    const shutdown = new SessionShutdown({
+      getConfig: () => ({ model: 'sonnet', cwd: '/repo', ...(parentSessionId ? { parentSessionId } : {}) }) as unknown as AgentConfig,
+      getAbortController: () => new AbortController(),
+      getHookRegistry: () => registry,
+      accounting: new AccountingAccumulator(),
+      getTurnCount: () => 1,
+      getSessionId: () => 'sess-bg',
+      ownedTraceWriter: undefined,
+      ownsTraceSeal: false,
+    });
+    return { shutdown, release, finished };
+  }
+
+  it("reason 'reset' returns without waiting for background handlers", async () => {
+    const { shutdown, release, finished } = withBackground();
+    await shutdown.dispatchOnce('reset');
+    expect(finished).toEqual([]);
+    release();
+  });
+
+  it("reason 'close' waits for background work, including work queued by an earlier reset", async () => {
+    const { shutdown, release, finished } = withBackground();
+    await shutdown.dispatchOnce('reset');
+    shutdown.reset();
+    let closed = false;
+    const closing = shutdown.dispatchOnce('close').then(() => { closed = true; });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(closed).toBe(false);
+    release();
+    await closing;
+    expect(finished).toEqual(['reset', 'close']);
+  });
+
+  it('a forked child never drains the shared registry on close', async () => {
+    const { shutdown, release, finished } = withBackground('parent-sess');
+    await shutdown.dispatchOnce('close');
+    expect(finished).toEqual([]);
+    release();
+  });
+});

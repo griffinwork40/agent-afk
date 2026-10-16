@@ -39,10 +39,19 @@ import { JOURNAL_VERSION, type JournalRecordInput } from './types.js';
 /** Buffered-record cap while the session id is unresolved. */
 export const MAX_BUFFERED_RECORDS = 10_000;
 
+/** Metadata stamped on every `meta` record. */
+export interface JournalMeta {
+  provider?: string;
+  model?: string;
+  cwd?: string;
+  /** Running afk package version (baked in at build time via `__AFK_VERSION__`). */
+  afkVersion?: string;
+}
+
 /** State shared by a session's top-level journal and all of its subagent journals. */
 export interface JournalSessionShared {
   getSessionId: () => string | undefined;
-  meta: { provider?: string; model?: string; cwd?: string };
+  meta: JournalMeta;
   blobs: BlobStore;
   report: OnceReporter;
 }
@@ -209,6 +218,7 @@ export class JournalFileWriter {
         ...(m.provider !== undefined ? { provider: m.provider } : {}),
         ...(m.model !== undefined ? { model: m.model } : {}),
         ...(m.cwd !== undefined ? { cwd: m.cwd } : {}),
+        ...(m.afkVersion !== undefined ? { afkVersion: m.afkVersion } : {}),
       }) + '\n'
     );
   }

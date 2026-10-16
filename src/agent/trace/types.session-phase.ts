@@ -353,4 +353,10 @@ export interface SessionPhasePayload {
    * other phase kinds.
    */
   priorSessionId?: string;
+  /**
+   * Running afk package version at the time the session id was assigned.
+   * Set ONLY on `session_id_assigned` events. Absent on older traces and all
+   * other phase kinds. (#3808)
+   */
+  afkVersion?: string;
 }

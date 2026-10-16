@@ -23,6 +23,7 @@ import { TraceEventSchema } from '../../agent/trace/events.js';
 import { listSessionIds, getOrDeriveFacet } from '../../agent/facets/index.js';
 import type { InsightsOptions, TraceAggregates } from '../types.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
+import { SessionCostAccumulator } from '../../agent/trace/cost.js';
 
 // ---------------------------------------------------------------------------
 // Zero aggregates factory
@@ -120,10 +121,14 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
     }
     if (!raw) continue;
 
+    // Cost uses the shared per-trace definition (`agent/trace/cost.ts`,
+    // #3879) so this total equals the sum of receipt/facet totals.
+    const costAcc = new SessionCostAccumulator();
     for (const parsed of parseJsonlLines(raw)) {
       const result = TraceEventSchema.safeParse(parsed);
       if (!result.success) continue;
       const event = result.data;
+      costAcc.add(event);
 
       switch (event.kind) {
         case 'compaction':
@@ -156,8 +161,6 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
           agg.totalOutputTokens += ft.output ?? 0;
           agg.totalCacheReadTokens += ft.cacheRead ?? 0;
           agg.totalCacheCreationTokens += ft.cacheCreation ?? 0;
-          agg.totalCostUsd += payload.finalCostUsd;
-          if (payload.finalCostUsd > 0) agg.sessionsWithCost += 1;
           break;
         }
 
@@ -183,6 +186,11 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
           break;
       }
     }
+    // Once per trace, not once per closure: a trace with N subagents used to
+    // count as N+1 "sessions with cost", deflating the per-session average.
+    const traceCost = costAcc.result().totalCostUsd ?? 0;
+    agg.totalCostUsd += traceCost;
+    if (traceCost > 0) agg.sessionsWithCost += 1;
   }
 
   return agg;
