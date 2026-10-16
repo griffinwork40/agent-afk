@@ -431,3 +431,95 @@ describe('subagent billing settled by amount across a cancel', () => {
     expect(h.acc.snapshot().subagentBilling?.total).toEqual(sum);
   });
 });
+
+describe('billing_settled phase on post-cancel delta (#3931)', () => {
+  it('emits billing_settled when a billed done arrives after cancel() row was written', async () => {
+    // Mirrors "run()'s post-cancel catch branch reports only the post-cancel delta"
+    // but checks the trace for the new billing_settled session_phase event.
+    const graph = new AbortGraph();
+    const controller = new AbortController();
+    graph.register('root', controller);
+    const writer = new InMemoryTraceWriter();
+    const ref: { handle?: SubagentHandleImpl<unknown> } = {};
+    const handle: SubagentHandleImpl<unknown> = new SubagentHandleImpl(
+      'phase-child',
+      {
+        sessionId: 'mock-session',
+        state: 'idle',
+        abortSignal: new AbortController().signal,
+        async *sendMessageStream() {
+          // Spend already on the handle when cancel() settles it.
+          ref.handle!._runBilling = openAICompatibleBilling(10_000, 9_000, 100);
+          void ref.handle!.cancel();
+          // Post-cancel spend delta.
+          yield openAIDone(12_000, 11_000, 50);
+        },
+        async interrupt() {},
+        async close() {},
+        getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+        getLastResponseMetadata: () => null,
+      } as unknown as IAgentSession,
+      controller, graph, undefined, 5000, undefined, vi.fn(),
+      undefined, undefined, undefined, undefined, undefined, writer, vi.fn(),
+    );
+    ref.handle = handle;
+    await expect(handle.run('go')).rejects.toThrow();
+    await handle._pendingCancellationWrite;
+
+    // Exactly one cancelled lifecycle row (from cancel()).
+    const cancelled = writer.events.filter(
+      (e) => e.kind === 'subagent_lifecycle' && e.payload.transition === 'cancelled',
+    );
+    expect(cancelled).toHaveLength(1);
+
+    // The post-cancel delta must appear as a billing_settled session_phase.
+    const settled = writer.events.find(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'billing_settled',
+    );
+    expect(settled).toBeDefined();
+    if (settled?.kind !== 'session_phase') throw new Error('no billing_settled event');
+    expect(settled.payload.metadata?.subagentId).toBe('phase-child');
+    expect(settled.payload.metadata?.provider).toBe('openai-compatible');
+    // billing_settled carries billingLifecycleFields(context.total) — the
+    // cumulative total across both turns (the delta from cancel()'s watermark
+    // is computed by the rollup consumer by diffing against the cancelled row).
+    // Turn 1: (10k, 9k cached, 100 out) = { uncachedInput: 1k, cacheRead: 9k, output: 100 }
+    // Turn 2 cumulative: (22k total, 20k cached, 150 out) = { uncachedInput: 2k, cacheRead: 20k, output: 150 }
+    expect(settled.payload.metadata?.uncachedInput).toBe(2_000);
+    expect(settled.payload.metadata?.cacheRead).toBe(20_000);
+    expect(settled.payload.metadata?.output).toBe(150);
+  });
+
+  it('does NOT emit billing_settled when there is no post-cancel delta', async () => {
+    const graph = new AbortGraph();
+    const controller = new AbortController();
+    graph.register('root', controller);
+    const writer = new InMemoryTraceWriter();
+    // cancel() before any spend — no delta possible.
+    const handle = new SubagentHandleImpl(
+      'no-delta-child',
+      {
+        sessionId: 'mock-session',
+        state: 'idle',
+        abortSignal: new AbortController().signal,
+        async *sendMessageStream() {
+          void handle.cancel();
+          // No done event — stream ends with no billing.
+        },
+        async interrupt() {},
+        async close() {},
+        getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+        getLastResponseMetadata: () => null,
+      } as unknown as IAgentSession,
+      controller, graph, undefined, 5000, undefined, vi.fn(),
+      undefined, undefined, undefined, undefined, undefined, writer, vi.fn(),
+    );
+    await expect(handle.run('go')).rejects.toThrow();
+    await handle._pendingCancellationWrite;
+
+    const settled = writer.events.find(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'billing_settled',
+    );
+    expect(settled).toBeUndefined();
+  });
+});

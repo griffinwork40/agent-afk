@@ -276,11 +276,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     // set below), so no in-flight run owns this value for us to clobber.
     this._lastStopReason = undefined;
     if (this._currentStatus === 'cancelled') throw new Error(`Subagent ${this.id} is cancelled`);
-    this.runInProgress = true;
     const billingContext: RunBillingContext = {};
     this._billingContext = billingContext;
 
-    this._currentStatus = 'running';
+    // runInProgress and _currentStatus are set inside the try so a synchronous
+    // throw between here and the try (e.g. PauseAwareCeiling construction) cannot
+    // leave the handle permanently locked (#3931 item 2).
     const startTime = Date.now();
     // Pause-aware wall-clock ceiling. The ceiling is still un-resettable BY THE
     // CHILD — only a provider-reported pause (`paused` w/ resetsAt, `rate_limit`
@@ -313,13 +314,18 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
           })
         : undefined;
     this._pauseCeiling = pauseCeiling;
-    const p = withTimeout(streamToFinalMessage(this, prompt, sinkOverride, billingContext), this.timeoutMs, {
-      controller: this._controller,
-      label: this.id,
-      ...(pauseCeiling !== undefined && { extender: pauseCeiling }),
-    });
-    this.inFlight = p;
     try {
+      // Set flags inside the try so any synchronous throw above (e.g. from
+      // PauseAwareCeiling construction) cannot leave the handle permanently
+      // locked with runInProgress=true (#3931 item 2).
+      this.runInProgress = true;
+      this._currentStatus = 'running';
+      const p = withTimeout(streamToFinalMessage(this, prompt, sinkOverride, billingContext), this.timeoutMs, {
+        controller: this._controller,
+        label: this.id,
+        ...(pauseCeiling !== undefined && { extender: pauseCeiling }),
+      });
+      this.inFlight = p;
       const msg = await p;
       this._lastMessage = msg.content;
       this._lastDurationMs = Date.now() - startTime;
@@ -366,7 +372,24 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         // cancel() already emitted the row and settled the billing known then;
         // settle only the DELTA that accrued after it (a `done` drained on
         // interrupt) so it still reaches the rollup, counted once (#3878).
-        settleUnreportedBilling(this, 'cancelled', billingContext);
+        // Emit a billing_settled session_phase so trace readers can account for
+        // the delta — without it the cancelled row's totals are understated
+        // (#3931 item 1). Fire-and-forget: mirrors pause_extension_granted.
+        const postCancelFields = settleUnreportedBilling(this, 'cancelled', billingContext);
+        if (postCancelFields.provider !== undefined && postCancelFields.tokens !== undefined) {
+          const { uncachedInput, cacheRead, cacheWrite, output } = postCancelFields.tokens;
+          void emitSessionPhase(this._traceWriter, {
+            phase: 'billing_settled',
+            metadata: {
+              subagentId: this.id,
+              provider: postCancelFields.provider,
+              uncachedInput,
+              cacheRead,
+              cacheWrite,
+              output,
+            },
+          });
+        }
       } else {
         // Invariant: cascade classification. When our controller's signal is
         // aborted at this point AND cancel() didn't fire (otherwise status

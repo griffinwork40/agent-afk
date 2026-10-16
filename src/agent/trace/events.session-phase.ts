@@ -117,6 +117,10 @@ export const SessionPhaseNameSchema = z.enum([
   // PreToolUse blocks on the same gate key trip the breaker. metadata carries
   // { tool, count, fork } where fork is true for forked children.
   'hook_block_repeat_tripped',
+  // Post-cancel late billing delta (#3931). See SessionPhaseName JSDoc in
+  // types.session-phase.ts. metadata: { subagentId, provider, uncachedInput,
+  // cacheRead, cacheWrite, output }. At most one per cancelled run.
+  'billing_settled',
   // Streaming connection opener diagnostics (opt-in AFK_CONNECT_RETRY_BUDGET_MS).
   // Must mirror the SessionPhaseName union in types.session-phase.ts;
   // session-phase.test.ts parity enforces it.
