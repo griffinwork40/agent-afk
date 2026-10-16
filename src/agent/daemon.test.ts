@@ -573,6 +573,21 @@ describe('startDaemon', () => {
     return handle;
   }
 
+  it('starts handoff maintenance without a pull interval (#1416), unless disabled', async () => {
+    const spy = vi.spyOn(CronScheduler.prototype, 'startHandoffMaintenance');
+    try {
+      await spinDaemon([{ taskId: 'c1', command: 'x', trigger: 'cron', cronExpression: '0 0 1 1 *' }]);
+      expect(spy).toHaveBeenCalledTimes(1);
+      await handle?.stop();
+      handle = null;
+      spy.mockClear();
+      handle = await startDaemon({ port: 0, telemetryPath, handoffMaintenance: false, writePortFile: false });
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('listens on a port and returns it on the handle', async () => {
     const h = await spinDaemon();
     expect(h.port).toBeGreaterThan(0);

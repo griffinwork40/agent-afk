@@ -14,7 +14,6 @@
  */
 
 import { processAnsweredHandoffs } from './handoff-consume.js';
-import { sweepExpiredHandoffs } from './handoff-expiry.js';
 import { dequeueNext } from './queue-store.js';
 import { completeTask } from './lease-store.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
@@ -26,6 +25,8 @@ import { errorMessage } from '../../utils/errors.js';
 
 export interface PullTickContext {
   queueDir: string;
+  /** Override the handoffs directory swept for answers (tests). */
+  handoffsDir?: string;
   isIdle: () => boolean;
   getIsDequeuing: () => boolean;
   setIsDequeuing: (v: boolean) => void;
@@ -40,8 +41,8 @@ export interface PullTickContext {
  * at call sites — this function is the single canonical implementation of the
  * four formerly copy-pasted sweep blocks.
  */
-export function sweepAnsweredHandoffs(queueDir: string): void {
-  void processAnsweredHandoffs(queueDir)
+export function sweepAnsweredHandoffs(queueDir: string, handoffsDir?: string): void {
+  void processAnsweredHandoffs(queueDir, handoffsDir)
     .then((r) => {
       if (r.requeued > 0) {
         // eslint-disable-next-line no-console
@@ -80,10 +81,10 @@ export async function executePullTick(ctx: PullTickContext): Promise<void> {
       // Queue is empty this tick — still sweep for answered handoffs. An
       // answer that arrives between ticks would otherwise wait indefinitely
       // if no other task completes to trigger the post-run sweep below.
-      sweepAnsweredHandoffs(ctx.queueDir);
-      // Expire questions past their TTL (throttled; #1416). Without this a
-      // long-lived daemon only expired handoffs at its next restart.
-      sweepExpiredHandoffs(ctx.queueDir);
+      // Expiry is NOT swept here: handoff-maintenance.ts owns the periodic
+      // expiry sweep for every trigger mode (#1416), so pull mode never
+      // sweeps twice.
+      sweepAnsweredHandoffs(ctx.queueDir, ctx.handoffsDir);
       return;
     }
     const syntheticTask: ScheduledTask = {
@@ -108,8 +109,7 @@ export async function executePullTick(ctx: PullTickContext): Promise<void> {
       // startup) will re-enqueue or dead-letter based on the record's attempts.
     }
     // If the session answered a handoff during this run, re-enqueue it now.
-    sweepAnsweredHandoffs(ctx.queueDir);
-    sweepExpiredHandoffs(ctx.queueDir);
+    sweepAnsweredHandoffs(ctx.queueDir, ctx.handoffsDir);
   } catch (err) {
     // Errors thrown INSIDE runOnce are captured there and written to
     // telemetry. Errors reaching here come from the dequeue path (now

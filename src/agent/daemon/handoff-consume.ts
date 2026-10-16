@@ -4,13 +4,13 @@
  * When an operator answers a daemon's handoff question via Telegram (or another
  * surface), the HandoffRecord transitions to status 'answered'. This module
  * sweeps those records, builds a context-injected resume command, and
- * re-enqueues the task so the next pull-tick picks it up with the answer
- * threaded into the session prompt.
+ * re-enqueues the task so a later tick runs it with the answer threaded into
+ * the session prompt.
  *
- * Called fire-and-forget from two scheduler sites:
- *   1. startPullLoop() startup — pick up answers that arrived while the daemon
- *      was down.
- *   2. pullTick() teardown — pick up answers recorded during the completed run.
+ * Called from:
+ *   1. handoff-maintenance.ts — every daemon trigger mode, into the
+ *      resume-only queue (#1416).
+ *   2. startPullLoop() startup and pullTick() teardown (pull mode).
  *
  * Dead-letter quarantine for malformed/unsafe records lives in:
  *   ./handoff-consume.dead-letter.ts

@@ -14,8 +14,9 @@
  *     startup recovery loop and the periodic sweep, so there is one expiry
  *     implementation.
  *   - `sweepExpiredHandoffs` — throttled, fire-and-forget sweep called from the
- *     scheduler pull tick. It never re-notifies pending questions (that stays a
- *     startup-only action in `recoverPendingHandoffs`).
+ *     handoff maintenance tick (every trigger mode). It never re-notifies
+ *     pending questions (that stays a startup-only action in
+ *     `recoverPendingHandoffs`).
  *
  * Invariant: the pending → expired transition happens inside
  * `withHandoffLock`, after a re-read that requires status 'pending'. This is
@@ -34,7 +35,8 @@
  * @module agent/daemon/handoff-expiry
  */
 
-import { getHandoffsDir } from '../../paths.js';
+import { join } from 'node:path';
+import { getHandoffsDir, getQueueDir } from '../../paths.js';
 import {
   listPendingHandoffs,
   readHandoff,
@@ -45,6 +47,13 @@ import {
 import { setLeaseState } from './lease-store.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { errorMessage } from '../../utils/errors.js';
+
+/**
+ * Queue subdirectory holding answered-handoff resume tasks. Declared here (not
+ * in handoff-maintenance.ts) so expiry can restore a lease parked there
+ * without an import cycle.
+ */
+export const RESUME_QUEUE_SUBDIR = 'handoff-resume';
 
 /** Default TTL for daemon handoffs: 24 hours. */
 export const DEFAULT_HANDOFF_TTL_MS = 24 * 60 * 60 * 1_000;
@@ -112,17 +121,32 @@ export async function expireHandoff(
   // Crash path only: a lease still parked in waiting_human_input goes back to
   // 'leased' so lease recovery can re-enqueue or dead-letter it. Safe outside
   // the handoff lock: the record is already non-pending, so no answer can land.
-  try {
-    setLeaseState(taskId, 'leased', opts.queueDir, 'waiting_human_input');
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error(`[handoff-expiry] lease restore failed for task ${taskId}: ${errorMessage(err)}`);
+  // A resumed task's lease lives in the resume queue (handoff-maintenance.ts),
+  // so try both; task ids are unique, so at most one lease matches.
+  const root = opts.queueDir ?? getQueueDir();
+  for (const dir of [root, join(root, RESUME_QUEUE_SUBDIR)]) {
+    try {
+      setLeaseState(taskId, 'leased', dir, 'waiting_human_input');
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[handoff-expiry] lease restore failed for task ${taskId}: ${errorMessage(err)}`);
+    }
   }
 
   const ageHours = Math.round((now - Date.parse(expired.createdAt)) / 3_600_000);
   // eslint-disable-next-line no-console
   console.error(`[handoff-expiry] expired stale handoff for task ${taskId} (age: ${ageHours}h)`);
-  void pushIfConfigured(buildExpiryNotice(expired, ageHours)).catch(() => undefined);
+  // Send the notice where the question went (#1416): route.chatId is the chat
+  // the question was delivered to, so it was already resolved + allowlisted.
+  const route = expired.route;
+  const notice = buildExpiryNotice(expired, ageHours);
+  void (route !== undefined
+    ? pushIfConfigured(notice, {
+      target: route.chatId,
+      ...(route.threadId !== undefined ? { messageThreadId: route.threadId } : {}),
+    })
+    : pushIfConfigured(notice)
+  ).catch(() => undefined);
   return true;
 }
 
@@ -149,20 +173,25 @@ export async function expireStaleHandoffs(opts: ExpireHandoffOpts = {}): Promise
   return count;
 }
 
-// Invariant: module-scope throttle state for the pull-tick sweep. The daemon
+// Invariant: module-scope throttle state for the periodic sweep. The daemon
 // runs one scheduler per process, and this is the only declaration of it.
 let lastSweepAt = 0;
 let sweepInFlight = false;
 
 /**
- * Periodic, fire-and-forget expiry sweep for the scheduler pull tick.
+ * Periodic, fire-and-forget expiry sweep, called from the handoff maintenance
+ * tick (handoff-maintenance.ts) in every daemon trigger mode.
  * Runs at most once per `EXPIRY_SWEEP_INTERVAL_MS` and never overlaps itself.
  */
-export function sweepExpiredHandoffs(queueDir: string, now: number = Date.now()): void {
+export function sweepExpiredHandoffs(
+  queueDir: string,
+  now: number = Date.now(),
+  handoffsDir?: string,
+): void {
   if (sweepInFlight || now - lastSweepAt < EXPIRY_SWEEP_INTERVAL_MS) return;
   lastSweepAt = now;
   sweepInFlight = true;
-  void expireStaleHandoffs({ queueDir, now })
+  void expireStaleHandoffs({ queueDir, now, ...(handoffsDir !== undefined ? { handoffsDir } : {}) })
     .catch((err: unknown) => {
       // eslint-disable-next-line no-console
       console.error(`[daemon] handoff-expiry: sweep failed: ${errorMessage(err)}`);
@@ -179,9 +208,9 @@ export function resetExpirySweepThrottleForTests(): void {
 }
 
 function buildExpiryNotice(record: HandoffRecord, ageHours: number): string {
-  const raw = typeof record.question['message'] === 'string'
-    ? record.question['message']
-    : '(question details unavailable)';
+  const q: unknown = record.question;
+  const message = q !== null && typeof q === 'object' ? (q as Record<string, unknown>)['message'] : undefined;
+  const raw = typeof message === 'string' ? message : '(question details unavailable)';
   const question = raw.length <= MAX_NOTICE_CHARS ? raw : `${raw.slice(0, MAX_NOTICE_CHARS)}…(truncated)`;
   return [
     '⌛ Daemon question expired unanswered',

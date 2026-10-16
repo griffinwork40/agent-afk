@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   DEFAULT_HANDOFF_TTL_MS,
   EXPIRY_SWEEP_INTERVAL_MS,
+  RESUME_QUEUE_SUBDIR,
   expireHandoff,
   expireStaleHandoffs,
   isHandoffStale,
@@ -96,6 +97,37 @@ describe('expireHandoff', () => {
     // Second call is a no-op: no second transition, no second notice.
     expect(await expireHandoff('q-stale', { handoffsDir, queueDir, now: NOW })).toBe(false);
     expect(pushIfConfigured).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes the notice to the chat/thread the question was sent to', async () => {
+    await writeHandoff(record('q-routed', 25 * HOUR, { route: { chatId: -100123, threadId: 7 } }), handoffsDir);
+    expect(await expireHandoff('q-routed', { handoffsDir, queueDir, now: NOW })).toBe(true);
+    expect(vi.mocked(pushIfConfigured).mock.calls[0]?.[1]).toEqual({ target: -100123, messageThreadId: 7 });
+  });
+
+  it('uses default routing when the record has no route', async () => {
+    await writeHandoff(record('q-unrouted', 25 * HOUR), handoffsDir);
+    expect(await expireHandoff('q-unrouted', { handoffsDir, queueDir, now: NOW })).toBe(true);
+    expect(vi.mocked(pushIfConfigured).mock.calls[0]?.[1]).toBeUndefined();
+  });
+
+  it('still expires and notifies when question is null', async () => {
+    await writeHandoff(record('q-nullq', 25 * HOUR, { question: null as unknown as Record<string, unknown> }), handoffsDir);
+    expect(await expireHandoff('q-nullq', { handoffsDir, queueDir, now: NOW })).toBe(true);
+    expect(String(vi.mocked(pushIfConfigured).mock.calls[0]?.[0])).toContain('question details unavailable');
+  });
+
+  it('restores a lease parked in the resume queue', async () => {
+    const resumeDir = join(queueDir, RESUME_QUEUE_SUBDIR);
+    const dir = join(resumeDir, 'leased');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'q-resumed.json'), JSON.stringify({
+      id: 'q-resumed', command: '/x', state: 'waiting_human_input', attempts: 1, maxAttempts: 1,
+      leaseExpiry: NOW - 1, createdAt: NOW, updatedAt: NOW,
+    }));
+    await writeHandoff(record('q-resumed', 25 * HOUR), handoffsDir);
+    expect(await expireHandoff('q-resumed', { handoffsDir, queueDir, now: NOW })).toBe(true);
+    expect(getTaskRecord('q-resumed', resumeDir)?.state).toBe('leased');
   });
 
   it('leaves a fresh record pending', async () => {

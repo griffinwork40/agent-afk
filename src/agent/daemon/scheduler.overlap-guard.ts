@@ -222,3 +222,44 @@ export function formatOverlapAlertMessage(
     `until the current run completes.`
   );
 }
+
+/**
+ * Maximum length (chars) of the command preview included in crash-notice
+ * in-flight task snapshots. Redaction runs BEFORE truncation so a secret
+ * straddling the boundary is always fully masked (#3323 review).
+ */
+const COMMAND_HEAD_MAX_LEN = 60;
+
+/** Point-in-time snapshot of in-flight tasks for crash notices (#3248). */
+export function snapshotInFlightTasks(
+  inFlight: ReadonlyMap<string, number>,
+  commandOf: (taskId: string) => string | undefined,
+  now: number,
+): Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> {
+  const result: Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> = [];
+  for (const [taskId, startedAt] of inFlight) {
+    const command = commandOf(taskId);
+    const commandHead = redactInlineSecrets(command ?? taskId).slice(0, COMMAND_HEAD_MAX_LEN);
+    result.push({ taskId, displayId: redactInlineSecrets(taskId), commandHead, elapsedMs: now - startedAt });
+  }
+  return result;
+}
+
+/** Error record for a task whose pinned cwd has vanished at run time. */
+export function makeCwdErrorRecord(
+  task: ScheduledTask,
+  trigger: TelemetryTrigger,
+  nowMs: number,
+  cwdError: string,
+): TelemetryRecord {
+  return {
+    taskId: task.taskId,
+    command: redactInlineSecrets(task.command),
+    trigger,
+    ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
+    triggeredAt: new Date(nowMs).toISOString(),
+    durationMs: 0,
+    status: 'error',
+    errorMessage: redactInlineSecrets(cwdError),
+  };
+}

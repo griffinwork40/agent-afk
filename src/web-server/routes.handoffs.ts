@@ -53,7 +53,12 @@ export interface HandoffRouteContext {
  * HandoffRecord remain absent from the response until deliberately added here.
  */
 function toSummary(record: Awaited<ReturnType<typeof listPendingHandoffs>>[number]): HandoffSummary {
-  const q = record.question;
+  // A parseable record can still carry `question: null` (or a non-object);
+  // treat it as empty rather than letting one bad file 500 the list (#1416).
+  const raw: unknown = record.question;
+  const q: Record<string, unknown> = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : {};
   return {
     taskId: record.taskId,
     sessionId: record.sessionId,

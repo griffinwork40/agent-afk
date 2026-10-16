@@ -86,6 +86,20 @@ describe('routes.handoffs — handleListHandoffs', () => {
     expect((body as { handoffs: unknown[] }).handoffs).toEqual([]);
   });
 
+  it('does not 500 when a record has question: null (skips the fields)', async () => {
+    const bad = makeRecord({ taskId: 'q-null', question: null as unknown as Record<string, unknown> });
+    mockListPendingHandoffs.mockResolvedValue([bad, makeRecord()]);
+    const { res, json } = makeRes();
+    await handleListHandoffs(res, { handoffsDir: '/tmp/test-handoffs' });
+    const { status, body } = json();
+    expect(status).toBe(200);
+    const handoffs = (body as { handoffs: HandoffSummary[] }).handoffs;
+    expect(handoffs).toHaveLength(2);
+    expect(handoffs[0]?.taskId).toBe('q-null');
+    expect(handoffs[0]?.question).toEqual({});
+    expect(handoffs[1]?.question.message).toBe('Which environment should I deploy to?');
+  });
+
   it('returns pending records with the expected shape', async () => {
     const record = makeRecord();
     mockListPendingHandoffs.mockResolvedValue([record]);

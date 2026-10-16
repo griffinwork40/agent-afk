@@ -12,13 +12,13 @@
  * for cron/sessionstart tasks that:
  *
  *   1. Writes a durable `HandoffRecord` so the question survives a restart
- *      and `processAnsweredHandoffs` can re-enqueue it as a pull task later
- *      (the same path pull tasks use for answered handoffs).
+ *      and the handoff maintenance tick (handoff-maintenance.ts, every trigger
+ *      mode) can resume it with the answer via `processAnsweredHandoffs`.
  *   2. Sends a task-aware Telegram notification (names the task, respects
  *      `notifyOn` via the injected `notify` callback).
  *   3. Returns `{ action: 'decline' }` immediately — cron sessions cannot
  *      block on a synchronous answer; the operator answers later and the
- *      handoff is consumed on the next pull sweep.
+ *      handoff is consumed on the next maintenance tick.
  *
  * Deliberately omits the `setLeaseState('waiting_human_input')` step used
  * by `makeDaemonElicitationHandler` for pull tasks: cron tasks have no
@@ -72,7 +72,7 @@ export function formatCronElicitationMessage(
     `Command: ${command}\n` +
     `Question: ${questionHead}\n` +
     `The question has been saved as a handoff record. ` +
-    `Answer via Telegram and the daemon will re-run the task on the next pull sweep.`
+    `Answer via Telegram and the daemon will resume the task with your answer.`
   );
 }
 
@@ -144,7 +144,7 @@ export function makeCronElicitationHandler(
     };
 
     // Step 1: persist the handoff so the operator can answer later and
-    // `processAnsweredHandoffs` re-enqueues it as a pull task.
+    // the maintenance tick resumes the task with the answer (#1416).
     let handoffWritten = false;
     try {
       await writeHandoff(record, opts.handoffsDir);
