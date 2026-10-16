@@ -26,7 +26,9 @@ export async function awaitPendingWritesBounded(
   pending: readonly Promise<void>[],
   timeoutMs: number,
   label: string,
+  describeTimeout?: (unsettled: number, total: number) => string,
 ): Promise<void> {
+  if (pending.length === 0) return;
   let unsettled = pending.length;
   const tracked = pending.map((p) =>
     p.then(
@@ -42,9 +44,9 @@ export async function awaitPendingWritesBounded(
   const outcome = await Promise.race([Promise.all(tracked), bound]);
   clearTimeout(timer);
   if (outcome === 'timeout' && unsettled > 0) {
-    console.warn(
+    console.warn(describeTimeout?.(unsettled, pending.length) ?? (
       `[${label}] seal: abandoned ${unsettled} of ${pending.length} pending child ` +
-        `terminal write(s) after ${timeoutMs}ms — sealing anyway; their rows may be missing`,
-    );
+        `terminal write(s) after ${timeoutMs}ms — sealing anyway; their rows may be missing`
+    ));
   }
 }

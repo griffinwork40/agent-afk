@@ -59,6 +59,7 @@ export interface TelegramExecutorWiring {
   drainSubagents: AgentConfig['drainSubagents'];
   /** Wired into `AgentConfig.getPendingChildTerminalWrites` so seal() can await in-flight cancel emits (#3714). */
   getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'];
+  getPendingChildBillingStreams?: AgentConfig['getPendingChildBillingStreams'];
   /**
    * Call after `new AgentSession(config)` to resolve the deferred parent proxy
    * and wire the subagent-success rollup.
@@ -134,5 +135,8 @@ export function wireTelegramExecutors(
   const getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'] =
     () => executors.rootManager.getPendingChildTerminalWrites();
 
-  return { executors, backgroundRegistry, bgNotifier, drainSubagents, getPendingChildTerminalWrites, bindSession };
+  return {
+    executors, backgroundRegistry, bgNotifier, drainSubagents, getPendingChildTerminalWrites, bindSession,
+    getPendingChildBillingStreams: () => executors.rootManager.getPendingChildBillingStreams(),
+  };
 }

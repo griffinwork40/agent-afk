@@ -11,7 +11,7 @@
 import type { SubagentProgressSink } from '../types/session-types.js';
 import type { Message } from '../types.js';
 import { emitSuccessfulHandoff } from './capped-handoff.js';
-import { takeUnreportedBilling } from './handle.billing.js';
+import { takeUnreportedBilling, type RunBillingContext } from './handle.billing.js';
 import { streamToFinalMessage } from './handle.streaming.js';
 import type { SubagentHandleImpl } from './handle.js';
 
@@ -33,6 +33,7 @@ export async function drainAndEmitSuccess(
   firstMsg: Message,
   startTime: number,
   sinkOverride: SubagentProgressSink | undefined,
+  billingContext: RunBillingContext = handle._billingContext,
 ): Promise<Message> {
   // Item 7: Drain pending user messages queued via sendMessage(). Each
   // message starts a new turn in the same subagent conversation.
@@ -49,7 +50,7 @@ export async function drainAndEmitSuccess(
       // Item 7c: abort-signal guard — stop draining if cancelled.
       if (handle._controller.signal.aborted) break;
       const next = handle._pendingUserMessages.shift()!;
-      lastMsg = await streamToFinalMessage(handle, next, sinkOverride);
+      lastMsg = await streamToFinalMessage(handle, next, sinkOverride, billingContext);
       handle._lastMessage = lastMsg.content;
       handle._currentTrace.turnCount++;
     }
@@ -74,7 +75,7 @@ export async function drainAndEmitSuccess(
   // FIFO queue BEFORE any seal can run. Safe: write() is a bounded FS append
   // and emitSubagentLifecycle already swallows errors, so the await cannot
   // introduce a new failure mode or an unbounded hang.
-  await emitSuccessfulHandoff(handle, lastMsg, startTime);
+  await emitSuccessfulHandoff(handle, lastMsg, startTime, billingContext);
   // Propagate usage and cost to the parent session's rollup accumulators.
   // Fire synchronously before onTerminal() so the session_sealed event
   // always captures this subagent's contribution even if onTerminal()
@@ -96,7 +97,7 @@ export async function drainAndEmitSuccess(
   // Taking the delta records it as reported, so a later cancel()/failure
   // reports only spend that accrues after this point — counted exactly once.
   const { billing: _traceBilling, ...legacy } = handle._currentTrace.usage ?? {};
-  const billing = takeUnreportedBilling(handle);
+  const billing = takeUnreportedBilling(billingContext);
   const usage = handle._currentTrace.usage === undefined && billing === undefined ? undefined : legacy;
   handle.onSubagentSucceeded?.(billing !== undefined ? { ...usage, billing } : usage, costUsd);
 

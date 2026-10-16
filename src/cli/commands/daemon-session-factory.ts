@@ -2,6 +2,7 @@ import { env } from '../../config/env.js';
 import { getApiKeyForModel, getDefaultSubagentModel, getMaxToolUseIterations, getMaxBudgetUsd, parseProvider } from '../shared-helpers.js';
 import type { AgentConfig, AgentModelInput } from '../../agent/types.js';
 import { AgentSession } from '../../agent/session.js';
+import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
 import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { STATE_TOOL_NAMES } from '../../agent/state/state-tools.js';
@@ -199,9 +200,7 @@ export function buildDaemonSessionFactory(
       // Cascade-abort and drain in-flight children before the writer seals,
       // so a wave still running when this session ends emits real `cancelled`
       // rows instead of vanishing (#733).
-      drainSubagents: (reason) =>
-        rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
-      getPendingChildTerminalWrites: () => rootManager.getPendingChildTerminalWrites(),
+      ...managerShutdownConfig(rootManager),
       // User-facing surface for trace `origin` attribution. Forced after
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.

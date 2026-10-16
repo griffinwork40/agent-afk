@@ -49,6 +49,7 @@ export interface WebSessionWiring {
   drainSubagents: AgentConfig['drainSubagents'];
   /** Wired into `AgentConfig.getPendingChildTerminalWrites` so seal() can await in-flight cancel emits (#3714). */
   getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'];
+  getPendingChildBillingStreams?: AgentConfig['getPendingChildBillingStreams'];
 }
 
 export interface WireWebSessionOptions {
@@ -156,6 +157,7 @@ export async function wireWebSession(
     workspaceStore,
     drainSubagents,
     getPendingChildTerminalWrites,
+    getPendingChildBillingStreams: () => executors.rootManager.getPendingChildBillingStreams(),
   };
 
   // Attach the late-bind setter as a post-construction hook: the caller must

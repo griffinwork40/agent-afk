@@ -14,6 +14,7 @@
  */
 
 import type { TraceWriter } from '../trace/writer.js';
+import { awaitPendingWritesBounded, SEAL_PENDING_WRITES_TIMEOUT_MS } from '../trace/pending-writes.js';
 import { dispatchSessionEnd } from './hooks-dispatch.js';
 import { emitClosureEvent, sealTraceWriter, type SealTraceInput } from './closure-emitter.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
@@ -97,7 +98,11 @@ export class SessionShutdown {
       ownedTraceWriter,
       getAssistantTexts,
     } = this.deps;
-    const config = getConfig();
+    // Some caller-owned surfaces carry compose directly rather than in the
+    // SDK bundle; keep this structural and optional for legacy configs/mocks.
+    const config = getConfig() as AgentConfig & {
+      composeExecutor?: { getPendingChildBillingStreams?: () => readonly Promise<void>[] };
+    };
 
     // Drain both the opt-in executor bundle (#3442) and the caller-supplied
     // tree hook concurrently; neither may reject the shutdown.
@@ -105,6 +110,20 @@ export class SessionShutdown {
       config.executors?.drain(reason).catch(() => {}),
       config.drainSubagents?.(reason).catch(() => {}),
     ]);
+
+    // Cancellation/drain can abandon a provider iterator. Wait for its final
+    // billing callback BEFORE freezing accounting, not inside writer.seal().
+    const pendingBilling = [
+      ...(config.executors?.getPendingChildBillingStreams?.() ?? []),
+      ...(config.getPendingChildBillingStreams?.() ?? []),
+      ...(config.composeExecutor?.getPendingChildBillingStreams?.() ?? []),
+      ...(config.executors?.composeExecutor?.getPendingChildBillingStreams?.() ?? []),
+    ];
+    await awaitPendingWritesBounded(
+      [...new Set(pendingBilling)], SEAL_PENDING_WRITES_TIMEOUT_MS, 'SessionShutdown',
+      (unsettled, total) => `[SessionShutdown] billing: abandoned ${unsettled} of ${total} pending child ` +
+        `stream(s) after ${SEAL_PENDING_WRITES_TIMEOUT_MS}ms — taking accounting snapshot anyway; billing may be incomplete`,
+    );
 
     const signals = accounting.closureSignals(getAbortController().signal, reason);
     const acct = accounting.snapshot();

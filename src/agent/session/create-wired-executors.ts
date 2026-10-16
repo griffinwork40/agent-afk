@@ -205,6 +205,7 @@ export function createWiredExecutors(
       if (toggles.compose) wired.composeExecutor.setOnSubagentSucceeded(record);
     },
     drain,
+    getPendingChildBillingStreams: () => wired.rootManager.getPendingChildBillingStreams(),
   };
 
   let disposedPromise: Promise<void> | undefined;

@@ -1,74 +1,29 @@
-/**
- * Exactly-once (by amount) billing settlement for a subagent run (#3878).
- *
- * Contract: every token of a child's summed billing (`handle._runBilling`)
- * reaches the parent's `session_sealed.billing.subagents` rollup EXACTLY ONCE
- * per run, whatever the run's terminal outcome and however many settlement
- * points fire. Settlement is tracked BY AMOUNT, not by a boolean: the handle
- * records the cumulative total already handed to the parent
- * (`_billingReportedTotal`) and every settlement point reports only the
- * unreported DELTA (`_runBilling − _billingReportedTotal`, per counter), via
- * {@link takeUnreportedBilling}. Settlement points:
- *
- *   - succeeded → `drainAndEmitSuccess` hands legacy fields + the billing
- *     delta to `onSubagentSucceeded` (legacy counters unchanged).
- *   - failed / cascade-cancelled / explicit `cancel()` / the post-cancel
- *     branch of `run()`'s catch → {@link settleUnreportedBilling} hands a
- *     BILLING-ONLY delta, tagged `outcome: 'failed' | 'cancelled'`, to the
- *     same callback.
- *   - late `done` arriving after a terminal settlement (own-timeout path):
- *     {@link processDoneEvent} in handle.streaming.ts detects a terminal
- *     handle status and calls {@link settleUnreportedBilling} once more for
- *     the newly-arrived delta, ensuring spend from an aborted turn is not
- *     silently dropped (#3889).
- *
- * So spend that arrives AFTER an explicit `cancel()` already settled (a
- * `done` drained on interrupt, or a drain turn finishing during the cancel)
- * is still reported — as its own delta — by the next settlement point, and a
- * `cancel()` after a fully reported success reports nothing.
- *
- * The `outcome` tag is what keeps legacy semantics intact: the accumulator
- * (`AccountingAccumulator.recordSubagentCompletion`) adds a tagged report to
- * the billing rollup ONLY — `subagentCompletedCount`, `subagentRunningTokens`,
- * `subagentRunningCostUsd`, and the tree-budget check stay success-only.
- * Routing through the existing callback means every surface that already
- * wires `setOnSubagentSucceeded` → `recordSubagentCompletion` picks this up
- * with no edit, because each forwards `usage` verbatim.
- *
- * Lifecycle rows are NOT deltas: a terminal row carries the CUMULATIVE
- * `{ provider, tokens }` known when it is emitted. The `succeeded` row always
- * does (`emitSuccessfulHandoff`); a failed/cancelled row does only when its
- * settlement had an unreported delta (so a cancel after a reported success
- * carries none). An explicit `cancelled` row may therefore UNDERCOUNT spend
- * that lands after it, and a cancel during a drain can put overlapping
- * cumulative totals on both the `cancelled` and the `succeeded` row. The
- * rollup is authoritative for totals — never sum lifecycle rows.
- *
- * `_billingReportedTotal` is reset with `_runBilling` at the start of every
- * `run()`, so a re-run reports its own spend.
- *
- * @module agent/subagent/handle.billing
- */
-
+// Contract: billing totals and the settled-through watermark belong to a run,
+// not a reusable handle. Stream closures retain this context after a timeout;
+// catch arms its terminal outcome before callbacks or asynchronous trace writes.
+// Each settlement synchronously advances the watermark before reporting a delta.
+// Unsuccessful reports are billing-only; legacy completion counters stay unchanged.
+// Lifecycle rows contain cumulative totals, not deltas; the rollup is authoritative.
 import type { BillingUsage } from '../provider.js';
 import { billingLifecycleFields } from '../usage.billing.js';
 import type { SubagentHandleImpl } from './handle.js';
 
-/** Non-success terminal outcomes that settle billing without a completion. */
 export type SubagentUnsuccessfulOutcome = 'failed' | 'cancelled';
+
+/** Mutable ledger captured by every stream and settlement in one run. */
+export interface RunBillingContext {
+  total?: BillingUsage;
+  reported?: BillingUsage;
+  terminalOutcome?: SubagentUnsuccessfulOutcome;
+}
 
 const sub = (a: number, b: number): number => Math.max(0, a - b);
 
-/**
- * The run's billing not yet handed to the parent, per counter. Returns the
- * full total when nothing was reported yet (even an all-zero total: reported
- * zero is data), `undefined` when the run accrued no billing or the delta
- * since the last report is all-zero. Pure — does not record anything.
- */
-export function unreportedBillingDelta<T>(handle: SubagentHandleImpl<T>): BillingUsage | undefined {
-  const total = handle._runBilling;
+/** Pure per-counter delta; a first all-zero report is still data. */
+export function unreportedBillingDelta(context: RunBillingContext): BillingUsage | undefined {
+  const total = context.total;
   if (total === undefined) return undefined;
-  const prior = handle._billingReportedTotal;
+  const prior = context.reported;
   if (prior === undefined) return { ...total };
   const delta: BillingUsage = {
     provider: total.provider,
@@ -81,32 +36,32 @@ export function unreportedBillingDelta<T>(handle: SubagentHandleImpl<T>): Billin
   return empty ? undefined : delta;
 }
 
-/**
- * Return the unreported delta AND record the current total as reported, in
- * one synchronous step, so no interleaving settlement can report it again.
- */
-export function takeUnreportedBilling<T>(handle: SubagentHandleImpl<T>): BillingUsage | undefined {
-  const delta = unreportedBillingDelta(handle);
-  if (delta !== undefined && handle._runBilling !== undefined) {
-    handle._billingReportedTotal = { ...handle._runBilling };
-  }
+/** Advance synchronously so reentrant settlement cannot count a delta twice. */
+export function takeUnreportedBilling(context: RunBillingContext): BillingUsage | undefined {
+  const delta = unreportedBillingDelta(context);
+  if (delta !== undefined && context.total !== undefined) context.reported = { ...context.total };
   return delta;
 }
 
-/**
- * Settle a failed/cancelled run's billing: roll the unreported delta into the
- * parent (billing-only, tagged with `outcome`) and return the CUMULATIVE
- * `{ provider, tokens }` lifecycle fields for the terminal trace row. Returns
- * `{}` — and reports nothing — when there is no unreported delta (no billing,
- * or all of it already reported, e.g. cancel after success).
- */
+/** Report billing only and return cumulative lifecycle fields when a delta exists. */
 export function settleUnreportedBilling<T>(
   handle: SubagentHandleImpl<T>,
   outcome: SubagentUnsuccessfulOutcome,
+  context: RunBillingContext = handle._billingContext,
 ): ReturnType<typeof billingLifecycleFields> {
-  const billing = takeUnreportedBilling(handle);
+  const billing = takeUnreportedBilling(context);
   if (billing === undefined) return {};
-  const usage: import('./result.js').SubagentTrace['usage'] = { billing, outcome };
-  handle.onSubagentSucceeded?.(usage, undefined);
-  return billingLifecycleFields(handle._runBilling);
+  handle.onSubagentSucceeded?.({ billing, outcome }, undefined);
+  return billingLifecycleFields(context.total);
+}
+
+/** Track live streams from creation, including ones abandoned by timeout races. */
+export function trackBillingStream<T>(
+  pending: Set<Promise<void>>,
+  stream: Promise<T>,
+): Promise<T> {
+  const completion = stream.then(() => {}, () => {});
+  pending.add(completion);
+  void completion.then(() => pending.delete(completion));
+  return stream;
 }

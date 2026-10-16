@@ -33,7 +33,7 @@ import {
 import { buildEmptyBufferError, synthesizeEmptyBufferPartial, synthesizeTimeoutPartial } from './empty-buffer-partial.js';
 import type { SubagentHandleImpl } from './handle.js';
 import { CappedHandoffAccumulator } from './capped-handoff.js';
-import { settleUnreportedBilling } from './handle.billing.js';
+import { settleUnreportedBilling, trackBillingStream, type RunBillingContext } from './handle.billing.js';
 
 /**
  * Consume the streaming message iterator, forward events to progressSink,
@@ -45,10 +45,20 @@ import { settleUnreportedBilling } from './handle.billing.js';
  *
  * @internal
  */
-export async function streamToFinalMessage<T>(
+export function streamToFinalMessage<T>(
   handle: SubagentHandleImpl<T>,
   prompt: string | ContentBlockParam[],
   sinkOverride?: SubagentProgressSink,
+  billingContext: RunBillingContext = handle._billingContext,
+): Promise<Message> {
+  return trackBillingStream(handle._pendingBillingStreams, consumeStream(handle, prompt, sinkOverride, billingContext));
+}
+
+async function consumeStream<T>(
+  handle: SubagentHandleImpl<T>,
+  prompt: string | ContentBlockParam[],
+  sinkOverride: SubagentProgressSink | undefined,
+  billingContext: RunBillingContext,
 ): Promise<Message> {
   let finalMessage: Message | undefined;
   let streamError: Error | undefined;
@@ -105,6 +115,12 @@ export async function streamToFinalMessage<T>(
   handle.session.setBeforeNextRound?.(handle._beforeNextRound);
   try {
     for await (const event of handle.session.sendMessageStream(prompt)) {
+      // A superseded stream owns billing only; do not mutate the retry's trace,
+      // stop reason, pause policy, output buffer, or progress delivery.
+      if (handle._billingContext !== billingContext) {
+        if (event.type === 'done') { processDoneEvent(handle, event, billingContext); break; }
+        continue;
+      }
       if (activeSink) {
         activeSink(event, meta);
       }
@@ -135,14 +151,14 @@ export async function streamToFinalMessage<T>(
         streamError = event.error;
         break;
       } else if (event.type === 'done') {
-        processDoneEvent(handle, event);
+        processDoneEvent(handle, event, billingContext);
         break;
       }
     }
   } finally {
     // Clear the steering callback from the provider session so it cannot fire
     // after the stream ends (e.g. if the session is reused or inspected).
-    handle.session.setBeforeNextRound?.(undefined);
+    if (handle._billingContext === billingContext) handle.session.setBeforeNextRound?.(undefined);
     // Idempotent: releases the idle timer on EVERY exit path — normal
     // completion, an `error`/`done` break, or a thrown/aborted iterator.
     // Disposing before the post-loop return/throw logic guarantees a
@@ -150,6 +166,11 @@ export async function streamToFinalMessage<T>(
     idleWatchdog.dispose();
   }
 
+  // The abandoned caller already rejected. Avoid post-loop fallback writes to
+  // the retry's stop reason/trace after delivering the old run's billing.
+  if (handle._billingContext !== billingContext) {
+    return finalMessage ?? { role: 'assistant', content: '', timestamp: new Date() };
+  }
   return resolveStreamResult(handle, handoff, finalMessage, streamError);
 }
 
@@ -194,12 +215,14 @@ function processChunkEvent<T>(
 function processDoneEvent<T>(
   handle: SubagentHandleImpl<T>,
   event: { type: 'done'; metadata?: { stopReason?: unknown; usage?: unknown } },
+  context: RunBillingContext,
 ): void {
   // Capture the turn's stop reason so the post-loop fallback can tell a
   // tool-use-cap termination (which yields a `done` with no assistant
   // message) apart from a genuinely empty stream — and so `runToResult`
   // can surface it on the SubagentResult (persisted on the handle).
-  if (typeof event.metadata?.stopReason === 'string') {
+  const current = handle._billingContext === context;
+  if (current && typeof event.metadata?.stopReason === 'string') {
     handle._lastStopReason = event.metadata.stopReason;
   }
   if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {
@@ -207,9 +230,9 @@ function processDoneEvent<T>(
     // Billing (#3878) accumulates across the run's turns on the handle (the
     // trace is replaced per drain turn). Each `done` carries ONE turn's usage
     // (the provider's per-turn accumulator), so summing is a true total.
-    handle._runBilling = sumBillingUsage(handle._runBilling, billingFromUsageRecord(u));
-    const billing = handle._runBilling;
-    handle._currentTrace.usage = {
+    context.total = sumBillingUsage(context.total, billingFromUsageRecord(u));
+    const billing = context.total;
+    if (current) handle._currentTrace.usage = {
       ...(billing !== undefined ? { billing } : {}),
       inputTokens: typeof u['input_tokens'] === 'number' ? u['input_tokens'] : undefined,
       outputTokens: typeof u['output_tokens'] === 'number' ? u['output_tokens'] : undefined,
@@ -222,23 +245,12 @@ function processDoneEvent<T>(
           ? u['cache_creation_input_tokens']
           : undefined,
     };
-    // Item 1 fix (#3889): when a subagent hits its OWN wall-clock budget,
-    // `withTimeout` aborts the controller and rejects in the same tick, so
-    // `run()`'s catch calls `settleUnreportedBilling('failed')` BEFORE this
-    // `done` event arrives (providers yield usage on abort). The spend is
-    // then stranded on `_runBilling` with no later settlement point.
-    //
-    // When the handle is already `'failed'` (set by `run()`'s catch before
-    // the aborted stream unwinds), settle the newly-arrived delta immediately.
-    // `takeUnreportedBilling` is exactly-once by amount: if the catch already
-    // reported everything (or nothing arrived yet) the delta is zero → no-op.
-    //
-    // `'cancelled'` is deliberately excluded: late billing on the cancel path
-    // is routed through `run()`'s post-cancel catch branch and
-    // `drainAndEmitSuccess` — adding a third settlement here would over-fire
-    // on drain turns where `cancel()` races a `done` inside the stream loop.
-    if ((handle._currentStatus as string) === 'failed') {
-      settleUnreportedBilling(handle, 'failed');
+    // Catch arms billing settlement synchronously, before its first await.
+    // Status may still be running while the terminal trace write is pending.
+    // The amount watermark makes this safe before OR after catch settlement.
+    // A live cancelled drain keeps its existing success/catch settlement path.
+    if (context.terminalOutcome !== undefined) {
+      settleUnreportedBilling(handle, context.terminalOutcome, context);
     }
   }
 }

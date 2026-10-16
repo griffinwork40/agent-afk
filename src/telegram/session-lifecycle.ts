@@ -137,6 +137,7 @@ export function finalizeTelegramSession(
     maxTurns: 100,
     drainSubagents: wiring.drainSubagents,
     getPendingChildTerminalWrites: wiring.getPendingChildTerminalWrites,
+    getPendingChildBillingStreams: wiring.getPendingChildBillingStreams,
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
     ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),

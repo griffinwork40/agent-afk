@@ -2,6 +2,7 @@ import type { Message, IAgentSession, OutputEvent } from '../types.js';
 import { emitSubagentLifecycle } from '../trace/emit.js';
 import { billingLifecycleFields } from '../usage.billing.js';
 import type { SubagentHandleImpl } from './handle.js';
+import type { RunBillingContext } from './handle.billing.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 
 /** Advisory classifier, deliberately narrow: never discard a multiline findings report. */
@@ -65,7 +66,10 @@ export class CappedHandoffAccumulator {
 }
 
 /** Invariant: await the lifecycle receipt before onTerminal can seal the trace. */
-export async function emitSuccessfulHandoff<T>(handle: SubagentHandleImpl<T>, message: Message, startTime: number): Promise<void> {
+export async function emitSuccessfulHandoff<T>(
+  handle: SubagentHandleImpl<T>, message: Message, startTime: number,
+  billingContext: RunBillingContext = handle._billingContext,
+): Promise<void> {
   await emitSubagentLifecycle(handle._traceWriter, {
     transition: 'succeeded',
     subagentId: handle.id,
@@ -74,7 +78,7 @@ export async function emitSuccessfulHandoff<T>(handle: SubagentHandleImpl<T>, me
     outputBytes: Buffer.byteLength(message.content, 'utf8'),
     ...(handle._lastStopReason !== undefined && { stopReason: handle._lastStopReason }),
     // Cumulative run total (#3878); the rollup, not this row, is authoritative.
-    ...billingLifecycleFields(handle._runBilling),
+    ...billingLifecycleFields(billingContext.total),
     ...cappedHandoffFields(message, handle._lastStopReason),
   });
 }

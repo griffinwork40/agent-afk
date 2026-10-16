@@ -66,6 +66,8 @@ export interface SessionExecutors {
    * keeps living, so implementations should re-arm rather than latch closed.
    */
   drain(reason: string): Promise<unknown>;
+  /** Collected after drain; settled before the parent's accounting snapshot (bounded). */
+  getPendingChildBillingStreams?(): readonly Promise<void>[];
 }
 
 /** The provider-constructor slice of a {@link SessionExecutors} bundle. */
