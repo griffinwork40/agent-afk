@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ToolCall } from './types.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
+import type { AgentRegistry, RegisteredAgent } from '../agents/index.js';
 import { runWithSink } from '../_lib/skill-sink-channel.js';
 import { SKILL_MAX_DEPTH_RECOVERY_HINT } from './skill-depth-message.js';
 
@@ -1389,17 +1390,18 @@ describe('ComposeExecutor', () => {
   //   4. Skips emission when nodes.length !== resolvedAgents.length.
   // -------------------------------------------------------------------------
   describe('emitLeafToolStrips', () => {
-    const agentWithStrippedTool = {
+    const agentWithStrippedTool: RegisteredAgent = {
       name: 'agent-with-delegation',
       definition: {
+        description: '',
         prompt: 'You are a specialist.',
         // 'agent' is in COMPOSE_LEAF_STRIPPED_TOOLS — it will be stripped.
         tools: ['read_file', 'agent'],
         model: 'haiku',
       },
-      source: 'user' as const,
+      source: 'user',
     };
-    const registryWithStripped: ReadonlyMap<string, typeof agentWithStrippedTool> = new Map([
+    const registryWithStripped: AgentRegistry = new Map([
       ['agent-with-delegation', agentWithStrippedTool],
     ]);
 
@@ -2171,16 +2173,17 @@ describe('ComposeExecutor', () => {
   });
 
   describe('agent_type resolution', () => {
-    const researchAgent = {
+    const researchAgent: RegisteredAgent = {
       name: 'research-agent',
       definition: {
+        description: '',
         prompt: 'You are a research specialist.',
         tools: ['read_file', 'grep', 'glob'],
         model: 'haiku',
       },
-      source: 'user' as const,
+      source: 'user',
     };
-    const registry: ReadonlyMap<string, typeof researchAgent> = new Map([
+    const registry: AgentRegistry = new Map([
       ['research-agent', researchAgent],
     ]);
 

@@ -57,7 +57,7 @@ const IMPL_INTENT_PATTERNS: readonly RegExp[] = [
       String.raw`((?:commit|push|deploy)\s+(?:(?:the|your|these|this|all|my)\s+)?(?:changes?|code|fix(?:es)?|work|it|them|to\s+\S+))`,
     'i',
   ),
-  /\b((?:use|call|invoke|using|via)\s+(?:the\s+)?(?:write_file|edit_file)\b)/i,
+  /((?:use|call|invoke|using|via)\s+(?:the\s+)?(?:write_file|edit_file)\b)/i,
 ];
 
 /**
