@@ -26,7 +26,7 @@ import { validateBotToken } from './setup-wizard.js';
 import { MemoryStore } from '../agent/memory/index.js';
 import { StateStore } from '../agent/state/state-store.js';
 import { providerForModel } from '../agent/providers/index.js';
-import { loadConfig, loadTelegramConfig } from '../cli/config.js';
+import { loadConfig, loadTelegramConfig, getOperatorPermissionMode } from '../cli/config.js';
 import { getEnvConfigPath, getStateDatabasePath } from '../paths.js';
 import { loadSystemPrompt, getThinking, getEffort } from '../cli/shared-helpers.js';
 import type { AgentModelInput } from '../agent/types.js';
@@ -196,6 +196,7 @@ export async function main(): Promise<void> {
   const telegramCwd = env.AFK_TELEGRAM_CWD;
   const idleSessionMs = env.AFK_TELEGRAM_SESSION_IDLE_MS !== undefined ? parseInt(env.AFK_TELEGRAM_SESSION_IDLE_MS, 10) : undefined;
 
+  const opMode = getOperatorPermissionMode();
   const bot = new TelegramBot({
     botToken,
     apiKey: config.apiKey ?? '',
@@ -215,6 +216,10 @@ export async function main(): Promise<void> {
     // override is set via /cd. Per-session `data.cwd` takes precedence.
     ...(telegramCwd !== undefined && telegramCwd.length > 0 ? { botCwd: telegramCwd } : {}),
     ...(idleSessionMs !== undefined && !isNaN(idleSessionMs) && idleSessionMs > 0 ? { idleSessionMs } : {}),
+    // Forward permissionMode only when the operator explicitly set it in afk.config.json.
+    // loadConfig() always fills in DEFAULT_CLI_PERMISSION_MODE, so checking config.permissionMode
+    // would unconditionally forward bypassPermissions into Telegram session metadata (#3969).
+    ...(opMode !== undefined ? { permissionMode: opMode } : {}),
     createSession: createTelegramSessionFactory({
       config,
       frameworkBase,
@@ -265,7 +270,7 @@ export async function main(): Promise<void> {
     console.log('  /help    - Show command list');
     console.log('  /clear   - Clear conversation history');
     console.log('  /compact - Compact history (summarize older messages)');
-    console.log('  /model   - Switch model (opus/sonnet/haiku/gpt-5.4/...)');
+    console.log('  /model   - Switch model (opus/sonnet/haiku/gpt-5.6-sol/...)');
     console.log('\n💬 Send any message to chat with the agent.');
     console.log('\n⏹️  Press Ctrl+C to stop the bot.');
 

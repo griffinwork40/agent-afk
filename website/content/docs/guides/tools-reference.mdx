@@ -85,6 +85,20 @@ Extract text from binary document formats that `read_file` rejects. Supports `.d
 |-----------|------|----------|-------------|
 | `file_path` | string | ✓ | Absolute path to the document file. |
 
+### `git_read`
+
+Opt-in: advertised only when `AFK_READONLY_GIT_TOOL=1`. Runs a read-only git query in the session working directory with no shell (`execFile`, argv only). With the flag on, read-only children (read-only skills such as `ground-state`, `bash: read-only` named agents such as `git-investigator`, and compose nodes running them) lose generic `bash` and get this tool instead. Write-capable agents keep `bash`; top-level sessions also see `git_read`.
+
+Subcommands: `status`, `log`, `diff`, `show`, `grep`, `tag` (listing), `branch` (listing), `blame`, `ls-files`, `rev-parse`. Each subcommand accepts a fixed option allowlist; anything else is rejected, including `-c`, `--output`/`-o`, `--ext-diff`, `--textconv`, `--exec`, `-O`, and `%G` signature placeholders. Paths must stay inside the working directory and are passed after `--`. git runs with `--no-pager`, `core.pager=cat`, `diff.external=` empty, `--no-ext-diff`/`--no-textconv`, `GIT_PAGER=cat`, `GIT_EDITOR=:`, and inherited `GIT_*` variables removed.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `subcommand` | string | ✓ | One of the subcommands above. |
+| `args` | string[] | | Allowlisted options and revisions, one token each (e.g. `["--oneline", "--max-count=20", "main..HEAD"]`). |
+| `paths` | string[] | | Pathspecs relative to the working directory. |
+| `pattern` | string | | Search pattern; required for `grep`, invalid otherwise. |
+| `max_bytes` | number | | Output cap in bytes (default 51200, ceiling 204800). |
+
 ### `json_query`
 
 Run a bounded jq-subset query on a JSON file without loading it fully into context. Returns `{ result, type, truncated, source_size }`.

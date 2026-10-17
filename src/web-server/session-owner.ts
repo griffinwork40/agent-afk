@@ -145,6 +145,7 @@ export class SessionOwner {
       provider: wiring.provider,
       drainSubagents: wiring.drainSubagents,
       getPendingChildTerminalWrites: wiring.getPendingChildTerminalWrites,
+      getPendingChildBillingStreams: wiring.getPendingChildBillingStreams,
       ...(wiring.systemPrompt !== undefined ? { systemPrompt: wiring.systemPrompt } : {}),
       ...(wiring.systemPromptSource !== undefined ? { systemPromptSource: wiring.systemPromptSource } : {}),
       ...(wiring.traceWriter !== undefined ? { traceWriter: wiring.traceWriter } : {}),

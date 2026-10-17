@@ -518,3 +518,115 @@ describe('GradeEntry pairing keys support arm pairing per probe', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Budget truncation (#3876)
+// ---------------------------------------------------------------------------
+
+describe('verifyRun: truncatedByBudget (#3876)', () => {
+  /**
+   * A runner that costs `costPerTrace` USD per trace. The test controls the
+   * cap via `maxUsdRemaining` to trigger/avoid truncation.
+   */
+  function costRunner(episodes: Episode[], costPerTrace: number): AgentRunner {
+    return {
+      name: 'cost-fake',
+      run: vi.fn(async (en: Environment, ep: Episode, s: number) =>
+        ({ ...trace(ep.id, en.label, s, 'ok'), costUsd: costPerTrace }),
+      ),
+      snapshot: vi.fn(),
+    } as unknown as AgentRunner;
+  }
+
+  it('truncatedByBudget is false when budget is exceeded only after the last task finishes', async () => {
+    // 2 episodes × 2 envs × 1 sample = 4 tasks at $6 each = $24 total.
+    // Cap is $20 — exceeded after the last task, but no task was skipped.
+    const episodes: Episode[] = [
+      { id: 'e1', source: 'real', prompt: 'p1' },
+      { id: 'e2', source: 'real', prompt: 'p2' },
+    ];
+    const { verifyResult } = await verifyRun(input(episodes, [], {
+      runner: costRunner(episodes, 6),
+      options: {
+        samples: 1,
+        concurrency: 1,   // serial so cost accumulates predictably
+        maxTurns: 1,
+        episodeTimeoutMs: 1000,
+        maxUsdRemaining: 20,
+        changeKinds: ['append'],
+        calibrationFile: path.join(os.tmpdir(), 'noop-ledger.jsonl'),
+      },
+    }));
+    expect(verifyResult.truncatedByBudget).toBe(false);
+  });
+
+  it('truncatedByBudget is true when planned episodes are skipped due to budget', async () => {
+    // 4 episodes × 2 envs × 1 sample = 8 tasks at $6 each = $48 total.
+    // Cap is $13 — first 2 tasks ($12) run, 3rd would push to $18 > cap, so
+    // remaining tasks are skipped.
+    const episodes: Episode[] = [
+      { id: 'e1', source: 'real', prompt: 'p1' },
+      { id: 'e2', source: 'real', prompt: 'p2' },
+      { id: 'e3', source: 'real', prompt: 'p3' },
+      { id: 'e4', source: 'real', prompt: 'p4' },
+    ];
+    const { verifyResult } = await verifyRun(input(episodes, [], {
+      runner: costRunner(episodes, 6),
+      options: {
+        samples: 1,
+        concurrency: 1,
+        maxTurns: 1,
+        episodeTimeoutMs: 1000,
+        maxUsdRemaining: 13,
+        changeKinds: ['append'],
+        calibrationFile: path.join(os.tmpdir(), 'noop-ledger.jsonl'),
+      },
+    }));
+    expect(verifyResult.truncatedByBudget).toBe(true);
+  });
+
+  it('skippedByBudget is not double-counted when concurrency > 1 (#3920)', async () => {
+    // 6 episodes × 2 envs × 1 sample = 12 tasks at $5 each = $60 total.
+    // Cap is $11 — only the first 2 tasks run ($10), then budget.exceeded
+    // flips.  With concurrency=4 several tasks are acquired concurrently;
+    // without the fix a task that slips through the dispatch-loop guard into
+    // inflight would be counted again inside runTask, inflating the counter.
+    // The correct skip count is 12 - 2 = 10; with the bug it was > 10.
+    const episodes: Episode[] = Array.from({ length: 6 }, (_, i) => ({
+      id: `e${i + 1}`, source: 'real' as const, prompt: `p${i + 1}`,
+    }));
+    // Use a runner that tracks how many times it was actually called.
+    let runCalls = 0;
+    const runner: AgentRunner = {
+      name: 'counting-fake',
+      run: vi.fn(async (en: Environment, ep: Episode, s: number) => {
+        runCalls++;
+        return { ...trace(ep.id, en.label, s, 'ok'), costUsd: 5 };
+      }),
+      snapshot: vi.fn(),
+    } as unknown as AgentRunner;
+
+    const { verifyResult, allTraces } = await verifyRun(input(episodes, [], {
+      runner,
+      options: {
+        samples: 1,
+        concurrency: 4,
+        maxTurns: 1,
+        episodeTimeoutMs: 1000,
+        maxUsdRemaining: 11,
+        changeKinds: ['append'],
+        calibrationFile: path.join(os.tmpdir(), 'noop-ledger.jsonl'),
+      },
+    }));
+
+    // truncatedByBudget must be true (some tasks were skipped).
+    expect(verifyResult.truncatedByBudget).toBe(true);
+    const totalTasks = 6 * 2 * 1; // episodes × envs × samples
+    // The key accounting assertion: traces that ran + tasks skipped by budget
+    // must equal the total planned tasks.  Before the #3945 fix, double-counting
+    // in runTask inflated skippedByBudget so this sum exceeded totalTasks.
+    expect(allTraces.length + verifyResult.skippedByBudget!).toBe(totalTasks);
+    // Concrete: at most 2 tasks ran (cap $11, cost $5 each → 2 fit).
+    expect(runCalls).toBeLessThanOrEqual(4); // concurrency=4, so up to 4 may start
+  });
+});

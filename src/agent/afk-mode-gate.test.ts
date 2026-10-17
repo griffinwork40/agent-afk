@@ -1266,6 +1266,8 @@ describe('createAfkModeGate — specific block reasons and temp-dir writes', () 
     expect(result.reason).toContain('no operator can approve this run');
     // classification unchanged
     expect(result.reason).toContain('workspace-escape: ');
+    // sanctioned-scratch hint must NOT appear in a workspace-escape block
+    expect(result.reason).not.toContain('Sanctioned scratch');
   });
 
   it.each([false, true])('non-workspace-escape hard-block does NOT gain the escape hint (daemon=%s)', async (daemon) => {

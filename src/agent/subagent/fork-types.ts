@@ -335,13 +335,22 @@ export interface SubagentManagerOptions {
   surface?: Surface;
   /**
    * Optional callback invoked after each forked subagent reaches
-   * `succeeded` status. Receives the subagent's token usage and optional
-   * USD cost so a parent session can accumulate them into the
-   * `session_sealed` rollup without a direct reference to `AgentSession`.
+   * `succeeded` status, AND once more (billing-only) for a child that
+   * accrued spend but did not succeed (#3878, #3889).
+   *
+   * Receives the subagent's token usage and optional USD cost so a parent
+   * session can accumulate them into the `session_sealed` rollup without a
+   * direct reference to `AgentSession`.
    *
    * Intended wiring: `AgentSession.recordSubagentCompletion` bound to the
    * session instance. The callback fires synchronously on the
    * `SubagentHandleImpl.run()` success path before `onTerminal()`.
+   *
+   * **Consumers MUST check `usage?.outcome`** before treating this as a
+   * success signal. When `usage.outcome` is `'failed'` or `'cancelled'`,
+   * the callback carries only `usage.billing` — the legacy counters
+   * (`subagentCompletedCount`, running tokens/cost) must NOT be
+   * incremented. Forward `usage` verbatim so the tag is preserved.
    */
   onSubagentSucceeded?: (
     usage: import('./result.js').SubagentTrace['usage'],
@@ -387,6 +396,21 @@ export interface SubagentManagerOptions {
    * phase forks count against the same tree-wide counters.
    */
   delegationBudget?: import('../tools/delegation-budget.js').DelegationBudget;
+  /**
+   * Shared billing-stream registry owned by the root manager (#3961).
+   *
+   * When set, every promise this manager retains in its own
+   * `pendingChildBillingStreams` set is ALSO inserted into this shared set.
+   * The root manager passes its own `pendingChildBillingStreams` here when
+   * constructing nested (depth-2+) managers so that
+   * `rootManager.getPendingChildBillingStreams()` surfaces abandoned streams
+   * from every depth — not just the root's direct children.
+   *
+   * Deduplication is guaranteed: both sets use the same `Promise` reference as
+   * the key, and `retainChildBillingStreams` already skips duplicates in the
+   * local set, so the shared set receives each promise at most once.
+   */
+  parentBillingStreams?: Set<Promise<void>>;
 }
 
 /**

@@ -20,7 +20,7 @@ export interface DrainHandle {
    * fully reached the writer. Awaited inside the drain bound so the
    * `cancelled` lifecycle row is guaranteed to precede the seal (#3714).
    */
-  readonly _pendingCancellationWrite: Promise<void>;
+  readonly _pendingCancellationWrite?: Promise<void>;
 }
 
 /**
@@ -76,14 +76,19 @@ export async function abortAllAndDrainImpl(
   );
   const settled = await Promise.race([
     Promise.allSettled(
-      inFlight.flatMap((h) => [h.cancel(), h._pendingCancellationWrite]),
+      inFlight.flatMap((h) =>
+        h._pendingCancellationWrite
+          ? [h.cancel(), h._pendingCancellationWrite]
+          : [h.cancel()],
+      ),
     ),
     bound,
   ]);
   if (timedOut) {
     console.warn(
-      `[SubagentManager] abortAllAndDrain: ${inFlight.length} child(ren) did not settle ` +
-        `within ${timeoutMs}ms — sealing anyway; their terminal rows may be missing`,
+      `[SubagentManager] abortAllAndDrain: ${inFlight.length} child(ren) ` +
+        `(${[...active.keys()].join(', ')}) did not settle within ${timeoutMs}ms — ` +
+        `sealing anyway; seal() waits a further bounded interval for their terminal rows`,
     );
   } else if (Array.isArray(settled)) {
     const rejected = settled.filter(

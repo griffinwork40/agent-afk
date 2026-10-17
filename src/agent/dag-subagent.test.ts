@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { homedir } from 'os';
 import { join } from 'path';
 import { runSubagentDAG, type SubagentDAGNode } from './dag-subagent.js';
+import { dispatchDagNode } from './dag-subagent.dispatch.js';
 import type { SubagentManager } from './subagent.js';
 import type { IAgentSession, Message } from './types.js';
 import { DelegationBudget } from './tools/delegation-budget.js';
@@ -9,6 +10,13 @@ import { createMessageJournal } from './journal/index.js';
 import { SOFT_DEADLINE_WIND_DOWN } from './providers/shared/soft-deadline.js';
 
 vi.mock('../utils/debug.js', () => ({ debugLog: vi.fn() }));
+// Spy-wrap dispatchDagNode so new tests can override its return value while
+// all existing tests continue to use the real implementation (mockRestore()
+// re-instates the original after each override).
+vi.mock('./dag-subagent.dispatch.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./dag-subagent.dispatch.js')>();
+  return { ...real, dispatchDagNode: vi.fn(real.dispatchDagNode) };
+});
 
 interface FakeHandle {
   runToResult: ReturnType<typeof vi.fn>;
@@ -1071,6 +1079,169 @@ describe('runSubagentDAG', () => {
       const dagResult = await runDAG({ nodes: [], edges: [] }, new AbortController().signal);
       expect(dagResult.partial).toEqual([]);
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // setupNotice propagation (#3660 / #3661)
+  //
+  // dispatchDagNode attaches setupNotice to the SubagentResult it returns.
+  // runSubagentDAG must propagate it through both the failure path (via
+  // attachSubagentContext → SubagentExecutionError.setupNotice) and the
+  // success path (prepended to string output).
+  //
+  // In the test harness there is no real worktree isolation, so we exercise
+  // the propagation by having runToResult return a result that already carries
+  // setupNotice — exactly the shape dispatchDagNode produces after attaching
+  // it in the worktree path.
+  // ---------------------------------------------------------------------------
+  describe('setupNotice propagation (#3661)', () => {
+    it('carries setupNotice through to the thrown error on a failed node', async () => {
+      const handleWithSetupNotice: FakeHandle = {
+        runToResult: vi.fn(async () => ({
+          id: 'fork-setup-fail',
+          status: 'failed' as const,
+          error: new Error('node failed'),
+          setupNotice: 'Setup step "pnpm install" failed with exit 1',
+        })),
+        teardown: vi.fn(async () => undefined),
+      };
+      const manager = makeFakeManager(() => handleWithSetupNotice);
+
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+        edges: [],
+      });
+
+      expect(result.failed).toHaveLength(1);
+      const failedErr = result.failed[0]!.error as Error & { setupNotice?: string };
+      expect(failedErr.message).toBe('node failed');
+      expect(failedErr.setupNotice).toBe('Setup step "pnpm install" failed with exit 1');
+    });
+
+    it('surfaces setupNotice via setupNotices field, not inline content (#3661)', async () => {
+      const handleWithSetupNotice: FakeHandle = {
+        runToResult: vi.fn(async () => ({
+          id: 'fork-setup-ok',
+          status: 'succeeded' as const,
+          message: {
+            role: 'assistant' as const,
+            content: 'Agent output here.',
+            timestamp: new Date(),
+          },
+          setupNotice: 'Setup step "pnpm install" failed with exit 1',
+        })),
+        teardown: vi.fn(async () => undefined),
+      };
+      const manager = makeFakeManager(() => handleWithSetupNotice);
+
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+        edges: [],
+      });
+
+      expect(result.failed).toHaveLength(0);
+      // Output content is NOT prepended with the notice (no double-prepend).
+      const output = result.outputs['A'] as string;
+      expect(output).toBe('Agent output here.');
+      // The notice is surfaced via the dedicated setupNotices field.
+      expect(result.setupNotices).toBeDefined();
+      expect(result.setupNotices!['A']).toBe('Setup step "pnpm install" failed with exit 1');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setupNotice propagation (#3661)
+//
+// dispatchDagNode is mocked at module level (vi.mock above) so we can inject
+// a SubagentResult carrying setupNotice without triggering real worktree or
+// forkSubagent machinery. recoverDagNode calls dispatchDagNode and passes the
+// result straight through, so controlling dispatchDagNode's return value is
+// sufficient to exercise runSubagentDAG's accumulator logic.
+// ---------------------------------------------------------------------------
+describe('setupNotice propagation (#3661)', () => {
+  const mockDispatch = vi.mocked(dispatchDagNode);
+
+  afterEach(() => {
+    // Restore the spy to the real implementation so subsequent describe blocks
+    // (e.g. message journal tests) are unaffected.
+    mockDispatch.mockRestore();
+  });
+
+  it('setupNotice survives structured-output (outputSchema) return path', async () => {
+    // Simulates a node that returned a parsed outputSchema object (result.output
+    // is defined) AND had a worktree setup failure (setupNotice is set).
+    // Bug 1: the `if (result.output !== undefined) return result.output` early
+    // return in dag-subagent.ts would discard setupNotice entirely before the fix.
+    mockDispatch.mockResolvedValue({
+      id: 'fake',
+      status: 'succeeded',
+      message: { role: 'assistant', content: '', timestamp: new Date() },
+      output: { key: 'value' },
+      setupNotice: 'Worktree setup failed: pnpm install returned exit 1',
+    });
+
+    const manager: SubagentManager = {
+      forkSubagent: vi.fn(async () => ({
+        runToResult: vi.fn(async () => ({ id: 'fake', status: 'succeeded', message: { role: 'assistant', content: '', timestamp: new Date() } })),
+        teardown: vi.fn(async () => undefined),
+      })),
+    } as unknown as SubagentManager;
+
+    const result = await runSubagentDAG({
+      manager,
+      parentSession: { sessionId: 'test-parent', abortSignal: new AbortController().signal },
+      nodes: [{ id: 'schema-node', systemPrompt: 's', promptBuilder: () => 'p' }],
+      edges: [],
+    });
+
+    // The output is the structured object (not discarded).
+    expect(result.outputs['schema-node']).toEqual({ key: 'value' });
+    // setupNotices must carry the notice for this node.
+    expect(result.setupNotices).toBeDefined();
+    expect(result.setupNotices!['schema-node']).toBe('Worktree setup failed: pnpm install returned exit 1');
+  });
+
+  it('setupNotice appears exactly once — not spliced into message.content (no double-prepend)', async () => {
+    // Bug 2: before the fix, dispatchDagNode would BOTH prepend the notice to
+    // message.content AND set result.setupNotice. After the fix, only the
+    // setupNotice field is set; message.content is left untouched.
+    const originalContent = 'Node completed its work successfully.';
+    const notice = 'Worktree setup warning: deps may be missing';
+    mockDispatch.mockResolvedValue({
+      id: 'fake',
+      status: 'succeeded',
+      message: { role: 'assistant', content: originalContent, timestamp: new Date() },
+      setupNotice: notice,
+    });
+
+    const manager: SubagentManager = {
+      forkSubagent: vi.fn(async () => ({
+        runToResult: vi.fn(async () => ({ id: 'fake', status: 'succeeded', message: { role: 'assistant', content: originalContent, timestamp: new Date() } })),
+        teardown: vi.fn(async () => undefined),
+      })),
+    } as unknown as SubagentManager;
+
+    const result = await runSubagentDAG({
+      manager,
+      parentSession: { sessionId: 'test-parent', abortSignal: new AbortController().signal },
+      nodes: [{ id: 'worktree-node', systemPrompt: 's', promptBuilder: () => 'p' }],
+      edges: [],
+    });
+
+    // The DAG output for a plain-string node is the content string.
+    const output = result.outputs['worktree-node'];
+    expect(typeof output).toBe('string');
+    // After the fix: message.content is NOT prepended with the notice —
+    // it must equal the original content, not `${notice}\n\n${originalContent}`.
+    expect(output as string).toBe(originalContent);
+    expect((output as string).startsWith(notice)).toBe(false);
+    // The notice is surfaced only via setupNotices.
+    expect(result.setupNotices!['worktree-node']).toBe(notice);
   });
 });
 

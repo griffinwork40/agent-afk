@@ -10,6 +10,7 @@
 
 import type { RequestSnapshot } from '../types.js';
 import type { CapturedRequest } from './capture-server.js';
+import { redactSecrets } from '../../agent/redact-secrets.js';
 
 // ---------------------------------------------------------------------------
 // Body extraction helpers (pure functions)
@@ -79,13 +80,6 @@ function extractFirstUserMessage(messages: unknown): string {
 // ---------------------------------------------------------------------------
 // Public
 // ---------------------------------------------------------------------------
-
-/** Regex for Anthropic API key redaction. */
-const SK_ANT_PATTERN = /sk-ant-[A-Za-z0-9_-]+/g;
-
-function redactSecrets(s: string): string {
-  return s.replace(SK_ANT_PATTERN, '[REDACTED]');
-}
 
 /**
  * Build a {@link RequestSnapshot} from the list of captured /messages requests.

@@ -576,6 +576,17 @@ export class TerminalCompositor {
   // Both are 1-based screen rows; reset on disarm via resetState().
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   lastKnownRows = 0;
+  /**
+   * The `stdout.columns` value as of the last repaint — used by the SIGWINCH
+   * immediate handler to compute how many physical rows the pre-resize painted
+   * content occupies after a narrowing reflow. With AFK_CENTER_CONTENT the
+   * painted width of each row is `margin + content` (which can exceed the new
+   * terminal width), so the on-screen footprint after reflow is taller than
+   * `lastKnownRows - top` would suggest. 0 until the first repaint; reset on
+   * disarm via resetState().
+   * @internal Relaxed from `private` for the frame module (FrameHost).
+   */
+  lastKnownCols = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   pendingResizeErase: { top: number; bottom: number; origin?: 'width-only' | 'expand' } | null = null;
   /**

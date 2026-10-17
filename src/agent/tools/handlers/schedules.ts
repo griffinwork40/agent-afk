@@ -33,6 +33,8 @@ import {
 } from '../../daemon/http-client.js';
 import { readTelemetryHistory } from '../../daemon/telemetry-reader.js';
 import { parseTaskRetryFields } from '../../daemon/task-retry.js';
+import { isValidIsoDate } from '../../../utils/iso-date.js';
+import { datePinnedCronWarning } from '../../daemon/schedule-cron-warning.js';
 
 export type { DaemonSyncResult };
 
@@ -83,7 +85,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     if (typeof rawRunAt !== 'string') {
       return { content: 'Invalid input: runAt must be an ISO 8601 string', isError: true };
     }
-    if (isNaN(Date.parse(rawRunAt))) {
+    if (!isValidIsoDate(rawRunAt)) {
       return { content: 'Invalid input: runAt must be a valid ISO 8601 date string', isError: true };
     }
     resolvedRunAt = rawRunAt;
@@ -96,7 +98,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     if (typeof rawExpiresAt !== 'string') {
       return { content: 'Invalid input: expiresAt must be an ISO 8601 string', isError: true };
     }
-    if (isNaN(Date.parse(rawExpiresAt))) {
+    if (!isValidIsoDate(rawExpiresAt)) {
       return { content: 'Invalid input: expiresAt must be a valid ISO 8601 date string', isError: true };
     }
     resolvedExpiresAt = rawExpiresAt;
@@ -160,6 +162,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
       name: config.name,
       cron: config.cron,
       enabled: config.enabled,
+      ...datePinnedCronWarning(config),
       daemonSynced: sync.synced,
       syncDetail: sync.detail,
       ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),
@@ -260,7 +263,7 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
       patchRunAt = null;
     } else if (typeof rawRunAt !== 'string') {
       return { content: 'Invalid input: runAt must be an ISO 8601 string or null to clear', isError: true };
-    } else if (isNaN(Date.parse(rawRunAt))) {
+    } else if (!isValidIsoDate(rawRunAt)) {
       return { content: 'Invalid input: runAt must be a valid ISO 8601 date string', isError: true };
     } else {
       patchRunAt = rawRunAt;
@@ -275,7 +278,7 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
       patchExpiresAt = null;
     } else if (typeof rawExpiresAt !== 'string') {
       return { content: 'Invalid input: expiresAt must be an ISO 8601 string or null to clear', isError: true };
-    } else if (isNaN(Date.parse(rawExpiresAt))) {
+    } else if (!isValidIsoDate(rawExpiresAt)) {
       return { content: 'Invalid input: expiresAt must be a valid ISO 8601 date string', isError: true };
     } else {
       patchExpiresAt = rawExpiresAt;
@@ -319,6 +322,7 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
       name: updated.name,
       cron: updated.cron,
       enabled: updated.enabled,
+      ...datePinnedCronWarning(updated),
       daemonSynced: sync.synced,
       syncDetail: sync.detail,
       ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),

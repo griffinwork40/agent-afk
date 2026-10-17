@@ -5,7 +5,7 @@
  * (same pattern as bg-job-log.test.ts — env must be set before import).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -401,8 +401,14 @@ describe('tailLedger', () => {
     const id = freshId();
     const writer = new SessionLedgerWriter(id);
     writer.recordUser('pre-existing');
-    // Give the lazy stream a beat to flush the first line.
-    await sleep(50);
+    // Wait until the ledger file exists and has content before starting the
+    // tail — eliminates the fixed sleep(50) that was brittle on slow Windows CI.
+    const ledgerPath = getSessionLedgerPath(id);
+    await vi.waitFor(() => {
+      if (!fs.existsSync(ledgerPath) || fs.statSync(ledgerPath).size === 0) {
+        throw new Error('ledger not flushed yet');
+      }
+    }, { timeout: 5000, interval: 20 });
 
     const seen: LedgerRecord[] = [];
     const done = (async () => {
@@ -411,9 +417,9 @@ describe('tailLedger', () => {
       }
     })();
 
-    await sleep(100);
+    // Write a live record, then close. No fixed sleeps — the tail's internal
+    // poll (250 ms) plus fs.watch wakeup picks up both writes deterministically.
     writer.recordUser('live-one');
-    await sleep(400);
     await writer.close('close');
     await done;
 
@@ -421,23 +427,29 @@ describe('tailLedger', () => {
     expect(seen.some((r) => r.kind === 'user' && 'text' in r && r.text === 'pre-existing')).toBe(false);
     expect(seen.some((r) => r.kind === 'user' && 'text' in r && r.text === 'live-one')).toBe(true);
     expect(seen.at(-1)?.kind).toBe('closed');
-  });
+  }, 10_000);
 
   it('terminates when the abort signal fires', async () => {
     const id = freshId();
     const writer = new SessionLedgerWriter(id);
     writer.recordUser('hello');
-    await sleep(50);
+    // Wait until the file exists before starting the tail so the abort fires
+    // while the tail is actively polling (not before it has even opened).
+    const ledgerPath = getSessionLedgerPath(id);
+    await vi.waitFor(() => {
+      if (!fs.existsSync(ledgerPath) || fs.statSync(ledgerPath).size === 0) {
+        throw new Error('ledger not flushed yet');
+      }
+    }, { timeout: 5000, interval: 20 });
 
     const abort = new AbortController();
     const tailPromise = collect(tailLedger(id, { signal: abort.signal }));
-    await sleep(100);
     abort.abort();
     const records = await tailPromise;
     // No closed record was written — abort alone must end the generator.
     expect(records.every((r) => r.kind !== 'closed')).toBe(true);
     await writer.close();
-  });
+  }, 10_000);
 
   it('returns immediately for unsafe ids', async () => {
     const records = await collect(tailLedger('../escape'));

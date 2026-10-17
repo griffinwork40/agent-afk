@@ -102,6 +102,14 @@ export async function createIssue(
     const e = err as { stderr?: string; exitCode?: number; code?: string; killed?: boolean };
     const stderr = e.stderr ?? '';
     const kind = e.killed ? 'timeout' : e.code === 'ENOENT' ? 'not-found' : /auth/i.test(stderr) ? 'unauthed' : 'unknown';
-    throw new GhError(`gh issue create failed (${kind}): ${stderr.trim()}`, kind, e.exitCode ?? 1, stderr);
+    // When stderr is empty the process may have exited cleanly but stdout failed
+    // validation (e.g. validateIssueUrl threw). Preserve the original Error
+    // message so callers see "gh issue create failed (unknown): invalid issue URL"
+    // instead of the useless "gh issue create failed (unknown): ".
+    // GhError.stderr stays raw (the original stderr bytes) while `message`
+    // uses the enriched `detail` string — which falls back to err.message when
+    // stderr is empty (e.g. "invalid issue URL" from validateIssueUrl).
+    const detail = stderr.trim() || (err instanceof Error ? err.message : '');
+    throw new GhError(`gh issue create failed (${kind}): ${detail}`, kind, e.exitCode ?? 1, stderr);
   }
 }

@@ -118,6 +118,25 @@ describe('loadAgentRegistry', () => {
     expect(sawInheritAll, 'expected the inherit-all worker (general-purpose)').toBe(true);
   });
 
+  // Drift-catcher: builtins never pin a model. A definition-level `model`
+  // outranks the operator's subagent policy in resolveChildModel, so a pinned
+  // builtin silently overrides AFK_DEFAULT_SUBAGENT_MODEL (and routes local-only
+  // setups to Anthropic). Only `undefined` is allowed — `'inherit'` resolves to
+  // `parentModel` in child-config.helpers.ts, which takes named-agent precedence
+  // over `defaultSubagentModel`, producing the same operator-policy bypass as an
+  // explicit pin (the bypass closed by #3926).
+  it('no builtin pins a model (undefined only)', () => {
+    const builtins = builtinAgents();
+    expect(builtins.size).toBeGreaterThan(0);
+    for (const [name, entry] of builtins) {
+      const model = entry.definition.model;
+      expect(
+        model === undefined,
+        `builtin ${name} sets model to ${String(model)}; remove it so dispatch follows operator policy`,
+      ).toBe(true);
+    }
+  });
+
   // Regression guard for #883. Asserting the registry's static `tools` array
   // is not enough: what the dispatcher enforces is the RESOLVED access set,
   // and resolution intersects the declared tokens with the child's runtime

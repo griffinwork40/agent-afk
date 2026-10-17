@@ -20,6 +20,7 @@ import {
   TASK_RETRY_DELAY_MIN_MS,
   TASK_RETRY_DELAY_MAX_MS,
 } from './task-retry.js';
+import { isValidIsoDate } from '../../utils/iso-date.js';
 
 export type TriggerMode = 'cron' | 'sessionstart' | 'both' | 'pull';
 
@@ -117,6 +118,13 @@ export interface ScheduledTask {
   maxAttempts?: number;
   /** Backoff base (ms) between retry attempts; doubles per attempt. See `maxAttempts`. */
   retryDelayMs?: number;
+  /**
+   * Overlap identity for the scheduler's in-flight guard; defaults to `taskId`.
+   * Set only on the synthetic task that resumes an answered handoff: it runs
+   * under a fresh queue id but must overlap-guard as the ORIGINAL task, so a
+   * cron fire of that task is skipped while its resume is in flight (#1416).
+   */
+  overlapKey?: string;
 }
 
 /**
@@ -137,8 +145,7 @@ export function validateScheduledTask(task: ScheduledTask): void {
     );
   }
   if (task.runAt !== undefined) {
-    const ms = Date.parse(task.runAt);
-    if (isNaN(ms)) {
+    if (!isValidIsoDate(task.runAt)) {
       throw new Error(`task ${task.taskId}: runAt must be a valid ISO 8601 date string`);
     }
     if (task.cronExpression !== undefined) {
@@ -148,8 +155,7 @@ export function validateScheduledTask(task: ScheduledTask): void {
     }
   }
   if (task.expiresAt !== undefined) {
-    const ms = Date.parse(task.expiresAt);
-    if (isNaN(ms)) {
+    if (!isValidIsoDate(task.expiresAt)) {
       throw new Error(`task ${task.taskId}: expiresAt must be a valid ISO 8601 date string`);
     }
   }

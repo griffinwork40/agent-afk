@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ToolCall } from './types.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
+import type { AgentRegistry, RegisteredAgent } from '../agents/index.js';
 import { runWithSink } from '../_lib/skill-sink-channel.js';
 import { SKILL_MAX_DEPTH_RECOVERY_HINT } from './skill-depth-message.js';
 
@@ -1389,17 +1390,18 @@ describe('ComposeExecutor', () => {
   //   4. Skips emission when nodes.length !== resolvedAgents.length.
   // -------------------------------------------------------------------------
   describe('emitLeafToolStrips', () => {
-    const agentWithStrippedTool = {
+    const agentWithStrippedTool: RegisteredAgent = {
       name: 'agent-with-delegation',
       definition: {
+        description: '',
         prompt: 'You are a specialist.',
         // 'agent' is in COMPOSE_LEAF_STRIPPED_TOOLS — it will be stripped.
         tools: ['read_file', 'agent'],
         model: 'haiku',
       },
-      source: 'user' as const,
+      source: 'user',
     };
-    const registryWithStripped: ReadonlyMap<string, typeof agentWithStrippedTool> = new Map([
+    const registryWithStripped: AgentRegistry = new Map([
       ['agent-with-delegation', agentWithStrippedTool],
     ]);
 
@@ -2171,16 +2173,17 @@ describe('ComposeExecutor', () => {
   });
 
   describe('agent_type resolution', () => {
-    const researchAgent = {
+    const researchAgent: RegisteredAgent = {
       name: 'research-agent',
       definition: {
+        description: '',
         prompt: 'You are a research specialist.',
         tools: ['read_file', 'grep', 'glob'],
         model: 'haiku',
       },
-      source: 'user' as const,
+      source: 'user',
     };
-    const registry: ReadonlyMap<string, typeof researchAgent> = new Map([
+    const registry: AgentRegistry = new Map([
       ['research-agent', researchAgent],
     ]);
 
@@ -2202,8 +2205,10 @@ describe('ComposeExecutor', () => {
         nodes: [{ id: 'a', prompt: 'research task', agent_type: 'research-agent' }],
       }));
       const dagOpts = mockRunSubagentDAG.mock.calls[0]?.[0];
-      // Named agent's definition prompt replaces the generic system prompt
-      expect(dagOpts.nodes[0].systemPrompt).toBe('You are a research specialist.');
+      // Named agent's definition prompt replaces the generic system prompt;
+      // resolveComposeAgentPrompt appends a tool-list suffix for named agents.
+      expect(dagOpts.nodes[0].systemPrompt).toContain('You are a research specialist.');
+      expect(dagOpts.nodes[0].systemPrompt).toContain('This compose node can use only these tools:');
       // Workspace-backed compose nodes always get replaySafe:false because
       // the provider grants CHILD_ALLOWED_TOOLS (write surface) regardless
       // of the named agent's declared frontmatter tools.
@@ -2231,6 +2236,38 @@ describe('ComposeExecutor', () => {
       expect(dagOpts.nodes[0].agentType).toBe('a [1/1]');
       expect(dagOpts.nodes[0].systemPrompt).toBe('You are a helpful assistant.');
       expect(dagOpts.nodes[0].replaySafe).toBe(false);
+    });
+
+    it('refuses an implementation brief to a read-only agent_type before any node starts (#3754)', async () => {
+      const executor = new ComposeExecutor(makeContext({ agentRegistry: registry }));
+      const result = await executor.execute(makeCall({
+        nodes: [
+          { id: 'recon', prompt: 'grep for TODO comments', agent_type: 'research-agent' },
+          { id: 'impl', prompt: 'edit src/foo.ts to add the flag', agent_type: 'research-agent' },
+        ],
+      }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('Compose node "impl"');
+      expect(result.content).toContain('research-agent');
+      expect(result.content).toContain('matched: "edit src/foo.ts"');
+      expect(mockRunSubagentDAG).not.toHaveBeenCalled();
+    });
+
+    it('passes a review brief through to a read-only agent_type (#3754)', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({ agentRegistry: registry }));
+      const result = await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'Review the fix commit 4b6babb on branch afk/pr-3889 for correctness.', agent_type: 'research-agent' }],
+      }));
+      expect(result.isError).toBe(false);
+      expect(mockRunSubagentDAG).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not gate bare nodes with implementation briefs (#3754)', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({ agentRegistry: registry }));
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'edit src/foo.ts' }] }));
+      expect(mockRunSubagentDAG).toHaveBeenCalledTimes(1);
     });
 
     it('returns error when agent_type set but no registry wired', async () => {

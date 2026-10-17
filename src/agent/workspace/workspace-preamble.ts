@@ -20,7 +20,7 @@ import { appendSystemPromptBlock } from '../subagent/append-system-prompt-block.
  */
 export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
   const lines: string[] = [
-    '# Workspace context (shared findings from sibling agents)',
+    WORKSPACE_CONTEXT_HEADER,
     '',
     'The following findings were published by other agents working on this task.',
     'Use them to avoid re-discovering known facts. If your tool allowlist includes',
@@ -76,7 +76,7 @@ export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
   // Trim from the start (oldest entries) so the most-recent findings survive.
   const MAX_BYTES = 32 * 1024;
   if (full.length <= MAX_BYTES) return full;
-  const notice = '\n---\n[Workspace preamble truncated: too many entries. Earlier entries omitted.]\n';
+  const notice = `\n---\n${WORKSPACE_TRUNCATED_NOTICE}\n`;
   const tail = full.slice(full.length - MAX_BYTES + notice.length);
   const dividerIdx = tail.indexOf('\n---\n');
   const aligned = dividerIdx >= 0 ? tail.slice(dividerIdx) : tail;
@@ -105,6 +105,27 @@ export function injectWorkspacePreamble(
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
+/** First line of a populated workspace preamble. */
+export const WORKSPACE_CONTEXT_HEADER = '# Workspace context (shared findings from sibling agents)';
+/** First line of the cold-start (empty workspace) preamble. */
+export const WORKSPACE_COLD_START_HEADER = '# Workspace (shared agent scratchpad)';
+/** Leading line of a preamble that hit the 32 KiB cap (its header was trimmed). */
+export const WORKSPACE_TRUNCATED_NOTICE = '[Workspace preamble truncated: too many entries. Earlier entries omitted.]';
+
+/**
+ * Contract: every rendered workspace preamble contains one of these strings
+ * on its first non-blank line. The anthropic-direct provider splits the
+ * system prompt there (`query-system.ts`, #3878) so the per-fork,
+ * time-varying workspace preamble never sits inside the sibling-shared cached
+ * prefix. Changing a header without updating this list silently re-merges the
+ * preamble into the cached block; `sibling-cache-prefix.test.ts` pins it.
+ */
+export const WORKSPACE_PREAMBLE_MARKERS: readonly string[] = [
+  WORKSPACE_CONTEXT_HEADER,
+  WORKSPACE_COLD_START_HEADER,
+  WORKSPACE_TRUNCATED_NOTICE,
+];
+
 /**
  * Injected when the workspace is empty so the first agent knows the tool exists.
  * Breaks the chicken-and-egg: agents can't discover workspace_publish from an
@@ -112,7 +133,7 @@ export function injectWorkspacePreamble(
  * See also WORKSPACE_SYSTEM_PROMPT in tools/system-prompt.ts.
  */
 const COLD_START_HINT = [
-  '# Workspace (shared agent scratchpad)',
+  WORKSPACE_COLD_START_HEADER,
   '',
   'No entries published yet — you may be the first. If `workspace_publish` is available, call it when you:',
   '- confirm an architectural invariant or key export surface of a module,',

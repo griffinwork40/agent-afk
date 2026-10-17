@@ -78,6 +78,7 @@ function buildSkillForkManager(
   const childReadRoots = resolveChildManagerReadRoots(ctx.getReadScopeInputs?.(), currentCwd);
   return new SubagentManager({
     parentAbortSignal: perPath.parentAbortSignal,
+    ...(ctx.onSubagentSucceeded !== undefined ? { onSubagentSucceeded: ctx.onSubagentSucceeded } : {}),
     // #2844: pair the credential with its source model atomically.
     ...(perPath.apiKey !== undefined
       ? { parentCredential: { key: perPath.apiKey, sourceModel: perPath.parentModel } }
@@ -91,6 +92,9 @@ function buildSkillForkManager(
     ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
     ...(ctx.parentRootSessionId !== undefined ? { parentRootSessionId: ctx.parentRootSessionId } : {}),
     ...(ctx.hookRegistry !== undefined ? { hookRegistry: ctx.hookRegistry } : {}),
+    // #3961: propagate root's billing-stream registry so depth-2+ abandoned
+    // streams surface in rootManager.getPendingChildBillingStreams() at shutdown.
+    ...(ctx.parentBillingStreams !== undefined ? { parentBillingStreams: ctx.parentBillingStreams } : {}),
   });
 }
 

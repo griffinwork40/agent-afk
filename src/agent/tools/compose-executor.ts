@@ -22,6 +22,7 @@ import { type ComposeExecutorContext } from './compose-executor.context.js';
 export type { ComposeExecutorContext } from './compose-executor.context.js';
 
 import { resolveComposeNodeAgent, COMPOSE_LEAF_STRIPPED_TOOLS } from './compose-agent-resolve.js';
+import { checkComposeReadOnlyDispatchIntent } from './subagent-executor.dispatch-intent.js';
 import { splitComposeNodeResults } from './compose-node-results.js';
 import { formatDAGResult, cleanupComposeSpills } from './compose-executor.format.js';
 // Re-export for callers that import cleanupComposeSpills from compose-executor.ts
@@ -32,6 +33,7 @@ import type { DetachableToolRegistry } from './detach-registry.js';
 import { raceComposeDetach } from './detach-compose.js';
 import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { createComposeManager } from './compose-executor.manager.js';
+import type { SubagentManager } from '../subagent.js';
 import { buildComposeDagNode, type ComposeNodeBuildResult } from './compose-executor.node-build.js';
 import { preflightComposeCall, startComposeDag, recordComposeCompleted } from './compose-executor.preflight.js';
 import type { ComposeInput } from './compose-input-parse.js';
@@ -83,6 +85,35 @@ export class ComposeExecutor {
   // compose DAG nodes anchor to the worktree, not the host's process.cwd().
   // Mirrors the SubagentExecutor / SkillExecutor re-anchor convention.
   private currentCwd: string | undefined;
+  private readonly billingManagers = new Set<SubagentManager>();
+  private readonly pendingBillingStreams = new Set<Promise<void>>();
+
+  /** Include live DAGs and receipts retained after their ephemeral manager teardown. */
+  getPendingChildBillingStreams(): readonly Promise<void>[] {
+    for (const manager of this.billingManagers) this.retainBillingStreams(manager);
+    return [...this.pendingBillingStreams];
+  }
+
+  private retainBillingStreams(manager: SubagentManager): void {
+    for (const stream of manager.getPendingChildBillingStreams?.() ?? []) {
+      if (this.pendingBillingStreams.has(stream)) continue;
+      this.pendingBillingStreams.add(stream);
+      const remove = (): void => { this.pendingBillingStreams.delete(stream); };
+      void stream.then(remove, remove);
+    }
+  }
+
+  private async teardownManager(manager: SubagentManager): Promise<void> {
+    // Capture before teardown can discard handles, and again for streams
+    // abandoned during teardown. Keep only receipts, not the completed manager.
+    this.retainBillingStreams(manager);
+    try {
+      await manager.teardownAll();
+    } finally {
+      this.retainBillingStreams(manager);
+      this.billingManagers.delete(manager);
+    }
+  }
 
   constructor(private readonly ctx: ComposeExecutorContext) {
     this.currentCwd = ctx.cwd;
@@ -160,6 +191,7 @@ export class ComposeExecutor {
       currentCwd: this.currentCwd,
       nodeReadRoots,
     });
+    this.billingManagers.add(manager);
 
     const startedAt = Date.now();
     void appendRoutingDecision({
@@ -203,6 +235,10 @@ export class ComposeExecutor {
         const message = errorMessage(resolveErr);
         return { content: message, isError: true };
       }
+      // #3754: same pre-dispatch implementation-intent gate as the agent tool,
+      // applied eagerly so no node forks when any read-only node is misbriefed.
+      const intentRefusal = checkComposeReadOnlyDispatchIntent(parsed.nodes, resolvedAgents);
+      if (intentRefusal !== undefined) return intentRefusal;
       emitLeafToolStrips(parsed.nodes, resolvedAgents, this.ctx.traceWriter);
       // Invariant: attachment resolution errors are isolated per-node so a bad
       // path or unknown image id on one node never aborts siblings. Each callback
@@ -263,7 +299,7 @@ export class ComposeExecutor {
         ? await raceComposeDetach({
             dagPromise, nodeIds, toolUseId: call.id, attachmentErrors, startedAt,
             formatResult: (r) => formatDAGResult(r, { sessionId: spillSessionId, callId: call.id }).content,
-            teardown: () => manager.teardownAll(),
+            teardown: () => this.teardownManager(manager),
             detachRegistry,
             onDetach: () => { detachedRef.value = true; },
           })
@@ -307,7 +343,7 @@ export class ComposeExecutor {
       // but the double-teardown is confusing in traces). detachedRef.value is
       // true only when the detach path returned early above.
       if (!detachedRef.value) {
-        await manager.teardownAll();
+        await this.teardownManager(manager);
       }
     }
   }

@@ -52,6 +52,7 @@ you with a picker:
 | **Approve — implement now (restore previous mode)** | Restores the mode you were in *before* entering plan (typically `default`). Implementation begins on the next turn. |
 | **Approve — implement now (bypass mode)** | Escalates to `bypassPermissions` for the implement turn — offered unless you were already in bypass before planning. |
 | **Keep planning** | Stays in plan mode; the model continues refining. |
+| **Type your own answer** | Sends your text to the model as revision feedback. Stays in plan mode; the model revises the plan and calls `exit_plan_mode` again. Typed text never approves the plan. |
 
 The permission flip is deferred to the post-turn drain boundary so the plan-mode gate stays
 locked for the entire current model turn, closing a mid-turn TOCTOU window. This is

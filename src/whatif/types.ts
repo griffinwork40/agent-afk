@@ -404,6 +404,8 @@ export interface VerifyResult {
   /** Share of predictions confirmed, among confirmed + refuted (excludes 'unclear' and 'unobservable'). */
   predictionAccuracy?: number;
   truncatedByBudget: boolean;
+  /** Number of planned tasks that were skipped because the budget was exceeded before they were dispatched. */
+  skippedByBudget?: number;
   failedEpisodes: number;
   /** Outputs the judge could not grade; excluded from every rate. */
   judgeFailures?: number;

@@ -55,6 +55,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { _setRealScratchRootsForTests, _resetScratchRootsCacheForTests } from './tools/handlers/scratch-roots.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
@@ -249,6 +250,12 @@ async function runForkedTools(
 }
 
 // --- Suite ---
+
+// This suite uses os.tmpdir() dirs as "outside every granted root". The OS
+// temp dir is an implicit WRITE root (scratch-roots.ts), so disable that
+// allowance here to keep testing granted-root containment, not temp policy.
+beforeEach(() => _setRealScratchRootsForTests([]));
+afterEach(() => _resetScratchRootsCacheForTests());
 
 describe('forked worktree subagent — live dispatcher read/glob/grep + write-confinement (#440)', () => {
   let tmpRoot: string; // acts as the "main repo" root

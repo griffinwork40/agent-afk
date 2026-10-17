@@ -383,34 +383,3 @@ export function checkNestedScope(
     isError: true,
   };
 }
-
-/**
- * Pre-dispatch implementation-intent gate (#3754).
- *
- * Returns a ToolResult refusal when a read-only named agent receives a brief
- * that unambiguously requests implementation work (file writes, code edits,
- * commits). Returns `undefined` when the dispatch is permitted.
- *
- * Invariant: only fires for named agents (`namedAgent !== undefined`) and only
- * when the child tool surface is read-only (`!childWriteCapable`). Bare
- * dispatches are exempt. The `classifyDispatchIntent` classifier is conservative:
- * it exempts negation/passive recon phrases ("do not edit", "report what should
- * be changed") to keep false-positive rate near zero.
- */
-export function checkReadOnlyDispatchIntent(
-  childWriteCapable: boolean,
-  namedAgent: RegisteredAgent | undefined,
-  prompt: string,
-  classifyFn: (p: string) => boolean,
-): ToolResult | undefined {
-  if (childWriteCapable || namedAgent === undefined) return undefined;
-  if (!classifyFn(prompt)) return undefined;
-  return {
-    content:
-      `Cannot dispatch implementation work to read-only agent "${namedAgent.name}". ` +
-      `This agent type is read-only and cannot write files, apply edits, or commit changes. ` +
-      `Use a write-capable agent (e.g. general-purpose) for implementation tasks, ` +
-      `or ask this agent to return a patch/findings for the parent to apply.`,
-    isError: true,
-  };
-}

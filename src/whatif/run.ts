@@ -396,9 +396,9 @@ export async function runWhatif(
     // Preflight: MDE gate + headroom gate + budget gate (includes sample cost #2511).
     const { noBaselineSample } = await runVerifyPreflight({
       episodes, predictions, structural, force: options.force ?? false,
-      samples: options.samples, agentModel: options.agentModel,
-      analystModel: options.analystModel, judgeExternal: resolvedJudge.external,
-      analystCostUsd, maxUsd: options.maxUsd,
+      samples: options.samples, maxTurns: options.maxTurns,
+      agentModel: options.agentModel, analystModel: options.analystModel,
+      judgeExternal: resolvedJudge.external, analystCostUsd, maxUsd: options.maxUsd,
       noBaselineSample: options.noBaselineSample ?? false,
       onProgress: deps.onProgress as ((p: { stage: 'preflight'; message: string }) => void) | undefined,
       closeJudges: async () => { await resolvedJudge.close?.(); await crossCheckJudge?.close?.(); },

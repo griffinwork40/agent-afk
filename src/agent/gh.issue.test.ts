@@ -45,9 +45,11 @@ describe('validateIssueUrl', () => {
   it.each([
     '', 'not a url', 'javascript:alert(1)', 'http://github.com/o/r/issues/1',
     'https://evil.example/o/r/issues/1', 'https://github.com/other/repo/issues/1',
-    'https://github.com/o/r/issues/nope', 'https://github.com/o/r/issues/1\nextra',
+    'https://github.com/o/r/issues/nope', 'https://github.com/o/r/issues/0',
+    'https://github.com/o/r/issues/1\nextra',
     'https://user:pass@github.com/o/r/issues/1', 'https://github.com/o/r/issues/1?x=1',
     'https://github.com/o/r/issues/1#fragment',
+    'https://github.com:8443/o/r/issues/1',
   ])('rejects invalid/unexpected output %j', (value) => {
     expect(() => validateIssueUrl(value, 'github.com/o/r')).toThrow('invalid issue URL');
   });
@@ -64,7 +66,9 @@ describe('validateIssueUrl', () => {
 describe('createIssue', () => {
   it('rejects non-URL stdout', async () => {
     const exec = vi.fn(async () => ({ stdout: 'success!', stderr: '' }));
-    await expect(createIssue({ repo: 'o/r', title: 'T', body: 'b' }, exec)).rejects.toBeInstanceOf(GhError);
+    const err = await createIssue({ repo: 'o/r', title: 'T', body: 'b' }, exec).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GhError);
+    expect((err as GhError).message).toContain('invalid issue URL');
   });
   it('sends the body on stdin via --body-file - and passes labels as separate args', async () => {
     const exec = vi.fn(async () => ({ stdout: 'https://github.com/o/r/issues/1\n', stderr: '' }));

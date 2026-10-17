@@ -24,6 +24,8 @@
  * @module agent/facets/derive.trace
  */
 
+import { SessionCostAccumulator } from '../trace/cost.js';
+
 /** The subset of trace `closure` reasons that trigger a downgrade. */
 export type DowngradableClosureReason = 'budget_exceeded' | 'iteration_cap' | 'truncated';
 
@@ -41,6 +43,14 @@ export interface TraceSignals {
    * budget and was wound down before it could finish naturally.
    */
   hasSubagentBudgetExhaustion: boolean;
+  /**
+   * Whole-trace spend, root plus every subagent, from `computeSessionCost`
+   * (`agent/trace/cost.ts`, #3879). Absent when the trace has neither a
+   * `closure` nor a `session_sealed` event.
+   */
+  totalCostUsd?: number;
+  /** `totalCostUsd` minus the root's cost; same presence rule. */
+  subagentCostUsd?: number;
 }
 
 /**
@@ -56,6 +66,7 @@ export function parseTraceSignals(content: string): TraceSignals {
   let hasSubagentBudgetExhaustion = false;
 
   const DOWNGRADE_REASONS = new Set<string>(['budget_exceeded', 'iteration_cap', 'truncated']);
+  const costAcc = new SessionCostAccumulator();
 
   for (const rawLine of content.split('\n')) {
     if (!rawLine.trim()) continue;
@@ -69,6 +80,7 @@ export function parseTraceSignals(content: string): TraceSignals {
     }
 
     const kind = obj['kind'];
+    costAcc.add({ kind, payload: obj['payload'] });
 
     if (kind === 'closure') {
       const payload = obj['payload'];
@@ -105,5 +117,11 @@ export function parseTraceSignals(content: string): TraceSignals {
     }
   }
 
-  return { traceClosureReason, hasSubagentBudgetExhaustion };
+  const cost = costAcc.result();
+  return {
+    traceClosureReason,
+    hasSubagentBudgetExhaustion,
+    ...(cost.totalCostUsd !== undefined ? { totalCostUsd: cost.totalCostUsd } : {}),
+    ...(cost.subagentCostUsd !== undefined ? { subagentCostUsd: cost.subagentCostUsd } : {}),
+  };
 }

@@ -33,6 +33,8 @@ import type { CanUseTool } from '../types.js';
 import type { PermissionResult } from '../types/sdk-types.js';
 import { CHILD_ALLOWED_TOOLS, COMPOSE_LEAF_STRIPPED_TOOLS } from './nesting.js';
 import { isComposeReplaySafe } from '../dag-subagent.recovery.js';
+import { isReadOnlyGitToolEnabled, GIT_READ_TOOL_NAME } from './readonly-git-surface.js';
+import { isChildWriteCapable } from './subagent/write-capability.js';
 
 // Defined beside buildComposeNodeProvider (which withholds the executors);
 // re-exported here for callers and tests.
@@ -109,6 +111,12 @@ export interface ResolvedComposeAgent {
    * bash. Set only when true.
    */
   readOnlyBash?: true;
+  /**
+   * The named agent's surface cannot write (same `isChildWriteCapable`
+   * predicate as the agent tool's `childWriteCapable`). Drives the #3754
+   * pre-dispatch implementation-intent gate in compose. Set only when true.
+   */
+  readOnly?: true;
 }
 
 /**
@@ -184,6 +192,7 @@ export function resolveComposeNodeAgent(
   // Bash restriction: forwarded independently of the allowlist (a
   // `bashReadOnly` agent may inherit-all tools and still be shell-read-only).
   if (resolvedAccess.bashReadOnly) result.readOnlyBash = true;
+  if (!isChildWriteCapable(resolvedAccess.allowedTools, resolvedAccess.bashReadOnly === true)) result.readOnly = true;
 
   // Tool restriction: build canUseTool from the effective allowlist.
   // When allowedTools is undefined (inherit-all definition), skip — no
@@ -204,7 +213,12 @@ export function resolveComposeNodeAgent(
       return true;
     });
 
-    result.canUseTool = buildAllowlistCanUseTool(leafAllowed);
+    // #3754: the provider swaps bash for git_read on a read-only-bash node when
+    // AFK_READONLY_GIT_TOOL is on; admit git_read here too so the gates agree.
+    const gateAllowed = resolvedAccess.bashReadOnly && isReadOnlyGitToolEnabled() && leafAllowed.includes('bash')
+      ? [...leafAllowed, GIT_READ_TOOL_NAME]
+      : leafAllowed;
+    result.canUseTool = buildAllowlistCanUseTool(gateAllowed);
     result.namedAgentAllowedTools = leafAllowed;
     // compose-executor.ts still pins replaySafe to false for compose nodes
     // (conservative; unchanged).
@@ -233,7 +247,13 @@ export function resolveComposeAgentPrompt(agent: ResolvedComposeAgent, basePromp
   const base = agent.systemPrompt ?? basePrompt;
   const withLeafNotice = agent.leafNotice ? `${base}\n\n${agent.leafNotice}` : base;
   if (agent.namedAgentAllowedTools === undefined) return withLeafNotice;
-  return `${withLeafNotice}\n\nThis compose node can use only these tools: ${agent.namedAgentAllowedTools.join(', ') || '(none)'}. ` +
+  // Invariant: render from the SAME effective list the provider advertises.
+  // buildComposeNodeProvider intersects CHILD_ALLOWED_TOOLS (minus
+  // COMPOSE_LEAF_STRIPPED_TOOLS) with namedAgentAllowedTools; mirror that
+  // here so the prompt suffix never names a tool the provider withholds.
+  const leafTools = CHILD_ALLOWED_TOOLS.filter((t) => !COMPOSE_LEAF_STRIPPED_TOOLS.has(t));
+  const effectiveTools = leafTools.filter((t) => agent.namedAgentAllowedTools!.includes(t));
+  return `${withLeafNotice}\n\nThis compose node can use only these tools: ${effectiveTools.join(', ') || '(none)'}. ` +
     'Do not call bash, workspace_query, or other tools unless they appear in this list; ' +
     'use available read tools or return the missing capability to the parent.';
 }

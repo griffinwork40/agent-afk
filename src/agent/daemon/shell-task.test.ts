@@ -171,11 +171,13 @@ describe('runShellTask – timeout', () => {
 
 describe('runShellTask – excerpt truncation', () => {
   it('tail-slices output exceeding EXCERPT_CAP (4096) on success path', async () => {
-    // Build output of 5000 'x' chars — well above the 4096 cap.
-    const longOutput = 'x'.repeat(5000);
+    // Build output of 5000 chars — well above the 4096 cap.
+    // Use space-separated words so the output is not token-shaped (avoids
+    // the generic ≥32-char redaction rule introduced by the delegation refactor).
+    const longOutput = 'ab '.repeat(1667); // 1667 × 3 = 5001 chars
     const col = makeTelemetryCollector();
     const result = await runShellTask(
-      { taskId: 'task-long', command: `printf '%5000s' | tr ' ' x` },
+      { taskId: 'task-long', command: `yes ab | head -n 1667 | tr '\n' ' '` }, // POSIX-portable: dash has no brace expansion
       'cron',
       { now: Date.now.bind(Date), writeTelemetry: col.writeTelemetry },
     );
@@ -185,14 +187,14 @@ describe('runShellTask – excerpt truncation', () => {
     // The excerpt must be at most EXCERPT_CAP characters.
     expect(excerpt.length).toBeLessThanOrEqual(4096);
     // The tail (last 4096 chars) of the original long output should match excerpt.
-    expect(longOutput.endsWith(excerpt)).toBe(true);
+    expect(longOutput.trimEnd().endsWith(excerpt.trimEnd())).toBe(true);
   });
 
   it('tail-slices output exceeding EXCERPT_CAP (4096) on error path', async () => {
-    const longOutput = 'y'.repeat(5000);
+    const longOutput = 'cd '.repeat(1667); // 1667 × 3 = 5001 chars, not token-shaped
     const col = makeTelemetryCollector();
     const result = await runShellTask(
-      { taskId: 'task-long-err', command: `printf '%5000s' | tr ' ' y; exit 1` },
+      { taskId: 'task-long-err', command: `yes cd | head -n 1667 | tr '\n' ' '; exit 1` },
       'cron',
       { now: Date.now.bind(Date), writeTelemetry: col.writeTelemetry },
     );
@@ -200,7 +202,7 @@ describe('runShellTask – excerpt truncation', () => {
     expect(result.status).toBe('error');
     const excerpt = result.responseExcerpt ?? '';
     expect(excerpt.length).toBeLessThanOrEqual(4096);
-    expect(longOutput.endsWith(excerpt)).toBe(true);
+    expect(longOutput.trimEnd().endsWith(excerpt.trimEnd())).toBe(true);
   });
 
   it('does not truncate output within the cap', async () => {

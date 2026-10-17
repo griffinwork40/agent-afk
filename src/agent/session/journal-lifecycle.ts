@@ -29,6 +29,7 @@
  */
 
 import { createMessageJournal, type MessageJournal } from '../journal/index.js';
+import { getVersion } from '../../cli/version.js';
 import type { AgentConfig } from '../types.js';
 
 /** True for configs that belong to a subagent fork rather than a top-level session. */
@@ -83,6 +84,7 @@ export class JournalLifecycle {
         model: String(config.model),
         ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
         ...(config.provider?.name !== undefined ? { provider: config.provider.name } : {}),
+        afkVersion: getVersion(),
       },
     });
     this.journal = journal;

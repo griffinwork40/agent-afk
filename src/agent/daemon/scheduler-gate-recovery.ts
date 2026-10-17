@@ -89,6 +89,12 @@ export function hasRecoveredFromGate(response: Message, aborted: boolean): boole
     && parseTerminalState(response.content)?.kind === 'done';
 }
 
+/** Policy-level reason only: no raw refusal text, tool arguments, or outputs. */
+export function gateBlockReason(counter: GateBlockCounter): string {
+  const tools = [...new Set(counter.calls?.map((call) => toolLabel(call.blockedTool)) ?? [])];
+  return `Unrecovered AFK gate block(s): ${counter.count}; blocked tools: ${tools.join(', ') || 'unknown'}. High-risk operations require human approval in unattended mode.`;
+}
+
 export function gateRecoveryNote(counter: GateBlockCounter): string {
   return `Recovered after ${counter.count} AFK gate block(s) (declared Done; not verified).`;
 }

@@ -3,7 +3,7 @@
  * @module telegram/session-manager
  */
 
-import type { IAgentSession, AgentConfig, AgentModelInput, ThinkingConfig, EffortLevel, ResponseMetadata } from '../agent/types.js';
+import type { IAgentSession, AgentConfig, AgentModelInput, ThinkingConfig, EffortLevel, PermissionMode, ResponseMetadata } from '../agent/types.js';
 import { setElicitationRoute } from './elicitation-route-registry.js';
 // Shared session-persistence utilities. These live under src/cli/ but are
 // surface-agnostic (pure functions over SessionStats / sidecar files); the
@@ -122,6 +122,14 @@ export interface SessionManagerOptions {
   effort?: EffortLevel;
 
   /**
+   * Bot-level permissionMode from afk.config.json. Forwarded into every new
+   * session's AgentConfig so the plan-mode guard in finalizeTelegramSession
+   * (session-lifecycle.ts) is reachable. Without this wire the guard is inert
+   * against `afk config set permissionMode plan` (#3927).
+   */
+  permissionMode?: PermissionMode;
+
+  /**
    * Bot-global working directory fallback. Used as the cwd for any chat
    * that has not set a per-session override via `/cd`. Typically sourced
    * from the `AFK_TELEGRAM_CWD` env var in the bot bootstrap.
@@ -132,6 +140,21 @@ export interface SessionManagerOptions {
 
   /** Factory function to create agent sessions */
   createSession: (config: AgentConfig) => Promise<IAgentSession>;
+  /**
+   * Per-route idle-wake callback factory. When provided, it is forwarded to
+   * `createTelegramSessionFactory` (via `TelegramSessionFactoryOptions`) so
+   * that each session's `TelegramBgResultNotifier.onInjectable` is wired to
+   * automatically synthesise a new Telegram turn when a background subagent
+   * result lands on an idle session.
+   *
+   * The factory is called once per session at creation time. It receives the
+   * session's chatId and threadId and must return the () => void hook bound to
+   * that route. The implementation in bot.ts closes over `messageHandler`.
+   *
+   * When undefined, the idle-wake path is skipped and results are delivered
+   * only on the next user-initiated message (the pre-fix behaviour).
+   */
+  onInjectableForRoute?: (chatId: number, threadId: number | undefined) => () => void;
   /**
    * Milliseconds of inactivity after which an idle AgentSession is closed and
    * its memory freed (P2-1, #1687). sessionData (model/cwd) is kept and
@@ -170,6 +193,16 @@ export interface SessionManagerOptions {
  * `RouteTarget` (a full `TelegramRoute`, or a bare `number` treated as that chat's
  * General topic) and compute the routeKey internally.
  */
+/**
+ * Resolved options shape stored by {@link SessionManager}. Optional fields that
+ * are passed through unchanged stay as `Pick` (no `Required` wrapper) so callers
+ * that leave them undefined do not have to supply a placeholder. `idleSessionMs`
+ * lives in the `Required` half because the constructor always fills it in.
+ */
+type ResolvedSessionManagerOptions = Required<
+  Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'permissionMode' | 'registry' | 'onResumptionOffer' | 'onInjectableForRoute'>
+> & Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'permissionMode' | 'registry' | 'onResumptionOffer' | 'onInjectableForRoute'>;
+
 export class SessionManager {
   private sessions = new Map<string, IAgentSession>();
   /** In-flight creation promises — prevent duplicate session spawns on concurrent messages (per route). */
@@ -200,7 +233,7 @@ export class SessionManager {
    * resuming a stale target.
    */
   private pendingResume = new Map<string, string>();
-  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>> & Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>; // idleSessionMs is in the Required half
+  private options: ResolvedSessionManagerOptions; // idleSessionMs is in the Required half
   /** Timer handle for periodic sessionData eviction. Unref'd so it never prevents process exit. */
   private _evictionTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -215,9 +248,11 @@ export class SessionManager {
       thinking: options.thinking,
       effort: options.effort,
       botCwd: options.botCwd,
+      permissionMode: options.permissionMode,
       createSession: options.createSession,
       registry: options.registry,
       onResumptionOffer: options.onResumptionOffer,
+      onInjectableForRoute: options.onInjectableForRoute,
       idleSessionMs: options.idleSessionMs ?? 4 * 60 * 60 * 1000,
     };
     // Periodic eviction keeps the sessionData AND idle-session maps bounded

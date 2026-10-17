@@ -43,6 +43,7 @@ import { handleListModels } from './routes.models.js';
 import { handleSearchMemory, handleGetHotMemory } from './routes.memory.js';
 import { handleListBgJobs, handleGetBgJob } from './routes.bg-jobs.js';
 import { handleGetConfig } from './routes.config.js';
+import { handleListHandoffs } from './routes.handoffs.js';
 import { errorMessage } from '../utils/errors.js';
 
 export const DEFAULT_WEB_PORT = 4141;
@@ -412,6 +413,12 @@ async function dispatch(
   // ---- config route --------------------------------------------------------
   if (path === '/api/config' && method === 'GET') {
     handleGetConfig(res, port, host);
+    return;
+  }
+
+  // ---- daemon handoff routes -----------------------------------------------
+  if (path === '/api/handoffs' && method === 'GET') {
+    await handleListHandoffs(res);
     return;
   }
 

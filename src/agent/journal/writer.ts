@@ -17,11 +17,12 @@
 
 import { createOnceReporter } from './append-queue.js';
 import { BlobStore } from './blobs.js';
-import { JournalFileWriter, type JournalSessionShared } from './journal-file.js';
+import { JournalFileWriter, type JournalMeta, type JournalSessionShared } from './journal-file.js';
 import { isMessageJournalDisabled, NOOP_JOURNAL } from './noop.js';
 import type { JournalMarkLabel, JournalMessage, JournalTruncateReason, MessageJournal } from './types.js';
 
 export { isMessageJournalDisabled } from './noop.js';
+export type { JournalMeta } from './journal-file.js';
 
 export interface CreateMessageJournalOptions {
   /**
@@ -31,7 +32,7 @@ export interface CreateMessageJournalOptions {
    */
   getSessionId: () => string | undefined;
   /** Metadata stamped on the journal's `meta` record. */
-  meta?: { provider?: string; model?: string; cwd?: string };
+  meta?: JournalMeta;
 }
 
 class FileJournal implements MessageJournal {
@@ -70,11 +71,22 @@ class FileJournal implements MessageJournal {
    * One journal per subagent id per session writer: a repeat call with the
    * same id returns the same (open) instance so two writers never interleave
    * one file from a single process.
+   *
+   * `childMeta` overrides selected fields in the parent's shared meta for this
+   * child's `meta` record only (model, provider). The child's blob store and
+   * session-id accessor are still inherited from the parent's shared object.
+   * Callers MUST pass the child's resolved model and provider here so the
+   * subagent journal's meta record reflects the model the child actually runs,
+   * not the parent's model. (#3808)
    */
-  forSubagent(subagentId: string): MessageJournal {
+  forSubagent(subagentId: string, childMeta?: Partial<JournalMeta>): MessageJournal {
     const existing = this.children.get(subagentId);
     if (existing && !existing.file.isClosed) return existing;
-    const child = new FileJournal(this.shared, new JournalFileWriter(this.shared, subagentId));
+    const childShared: JournalSessionShared =
+      childMeta !== undefined
+        ? { ...this.shared, meta: { ...this.shared.meta, ...childMeta } }
+        : this.shared;
+    const child = new FileJournal(childShared, new JournalFileWriter(childShared, subagentId));
     this.children.set(subagentId, child);
     return child;
   }

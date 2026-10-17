@@ -9,7 +9,8 @@
  * rejects (silent containment failure).
  */
 
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, beforeEach } from 'vitest';
+import { _setRealScratchRootsForTests, _resetScratchRootsCacheForTests } from './scratch-roots.js';
 import { resolveAndContain, wouldBeRestricted, extractCandidatePaths, assertWriteTargetContained } from './_cwd-utils.js';
 import type { ToolHandlerContext } from '../types.js';
 import os from 'os';
@@ -34,6 +35,12 @@ function ctx(overrides: Partial<ToolHandlerContext> = {}): ToolHandlerContext {
     ...overrides,
   };
 }
+
+// This suite uses os.tmpdir() dirs as "outside every granted root". The OS
+// temp dir is an implicit WRITE root (scratch-roots.ts), so disable that
+// allowance here to keep testing granted-root containment, not temp policy.
+beforeEach(() => _setRealScratchRootsForTests([]));
+afterEach(() => _resetScratchRootsCacheForTests());
 
 describe('resolveAndContain', () => {
   it('returns the absolute path for inputs inside the resolveBase', () => {

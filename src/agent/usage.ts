@@ -15,6 +15,7 @@
  */
 
 import type { ProviderUsage } from './provider.js';
+import { sumBillingUsage } from './usage.billing.js';
 
 /**
  * Sum two `ProviderUsage` objects into a third. Used by providers to
@@ -63,6 +64,14 @@ export function sumProviderUsage(a: ProviderUsage, b: ProviderUsage): ProviderUs
   if (cached !== undefined) out.cachedInputTokens = cached;
   const cacheCreate = latestOptional(a.cacheCreationTokens, b.cacheCreationTokens);
   if (cacheCreate !== undefined) out.cacheCreationTokens = cacheCreate;
+  // Context-window footprint: latest, not sum — same semantics as cache fields.
+  // It describes the window size on the most recent round, not a cumulative total.
+  const ctxWindow = latestOptional(a.contextWindowTokens, b.contextWindowTokens);
+  if (ctxWindow !== undefined) out.contextWindowTokens = ctxWindow;
+  // Billing counts (#3878) are SUMMED, unlike the latest-round cache fields
+  // above: they answer "what did these rounds cost", not "how full is the window".
+  const billing = sumBillingUsage(a.billing, b.billing);
+  if (billing !== undefined) out.billing = billing;
   const total = sumOptional(a.totalTokens, b.totalTokens);
   if (total !== undefined) out.totalTokens = total;
   // Cost is cumulative across iterations (unlike cache fields above).

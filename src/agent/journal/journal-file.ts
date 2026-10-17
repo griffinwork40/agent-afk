@@ -39,10 +39,31 @@ import { JOURNAL_VERSION, type JournalRecordInput } from './types.js';
 /** Buffered-record cap while the session id is unresolved. */
 export const MAX_BUFFERED_RECORDS = 10_000;
 
+/** Metadata stamped on every `meta` record. */
+export interface JournalMeta {
+  provider?: string;
+  /**
+   * The **configured** model string at session open — the value the caller
+   * passed (e.g. an alias like `"sonnet"` or `"medium"`), NOT the resolved
+   * wire id sent to the provider API.  For root sessions this comes from
+   * `String(config.model)` in `journal-lifecycle.ts`; for child sessions it
+   * is `String(effectiveChildModel)` from `fork-child-config.ts`.
+   *
+   * The resolved wire model id is available in the witness trace (`resolvedModel`
+   * field on `model_ttfb` / round events) but is NOT recorded here because
+   * it is only known after the first API round-trip, whereas the `meta` record
+   * is written before any tool call.
+   */
+  model?: string;
+  cwd?: string;
+  /** Running afk package version (baked in at build time via `__AFK_VERSION__`). */
+  afkVersion?: string;
+}
+
 /** State shared by a session's top-level journal and all of its subagent journals. */
 export interface JournalSessionShared {
   getSessionId: () => string | undefined;
-  meta: { provider?: string; model?: string; cwd?: string };
+  meta: JournalMeta;
   blobs: BlobStore;
   report: OnceReporter;
 }
@@ -209,6 +230,7 @@ export class JournalFileWriter {
         ...(m.provider !== undefined ? { provider: m.provider } : {}),
         ...(m.model !== undefined ? { model: m.model } : {}),
         ...(m.cwd !== undefined ? { cwd: m.cwd } : {}),
+        ...(m.afkVersion !== undefined ? { afkVersion: m.afkVersion } : {}),
       }) + '\n'
     );
   }

@@ -15,6 +15,7 @@
 import { ResizeBus } from './terminal-size.js';
 import { isPlainOutputRequested } from '../config/env.js';
 import { formatStatusLine, type StatusLineFields } from './render/status-line-format.js';
+import { contentBand } from './render/measure.js';
 
 export type { StatusLineFields } from './render/status-line-format.js';
 
@@ -359,8 +360,19 @@ export class StatusLine {
   }
 
   private formatLine(f: StatusLineFields): string {
-    const maxW = Math.max(4, (this.stream.columns ?? 80) - 2);
-    return formatStatusLine(f, maxW);
+    const cols = this.stream.columns ?? 80;
+    // Content centering (AFK_CENTER_CONTENT): prepend left margin and cap the
+    // formatted content to the band width so the status line floats at the same
+    // horizontal position as the stage bar, health rail, and input line.
+    // When centering is off, contentBand returns { margin: '', width: cols },
+    // making this byte-identical to the previous code path.
+    const { margin, width: bandWidth } = contentBand(cols);
+    // RAIL_INDENT is NOT subtracted from bandWidth here because the status
+    // line sits below the stage bar and health rail — it occupies its own
+    // full-width row. The loop-stage bar subtracts RAIL_INDENT to align its
+    // left gutter with the rail column; the status line has no such gutter.
+    const maxW = Math.max(4, bandWidth - 2);
+    return margin + formatStatusLine(f, maxW);
   }
 
   private currentRows(): number {
