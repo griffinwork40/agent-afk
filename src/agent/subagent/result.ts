@@ -263,6 +263,17 @@ export interface SubagentResult<T = unknown> extends Partial<CappedHandoff> {
    * when the provider reported no stop reason.
    */
   stopReason?: string;
+  /**
+   * Human-readable notice describing a worktree setup step that failed or was
+   * skipped for this node (e.g. a repo-declared setup script that exited
+   * non-zero). Set by `dispatchDagNode` when the node ran with
+   * `isolation:"worktree"` and `describeWorktreeSetupFailure` returned a
+   * non-empty string. Surfaced here as a dedicated field so callers can act on
+   * it regardless of whether `message.content` is a plain string — the
+   * previous approach of prepending the notice to `content` silently dropped it
+   * for `outputSchema` nodes and failed/cancelled nodes (#3660).
+   */
+  setupNotice?: string;
 }
 
 /**
@@ -357,11 +368,13 @@ export function describeFailure(result: Pick<SubagentResult, 'status' | 'error'>
 export interface SubagentExecutionError extends Error {
   partialOutput?: unknown;
   subagentId?: string;
+  /** Propagated from {@link SubagentResult.setupNotice} so compose's failure formatter can surface it. */
+  setupNotice?: string;
 }
 
 export function attachSubagentContext(
   err: Error,
-  context: { partialOutput?: unknown; subagentId?: string },
+  context: { partialOutput?: unknown; subagentId?: string; setupNotice?: string },
 ): SubagentExecutionError {
   const wrapped = err as SubagentExecutionError;
   if (context.partialOutput !== undefined && context.partialOutput !== null) {
@@ -369,6 +382,9 @@ export function attachSubagentContext(
   }
   if (context.subagentId !== undefined) {
     wrapped.subagentId = context.subagentId;
+  }
+  if (context.setupNotice !== undefined) {
+    wrapped.setupNotice = context.setupNotice;
   }
   return wrapped;
 }
