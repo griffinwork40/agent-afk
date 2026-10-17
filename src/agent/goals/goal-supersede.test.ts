@@ -63,7 +63,8 @@ beforeEach(async () => {
 
 afterEach(() => {
   goalStore.closeStore();
-  vi.restoreAllMocks(); // also restores vi.stubEnv stubs
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs(); // undo vi.stubEnv() — restoreAllMocks() does NOT cover env stubs
   rmSync(tmpDir, { recursive: true, force: true });
 });
 

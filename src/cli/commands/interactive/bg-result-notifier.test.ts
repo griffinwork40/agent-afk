@@ -312,6 +312,7 @@ describe('buildBgResultInjection', () => {
   it('serializes non-string message content as JSON', () => {
     const job = {
       jobId: 'bg-x',
+      provenance: 'model' as const,
       subagentId: 'sub-x',
       label: 'structured',
       model: 'sonnet',
