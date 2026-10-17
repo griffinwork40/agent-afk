@@ -974,3 +974,105 @@ describe('schedule handlers — retry fields (#3243)', () => {
     expect(list[0]).toMatchObject({ maxAttempts: 2, retryDelayMs: 1_000 });
   });
 });
+
+describe('schedule handlers — ISO date validation at tool layer (#3585)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-handler-iso-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // create_schedule — runAt
+  it('create_schedule rejects locale-format runAt', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Locale RunAt', command: '/cmd', runAt: '01/02/2027' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/runAt must be a valid ISO 8601/);
+  });
+
+  it('create_schedule rejects overflowing runAt (2026-02-30)', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Overflow RunAt', command: '/cmd', runAt: '2026-02-30' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/runAt must be a valid ISO 8601/);
+  });
+
+  it('create_schedule accepts strict ISO runAt', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Good RunAt', command: '/cmd', runAt: '2099-06-15T12:00:00Z' },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+  });
+
+  // create_schedule — expiresAt
+  it('create_schedule rejects locale-format expiresAt', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Locale ExpiresAt', command: '/cmd', cron: '* * * * *', expiresAt: '01/02/2027' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/expiresAt must be a valid ISO 8601/);
+  });
+
+  it('create_schedule rejects overflowing expiresAt (2026-02-30)', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Overflow ExpiresAt', command: '/cmd', cron: '* * * * *', expiresAt: '2026-02-30' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/expiresAt must be a valid ISO 8601/);
+  });
+
+  // update_schedule — runAt
+  it('update_schedule rejects locale-format runAt', async () => {
+    await createScheduleHandler({ name: 'Upd ISO RunAt', command: '/cmd', cron: '* * * * *' }, fakeSignal);
+    const result = await updateScheduleHandler(
+      { taskId: 'upd-iso-run-at', runAt: '01/02/2027' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/runAt must be a valid ISO 8601/);
+  });
+
+  it('update_schedule rejects overflowing runAt (2026-02-30)', async () => {
+    await createScheduleHandler({ name: 'Upd ISO RunAt2', command: '/cmd', cron: '* * * * *' }, fakeSignal);
+    const result = await updateScheduleHandler(
+      { taskId: 'upd-iso-run-at2', runAt: '2026-02-30' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/runAt must be a valid ISO 8601/);
+  });
+
+  // update_schedule — expiresAt
+  it('update_schedule rejects locale-format expiresAt', async () => {
+    await createScheduleHandler({ name: 'Upd ISO Exp', command: '/cmd', cron: '* * * * *' }, fakeSignal);
+    const result = await updateScheduleHandler(
+      { taskId: 'upd-iso-exp', expiresAt: '01/02/2027' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/expiresAt must be a valid ISO 8601/);
+  });
+
+  it('update_schedule rejects overflowing expiresAt (2026-02-30)', async () => {
+    await createScheduleHandler({ name: 'Upd ISO Exp2', command: '/cmd', cron: '* * * * *' }, fakeSignal);
+    const result = await updateScheduleHandler(
+      { taskId: 'upd-iso-exp2', expiresAt: '2026-02-30' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/expiresAt must be a valid ISO 8601/);
+  });
+});

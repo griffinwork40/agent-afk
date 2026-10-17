@@ -916,6 +916,8 @@ describe('isLockContention', () => {
         expect(isLockContention(makeErr('EBUSY'), platform)).toBe(false);
       });
     }
+  });
+});
 
 // ── ISO date validation (#3585) ──────────────────────────────────────────────
 
