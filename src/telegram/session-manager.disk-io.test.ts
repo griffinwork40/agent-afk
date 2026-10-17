@@ -30,10 +30,12 @@ function makeTmpDir(): string {
 }
 
 function makeSessionData(chatId: number, threadId?: number): SessionData {
+  const ts = new Date().toISOString();
   const data: SessionData = {
     chatId,
-    lastActivity: Date.now(),
-    messageCount: 0,
+    model: 'claude-sonnet-4-5',
+    createdAt: ts,
+    lastActivity: ts,
   };
   if (threadId !== undefined) data.threadId = threadId;
   return data;
@@ -143,13 +145,23 @@ describe('loadSessionsFromDisk', () => {
     // filename, which is exactly what the loader does.
     const data = makeSessionData(900, 7);
 
+    // Gate on a read-back round-trip: NTFS Alternate Data Streams (ADS) let
+    // writeFileSync('900:7.json') succeed on Windows without error, but the
+    // resulting ADS is invisible to readdir and readFile returns empty/throws.
+    // Checking that the written content round-trips through readFileSync is the
+    // portable guard that works on both POSIX and NTFS.
+    const colonPath = path.join(dataDir, '900:7.json');
     let couldWriteColonFile = false;
     try {
-      fs.writeFileSync(path.join(dataDir, '900:7.json'), JSON.stringify(data));
+      fs.writeFileSync(colonPath, JSON.stringify(data));
+      // Verify the file is truly readable as a regular file (not an ADS stub).
+      const readBack = fs.readFileSync(colonPath, 'utf-8');
+      JSON.parse(readBack); // must be valid JSON with actual content
       couldWriteColonFile = true;
     } catch {
-      // Windows: colon filenames are rejected by the OS at the syscall level.
-      // The loader never encounters them on Windows, so nothing to assert.
+      // Windows: colon filenames are either OS-rejected or written as an NTFS
+      // ADS that cannot be read back. The loader never encounters them on
+      // Windows, so nothing to assert.
     }
 
     if (couldWriteColonFile) {
@@ -270,10 +282,11 @@ describe('loadSessionsFromDisk — determinism when both filename forms exist', 
 
   it('prefers the tilde-named file over the legacy colon-named file', async () => {
     // Stale data in the legacy colon file, fresh data in the tilde file.
+    // Use sessionId as the distinguishing field (present in SessionData).
     const staleData = makeSessionData(300, 4);
-    staleData.messageCount = 1;
+    staleData.sessionId = 'stale-session';
     const freshData = makeSessionData(300, 4);
-    freshData.messageCount = 99;
+    freshData.sessionId = 'fresh-session';
 
     let wroteColonFile = false;
     try {
@@ -289,9 +302,9 @@ describe('loadSessionsFromDisk — determinism when both filename forms exist', 
 
     expect(sessionData.has('300:4')).toBe(true);
     // Both platforms: the tilde (canonical) file must win.
-    expect(sessionData.get('300:4')!.messageCount).toBe(99);
+    expect(sessionData.get('300:4')!.sessionId).toBe('fresh-session');
     if (wroteColonFile) {
-      expect(sessionData.get('300:4')!.messageCount).not.toBe(1);
+      expect(sessionData.get('300:4')!.sessionId).not.toBe('stale-session');
     }
   });
 });
