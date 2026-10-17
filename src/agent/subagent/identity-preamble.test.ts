@@ -97,6 +97,7 @@ describe('renderSubagentIdentityPreamble', () => {
     expect(out).toContain('git-investigator');
     expect(out).toContain('web-researcher');
     expect(out).toContain('A bare dispatch with no agent_type is not permitted here');
+    expect(out).toContain('Do not delegate your ordinary research to another research-agent or Explore agent');
     expect(out).not.toContain(DENY_ALL);
   });
 

@@ -245,6 +245,8 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
 
   // Side-channel: nodes that succeeded but wound down early (#2970).
   const partialNodes: PartialNode[] = [];
+  // Side-channel: per-node worktree setup failure notices (#3661).
+  const setupNotices: Record<string, string> = {};
 
   const dagNodes: DAGNode[] = nodes.map((originalSpec) => ({
     id: originalSpec.id,
@@ -254,12 +256,13 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
       const result = await recoverDagNode(originalSpec.id,
         () => dispatchDagNode(originalSpec, inputs, nodeSignal, options, softDeadlineForNode, ++dagIsolationCounter),
         nodeSignal, originalSpec.replaySafe === true && originalSpec.canUseTool !== undefined, options.traceWriter);
+      if (result.setupNotice) setupNotices[originalSpec.id] = result.setupNotice;
       if (result.status !== 'succeeded') {
         const reason = nodeSignal.reason;
         const throwable = reason instanceof TimeoutError
           ? new Error(`Subagent ${originalSpec.id} aborted: ${reason.message}`, result.error ? { cause: result.error } : {})
           : result.error ?? new Error(`Subagent ${originalSpec.id} ${result.status}`);
-        throw attachSubagentContext(throwable, { partialOutput: result.partialOutput, subagentId: result.id });
+        throw attachSubagentContext(throwable, { partialOutput: result.partialOutput, subagentId: result.id, setupNotice: result.setupNotice });
       }
       recordIfPartial(partialNodes, originalSpec.id, result.stopReason);
       if (result.output !== undefined) return result.output;
@@ -270,5 +273,9 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
 
   // runDAG's own `partial` is always [] (it has no notion of partial output).
   const dagResult = await runDAG({ nodes: dagNodes, edges }, signal, { failFast, nodeTimeoutMs });
-  return { ...dagResult, partial: partialNodes };
+  return {
+    ...dagResult,
+    partial: partialNodes,
+    ...(Object.keys(setupNotices).length > 0 ? { setupNotices } : {}),
+  };
 }

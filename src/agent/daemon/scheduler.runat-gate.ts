@@ -13,6 +13,7 @@ import { toggleScheduleEnabled } from './schedule-store.js';
 import { errorMessage } from '../../utils/errors.js';
 import type { ScheduledTask } from './triggers.js';
 import type { TelemetryRecord, TelemetryTrigger } from './scheduler.js';
+import { isValidIsoDate } from '../../utils/iso-date.js';
 
 export type RunAtGateResult =
   | { kind: 'pass' }
@@ -38,16 +39,16 @@ export function evaluateRunAtGate(
 ): RunAtGateResult {
   // expiresAt check takes priority: a task that is both expired and at its
   // runAt instant should be recorded as expired, not fired once.
-  if (task.expiresAt !== undefined) {
+  if (task.expiresAt !== undefined && isValidIsoDate(task.expiresAt)) {
     const expiryMs = Date.parse(task.expiresAt);
-    if (!isNaN(expiryMs) && nowMs >= expiryMs) {
+    if (nowMs >= expiryMs) {
       return { kind: 'expired', record: makeExpiredSkipRecord(task, trigger, nowMs) };
     }
   }
 
-  if (task.runAt !== undefined) {
+  if (task.runAt !== undefined && isValidIsoDate(task.runAt)) {
     const runAtMs = Date.parse(task.runAt);
-    if (!isNaN(runAtMs) && nowMs < runAtMs) {
+    if (nowMs < runAtMs) {
       return { kind: 'not-yet', record: makeNotYetSkipRecord(task, trigger, nowMs) };
     }
   }

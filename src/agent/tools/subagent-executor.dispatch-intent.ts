@@ -54,7 +54,7 @@ const IMPL_INTENT_PATTERNS: readonly RegExp[] = [
   ),
   new RegExp(
     CLAUSE_LEAD +
-      String.raw`((?:commit|push|deploy)\s+(?:(?:the|your|these|this|all|my)\s+)?(?:changes?|code|fix(?:es)?|work|it|them|to\s+\S+))`,
+      String.raw`((?:commit|push|deploy)\s+(?:(?:the|your|these|this|all|my)\s+)?(?:changes?|code|fix(?:es)?|work|it|them|to\s+(?:(?:the|a)\s+)?[\w./-]+(?:\s+branch)?|origin\s+[\w./-]+))`,
     'i',
   ),
   // Pattern 4 does not use CLAUSE_LEAD: "use edit_file" / "call write_file"

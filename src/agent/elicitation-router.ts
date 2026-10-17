@@ -170,11 +170,17 @@ class ElicitationRouter {
    * (REPL/Telegram) is attached to this process". Read at call time — a
    * handler installed later is observed by subsequent probes.
    *
-   * Returns true when either the global handler or ANY per-session handler is
-   * installed, so daemon tasks that use the keyed path still pass the gate.
+   * When `sessionKey` is provided, returns true only when a handler is
+   * installed for THAT specific session (or the global handler is present).
+   * Without a `sessionKey`, any per-session handler causes this to return
+   * true — which can produce a false positive when a concurrent session's
+   * handler is installed but the calling session has none. Pass the session's
+   * own key from the ask-question gate so the probe is accurate per-session.
    */
-  hasHandler(): boolean {
-    return this.handler !== null || this.sessionHandlers.size > 0;
+  hasHandler(sessionKey?: string): boolean {
+    if (this.handler !== null) return true;
+    if (sessionKey !== undefined) return this.sessionHandlers.has(sessionKey);
+    return this.sessionHandlers.size > 0;
   }
 
   /** Number of requests currently waiting in (or executing from) the queue. */
