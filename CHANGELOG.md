@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.322.5] - 2026-10-17
+
+### Fixed
+- tighten registry drift-catcher to reject 'inherit' model pins (#3995) (b8e10f09)
+- add hasWorkspacePreamble test and drop `true as const` nit (#3992) (5a08681b)
+- tighten recovery tests, add reply hint, fix readonly cast, harden rmSync (#3998) (6ae521cc)
+- tighten isStdoutOnlyCat regex and fix threat-model citation (#3996) (330ad864)
+- fix Bearer stopword lookahead \b→\s; add 8-char boundary and hyphenated-token tests (#3997) (be00c1db)
+
 ## [5.322.4] - 2026-10-17
 
 ### Fixed
