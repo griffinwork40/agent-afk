@@ -147,4 +147,41 @@ describe('checkComposeReadOnlyDispatchIntent (#3754)', () => {
       [{ readOnly: true }],
     )).toBeUndefined();
   });
+
+  it('RECON_EXEMPTION_RE: negation phrases exempt a read-only node that would otherwise match', () => {
+    // "fix the bug" clause-starts and matches Pattern 2; "do not fix it" negates via RECON_EXEMPTION_RE.
+    // Verify the exemption is load-bearing: without RECON_EXEMPTION_RE this prompt would be refused.
+    expect(checkComposeReadOnlyDispatchIntent(
+      [{ id: 'n', prompt: 'Read auth.ts. Fix the bug you find, but do not commit it.', agent_type: 'research-agent' }],
+      [{ readOnly: true }],
+    )).toBeUndefined();
+    // "fix the bug" matched via "then" connector (CLAUSE_LEAD); "don't fix" negates.
+    expect(checkComposeReadOnlyDispatchIntent(
+      [{ id: 'n2', prompt: 'Read the code, then fix the bug — but do not commit the fix.', agent_type: 'research-agent' }],
+      [{ readOnly: true }],
+    )).toBeUndefined();
+  });
+
+  it('RECON_EXEMPTION_RE: passive recon phrases exempt a read-only node that would otherwise match', () => {
+    // "implement the feature" matches Pattern 2 at sentence start; "describe what" triggers passive branch.
+    expect(checkComposeReadOnlyDispatchIntent(
+      [{ id: 'p', prompt: 'Inspect the module. Implement the feature. Describe what the changes do.', agent_type: 'research-agent' }],
+      [{ readOnly: true }],
+    )).toBeUndefined();
+    // "implement the feature" via "you must" connector; "identify which" triggers passive branch.
+    expect(checkComposeReadOnlyDispatchIntent(
+      [{ id: 'p2', prompt: 'You must implement the feature; identify which files are affected without editing them.', agent_type: 'research-agent' }],
+      [{ readOnly: true }],
+    )).toBeUndefined();
+  });
+
+  it('RECON_EXEMPTION_RE: exemption does not fire when no impl pattern matches (early-exit path)', () => {
+    // Prompt contains a negation phrase but no impl pattern matches at a clause boundary,
+    // so classifyDispatchIntent returns undefined before RECON_EXEMPTION_RE is evaluated.
+    // The node must be allowed through (undefined), confirming the early-exit is correct.
+    expect(checkComposeReadOnlyDispatchIntent(
+      [{ id: 'e', prompt: 'do not edit files, only report findings', agent_type: 'research-agent' }],
+      [{ readOnly: true }],
+    )).toBeUndefined();
+  });
 });
