@@ -248,6 +248,9 @@ function buildChildSkillFactory(
   agentRegistry: ReturnType<typeof loadAgentRegistry>,
   delegationBudget: DelegationBudget | undefined,
   onSubagentSucceeded: NonNullable<import('../subagent/fork-types.js').SubagentManagerOptions['onSubagentSucceeded']>,
+  // #3961: shared billing-stream registry threaded from the root manager so
+  // depth-2+ skill-fork managers propagate abandoned streams to the root's set.
+  parentBillingStreams?: Set<Promise<void>>,
 ): ReturnType<typeof createChildSkillExecutorFactory> {
   return createChildSkillExecutorFactory(
     opts.model,
@@ -269,6 +272,7 @@ function buildChildSkillFactory(
     opts.skillAllowlist,
     opts.hookRegistry,
     onSubagentSucceeded,
+    parentBillingStreams,
   );
 }
 
@@ -373,7 +377,9 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   // 4. Shared by the `agent` and `skill` executors so plugin skill children
   //    nest with identical depth-aware wiring at every hop.
   const onSubagentSucceeded = (usage: import('../subagent/result.js').SubagentTrace['usage'], cost: number | undefined): void => rootManager.reportSubagentCompletion(usage, cost);
-  const childSkillExecutorFactory = buildChildSkillFactory(opts, childProviderFactory, agentRegistry, delegationBudget, onSubagentSucceeded);
+  // #3961: thread the root's billing-stream registry so depth-2+ skill-fork managers
+  // propagate abandoned streams into rootManager.getPendingChildBillingStreams().
+  const childSkillExecutorFactory = buildChildSkillFactory(opts, childProviderFactory, agentRegistry, delegationBudget, onSubagentSucceeded, rootManager.billingStreamRegistry);
 
   // 5. `agent` tool.
   const subagentExecutor = new SubagentExecutor({
@@ -433,6 +439,9 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
     ...budgetOpt,
     ...skillScopeOpts(opts), // #3442 pluginConfigs / skillAllowlist / hookRegistry
+    // #3961: root's billing-stream registry so skill-fork managers at every depth
+    // propagate abandoned streams into rootManager.getPendingChildBillingStreams().
+    parentBillingStreams: rootManager.billingStreamRegistry,
   });
 
   // 7. `compose` tool. Nodes receive the raw base prompt so they stay task

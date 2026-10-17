@@ -396,6 +396,21 @@ export interface SubagentManagerOptions {
    * phase forks count against the same tree-wide counters.
    */
   delegationBudget?: import('../tools/delegation-budget.js').DelegationBudget;
+  /**
+   * Shared billing-stream registry owned by the root manager (#3961).
+   *
+   * When set, every promise this manager retains in its own
+   * `pendingChildBillingStreams` set is ALSO inserted into this shared set.
+   * The root manager passes its own `pendingChildBillingStreams` here when
+   * constructing nested (depth-2+) managers so that
+   * `rootManager.getPendingChildBillingStreams()` surfaces abandoned streams
+   * from every depth — not just the root's direct children.
+   *
+   * Deduplication is guaranteed: both sets use the same `Promise` reference as
+   * the key, and `retainChildBillingStreams` already skips duplicates in the
+   * local set, so the shared set receives each promise at most once.
+   */
+  parentBillingStreams?: Set<Promise<void>>;
 }
 
 /**

@@ -135,6 +135,13 @@ export interface BuildChildConfigArgs {
    */
   parentRootSessionId?: string;
   /**
+   * Shared billing-stream registry owned by the root manager (#3961).
+   * Threaded into every nested {@link SubagentManager} so abandoned streams
+   * from depth-2+ children surface in `rootManager.getPendingChildBillingStreams()`
+   * at shutdown, matching the depth-1 behaviour for the root manager's own children.
+   */
+  parentBillingStreams?: Set<Promise<void>>;
+  /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so
    * this module never imports the executor at runtime (circular-import seam;

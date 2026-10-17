@@ -4,6 +4,7 @@ import type { ModelProvider } from '../provider.js';
 import type { ChildProviderFactoryArgs } from './nesting.js';
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { SkillExecutor } from './skill-executor.js';
+import type { IAgentSession } from '../types.js';
 
 const transport = vi.hoisted(() => ({ build: undefined as unknown as (args: ChildProviderFactoryArgs) => ModelProvider }));
 vi.mock('./nesting.js', async (original) => ({
@@ -14,6 +15,7 @@ vi.mock('../routing-telemetry.js', () => ({ appendRoutingDecision: vi.fn().mockR
 
 import { wireExecutors } from '../session/wire-executors.js';
 import { AgentSession } from '../session.js';
+import { SubagentManager } from '../subagent.js';
 import { InMemoryTraceWriter } from '../trace/writer.js';
 import { createMockProvider } from '../__fixtures__/mock-provider.js';
 import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
@@ -39,6 +41,61 @@ beforeEach(() => {
   vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({ 'system.md': 'Probe instructions' });
 });
 afterEach(() => { vi.restoreAllMocks(); _resetRegistry(); });
+
+describe('depth-2 shutdown-cancel: abandoned billing stream reaches session_sealed (#3961)', () => {
+  /**
+   * Regression for #3961: a depth-2 child's abandoned billing stream, held in a
+   * nested SubagentManager, must surface in rootManager.getPendingChildBillingStreams()
+   * so session-shutdown.ts awaits it before writing session_sealed.
+   *
+   * The defect: each SubagentManager keeps pendingChildBillingStreams in a private Set.
+   * Before the fix, only the root manager's Set was visible to shutdown — streams
+   * retained by nested (depth-2+) managers were invisible because there was no link
+   * between the nested manager's set and the root's set.
+   *
+   * This test directly injects a fake settlement promise into a nested manager's
+   * handle-level stream set (bypassing transport), then asserts that
+   * rootManager.getPendingChildBillingStreams() surfaces it. The injection mirrors
+   * shutdown-billing-cutoff.test.ts:115 which verified the depth-1 case.
+   */
+  it('nested manager abandoned stream is visible in rootManager.getPendingChildBillingStreams', () => {
+    // Root manager (depth-0): owns the shutdown-visible billing set.
+    const rootManager = new SubagentManager();
+
+    // Nested manager (depth-1): wired to root's billing set via parentBillingStreams.
+    // BEFORE the fix: SubagentManager ignores parentBillingStreams — root sees nothing.
+    // AFTER the fix: nested manager propagates retained streams into this shared set.
+    type WithPrivateSets = { pendingChildBillingStreams: Set<Promise<void>> };
+    const rootSet = (rootManager as unknown as WithPrivateSets).pendingChildBillingStreams;
+    const nestedManager = new SubagentManager({ parentBillingStreams: rootSet });
+
+    // Simulate the abandoned-stream path: a fake handle's pendingBillingStreams
+    // holds a settlement promise (same technique as shutdown-billing-cutoff.test.ts:115).
+    let settlementResolve!: () => void;
+    const settlement = new Promise<void>((res) => { settlementResolve = res; });
+    const fakeHandle = { pendingBillingStreams: [settlement] };
+
+    // Calling nestedManager.getPendingChildBillingStreams() triggers retainChildBillingStreams
+    // on active handles. To inject without a real fork, call the internal retention path
+    // by temporarily planting the fake handle via the nestedManager's getPendingChildBillingStreams,
+    // which scans active. Instead, directly call the path that production uses:
+    // nestedManager.getPendingChildBillingStreams() after inserting into the nested set.
+    // The production path is: retainChildBillingStreams(handle) → pendingChildBillingStreams.add
+    // AND parentBillingStreams.add. We test the latter by triggering it directly.
+    (nestedManager as unknown as WithPrivateSets).pendingChildBillingStreams.add(settlement);
+    // Trigger the nested manager's own getPendingChildBillingStreams — this is what
+    // any caller of the nested manager does, and it must propagate into rootSet.
+    nestedManager.getPendingChildBillingStreams();
+
+    // Now the root reads its set — it must include the stream propagated from nested.
+    const streams = rootManager.getPendingChildBillingStreams();
+    settlementResolve();
+
+    // BEFORE the fix: streams = [] (no link from nested to root)
+    // AFTER the fix: streams = [settlement] (nested propagated via parentBillingStreams)
+    expect(streams.length, 'rootManager must surface depth-2 nested manager abandoned billing stream').toBeGreaterThan(0);
+  });
+});
 
 describe('descendant billing reaches root session_sealed exactly once', () => {
   it.each<{ chain: Hop[] }>([

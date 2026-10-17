@@ -331,7 +331,7 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
 export function buildNestedChildManager(
   args: Pick<BuildChildConfigArgs,
     'childInheritedReadRoots' | 'traceWriter' | 'surface' | 'workspaceStore' |
-    'parentRootSessionId' | 'hookRegistry' | 'onSubagentSucceeded'>,
+    'parentRootSessionId' | 'hookRegistry' | 'onSubagentSucceeded' | 'parentBillingStreams'>,
   signal: AbortSignal,
   currentCwd: string | undefined,
 ): SubagentManager {
@@ -345,6 +345,9 @@ export function buildNestedChildManager(
     ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
     ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
     ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
+    // #3961: propagate the root's billing-stream registry so depth-2+ abandoned
+    // streams surface in rootManager.getPendingChildBillingStreams() at shutdown.
+    ...(args.parentBillingStreams !== undefined ? { parentBillingStreams: args.parentBillingStreams } : {}),
   });
 }
 

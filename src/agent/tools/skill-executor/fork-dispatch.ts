@@ -92,6 +92,9 @@ function buildSkillForkManager(
     ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
     ...(ctx.parentRootSessionId !== undefined ? { parentRootSessionId: ctx.parentRootSessionId } : {}),
     ...(ctx.hookRegistry !== undefined ? { hookRegistry: ctx.hookRegistry } : {}),
+    // #3961: propagate root's billing-stream registry so depth-2+ abandoned
+    // streams surface in rootManager.getPendingChildBillingStreams() at shutdown.
+    ...(ctx.parentBillingStreams !== undefined ? { parentBillingStreams: ctx.parentBillingStreams } : {}),
   });
 }
 

@@ -102,6 +102,12 @@ export interface SkillExecutorContext {
   hookRegistry?: HookRegistry;
   /** Tree-wide accounting sink, shared by skill forks and every descendant manager. */
   onSubagentSucceeded?: import('../../subagent/fork-types.js').SubagentManagerOptions['onSubagentSucceeded'];
+  /**
+   * Shared billing-stream registry owned by the root manager (#3961).
+   * Threaded into every per-call SubagentManager built by skill fork paths
+   * so depth-2+ abandoned streams surface in rootManager.getPendingChildBillingStreams().
+   */
+  parentBillingStreams?: Set<Promise<void>>;
   depth?: number;
   maxDepth?: number;
   /**
