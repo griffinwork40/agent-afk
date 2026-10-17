@@ -202,6 +202,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   /** Live stream receipts retained independently of the current run. @internal */
   readonly _pendingBillingStreams = new Set<Promise<void>>();
 
+  /**
+   * Root manager's shutdown-visible registry (#3961); every live stream is also
+   * published here at creation. Set by SubagentManager after construction. @internal
+   */
+  _billingStreamSink?: Set<Promise<void>>;
+
   get pendingBillingStreams(): Promise<void>[] {
     return [...this._pendingBillingStreams];
   }

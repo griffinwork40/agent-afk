@@ -15,7 +15,7 @@ vi.mock('../routing-telemetry.js', () => ({ appendRoutingDecision: vi.fn().mockR
 
 import { wireExecutors } from '../session/wire-executors.js';
 import { AgentSession } from '../session.js';
-import { SubagentManager } from '../subagent.js';
+import { managerShutdownConfig } from '../session/manager-shutdown-config.js';
 import { InMemoryTraceWriter } from '../trace/writer.js';
 import { createMockProvider } from '../__fixtures__/mock-provider.js';
 import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
@@ -40,61 +40,90 @@ beforeEach(() => {
   for (let i = 0; i < 3; i++) registerSkill({ name: `billing-probe-${i}`, description: 'Billing regression probe', context: 'fork', handler: vi.fn() });
   vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({ 'system.md': 'Probe instructions' });
 });
-afterEach(() => { vi.restoreAllMocks(); _resetRegistry(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); _resetRegistry(); });
 
-describe('depth-2 shutdown-cancel: abandoned billing stream reaches session_sealed (#3961)', () => {
-  /**
-   * Regression for #3961: a depth-2 child's abandoned billing stream, held in a
-   * nested SubagentManager, must surface in rootManager.getPendingChildBillingStreams()
-   * so session-shutdown.ts awaits it before writing session_sealed.
-   *
-   * The defect: each SubagentManager keeps pendingChildBillingStreams in a private Set.
-   * Before the fix, only the root manager's Set was visible to shutdown — streams
-   * retained by nested (depth-2+) managers were invisible because there was no link
-   * between the nested manager's set and the root's set.
-   *
-   * This test directly injects a fake settlement promise into a nested manager's
-   * handle-level stream set (bypassing transport), then asserts that
-   * rootManager.getPendingChildBillingStreams() surfaces it. The injection mirrors
-   * shutdown-billing-cutoff.test.ts:115 which verified the depth-1 case.
-   */
-  it('nested manager abandoned stream is visible in rootManager.getPendingChildBillingStreams', () => {
-    // Root manager (depth-0): owns the shutdown-visible billing set.
-    const rootManager = new SubagentManager();
-
-    // Nested manager (depth-1): wired to root's billing set via parentBillingStreams.
-    // BEFORE the fix: SubagentManager ignores parentBillingStreams — root sees nothing.
-    // AFTER the fix: nested manager propagates retained streams into this shared set.
-    type WithPrivateSets = { pendingChildBillingStreams: Set<Promise<void>> };
-    const rootSet = (rootManager as unknown as WithPrivateSets).pendingChildBillingStreams;
-    const nestedManager = new SubagentManager({ parentBillingStreams: rootSet });
-
-    // Simulate the abandoned-stream path: a fake handle's pendingBillingStreams
-    // holds a settlement promise (same technique as shutdown-billing-cutoff.test.ts:115).
-    let settlementResolve!: () => void;
-    const settlement = new Promise<void>((res) => { settlementResolve = res; });
-    const fakeHandle = { pendingBillingStreams: [settlement] };
-
-    // Calling nestedManager.getPendingChildBillingStreams() triggers retainChildBillingStreams
-    // on active handles. To inject without a real fork, call the internal retention path
-    // by temporarily planting the fake handle via the nestedManager's getPendingChildBillingStreams,
-    // which scans active. Instead, directly call the path that production uses:
-    // nestedManager.getPendingChildBillingStreams() after inserting into the nested set.
-    // The production path is: retainChildBillingStreams(handle) → pendingChildBillingStreams.add
-    // AND parentBillingStreams.add. We test the latter by triggering it directly.
-    (nestedManager as unknown as WithPrivateSets).pendingChildBillingStreams.add(settlement);
-    // Trigger the nested manager's own getPendingChildBillingStreams — this is what
-    // any caller of the nested manager does, and it must propagate into rootSet.
-    nestedManager.getPendingChildBillingStreams();
-
-    // Now the root reads its set — it must include the stream propagated from nested.
-    const streams = rootManager.getPendingChildBillingStreams();
-    settlementResolve();
-
-    // BEFORE the fix: streams = [] (no link from nested to root)
-    // AFTER the fix: streams = [settlement] (nested propagated via parentBillingStreams)
-    expect(streams.length, 'rootManager must surface depth-2 nested manager abandoned billing stream').toBeGreaterThan(0);
-  });
+describe('depth-3 abandoned billing stream reaches root session_sealed (#3961)', () => {
+  // Real root/nested managers, handles and executors; only the transport is faked.
+  // Each hop passes its own session's abort signal. The
+  // depth-3 provider stalls before its billed turn.completed and ignores
+  // interrupts. In `awaited` mode its own budget abandons the stream while billing
+  // is outstanding and the depth-2-owned manager retains it (item 1: it must forward
+  // to the ROOT set, not its parent's local set). The late usage lands only
+  // after shutdown snapshots the root, which is the only manager shutdown reads.
+  it.each(['awaited', 'detached'] as const)('%s: root seal includes a depth-3 abandoned stream', async (mode) => {
+    vi.stubEnv('AFK_SUBAGENT_TIMEOUT_MS', mode === 'awaited' ? '150' : '0');
+    let snapshot = 0;
+    const writer = new InMemoryTraceWriter();
+    let wired: ReturnType<typeof wireExecutors> | undefined;
+    const hooks = (): ReturnType<typeof managerShutdownConfig> => managerShutdownConfig(wired!.rootManager);
+    const session = new AgentSession({
+      model: 'sonnet', apiKey: 'test-key', provider: createMockProvider(), traceWriter: writer,
+      drainSubagents: (reason) => hooks().drainSubagents!(reason),
+      getPendingChildTerminalWrites: () => hooks().getPendingChildTerminalWrites!(),
+      // Late usage lands only AFTER shutdown snapshots the root: a stream missing
+      // from this snapshot is never awaited, so its billing misses the seal.
+      getPendingChildBillingStreams: () => { const streams = hooks().getPendingChildBillingStreams!(); snapshot = streams.length; setTimeout(release, 0); return streams; },
+    }, writer);
+    await session.waitForInitialization();
+    const depth = 3;
+    let forks = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let stalled!: () => void;
+    const deepestStalled = new Promise<void>((resolve) => { stalled = resolve; });
+    transport.build = (args) => {
+      const index = forks++;
+      const deepest = index === depth - 1;
+      const base = createMockProvider({ sessionId: `abandoned-${index}` });
+      return {
+        ...base,
+        query(queryArgs) {
+          const query = base.query(queryArgs);
+          return {
+            ...query,
+            interrupt: deepest ? async () => {} : query.interrupt.bind(query),
+            async *[Symbol.asyncIterator]() {
+              for await (const event of query) {
+                if (event.type === 'assistant.message' && !deepest) {
+                  const child = (args.childExecutor as SubagentExecutor).execute({ id: `abandon-${index + 1}`, name: 'agent',
+                    signal: queryArgs.config.abortSignal ?? signal, input: { prompt: 'probe' } });
+                  if (mode === 'awaited' || index < depth - 2) await child;
+                }
+                if (event.type === 'turn.completed' && deepest) {
+                  stalled();
+                  await gate;
+                  event.usage = { ...event.usage, billing: { provider: 'anthropic-direct', uncachedInput: 300, cacheRead: 0, cacheWrite: 0, output: 7 } };
+                }
+                yield event;
+              }
+            },
+          };
+        },
+      };
+    };
+    wired = wireExecutors({
+      surface: 'cli', parentSession: session, apiKey: 'test-key', model: 'sonnet', managerParentModel: 'sonnet',
+      defaultSubagentModel: 'sonnet', resolveApiKeyForModel: () => 'test-key', pluginConfigs: [],
+      traceWriter: writer, skillTraceWriter: writer,
+    });
+    wired.rootManager.setOnSubagentSucceeded((...args) => session.recordSubagentCompletion(...args));
+    const rootCall = wired.subagentExecutor.execute({ id: 'abandon-0', name: 'agent', signal, input: { prompt: 'probe' } });
+    await deepestStalled;
+    expect(forks).toBe(depth);
+    // awaited: past the depth-3 child's 150ms budget, its stream is abandoned and
+    // its handle recorded. detached: no budget and its depth-2 parent does not
+    // wait, so at seal the depth-3 handle is still ACTIVE in a nested manager.
+    if (mode === 'awaited') await new Promise((resolve) => setTimeout(resolve, 250));
+    await session.close();
+    await rootCall;
+    const sealed = writer.events.find((e) => e.kind === 'session_sealed');
+    if (sealed?.kind !== 'session_sealed') throw new Error('missing seal');
+    expect(sealed.payload.billing?.subagents?.total.uncachedInput,
+      'root session_sealed must include the depth-3 child\'s abandoned-stream billing').toBe(300);
+    // detached: the root snapshot itself must hold the still-active depth-3 stream
+    // alongside the depth-1 stream (blocked on its tool call), not only reach it transitively.
+    if (mode === 'detached') expect(snapshot, 'root snapshot must include the still-active depth-3 stream').toBe(2);
+  }, 15000);
 });
 
 describe('descendant billing reaches root session_sealed exactly once', () => {

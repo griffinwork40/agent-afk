@@ -51,7 +51,7 @@ export function streamToFinalMessage<T>(
   sinkOverride?: SubagentProgressSink,
   billingContext: RunBillingContext = handle._billingContext,
 ): Promise<Message> {
-  return trackBillingStream(handle._pendingBillingStreams, consumeStream(handle, prompt, sinkOverride, billingContext));
+  return trackBillingStream(handle._pendingBillingStreams, consumeStream(handle, prompt, sinkOverride, billingContext), handle._billingStreamSink);
 }
 
 async function consumeStream<T>(

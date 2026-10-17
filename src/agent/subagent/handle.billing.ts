@@ -59,9 +59,11 @@ export function settleUnreportedBilling<T>(
 export function trackBillingStream<T>(
   pending: Set<Promise<void>>,
   stream: Promise<T>,
+  sink?: Set<Promise<void>>,
 ): Promise<T> {
   const completion = stream.then(() => {}, () => {});
   pending.add(completion);
-  void completion.then(() => pending.delete(completion));
+  sink?.add(completion);
+  void completion.then(() => { pending.delete(completion); sink?.delete(completion); });
   return stream;
 }

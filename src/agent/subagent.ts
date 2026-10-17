@@ -460,6 +460,9 @@ export class SubagentManager {
       throw err;
     }
     const { handle, effectiveAgentType, effectiveResolvedAgentType } = constructed;
+    // #3961: publish each stream into the root registry the moment it starts, so
+    // a depth-2+ handle still ACTIVE in a nested manager is visible at seal.
+    handle._billingStreamSink = this.billingStreamRegistry;
 
     // Witness emit + routing telemetry: fires AFTER the handle is wired into
     // the manager's active map and the abort-graph. See ./subagent/fork-lifecycle.ts.
@@ -512,29 +515,18 @@ export class SubagentManager {
   }
 
   /**
-   * The live billing-stream registry owned by this manager (#3961).
-   * Pass to nested managers as `parentBillingStreams` so depth-2+ abandoned
-   * streams surface in this manager's `getPendingChildBillingStreams()`.
-   * For the root manager, this is the set shutdown awaits before sealing.
+   * The shutdown-visible billing-stream registry (#3961): the ROOT manager's
+   * set at every depth. A nested manager returns the root set it was handed,
+   * never its own local set, so a depth-3 child's stream forwarded by a
+   * depth-2-owned manager still lands where shutdown reads it.
    */
   get billingStreamRegistry(): Set<Promise<void>> {
-    return this.pendingChildBillingStreams;
+    return this.parentBillingStreams ?? this.pendingChildBillingStreams;
   }
 
   /** Includes terminal children evicted from both the active map and completed LRU. */
   getPendingChildBillingStreams(): readonly Promise<void>[] {
     for (const handle of this.active.values()) this.retainChildBillingStreams(handle);
-    // #3961: push any locally-retained streams into the shared root registry.
-    // Streams already in parentBillingStreams are skipped (dedup by identity).
-    if (this.parentBillingStreams !== undefined) {
-      for (const stream of this.pendingChildBillingStreams) {
-        if (!this.parentBillingStreams.has(stream)) {
-          this.parentBillingStreams.add(stream);
-          const remove = (): void => { this.parentBillingStreams!.delete(stream); };
-          void stream.then(remove, remove);
-        }
-      }
-    }
     return [...this.pendingChildBillingStreams];
   }
 
@@ -545,9 +537,8 @@ export class SubagentManager {
       this.pendingChildBillingStreams.add(stream);
       const remove = (): void => { this.pendingChildBillingStreams.delete(stream); };
       void stream.then(remove, remove);
-      // #3961: propagate into the shared root registry so shutdown sees depth-2+ streams.
-      // Deduplication is by promise identity; parentBillingStreams never adds duplicates
-      // because this branch only executes when the local set did not already have the stream.
+      // #3961: the sole path into the root registry. Every local insertion goes
+      // through here, so no separate local->root forwarding pass is needed.
       if (this.parentBillingStreams !== undefined && !this.parentBillingStreams.has(stream)) {
         this.parentBillingStreams.add(stream);
         const removeFromParent = (): void => { this.parentBillingStreams!.delete(stream); };
