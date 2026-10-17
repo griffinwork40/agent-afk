@@ -66,7 +66,9 @@ describe('validateIssueUrl', () => {
 describe('createIssue', () => {
   it('rejects non-URL stdout', async () => {
     const exec = vi.fn(async () => ({ stdout: 'success!', stderr: '' }));
-    await expect(createIssue({ repo: 'o/r', title: 'T', body: 'b' }, exec)).rejects.toBeInstanceOf(GhError);
+    const err = await createIssue({ repo: 'o/r', title: 'T', body: 'b' }, exec).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GhError);
+    expect((err as GhError).message).toContain('invalid issue URL');
   });
   it('sends the body on stdin via --body-file - and passes labels as separate args', async () => {
     const exec = vi.fn(async () => ({ stdout: 'https://github.com/o/r/issues/1\n', stderr: '' }));

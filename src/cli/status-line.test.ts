@@ -1587,8 +1587,7 @@ describe('StatusLine — AFK_CENTER_CONTENT centering', () => {
     status.stop();
   });
 
-  it('output is byte-identical to non-centered when AFK_CENTER_CONTENT is unset', () => {
-    // No stub — AFK_CENTER_CONTENT must be absent / falsy.
+  it('output is byte-identical to non-centered when AFK_CENTER_CONTENT is empty string', () => {
     vi.stubEnv('AFK_CENTER_CONTENT', '');
     const stream = wideStream(200);
     const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
@@ -1614,6 +1613,35 @@ describe('StatusLine — AFK_CENTER_CONTENT centering', () => {
     const plainPaint = paintChunk.replace(BROAD_ANSI_RE, '');
     // Entire painted line must not exceed terminal width.
     expect(plainPaint.length).toBeLessThanOrEqual(cols);
+    status.stop();
+  });
+
+  it('output is byte-identical to non-centered when AFK_CENTER_CONTENT is truly absent', () => {
+    // Ensure the env var is completely absent (not just empty string).
+    vi.unstubAllEnvs();
+    const stream = wideStream(200);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cost: 0.01 });
+    const out = lastJoined(stream);
+    const paintChunk = out.split('\x1b[2K')[1] ?? '';
+    const plainPaint = paintChunk.replace(BROAD_ANSI_RE, '');
+    // No leading margin — content starts immediately (first char at col 0).
+    expect(plainPaint.charAt(0)).not.toBe(' ');
+    status.stop();
+  });
+
+  it('centered output has empty margin on narrow terminal (cols=80)', () => {
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    const stream = wideStream(80);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cost: 0.01, tokens: 500 });
+    const out = lastJoined(stream);
+    const paintChunk = out.split('\x1b[2K')[1] ?? '';
+    const plainPaint = paintChunk.replace(BROAD_ANSI_RE, '');
+    // cols=80 ≤ measure=100 → marginCols = 0, no leading spaces.
+    expect(plainPaint.charAt(0)).not.toBe(' ');
     status.stop();
   });
 });
