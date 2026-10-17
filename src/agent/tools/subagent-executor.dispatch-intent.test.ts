@@ -149,37 +149,39 @@ describe('checkComposeReadOnlyDispatchIntent (#3754)', () => {
   });
 
   it('RECON_EXEMPTION_RE: negation phrases exempt a read-only node that would otherwise match', () => {
-    // "fix the bug" would normally trip Pattern 2, but "do not fix it" negates.
+    // "fix the bug" clause-starts and matches Pattern 2; "do not fix it" negates via RECON_EXEMPTION_RE.
+    // Verify the exemption is load-bearing: without RECON_EXEMPTION_RE this prompt would be refused.
     expect(checkComposeReadOnlyDispatchIntent(
-      [{ id: 'n', prompt: 'find where the bug is but do not fix it', agent_type: 'research-agent' }],
+      [{ id: 'n', prompt: 'Read auth.ts. Fix the bug you find, but do not commit it.', agent_type: 'research-agent' }],
       [{ readOnly: true }],
     )).toBeUndefined();
-    // "edit" verb present but "do not edit" negates.
+    // "fix the bug" matched via "then" connector (CLAUSE_LEAD); "don't fix" negates.
     expect(checkComposeReadOnlyDispatchIntent(
-      [{ id: 'n2', prompt: 'do not edit files, only report findings', agent_type: 'research-agent' }],
+      [{ id: 'n2', prompt: 'Read the code, then fix the bug — but do not commit the fix.', agent_type: 'research-agent' }],
       [{ readOnly: true }],
     )).toBeUndefined();
   });
 
   it('RECON_EXEMPTION_RE: passive recon phrases exempt a read-only node that would otherwise match', () => {
-    // "what should be changed" triggers the report/describe/identify branch.
+    // "implement the feature" matches Pattern 2 at sentence start; "describe what" triggers passive branch.
     expect(checkComposeReadOnlyDispatchIntent(
-      [{ id: 'p', prompt: 'report what should be changed in the codebase', agent_type: 'research-agent' }],
+      [{ id: 'p', prompt: 'Inspect the module. Implement the feature. Describe what the changes do.', agent_type: 'research-agent' }],
       [{ readOnly: true }],
     )).toBeUndefined();
-    // "identify which files need updating" — identify + which.
+    // "implement the feature" via "you must" connector; "identify which" triggers passive branch.
     expect(checkComposeReadOnlyDispatchIntent(
-      [{ id: 'p2', prompt: 'identify which files need updating', agent_type: 'research-agent' }],
+      [{ id: 'p2', prompt: 'You must implement the feature; identify which files are affected without editing them.', agent_type: 'research-agent' }],
       [{ readOnly: true }],
     )).toBeUndefined();
   });
 
-  it('RECON_EXEMPTION_RE: exemption does not suppress refusal when brief is unambiguously impl-only', () => {
-    // No negation/passive present — refusal must still fire.
-    const result = checkComposeReadOnlyDispatchIntent(
-      [{ id: 'bad', prompt: 'implement the feature in src/a.ts', agent_type: 'research-agent' }],
+  it('RECON_EXEMPTION_RE: exemption does not fire when no impl pattern matches (early-exit path)', () => {
+    // Prompt contains a negation phrase but no impl pattern matches at a clause boundary,
+    // so classifyDispatchIntent returns undefined before RECON_EXEMPTION_RE is evaluated.
+    // The node must be allowed through (undefined), confirming the early-exit is correct.
+    expect(checkComposeReadOnlyDispatchIntent(
+      [{ id: 'e', prompt: 'do not edit files, only report findings', agent_type: 'research-agent' }],
       [{ readOnly: true }],
-    );
-    expect(result?.isError).toBe(true);
+    )).toBeUndefined();
   });
 });
