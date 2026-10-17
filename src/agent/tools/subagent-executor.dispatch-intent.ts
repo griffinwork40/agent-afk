@@ -57,6 +57,10 @@ const IMPL_INTENT_PATTERNS: readonly RegExp[] = [
       String.raw`((?:commit|push|deploy)\s+(?:(?:the|your|these|this|all|my)\s+)?(?:changes?|code|fix(?:es)?|work|it|them|to\s+\S+))`,
     'i',
   ),
+  // Pattern 4 does not use CLAUSE_LEAD: "use edit_file" / "call write_file"
+  // name a TOOL explicitly, so position is irrelevant — any appearance of the
+  // tool name as the object of a dispatch verb is an unambiguous write intent
+  // regardless of whether it sits at a clause boundary.
   /((?:use|call|invoke|using|via)\s+(?:the\s+)?(?:write_file|edit_file)\b)/i,
 ];
 
@@ -124,6 +128,15 @@ export function checkReadOnlyDispatchIntent(
  * call and naming the first offending node. Only nodes whose resolved agent is
  * read-only (`readOnly: true`, derived from the same write-capability
  * predicate as the agent path) are checked; bare nodes are exempt.
+ *
+ * **Length/shape invariant**: `nodes` and `resolvedAgents` MUST be parallel
+ * arrays of the same length — `resolvedAgents[i]` is the resolution result
+ * for `nodes[i]`. The caller (compose-executor.ts) satisfies this by building
+ * `resolvedAgents` with `parsed.nodes.map(resolveComposeNodeAgent)` over the
+ * same `parsed.nodes` array passed here as `nodes`. If the arrays are ragged,
+ * out-of-bounds indices return `undefined`; the `?.readOnly !== true` guard
+ * then treats the orphaned node as write-capable and skips it silently — a
+ * safe conservative default, but the invariant must be maintained by callers.
  */
 export function checkComposeReadOnlyDispatchIntent(
   nodes: ReadonlyArray<{ id: string; prompt: string; agent_type?: string }>,

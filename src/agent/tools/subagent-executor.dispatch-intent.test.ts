@@ -144,4 +144,39 @@ describe('checkComposeReadOnlyDispatchIntent (#3754)', () => {
       [{ readOnly: true }],
     )).toBeUndefined();
   });
+
+  it('RECON_EXEMPTION_RE: negation phrases exempt a read-only node that would otherwise match', () => {
+    // "fix the bug" would normally trip Pattern 2, but "do not fix it" negates.
+    expect(checkComposeReadOnlyDispatchIntent(
+      [{ id: 'n', prompt: 'find where the bug is but do not fix it', agent_type: 'research-agent' }],
+      [{ readOnly: true }],
+    )).toBeUndefined();
+    // "edit" verb present but "do not edit" negates.
+    expect(checkComposeReadOnlyDispatchIntent(
+      [{ id: 'n2', prompt: 'do not edit files, only report findings', agent_type: 'research-agent' }],
+      [{ readOnly: true }],
+    )).toBeUndefined();
+  });
+
+  it('RECON_EXEMPTION_RE: passive recon phrases exempt a read-only node that would otherwise match', () => {
+    // "what should be changed" triggers the report/describe/identify branch.
+    expect(checkComposeReadOnlyDispatchIntent(
+      [{ id: 'p', prompt: 'report what should be changed in the codebase', agent_type: 'research-agent' }],
+      [{ readOnly: true }],
+    )).toBeUndefined();
+    // "identify which files need updating" — identify + which.
+    expect(checkComposeReadOnlyDispatchIntent(
+      [{ id: 'p2', prompt: 'identify which files need updating', agent_type: 'research-agent' }],
+      [{ readOnly: true }],
+    )).toBeUndefined();
+  });
+
+  it('RECON_EXEMPTION_RE: exemption does not suppress refusal when brief is unambiguously impl-only', () => {
+    // No negation/passive present — refusal must still fire.
+    const result = checkComposeReadOnlyDispatchIntent(
+      [{ id: 'bad', prompt: 'implement the feature in src/a.ts', agent_type: 'research-agent' }],
+      [{ readOnly: true }],
+    );
+    expect(result?.isError).toBe(true);
+  });
 });
