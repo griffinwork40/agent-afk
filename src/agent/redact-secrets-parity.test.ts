@@ -120,6 +120,69 @@ describe('redactInlineSecrets parity — prompt-dump egress', () => {
 });
 
 // ---------------------------------------------------------------------------
+// False-positive / narrowing tests for items 1–3 (issue #3934)
+// ---------------------------------------------------------------------------
+
+describe('false-positive narrowing — bare Bearer rule (issue #3934 item 1)', () => {
+  it('does NOT redact "bearer of bad news" (stopword "of")', () => {
+    const result = redactSecrets('the bearer of bad news');
+    expect(result).toBe('the bearer of bad news');
+  });
+
+  it('does NOT redact "invalid bearer token" (stopword "token")', () => {
+    const result = redactSecrets('invalid bearer token');
+    expect(result).toBe('invalid bearer token');
+  });
+
+  it('does NOT redact "bearer to the rescue" (stopword "to")', () => {
+    const result = redactSecrets('bearer to the rescue');
+    expect(result).toBe('bearer to the rescue');
+  });
+
+  it('DOES redact a real short token (8-char floor)', () => {
+    const result = redactSecrets('Bearer abcdef0123456789TOKEN');
+    expect(result).not.toContain('abcdef0123456789TOKEN');
+    expect(result).toContain('[REDACTED]');
+  });
+
+  it('preserves bearer casing in replacement (no Title-case forced)', () => {
+    const result = redactSecrets('authorization: bearer abcdef0123456789');
+    expect(result).toBe('authorization: bearer [REDACTED]');
+  });
+});
+
+describe('false-positive narrowing — AWS key-id mid-uppercase-run (issue #3934 item 2)', () => {
+  it('does NOT match XAKIA… inside a longer uppercase run', () => {
+    const result = redactSecrets('XAKIAFAKEKEY1234ABCDE');
+    expect(result).toBe('XAKIAFAKEKEY1234ABCDE');
+  });
+
+  it('DOES redact a bare AKIA… key', () => {
+    const result = redactSecrets('AKIAFAKEKEY1234ABCDE');
+    expect(result).toContain('[REDACTED]');
+    expect(result).not.toContain('AKIAFAKEKEY1234ABCDE');
+  });
+
+  it('DOES redact keyAKIA… (lowercase before prefix)', () => {
+    const result = redactSecrets('keyAKIAFAKEKEY1234ABCDE');
+    expect(result).not.toContain('AKIAFAKEKEY1234ABCDE');
+    expect(result).toContain('[REDACTED]');
+  });
+});
+
+describe('label-casing preservation — Authorization header (issue #3934 item 3)', () => {
+  it('preserves lowercase "authorization: bearer" label', () => {
+    const result = redactSecrets('authorization: bearer abcdef0123456789');
+    expect(result).toBe('authorization: bearer [REDACTED]');
+  });
+
+  it('preserves Title-case "Authorization: Bearer" label', () => {
+    const result = redactSecrets('Authorization: Bearer abcdef0123456789');
+    expect(result).toBe('Authorization: Bearer [REDACTED]');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Regression cases for items 1–3 (spec #3918)
 // ---------------------------------------------------------------------------
 

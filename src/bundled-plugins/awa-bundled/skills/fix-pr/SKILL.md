@@ -78,7 +78,7 @@ This phase validates each spec item independently before any writes begin. The g
 
 - **agent_type:** `research-agent` (mechanically read-only -- cannot write files, run bash, or commit).
 - **cwd:** `<worktree path>` (so file reads target the PR branch, not the main working tree).
-- **model:** `haiku` (sufficient for validation; keeps the fan-out cheap).
+- **model:** the cheapest model the operator has configured (e.g. the `small` slot) when one is available; otherwise omit `model` so the operator's subagent default applies. Never hardcode a model name.
 - **max_tool_use_iterations:** 8 (read the cited code, check surrounding context, form a verdict -- more than enough).
 - **inputs (in prompt):** one numbered spec item (comment text, source URL, file/line if known) and the `head_branch`.
 - **goal:** read the cited file(s) and surrounding context in the worktree. Determine whether the reviewer's request is (a) valid and unaddressed, (b) already addressed by existing code, or (c) a false positive / misunderstanding. If valid, propose the minimal fix: exact file, location, and the change to make.
@@ -105,7 +105,7 @@ If ALL items are triaged out (every probe returned `already-addressed` or `inval
 
 Size the dispatch per `/right-size-delegation` if available; defaults otherwise:
 
-Dispatch ONE implementation subagent (`agent` tool, `cwd: <worktree path>`, `max_turns: 25`, model right-sized to the diff -- `sonnet` default, `haiku` never for code fixes):
+Dispatch ONE implementation subagent (`agent` tool, `cwd: <worktree path>`, `max_turns: 25`, model right-sized to the diff -- omit `model` by default so the operator's subagent default applies; never downgrade to the cheapest tier for code fixes):
 - inputs: the **triaged fix spec** (not raw review comments): each surviving item carries its original numbered ID, the reviewer's request, the triage probe's `proposed_fix` and `risk` assessment, and `unclear` items carry the probe's reasoning. Also: `head_branch`, repo test/lint commands (inferred from package.json / Makefile / pyproject.toml and passed explicitly).
 - goal: apply every surviving spec item with minimal diffs, using the triage probe's proposed fixes as a starting point (the probe proposals are guidance, not mandates -- the write agent may deviate if it discovers a better approach). Run the narrowest relevant tests per item. **Do NOT commit yet** -- emit the manifest first (see below).
 - non_goals: do NOT push, do NOT touch branches other than the checked-out one, do NOT invoke /review or any skill, do NOT expand scope beyond the surviving spec items, do NOT modify files that are not named in the triaged spec unless a fix structurally requires it (e.g. a shared helper, a test file, a baseline file the gate checks).

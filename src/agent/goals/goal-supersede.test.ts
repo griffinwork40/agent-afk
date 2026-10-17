@@ -172,7 +172,7 @@ describe('Scenario 3 (#3714): goal change while worker runs', () => {
    * `superseded="true"` attribute (or equivalent) when the goal at delivery
    * time differs from the goal at worker-dispatch time.
    */
-  it.fails(
+  it(
     'delivered result is marked superseded when the goal changed while the worker ran',
     async () => {
       const { BgResultNotifier } = await import(
@@ -194,18 +194,15 @@ describe('Scenario 3 (#3714): goal change while worker runs', () => {
       // The two goals must actually differ (precondition)
       expect(goalTextAtDispatch).not.toBe(goalTextAtDelivery);
 
-      // Simulate the worker settling — triggers onSettled → buffers injection
-      const job = makeStubJob();
+      // Simulate the worker settling — triggers onSettled → buffers injection.
+      // The job carries the goal text snapshotted at dispatch time, mirroring
+      // what createJobEntry() now stamps via getGoal() in the real registry.
+      const job = makeStubJob({ goalTextAtDispatch: goalTextAtDispatch });
       registry.emit('settled', job);
 
       // Drain the injection envelope (the real delivery path)
       const envelope = notifier.drainInjections();
 
-      // DEFECT: today BgResultNotifier has no goal-epoch awareness, so
-      // the envelope contains neither a superseded attribute nor any
-      // indication that the result is stale relative to the current goal.
-      // This assertion FAILS today (hence it.fails) and will pass once the
-      // supersede feature is implemented in the delivery path.
       expect(envelope).toContain('superseded="true"');
     },
   );
@@ -243,37 +240,4 @@ describe('Scenario 3 (#3714): goal change while worker runs', () => {
     expect(envelope).not.toContain('superseded');
   });
 
-  /**
-   * Current behavior assertion (positive, non-it.fails):
-   * Verifies that BgResultNotifier today emits an ordinary completion
-   * envelope with no superseded marker — documenting the status quo so any
-   * accidental partial fix is caught.
-   */
-  it('BgResultNotifier currently emits no superseded marker (status-quo pin)', async () => {
-    const { BgResultNotifier } = await import(
-      '../../cli/commands/interactive/bg-result-notifier.js'
-    );
-
-    const registry = makeStubRegistry();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const notifier = new BgResultNotifier(registry as any);
-
-    // Goal changes between dispatch and delivery
-    goalStore.setGoal('refactor the auth module', 'parent-session-001');
-    goalStore.setGoal('migrate the database schema', 'parent-session-001');
-
-    const job = makeStubJob();
-    registry.emit('settled', job);
-
-    const envelope = notifier.drainInjections();
-
-    // Envelope is a well-formed background-subagent-result block
-    expect(envelope).toContain('<background-subagent-result');
-    expect(envelope).toContain('status="completed"');
-    expect(envelope).toContain('</background-subagent-result>');
-
-    // NO superseded annotation — this is the current (defective) behavior.
-    // Remove this assertion when the feature lands.
-    expect(envelope).not.toContain('superseded');
-  });
 });

@@ -13,9 +13,9 @@
  *
  * Contract: the remote's login password is read from THIS machine's keychain
  * (service {@link UNLOCK_SERVICE}, account = host name), which is unlocked in
- * the operator's GUI session. It travels only as the first stdin line of the
- * launch ssh call, pre-escaped for `security -i`, and is fed to `security -i`
- * through a pipe on the remote: never argv, never a file, never the trace.
+ * the operator's GUI session. It is embedded in the launch script as a quoted
+ * heredoc (`IFS= read -r kcpw <<'DELIM'`) and fed to `security -i` through a
+ * pipe on the remote: never argv, never a file, never the trace.
  *
  * @module remote/keychain-unlock
  */

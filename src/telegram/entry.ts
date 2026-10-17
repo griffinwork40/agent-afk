@@ -215,6 +215,12 @@ export async function main(): Promise<void> {
     // override is set via /cd. Per-session `data.cwd` takes precedence.
     ...(telegramCwd !== undefined && telegramCwd.length > 0 ? { botCwd: telegramCwd } : {}),
     ...(idleSessionMs !== undefined && !isNaN(idleSessionMs) && idleSessionMs > 0 ? { idleSessionMs } : {}),
+    // Forward the operator's permissionMode so it reaches every new session's
+    // AgentConfig and the plan-mode guard in finalizeTelegramSession is live.
+    // Without this, `afk config set permissionMode plan` is silently ignored on
+    // Telegram (#3927). Undefined when not set — SessionManager passes it through
+    // only when present so the downstream ?? 'default' fallback still applies.
+    ...(config.permissionMode !== undefined ? { permissionMode: config.permissionMode } : {}),
     createSession: createTelegramSessionFactory({
       config,
       frameworkBase,

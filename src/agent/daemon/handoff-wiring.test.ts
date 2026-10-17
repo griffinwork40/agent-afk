@@ -273,6 +273,83 @@ describe('recoverPendingHandoffs', () => {
     expect(result.expired).toBe(0);
   });
 
+  it('re-sends confirm reminder with inline keyboard (no bot)', async () => {
+    const { pushIfConfigured } = await import('../../telegram/push.js');
+    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    mockPush.mockClear();
+
+    const record: HandoffRecord = {
+      taskId: 'q-recover-confirm',
+      sessionId: 'sess-1',
+      question: { message: 'Deploy now?', type: 'confirm' } as Record<string, unknown>,
+      requestType: 'ask_question',
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+      originalCommand: '/deploy',
+    };
+    await writeHandoff(record, handoffsDir);
+
+    await recoverPendingHandoffs(handoffsDir);
+
+    expect(mockPush).toHaveBeenCalled();
+    const [, opts] = mockPush.mock.calls[0]!;
+    expect(opts?.replyMarkup).toBeDefined();
+    const kb = opts.replyMarkup.inline_keyboard;
+    expect(kb).toHaveLength(1);
+    expect(kb[0][0].text).toBe('Yes');
+    expect(kb[0][1].text).toBe('No');
+  });
+
+  it('re-sends choice reminder with per-option buttons (no bot)', async () => {
+    const { pushIfConfigured } = await import('../../telegram/push.js');
+    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    mockPush.mockClear();
+
+    const record: HandoffRecord = {
+      taskId: 'q-recover-choice',
+      sessionId: 'sess-1',
+      question: { message: 'Pick one', type: 'choice', choices: ['Alpha', 'Beta'] } as Record<string, unknown>,
+      requestType: 'ask_question',
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+      originalCommand: '/pick',
+    };
+    await writeHandoff(record, handoffsDir);
+
+    await recoverPendingHandoffs(handoffsDir);
+
+    expect(mockPush).toHaveBeenCalled();
+    const [, opts] = mockPush.mock.calls[0]!;
+    expect(opts?.replyMarkup).toBeDefined();
+    const kb = opts.replyMarkup.inline_keyboard;
+    expect(kb).toHaveLength(2);
+    expect(kb[0][0].text).toBe('Alpha');
+    expect(kb[1][0].text).toBe('Beta');
+  });
+
+  it('re-sends text reminder without inline keyboard (no bot)', async () => {
+    const { pushIfConfigured } = await import('../../telegram/push.js');
+    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    mockPush.mockClear();
+
+    const record: HandoffRecord = {
+      taskId: 'q-recover-text',
+      sessionId: 'sess-1',
+      question: { message: 'What is your name?', type: 'text' } as Record<string, unknown>,
+      requestType: 'ask_question',
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+      originalCommand: '/ask',
+    };
+    await writeHandoff(record, handoffsDir);
+
+    await recoverPendingHandoffs(handoffsDir);
+
+    expect(mockPush).toHaveBeenCalled();
+    const [, opts] = mockPush.mock.calls[0]!;
+    expect(opts?.replyMarkup).toBeUndefined();
+  });
+
   it('handles multiple pending handoffs', async () => {
     const base = {
       sessionId: 'sess-1',
@@ -328,11 +405,15 @@ describe('recoverPendingHandoffs', () => {
     const updated = await readHandoff(taskId, handoffsDir);
     expect(updated?.status).toBe('expired');
 
-    // Lease must no longer be in waiting_human_input — it should be 'leased'
-    // so recoverExpiredLeases can pick it up on the next cycle.
+    // Lease is now dead-lettered: the PR's expireHandoff calls reclaimSingleLease
+    // on the restored lease (handoff-expiry.ts:151). The test lease has
+    // attempts: 1 === maxAttempts: 1, so it's past the retry budget and gets
+    // dead-lettered rather than re-enqueued. This is the correct new contract:
+    // a crashed lease that has already burned through its attempts is removed,
+    // not re-leased for another (doomed) run.
     const lease = getTaskRecord(taskId, queueDir);
     expect(lease).not.toBeNull();
-    expect(lease?.state).toBe('leased');
+    expect(lease?.state).toBe('dead-letter');
   });
 });
 

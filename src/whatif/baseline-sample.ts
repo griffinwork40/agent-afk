@@ -131,6 +131,9 @@ export function estimateBaselineSampleCost(input: {
   const fullCost = estimateVerifyCost({
     episodes: totalProbes,
     samples: 1,
+    // Baseline-sample episodes are always single-turn (the gate measures the
+    // agent's immediate response on its first turn, not a multi-turn session).
+    maxTurns: 1,
     agentModel: input.agentModel,
     analystModel: input.analystModel,
     systemTokens: {
