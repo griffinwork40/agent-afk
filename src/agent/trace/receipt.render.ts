@@ -56,7 +56,16 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
   if (r.toolCalls.circuitBreakerHits > 0)
     lines.push(`| Circuit-breaker hits | ${r.toolCalls.circuitBreakerHits} |`);
   if (r.cost.turnCount !== undefined) lines.push(`| Turns | ${r.cost.turnCount} |`);
-  if (r.cost.finalCostUsd !== undefined)
+  if (r.cost.totalCostUsd !== undefined) {
+    // Total = root + every subagent (#3879); root and subagent shown beside it.
+    lines.push(`| Cost (USD, total) | ${r.cost.totalCostUsd.toFixed(4)} |`);
+    if (r.cost.rootCostUsd !== undefined)
+      lines.push(`| Cost (USD, root) | ${r.cost.rootCostUsd.toFixed(4)} |`);
+    else if (r.cost.costSource === 'closures-incomplete')
+      lines.push('| Cost (USD, root) | unknown (process exited before the root closed) |');
+    if (r.cost.subagentCostUsd !== undefined)
+      lines.push(`| Cost (USD, subagents) | ${r.cost.subagentCostUsd.toFixed(4)} |`);
+  } else if (r.cost.finalCostUsd !== undefined)
     lines.push(`| Cost (USD) | ${r.cost.finalCostUsd.toFixed(4)} |`);
   if (r.subagents.started > 0)
     lines.push(

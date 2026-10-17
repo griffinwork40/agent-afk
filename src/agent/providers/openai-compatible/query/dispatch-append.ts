@@ -11,6 +11,7 @@ import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import { buildToolCallStartedPayload } from '../../shared/tool-call-trace.js';
 import { relayWhilePending } from '../../shared/event-relay.js';
 import { emitDispatchedToolOutputs } from './dispatch-append.emit.js';
+import { dispatchableCalls, mergeUndispatchedResults } from './dispatch-append.parse-errors.js';
 import type { OpenAIMessage } from '../messages.js';
 import type { StreamState } from '../translate.js';
 import { finalizedToolCalls } from '../translate.js';
@@ -124,7 +125,7 @@ export async function* dispatchAndAppendToolCalls({
     };
   }
 
-  // Build results — start with synthetic errors for any JSON parse failures.
+  // Build results. Parse-error calls get synthetic results in the dispatch branch.
   const results: { call: typeof calls[number]; result: ToolResult }[] = [];
 
   if (signal.aborted) {
@@ -148,10 +149,16 @@ export async function* dispatchAndAppendToolCalls({
       };
     }
   } else {
+    // Invariant (#3808): calls with a parse error (lost or unparseable
+    // arguments) never reach the dispatcher; they receive a synthetic isError
+    // result merged back into batch order below. See dispatch-append.parse-errors.ts.
+    const toDispatch = dispatchableCalls(calls, parseErrors);
     // Real dispatch — batch when available, sequential fallback.
     let dispatcherResults: ToolResult[];
     try {
-      if (toolDispatcher.executeBatch) {
+      if (toDispatch.length === 0) {
+        dispatcherResults = [];
+      } else if (toolDispatcher.executeBatch) {
         // Phase 2 (issue #516 fix): relay `tool.activity` events WHILE
         // executeBatch is still pending, so the TUI badges a parallel wave
         // during execution instead of after it. A plain `await` suspends this
@@ -162,7 +169,7 @@ export async function* dispatchAndAppendToolCalls({
         // A dispatcher throw propagates out of the relay into the existing
         // catch below, which maps it to isError results for every call.
         dispatcherResults = yield* relayWhilePending<ProviderEvent, ToolResult[]>((emit) =>
-          toolDispatcher.executeBatch!(calls, (activeIds) => {
+          toolDispatcher.executeBatch!(toDispatch, (activeIds) => {
             emit({
               type: 'tool.activity',
               activeCount: activeIds.length,
@@ -173,7 +180,7 @@ export async function* dispatchAndAppendToolCalls({
         );
       } else {
         dispatcherResults = [];
-        for (const call of calls) {
+        for (const call of toDispatch) {
           if (signal.aborted) {
             dispatcherResults.push({
               content: 'Tool call aborted',
@@ -195,7 +202,7 @@ export async function* dispatchAndAppendToolCalls({
       }
     } catch (err) {
       const message = errorMessage(err);
-      dispatcherResults = calls.map(() => ({
+      dispatcherResults = toDispatch.map(() => ({
         content: `Tool batch execution failed: ${message}`,
         isError: true,
       }));
@@ -203,8 +210,7 @@ export async function* dispatchAndAppendToolCalls({
 
     yield* emitDispatchedToolOutputs({
       calls,
-      dispatcherResults,
-      parseErrors,
+      dispatcherResults: mergeUndispatchedResults(calls, accumulated, parseErrors, dispatcherResults),
       startTimes,
       traceWriter,
       subagentId,
@@ -267,7 +273,7 @@ function appendRoundHistory(
   // LAST tool message of the round, NOT pushed as its own `role:'user'` message
   // as on anthropic-direct. On this wire every `role:'user'` message is a
   // compaction boundary (openai-compatible/compact.ts isFreshUserTurn) and a
-  // /rewind target (rewind-conversation.ts isGenuineUserTurn), so a per-round
+  // /rewind target (rewind-conversation.ts isUserAuthoredTurn), so a per-round
   // user message would make compaction keep N rounds instead of N human turns
   // and list every stamp as a rewindable turn. The note carries no operator
   // authority (unlike queued_user_message), so riding in tool content is safe.

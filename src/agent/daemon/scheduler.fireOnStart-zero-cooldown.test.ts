@@ -22,7 +22,8 @@ import { tmpdir } from 'node:os';
 
 // Stub probeTelemetryWritable to always return an error so the test never
 // depends on filesystem permissions (portable across root CI and Windows).
-vi.mock('./telemetry-write-guard.js', () => ({
+vi.mock('./telemetry-write-guard.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./telemetry-write-guard.js')>(),
   probeTelemetryWritable: vi.fn(() => 'EACCES: permission denied, access \'/fake/path\''),
   TelemetryAlertLatch: class {
     async notify() { /* no-op */ }

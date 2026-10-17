@@ -10,6 +10,9 @@
  *   - approve → escalate to `bypassPermissions` (offered unless the restored
  *     mode is already bypass — that would be a redundant duplicate row)
  *   - keep planning (stay in plan; refine)
+ *   - type revision feedback (the picker's custom-answer row): stay in plan and
+ *     revise with the user's text returned to the model — never an approval
+ *     (see ./exit-plan-mode.feedback.ts)
  *
  * On approval the handler records the approved mode ALONGSIDE the seed message
  * via {@link PlanExitControls.requestImplementSeed} — the mode flip is NOT
@@ -43,6 +46,7 @@ import { elicitationRouter } from '../../elicitation-router.js';
 import { buildPlanExitPrompt } from '../../plan-mode-exit-prompt.js';
 import { getProjectPlansDir } from '../../../paths.js';
 import { isUserWaiting, userAttentionFrom, yieldNotice } from '../user-yield.js';
+import { planFeedbackResult, readPlanFeedback } from './exit-plan-mode.feedback.js';
 
 /** Stable tool name — must be present in the session's tool allowlist. */
 export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
@@ -58,12 +62,14 @@ const CHOICE_BYPASS = 'Approve — implement now (bypass mode: no prompts, read/
 const CHOICE_KEEP = 'Keep planning';
 
 const PICKER_MESSAGE =
-  'Plan ready. How do you want to proceed? (Your plan is in the conversation above.)';
+  'Plan ready. How do you want to proceed? (Your plan is in the conversation above. ' +
+  'Or type your own answer to send revision feedback.)';
 // Shown when the visible-text gate's refusal budget is spent: the picker still
 // appears (the user is never stranded) but it no longer claims the plan is above.
 const PICKER_MESSAGE_UNWRITTEN =
   'Plan ready. How do you want to proceed? (Warning: the agent did not write its ' +
-  'plan out as visible text in this response. Choose Keep planning to prompt it to write one.)';
+  'plan out as visible text in this response. Choose Keep planning, or type your own ' +
+  'answer, to prompt it to write one.)';
 
 /**
  * Tool result for a gate refusal. Names WHY (tool results and thinking are not
@@ -113,7 +119,8 @@ export const exitPlanModeTool: AnthropicToolDef = {
   description:
     'Signal that your plan is ready and present it to the user for approval. ' +
     'The user is shown a picker: approve and implement (you pick neither mode — ' +
-    'the user does), or keep planning.\n\n' +
+    'the user does), keep planning, or type revision feedback. If feedback comes ' +
+    'back, revise the plan to address it and call this tool again; do not implement.\n\n' +
     'IMPORTANT: only call this in plan mode, and only when the task requires ' +
     'implementation (writing code or files). For research / read-only / ' +
     'understanding tasks, do NOT call it — just answer.\n\n' +
@@ -180,6 +187,10 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       type: 'choice',
       message: planText === 'warn' ? PICKER_MESSAGE_UNWRITTEN : PICKER_MESSAGE,
       choices,
+      // Free-text revision feedback. Read via readPlanFeedback BEFORE the keyword
+      // matcher below — a custom answer has value:null, which must never reach
+      // the approve fall-through.
+      allowCustom: true,
     };
 
     const result = await elicitationRouter.route(request, {
@@ -200,6 +211,11 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       };
     }
 
+    const feedback = readPlanFeedback(result.content);
+    if (feedback.kind === 'feedback') {
+      return { content: planFeedbackResult(feedback.text) };
+    }
+
     const picked = typeof result.content?.['value'] === 'string'
       ? (result.content['value'] as string)
       : '';
@@ -208,7 +224,7 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
     // round-tripping. Order matters: detect "keep" first, then the "bypass"
     // branch (the escalation choice, or restore-of-bypass — both land in
     // bypass), else restore the captured pre-plan mode.
-    if (picked.startsWith('Keep') || picked === CHOICE_KEEP) {
+    if (feedback.kind === 'empty' || picked.startsWith('Keep') || picked === CHOICE_KEEP) {
       return {
         content:
           'User chose to keep planning. Stay in plan mode and refine the plan; ' +

@@ -385,7 +385,12 @@ function mapBulletsToFields(
       if (evidence !== undefined) out.evidence = evidence;
       const whatChanged = find('what changed', 'world-state', 'world state', 'change');
       if (whatChanged !== undefined) out.whatChanged = whatChanged;
-      const deferred = find('pending', 'deferred', 'follow-up', 'followup', 'next');
+      // `next` is deliberately NOT a needle. A Done block's forward-looking
+      // suggestion ("Next steps:", "Suggested next:", "What's next:") is not
+      // unfinished work, but `deferred` feeds the facet downgrade
+      // (src/agent/facets/derive.downgrade.ts), so a substring hit on `next`
+      // marked completed sessions partially_achieved.
+      const deferred = find('pending', 'deferred', 'follow-up', 'followup');
       if (deferred !== undefined) out.deferred = deferred;
       return out;
     }

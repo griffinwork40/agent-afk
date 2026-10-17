@@ -74,12 +74,28 @@ describe('bash run_in_background via the dispatcher', () => {
     expect(fs.realpathSync(printed)).toBe(fs.realpathSync(dir));
   });
 
-  it('accepts a timeout above the foreground ceiling only when backgrounded', async () => {
+  it('clamps a foreground timeout above the ceiling with a warning', async () => {
     const d = makeDispatcher({ processJobs: reg });
     const job = await startJob(d, 'sleep 30', { timeout_ms: 3_600_000 });
     expect(job.max_runtime_ms).toBe(3_600_000);
     const fg = await d.execute(call('bash', { command: 'true', timeout_ms: 3_600_000 }));
-    expect(fg.isError).toBe(true);
+    expect(fg.isError).toBeFalsy();
+    expect(fg.content).toContain('[Warning]');
+  });
+
+  it('clamps a background timeout above the 24 h ceiling and returns valid JSON', async () => {
+    const d = makeDispatcher({ processJobs: reg });
+    const res = await d.execute(call('bash', { command: 'sleep 30', run_in_background: true, timeout_ms: 999_999_999 }));
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('999999999');
+    expect(res.content).toContain('86400000');
+    expect(res.content).toContain('[Warning]');
+    // Content after any warning prefix must be parseable JSON with the clamped runtime.
+    const jsonPart = (res.content as string).includes('\n\n')
+      ? (res.content as string).split('\n\n').slice(1).join('\n\n')
+      : (res.content as string);
+    const parsed = JSON.parse(jsonPart) as { max_runtime_ms: number; warning?: string };
+    expect(parsed.max_runtime_ms).toBe(86_400_000);
   });
 
   it('rejects a background max runtime under one second', async () => {

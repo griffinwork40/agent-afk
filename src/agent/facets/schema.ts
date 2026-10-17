@@ -72,8 +72,12 @@ import { z } from 'zod';
  * isError). `extractRawToolInput` persists a bounded `changes_paths`
  * projection for `patch_apply` so evidence-path collection works in
  * production.
+ *
+ * v13 (#3879): `token_breakdown.total_cost_usd` and `subagent_cost_usd` added
+ * from the witness trace, so session cost includes subagent spend.
+ * `cost_usd` is unchanged and documented as root-only.
  */
-export const FACET_VERSION = 12;
+export const FACET_VERSION = 13;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
@@ -260,7 +264,12 @@ export const TokenBreakdownSchema = z.object({
   output: z.number().optional(),
   cache_read: z.number().optional(),
   cache_creation: z.number().optional(),
+  /** Root-only cost from the session sidecar (back-compat; see #3879). */
   cost_usd: z.number(),
+  /** Root + every subagent, from the witness trace (`agent/trace/cost.ts`). */
+  total_cost_usd: z.number().optional(),
+  /** `total_cost_usd` minus the root's cost. */
+  subagent_cost_usd: z.number().optional(),
 });
 export type TokenBreakdown = z.infer<typeof TokenBreakdownSchema>;
 

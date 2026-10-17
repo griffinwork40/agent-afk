@@ -26,6 +26,19 @@ export type PermissionMode =
   // ops. agent-afk-local addition (not from the upstream SDK union).
   | 'autonomous';
 
+/**
+ * Runtime set of valid {@link PermissionMode} values. Kept in sync with the
+ * union above — add a member to the union, add it here.
+ */
+export const VALID_PERMISSION_MODES: ReadonlySet<string> = new Set<PermissionMode>([
+  'default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto', 'autonomous',
+]);
+
+/** Type-guard: returns true when `value` is a member of the {@link PermissionMode} union. */
+export function isValidPermissionMode(value: string): value is PermissionMode {
+  return VALID_PERMISSION_MODES.has(value);
+}
+
 export type SettingSource = 'user' | 'project' | 'local';
 
 export type ApiKeySource = 'user' | 'project' | 'org' | 'temporary' | 'oauth';

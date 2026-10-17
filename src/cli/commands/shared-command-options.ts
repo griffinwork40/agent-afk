@@ -16,8 +16,10 @@
  */
 
 import type { Command } from 'commander';
+import { InvalidArgumentError } from 'commander';
 import { getModel } from '../shared-helpers.js';
 import { parseThemeFlag } from '../theme.js';
+import { isValidPermissionMode, VALID_PERMISSION_MODES } from '../../agent/types/sdk-types.js';
 
 export interface SharedChatOptionOverrides {
   /** Default value for --max-turns. Chat uses '10', interactive uses '100'. */
@@ -111,5 +113,18 @@ export function applySharedChatOptions(
     )
     .option('--resume <id>', 'Resume a persisted session by id')
     .option('--continue', 'Continue the most recent persisted session in cwd')
+    .option(
+      '--permission-mode <mode>',
+      `Permission mode: ${[...VALID_PERMISSION_MODES].join('|')}. ` +
+        'Overrides afk.config.json permissionMode. Does not affect ask_question.',
+      (value: string) => {
+        if (!isValidPermissionMode(value)) {
+          throw new InvalidArgumentError(
+            `invalid permission mode "${value}". Valid modes: ${[...VALID_PERMISSION_MODES].join(', ')}`,
+          );
+        }
+        return value;
+      },
+    )
     .option('--dangerously-skip-permissions', dangerouslySkipPermissionsDescription);
 }

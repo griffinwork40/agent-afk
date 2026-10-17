@@ -18,6 +18,7 @@ import { forwardProvenancePrefix } from '../forward-provenance.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { handleDocumentMessage } from './document.js';
 import { drainBgInjections, prependToContent } from '../bg-injection.js';
+import { wakeIdleSessionImpl, type WakeIdleDeps } from './message.wake-idle.js';
 import { addressedToBot } from './message.addressed-to-bot.js';
 import { reactionMap } from '../reaction-map.js';
 import { handlePhotoImpl } from './message.photo-handler.js';
@@ -641,6 +642,9 @@ export class MessageHandler {
       this.releaseClaim(routeKey(route));
     }
   }
+
+  /** Wake an idle session when a background subagent result settles (#3839). */
+  wakeIdleSession(route: TelegramRoute): void { wakeIdleSessionImpl(route, this as unknown as WakeIdleDeps); }
 
   /**
    * Process the next queued item for this route, if any.

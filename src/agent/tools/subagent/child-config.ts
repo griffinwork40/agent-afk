@@ -110,6 +110,8 @@ export interface BuildChildConfigArgs {
    *      mirroring `cwd`).
    */
   traceWriter?: TraceSink;
+  /** Tree-wide accounting sink: forward each descendant's own report, not subtree totals. */
+  onSubagentSucceeded?: import('../../subagent/fork-types.js').SubagentManagerOptions['onSubagentSucceeded'];
   /**
    * Shared workspace store. Threaded into the same TWO places as `traceWriter`
    * above, for the same reason: (1) the depth-2+ child {@link SubagentManager},
@@ -132,6 +134,13 @@ export interface BuildChildConfigArgs {
    * depth-2+ forks inherit the real root id for child-attribution.
    */
   parentRootSessionId?: string;
+  /**
+   * Shared billing-stream registry owned by the root manager (#3961).
+   * Threaded into every nested {@link SubagentManager} so abandoned streams
+   * from depth-2+ children surface in `rootManager.getPendingChildBillingStreams()`
+   * at shutdown, matching the depth-1 behaviour for the root manager's own children.
+   */
+  parentBillingStreams?: Set<Promise<void>>;
   /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so

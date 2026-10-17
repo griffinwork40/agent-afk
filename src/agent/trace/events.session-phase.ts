@@ -117,6 +117,10 @@ export const SessionPhaseNameSchema = z.enum([
   // PreToolUse blocks on the same gate key trip the breaker. metadata carries
   // { tool, count, fork } where fork is true for forked children.
   'hook_block_repeat_tripped',
+  // Post-cancel late billing delta (#3931). See SessionPhaseName JSDoc in
+  // types.session-phase.ts. metadata: { subagentId, provider, uncachedInput,
+  // cacheRead, cacheWrite, output }. At most one per cancelled run.
+  'billing_settled',
   // Streaming connection opener diagnostics (opt-in AFK_CONNECT_RETRY_BUDGET_MS).
   // Must mirror the SessionPhaseName union in types.session-phase.ts;
   // session-phase.test.ts parity enforces it.
@@ -157,4 +161,7 @@ export const SessionPhasePayloadSchema = z.object({
   // JSDoc in types.ts for the backward-compat contract.
   sessionId: z.string().optional(),
   priorSessionId: z.string().optional(),
+  // Running afk version, set ONLY on `session_id_assigned`. Absent on older
+  // traces and all other phase kinds. (#3808)
+  afkVersion: z.string().optional(),
 });

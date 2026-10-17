@@ -66,11 +66,15 @@ describe('setUpQuerySession dispatcher cwd', () => {
   });
 
   it('re-reads the live cwd when rebuilding instead of capturing config.cwd', () => {
+    // Use a dir that differs from process.cwd() so the assertion is discriminating
+    // on its own — if the accessor captured config.cwd (undefined) and fell back
+    // to process.cwd() the test would still pass, masking the regression.
+    const liveCwd = fileURLToPath(new URL('.', import.meta.url));
     const { ctx, build, session } = setup();
-    ctx.setCurrentCwd(process.cwd());
+    ctx.setCurrentCwd(liveCwd);
     session.modelToolsFactory('claude-opus-4-5', 'default');
     expect(build).toHaveBeenCalledTimes(2);
-    expect(build.mock.calls[1]?.[1]?.cwd).toBe(process.cwd());
+    expect(build.mock.calls[1]?.[1]?.cwd).toBe(liveCwd);
   });
 
   it('lets an unconfined child read an absolute path through the real dispatcher', async () => {

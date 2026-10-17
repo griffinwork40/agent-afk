@@ -94,6 +94,71 @@ describe('listUserTurns', () => {
     expect(listUserTurns([{ role: 'assistant', content: 'hi' }])).toEqual([]);
     expect(listUserTurns([{ role: 'user', content: toolResult('t1') }])).toEqual([]);
   });
+
+  // Regression: the per-round [vitals] note rides as a sibling text block in
+  // the tool_result user message (loop/tool-results.ts). It made every tool
+  // round look like a typed prompt, flooding the Esc-Esc picker with
+  // "[vitals] …" rows.
+  const vitals = '[vitals] Thu 2026-10-15 18:31 EDT · turn 4s · context 61%';
+
+  it('excludes a tool-round carrier whose only text is the vitals note', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'real question' },
+      { role: 'assistant', content: toolUse('t1') },
+      { role: 'user', content: [...toolResult('t1'), { type: 'text', text: vitals }] },
+      { role: 'assistant', content: 'answer' },
+    ];
+    expect(listUserTurns(messages).map((t) => t.turnIndex)).toEqual([0]);
+  });
+
+  it('never targets a tool-round carrier, even when it holds queued text', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'real question' },
+      { role: 'assistant', content: toolUse('t1') },
+      {
+        role: 'user',
+        content: [
+          ...toolResult('t1'),
+          { type: 'text', text: 'queued follow-up' },
+          { type: 'text', text: vitals },
+        ],
+      },
+      { role: 'assistant', content: 'answer' },
+    ];
+    expect(listUserTurns(messages).map((t) => t.turnIndex)).toEqual([0]);
+
+    // Rewinding there would discard the real tool_result, orphan t1, and make
+    // repair fabricate an is_error result. The guard refuses and leaves
+    // history byte-identical.
+    const state = makeState(messages);
+    const snapshot = JSON.stringify(state.messages);
+    const result = rewindConversationHistory({ state, abort: idleAbort }, 2);
+    expect(result).toMatchObject({ rewound: false, reason: 'invalid-target' });
+    expect(JSON.stringify(state.messages)).toBe(snapshot);
+  });
+
+  it('keeps a mid-turn steering message (its own text-only user turn) rewindable', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'real question' },
+      { role: 'assistant', content: toolUse('t1') },
+      { role: 'user', content: [...toolResult('t1'), { type: 'text', text: vitals }] },
+      { role: 'user', content: [{ type: 'text', text: 'steer: use pnpm' }] },
+      { role: 'assistant', content: 'answer' },
+    ];
+    expect(listUserTurns(messages).map((t) => t.preview)).toEqual(['steer: use pnpm', 'real question']);
+
+    const state = makeState(messages);
+    const result = rewindConversationHistory({ state, abort: idleAbort }, 3);
+    expect(result).toMatchObject({ rewound: true, reloadText: 'steer: use pnpm' });
+    // The tool_use/tool_result pair before the cut is intact, nothing fabricated.
+    expect(state.messages).toHaveLength(3);
+    expect(JSON.stringify(state.messages)).not.toContain('is_error');
+  });
+
+  it('leaves a typed prompt that starts with [vitals] untouched', () => {
+    const typed = [{ type: 'text', text: vitals }] as ContentBlockParam[];
+    expect(listUserTurns([{ role: 'user', content: typed }]).map((t) => t.turnIndex)).toEqual([0]);
+  });
 });
 
 describe('rewindConversationHistory', () => {
@@ -186,5 +251,26 @@ describe('rewindConversationHistory', () => {
     expect(rewindConversationHistory({ state, abort: idleAbort }, 3).reason).toBe('invalid-target');
     expect(rewindConversationHistory({ state, abort: idleAbort }, 2).reason).toBe('invalid-target');
     expect(state.messages).toHaveLength(8);
+  });
+
+  // Regression: on resume, fromJournalMessages merges consecutive same-role
+  // user messages, so the steering text (pushed as a separate text-only user
+  // message by inter-round.ts in live sessions) gets merged into the preceding
+  // tool_result carrier. The fix preserves the boundary, keeping the steering
+  // message visible in the rewind picker.
+  it('lists a text-only user message after a tool-result carrier as a rewind target (resume case)', () => {
+    // This simulates what fromJournalMessages produces when a live session with
+    // mid-turn steering is resumed: the steering message survives as a separate
+    // message (the journal-adapter fix preserves the boundary).
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: toolUse('t1') },
+      { role: 'user', content: toolResult('t1') },  // index 2: carrier (excluded)
+      { role: 'assistant', content: 'answer' },
+      { role: 'user', content: 'actually, cancel that' },  // index 4: steering (included)
+    ];
+    const targets = listUserTurns(messages);
+    expect(targets.map((t) => t.turnIndex)).toEqual([4, 0]);
+    expect(targets.map((t) => t.preview)).toEqual(['actually, cancel that', 'first question']);
   });
 });

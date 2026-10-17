@@ -439,6 +439,26 @@ describe('detectLostWork', () => {
     const candidates = detectLostWork('s-term', events);
     expect(candidates).toHaveLength(1);
   });
+
+  it('reports lost work on an abort-only terminal (no closure / session_sealed)', () => {
+    resetSeq();
+    // An abort event alone (user Ctrl-C, signal kill) is a valid terminal;
+    // lost-work detection must fire even when no closure or session_sealed follows.
+    const abortEvent: TraceEvent = {
+      kind: 'abort',
+      seq: nextSeq(),
+      ts: '2026-10-14T10:01:00.000Z',
+      payload: {},
+    };
+    const events: TraceEvent[] = [
+      mkHardBlock('2026-10-14T10:00:00.000Z', 'write_file', 'plan'),
+      mkToolOk('2026-10-14T10:00:01.000Z', 'read_file'),
+      abortEvent,
+    ];
+    const candidates = detectLostWork('s-abort-only', events);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.closureReason).toBe('abort');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@
  * Chromium egress through it (session contexts and ephemeral `renderHtml`
  * contexts inherit browser-level proxy settings). When the operator opted out
  * via AFK_WEB_ALLOW_PRIVATE_HOSTS — read ONCE per browser lifetime, at launch —
- * no proxy is installed, matching the route-guard opt-out. `stop()` is
+ * no proxy is installed. `stop()` is
  * idempotent and must be called on launch failure, crash recovery and shutdown.
  */
 

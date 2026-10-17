@@ -57,6 +57,7 @@ import { BgJobLogWriter, type BgJobMeta } from './bg-job-log.js';
 import { ownProcessStartedAt } from './process-liveness.start-time.js';
 import { sweepOldBgJobs } from './background-registry.sweep.js';
 import { BackgroundJobCapError, resolveBackgroundJobCap } from './background-registry.cap.js';
+import { getGoal } from './goals/goal-store.js';
 
 import type { BackgroundJob, BackgroundJobProvenance, BackgroundJobStatus } from './background-registry.types.js';
 import {
@@ -367,6 +368,11 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       parentSessionId: args.parentSessionId,
       onCleanup: args.onCleanup,
       onSettled: args.onSettled,
+      // Snapshot the active goal text at dispatch time so the delivery path
+      // can detect whether the operator changed the goal while this job ran.
+      // Uses the global fallback key (no cwd threading needed here — the
+      // same key getGoal() uses when called without a projectKey argument).
+      goalTextAtDispatch: getGoal()?.text,
     };
     this.jobs.set(jobId, job);
 
@@ -646,6 +652,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
       ...(job.parentSessionId !== undefined && { parentSessionId: job.parentSessionId }),
       ...(job.lastActivityAt !== undefined ? { lastActivityAt: job.lastActivityAt } : {}),
+      ...(job.goalTextAtDispatch !== undefined ? { goalTextAtDispatch: job.goalTextAtDispatch } : {}),
     };
     return snap;
   }

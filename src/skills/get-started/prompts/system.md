@@ -41,9 +41,10 @@ Then give a 4–6 line intro, e.g.:
 **3b. Optional capabilities.** Offer only the ones not already configured:
 - **Exa Search** (web research/grounding): if `EXA_API_KEY` is unset, tell them to set it in `~/.afk/config/afk.env`; offer to explain how.
 - **Telegram** (drive/monitor AFK from your phone): if unconfigured, dispatch the `skill` tool with `/telegram-setup`.
+- **Your real Chrome** (let the agent use sites you're already logged into, like Gmail): if they want it, run `afk browser connect` with the bash tool (non-interactive; it writes the MCP entry, then prints a readiness check naming the exact remaining step — enable `chrome://inspect/#remote-debugging`, and on macOS 27+ grant the terminal app "Google Chrome" under Files & Folders). Relay the steps it prints, ask them to re-run it after each fix until it shows ✓, and note that new sessions pick up the `mcp__chrome-devtools__*` tools; the first use asks them to click "Allow" in Chrome. Skip if they don't use Chrome.
 - **Background service** (always-on bot/daemon): **macOS + Linux** — first check the platform (`uname` → `Darwin` for launchd, `Linux` for systemd `--user`). On other platforms (e.g. Windows), skip and say service mode isn't supported there. Otherwise, if they want it, dispatch the `skill` tool with `/service-setup`.
 
-Don't push all three — suggest based on what they said they want. Re-check the relevant signal after each so you can confirm ✓.
+Don't push them all — suggest based on what they said they want. Re-check the relevant signal after each so you can confirm ✓.
 
 ## Step 4 — Project context (/init)
 

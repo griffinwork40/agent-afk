@@ -215,6 +215,12 @@ export async function main(): Promise<void> {
     // override is set via /cd. Per-session `data.cwd` takes precedence.
     ...(telegramCwd !== undefined && telegramCwd.length > 0 ? { botCwd: telegramCwd } : {}),
     ...(idleSessionMs !== undefined && !isNaN(idleSessionMs) && idleSessionMs > 0 ? { idleSessionMs } : {}),
+    // Forward the operator's permissionMode so it reaches every new session's
+    // AgentConfig and the plan-mode guard in finalizeTelegramSession is live.
+    // Without this, `afk config set permissionMode plan` is silently ignored on
+    // Telegram (#3927). Undefined when not set — SessionManager passes it through
+    // only when present so the downstream ?? 'default' fallback still applies.
+    ...(config.permissionMode !== undefined ? { permissionMode: config.permissionMode } : {}),
     createSession: createTelegramSessionFactory({
       config,
       frameworkBase,
@@ -265,7 +271,7 @@ export async function main(): Promise<void> {
     console.log('  /help    - Show command list');
     console.log('  /clear   - Clear conversation history');
     console.log('  /compact - Compact history (summarize older messages)');
-    console.log('  /model   - Switch model (opus/sonnet/haiku/gpt-5.4/...)');
+    console.log('  /model   - Switch model (opus/sonnet/haiku/gpt-5.6-sol/...)');
     console.log('\n💬 Send any message to chat with the agent.');
     console.log('\n⏹️  Press Ctrl+C to stop the bot.');
 

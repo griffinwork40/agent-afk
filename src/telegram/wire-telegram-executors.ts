@@ -18,6 +18,7 @@ import type { AgentSession } from '../agent/session/agent-session.js';
 import type { AgentConfig } from '../agent/types.js';
 import { wireExecutors, type WiredExecutors, type WireExecutorsOptions } from '../agent/session/wire-executors.js';
 import { makeDeferredParentProxy } from '../agent/session/deferred-parent-proxy.js';
+import { pendingChildBillingStreams } from '../agent/session/manager-shutdown-config.js';
 import { BackgroundAgentRegistry } from '../agent/background-registry.js';
 import { TelegramBgResultNotifier } from './bg-result-notifier.js';
 import {
@@ -44,6 +45,15 @@ export interface TelegramExecutorWiringOptions {
   /** Telegram topic thread id for background-job notifications. */
   threadId: number | undefined;
   /**
+   * Optional idle-wake callback. When provided, it is wired as
+   * `bgNotifier.onInjectable` so a settled background job automatically
+   * synthesises a new Telegram turn instead of waiting for the next user
+   * message. Mirrors the REPL's `tryAutoResume` / `onInjectable` path.
+   * The callee (e.g. `MessageHandler.wakeIdleSession`) is responsible for
+   * guarding against concurrent turns and wake loops.
+   */
+  onInjectable?: () => void;
+  /**
    * Provider-specific extras spread into `wireExecutors`. Each branch passes
    * its own endpoint overrides (`baseUrl`, `openaiBaseUrl`, `xaiBaseUrl`) and
    * optional stores (`workspaceStore`) here.
@@ -59,6 +69,7 @@ export interface TelegramExecutorWiring {
   drainSubagents: AgentConfig['drainSubagents'];
   /** Wired into `AgentConfig.getPendingChildTerminalWrites` so seal() can await in-flight cancel emits (#3714). */
   getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'];
+  getPendingChildBillingStreams?: AgentConfig['getPendingChildBillingStreams'];
   /**
    * Call after `new AgentSession(config)` to resolve the deferred parent proxy
    * and wire the subagent-success rollup.
@@ -82,6 +93,7 @@ export function wireTelegramExecutors(
     traceWriter,
     chatId,
     threadId,
+    onInjectable,
     wireExtras,
   } = opts;
 
@@ -93,8 +105,19 @@ export function wireTelegramExecutors(
     traceWriter ? { traceWriter } : {},
   );
   const bgNotifier = new TelegramBgResultNotifier(backgroundRegistry, chatId, threadId);
+  // Wire the idle-wake hook when the caller provided one. Mirrors the REPL's
+  // `bgResultNotifier.onInjectable = tryAutoResume` wiring in bootstrap-infra.ts.
+  if (onInjectable !== undefined) {
+    bgNotifier.onInjectable = onInjectable;
+  }
 
   // -- wireExecutors --------------------------------------------------------
+  // backgroundAutoWake: true when the idle-wake hook is wired — the model's
+  // delivery note then says "woken automatically" (auto-wake) instead of
+  // "with next user message" (next-message). Mirrors bootstrap-infra.ts.
+  // backgroundAutoDeliver is always true on Telegram: TelegramBgResultNotifier
+  // always buffers non-cancelled jobs (no AFK_BG_AUTO_DELIVER opt-out on this
+  // surface), so `next-message` is always the floor even without the wake hook.
   const executors = wireExecutors({
     surface: 'telegram',
     parentSession: deferredParent,
@@ -108,6 +131,8 @@ export function wireTelegramExecutors(
     ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
     ...(traceWriter !== null ? { traceWriter } : {}),
     backgroundRegistry,
+    backgroundAutoWake: () => onInjectable !== undefined,
+    backgroundAutoDeliver: () => true,
     ...wireExtras,
   });
 
@@ -134,5 +159,8 @@ export function wireTelegramExecutors(
   const getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'] =
     () => executors.rootManager.getPendingChildTerminalWrites();
 
-  return { executors, backgroundRegistry, bgNotifier, drainSubagents, getPendingChildTerminalWrites, bindSession };
+  return {
+    executors, backgroundRegistry, bgNotifier, drainSubagents, getPendingChildTerminalWrites, bindSession,
+    getPendingChildBillingStreams: () => pendingChildBillingStreams(executors.rootManager, executors.composeExecutor),
+  };
 }

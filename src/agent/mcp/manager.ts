@@ -238,7 +238,7 @@ export class McpManager {
           connectStatus = 'connected';
           connectedToolCount = tools.length;
           const info = serverInfo ? `${serverInfo.name}@${serverInfo.version}` : 'unknown';
-          console.log(
+          console.error(
             `[mcp:${serverName}] connected (${info}) — ${tools.length} tool(s)`,
           );
         } catch (err) {
@@ -250,7 +250,7 @@ export class McpManager {
           if (err instanceof UnauthorizedError) {
             record.state.status = 'oauth_pending';
             connectStatus = 'oauth_pending';
-            console.log(
+            console.error(
               `[mcp:${serverName}] OAuth authorization required — check Telegram or stderr for the auth URL`,
             );
             return;
@@ -415,7 +415,7 @@ export class McpManager {
     rec.state.toolCount = freshTools.length;
     rec.state.lastListedAt = Date.now();
 
-    console.log(
+    console.error(
       `[mcp:${serverName}] tool list refreshed — ${freshTools.length} tool(s)`,
     );
     this.onToolsRefreshed?.(serverName);
@@ -506,7 +506,7 @@ export class McpManager {
       rec.state.toolCount = tools.length;
       rec.state.lastListedAt = Date.now();
       const info = serverInfo ? `${serverInfo.name}@${serverInfo.version}` : 'unknown';
-      console.log(
+      console.error(
         `[mcp:${serverName}] OAuth complete — connected (${info}) — ${tools.length} tool(s)`,
       );
     } catch (err) {

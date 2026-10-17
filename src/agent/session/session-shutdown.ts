@@ -14,6 +14,7 @@
  */
 
 import type { TraceWriter } from '../trace/writer.js';
+import { awaitPendingWritesBounded, SEAL_PENDING_WRITES_TIMEOUT_MS } from '../trace/pending-writes.js';
 import { dispatchSessionEnd } from './hooks-dispatch.js';
 import { emitClosureEvent, sealTraceWriter, type SealTraceInput } from './closure-emitter.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
@@ -65,6 +66,7 @@ export class SessionShutdown {
    *   2. Emit the `closure` trace event.
    *   3. Seal the trace writer (top-level sessions only).
    *   4. Dispatch the SessionEnd hook.
+   *   5. Await background SessionEnd handlers (top-level, non-reset only).
    *
    * Both (2) and (3) swallow writer errors so a broken sink never masks the
    * real session-end reason from downstream observers.
@@ -105,6 +107,20 @@ export class SessionShutdown {
       config.drainSubagents?.(reason).catch(() => {}),
     ]);
 
+    // Cancellation/drain can abandon a provider iterator. Wait for its final
+    // billing callback BEFORE freezing accounting, not inside writer.seal().
+    // Each source already unions root-manager AND compose-node streams via
+    // `pendingChildBillingStreams` (manager-shutdown-config.ts).
+    const pendingBilling = [
+      ...(config.executors?.getPendingChildBillingStreams?.() ?? []),
+      ...(config.getPendingChildBillingStreams?.() ?? []),
+    ];
+    await awaitPendingWritesBounded(
+      [...new Set(pendingBilling)], SEAL_PENDING_WRITES_TIMEOUT_MS, 'SessionShutdown',
+      (unsettled, total) => `[SessionShutdown] billing: abandoned ${unsettled} of ${total} pending child ` +
+        `stream(s) after ${SEAL_PENDING_WRITES_TIMEOUT_MS}ms — taking accounting snapshot anyway; billing may be incomplete`,
+    );
+
     const signals = accounting.closureSignals(getAbortController().signal, reason);
     const acct = accounting.snapshot();
 
@@ -113,6 +129,10 @@ export class SessionShutdown {
       finalTurnCount: getTurnCount(),
       finalCostUsd: acct.sessionRunningCostUsd,
       runningTokens: acct.sessionRunningTokens,
+      // Present on forked children only; absent for the root session. Stamped
+      // into the closure payload so parseTraceSignals can skip child closures
+      // and avoid falsely downgrading the root facet (#3883).
+      ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
     }).catch(() => {});
 
     // Invariant: only a session explicitly given the separate owner capability
@@ -131,6 +151,8 @@ export class SessionShutdown {
         subagentCompletedCount: acct.subagentCompletedCount,
         subagentRunningTokens: acct.subagentRunningTokens,
         subagentRunningCostUsd: acct.subagentRunningCostUsd,
+        ...(acct.sessionBilling !== undefined ? { sessionBilling: acct.sessionBilling } : {}),
+        ...(acct.subagentBilling !== undefined ? { subagentBilling: acct.subagentBilling } : {}),
         // Collect in-flight child terminal emit promises so they land before
         // session_sealed even when the drain timed out or was not configured
         // (#3714). Called after the drain so all active handles have had a
@@ -166,5 +188,18 @@ export class SessionShutdown {
       // above) — the writer is sealed, so the hook_decision write would throw.
       config.traceWriter && !ownsTraceSeal ? { traceWriter: config.traceWriter } : {},
     );
+
+    // Invariant: `reset` (`/clear`) must NOT await background SessionEnd
+    // handlers. That is the whole point of the lane: the SPINE classifier's
+    // model call (measured 1-5s) used to sit between `/clear` and the screen
+    // clear. The REPL process outlives a reset, so the chain finishes while
+    // the next conversation runs. Every other reason (close, error) awaits
+    // the chain so one-shot / daemon / Telegram teardown keeps its old
+    // complete-before-return behaviour, and that includes work a prior
+    // `/clear` queued. Forks share the parent's registry, so a child must
+    // never drain: it would block on the parent's queued work.
+    if (reason !== 'reset' && config.parentSessionId === undefined) {
+      await getHookRegistry()?.drainBackground?.();
+    }
   }
 }

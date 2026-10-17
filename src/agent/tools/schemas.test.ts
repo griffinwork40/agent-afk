@@ -14,8 +14,8 @@ import { TASK_MAX_ATTEMPTS_LIMIT, TASK_RETRY_DELAY_MAX_MS, TASK_RETRY_DELAY_MIN_
 import { cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 43 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(44);
+  it('contains exactly 45 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(45);
   });
 
   it('exports the expected tool names', () => {
@@ -60,6 +60,7 @@ describe('builtinToolSchemas', () => {
       'get_facet',
       'json_query',
       'model_complete',
+      'remote_agent',
       'clipboard_write',
       'clipboard_read',
       'list_sessions',

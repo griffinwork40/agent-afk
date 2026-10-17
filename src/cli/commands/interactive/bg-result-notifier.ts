@@ -38,6 +38,8 @@ import { extractOutputText } from '../../../agent/background-registry.result.js'
 import { redactSecrets } from '../../../agent/redact-secrets.js';
 import { env, isPlainOutputRequested } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
+import { escapeXmlAttr } from './process-job-notifier.js';
+import { getGoal } from '../../../agent/goals/goal-store.js';
 import { DetachedToolNotifier } from './detached-tool-notifier.js';
 import type { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
 import type { ToolEvent } from '../../slash/types.js';
@@ -124,10 +126,34 @@ export function formatBgResultBody(job: BackgroundJob): string {
 }
 
 /**
+ * Detect whether a job's result is superseded — i.e. the operator changed
+ * the active goal after the job was dispatched.
+ *
+ * Returns `true` only when all three conditions hold:
+ *   1. A goal text was captured at dispatch time (`goalTextAtDispatch`).
+ *   2. A goal is currently active at delivery time.
+ *   3. The two goal texts differ (goal actually changed).
+ *
+ * When no goal was set at dispatch, or no goal is active now, we cannot
+ * determine supersession — the safe default is `false` (no annotation).
+ */
+function isSuperseded(job: BackgroundJob): boolean {
+  if (job.goalTextAtDispatch === undefined) return false;
+  const current = getGoal();
+  if (!current || current.status !== 'active') return false;
+  return current.text !== job.goalTextAtDispatch;
+}
+
+/**
  * Build the model-injection envelope for one settled job. Wrapped in
  * `<background-subagent-result>` tags — distinct from the `agent` tool's
  * foreground result envelope so the model understands this arrived
  * asynchronously, not as a tool result it just awaited.
+ *
+ * When the operator changed the active goal after this job was dispatched,
+ * the envelope carries `superseded="true"` and a one-line notice so the
+ * model understands the result was produced under an older objective and
+ * may no longer be relevant to the current goal.
  */
 export function buildBgResultInjection(job: BackgroundJob): string {
   const duration =
@@ -135,11 +161,18 @@ export function buildBgResultInjection(job: BackgroundJob): string {
   // Escape BEFORE truncating so the byte cap bounds the final injected
   // size — see truncateBytes' invariant for the expansion-bypass rationale.
   const output = truncateBytes(escapeXml(extractOutput(job)), MAX_INJECTION_BYTES, job.jobId);
+  const superseded = isSuperseded(job);
   const lines: string[] = [];
+  const supersededAttr = superseded ? ' superseded="true"' : '';
   lines.push(
-    `<background-subagent-result jobId="${escapeXml(job.jobId)}" status="${escapeXml(job.status)}" ` +
-      `model="${escapeXml(job.model)}" duration="${duration}">`,
+    `<background-subagent-result jobId="${escapeXmlAttr(job.jobId)}" status="${escapeXmlAttr(job.status)}" ` +
+      `model="${escapeXmlAttr(job.model)}" duration="${escapeXmlAttr(duration)}"${supersededAttr}>`,
   );
+  if (superseded) {
+    lines.push(
+      `<notice>This result was produced under a previous goal and may not be relevant to the current objective.</notice>`,
+    );
+  }
   lines.push(`<task>${escapeXml(job.label)}</task>`);
   lines.push('<output>');
   lines.push(output);

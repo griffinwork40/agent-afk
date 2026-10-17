@@ -62,6 +62,12 @@ describe('buildForkDenialRemedy', () => {
       expect(remedy).toContain("`gh pr create --body-file - <<'EOF'`");
     });
 
+    it('tells the fork the OS temp dir needs no grant (scratch-roots.ts)', () => {
+      // A write denial is never about /tmp any more; say so, so a fork that hit
+      // a real out-of-root path is not steered away from the temp dir.
+      expect(remedy).toContain('the OS temp dir (`/tmp`, `os.tmpdir()`) is always writable');
+    });
+
     it('does not add the scratch-file hint to read denials', () => {
       const read = buildForkDenialRemedy({ mode: 'read', resolvedPath: P });
       expect(read).not.toContain('--body-file');
