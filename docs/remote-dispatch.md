@@ -28,6 +28,16 @@ repos, accounts, and model subscriptions. Nothing is copied: move code with git.
 A `host` absent from the file is used as a literal ssh target, so `~/.ssh/config`
 aliases work with no setup. `afkPath` is only needed when auto-discovery fails.
 
+### Host fields
+
+| Field | Type | Description |
+|---|---|---|
+| `ssh` | string | SSH destination (`user@host`, `~/.ssh/config` alias, or `ssh://host:port`). |
+| `cwd` | string? | Working directory on the remote (absolute or `~/…`). |
+| `afkPath` | string? | Absolute path to the `afk` binary on the remote. Only needed when auto-discovery fails. |
+| `unlockKeychain` | bool? | Unlock the remote's macOS login keychain before each run (see [Keychain unlock](#keychain-unlock)). |
+| `permissionMode` | string? | Permission mode pinned on every `afk chat` run for this host (`default`, `plan`, `bypassPermissions`, `autonomous`). When absent the remote resolves its own configured default. |
+
 ## Keychain unlock
 
 For a host with `"unlockKeychain": true`, store that machine's login password once,
