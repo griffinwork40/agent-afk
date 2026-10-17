@@ -340,7 +340,7 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
   it('passes full redacted response to completion callback without persisting it', async () => {
     const rawSecret = 'sk-ant-api03-secretkeyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstu';
     const tail = 'TAIL_AFTER_EXCERPT';
-    const response = `${'x'.repeat(350)}${rawSecret}\n${tail}`;
+    const response = `${'safe text '.repeat(35)}${rawSecret}\n${tail}`;
     const onTaskComplete = vi.fn();
     const scheduler = new CronScheduler({
       telemetryPath,
@@ -1599,6 +1599,92 @@ describe('elicitationRouter — installForSession / uninstallForSession isolatio
     expect(elicitationRouter.hasHandler()).toBe(false);
   });
 });
+
+describe('CronScheduler.stop() — unregister before awaiting handoffMaintenance (#3948)', () => {
+  /**
+   * Regression: stop() used to await handoffMaintenance.stop() BEFORE
+   * unregistering cron tasks. A slow-resolving startup recovery (e.g. Telegram
+   * re-notification) opened a window where a live cron timer could fire
+   * runOnce() against the freshly-reset shutdownController, spawning sessions
+   * mid-shutdown. The fix moves the unregister loop before the await.
+   *
+   * This test verifies that a cron callback does NOT fire runOnce() during the
+   * await window by:
+   *   1. Freezing the handoffMaintenance.stop() promise behind a gate.
+   *   2. Triggering stop() (which now unregisters first, then awaits the gate).
+   *   3. Releasing the gate and asserting no session was spawned after stop()
+   *      was called.
+   */
+  it('cron callbacks do not spawn sessions during the handoffMaintenance.stop() await window', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'afk-stop-order-'));
+    const telemetryPath = join(dir, 'telemetry.jsonl');
+
+    let sessionCallCount = 0;
+    let releaseStopGate!: () => void;
+    const stopGate = new Promise<void>((r) => { releaseStopGate = r; });
+
+    // Fake handoffMaintenance whose stop() suspends until we release it.
+    let fakeHandoffStopped = false;
+    const fakeHandoff = {
+      stop: () => stopGate.then(() => { fakeHandoffStopped = true; }),
+    };
+
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      budgetGate: async () => ({ skip: false }),
+      sessionFactory: () => {
+        sessionCallCount += 1;
+        return {
+          sendMessage: () => Promise.resolve({ content: 'ok' }),
+          close: () => Promise.resolve(),
+        } as unknown as AgentSession;
+      },
+    });
+
+    // Inject the fake handle before stop() is called.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (scheduler as any).handoffMaintenance = fakeHandoff;
+
+    scheduler.register({
+      taskId: 'stop-order-task',
+      command: 'run',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    // Begin stop() — with the fix, this unregisters the cron task first, then
+    // suspends on fakeHandoff.stop() (which awaits stopGate).
+    const stopPromise = scheduler.stop();
+
+    // Yield to allow stop() to reach the await.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Capture session count at this point — the cron task is already
+    // unregistered, so no new sessions should be spawned from here.
+    const sessionsBeforeRelease = sessionCallCount;
+
+    // Simulate a cron tick firing (as node-cron would) while stop() is still
+    // suspended. Because unregister already called destroy(), the entry is gone
+    // from the registry and runOnce() is a no-op.
+    // We verify by directly checking registry is empty.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const registrySize = (scheduler as any).registry.size;
+    expect(registrySize).toBe(0);
+
+    // Release the gate so stop() can finish.
+    releaseStopGate();
+    await stopPromise;
+
+    expect(fakeHandoffStopped).toBe(true);
+    // No new sessions should have been created after stop() began.
+    expect(sessionCallCount).toBe(sessionsBeforeRelease);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+
 
 describe('CronScheduler — concurrent cron tasks each get their own elicitation handler (#3619)', () => {
   /**

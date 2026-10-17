@@ -208,7 +208,7 @@ export function loadEnvConfig(): Partial<CliConfig> {
   if (modelRaw) {
     const lowered = modelRaw.toLowerCase();
     // Only normalize casing for known Claude short aliases; non-Claude model
-    // ids (`gpt-5.4`, `codex-fast-1`) pass through unchanged so the provider
+    // ids (`gpt-5.6-sol`, `codex-fast-1`) pass through unchanged so the provider
     // router sees exactly what the user typed.
     config.model = isValidModel(lowered) ? lowered : modelRaw;
   }

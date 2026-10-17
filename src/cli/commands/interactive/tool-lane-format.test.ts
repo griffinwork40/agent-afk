@@ -217,6 +217,7 @@ describe('doneGlyph — benign rejection vs real fault (#75)', () => {
         'abort',
         'elicitation-declined',
         'hook-block',
+        'lost-args',
         'no-such-target',
         'permission-denied',
         'policy-refusal',

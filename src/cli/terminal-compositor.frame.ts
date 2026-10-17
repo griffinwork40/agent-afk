@@ -109,6 +109,8 @@ export interface FrameHost {
   /** Frame placement regime — see {@link FramePlacementMode}. */
   placementMode: FramePlacementMode;
   lastKnownRows: number;
+  /** See field doc on the class (terminal-compositor.ts). @internal */
+  lastKnownCols: number;
   /** True while commitAbove is executing (Phase 1 → Phase 3). Guards Phase 2
    *  repaints from applying content-following, which would misplace the frame
    *  and cause Phase 3 to write into the banner zone. */
@@ -155,6 +157,7 @@ export function repaint(self: FrameHost): void {
   // expand vs shrink.
   self.flushResizeGhostErase();
   self.lastKnownRows = self.stdout.rows ?? 24;
+  self.lastKnownCols = self.stdout.columns ?? 80;
   // F1 (retained-logical-source re-wrap): re-wrap the retained band at the
   // CURRENT width before EITHER downstream consumer reads it this repaint —
   // preserveRowsBeforeFrameRender's eviction paints (called below and from

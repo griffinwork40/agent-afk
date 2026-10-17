@@ -701,6 +701,66 @@ describe('formatTrace — fmtErrorHead sanitizes escape sequences', () => {
   });
 });
 
+describe('formatTrace — summed total with child closures (#3891)', () => {
+  // A fan-out trace: the root closure costs $0.0300 and one child closure
+  // costs $0.0200. The session_sealed carries both figures so the accumulator
+  // can compute root=$0.0300, subagent=$0.0200, total=$0.0500.
+  // formatTrace must surface the whole-trace total ($0.0500), NOT just the
+  // root seal cost.
+  const events: EventObj[] = [
+    {
+      ts: '2026-06-05T12:30:00.000Z',
+      seq: 0,
+      kind: 'subagent_lifecycle',
+      payload: { transition: 'started', subagentId: 'child-1', parentId: 'root', model: 'haiku' },
+    },
+    {
+      ts: '2026-06-05T12:31:00.000Z',
+      seq: 1,
+      kind: 'closure',
+      payload: { reason: 'subagent_end', finalTurnCount: 3, finalCostUsd: 0.02, finalTokens: {}, subagentId: 'child-1' },
+    },
+    {
+      ts: '2026-06-05T12:32:00.000Z',
+      seq: 2,
+      kind: 'subagent_lifecycle',
+      payload: { transition: 'succeeded', subagentId: 'child-1', durationMs: 120000, turnCount: 3, outputBytes: 500, totalCostUsd: 0.02 },
+    },
+    {
+      ts: '2026-06-05T12:33:00.000Z',
+      seq: 3,
+      kind: 'closure',
+      payload: { reason: 'model_end_turn', finalTurnCount: 5, finalCostUsd: 0.03, finalTokens: {} },
+    },
+    {
+      ts: '2026-06-05T12:33:01.000Z',
+      seq: 4,
+      kind: 'session_sealed',
+      payload: {
+        status: 'succeeded',
+        finalCostUsd: 0.03,
+        subagentCostUsd: 0.02,
+        finalTurnCount: 5,
+        closedAt: '2026-06-05T12:33:01.000Z',
+        subagentCount: 1,
+      },
+    },
+  ];
+
+  const out = formatTrace('sess-fanout', '/w/sess-fanout/trace.jsonl', parseTrace(toJsonl(events)));
+
+  it('shows the whole-trace total ($0.0500) in the header, not just the root cost', () => {
+    expect(out).toContain('$0.0500');
+  });
+
+  it('does not show only the root cost as the total', () => {
+    // $0.0300 is the root-only figure; it must not appear as the total.
+    // (It may appear elsewhere, e.g. in the closure line, so we assert the
+    // header cost part specifically via the fmtUsd pattern " · $0.03".)
+    expect(out).not.toMatch(/· \$0\.0300/);
+  });
+});
+
 describe('formatTrace — fmtErrorHead truncates without splitting emoji', () => {
   it('does not split an emoji at the 120-code-point display cut', () => {
     // Construct an errorHead that is exactly 119 ASCII chars + an emoji.

@@ -96,6 +96,7 @@ import {
 } from '../handlers/read-denylist.js';
 import { env } from '../../../config/env.js';
 import { textMentionsPath } from '../fs-case.js';
+import { tokenizeSegments } from '../readonly-bash.tokenizer.js';
 import {
   configuredAfkHome,
   afkAllowlistFileForms,
@@ -236,7 +237,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     //     typed write denylist floors all of ~/.afk/config the same way.
     const home = homedir();
     const afkHome = configuredAfkHome();
-    const normalized = normalizeHomeRefs(command, home, afkHome);
+    const normalized = normalizeHomeRefs(stripQuotedBodyFileData(command), home, afkHome);
     const scanned = headless ? normalized : scrubAllowlistedRefs(normalized, home, afkHome);
     const restrictedSubstrings =
       grantManager !== undefined && !headless
@@ -332,6 +333,102 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
 
     return {};
   };
+}
+
+/**
+ * Ignore literal stdin data only for simple, known data consumers. Reuse the
+ * readonly-bash tokenizer for argv, but NOT its stripDataStrings: quoted argv
+ * can be real paths or interpreter programs. Unknown shell syntax fails closed.
+ * Invariant: a quoted delimiter disables shell expansion, not execution by the
+ * consumer (`sh <<'EOF'` still executes its body). Never strip interpreter stdin,
+ * pipelines, wrappers, quoted shell programs, multiple pending heredocs, or a
+ * body that a redirect writes to a file (see isStdoutOnlyCat).
+ */
+function stripQuotedBodyFileData(command: string): string {
+  const newline = command.indexOf('\n');
+  if (newline < 0) return command;
+  const header = command.slice(0, newline);
+  // Structural guard: require that the char immediately before `<<` is NOT
+  // another `<` (which would make this a here-string `<<<`, not a heredoc).
+  // The regex `(?<!<)` is a negative lookbehind that makes the guard exact
+  // rather than relying on `isSimpleHeaderText` to reject the result later.
+  const heredoc = /(?<!<)<<[ \t]*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|\\([A-Za-z_]\w*))/g;
+  const matches = [...header.matchAll(heredoc)];
+  if (matches.length !== 1) return command;
+  const match = matches[0]!;
+  const delimiter = match[1] ?? match[2] ?? match[3]!;
+  const prefix = header.slice(0, match.index);
+  const suffix = header.slice(match.index + match[0].length);
+  // This deliberately narrow grammar is NOT a shell parser. In particular, no
+  // escapes, substitutions, comments, chaining, or other stdin redirects.
+  // Balanced quotes on EACH side prove the `<<` match is not inside a string.
+  if (!isSimpleHeaderText(prefix) || !isSimpleHeaderText(suffix)) return command;
+  // Dependency: this guard relies on `isStdoutOnlyCat` (below) rejecting any
+  // `cat` invocation that redirects output to a file, so a `> f` suffix here
+  // is safe only because `isStdoutOnlyCat` will return false for it.
+  if (suffix !== '' && !/^[ \t>]/.test(suffix)) return command;
+  const segments = tokenizeSegments(prefix + ' ' + suffix);
+  if (segments.length !== 1) return command;
+  const tokens = segments[0]!;
+  const [consumer, noun, verb] = tokens;
+  const bodyFile = tokens.indexOf('--body-file');
+  const isBodyFile = consumer === 'gh' && (noun === 'issue' || noun === 'pr') &&
+    ['create', 'comment', 'edit'].includes(verb ?? '') && bodyFile >= 3 && tokens[bodyFile + 1] === '-';
+  if (!isBodyFile && !isStdoutOnlyCat(tokens)) return command;
+  const bodyStart = newline + 1;
+  let end = bodyStart;
+  while (end < command.length) {
+    const next = command.indexOf('\n', end);
+    const lineEnd = next < 0 ? command.length : next;
+    if (command.slice(end, lineEnd) === delimiter) {
+      // Keep the complete header (including redirect targets) and every command
+      // after the terminator: only the literal body is excluded from both scans.
+      return command.slice(0, bodyStart) + command.slice(end);
+    }
+    end = lineEnd + 1;
+  }
+  return command; // Unterminated/ambiguous heredocs retain the original scan.
+}
+
+/**
+ * Invariant: `cat` stdin is exempt only when it is printed to stdout. Any other
+ * argv (`> f`, `>> f`, `1>f`, a file operand) may persist the body to disk, and a
+ * persisted body is a script the same or a LATER tool call can execute
+ * (`cat > /tmp/run.sh <<'EOF'` … `bash /tmp/run.sh`), so it stays scanned.
+ */
+function isStdoutOnlyCat(tokens: readonly string[]): boolean {
+  // Flags tightened to the known POSIX + BSD/GNU `cat` flag set so that an
+  // invented flag like `-x` (which could mean something on a future cat) is
+  // not silently admitted.  Known flags: -A (show-all), -b (number nonblank),
+  // -e (show ends+nonprint), -n (number), -s (squeeze), -t (show tabs+nonprint),
+  // -u (unbuffered), -v (show-nonprinting).  Long opts (`--number`, etc.) are
+  // not needed here because the tokenizer leaves them as separate tokens.
+  return tokens[0] === 'cat' && tokens.slice(1).every((t) => /^-[AbenrstuveV]*$/.test(t));
+}
+
+/**
+ * Contract: true only for heredoc-header text made of plain words, `$NAME`
+ * parameter references, and balanced quoted strings, so real headers
+ * such as `gh issue create -R $R --title "x: y" --body-file - <<'EOF'` qualify.
+ * Rejects backslashes, backticks, `$(`, `<(`, and unterminated quotes (which
+ * would mean the `<<` match sat inside a string). The header itself is always
+ * still scanned; this only decides whether the body may be treated as data.
+ */
+function isSimpleHeaderText(text: string): boolean {
+  let quote: '"' | "'" | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote === "'") { if (ch === "'") quote = undefined; continue; }
+    if (ch === '\\' || ch === '`' || ch === '\n') return false;
+    if (ch === '$') {
+      if (!/[A-Za-z_]/.test(text[i + 1] ?? '')) return false;
+      continue;
+    }
+    if (quote === '"') { if (ch === '"') quote = undefined; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (!/[\w \t./~:=,@%+>\-]/.test(ch)) return false;
+  }
+  return quote === undefined;
 }
 
 /**

@@ -759,12 +759,17 @@ describe('parseWhatifArgs — --aa flag', () => {
     expect(parsed.options.aaMode).toBe(true);
   });
 
-  it('--aa can be combined with --verify', () => {
+  it('--aa rejects --verify (A/A runs no episodes, so --verify would be silently ignored)', () => {
     const r = parseWhatifArgs(['--aa', '--verify']);
-    expect(typeof r).not.toBe('string');
-    const parsed = r as import('./args.js').ParsedWhatifArgs;
-    expect(parsed.aaMode).toBe(true);
-    expect(parsed.options.verify).toBe(true);
+    expect(typeof r).toBe('string');
+    expect(r as string).toMatch(/--aa cannot be combined with --verify/);
+    expect(r as string).toMatch(/structural snapshots only/);
+  });
+
+  it('--aa rejects --verify regardless of flag order', () => {
+    const r = parseWhatifArgs(['--verify', '--aa']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toMatch(/--aa cannot be combined with --verify/);
   });
 
   it('--aa can be combined with --quick', () => {
@@ -796,9 +801,9 @@ describe('parseWhatifArgs — --aa flag', () => {
   });
 
   it('--aa is a run-mode flag and does not trigger the change-flag conflict guard', () => {
-    // --aa with --verify: no change flags and no positional text, so neither the
-    // --spec conflict guard nor the --aa conflict guard fires.  Parse succeeds.
-    const r = parseWhatifArgs(['--aa', '--verify']);
+    // --aa with a run option (--quick): no change flags and no positional text,
+    // so neither the --spec conflict guard nor the --aa conflict guard fires.
+    const r = parseWhatifArgs(['--aa', '--quick']);
     expect(typeof r).not.toBe('string');
   });
 

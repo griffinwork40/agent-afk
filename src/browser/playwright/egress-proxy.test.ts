@@ -105,6 +105,54 @@ describe('EgressProxy — HTTP forwarding', () => {
   });
 });
 
+describe('EgressProxy — replacement coverage for retired route/post-hoc checks (#3721)', () => {
+  it('refuses a private redirect destination before any connection to it', async () => {
+    const destination = `http://127.0.0.1:${priv.port}/secret`;
+    pub.server.removeAllListeners('request');
+    pub.server.on('request', (_req, res) => res.writeHead(302, { location: destination }).end());
+    const first = await raw(proxyPort, get(pub.port, '/redirect'));
+    expect(first).toContain('302');
+    expect(first).toContain(destination);
+    // Follow the actual Location through the same proxy, as Chromium does.
+    const location = /\r\nlocation: ([^\r\n]+)/i.exec(first)?.[1];
+    expect(location).toBe(destination);
+    const mark = proxy.mark();
+    const next = await raw(proxyPort, `GET ${location} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+    expect(next).toContain('403');
+    expect(priv.connections).toBe(0);
+    expect(proxy.refusalsSince(mark)[0]?.target).toBe(targetKey('127.0.0.1', priv.port));
+  });
+
+  it('rechecks DNS on each connection and refuses a rebound hostname', async () => {
+    const lookupFn = vi.fn()
+      .mockResolvedValueOnce([{ address: '127.0.0.1' }])
+      .mockResolvedValueOnce([{ address: '10.0.0.1' }]);
+    const p = new EgressProxy({ lookupFn, isBlocked: (ip) => ip === '10.0.0.1' });
+    try {
+      const port = await p.listen();
+      expect(await raw(port, get(pub.port, '/first'))).toContain('hello /first');
+      expect(await raw(port, get(pub.port, '/rebound'))).toContain('403');
+      expect(pub.requests).toEqual(['/first']);
+      expect(lookupFn).toHaveBeenCalledTimes(2);
+      expect(p.refusalsSince(0)[0]?.target).toBe(targetKey('public.test', pub.port));
+    } finally {
+      await p.close();
+    }
+  });
+
+  it('refuses IMDS with the production classifier (not an injected port rule)', async () => {
+    const strict = new EgressProxy();
+    try {
+      const port = await strict.listen();
+      const response = await raw(port, 'GET http://169.254.169.254/latest/meta-data/ HTTP/1.1\r\nHost: 169.254.169.254\r\n\r\n');
+      expect(response).toContain('403');
+      expect(strict.refusalsSince(0)[0]?.target).toBe('169.254.169.254:80');
+    } finally {
+      await strict.close();
+    }
+  });
+});
+
 describe('EgressProxy — CONNECT tunnels', () => {
   it('tunnels opaquely to an allowed target', async () => {
     const res = await raw(proxyPort,

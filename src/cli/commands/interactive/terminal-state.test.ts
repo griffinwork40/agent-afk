@@ -107,6 +107,31 @@ describe('parseTerminalState — bullet field mapping', () => {
     expect(v?.deferred).toBe('integrate with renderer');
   });
 
+  // Regression: `next` was a deferred needle, so a forward-looking suggestion
+  // bullet was captured as deferred work and downgraded the session facet to
+  // partially_achieved even though the work was complete.
+  it('done: a forward-looking "next" bullet is not captured as deferred', () => {
+    for (const label of ['Next', 'Next steps', 'Suggested next', "What's next"]) {
+      const text = `prose\n\nDone\n- What was done: shipped it\n- Evidence: tests pass\n- ${label}: open a follow-on PR`;
+      expect(parseTerminalState(text)?.deferred, label).toBeUndefined();
+    }
+  });
+
+  it('done: Deferred still wins when a "next" suggestion precedes it', () => {
+    const text = `prose\n\nDone\n- What was done: shipped it\n- Next steps: open a follow-on PR\n- Deferred: none`;
+    expect(parseTerminalState(text)?.deferred).toBe('none');
+  });
+
+  it('done: Follow-up still maps to deferred', () => {
+    const text = `prose\n\nDone\n- What was done: shipped it\n- Follow-up: wire the renderer`;
+    expect(parseTerminalState(text)?.deferred).toBe('wire the renderer');
+  });
+
+  it('asking: "next" still maps to followup', () => {
+    const text = `prose\n\nAsking\n- Question: keep or delete?\n- Next: I will archive it`;
+    expect(parseTerminalState(text)?.followup).toBe('I will archive it');
+  });
+
   it('blocked: maps fields, tolerant of label drift', () => {
     const text = `prose\n\nBlocked\n- Blocker: API down\n- To unblock: wait or retry\n- Already done: scoped the change`;
     const v = parseTerminalState(text);

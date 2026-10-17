@@ -144,6 +144,14 @@ export function createTelegramSessionFactory(
         workspaceStore,
         ...(sessionConfig.telegramChatId !== undefined ? { chatId: sessionConfig.telegramChatId } : {}),
         ...(sessionConfig.telegramThreadId !== undefined ? { threadId: sessionConfig.telegramThreadId } : {}),
+        // Wire the pre-bound idle-wake hook injected by SessionManager.
+        // When onInjectableForRoute was configured on the SessionManager,
+        // buildAndRegisterSession placed the bound callback in
+        // sessionConfig.telegramOnInjectable. Forward it into the session
+        // context so wireTelegramExecutors can set bgNotifier.onInjectable.
+        ...(sessionConfig.telegramOnInjectable !== undefined
+          ? { onInjectable: sessionConfig.telegramOnInjectable }
+          : {}),
         reportSession: (session) => {
           returnedSession = session;
           const close = session.close.bind(session);

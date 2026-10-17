@@ -132,6 +132,22 @@ describe('executeAgentTask — gate-block status (#3466)', () => {
     expect(record.gateBlocks).toBe(1);
     expect(telemetryRecords[0]?.status).toBe('blocked');
     expect(telemetryRecords[0]?.gateBlocks).toBe(1);
+    expect(record.errorMessage).toBe('Unrecovered AFK gate block(s): 1; blocked tools: unknown. High-risk operations require human approval in unattended mode.');
+    expect(telemetryRecords[0]?.errorMessage).toBe(record.errorMessage);
+  });
+
+  it('explains unrecovered blocks using deduplicated, sanitized tool labels', async () => {
+    const { ctx, telemetryRecords } = makeCtx({
+      hardBlocks: 3,
+      calls: [
+        { blockedTool: 'bash', followingTools: [] },
+        { blockedTool: 'bash', followingTools: [] },
+        { blockedTool: 'create_schedule\n', followingTools: [] },
+      ],
+    });
+    const record = await executeAgentTask(ctx, makeTask(), 'cron');
+    expect(record.errorMessage).toContain('blocked tools: bash, create_schedule_.');
+    expect(telemetryRecords[0]?.errorMessage).toBe(record.errorMessage);
   });
 
   it('records gateBlocks equal to the total number of hard-blocks', async () => {

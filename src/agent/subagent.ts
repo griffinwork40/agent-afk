@@ -79,6 +79,11 @@ export type { ForkParent, ForkSubagentOptions, SubagentManagerOptions };
 
 export class SubagentManager {
   private readonly active = new Map<string, SubagentHandleImpl<unknown>>();
+  private readonly pendingChildBillingStreams = new Set<Promise<void>>();
+  // Shared billing-stream registry owned by the root manager (#3961).
+  // When set, every stream retained here is ALSO inserted into this set so
+  // rootManager.getPendingChildBillingStreams() surfaces depth-2+ streams.
+  private readonly parentBillingStreams: Set<Promise<void>> | undefined;
   /** Recently-completed subagent handles for `/tasks:view` memory-first path. */
   readonly completed = new CompletedCache();
   private readonly parentCanUseTool: CanUseTool | undefined;
@@ -159,6 +164,7 @@ export class SubagentManager {
     this.workspaceStore = options.workspaceStore;
     this.sessionLabel = options.sessionLabel;
     this.delegationBudget = options.delegationBudget;
+    this.parentBillingStreams = options.parentBillingStreams;
     // Witness layer: AbortGraph receives the writer at construction so
     // cascades fire `abort` events without per-call plumbing.
     this.abortGraph = new AbortGraph(options.traceWriter);
@@ -206,6 +212,18 @@ export class SubagentManager {
     cb: (usage: import('./subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined) => void,
   ): void {
     this.onSubagentSucceededCb = cb;
+  }
+
+  /**
+   * Forward one descendant's OWN usage to the tree's accounting sink, verbatim
+   * (including billing-only outcome tags). Never add intermediate session
+   * totals: each handle reports its own spend exactly once. Read the sink
+   * lazily so late binding and REPL session replacement also reach descendants.
+   */
+  reportSubagentCompletion(
+    ...args: Parameters<NonNullable<SubagentManagerOptions['onSubagentSucceeded']>>
+  ): void {
+    this.onSubagentSucceededCb?.(...args);
   }
 
   /**
@@ -425,7 +443,12 @@ export class SubagentManager {
         getOutputEventSink: () => this.outputEventSink,
         activeMap: this.active,
         abortGraph: this.abortGraph,
-        completedCache: this.completed,
+        completedCache: {
+          recordHandle: (...args) => {
+            this.retainChildBillingStreams(args[1]);
+            this.completed.recordHandle(...args);
+          },
+        },
         onSubagentSucceeded: this.onSubagentSucceededCb,
       });
     } catch (err) {
@@ -437,6 +460,9 @@ export class SubagentManager {
       throw err;
     }
     const { handle, effectiveAgentType, effectiveResolvedAgentType } = constructed;
+    // #3961: publish each stream into the root registry the moment it starts, so
+    // a depth-2+ handle still ACTIVE in a nested manager is visible at seal.
+    handle._billingStreamSink = this.billingStreamRegistry;
 
     // Witness emit + routing telemetry: fires AFTER the handle is wired into
     // the manager's active map and the abort-graph. See ./subagent/fork-lifecycle.ts.
@@ -477,6 +503,48 @@ export class SubagentManager {
   /** Cancel all running subagents. */
   async killAll(): Promise<void> {
     await Promise.allSettled([...this.active.values()].map((h) => h.cancel()));
+  }
+
+  /**
+   * Snapshot the in-flight cancellation-write promises from every active handle.
+   * Threaded into `AgentConfig.getPendingChildTerminalWrites` so `seal()` can
+   * await them even when the drain timed out (#3714).
+   */
+  getPendingChildTerminalWrites(): readonly Promise<void>[] {
+    return [...this.active.values()].map((h) => h._pendingCancellationWrite);
+  }
+
+  /**
+   * The shutdown-visible billing-stream registry (#3961): the ROOT manager's
+   * set at every depth. A nested manager returns the root set it was handed,
+   * never its own local set, so a depth-3 child's stream forwarded by a
+   * depth-2-owned manager still lands where shutdown reads it.
+   */
+  get billingStreamRegistry(): Set<Promise<void>> {
+    return this.parentBillingStreams ?? this.pendingChildBillingStreams;
+  }
+
+  /** Includes terminal children evicted from both the active map and completed LRU. */
+  getPendingChildBillingStreams(): readonly Promise<void>[] {
+    for (const handle of this.active.values()) this.retainChildBillingStreams(handle);
+    return [...this.pendingChildBillingStreams];
+  }
+
+  private retainChildBillingStreams(handle: SubagentHandle): void {
+    const streams = (handle as SubagentHandle & { readonly pendingBillingStreams?: readonly Promise<void>[] }).pendingBillingStreams;
+    for (const stream of streams ?? []) {
+      if (this.pendingChildBillingStreams.has(stream)) continue;
+      this.pendingChildBillingStreams.add(stream);
+      const remove = (): void => { this.pendingChildBillingStreams.delete(stream); };
+      void stream.then(remove, remove);
+      // #3961: the sole path into the root registry. Every local insertion goes
+      // through here, so no separate local->root forwarding pass is needed.
+      if (this.parentBillingStreams !== undefined && !this.parentBillingStreams.has(stream)) {
+        this.parentBillingStreams.add(stream);
+        const removeFromParent = (): void => { this.parentBillingStreams!.delete(stream); };
+        void stream.then(removeFromParent, removeFromParent);
+      }
+    }
   }
 
   /**

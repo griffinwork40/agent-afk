@@ -20,7 +20,7 @@ import { backgroundTarget } from './subagent/background-delivery.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import type { StreamCutProbe } from '../subagent/stream-cut-retry.js';
 import { addForegroundNotices } from './subagent-executor.notices.js';
-import { classifyDispatchIntent } from './subagent-executor.write-intent.js';
+import { classifyDispatchIntent, checkReadOnlyDispatchIntent } from './subagent-executor.dispatch-intent.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budget.js';
@@ -36,7 +36,6 @@ import {
   resolveChildPrompt,
   runBackgroundDispatch,
   checkNestedScope,
-  checkReadOnlyDispatchIntent,
 } from './subagent-executor.execute-once.helpers.js';
 
 export interface ExecuteOnceArgs {

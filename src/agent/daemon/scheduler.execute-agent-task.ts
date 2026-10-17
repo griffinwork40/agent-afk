@@ -10,9 +10,10 @@
  * @module agent/daemon/scheduler.execute-agent-task
  */
 
-import { gateRecoveryNote, hasRecoveredFromGate, type GateBlockCounter } from './scheduler-gate-recovery.js';
+import { gateBlockReason, gateRecoveryNote, hasRecoveredFromGate, type GateBlockCounter } from './scheduler-gate-recovery.js';
 import { makeDaemonElicitationHandler } from './handoff-wiring.js';
 import { makeCronElicitationHandler } from './scheduler.elicitation-notify.js';
+import { resumeContextFromTask } from './handoff-resume-context.js';
 import { elicitationRouter } from '../elicitation-router.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { errorMessage } from '../../utils/errors.js';
@@ -166,6 +167,7 @@ export async function executeAgentTask(
       ...baseRecord,
       durationMs: ctx.now() - startTimeMs,
       status,
+      ...(status === 'blocked' ? { errorMessage: gateBlockReason(gateBlockCounter) } : {}),
       ...(recoveryNote !== undefined ? { gateRecoveryNote: recoveryNote } : {}),
       responseExcerpt: responseText.length > 280
         ? `${responseText.slice(0, 280)}… [truncated]`
@@ -237,6 +239,7 @@ async function runAgentAttempt(
       elicitationRouter.installForSession(elicitationKey, makeDaemonElicitationHandler({
         taskId: task.taskId,
         originalCommand: redactInlineSecrets(task.command),
+        resumeContext: resumeContextFromTask(task),
         queueDir: ctx.queueDir,
         ...(ctx.options.bot !== undefined ? { bot: ctx.options.bot } : {}),
         ...(ctx.options.primaryChatId !== undefined ? { chatId: ctx.options.primaryChatId } : {}),
@@ -260,6 +263,7 @@ async function runAgentAttempt(
       elicitationRouter.installForSession(elicitationKey, makeCronElicitationHandler({
         taskId: task.taskId,
         originalCommand: redactInlineSecrets(task.command),
+        resumeContext: resumeContextFromTask(task),
         cronExpression: task.cronExpression,
         ...(ctx.handoffsDir !== undefined ? { handoffsDir: ctx.handoffsDir } : {}),
         ...(ctx.options.bot !== undefined && resolvedChatId !== undefined

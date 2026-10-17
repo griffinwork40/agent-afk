@@ -31,6 +31,7 @@ import { getQueueDir } from '../../paths.js';
 import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { env } from '../../config/env.js';
 import { type QueuedTask } from './queue-store.js';
+import { pickResumeFields } from './handoff-resume-context.js';
 import {
   type TaskRecord,
   type TaskState,
@@ -146,6 +147,7 @@ export function leaseTask(
       enqueuedAt: task.enqueuedAt,
       sequence: task.sequence,
       ...(task.notifyOn !== undefined ? { notifyOn: task.notifyOn } : {}),
+      ...pickResumeFields(task),
     },
   };
 
@@ -211,26 +213,35 @@ export function renewLease(
  * No-op if the lease file does not exist (task may have completed or been
  * recovered by another process).
  *
- * @param taskId   - Task ID whose state to update.
- * @param state    - New TaskState value to write.
- * @param queueDir - Queue root directory.
+ * Contract: when `expectedState` is given, the write happens only if the lease
+ * is currently in that state (a compare-and-set within this process), so a
+ * caller restoring a parked lease cannot clobber one another path has moved on.
+ *
+ * @param taskId        - Task ID whose state to update.
+ * @param state         - New TaskState value to write.
+ * @param queueDir      - Queue root directory.
+ * @param expectedState - Optional guard: only write when the current state matches.
+ * @returns true when the state was written; false on missing/corrupt file or guard mismatch.
  */
 export function setLeaseState(
   taskId: string,
   state: TaskState,
   queueDir: string = getQueueDir(),
-): void {
+  expectedState?: TaskState,
+): boolean {
   const path = leasedPath(queueDir, taskId);
-  if (!existsSync(path)) return;
+  if (!existsSync(path)) return false;
   let record: TaskRecord;
   try {
     record = JSON.parse(readFileSync(path, 'utf-8')) as TaskRecord;
   } catch {
-    return; // Corrupt lease file — skip.
+    return false; // Corrupt lease file — skip.
   }
+  if (expectedState !== undefined && record.state !== expectedState) return false;
   record.state = state;
   record.updatedAt = Date.now();
   atomicWriteJson(path, record);
+  return true;
 }
 
 /**
@@ -280,7 +291,7 @@ export function completeTask(
 
   if (finalState === 'retrying') {
     // Re-enqueue for retry — only terminal states go to completed/.
-    reEnqueue(record, queueDir);
+    reEnqueueRecord(record, queueDir);
     // Clean up the lease file now that the queue entry is written.
     if (existsSync(src)) {
       try { unlinkSync(src); } catch { /* ignore */ }
@@ -405,7 +416,7 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
     if (record.attempts < record.maxAttempts) {
       // Re-enqueue: write a new queue file and move the lease to completed.
       record.state = 'retrying';
-      reEnqueue(record, queueDir);
+      reEnqueueRecord(record, queueDir);
     } else {
       // Exhausted attempts — dead-letter.
       record.state = 'dead-letter';
@@ -487,7 +498,7 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
 
     if (claimRecord.attempts < claimRecord.maxAttempts) {
       claimRecord.state = 'retrying';
-      reEnqueue(claimRecord, queueDir);
+      reEnqueueRecord(claimRecord, queueDir);
     } else {
       claimRecord.state = 'dead-letter';
       claimRecord.lastError = claimRecord.lastError ?? 'lease expired';
@@ -572,7 +583,7 @@ function buildFallbackRecord(taskId: string, status: 'succeeded' | 'failed'): Ta
  * task is not immediately dequeued on the next poll tick, preventing retry
  * storms when many tasks fail concurrently.
  */
-function reEnqueue(record: TaskRecord, queueDir: string): void {
+export function reEnqueueRecord(record: TaskRecord, queueDir: string): void {
   mkdirSync(queueDir, { recursive: true });
   const existing = readdirSync(queueDir).filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-'));
   const sequence = existing.length + 1;
@@ -600,6 +611,7 @@ function reEnqueue(record: TaskRecord, queueDir: string): void {
     ...(record.meta?.['notifyOn'] !== undefined
       ? { notifyOn: record.meta['notifyOn'] as QueuedTask['notifyOn'] }
       : {}),
+    ...pickResumeFields(record.meta),
     // Carry retry state through re-enqueue so leaseTask can restore the
     // attempt count and retry policy in the new TaskRecord.  Without this,
     // every recovered task looks like a fresh attempt (attempts:1 / maxAttempts:1)

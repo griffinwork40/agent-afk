@@ -63,6 +63,8 @@ interface RunEpisodesResult {
   failedEpisodes: number;
   /** Total traces attempted per arm (including failures), for imbalance rates. */
   armTotals: { baseline: number; candidate: number };
+  /** Number of planned tasks that were never launched because the budget was exceeded. */
+  skippedByBudget: number;
 }
 
 interface EpTask {
@@ -90,8 +92,8 @@ async function runEpisodes(
 ): Promise<RunEpisodesResult> {
   const budget = new BudgetTracker(maxUsdRemaining);
   const allTraces: EpisodeTrace[] = [];
-  let truncatedByBudget = false;
   let failedEpisodes = 0;
+  let skippedByBudget = 0;
   const armTotals = { baseline: 0, candidate: 0 };
 
   const taskList: EpTask[] = [];
@@ -105,13 +107,17 @@ async function runEpisodes(
 
   async function runTask(task: EpTask, release: () => void): Promise<void> {
     try {
-      if (signal?.aborted || budget.exceeded) return;
+      // Do NOT increment skippedByBudget here — the dispatch loop already
+      // counted this task at the pre-acquire or post-acquire guard.  A task
+      // that slips through both dispatch guards and enters inflight is still
+      // counted by the dispatch loop, so adding it here would double-count
+      // when budget.exceeded flips between dispatch and execution (#3920).
+      if (signal?.aborted || budget.exceeded) { return; }
       const trace = await runner.run(task.env, task.ep, task.s, runnerOpts);
       allTraces.push(trace);
       budget.add(trace.costUsd);
       armTotals[trace.env]++;
       if (trace.error) failedEpisodes++;
-      if (budget.exceeded) truncatedByBudget = true;
       onProgress?.({ stage: 'run', message: `Episode ${task.ep.id}/${task.env.label} done`, done: allTraces.length, total });
     } finally {
       release();
@@ -132,14 +138,15 @@ async function runEpisodes(
 
   const inflight: Array<Promise<void>> = [];
   for (const task of taskList) {
-    if (signal?.aborted || budget.exceeded) { truncatedByBudget = budget.exceeded; break; }
+    if (signal?.aborted || budget.exceeded) { skippedByBudget++; continue; }
     await acquire();
-    if (signal?.aborted || budget.exceeded) { truncatedByBudget = budget.exceeded; release(); break; }
+    if (signal?.aborted || budget.exceeded) { skippedByBudget++; release(); continue; }
     inflight.push(runTask(task, release));
   }
   await Promise.allSettled(inflight);
 
-  return { allTraces, truncatedByBudget, failedEpisodes, armTotals };
+  const truncatedByBudget = skippedByBudget > 0;
+  return { allTraces, truncatedByBudget, failedEpisodes, armTotals, skippedByBudget };
 }
 
 // ---------------------------------------------------------------------------

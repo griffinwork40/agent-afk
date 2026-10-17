@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { SubagentHandle, SubagentResult } from '../../../agent/subagent.js';
+import type { BackgroundJob } from '../../../agent/background-registry.types.js';
 import {
   BgResultNotifier,
   buildBgResultInjection,
@@ -365,5 +366,60 @@ describe('replCanAutoWake', () => {
     setTTY(true, true);
     process.env['AFK_PLAIN_OUTPUT'] = '1';
     expect(replCanAutoWake()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: buildBgResultInjection — attribute escaping (issue #3838)
+// ---------------------------------------------------------------------------
+
+describe('buildBgResultInjection — attribute escaping', () => {
+  function makeJob(overrides: Partial<{ jobId: string; status: string; model: string; label: string }>): BackgroundJob {
+    return {
+      jobId: overrides.jobId ?? 'bg-1',
+      provenance: 'model',
+      subagentId: 'sub-1',
+      label: overrides.label ?? 'test task',
+      model: overrides.model ?? 'sonnet',
+      startedAt: 1000,
+      endedAt: 2000,
+      // Cast: the escaping tests deliberately inject values outside the status union.
+      status: (overrides.status ?? 'completed') as BackgroundJob['status'],
+      result: {
+        id: 'sub-1',
+        status: 'succeeded' as const,
+        message: { content: 'ok', role: 'assistant' },
+      } as unknown as SubagentResult,
+    };
+  }
+
+  it('escapes " in model attribute so the envelope stays well-formed', () => {
+    const job = makeJob({ model: 'bad"model"name' });
+    const out = buildBgResultInjection(job);
+    // The raw double-quote must be encoded; attribute value must not contain a literal "
+    const attrMatch = /model="([^"]*)"/.exec(out);
+    expect(attrMatch).not.toBeNull();
+    expect(attrMatch![1]).not.toContain('"');
+    expect(out).toContain('&quot;');
+    // Still exactly one opening and one closing envelope tag
+    expect(out.match(/<background-subagent-result /g)).toHaveLength(1);
+    expect(out.match(/<\/background-subagent-result>/g)).toHaveLength(1);
+  });
+
+  it('escapes " in status attribute', () => {
+    const job = makeJob({ status: 'failed"injected' });
+    const out = buildBgResultInjection(job);
+    // The raw double-quote must be encoded; attribute value must not contain a literal "
+    const attrMatch = /status="([^"]*)"/.exec(out);
+    expect(attrMatch).not.toBeNull();
+    expect(attrMatch![1]).not.toContain('"');
+    expect(out).toContain('&quot;');
+  });
+
+  it('escapes < and > in model attribute', () => {
+    const job = makeJob({ model: '<script>alert(1)</script>' });
+    const out = buildBgResultInjection(job);
+    expect(out).toContain('&lt;script&gt;');
+    expect(out.match(/<\/background-subagent-result>/g)).toHaveLength(1);
   });
 });

@@ -66,6 +66,14 @@ export interface TelegramSessionBuildContext {
    */
   threadId?: number;
   /**
+   * Per-session idle-wake callback. When defined, it is forwarded to
+   * `wireTelegramExecutors` as `onInjectable` so a settled background subagent
+   * automatically wakes this session instead of waiting for the next user
+   * message. Already bound to the session's route by the factory.
+   * Undefined when no wake hook is registered (e.g. in unit tests).
+   */
+  onInjectable?: () => void;
+  /**
    * Report the session the moment it is constructed.
    *
    * Invariant: the factory's catch block closes an already-constructed session

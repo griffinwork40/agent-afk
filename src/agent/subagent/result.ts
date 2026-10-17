@@ -9,6 +9,7 @@
 
 import type { ZodError, ZodType } from 'zod';
 import type { Message } from '../types.js';
+import type { BillingUsage } from '../provider.js';
 import { cappedHandoffFields, type CappedHandoff } from './capped-handoff.js';
 import { extractStructuredOutput } from '../output-extractor.js';
 import { parseSignal, type Signal } from '../signal-block.js';
@@ -189,6 +190,20 @@ export interface SubagentTrace {
     outputTokens?: number;
     cacheReadTokens?: number;
     cacheCreationTokens?: number;
+    /**
+     * Billing-normalized counts SUMMED across every turn of this run (#3878).
+     * The legacy fields above reflect the latest turn only (each `done`
+     * overwrites them) and are kept unchanged for existing consumers.
+     */
+    billing?: BillingUsage;
+    /**
+     * Set on billing-only reports from a child that did NOT succeed (#3878).
+     * When present, `onSubagentSucceeded` is firing for accounting purposes
+     * only — the legacy success counters (`subagentCompletedCount`, running
+     * tokens/cost) are NOT incremented. Consumers MUST check this field before
+     * treating the callback as a success signal.
+     */
+    outcome?: 'failed' | 'cancelled';
   };
 }
 

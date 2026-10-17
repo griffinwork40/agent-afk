@@ -11,6 +11,272 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.322.0] - 2026-10-17
+
+### Added
+- self-diagnosing real-Chrome setup for `afk browser connect` (#3933) (263b3f20)
+
+### Fixed
+- add remote_agent to tools reference (#3914) (36d51ca4)
+- shadow-git false negatives (bundled flags, backslash continuation, escaped quotes) + abort-only lost-work test (#3799) (a9ea6acf)
+- inflate pendingResizeErase footprint for centered-content narrowing resize (#3802) (b02bcd74)
+- detect lost root closure by actor provenance, not cost equality (#3935) (64ed2cfe)
+- clamp over-max timeout_ms instead of rejecting (#3820) (d5804441)
+- emit billing_settled phase for post-cancel delta; move runInProgress inside try (#3938) (9d4e021a)
+
+## [5.321.10] - 2026-10-17
+
+### Added
+- wake idle Telegram sessions when a background subagent settles (#3953) (7fa10cef)
+
+### Fixed
+- carry accumulated usage across stop-hook continuations (#3936) (ba01631a)
+- add --permission-mode to afk chat and pin it on remote runs (#3947) (2154b025)
+
+## [5.321.9] - 2026-10-17
+
+### Fixed
+- narrow read-only dispatch-intent gate, name the match, enforce in compose (#3944) (733eff5b)
+- await startup recovery in HandoffMaintenanceHandle.stop() (#3948) (e7b0dd40)
+- lost-args failureClass, alignment guard, and missing tests (#3952) (1757ff41)
+
+## [5.321.8] - 2026-10-17
+
+### Fixed
+- thread parentBillingStreams registry so depth-2+ abandoned streams reach session_sealed (#3962) (29b36826)
+
+## [5.321.7] - 2026-10-17
+
+### Added
+- mark subagent results as superseded when goal changed at delivery (#3951) (b1cdb4f1)
+
+### Fixed
+- add missing stderr tests for OAuth/refresh paths; use restoreAllMocks (#3946) (8e47c5d4)
+- harden skill-reference telemetry — non-object JSON guard, in-flight promise dedup, Set-based dedup (#3940) (57a037df)
+- address advisory findings from 2026-10-16 PR triage batch (#3955) (10b91b0e)
+
+## [5.321.6] - 2026-10-17
+
+### Fixed
+- add maxTurns to cost estimator to model multi-turn episode spend (#3949) (fa420138)
+- gate splitAtWorkspacePreamble on fork provenance, not marker text (#3943) (eeca6650)
+- clarify JournalMeta.model semantics, fix child provider source, add noop forSubagent params (#3950) (12694cb0)
+- guard sumBillingUsage provider mismatch + document outcome tag on SessionExecutorsBindTarget (#3941) (bb3f0ffe)
+- remove skippedByBudget double-count in runTask (#3945) (a4e87629)
+- add schema-version guard to loadSchedules; refuse future/unknown shapes (#3954) (4e0c0a17)
+- wire bot-level permissionMode into every Telegram session's AgentConfig (#3942) (7a9fd9f4)
+- narrow Bearer/AWS false positives from loosened anchors (#3937) (2ea8bc3d)
+
+## [5.321.5] - 2026-10-16
+
+### Fixed
+- roll nested and skill fork spend into root session (#3960) (713edaea)
+
+## [5.321.4] - 2026-10-16
+
+### Fixed
+- pin receipt cost rows and trace total; fix facet doc (#3911) (9835afd8)
+- reclaim parked lease immediately when periodic sweep expires its handoff (#3913) (72ab0460)
+
+## [5.321.3] - 2026-10-16
+
+### Fixed
+- harden remote_agent cwd validation, quoting, and output framing (#3917) (e4b55fd6)
+
+## [5.321.2] - 2026-10-16
+
+### Fixed
+- re-send handoff reminder with inline keyboard buttons on recovery (#3915) (9b6e374c)
+- stop builtin agents and fix-pr from pinning models (#3926) (801f2a85)
+- stamp subagentId on child closure events so root-filter guard works (#3912) (060ee7a1)
+
+## [5.321.1] - 2026-10-16
+
+### Fixed
+- resolve each probed slot's route once instead of twice (#3910) (0a8139a9)
+- merge prompt-dump secret shapes into canonical redactSecrets; add parity test (#3918) (d4d7fb05)
+- correct lost-root-closure under-report and backstop-seal $0 root (#3909) (b694971f)
+
+## [5.321.0] - 2026-10-16
+
+### Added
+- billing-normalized token rollups split by provider (#3889) (ff2316cf)
+
+### Fixed
+- downgrade plan mode to default on Telegram (seed drain is REPL-only) (#3916) (c5f7f45c)
+
+## [5.320.5] - 2026-10-16
+
+### Fixed
+- keep per-fork workspace preamble out of the sibling-shared cached prefix (#3923) (5d12bcde)
+
+## [5.320.4] - 2026-10-16
+
+### Fixed
+- retire dead gpt-5.4/grok-4.6 ids, add gpt-6 family (#3825) (2a1ac81c)
+
+## [5.320.3] - 2026-10-16
+
+### Fixed
+- stop runAt overlap noise, record blocked reasons, warn on date-pinned crons (#3824) (e6437fc7)
+
+## [5.320.2] - 2026-10-16
+
+### Fixed
+- truncatedByBudget false when all episodes ran despite budget exceeded (#3906) (7fa0605d)
+- send MCP status logs to stderr so -f json stdout stays clean (#3905) (1c7a04c6)
+
+## [5.320.1] - 2026-10-16
+
+### Fixed
+- preserve existing body >300 chars when reinforcing SPINE entries (#3908) (58c9dd16)
+- resolve slash-routing contradiction and measure mid-message skill references (#3884) (99ac1575)
+- stop /clear waiting on the SPINE classifier (#3843) (5817ea85)
+- route-aware credential check and suppress SPINE.md rewrites in A/B arms (#3907) (d98a6350)
+- stream chatgpt-oauth turn events instead of buffering the whole turn (#3826) (40ee2959)
+
+## [5.320.0] - 2026-10-16
+
+### Added
+- probe model slots with a custom endpoint + docs: local Mac model guide (#3887) (283cc1f0)
+
+## [5.319.6] - 2026-10-16
+
+### Fixed
+- one shared session-cost definition that includes subagent spend (#3888) (a5bb4943)
+
+## [5.319.5] - 2026-10-16
+
+### Fixed
+- guard stale-unlink retry in worktree-sweep lock on Windows (#3881) (ebeaadd9)
+- keep [vitals] notes out of the Esc-Esc rewind picker (#3870) (048b33d9)
+
+## [5.319.4] - 2026-10-16
+
+### Fixed
+- apply Windows delete-pending contention fix to 3 remaining O_EXCL lock sites (#3875) (01c74ea8)
+- treat mutating bash calls as writes for last-mutation ordering (#3872) (be5fcef5)
+- extract splitFrontmatter to unify three divergent frontmatter parsers (#3874) (f0de21bc)
+- anchor truncated-marker fallback to tail; export shared constant (#3873) (0b4fe90f)
+- accept read-only polling builtins and pipelines (#3853) (2980ab38)
+- add remote_agent to ALWAYS_EXTERNAL_TOOLS (#3871) (8b51407c)
+- ignore proven quoted heredoc data (#3855) (2a65059c)
+- let confined forks write to the OS temp dir (#3864) (95dbc2c2)
+
+### Changed
+- add explicit threat model (docs/threat-model.md) (#3851) (835fe595)
+
+## [5.319.3] - 2026-10-16
+
+### Fixed
+- run handoff maintenance and resumption in every daemon mode (#3877) (c6f259ea)
+
+## [5.319.2] - 2026-10-16
+
+### Fixed
+- pin shared WorkspaceStore lifetime across child session close (#3827) (bd119ab9)
+
+## [5.319.1] - 2026-10-15
+
+### Changed
+- retire proxy-redundant egress checks (#3854) (c2a3cb8e)
+
+## [5.319.0] - 2026-10-15
+
+### Added
+- accept free-text revision feedback in exit_plan_mode (#3832) (4d1fb31d)
+
+## [5.318.13] - 2026-10-15
+
+### Fixed
+- stop confining unconfined openai-compatible forks to read roots [] (#3815) (82aa12e4)
+
+## [5.318.12] - 2026-10-15
+
+### Added
+- read-only GET /api/handoffs lists pending daemon handoffs (#3858) (9fcc9ae5)
+
+### Fixed
+- expire daemon handoffs on the pull tick under the handoff lock (#3859) (d8e0c3fc)
+
+### Changed
+- replace fixed sleep with vi.waitFor in background-registry stopReason meta test (#3844) (e2a95438)
+
+## [5.318.11] - 2026-10-15
+
+### Added
+- remote_agent tool dispatches afk agents to other machines over SSH (#3837) (70fd1d49)
+
+### Fixed
+- canonical redactSecrets in whatif runner; escape bg-result envelope attributes (#3857) (b5b407b5)
+
+## [5.318.10] - 2026-10-15
+
+### Fixed
+- reject whatif --aa --verify, which silently ran no episodes (#3856) (0c7d88a8)
+
+## [5.318.9] - 2026-10-15
+
+### Added
+- record running afk version and the child's real model in journal meta (#3808) (#3830) (d5f4731b)
+- opt-in git_read tool replaces bash on read-only children (#3812) (74f4daba)
+
+### Fixed
+- do not dispatch tool calls whose arguments were lost or unparseable (#3829) (f0c8dd46)
+- bound seal() wait on pending child writes; InMemoryTraceWriter parity (#3831) (d336dafc)
+
+### Changed
+- pin Scenario 4, a bash write after a test pass leaves the artifact unverified (#3810) (1d8cfc99)
+
+## [5.318.8] - 2026-10-15
+
+### Fixed
+- refuse to overwrite an unreadable schedules.json (#3819) (5224e6cc)
+
+### Changed
+- pin Scenario 5, future-version schedules.json is cast, not refused (#3809) (7f76a0c5)
+- never cancel in-progress CI runs on main (#3818) (3cfa7a6b)
+- add nightly live provider test workflow (#2217) (eda80a93)
+
+## [5.318.7] - 2026-10-15
+
+### Fixed
+- stop treating "next" Done bullets as deferred work (#3813) (324d4eb7)
+
+## [5.318.6] - 2026-10-15
+
+### Fixed
+- distinguish hook command data from executable input (#3780) (36fa3b4d)
+- center status line under AFK_CENTER_CONTENT (#3801) (7b900f23)
+
+## [5.318.5] - 2026-10-15
+
+### Fixed
+- preserve GhError detail, tighten test coverage across advisory items (#3798) (1ff57c30)
+- replace fixed sleep(600) with vi.waitFor in send-failures test (#3800) (0cf36811)
+
+### Changed
+- BgResultNotifier.dispose() with pending injections (turn-ends-before-drain) (#3804) (957616d5)
+
+## [5.318.4] - 2026-10-15
+
+### Fixed
+- await pending child cancellation writes inside TraceWriter.seal() (#3807) (6f391479)
+
+### Changed
+- pin Scenario 3 – goal change while worker runs yields no superseded marker (#3806) (4af5afe4)
+
+## [5.318.3] - 2026-10-15
+
+### Fixed
+- import REDUNDANCY_THRESHOLD and add fixture similarity assertion in run.test.ts (#3803) (476bc5b5)
+- add direct unit tests for checkReadOnlyDispatchIntent gate (#3805) (3bbce2c0)
+
+## [5.318.2] - 2026-10-15
+
+### Fixed
+- correct mislabelled catch-branch line numbers in schedule.test.ts (#3733) (4981f257)
+
 ## [5.318.1] - 2026-10-15
 
 ### Added

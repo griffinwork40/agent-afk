@@ -33,6 +33,7 @@ import {
 } from '../../daemon/http-client.js';
 import { readTelemetryHistory } from '../../daemon/telemetry-reader.js';
 import { parseTaskRetryFields } from '../../daemon/task-retry.js';
+import { datePinnedCronWarning } from '../../daemon/schedule-cron-warning.js';
 
 export type { DaemonSyncResult };
 
@@ -160,6 +161,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
       name: config.name,
       cron: config.cron,
       enabled: config.enabled,
+      ...datePinnedCronWarning(config),
       daemonSynced: sync.synced,
       syncDetail: sync.detail,
       ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),
@@ -319,6 +321,7 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
       name: updated.name,
       cron: updated.cron,
       enabled: updated.enabled,
+      ...datePinnedCronWarning(updated),
       daemonSynced: sync.synced,
       syncDetail: sync.detail,
       ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),

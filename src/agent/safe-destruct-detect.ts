@@ -54,6 +54,7 @@
  */
 
 import type { HookContext, HookDecision } from './hooks.js';
+import { maskHookCommandData } from './hook-command-data.js';
 import { DESTRUCTIVE_PATTERNS } from './safe-destruct-patterns.js';
 
 /**
@@ -91,9 +92,10 @@ export const SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT =
  */
 export function detectDestructiveCommands(command: string): string[] {
   if (!command) return [];
+  const executable = maskHookCommandData(command);
   const hits: string[] = [];
   for (const { id, re } of DESTRUCTIVE_PATTERNS) {
-    if (re.test(command)) hits.push(id);
+    if (re.test(executable)) hits.push(id);
   }
   return hits;
 }

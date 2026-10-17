@@ -435,69 +435,12 @@ describe('BrowserLauncher', () => {
       expect(currentStubBrowser.newContext).toHaveBeenCalledTimes(1);
     });
 
-    it('installs an SSRF guard on interactive navigation requests', async () => {
+    it('preserves HTTP caching by not installing interactive request routes', async () => {
       vi.mocked(privateHostsAllowed).mockReturnValue(false);
       const launcher = new BrowserLauncher(TEST_CONFIG);
       const ctx = await launcher.ensureContext('session-A') as unknown as StubContext;
-
-      expect(ctx.route).toHaveBeenCalledWith('**/*', expect.any(Function));
-      const handler = ctx.route.mock.calls[0]?.[1] as (route: {
-        request: () => { url: () => string; isNavigationRequest: () => boolean };
-        continue: () => Promise<void>;
-        abort: (reason: string) => Promise<void>;
-      }) => Promise<void>;
-
-      const blocked = {
-        request: () => ({
-          url: () => 'http://169.254.169.254/latest/meta-data/',
-          isNavigationRequest: () => true,
-        }),
-        continue: vi.fn().mockResolvedValue(undefined),
-        abort: vi.fn().mockResolvedValue(undefined),
-      };
-      await handler(blocked);
-      expect(blocked.continue).not.toHaveBeenCalled();
-      expect(blocked.abort).toHaveBeenCalledWith('blockedbyclient');
-
-      // Item 2: subresource requests on http(s) are also guarded — IMDS must be blocked.
-      const subresource = {
-        request: () => ({
-          url: () => 'http://169.254.169.254/latest/meta-data/',
-          isNavigationRequest: () => false,
-        }),
-        continue: vi.fn().mockResolvedValue(undefined),
-        abort: vi.fn().mockResolvedValue(undefined),
-      };
-      await handler(subresource);
-      expect(subresource.abort).toHaveBeenCalledWith('blockedbyclient');
-      expect(subresource.continue).not.toHaveBeenCalled();
-    });
-
-    it('skips route install when privateHostsAllowed is true (item 7)', async () => {
-      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(true);
-      const launcher = new BrowserLauncher(TEST_CONFIG);
-      const ctx = await launcher.ensureContext('session-A') as unknown as StubContext;
       expect(ctx.route).not.toHaveBeenCalled();
-      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(false);
-    });
-
-    it('passes non-http(s) requests (e.g. data:) through unchanged (item 2)', async () => {
-      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(false);
-      const launcher = new BrowserLauncher(TEST_CONFIG);
-      const ctx = await launcher.ensureContext('session-A') as unknown as StubContext;
-      const handler = ctx.route.mock.calls[0]?.[1] as (route: {
-        request: () => { url: () => string; isNavigationRequest: () => boolean };
-        continue: () => Promise<void>;
-        abort: (r: string) => Promise<void>;
-      }) => Promise<void>;
-      const dataRoute = {
-        request: () => ({ url: () => 'data:text/plain,hello', isNavigationRequest: () => false }),
-        continue: vi.fn().mockResolvedValue(undefined),
-        abort: vi.fn().mockResolvedValue(undefined),
-      };
-      await handler(dataRoute);
-      expect(dataRoute.continue).toHaveBeenCalledOnce();
-      expect(dataRoute.abort).not.toHaveBeenCalled();
+      expect(launcher.egressLog()).toBeDefined();
     });
 
     it('returns the cached context on repeated calls for the same session', async () => {

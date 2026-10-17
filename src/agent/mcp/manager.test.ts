@@ -16,12 +16,12 @@
  * in PR 2/3 as a real-world conformance test.
  */
 
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 import { McpManager } from './manager.js';
-import { McpClient } from './client.js';
+import { McpClient, UnauthorizedError, type McpClientConnectResult } from './client.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -354,4 +354,134 @@ describe('McpManager (integration: stdio fixture)', () => {
     },
     10_000,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Minimal connect result used by unit-style tests below.
+// ---------------------------------------------------------------------------
+const FAKE_CONNECT_RESULT: McpClientConnectResult = {
+  tools: [],
+  serverInfo: { name: 'fake-server', version: '1.0.0' },
+};
+
+describe('McpManager stdout cleanliness (#3892)', () => {
+  // nit(#3921): use afterEach restoreAllMocks instead of manual try/finally.
+  afterEach(() => vi.restoreAllMocks());
+
+  it(
+    'connect log goes to stderr, not stdout',
+    async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      manager = await McpManager.fromConfig({
+        testsrv: {
+          type: 'stdio',
+          command: process.execPath,
+          args: [FIXTURE],
+        },
+      });
+
+      // No [mcp:...] connected line should have gone to console.log (stdout).
+      const logLines = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(logLines.some((l) => l.includes('[mcp:'))).toBe(false);
+
+      // The connected line MUST appear on console.error (stderr).
+      const errLines = errorSpy.mock.calls.map((c) => String(c[0]));
+      expect(errLines.some((l) => l.includes('[mcp:testsrv] connected'))).toBe(true);
+    },
+    15_000,
+  );
+
+  // low(#3921): cover the three additional console.error sites that were
+  // migrated from console.log in #3905 but had no test coverage.
+
+  it('OAuth-required log goes to stderr, not stdout', async () => {
+    // Simulate a connect() that throws UnauthorizedError — triggering the
+    // "OAuth authorization required" console.error branch (manager.ts:253).
+    vi.spyOn(McpClient.prototype, 'connect').mockRejectedValueOnce(
+      new UnauthorizedError(),
+    );
+    vi.spyOn(McpClient.prototype, 'disconnect').mockResolvedValue(undefined);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // UnauthorizedError causes oauth_pending status — fromConfig resolves.
+    manager = await McpManager.fromConfig({
+      authsrv: { type: 'stdio', command: process.execPath, args: [FIXTURE] },
+    });
+
+    const logLines = logSpy.mock.calls.map((c) => String(c[0]));
+    expect(logLines.some((l) => l.includes('[mcp:'))).toBe(false);
+
+    const errLines = errorSpy.mock.calls.map((c) => String(c[0]));
+    expect(
+      errLines.some((l) => l.includes('[mcp:authsrv]') && l.includes('OAuth')),
+    ).toBe(true);
+  });
+
+  it('tool-list-refreshed log goes to stderr, not stdout', async () => {
+    // Use the real stdio fixture so refreshServer() can perform a real
+    // tools/list call. We spy AFTER connect to capture only the refresh log.
+    manager = await McpManager.fromConfig({
+      refreshsrv: {
+        type: 'stdio',
+        command: process.execPath,
+        args: [FIXTURE],
+      },
+    });
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await manager.refreshServer('refreshsrv');
+
+    const logLines = logSpy.mock.calls.map((c) => String(c[0]));
+    expect(logLines.some((l) => l.includes('[mcp:'))).toBe(false);
+
+    const errLines = errorSpy.mock.calls.map((c) => String(c[0]));
+    expect(
+      errLines.some(
+        (l) => l.includes('[mcp:refreshsrv]') && l.includes('tool list refreshed'),
+      ),
+    ).toBe(true);
+  }, 15_000);
+
+  it('OAuth-complete log goes to stderr, not stdout', async () => {
+    // Put the manager into oauth_pending state via a mocked UnauthorizedError,
+    // then call completeAuth() with a mocked reconnect to trigger the
+    // "OAuth complete" console.error branch (manager.ts:509).
+    vi.spyOn(McpClient.prototype, 'connect')
+      .mockRejectedValueOnce(
+        // First call (fromConfig): throw UnauthorizedError → oauth_pending.
+        new UnauthorizedError(),
+      )
+      .mockResolvedValueOnce(FAKE_CONNECT_RESULT); // Second call (completeAuth reconnect).
+    vi.spyOn(McpClient.prototype, 'disconnect').mockResolvedValue(undefined);
+    vi.spyOn(McpClient.prototype, 'finishAuth').mockResolvedValue(undefined);
+
+    manager = await McpManager.fromConfig({
+      oauthsrv: { type: 'stdio', command: process.execPath, args: [FIXTURE] },
+    });
+
+    // Confirm we are in the expected state before the second phase.
+    const [state] = manager.getServerStates();
+    expect(state?.status).toBe('oauth_pending');
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await manager.completeAuth('oauthsrv', 'fake-auth-code');
+
+    const logLines = logSpy.mock.calls.map((c) => String(c[0]));
+    expect(logLines.some((l) => l.includes('[mcp:'))).toBe(false);
+
+    const errLines = errorSpy.mock.calls.map((c) => String(c[0]));
+    expect(
+      errLines.some(
+        (l) => l.includes('[mcp:oauthsrv]') && l.includes('OAuth complete'),
+      ),
+    ).toBe(true);
+  });
 });
