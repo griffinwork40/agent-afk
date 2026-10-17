@@ -11,6 +11,41 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.322.5] - 2026-10-17
+
+### Fixed
+- tighten registry drift-catcher to reject 'inherit' model pins (#3995) (b8e10f09)
+- add hasWorkspacePreamble test and drop `true as const` nit (#3992) (5a08681b)
+- tighten recovery tests, add reply hint, fix readonly cast, harden rmSync (#3998) (6ae521cc)
+- tighten isStdoutOnlyCat regex and fix threat-model citation (#3996) (330ad864)
+- fix Bearer stopword lookahead \b→\s; add 8-char boundary and hyphenated-token tests (#3997) (be00c1db)
+
+## [5.322.4] - 2026-10-17
+
+### Fixed
+- add pinning tests for unconfined-parent writeRoots/readRoots no-op behaviour (#3797) (e88363d6)
+
+## [5.322.3] - 2026-10-17
+
+### Fixed
+- safe filename encoding for Telegram topic sessions; deterministic tailLedger test (#3814) (afb59aeb)
+
+## [5.322.2] - 2026-10-17
+
+### Added
+- add Telegram /inbox command for held peer messages (#3616) (9146a963)
+
+### Fixed
+- gate dashboard install on .modules.yaml, clean partial dir on failure, add tests (#3608) (ee1e15b8)
+- hasHandler sessionKey, concurrent-tick latch, setupNotice field (#3661) (0b298a8d)
+- strict ISO 8601 validator, overflow/null rejection, tests (#3591) (36bf64a3)
+- align dispatch guidance with tool allowlists (#3816) (35cb7ea4)
+
+## [5.322.1] - 2026-10-17
+
+### Fixed
+- expose skippedByBudget in VerifyResult and replace tautological assertion (#3988) (4fd46664)
+
 ## [5.322.0] - 2026-10-17
 
 ### Added

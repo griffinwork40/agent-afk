@@ -50,7 +50,7 @@ adversarial. A bypass here is a security bug.
 
 | Control | What it does | Source |
 |---|---|---|
-| **Browser domain policy** | Pre-navigation and post-redirect domain allow/block checks on every `browser_open` call; combined with an SSRF egress guard that blocks private/loopback/link-local/cloud-metadata ranges before the browser touches the network. | `src/browser/playwright/index.ts:114-127` |
+| **Browser domain policy** | Pre-navigation and post-redirect domain allow/block checks on every `browser_open` call; combined with an SSRF egress guard that blocks private/loopback/link-local/cloud-metadata ranges before the browser touches the network. | `src/browser/config.ts:374` (`enforceDomainPolicy`), `src/browser/playwright/index.ts:135-143` |
 | **Credential denylist floor** | Blocks bash and typed-file access to `~/.ssh`, `~/.aws`, `~/.afk/config`, `/etc/shadow`, and ~25 other credential roots. The bash and typed-tool denylists are kept in sync so a future entry covers both paths. | `src/agent/tools/hooks/bash-restriction-hook.ts:58-59`, `src/agent/tools/handlers/read-denylist.ts`, `src/agent/tools/handlers/write-denylist.ts` |
 | **SSRF / egress guard** | Rejects HTTP requests to private/loopback/link-local/cloud-metadata ranges before they leave the process. | `src/http-client/egress-guard.ts`, `src/agent/tools/handlers/web-scrape.ts:22` |
 | **Telegram allowlist** | Inbound messages from chat IDs not in `AFK_TELEGRAM_ALLOWED_CHAT_IDS` are silently dropped; outbound sends are routed only to allowlisted IDs. | `src/telegram/notify-routing.ts` |

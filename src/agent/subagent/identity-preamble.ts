@@ -138,6 +138,7 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
       lines.push(
         '',
         `When dispatching nested agents, agent_type is required and must be one of: ${nestedAgentAllowlist.join(', ')}.`,
+        'Do not delegate your ordinary research to another research-agent or Explore agent unless that exact type appears in this list. Complete it with your own read tools.',
         'A bare dispatch with no agent_type is not permitted here — set agent_type to one of the allowed types, or complete the task with your own tools.',
       );
     }
