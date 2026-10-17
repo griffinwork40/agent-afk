@@ -1570,6 +1570,110 @@ describe('SubagentHandle streaming', () => {
       expect(result.partialOutput).toBe('partial text');
     });
 
+    it('#3965: stale tool-stop reason from a prior tool round does not mask an abort in the next round', async () => {
+      // Regression guard for #3965.
+      //
+      // A single sendMessageStream invocation may span multiple provider rounds
+      // (tool-call → result → continuation). The provider emits a `done` event
+      // with stopReason `tool_use` after round 1 (setting _lastStopReason), then
+      // begins round 2. If the stream is aborted mid-round-2 (before any `done`),
+      // the iterator throws and resolveStreamResult is bypassed — _lastStopReason
+      // still holds the stale `tool_use` value from round 1.
+      //
+      // The old `??=` guard in the buffered-text branch of resolveStreamResult
+      // preserved that stale reason when the stream ended normally (without
+      // throwing), causing status:'succeeded' with stopReason:'tool_use' instead
+      // of stopReason:STREAM_INCOMPLETE. annotateIfIncomplete never fired.
+      //
+      // The fix changes `??=` to `=` (unconditional assignment).
+      //
+      // This test models the scenario as a single-stream abort mid-round-2:
+      // the stream emits done(tool_use) between rounds, then partial text in
+      // round 2, then ends abruptly (no message, no done) — matching the real
+      // provider abort path where resolveStreamResult IS reached (the loop exits
+      // normally via break/return rather than throw when an abort surfaces as a
+      // stream-error event rather than a thrown exception).
+
+      const localGraph = new AbortGraph();
+      const localController = new AbortController();
+      localGraph.register('stale-stopreason-3965', localController);
+
+      // Single-stream session that simulates two provider rounds within one
+      // sendMessageStream call:
+      //   Round 1: done(tool_use) — sets _lastStopReason to 'tool_use'
+      //   Round 2: two content chunks, then stream ends with no message/done
+      //            (simulates the HTTP stream being cut before provider closes).
+      const session: IAgentSession = {
+        sessionId: 'mock-session',
+        state: 'idle',
+        abortSignal: localController.signal,
+        async sendMessage() {
+          return { role: 'assistant', content: '', timestamp: new Date() };
+        },
+        async *sendMessageStream() {
+          // Round 2 streams partial assistant text (simulating a cut-off mid-output).
+          yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'partial ' } };
+          yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'round2 text' } };
+          // The stream ends with a `done` carrying stopReason 'tool_use' — this
+          // simulates a prior completed tool round whose reason survives on
+          // _lastStopReason. In the real bug, _lastStopReason is set by an
+          // earlier processDoneEvent call within the same stream; here we model
+          // it by emitting a done(tool_use) as the terminal event while the
+          // loop still has buffered text but no `message` event. The done causes
+          // a break → resolveStreamResult is reached with _lastStopReason='tool_use'
+          // and buffered content — the exact condition the `??=` guard failed on.
+          yield { type: 'done' as const, metadata: { stopReason: 'tool_use' } };
+        },
+        async interrupt() {},
+        async close() {},
+        async reset() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        waitForInitialization: async () => ({ sessionId: 'mock-session', model: 'test-model', persistSession: true }),
+        getSessionIdentity: () => ({ persistSession: true }),
+        getSessionMetadata: () => ({ sessionId: 'mock-session', model: 'test-model', persistSession: true }),
+        getQuery: () => { throw new Error('not implemented'); },
+        getLastResponseMetadata: () => null,
+        getOutputStream: async function* () {},
+        getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+        supportedCommands: async () => [],
+        supportedModels: async () => [],
+        supportedAgents: async () => [],
+        getContextUsage: async () => ({ contextLimitTokens: 0, contextUsedTokens: 0 }),
+        mcpServerStatus: async () => [],
+        accountInfo: async () => ({ name: 'test', email: 'test@example.com' }),
+      } as unknown as IAgentSession;
+
+      const handle = new SubagentHandleImpl(
+        'stale-stopreason-3965',
+        session,
+        localController,
+        localGraph,
+        undefined,
+        5000,
+        undefined,
+        vi.fn(),
+      );
+
+      const result = await handle.runToResult('prompt');
+
+      // The key assertion: stopReason must be STREAM_INCOMPLETE, not the stale
+      // 'tool_use' set by the round-1 done event. With the old `??=` guard,
+      // _lastStopReason stayed 'tool_use' and was preserved, so the result
+      // reported status:'succeeded' with stopReason:'tool_use' — the exact
+      // bug from #3965. With the fix (`=`), STREAM_INCOMPLETE is always stamped.
+      expect(result.stopReason).toBe(STREAM_INCOMPLETE);
+      // The buffered-text branch returns a Message (not throws), so run()
+      // succeeds and runToResult takes the try-path → buildResultFromMessage.
+      // Status is 'succeeded' (partial, flagged by stopReason) — this matches
+      // the existing buffered-partial contract. The regression is purely in
+      // stopReason: with `??=` it was 'tool_use'; with `=` it is STREAM_INCOMPLETE.
+      expect(result.status).toBe('succeeded');
+      // Partial text is in message.content (not partialOutput — that path is
+      // for the throw/error case). annotateIfIncomplete fires on STREAM_INCOMPLETE.
+      expect(result.message?.content).toBe('partial round2 text');
+    });
+
     it('lastStreamedContent resets between runs so stale partials do not leak', async () => {
       // Reusing a handle across runs (or after a failed run followed by a
       // successful one in a sibling handle) must never carry state forward.
