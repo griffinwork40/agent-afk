@@ -17,9 +17,9 @@
  *   effectiveOutput = maxTurns × OUTPUT_TOKENS_PER_TURN
  *
  * where USER_TOKENS_PER_TURN = 1 000 and OUTPUT_TOKENS_PER_TURN = 800.
- * System tokens are charged at full rate for every turn (conservative; actual
- * runs benefit from prompt-cache reads after turn 1, so the true cost is
- * lower, giving the estimator a small upward bias by design).
+ * System tokens are charged once (not multiplied by maxTurns); the upward
+ * bias comes from ignoring prompt-cache discounts on system + history tokens
+ * after turn 1, which cost ~0.1× in practice.
  *
  * Calibration data (issue #3876):
  *   - Pilot run 20260928-153056-015fbb (maxTurns≈1, 52 traces, $6.21 actual):
@@ -33,8 +33,9 @@
  * History: the original formula counted ×2 per episode per env, which doubled
  * every agent-call cost.  The old multiplier 2×2×samples = 8 should be
  * 2×1×samples = 4.  maxTurns was then added (issue #3876) to model
- * multi-turn history accumulation; single-turn runs (maxTurns=1) collapse
- * back to the prior single-call model.
+ * multi-turn history accumulation; single-turn runs (maxTurns=1) use
+ * USER_TOKENS_PER_TURN (1 000) where the prior model used 1 500 — a close
+ * but not identical baseline.
  * Provenance: src/whatif/run.verify.ts `runEpisodes` -- each EpTask calls
  * runner.run() exactly once.
  *
