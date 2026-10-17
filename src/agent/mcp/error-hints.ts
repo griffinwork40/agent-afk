@@ -74,8 +74,10 @@ export function applyMcpErrorHints(
       if (!rule.appliesTo(serverName, config)) continue;
       const extra = rule.hint(result.content, config);
       if (extra !== undefined) return { ...result, content: `${result.content}\n\n${extra}` };
-    } catch {
+    } catch (err) {
       // A hint is best-effort decoration; never let it break a tool result.
+      // Log so the failure is visible in stderr rather than silently swallowed.
+      process.stderr.write(`[afk] mcp error-hint rule "${rule.id}" threw: ${String(err)}\n`);
     }
   }
   return result;

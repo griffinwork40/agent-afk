@@ -76,4 +76,20 @@ describe('applyMcpErrorHints', () => {
     const result = { content: 'err', isError: true };
     expect(applyMcpErrorHints('s', {}, result, [bad])).toBe(result);
   });
+
+  it('logs the rule id and error message to stderr when a rule throws', () => {
+    const written: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: unknown, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      return true;
+    };
+    try {
+      const bad: McpErrorHintRule = { id: 'my-rule', appliesTo: () => true, hint: () => { throw new Error('boom'); } };
+      applyMcpErrorHints('s', {}, { content: 'err', isError: true }, [bad]);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    expect(written.some((line) => line.includes('my-rule') && line.includes('boom'))).toBe(true);
+  });
 });
