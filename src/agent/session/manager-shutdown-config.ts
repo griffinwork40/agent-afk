@@ -22,10 +22,12 @@ export function pendingChildBillingStreams(
 export function managerShutdownConfig(
   manager: SubagentManager,
   composeExecutor?: BillingStreamSource,
+  /** Override the drain timeout (ms). Defaults to SUBAGENT_DRAIN_TIMEOUT_MS. Tests pass a small value to avoid burning the 5 s ceiling (#3966). */
+  drainTimeoutMs?: number,
 ): Pick<AgentConfig, 'drainSubagents' | 'getPendingChildTerminalWrites' | 'getPendingChildBillingStreams'> {
   return {
     drainSubagents: (reason) =>
-      manager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
+      manager.abortAllAndDrain('session_end', 'user_signal', drainTimeoutMs, reason === 'reset'),
     getPendingChildTerminalWrites: () => manager.getPendingChildTerminalWrites(),
     getPendingChildBillingStreams: () => pendingChildBillingStreams(manager, composeExecutor),
   };
