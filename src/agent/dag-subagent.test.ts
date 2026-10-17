@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { homedir } from 'os';
 import { join } from 'path';
 import { runSubagentDAG, type SubagentDAGNode } from './dag-subagent.js';

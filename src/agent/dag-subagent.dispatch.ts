@@ -225,7 +225,8 @@ export async function dispatchDagNode(
     // the DAG layer (dag-subagent.ts) can propagate it through DAGRunResult
     // regardless of return path. The notice is already injected into the node's
     // prompt via the wrapped promptBuilder (lines 113-117); duplicating it into
-    // message.content caused a double-prepend bug (#3661 review finding 2).
+    // message.content caused a double-prepend on nodes that also produce
+    // plain-string content, so we attach it as a dedicated field instead.
     return setupNotice !== undefined ? { ...result, setupNotice } : result;
   } finally {
     nodeSignal.removeEventListener('abort', onNodeAbort);
