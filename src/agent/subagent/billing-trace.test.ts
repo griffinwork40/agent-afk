@@ -478,16 +478,16 @@ describe('billing_settled phase on post-cancel delta (#3931)', () => {
     );
     expect(settled).toBeDefined();
     if (settled?.kind !== 'session_phase') throw new Error('no billing_settled event');
-    expect(settled.payload.metadata?.subagentId).toBe('phase-child');
-    expect(settled.payload.metadata?.provider).toBe('openai-compatible');
+    expect(settled.payload.metadata?.['subagentId']).toBe('phase-child');
+    expect(settled.payload.metadata?.['provider']).toBe('openai-compatible');
     // billing_settled carries billingLifecycleFields(context.total) — the
     // cumulative total across both turns (the delta from cancel()'s watermark
     // is computed by the rollup consumer by diffing against the cancelled row).
     // Turn 1: (10k, 9k cached, 100 out) = { uncachedInput: 1k, cacheRead: 9k, output: 100 }
     // Turn 2 cumulative: (22k total, 20k cached, 150 out) = { uncachedInput: 2k, cacheRead: 20k, output: 150 }
-    expect(settled.payload.metadata?.uncachedInput).toBe(2_000);
-    expect(settled.payload.metadata?.cacheRead).toBe(20_000);
-    expect(settled.payload.metadata?.output).toBe(150);
+    expect(settled.payload.metadata?.['uncachedInput']).toBe(2_000);
+    expect(settled.payload.metadata?.['cacheRead']).toBe(20_000);
+    expect(settled.payload.metadata?.['output']).toBe(150);
   });
 
   it('does NOT emit billing_settled when there is no post-cancel delta', async () => {
