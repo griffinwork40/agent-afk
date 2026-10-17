@@ -40,6 +40,12 @@ const mockExistsSync = vi.fn((p: string) => {
 });
 const mockRmSync = vi.fn();
 const mockMkdirSync = vi.fn();
+// readdirSync/statSync are called by reportSize() inside main() at import time.
+// Without mocks they throw ENOENT (outDir does not exist in the test sandbox),
+// which propagates through main().catch() → mockExit() → throws → unhandled
+// rejection → vitest exits 1 even when all test assertions pass.
+const mockReaddirSync = vi.fn(() => [] as string[]);
+const mockStatSync = vi.fn(() => ({ isDirectory: () => false, size: 0 }));
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -48,6 +54,8 @@ vi.mock('node:fs', async (importOriginal) => {
     existsSync: mockExistsSync,
     rmSync: mockRmSync,
     mkdirSync: mockMkdirSync,
+    readdirSync: mockReaddirSync,
+    statSync: mockStatSync,
   };
 });
 
