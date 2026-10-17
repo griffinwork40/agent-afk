@@ -16,8 +16,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
 // ── mock node:child_process ────────────────────────────────────────────────────
 
@@ -61,7 +61,7 @@ vi.mock('node:fs', async (importOriginal) => {
 
 // ── mock process.exit so tests don't terminate the runner ─────────────────────
 
-const mockExit = vi.spyOn(process, 'exit').mockImplementation((_code?: number | string) => {
+const mockExit = vi.spyOn(process, 'exit').mockImplementation((_code?: number | string | null) => {
   throw new Error(`process.exit(${_code})`);
 });
 
@@ -102,7 +102,9 @@ describe('ensureDashboardDeps', () => {
     mockExecSync.mockReturnValue(undefined);
 
     if (!mod) {
-      mod = await import('../scripts/build-web-ui.mjs') as BuildWebUiModule;
+      const _dir = dirname(fileURLToPath(import.meta.url));
+      const url = pathToFileURL(resolve(_dir, '..', 'scripts', 'build-web-ui.mjs')).href;
+      mod = await import(url) as BuildWebUiModule;
     }
 
     // Reset after import-time main() side effects
