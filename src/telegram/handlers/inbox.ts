@@ -89,7 +89,7 @@ async function handleList(ctx: Context, sessionId: string): Promise<void> {
     const idShort = escapeHtml(e.messageId.slice(0, 8));
     const fromLabel =
       e.from.name !== undefined
-        ? `${escapeHtml(e.from.name)} (${escapeHtml(e.from.id.slice(0, 6))})`
+        ? `${escapeHtml(truncate(e.from.name, 40))} (${escapeHtml(e.from.id.slice(0, 6))})`
         : escapeHtml(e.from.id.slice(0, 8));
     const age = fmtAge(now - new Date(e.ts).getTime());
     const preview = escapeHtml(truncate(e.body, 60));
@@ -156,12 +156,19 @@ async function handleRelease(
   // in hold mode. We chain releaseHeld → claimPending (held → pending →
   // delivered) to match the REPL's forceAccept semantics. Messages land in
   // delivered/ which the scan loop never touches.
+  //
+  // Race note: a concurrent scanPeerInbox may claim the pending file between
+  // releaseHeld and claimPending, delivering the message anyway. Count a
+  // successful releaseHeld as accepted so the reply is never an undercount.
   let accepted = 0;
   for (const entry of releasable) {
     const released = await releaseHeld(sessionId, entry.file);
-    if (!released) continue;
-    const claimed = await claimPending(sessionId, entry.file).catch(() => null);
-    if (claimed !== null) accepted++;
+    if (!released) {
+      console.warn('[inbox] releaseHeld returned false for', entry.file);
+      continue;
+    }
+    accepted++;
+    await claimPending(sessionId, entry.file).catch(() => null);
   }
 
   await ctx.reply(
@@ -251,7 +258,7 @@ export async function handleInbox(
   const verb = (parts[0] ?? 'list').toLowerCase();
   const arg = parts.slice(1).join(' ').trim();
 
-  if (verb === 'list' || verb === '') {
+  if (verb === 'list') {
     await handleList(ctx, sessionId);
     return;
   }

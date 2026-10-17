@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Context } from 'telegraf';
 import { handleInbox } from './inbox.js';
 import {
   writeEnvelope,
@@ -54,10 +55,11 @@ function makeEnvelope(overrides: Partial<PeerEnvelope> = {}): PeerEnvelope {
   };
 }
 
+/** Typed mock Telegraf Context with captured reply calls. */
+type MockContext = Context & { replyCalls: Array<[string, unknown?]> };
+
 /** Build a mock Telegraf Context. */
-function makeCtx(commandText = '/inbox'): {
-  ctx: ReturnType<typeof vi.fn> & { replyCalls: Array<[string, unknown?]> };
-} {
+function makeCtx(commandText = '/inbox'): { ctx: MockContext } {
   const replyCalls: Array<[string, unknown?]> = [];
   const ctx = {
     message: { text: commandText },
@@ -66,7 +68,7 @@ function makeCtx(commandText = '/inbox'): {
       replyCalls.push([text, opts]);
     }),
     replyCalls,
-  } as unknown as ReturnType<typeof vi.fn> & { replyCalls: Array<[string, unknown?]> };
+  } as unknown as MockContext;
   return { ctx };
 }
 
