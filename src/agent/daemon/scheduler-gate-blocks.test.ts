@@ -1,6 +1,6 @@
 /**
- * Tests for issue #3466: daemon runs whose tool calls the AFK gate hard-blocked
- * are recorded as status:'blocked' and trigger notifyOn:'failure'.
+ * Tests for #3466/#3756: unrecovered AFK gate blocks remain failures;
+ * conservatively declared recoveries retain gate evidence as success.
  *
  * Strategy: exercise `executeAgentTask` directly with a mock `spawnSession`
  * that simulates the gate-block counting shim by incrementing the supplied
@@ -14,6 +14,9 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { executeAgentTask } from './scheduler.execute-agent-task.js';
+import { formatTaskCompletion } from '../../cli/commands/daemon.js';
+import type { ResponseMetadata } from '../types/message-types.js';
+import type { GateBlockCall } from './scheduler-gate-recovery.js';
 import { fireOnTaskComplete } from './scheduler.pull-tick.js';
 import type { AgentTaskContext } from './scheduler.execute-agent-task.js';
 import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
@@ -35,9 +38,10 @@ function makeStateStore() {
   return { close: vi.fn() };
 }
 
-function makeSession(response = 'all done') {
+function makeSession(response = 'all done', metadata = {}, aborted = false) {
   return {
-    sendMessage: vi.fn().mockResolvedValue({ content: response }),
+    abortSignal: { aborted },
+    sendMessage: vi.fn().mockResolvedValue({ role: 'assistant', content: response, metadata }),
     close: vi.fn().mockResolvedValue(undefined),
     sessionId: undefined,
     cwd: undefined,
@@ -52,7 +56,11 @@ function makeSession(response = 'all done') {
 function makeCtx(
   opts: {
     hardBlocks?: number;
+    calls?: GateBlockCall[];
     response?: string;
+    metadata?: ResponseMetadata;
+    aborted?: boolean;
+    error?: Error;
     writeTelemetry?: (r: TelemetryRecord, t: ScheduledTask, d?: TaskCompletionDetails) => void;
   } = {},
 ): { ctx: AgentTaskContext; telemetryRecords: TelemetryRecord[] } {
@@ -68,13 +76,16 @@ function makeCtx(
       // Simulate the counting shim incrementing for each hard-block.
       if (gateBlockCounter !== undefined) {
         gateBlockCounter.count += hardBlocks;
+        gateBlockCounter.calls = opts.calls;
       }
-      const session = makeSession(response);
+      const session = makeSession(response, opts.metadata, opts.aborted);
+      if (opts.error) session.sendMessage.mockRejectedValue(opts.error);
       return {
         session: session as never,
         memoryStore: makeMemoryStore() as never,
         stateStore: makeStateStore() as never,
         dispose: vi.fn(),
+        elicitationKey: 'gate-test',
       };
     }),
     writeTelemetry: writeTelemetry ?? ((r) => { telemetryRecords.push(r); }),
@@ -121,6 +132,22 @@ describe('executeAgentTask — gate-block status (#3466)', () => {
     expect(record.gateBlocks).toBe(1);
     expect(telemetryRecords[0]?.status).toBe('blocked');
     expect(telemetryRecords[0]?.gateBlocks).toBe(1);
+    expect(record.errorMessage).toBe('Unrecovered AFK gate block(s): 1; blocked tools: unknown. High-risk operations require human approval in unattended mode.');
+    expect(telemetryRecords[0]?.errorMessage).toBe(record.errorMessage);
+  });
+
+  it('explains unrecovered blocks using deduplicated, sanitized tool labels', async () => {
+    const { ctx, telemetryRecords } = makeCtx({
+      hardBlocks: 3,
+      calls: [
+        { blockedTool: 'bash', followingTools: [] },
+        { blockedTool: 'bash', followingTools: [] },
+        { blockedTool: 'create_schedule\n', followingTools: [] },
+      ],
+    });
+    const record = await executeAgentTask(ctx, makeTask(), 'cron');
+    expect(record.errorMessage).toContain('blocked tools: bash, create_schedule_.');
+    expect(telemetryRecords[0]?.errorMessage).toBe(record.errorMessage);
   });
 
   it('records gateBlocks equal to the total number of hard-blocks', async () => {
@@ -141,6 +168,61 @@ describe('executeAgentTask — gate-block status (#3466)', () => {
 
     expect(record.status).toBe('blocked');
     expect(record.responseExcerpt).toBe(explanation);
+  });
+
+  it.each(['end_turn', 'stop'])('records recovered success on normal %s and suppresses failure notifications', async (stopReason) => {
+    const cb = vi.fn();
+    const { ctx, telemetryRecords } = makeCtx({
+      hardBlocks: 1, response: '**Done**\n50 forecasts ingested', metadata: { stopReason },
+      calls: [{ blockedTool: 'bash', followingTools: ['web_request'] }],
+    });
+    const task = makeTask();
+    const record = await executeAgentTask(ctx, task, 'cron');
+    fireOnTaskComplete(record, { onTaskComplete: cb }, task);
+    expect(record.status).toBe('success');
+    expect(record.gateBlocks).toBe(1);
+    expect(record.gateBlockCalls).toEqual([{ blockedTool: 'bash', followingTools: ['web_request'] }]);
+    expect(record.gateRecoveryNote).toContain('Recovered after 1 AFK gate block(s)');
+    expect(telemetryRecords[0]).toEqual(record);
+    expect(cb).not.toHaveBeenCalled();
+    fireOnTaskComplete(record, { onTaskComplete: cb }, makeTask({ notifyOn: 'always' }));
+    expect(cb).toHaveBeenCalledOnce();
+    expect(formatTaskCompletion(record)).toContain(record.gateRecoveryNote);
+  });
+
+  it.each([
+    { response: '**Blocked**\nNeed approval', metadata: { stopReason: 'end_turn' } },
+    { response: '**Done**\nInitially completed\n**Blocked**\nNeed approval', metadata: { stopReason: 'end_turn' } },
+    { response: '```\nDone\n```', metadata: { stopReason: 'end_turn' } },
+    { response: '**Asking**\nNeed input', metadata: { stopReason: 'end_turn' } },
+    { response: '**Interrupted**', metadata: { stopReason: 'end_turn' } },
+    { response: '50 forecasts ingested', metadata: { stopReason: 'end_turn' } },
+    { response: '', metadata: { stopReason: 'end_turn' } },
+    { response: '**Done**', metadata: {} },
+    { response: '**Done**', metadata: { stopReason: 'max_tokens' } },
+    { response: '**Done**', metadata: { stopReason: 'tool_use_loop_capped' } },
+    { response: '**Done**', metadata: { stopReason: 'interrupted' } },
+    { response: '**Done**', metadata: { stopReason: 'end_turn', isError: true } },
+    { response: '**Done**', metadata: { stopReason: 'end_turn', resultSubtype: 'error_during_execution' } },
+    { response: '**Done**', metadata: { stopReason: 'end_turn', errors: ['failed'] } },
+    { response: '**Done**', metadata: { stopReason: 'end_turn' }, aborted: true },
+  ])('keeps ambiguous/incomplete recovery blocked: %j', async (signals) => {
+    const cb = vi.fn();
+    const { ctx } = makeCtx({ hardBlocks: 1, ...signals });
+    const task = makeTask();
+    const record = await executeAgentTask(ctx, task, 'cron');
+    fireOnTaskComplete(record, { onTaskComplete: cb }, task);
+    expect(record.status).toBe('blocked');
+    expect(record.gateRecoveryNote).toBeUndefined();
+    expect(cb).toHaveBeenCalledOnce();
+  });
+
+  it('preserves thrown errors rather than claiming recovery', async () => {
+    const { ctx } = makeCtx({ hardBlocks: 1, error: new Error('turn aborted') });
+    const record = await executeAgentTask(ctx, makeTask(), 'cron');
+    expect(record.status).toBe('error');
+    expect(record.gateBlocks).toBe(1);
+    expect(record.gateRecoveryNote).toBeUndefined();
   });
 
   it('passes gateBlockCounter into spawnSession', async () => {

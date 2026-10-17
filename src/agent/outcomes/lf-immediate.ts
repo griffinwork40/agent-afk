@@ -18,6 +18,7 @@ import {
   isVerificationCommand,
   parseVerificationSummary,
 } from './verification-patterns.js';
+import { classifyBashCommand } from '../tools/readonly-bash.js';
 import { parseTerminalState } from './terminal-state.js';
 
 // ---------------------------------------------------------------------------
@@ -321,11 +322,27 @@ export function lfErrorTail(turns: Turn[], now: string): Vote | null {
 export function lfVerification(turns: Turn[], now: string): Vote | null {
   const events = flatToolEvents(turns);
 
-  // Find the index of the last file-mutation tool call
+  // Find the index of the last file-mutation tool call.
+  // A bash call that the read-only bash classifier considers mutating (sed -i,
+  // git commit, rm, …) counts as a write for ordering purposes — a verification
+  // that ran BEFORE such a call is stale.  Verification commands (pnpm test,
+  // cargo check, …) are explicitly excluded: they are never stale-write risks,
+  // and counting a test runner as a write would force verification to certify
+  // itself.  Priority rule: verification check first; only non-verification bash
+  // calls are tested for mutation (mirrors the logic in done-evidence.ts).
   let lastWriteIdx = -1;
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
-    if (ev !== undefined && WRITE_TOOLS.has(ev.toolName)) {
+    if (ev === undefined) continue;
+    if (WRITE_TOOLS.has(ev.toolName)) {
+      lastWriteIdx = i;
+      break;
+    }
+    if (
+      ev.toolName === 'bash' &&
+      !isVerificationCommand(ev.input ?? '') &&
+      classifyBashCommand(ev.input ?? '').mutating
+    ) {
       lastWriteIdx = i;
       break;
     }

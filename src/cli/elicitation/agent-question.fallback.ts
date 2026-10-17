@@ -13,7 +13,7 @@
 import type { ElicitationRequest, ElicitationResult } from '../../agent/types/sdk-types.js';
 import { debugLog } from '../../utils/debug.js';
 import { renderMultiSelector, renderSelector, CUSTOM_ANSWER_SENTINEL } from '../input/selectors.js';
-import { sanitizeSchemaString } from '../_lib/sanitize.js';
+import { sanitizeSchemaString, sanitizeTerminalText } from '../_lib/sanitize.js';
 import { palette } from '../palette.js';
 import { validateNumberField, validateTextField } from './field-validation.js';
 import type { ReplElicitationDeps } from './repl-shared.js';
@@ -106,7 +106,7 @@ export async function renderChoiceFallback(
 
   // Non-TTY / fallback: numbered list + text entry
   choices.forEach((c, i) => {
-    writer.line(`  ${i + 1}. ${sanitizeSchemaString(c, 128)}`);
+    writer.line(`  ${i + 1}. ${sanitizeTerminalText(c)}`);
   });
   if (request.allowCustom) {
     writer.line(`  ${choices.length + 1}. ${CUSTOM_ANSWER_SENTINEL}`);
@@ -187,7 +187,7 @@ export async function renderMultiChoiceFallback(
 
   // Non-TTY / fallback: numbered list + comma-separated text entry
   choices.forEach((c, i) => {
-    writer.line(`  ${i + 1}. ${sanitizeSchemaString(c, 128)}`);
+    writer.line(`  ${i + 1}. ${sanitizeTerminalText(c)}`);
   });
   if (request.allowCustom) {
     writer.line(`  ${choices.length + 1}. ${CUSTOM_ANSWER_SENTINEL}`);

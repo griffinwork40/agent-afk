@@ -1,11 +1,12 @@
 import { spawn } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'fs';
 import { get as httpsGet } from 'https';
 import { join } from 'path';
 import { getAfkCacheDir } from '../paths.js';
 import { getVersion } from './version.js';
 import { palette } from './palette.js';
 import { env } from '../config/env.js';
+import { writeJsonFile } from '../utils/json-file.js';
 // isNewerVersion is imported for internal use and re-exported so callers that
 // already import it from this module do not need to change their import path.
 export { isNewerVersion } from './update-version.js';
@@ -223,14 +224,10 @@ const SEMVER_RE = /^\d+\.\d+\.\d+(-[\da-z.]+)?$/i;
 export function writePendingUpdateMarker(targetVersion: string): void {
   if (!SEMVER_RE.test(targetVersion)) return;
   try {
-    ensureCacheDir();
-    writeFileSync(
-      pendingPath(),
-      JSON.stringify({
-        targetVersion,
-        triggeredAt: Date.now(),
-      }),
-    );
+    writeJsonFile(pendingPath(), {
+      targetVersion,
+      triggeredAt: Date.now(),
+    }, { mode: 0o644, indent: 0 });
   } catch {
     // best-effort — confirmation is a nicety
   }
@@ -248,14 +245,10 @@ export function writePendingUpdateMarker(targetVersion: string): void {
 export function writeUpdateCache(latestVersion: string): void {
   if (!SEMVER_RE.test(latestVersion)) return;
   try {
-    ensureCacheDir();
-    writeFileSync(
-      cachePath(),
-      JSON.stringify({
-        latestVersion,
-        checkedAt: Date.now(),
-      }),
-    );
+    writeJsonFile(cachePath(), {
+      latestVersion,
+      checkedAt: Date.now(),
+    }, { mode: 0o644, indent: 0 });
   } catch {
     // best-effort — a stale cache only affects notifier freshness
   }

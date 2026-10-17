@@ -69,6 +69,12 @@ export interface ResponsesStreamEvent {
     incomplete_details?: { reason?: string };
     /** Carried by `response.failed`; contains the server's error code + message. */
     error?: { code?: string; message?: string } | null;
+    /**
+     * Final output items, carried by `response.completed`. Only `function_call`
+     * items are read (as an argument fallback); position in the array is the
+     * item's output index.
+     */
+    output?: ResponsesOutputItem[];
   };
   /**
    * Error code carried by the top-level `{type:'error'}` SSE event
@@ -81,6 +87,15 @@ export interface ResponsesStreamEvent {
    * Also used by `response.failed` when the response body carries a message.
    */
   message?: string;
+}
+
+/** Structural subset of a Responses output item (same fields as `event.item`). */
+export interface ResponsesOutputItem {
+  type?: string;
+  id?: string;
+  call_id?: string;
+  name?: string;
+  arguments?: string;
 }
 
 /**
@@ -206,6 +221,7 @@ export function* translateResponsesEvent(
 
     case 'response.completed': {
       applyResponsesUsage(state, event);
+      settleFromCompletedOutput(state, event.response?.output);
       // A turn that produced any function_call items is a tool-call stop;
       // otherwise a normal completion. `isToolCallStop` is also defensive on
       // toolCallsByIndex.size, so this is belt-and-suspenders.
@@ -271,6 +287,30 @@ function settleFunctionCall(
     existing.argumentsRaw = done.arguments;
   }
   state.toolCallsByIndex.set(index, existing);
+}
+
+/**
+ * Last-chance argument fallback from `response.completed`'s `output[]` (#3808).
+ *
+ * Contract: for each `function_call` item, settles into the accumulator at its
+ * position in `output` (its output index) ONLY when that call's accumulated
+ * args are still empty; delta or `*.done` args already accumulated are never
+ * overwritten. Missing id/name are seeded, as in {@link settleFunctionCall}.
+ * Runs before `finishReason` is derived, so a call known only from `output[]`
+ * still makes the turn a tool-call stop.
+ */
+function settleFromCompletedOutput(state: StreamState, output: readonly ResponsesOutputItem[] | undefined): void {
+  if (!Array.isArray(output)) return;
+  output.forEach((item, index) => {
+    if (item?.type !== 'function_call') return;
+    const accumulated = state.toolCallsByIndex.get(index)?.argumentsRaw ?? '';
+    if (accumulated.length > 0) {
+      // Seed identity only; never touch non-empty args.
+      settleFunctionCall(state, index, { call_id: item.call_id, name: item.name });
+      return;
+    }
+    settleFunctionCall(state, index, item);
+  });
 }
 
 /**

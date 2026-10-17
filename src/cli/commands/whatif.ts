@@ -98,6 +98,7 @@ export function registerWhatifCommand(program: Command): void {
     .option('--max-predictions <n>', 'Max predictions to retain (1–8; default 3 when probes>2, else 8)')
     .option('--keep-sandboxes', 'Keep sandbox directories after run')
     .option('--no-baseline-sample', 'Skip the baseline-sample preflight (#2511)')
+    .option('--aa', 'A/A calibration: snapshot both arms with zero changes; structural diff only, not with --verify (#2415)')
     .option('--predict <text>', 'Supply a prediction directly (can be repeated; skips analyst model)', (v: string, p: string[]) => [...p, v], [] as string[])
     .option('--yes', 'Skip confirmation of compiled spec')
     .option('--force', 'Bypass the MDE underpowered gate (--verify only)')
@@ -338,6 +339,7 @@ function buildArgvFromOpts(
   push('--yes', opts['yes']);
   push('--force', opts['force']);
   push('--json', opts['json']);
+  push('--aa', opts['aa']);
 
   return argv;
 }

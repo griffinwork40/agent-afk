@@ -10,8 +10,10 @@
  * @module agent/daemon/scheduler.execute-agent-task
  */
 
+import { gateBlockReason, gateRecoveryNote, hasRecoveredFromGate, type GateBlockCounter } from './scheduler-gate-recovery.js';
 import { makeDaemonElicitationHandler } from './handoff-wiring.js';
 import { makeCronElicitationHandler } from './scheduler.elicitation-notify.js';
+import { resumeContextFromTask } from './handoff-resume-context.js';
 import { elicitationRouter } from '../elicitation-router.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { errorMessage } from '../../utils/errors.js';
@@ -33,6 +35,11 @@ interface AgentTaskOptions {
   primaryThreadId?: number;
   doneUnverifiedProbe?: (args: { responseText: string; successfulToolNames: readonly string[] }) => boolean;
   onTaskTurnComplete?: (args: TaskTurnCompleteArgs) => void;
+  /**
+   * Resolve a task's `notifyChat` to an allowlisted chat id (#3243 item 2).
+   * Injected by the CLI layer; `src/agent/` must never import `src/cli/`.
+   */
+  resolveNotifyChat?: (notifyChat: number | string | undefined, taskId: string) => number | undefined;
 }
 
 /**
@@ -54,12 +61,14 @@ export interface AgentTaskContext {
   queueDir: string;
   idleDetector: IdleDetector;
   now: () => number;
-  spawnSession: (task: ScheduledTask, trigger: TelemetryTrigger, gateBlockCounter?: { count: number }) => Promise<{
+  spawnSession: (task: ScheduledTask, trigger: TelemetryTrigger, gateBlockCounter?: GateBlockCounter) => Promise<{
     session: AgentSession;
     memoryStore: MemoryStore;
     stateStore: StateStore;
     mcpManager?: McpManager;
     dispose: () => void;
+    /** Per-tick key for `elicitationRouter.installForSession` / `uninstallForSession` (#3619). */
+    elicitationKey: string;
   }>;
   writeTelemetry: (record: TelemetryRecord, task: ScheduledTask, details?: TaskCompletionDetails) => void;
   /** Scheduler shutdown signal; ends a retry backoff wait immediately (#3243). */
@@ -75,6 +84,7 @@ export interface AgentTaskContext {
 /** What one successful attempt hands back to the telemetry writer. */
 interface AttemptResult {
   responseText: string;
+  recovered: boolean;
   doneUnverified: boolean;
   /** Set when a cron-task elicitation was declined and a handoff written. */
   elicitationMessage?: string;
@@ -115,7 +125,7 @@ export async function executeAgentTask(
   // call (one per tick) and passed through spawnSession so the counting shim
   // in session-spawn.ts can update it. Retries share the same counter so
   // gateBlocks reflects the total across all attempts.
-  const gateBlockCounter = { count: 0 };
+  const gateBlockCounter: GateBlockCounter = { count: 0 };
   ctx.idleDetector.increment();
   try {
     const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger, gateBlockCounter), {
@@ -134,7 +144,10 @@ export async function executeAgentTask(
       } : {}),
     });
     const attemptsField = policy.maxAttempts > 1 ? { attempts: outcome.attempts } : {};
-    const gateBlocksField = gateBlockCounter.count > 0 ? { gateBlocks: gateBlockCounter.count } : {};
+    const gateBlocksField = gateBlockCounter.count > 0 ? {
+      gateBlocks: gateBlockCounter.count,
+      ...(gateBlockCounter.calls?.length ? { gateBlockCalls: gateBlockCounter.calls } : {}),
+    } : {};
     if (!outcome.ok) {
       const record: TelemetryRecord = {
         ...baseRecord,
@@ -147,17 +160,15 @@ export async function executeAgentTask(
       ctx.writeTelemetry(record, task);
       return record;
     }
-    const { responseText, doneUnverified, elicitationMessage } = outcome.value;
-    // A run whose model turn completed but whose tool calls were hard-blocked
-    // by the AFK gate is recorded as 'blocked' rather than 'success' (#3466).
-    // This surfaces to notifyOn:'failure' so the operator is alerted when the
-    // work silently never happened. The responseExcerpt is preserved so the
-    // operator can read the model's explanation of the refusal.
-    const status = gateBlockCounter.count > 0 ? 'blocked' : 'success';
+    const { responseText, recovered, doneUnverified, elicitationMessage } = outcome.value;
+    const status = gateBlockCounter.count > 0 && !recovered ? 'blocked' : 'success';
+    const recoveryNote = gateBlockCounter.count > 0 && recovered ? gateRecoveryNote(gateBlockCounter) : undefined;
     const record: TelemetryRecord = {
       ...baseRecord,
       durationMs: ctx.now() - startTimeMs,
       status,
+      ...(status === 'blocked' ? { errorMessage: gateBlockReason(gateBlockCounter) } : {}),
+      ...(recoveryNote !== undefined ? { gateRecoveryNote: recoveryNote } : {}),
       responseExcerpt: responseText.length > 280
         ? `${responseText.slice(0, 280)}… [truncated]`
         : responseText,
@@ -184,13 +195,19 @@ async function runAgentAttempt(
   ctx: AgentTaskContext,
   task: ScheduledTask,
   trigger: TelemetryTrigger,
-  gateBlockCounter?: { count: number },
+  gateBlockCounter?: GateBlockCounter,
 ): Promise<AttemptResult> {
   let session: AgentSession | null = null;
   let memoryStore: MemoryStore | null = null;
   let stateStore: StateStore | null = null;
   let mcpManager: McpManager | null = null;
   let disposeRegistration: (() => void) | null = null;
+  // elicitationKey is set after spawnSession returns — it equals the
+  // daemonTraceLabel that spawnDaemonSession threads into the dispatcher as
+  // context.sessionId. Using this value as the router key means ask-question.ts
+  // can look up the correct per-session handler via context.sessionId without
+  // any additional plumbing (#3619).
+  let elicitationKey = '';
   let handlerInstalled = false;
   try {
     const spawned = await ctx.spawnSession(task, trigger, gateBlockCounter);
@@ -199,6 +216,7 @@ async function runAgentAttempt(
     stateStore = spawned.stateStore;
     mcpManager = spawned.mcpManager ?? null;
     disposeRegistration = spawned.dispose;
+    elicitationKey = spawned.elicitationKey;
 
     // Invariant: handoff handler installed BEFORE sendMessage so the
     // ask-question-gate's hasHandler() probe passes for pull tasks;
@@ -208,11 +226,20 @@ async function runAgentAttempt(
     // Scoped per attempt: only the final retry's elicitation is notified.
     // Within that attempt the latest persisted question wins; earlier attempts
     // cannot leak a stale question into the final completion notification.
+    //
+    // Concurrency invariant (#3619): handlers are installed into a per-session
+    // keyed slot (installForSession / uninstallForSession) rather than the
+    // shared global slot (install / uninstall). Two concurrent cron tasks
+    // each get their own slot (keyed by elicitationKey = daemonTraceLabel,
+    // which is unique per tick). Uninstalling one slot never affects another.
+    // ask-question.ts resolves the right handler via context.sessionId, which
+    // equals elicitationKey (both come from daemonTraceLabel in session-spawn.ts).
     let elicitationMessage: string | undefined;
     if (trigger === 'pull') {
-      elicitationRouter.install(makeDaemonElicitationHandler({
+      elicitationRouter.installForSession(elicitationKey, makeDaemonElicitationHandler({
         taskId: task.taskId,
         originalCommand: redactInlineSecrets(task.command),
+        resumeContext: resumeContextFromTask(task),
         queueDir: ctx.queueDir,
         ...(ctx.options.bot !== undefined ? { bot: ctx.options.bot } : {}),
         ...(ctx.options.primaryChatId !== undefined ? { chatId: ctx.options.primaryChatId } : {}),
@@ -220,12 +247,28 @@ async function runAgentAttempt(
       }));
       handlerInstalled = true;
     } else {
-      elicitationRouter.install(makeCronElicitationHandler({
+      // Resolve the task's notifyChat to a concrete chat id for the rich
+      // Telegram handoff path (#3243 item 2). Falls back to primaryChatId
+      // when notifyChat is unset so the operator's default chat is used.
+      const resolvedChatId = ctx.options.resolveNotifyChat !== undefined
+        ? (ctx.options.resolveNotifyChat(task.notifyChat, task.taskId) ?? ctx.options.primaryChatId)
+        : ctx.options.primaryChatId;
+      // resolvedThreadId is intentionally only set for the primary chat: per-chat
+      // thread IDs are specific to a single chat and cannot be safely forwarded
+      // to a different (notifyChat-resolved) chat without risking a wrong-thread
+      // delivery. Non-primary chats get no thread override (#3637).
+      const resolvedThreadId = resolvedChatId === ctx.options.primaryChatId
+        ? ctx.options.primaryThreadId
+        : undefined;
+      elicitationRouter.installForSession(elicitationKey, makeCronElicitationHandler({
         taskId: task.taskId,
         originalCommand: redactInlineSecrets(task.command),
+        resumeContext: resumeContextFromTask(task),
         cronExpression: task.cronExpression,
         ...(ctx.handoffsDir !== undefined ? { handoffsDir: ctx.handoffsDir } : {}),
-        onHandoffWritten: (msg) => { elicitationMessage = msg; },
+        ...(ctx.options.bot !== undefined && resolvedChatId !== undefined
+          ? { bot: ctx.options.bot, chatId: resolvedChatId, ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}) }
+          : { onHandoffWritten: (msg) => { elicitationMessage = msg; } }),
       }));
       handlerInstalled = true;
     }
@@ -246,9 +289,14 @@ async function runAgentAttempt(
     } catch {
       // best-effort
     }
-    return { responseText, doneUnverified: probeDoneUnverified(ctx, responseText, response), elicitationMessage };
+    return {
+      responseText,
+      recovered: hasRecoveredFromGate(response, session.abortSignal?.aborted === true),
+      doneUnverified: probeDoneUnverified(ctx, responseText, response),
+      elicitationMessage,
+    };
   } finally {
-    if (handlerInstalled) elicitationRouter.uninstall();
+    if (handlerInstalled) elicitationRouter.uninstallForSession(elicitationKey);
     if (session) {
       try {
         await session.close();

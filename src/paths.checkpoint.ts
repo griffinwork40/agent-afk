@@ -7,6 +7,8 @@
  * Each SHA-256 digest-named entry directory contains binary pre-edit content
  * and metadata recording the original absolute path, existence and mode.
  * Content and metadata are published together with an atomic directory rename.
+ * Content is hardlinked from session-local `.blobs/<sha256(content)>/content`
+ * (copied on filesystems without hardlinks); metadata retains an integrity digest.
  * Readers retain compatibility with legacy base64url-named snapshots.
  *
  * @module paths.checkpoint
@@ -34,6 +36,13 @@ export function getFileCheckpointsRoot(): string {
  */
 export function getFileCheckpointSessionDir(sessionId: string): string {
   return join(getFileCheckpointsRoot(), sessionId);
+}
+
+/** Session-local immutable blobs keyed by SHA-256(content), created lazily. */
+export function getFileCheckpointBlobDir(sessionId: string, stateDir?: string): string {
+  const session = stateDir ? join(stateDir, 'file-checkpoints', sessionId)
+    : getFileCheckpointSessionDir(sessionId);
+  return join(session, '.blobs');
 }
 
 // ---------------------------------------------------------------------------

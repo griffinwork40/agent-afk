@@ -12,19 +12,19 @@
  * @module agent/daemon/scheduler
  */
 
-import { mkdirSync, appendFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { appendFileSync } from 'node:fs';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
 import { recoverDaemonQueues } from './pull-recovery.js';
+import { startHandoffMaintenance, type HandoffMaintenanceHandle } from './handoff-maintenance.js';
 import { getQueueDir, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import type { TraceWriter } from '../trace/index.js';
+import type { GateRecoveryFields } from './scheduler-gate-recovery.js';
 import type { AgentSession } from '../session/agent-session.js';
 import type { AgentConfig } from '../types.js';
 import type { Telegraf } from 'telegraf';
 
-import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
 import { runBuiltinTask } from './builtin-task.js';
 import { runShellTask } from './shell-task.js';
@@ -46,17 +46,11 @@ import {
   type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
 import { errorMessage } from '../../utils/errors.js';
-import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
+import { makeCwdErrorRecord, snapshotInFlightTasks, makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
-import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
+import { ensureTelemetrySink, probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
 import { evaluateRunAtGate, applyAutoDisable } from './scheduler.runat-gate.js';
-
-/**
- * Maximum length (chars) of the command preview included in crash-notice
- * in-flight task snapshots. Redaction runs BEFORE truncation so a secret
- * straddling the boundary is always fully masked (#3323 review).
- */
-const COMMAND_HEAD_MAX_LEN = 60;
+import { overlapKeyOf } from './handoff-resume-context.js';
 
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */
@@ -122,12 +116,12 @@ export interface SchedulerOptions {
    */
   onTaskTurnComplete?: (args: TaskTurnCompleteArgs) => void;
   /**
-   * Telegraf bot instance for rich elicitation in pull-mode tasks. When
-   * provided together with `primaryChatId`, daemon ask_question calls use
+   * Telegraf bot instance for rich elicitation in daemon tasks. When provided
+   * together with `primaryChatId`, daemon ask_question calls use
    * `sendHandoffQuestion` (inline keyboards, reply-to matching) instead of
    * falling back to the plain `pushIfConfigured` text notification path.
+   * Applies to both pull tasks and cron/sessionstart tasks (#3243 item 2).
    * Has no effect when absent — fallback is always preserved.
-   * Has no effect on cron-triggered tasks, which use the plain push path.
    */
   bot?: Telegraf;
   /** Primary Telegram chat ID for handoff question delivery. */
@@ -144,12 +138,20 @@ export interface SchedulerOptions {
   retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   /** Override the handoffs directory (tests). Forwarded to the cron elicitation handler. */
   handoffsDir?: string;
+  /**
+   * Resolve a task's `notifyChat` to an allowlisted chat id (#3243 item 2).
+   * Injected by the CLI layer; `src/agent/` must never import `src/cli/`.
+   * Signature mirrors `AgentTaskOptions.resolveNotifyChat` in
+   * `scheduler.execute-agent-task.ts` — both fields flow from the same
+   * `DaemonOptions` spread in `daemon.ts`.
+   */
+  resolveNotifyChat?: (notifyChat: number | string | undefined, taskId: string) => number | undefined;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
 type TelemetryStatus = 'success' | 'error' | 'skipped' | 'blocked';
 
-export interface TelemetryRecord {
+export interface TelemetryRecord extends GateRecoveryFields {
   taskId: string;
   command: string;
   trigger: TelemetryTrigger;
@@ -176,13 +178,6 @@ export interface TelemetryRecord {
    * into retries (`maxAttempts > 1`); absent = single attempt, as before.
    */
   attempts?: number;
-  /**
-   * Number of tool calls hard-blocked by the AFK gate during this run (#3466).
-   * Present only when > 0. A run with gateBlocks > 0 is recorded as
-   * `status: 'blocked'` and treated as a failure for `notifyOn: 'failure'`
-   * so the operator is alerted when work silently never happened.
-   */
-  gateBlocks?: number;
 }
 
 export interface TaskCompletionDetails {
@@ -224,7 +219,9 @@ export class CronScheduler {
   private readonly now: () => number;
   private readonly idleDetector = new IdleDetector();
   private pullPollTimer: ReturnType<typeof setInterval> | undefined;
+  private handoffMaintenance: HandoffMaintenanceHandle | undefined;
   private isDequeuing = false;
+
   private readonly queueDir: string;
   /**
    * Per-task in-flight guard: maps task id → start timestamp (ms) for tasks
@@ -248,7 +245,7 @@ export class CronScheduler {
     this.defaultCooldownMs = options.cooldownMs ?? DEFAULT_SESSIONSTART_COOLDOWN_MS;
     this.now = options.now ?? Date.now;
     this.queueDir = options.queueDir ?? getQueueDir();
-    this.ensureTelemetrySink();
+    ensureTelemetrySink(this.telemetryPath());
   }
 
   register(task: ScheduledTask): void {
@@ -264,6 +261,10 @@ export class CronScheduler {
       cronTask = cron.schedule(
         expr,
         () => {
+          // Invariant: runAt polls are a clock check, not independent scheduled
+          // runs. While the one-shot is executing there is nothing to poll;
+          // keep its overlap lock, but do not report these polls as missed work.
+          if (task.runAt !== undefined && this.inFlightTasks.has(task.taskId)) return;
           // Fire-and-forget — the cron callback type doesn't await, but
           // catching here means a thrown promise can't leak as unhandled.
           void this.runOnce(task, 'cron').catch(() => undefined);
@@ -299,17 +300,7 @@ export class CronScheduler {
    * first could slice a secret below the redactor's minimum-length match.
    */
   getInFlightTasks(): Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> {
-    const now = this.now();
-    const result: Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> = [];
-    for (const [taskId, startedAt] of this.inFlightTasks) {
-      const entry = this.registry.get(taskId);
-      const commandHead = entry !== undefined
-        ? redactInlineSecrets(entry.task.command).slice(0, COMMAND_HEAD_MAX_LEN)
-        : redactInlineSecrets(taskId).slice(0, COMMAND_HEAD_MAX_LEN);
-      const displayId = redactInlineSecrets(taskId);
-      result.push({ taskId, displayId, commandHead, elapsedMs: now - startedAt });
-    }
-    return result;
+    return snapshotInFlightTasks(this.inFlightTasks, (id) => this.registry.get(id)?.task.command, this.now());
   }
 
   /**
@@ -390,11 +381,17 @@ export class CronScheduler {
     // scheduler reused after stop() (tests) retry-capable.
     this.shutdownController.abort();
     this.shutdownController = new AbortController();
-    if (this.pullPollTimer !== undefined) {
-      clearInterval(this.pullPollTimer);
-      this.pullPollTimer = undefined;
-    }
+    if (this.pullPollTimer !== undefined) clearInterval(this.pullPollTimer);
+    this.pullPollTimer = undefined;
+    // Invariant: unregister (stop+destroy cron timers) BEFORE awaiting
+    // handoffMaintenance.stop(). The await window is non-zero when startup
+    // recovery is still in progress (e.g. a slow Telegram re-notification).
+    // A live cron timer can fire runOnce() inside that window using the
+    // freshly-reset, non-aborted shutdownController, spawning agent sessions
+    // after shutdown has begun. Stopping the cron tasks first closes that gap.
     for (const taskId of this.registry.keys()) this.unregister(taskId);
+    await this.handoffMaintenance?.stop();
+    this.handoffMaintenance = undefined;
   }
 
   /**
@@ -410,45 +407,75 @@ export class CronScheduler {
     const interval = this.options.pullPollIntervalMs;
     if (!interval || interval <= 0) return;
 
-    recoverDaemonQueues(this.queueDir);
+    // Main-queue lease recovery is deferred — see startHandoffMaintenance (#3880).
 
     // Pick up any answers that arrived while the daemon was down.
-    sweepAnsweredHandoffs(this.queueDir);
-    this.pullPollTimer = setInterval(() => { void this.pullTick(); }, interval).unref();
+    sweepAnsweredHandoffs(this.queueDir, this.options.handoffsDir);
+    this.pullPollTimer = setInterval(() => { void this.pullTick(this.queueDir); }, interval).unref();
   }
 
-  private async pullTick(): Promise<void> {
-    const ctx: PullTickContext = {
+  /**
+   * Start handoff maintenance (#1416) for EVERY trigger mode: startup recovery
+   * once, then a periodic unref'd tick that expires stale questions and resumes
+   * answered ones from a resume-only queue. Idempotent; cleared by `stop()`.
+   */
+  startHandoffMaintenance(intervalMs?: number): void {
+    if (this.handoffMaintenance !== undefined) return;
+    this.handoffMaintenance = startHandoffMaintenance({
       queueDir: this.queueDir,
+      ...(this.options.handoffsDir !== undefined ? { handoffsDir: this.options.handoffsDir } : {}),
+      ...(this.options.bot !== undefined ? { bot: this.options.bot } : {}),
+      ...(intervalMs !== undefined ? { intervalMs } : {}),
+      drainResumeQueue: (resumeDir) => this.pullTick(resumeDir),
+      ...((this.options.pullPollIntervalMs ?? 0) > 0 ? { recoverMainQueue: () => recoverDaemonQueues(this.queueDir) } : {}),
+      isInFlight: (id) => this.inFlightTasks.has(id),
+    });
+  }
+
+  /** One dequeue-and-run tick against `queueDir` (pull queue or resume queue). */
+  private async pullTick(queueDir: string): Promise<void> {
+    const ctx: PullTickContext = {
+      queueDir,
+      ...(this.options.handoffsDir !== undefined ? { handoffsDir: this.options.handoffsDir } : {}),
       isIdle: () => this.idleDetector.isIdle(),
       getIsDequeuing: () => this.isDequeuing,
       setIsDequeuing: (v) => { this.isDequeuing = v; },
-      runOnce: (task, trigger) => this.runOnce(task, trigger),
+      // The run's lease lives in `queueDir`, so the elicitation handler must
+      // park it there (resume-queue tasks are not in the main pull queue).
+      runOnce: (task, trigger) => this.runOnce(task, trigger, queueDir),
+      isOverlapBusy: (key) => this.inFlightTasks.has(key),
     };
     return executePullTick(ctx);
   }
 
-  private async runOnce(task: ScheduledTask, trigger: TelemetryTrigger): Promise<TelemetryRecord> {
+  private async runOnce(
+    task: ScheduledTask,
+    trigger: TelemetryTrigger,
+    leaseQueueDir: string = this.queueDir,
+  ): Promise<TelemetryRecord> {
     // Overlap guard: skip and record telemetry when this task's previous run is
     // still in progress. Prevents stacked concurrent sessions on slow ticks
     // (the in-flight set is released in the outer finally block below, covering
     // all executor branches including the agent path in executeAgentTask).
     // The guard is intentionally checked BEFORE the cwd and executor branches
     // so it applies uniformly to all executor types.
-    if (this.inFlightTasks.has(task.taskId)) {
+    // Keyed by overlapKeyOf(task): a handoff resume guards as its ORIGINAL
+    // task id, so a cron fire and that task's resume never overlap (#1416).
+    const overlapKey = overlapKeyOf(task);
+    if (this.inFlightTasks.has(overlapKey)) {
       const record = makeOverlapSkipRecord(task, trigger, this.now());
       // Alert once per overlap episode (OverlapAlertLatch), overriding the
       // task's notifyOn: 'always' for the first overlap so the operator hears
       // about the stacking, 'never' for subsequent ticks in the same episode
       // so a slow task does not spam once per cron interval.
-      const shouldAlert = this.overlapAlerts.shouldAlert(task.taskId);
+      const shouldAlert = this.overlapAlerts.shouldAlert(overlapKey);
       const notifyTask = { ...task, notifyOn: shouldAlert ? ('always' as const) : ('never' as const) };
       this.writeTelemetry(record, notifyTask, shouldAlert
         ? { responseText: formatOverlapAlertMessage(task.taskId, record.command, task.cronExpression) }
         : undefined);
       return record;
     }
-    this.inFlightTasks.set(task.taskId, this.now());
+    this.inFlightTasks.set(overlapKey, this.now());
     // Hoisted so the finally block can guard on kind:'pass' without a
     // second applyAutoDisable call when 'expired' already ran it above.
     let gateResult: ReturnType<typeof evaluateRunAtGate> | undefined;
@@ -494,16 +521,7 @@ export class CronScheduler {
     if (task.cwd !== undefined) {
       const cwdError = checkTaskCwdAtRuntime(task.cwd);
       if (cwdError !== undefined) {
-        const record: TelemetryRecord = {
-          taskId: task.taskId,
-          command: redactInlineSecrets(task.command),
-          trigger,
-          ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
-          triggeredAt: new Date(this.now()).toISOString(),
-          durationMs: 0,
-          status: 'error',
-          errorMessage: redactInlineSecrets(cwdError),
-        };
+        const record = makeCwdErrorRecord(task, trigger, this.now(), cwdError);
         this.writeTelemetry(record, task);
         return record;
       }
@@ -547,7 +565,7 @@ export class CronScheduler {
     return await executeAgentTask(
       {
         options: this.options,
-        queueDir: this.queueDir,
+        queueDir: leaseQueueDir,
         idleDetector: this.idleDetector,
         now: this.now,
         spawnSession: (t, tr, gbc) => this.spawnSession(t, tr, gbc),
@@ -563,10 +581,10 @@ export class CronScheduler {
       trigger,
     );
     } finally {
-      this.inFlightTasks.delete(task.taskId);
+      this.inFlightTasks.delete(overlapKey);
       // Any non-overlap run (success or error) ends the overlap episode for
       // this task, so the next overlap will alert again.
-      this.overlapAlerts.clear(task.taskId);
+      this.overlapAlerts.clear(overlapKey);
       // runAt one-shot: auto-disable + unregister after the run fires.
       // Guard on kind:'pass' so we don't call applyAutoDisable a second time
       // when the 'expired' branch above already called it and returned early
@@ -580,7 +598,7 @@ export class CronScheduler {
   private async spawnSession(
     task: ScheduledTask,
     trigger: TelemetryTrigger = 'cron',
-    gateBlockCounter?: { count: number },
+    gateBlockCounter?: import('./scheduler-gate-recovery.js').GateBlockCounter,
   ): ReturnType<typeof spawnDaemonSession> {
     return spawnDaemonSession(task.taskId, {
       ...this.options,
@@ -595,14 +613,6 @@ export class CronScheduler {
     return this.options.telemetryPath ?? getTelemetryPath();
   }
 
-  private ensureTelemetrySink(): void {
-    try {
-      mkdirSync(dirname(this.telemetryPath()), { recursive: true });
-    } catch {
-      // Directory creation is best-effort; the actual write path will surface a real error.
-    }
-  }
-
   private writeTelemetry(
     record: TelemetryRecord,
     task?: ScheduledTask,
@@ -615,9 +625,8 @@ export class CronScheduler {
     } catch (err) {
       // Telemetry write failure must not crash the daemon or suppress the
       // completion push — log and fall through so fireOnTaskComplete still runs.
-      const msg = errorMessage(err);
       // eslint-disable-next-line no-console
-      console.error(`[daemon] telemetry write failed: ${msg}`);
+      console.error(`[daemon] telemetry write failed: ${errorMessage(err)}`);
     }
     // Contract: persistedRecord is passed unconditionally — if appendFileSync
     // threw above, the record may not be on disk (see CronSchedulerOptions.onTaskComplete).

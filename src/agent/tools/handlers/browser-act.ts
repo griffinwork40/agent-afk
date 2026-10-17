@@ -27,7 +27,7 @@ import { emitBrowserEvent } from '../../trace/emit.js';
 import type { BrowserEventTarget } from '../../trace/types.js';
 import { browserTimeoutFailureClass } from './playwright-hints.js';
 import { acquireBrowserProvider } from './browser-provider.js';
-import { errorMessage } from '../../../utils/errors.js';
+import { abortReason, errorMessage } from '../../../utils/errors.js';
 
 const VALID_ACTIONS: readonly ActAction[] = [
   'click', 'fill', 'press', 'select', 'hover', 'scroll_to', 'wait_for',
@@ -166,8 +166,7 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
   return async (input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
-      const reason = signal.reason;
-      const msg = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+            const msg = abortReason(signal.reason);
       return { content: `browser_act aborted: ${msg}`, isError: true, failureClass: abortFailureClass(signal) };
     }
 

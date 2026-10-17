@@ -1,6 +1,7 @@
 /**
- * Tests for collectPostRunWarnings — the post-run warning helper extracted
- * from SubagentExecutor for issue #944.
+ * Tests for collectPostRunWarnings — helpers extracted from SubagentExecutor
+ * (issue #944). The #3754 dispatch-intent gate is tested in
+ * subagent-executor.dispatch-intent.test.ts.
  */
 
 import { describe, it, expect } from 'vitest';

@@ -85,9 +85,15 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // provider-agnostic: the openai-compatible query path
   // (query/model-params.ts:resolveEffectiveMaxOutputTokens) calls it to bound
   // output when config.maxOutputTokens is unset. Without these entries the
-  // gpt-5.x ids fall through to DEFAULT_MAX_OUTPUT (64k) and silently cap
+  // gpt-5.x/6.x ids fall through to DEFAULT_MAX_OUTPUT (64k) and silently cap
   // responses at half their real 128k output ceiling (per OpenAI API docs:
-  // gpt-5.5 and the gpt-5.6 sol/terra/luna tiers all support 128k max output).
+  // gpt-5.5, gpt-5.6 sol/terra/luna support 128k max output). The gpt-6 values
+  // below are an UNVERIFIED estimate carried over from the 5.x family; the Codex
+  // catalog exposes no max-output figure to check them against.
+  'gpt-6.1-sol': 128_000,
+  'gpt-6-astra': 128_000,
+  'gpt-6-sol': 128_000,
+  'gpt-6-luna': 128_000,
   'gpt-5.5': 128_000,
   'gpt-5.6': 128_000,
   'gpt-5.6-sol': 128_000,
@@ -219,6 +225,13 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'gpt-4o-mini': 128_000,
   'gpt-4.1': 1_000_000,
   'gpt-4.1-mini': 1_000_000,
+  // OpenAI GPT-6 family is deliberately ABSENT from this table. Its ids are
+  // ChatGPT-subscription tier ids with no published API-tier window, so
+  // contextLimitFor() falls through to the Codex catalog's context_window
+  // (gpt-6.1-sol 500k, the rest 272k as of 2026-10-16). A hardcoded guess here
+  // would outrank the catalog on every non-subscription path and, at 1M, exceed
+  // even the catalog's 872k maxContextWindow so compaction would fire too late.
+  // Add entries only once an authoritative API-tier window is published.
   // OpenAI GPT-5.6 family (GA 2026-07-09). The `gpt-5.6` alias routes to
   // `gpt-5.6-sol` (flagship); `-terra` is the balanced tier and `-luna` the
   // high-volume tier. All ship the flagship 5.x ~1.05M-token window (rounded to

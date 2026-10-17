@@ -3,7 +3,6 @@ import { pickRandomVerb, pickRandomGoblinVerb } from '../constants.js';
 import { buildTipPool, selectTip } from '../loading-tips.js';
 import { SPINNER_FRAMES, type SpinnerState } from '../terminal-compositor.types.js';
 import { formatElapsed, formatTipRow } from '../terminal-compositor.scrollback.js';
-import { contentMargin } from '../render/measure.js';
 
 /**
  * Frame cadence during the first {@link SPINNER_WARMUP_MS} of a spin (12.5 Hz),
@@ -211,9 +210,10 @@ export class SpinnerController {
     // Goblin theme tints the frame+verb olive; classic stays dim. Width is
     // unchanged (single braille glyph), so no compositor row-budget impact.
     const tint = this.goblin ? palette.goblin : palette.meta;
-    // Content centering (AFK_CENTER_CONTENT): prepend left margin so the
-    // spinner row floats at the same horizontal position as other content.
-    return contentMargin() + tint(`${SPINNER_FRAMES[this.state.frameIndex]!} ${this.state.verb}...`)
+    // Content centering (AFK_CENTER_CONTENT): returned UNMARGINED — the
+    // compositor prefixes the margin when it assembles the frame
+    // (terminal-compositor.frame.lines.ts), so it is applied exactly once.
+    return tint(`${SPINNER_FRAMES[this.state.frameIndex]!} ${this.state.verb}...`)
       + formatElapsed(this.state.startedAt);
   }
 

@@ -14,7 +14,7 @@ import { setSessionTmpdirRootForTests } from '../src/agent/session/session-tmpdi
 
 const workspace = realpathSync(process.cwd());
 const tempRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-bench-')));
-const localRoot = mkdtempSync(path.join(workspace, '.risk-bench-'));
+const localRoot = realpathSync(mkdtempSync(path.join(workspace, '.risk-bench-')));
 const iterations = 5_000;
 const batches = 5;
 const contexts: Record<string, RiskContext> = {

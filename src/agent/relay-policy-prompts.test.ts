@@ -85,8 +85,14 @@ describe('run it, don\'t relay it: hook block messages', () => {
     expect(withHandoff.length).toBeGreaterThan(0);
     for (const p of withHandoff) {
       if (p.tier !== 'block') continue;
-      expect(p.blockReason, p.id).toContain('it blocks only this command');
-      expect(p.blockReason, p.id).toContain('do not reach the same destructive effect another way');
+      // Old-style patterns use 'it blocks only this command'; new-style use 'This block is deliberate'.
+      // Both are valid scoping declarations — the regex matches either.
+      expect(p.blockReason, p.id).toMatch(/it blocks only this command|This block is deliberate/);
+      // Pin each full anti-bypass phrase, not a substring a different reason could satisfy.
+      const antiBypass = p.blockReason.includes('This block is deliberate')
+        ? 'This block is deliberate: do not reach the same effect via bash, python, or a script.'
+        : 'other non-destructive commands still run, but do not reach the same destructive effect another way.';
+      expect(p.blockReason, p.id).toContain(antiBypass);
       expect(p.blockReason, p.id).not.toContain('if the destruction is genuinely intended');
     }
   });

@@ -29,6 +29,25 @@ import { errorMessage } from '../../../utils/errors.js';
 import type { SlashContext } from '../types.js';
 
 /**
+ * Strip the `<plugin>:` namespace prefix from a skill name, returning the
+ * bare name that preflight registries are keyed on.
+ *
+ * A single registered preflight covers every source (builtin/user/project/
+ * plugin) for the same skill name, so both the builtin dispatch path (where
+ * `skill.name` is already bare) and the plugin dispatch path (where it may
+ * carry a `<plugin>:` prefix) must normalise before the registry lookup.
+ *
+ * @example
+ * bareSkillName('mint')              // → 'mint'
+ * bareSkillName('awa-private:mint')  // → 'mint'
+ * bareSkillName('a:b:c')             // → 'c'
+ */
+export function bareSkillName(name: string): string {
+  const colonIdx = name.lastIndexOf(':');
+  return colonIdx === -1 ? name : name.slice(colonIdx + 1);
+}
+
+/**
  * Invoke the registered preflight for `skillName` and return the manifest
  * block string, or `undefined` when none applies.
  *

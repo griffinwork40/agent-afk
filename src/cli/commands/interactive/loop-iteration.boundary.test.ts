@@ -1061,6 +1061,9 @@ describe('applyDeferPeers', () => {
     let drained = false;
     return {
       calls,
+      hasPendingInjections(): boolean {
+        return !drained;
+      },
       drainInjections() {
         calls.push(name);
         if (drained) return '';
@@ -1157,6 +1160,7 @@ describe('applyDeferPeers', () => {
 
     function makeOrderSource(name: string): InjectionSource {
       return {
+        hasPendingInjections(): boolean { return true; },
         drainInjections() {
           callOrder.push(name);
           return `[${name}]`;
@@ -1190,6 +1194,7 @@ describe('applyDeferPeers', () => {
 
     function makeOrderSource(name: string): InjectionSource {
       return {
+        hasPendingInjections(): boolean { return true; },
         drainInjections() {
           callOrder.push(name);
           return `[${name}]`;

@@ -64,6 +64,8 @@ RUN OPTIONS
   --max-predictions <n>        Max predictions to retain (1–8; default 3 when probes>2, else 8)
   --keep-sandboxes             Keep sandbox directories after run
   --no-baseline-sample         Skip the baseline-sample preflight; use analyst estimate instead (#2511)
+  --aa                         A/A calibration: snapshot both arms with zero changes; any structural
+                               difference is harness asymmetry. Free; no episodes, so not with --verify (#2415)
   --predict <text>             Supply a prediction directly (repeatable). Skips the analyst model
                                call and uses the operator-supplied predictions instead, making
                                the predict step fully deterministic (#2861)

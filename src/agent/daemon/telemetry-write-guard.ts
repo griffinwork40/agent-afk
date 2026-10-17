@@ -33,10 +33,20 @@
  * @module agent/daemon/telemetry-write-guard
  */
 
-import { existsSync, accessSync, constants } from 'node:fs';
+import { existsSync, accessSync, constants, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { errorMessage } from '../../utils/errors.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
+
+/** Create the telemetry parent directory; the later write reports any I/O error. */
+export function ensureTelemetrySink(path: string): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+  } catch {
+    // Best-effort: append failures are reported by the scheduler's writer.
+  }
+}
 
 // ─── Writability probe ────────────────────────────────────────────────────────
 
@@ -78,8 +88,8 @@ export function probeTelemetryWritable(
       probe.accessSync(dirname(telemetryPath), constants.W_OK);
       return null; // parent writable — fresh install, safe to proceed
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      const message = (err as NodeJS.ErrnoException).message ?? String(err);
+      const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
+      const message = errorMessage(err);
       return code != null ? `${code}: ${message}` : message;
     }
   }
@@ -87,8 +97,8 @@ export function probeTelemetryWritable(
     probe.accessSync(telemetryPath, constants.W_OK);
     return null; // writable
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    const message = (err as NodeJS.ErrnoException).message ?? String(err);
+    const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
+    const message = errorMessage(err);
     return code != null ? `${code}: ${message}` : message;
   }
 }

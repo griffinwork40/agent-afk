@@ -54,6 +54,8 @@ export const INHERITED_ENV_KEYS: ReadonlySet<string> = new Set([
   'SystemRoot',
   'MSYSTEM',
   'LOCALAPPDATA',
+  // macOS: set by the OS to the launching app's bundle id (real-Chrome probe hint).
+  '__CFBundleIdentifier',
 ]);
 
 /**

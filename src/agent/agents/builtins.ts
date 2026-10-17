@@ -199,7 +199,9 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         description: gitInvestigator.description,
         prompt: vendoredPromptBody(gitInvestigator.systemPrompt),
         tools: [...gitInvestigator.allowedTools],
-        model: gitInvestigator.model,
+        // No `model`: builtins never pin a model, so dispatch follows the
+        // operator's subagent policy (getDefaultSubagentModel). Guarded in
+        // registry.test.ts.
         // Same anti-runaway bound as research-agent / Explore: git-investigator
         // is a read-only git-archaeology leaf (dispatched by research-agent),
         // so it never needs an unbounded tool-use loop. Without a cap it can
@@ -242,7 +244,10 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
           'compatibility type — accepts a thoroughness hint (quick/medium/very thorough) in the prompt.',
         prompt: EXPLORE_PROMPT,
         tools: ['Read', 'Grep', 'Glob', 'list_directory'],
-        model: 'haiku',
+        // No `model` (was 'haiku'): builtins never pin a model. A literal tier
+        // here would also bypass the provider-aware default and route a
+        // local-only setup's Explore to Anthropic. Set AFK_DEFAULT_SUBAGENT_MODEL
+        // to make subagents cheap instead.
         // Same anti-runaway bound as research-agent: Explore is a read-only
         // search leaf, so it never needs an unbounded tool-use loop.
         maxToolUseIterations: READONLY_AGENT_MAX_TOOL_USE_ITERATIONS,

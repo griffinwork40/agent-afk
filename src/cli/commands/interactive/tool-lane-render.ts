@@ -5,7 +5,8 @@ import { palette } from '../../palette.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { wrapToWidth } from '../../wrap.js';
 import { truncateDisplayWidth } from '../../display.js';
-import { capToMeasure } from '../../render/measure.js';
+import { capToMeasure, contentBand } from '../../render/measure.js';
+import { TOOL_LANE_INDENT } from './tool-lane-flush-margin.js';
 import { sanitizeTextParagraph } from './tool-lane-format.js';
 
 /**
@@ -56,7 +57,15 @@ export function clampLineToTerminal(line: string, cols: number): string {
  * calling this, not by both happening to read the terminal.
  */
 export function toolLaneWidth(): number {
-  return capToMeasure(getTerminalWidth());
+  const tw = getTerminalWidth();
+  const capped = capToMeasure(tw);
+  // Content centering (AFK_CENTER_CONTENT): tool rows are painted at
+  // `margin + TOOL_LANE_INDENT + row`, so the row must fit the band minus the
+  // indent or it soft-wraps a stray `…` row on terminals just wider than the
+  // measure (e.g. 101-104 cols). No-op when centering is off.
+  const band = contentBand(tw);
+  if (band.marginCols === 0) return capped;
+  return Math.max(1, Math.min(capped, band.width - TOOL_LANE_INDENT.length));
 }
 
 interface ToolEntryFields {

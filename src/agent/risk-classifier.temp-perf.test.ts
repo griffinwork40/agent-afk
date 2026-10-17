@@ -30,6 +30,7 @@ describe('private-temp classification validation reuse', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.clearAllMocks();
     setSessionTmpdirRootForTests(undefined);
@@ -37,6 +38,9 @@ describe('private-temp classification validation reuse', () => {
   });
 
   it('validates a cached root once per classification, not once per containment check', () => {
+    // Pin os.tmpdir() so the lstat-count assertion is not affected by whatever
+    // the real tmpdir returns on this host. Mirrors the sibling test below.
+    vi.spyOn(os, 'tmpdir').mockReturnValue(root);
     expect(classify(scratch).level).toBe('safe');
     vi.mocked(lstatSync).mockClear();
     for (let i = 0; i < 3; i++) expect(classify(scratch).level).toBe('safe');
@@ -54,7 +58,9 @@ describe('private-temp classification validation reuse', () => {
       return original(...args);
     });
     expect(classify(scratch).level).toBe('high');
-    vi.restoreAllMocks();
+    // Restore lstatSync before this test ends so the throwing implementation
+    // does not leak into the next test. vi.restoreAllMocks() in afterEach does
+    // not reset mockImplementation on a vi.fn() created by vi.mock('fs').
     vi.mocked(lstatSync).mockImplementation(original);
   });
 

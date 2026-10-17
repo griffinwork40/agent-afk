@@ -523,7 +523,8 @@ describe('dumpIfEnabled', () => {
 
     const output = stderrSpy.mock.calls.map((c: unknown[]) => c[0]).join('');
     expect(output).not.toContain('eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.somepayload');
-    expect(output).toMatch(/<REDACTED Bearer/);
+    // redactInlineSecrets now delegates to redactSecrets which emits [REDACTED]
+    expect(output).toContain('[REDACTED]');
   });
 
   it('emits stderr warning on every active call', () => {
@@ -558,7 +559,8 @@ describe('redactInlineSecrets', () => {
     const text = 'api key is sk-ant-api03-supersecretkey1234567890abcdef end';
     const result = redactInlineSecrets(text);
     expect(result).not.toContain('sk-ant-api03-supersecretkey1234567890abcdef');
-    expect(result).toContain('<REDACTED sk-ant');
+    // Now delegated to redactSecrets which emits [REDACTED]
+    expect(result).toContain('[REDACTED]');
     expect(result).toContain('api key is');
     expect(result).toContain('end');
   });
@@ -567,21 +569,24 @@ describe('redactInlineSecrets', () => {
     const text = 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig';
     const result = redactInlineSecrets(text);
     expect(result).not.toContain('eyJhbGciOiJIUzI1NiJ9');
-    expect(result).toContain('<REDACTED Bearer');
+    // Now delegated to redactSecrets which emits [REDACTED]
+    expect(result).toContain('[REDACTED]');
   });
 
   it('redacts AKIA keys', () => {
     const text = 'AWS key: AKIAIOSFODNN7EXAMPLE rest of text';
     const result = redactInlineSecrets(text);
     expect(result).not.toContain('AKIAIOSFODNN7EXAMPLE');
-    expect(result).toContain('<REDACTED AKIA');
+    // Now delegated to redactSecrets which emits [REDACTED]
+    expect(result).toContain('[REDACTED]');
   });
 
   it('redacts xox tokens', () => {
     const text = 'slack: xoxb-12345678-12345678901-abcdefghijklmnopqrstuvwx rest';
     const result = redactInlineSecrets(text);
     expect(result).not.toContain('xoxb-12345678-12345678901-abcdefghijklmnopqrstuvwx');
-    expect(result).toContain('<REDACTED xox token');
+    // Now delegated to redactSecrets which emits [REDACTED]
+    expect(result).toContain('[REDACTED]');
   });
 
   it('redacts KEY=value with high-entropy value', () => {
@@ -734,25 +739,26 @@ describe('redactInlineSecrets', () => {
 
   // --- PR #968 Item 2: quantifier {3,} revert — bare keywords must NOT match ---
 
-  it('does NOT redact bare KEY=<long value> (quantifier revert: prefix must be ≥3 chars)', () => {
-    // With [A-Za-z_]* the prefix was optional, letting `KEY=` match. Reverted to
-    // [A-Za-z_]{3,} so a bare keyword without a meaningful prefix is ignored.
-    const text = 'KEY=supersecretvalueatleast16chrs';
+  it('does NOT redact bare KEY=<long value> via NAME=value pattern; generic rule still catches it', () => {
+    // The NAME=value pattern requires a ≥3-char prefix before the keyword, so
+    // bare `KEY=` alone does not match INLINE_NAME_VALUE_PATTERNS. However
+    // redactSecretsCanonical's generic ≥32-char rule fires when the full
+    // `KEY=<value>` blob is ≥32 chars — a stricter outcome than before (#3848).
+    const text = 'KEY=supersecretvalueatleast16chrs'; // 33 chars total — caught by generic rule
     const result = redactInlineSecrets(text);
-    // 'KEY' alone has no qualifying prefix — should pass through unchanged
-    expect(result).toBe(text);
+    expect(result).not.toContain('supersecretvalueatleast16chrs');
   });
 
-  it('does NOT redact bare TOKEN=<long value> (uppercase variant, quantifier revert)', () => {
-    const text = 'TOKEN=supersecretvalueatleast16chrs';
+  it('does NOT leak bare TOKEN=<long value>; generic rule catches it (#3848)', () => {
+    const text = 'TOKEN=supersecretvalueatleast16chrs'; // 35 chars total
     const result = redactInlineSecrets(text);
-    expect(result).toBe(text);
+    expect(result).not.toContain('supersecretvalueatleast16chrs');
   });
 
-  it('does NOT redact bare SECRET=<long value>', () => {
-    const text = 'SECRET=supersecretvalueatleast16chrs';
+  it('does NOT leak bare SECRET=<long value>; generic rule catches it (#3848)', () => {
+    const text = 'SECRET=supersecretvalueatleast16chrs'; // 36 chars total
     const result = redactInlineSecrets(text);
-    expect(result).toBe(text);
+    expect(result).not.toContain('supersecretvalueatleast16chrs');
   });
 
   it('DOES redact MY_KEY=<long value> (prefix ≥3 chars satisfies quantifier)', () => {

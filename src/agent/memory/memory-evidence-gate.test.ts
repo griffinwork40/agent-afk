@@ -352,3 +352,66 @@ describe('memory evidence gate — schema migration v3 → v4', () => {
     }
   });
 });
+
+describe('memory evidence gate — [auto-reflected] tag for learning facts', () => {
+  it('prefixes a learning fact with [auto-reflected] at recall when gate is on', async () => {
+    const out = await setFact('learning', 'autoreflect01 parallel subagents reduce context bloat');
+    expect(out['warning'], 'learning facts must never warn').toBeUndefined();
+
+    const fact = await recallOne('autoreflect01');
+    expect(fact.verification).toBe('not-applicable');
+    expect(fact.content.startsWith('[auto-reflected]')).toBe(true);
+    expect(fact.content).toContain('autoreflect01 parallel subagents reduce context bloat');
+  });
+
+  it('does not double-tag if [auto-reflected] is already present in stored content', async () => {
+    await setFact('learning', '[auto-reflected] autoreflect02 already tagged content');
+    const fact = await recallOne('autoreflect02');
+    expect(fact.content.indexOf('[auto-reflected]')).toBe(0);
+    // Only one occurrence of the tag prefix.
+    expect(fact.content.split('[auto-reflected]').length - 1).toBe(1);
+  });
+
+  it('does not tag a convention fact with [auto-reflected]', async () => {
+    await setFact('convention', 'autoreflect03 the dispatcher routes via providerForModel', 'src/x.ts:1');
+    const fact = await recallOne('autoreflect03');
+    expect(fact.content).not.toContain('[auto-reflected]');
+    expect(fact.verification).toBe('verified');
+  });
+
+  it('does not tag a preference fact with [auto-reflected]', async () => {
+    await setFact('preference', 'autoreflect04 the user prefers pnpm');
+    const fact = await recallOne('autoreflect04');
+    expect(fact.content).not.toContain('[auto-reflected]');
+    expect(fact.verification).toBe('not-applicable');
+  });
+
+  it('does not tag a decision fact with [auto-reflected]', async () => {
+    await setFact('decision', 'autoreflect05 chose Exa for search');
+    const fact = await recallOne('autoreflect05');
+    expect(fact.content).not.toContain('[auto-reflected]');
+    expect(fact.verification).toBe('not-applicable');
+  });
+
+  it('does NOT apply [auto-reflected] when gate is off', async () => {
+    vi.stubEnv('AFK_MEMORY_EVIDENCE_GATE', '0');
+    await setFact('learning', 'autoreflect06 gate-off reflection');
+    const res = await search({ query: 'autoreflect06' }, signal);
+    const results = JSON.parse(res.content) as MemorySearchResult[];
+    const fact = results.find((r) => r.type === 'fact')!;
+    expect(fact).toBeDefined();
+    expect(fact.content).not.toContain('[auto-reflected]');
+    // Gate-off: no provenance fields.
+    expect('verification' in fact).toBe(false);
+  });
+
+  it('superseding a learning fact preserves [auto-reflected] on the new version', async () => {
+    const out = await setFact('learning', 'autoreflect07 original reflection');
+    const newOut = await supersede(out['id'] as number, 'autoreflect07 refined reflection');
+    expect(newOut['warning']).toBeUndefined();
+
+    const fact = await recallOne('autoreflect07 refined');
+    expect(fact.content.startsWith('[auto-reflected]')).toBe(true);
+    expect(fact.verification).toBe('not-applicable');
+  });
+});

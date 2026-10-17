@@ -589,6 +589,19 @@ export interface AgentConfig {
   drainSubagents?: (reason: string) => Promise<unknown>;
 
   /**
+   * Returns promises for any in-flight child terminal trace emits that were
+   * started (e.g. fire-and-forget cancel emits) but may not have reached the
+   * writer yet. Collected by `SubagentManager` from active handle
+   * `_pendingCancellationWrite` fields immediately before the seal; passed
+   * into `TraceWriter.seal()` so the rows land BEFORE `session_sealed` even
+   * when the drain timed out or was not configured (#3714).
+   */
+  getPendingChildTerminalWrites?: () => readonly Promise<void>[];
+
+  /** Pending abandoned child streams; shutdown bounds settlement before its accounting snapshot. */
+  getPendingChildBillingStreams?: () => readonly Promise<void>[];
+
+  /**
    * True when this session is a forked subagent rather than the top-level
    * session. Stamped unconditionally by `SubagentManager.forkSubagent` — the
    * single choke point every built-in fork path converges through — and never
@@ -605,6 +618,17 @@ export interface AgentConfig {
    * distinguishing forks in trace attribution).
    */
   isSubagentFork?: true;
+
+  /**
+   * Set to `true` by `assembleChildConfig` when `injectWorkspacePreamble`
+   * appended a workspace preamble block to a forked child's system prompt.
+   *
+   * Threaded into `AnthropicDirectQueryOptions.hasWorkspacePreamble` so
+   * `composeQuerySystem` gates `splitAtWorkspacePreamble` on actual fork
+   * provenance rather than scanning for a marker string that could appear in
+   * any operator prompt. Absent/false = root session, no split. See #3924.
+   */
+  hasWorkspacePreamble?: true;
 
   /**
    * Model provider. Defaults to the Anthropic SDK adapter
@@ -941,6 +965,18 @@ export interface AgentConfig {
    * Telegram-scoped only: never set on REPL, daemon, or one-shot sessions.
    */
   telegramThreadId?: number;
+
+  /**
+   * Per-session idle-wake callback for the Telegram surface. When set,
+   * `createTelegramSessionFactory` wires it as `bgNotifier.onInjectable` so
+   * a settled background subagent automatically wakes the idle session instead
+   * of waiting for the next user message. Mirrors the REPL's `tryAutoResume`
+   * path in `loop-iteration.ts`.
+   *
+   * Set by `SessionManager` from `SessionManagerOptions.onInjectableForRoute`
+   * immediately before calling `createSession`. Telegram-scoped only.
+   */
+  telegramOnInjectable?: () => void;
 
   /**
    * In-process custom tools available to the session. Each entry is created

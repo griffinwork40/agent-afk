@@ -44,6 +44,8 @@ type SubagentUsage = {
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  /** Billing-only report from a child that did not succeed (#3878). */
+  outcome?: 'failed' | 'cancelled';
 };
 
 /**
@@ -67,6 +69,9 @@ export function recordSubagentCompletionInTree(
   costUsd: number | undefined,
 ): void {
   accounting.recordSubagentCompletion(usage, costUsd);
+  // A billing-only report (failed/cancelled child) carries no cost and is not
+  // a completion, so it never re-evaluates the tree budget.
+  if (usage?.outcome !== undefined) return;
   const max = config.maxBudgetUsd;
   if (max === undefined || abortController.signal.aborted) return;
   const acct = accounting.snapshot();

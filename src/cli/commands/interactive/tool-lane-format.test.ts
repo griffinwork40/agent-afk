@@ -32,6 +32,8 @@ import {
 import { resetHyperlinksEnabledForTest } from '../../hyperlink.js';
 import { stripAnsi, displayWidth } from '../../display.js';
 import { palette } from '../../palette.js';
+import { HARD_CAP_KILL_NOTE, isOutputCapKill } from '../../../agent/tools/handlers/_output-cap.js';
+import { scanCapKillNote } from '../../../agent/tools/handlers/_streaming-cap.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 
@@ -215,12 +217,13 @@ describe('doneGlyph — benign rejection vs real fault (#75)', () => {
         'abort',
         'elicitation-declined',
         'hook-block',
+        'lost-args',
         'no-such-target',
         'permission-denied',
         'policy-refusal',
       ].sort(),
     );
-    expect([...real].sort()).toEqual(['budget', 'denial-breaker', 'repeat-failure', 'timeout'].sort());
+    expect([...real].sort()).toEqual(['budget', 'denial-breaker', 'hook-block-repeat', 'repeat-failure', 'timeout'].sort());
   });
 
   it('resolves the benign glyph tone from `palette` at call time (no theme-swap freeze)', () => {
@@ -1478,11 +1481,13 @@ describe('formatOutcome — bash truncation / capture display', () => {
     truncated?: boolean;
     capturePath?: string;
     isError?: boolean;
+    outputCapKilled?: boolean;
   }): ToolResultChunk {
     return {
       type: 'tool_result',
       toolUseId: 'bash-test',
       content: '…head+tail preview…',
+      ...(opts.outputCapKilled !== undefined ? { outputCapKilled: opts.outputCapKilled } : {}),
       isError: opts.isError ?? false,
       lineCount: opts.lineCount,
       ...(opts.truncated !== undefined ? { truncated: opts.truncated } : {}),
@@ -1497,15 +1502,40 @@ describe('formatOutcome — bash truncation / capture display', () => {
     expect(out).toBe('42 lines');
   });
 
-  it('shows "N lines · output capped · command killed" when truncated with no capture (SIGKILL path)', () => {
-    const out = stripAnsi(
-      formatOutcome(makeBashResult({ lineCount: 800, truncated: true }), HOME, 60, 'bash'),
+  it('labels an output-cap SIGKILL as a safety cap, in warning tone (bash hard-cap path)', () => {
+    const raw = formatOutcome(
+      makeBashResult({ lineCount: 800, truncated: true, outputCapKilled: true }),
+      HOME, 60, 'bash',
     );
+    const out = stripAnsi(raw);
     expect(out).toContain('800 lines');
-    expect(out).toContain('output capped');
-    expect(out).toContain('command killed');
+    expect(out).toContain('⚠ stopped at output safety cap');
+    expect(raw).toContain(palette.warning(' · ⚠ stopped at output safety cap'));
     // Must NOT claim the output is saved
     expect(out).not.toContain('saved');
+  });
+
+  it('isOutputCapKill recognises both kill notes and nothing else', () => {
+    expect(isOutputCapKill(`partial${HARD_CAP_KILL_NOTE}`)).toBe(true);
+    expect(isOutputCapKill(`a\nb${scanCapKillNote(8_000_000)}`)).toBe(true);
+    expect(isOutputCapKill('a\n[output truncated — showing first 1000 lines]')).toBe(false);
+    expect(isOutputCapKill('ordinary output')).toBe(false);
+  });
+
+  it('truncated WITHOUT a kill sentinel (grep head+tail) says "output capped", never "stopped"', () => {
+    const out = stripAnsi(
+      formatOutcome(makeBashResult({ lineCount: 800, truncated: true }), HOME, 60, 'grep'),
+    );
+    expect(out).toContain('output capped');
+    expect(out).not.toContain('stopped');
+  });
+
+  it('single-line output-cap kill still shows the safety-cap label', () => {
+    const out = stripAnsi(formatOutcome(
+      makeBashResult({ lineCount: 1, truncated: true, outputCapKilled: true }),
+      HOME, 60, 'bash',
+    ));
+    expect(out).toContain('stopped at output safety cap');
   });
 
   it('shows "N lines · full output saved → ~/…" when truncated WITH capture (soft-cap path)', () => {
@@ -1517,7 +1547,7 @@ describe('formatOutcome — bash truncation / capture display', () => {
     expect(out).toContain('full output saved');
     expect(out).toContain('~/.afk/state/bash-captures/sess1/tu1.txt');
     // Must NOT claim the command was killed
-    expect(out).not.toContain('command killed');
+    expect(out).not.toContain('stopped at output safety cap');
   });
 
   it('displays the capture path abbreviated with ~ for home-relative paths', () => {

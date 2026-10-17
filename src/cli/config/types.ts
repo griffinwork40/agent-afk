@@ -19,7 +19,7 @@ import type { ImportFromConfig, ImportSourceBinary } from '../../config/import-s
  * in the environment or the user's config file. Providers that need a key
  * but don't get one (e.g. Anthropic without OAuth state) surface the
  * failure lazily at session-construction time, not up front — this is how
- * we support `AFK_MODEL=gpt-5.4` without an `ANTHROPIC_API_KEY` present.
+ * we support `AFK_MODEL=gpt-5.6-sol` without an `ANTHROPIC_API_KEY` present.
  */
 export interface AutoRoutingConfig {
   interactive?: boolean;
@@ -341,7 +341,12 @@ export interface ModelSlotConfigEntry {
 }
 
 export interface ConfigFileSchema {
-  tools?: { disabled?: string[] };
+  /**
+   * Operator tool visibility. `disabledBySlot` maps a model-slot name to an
+   * extra deny list for sessions whose active model resolves to that slot;
+   * resolved and enforced in agent/tools/operator-denied.slots.ts.
+   */
+  tools?: { disabled?: string[]; disabledBySlot?: Partial<Record<string, string[]>> };
   model?: string;
   /**
    * Per-tier model bindings. Each slot accepts a bare id string

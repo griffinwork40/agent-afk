@@ -36,7 +36,10 @@ export const browserOpenTool: AnthropicToolDef = {
     'unambiguous follow-up. ' +
     'Navigation is constrained by AFK_BROWSER_ALLOWED_DOMAINS / BLOCKED_DOMAINS ' +
     'when set — refused navigation returns `isError: true` with a `blocked_by_policy` ' +
-    'reason. Always-on screenshot capture on error helps debug failures.',
+    'reason. Always-on screenshot capture on error helps debug failures. ' +
+    'This is a separate afk-managed browser, NOT the user\'s own Chrome: it has none of their ' +
+    'logins. For sites they are signed into (e.g. Gmail), use `mcp__chrome-devtools__*` tools when ' +
+    'available; otherwise suggest they run `afk browser connect`.',
   input_schema: {
     type: 'object',
     properties: {

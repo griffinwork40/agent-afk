@@ -36,6 +36,13 @@ export interface BuildAgentSessionDeps {
    */
   maxToolUseIterations: number | undefined;
   /**
+   * Session-wide USD budget ceiling from `AFK_MAX_BUDGET_USD`.
+   * `undefined` = uncapped (no behavior change for operators who have not set
+   * the variable). Flows to `AgentConfig.maxBudgetUsd` and is enforced by
+   * `stream-consumer.ts`.
+   */
+  maxBudgetUsd: number | undefined;
+  /**
    * Fully-wired provider factory. Passed as `config.providerFactory` so the
    * ProviderRouter builds a wired provider (with executors, memoryStore,
    * mcpManager) on every turn — enabling cross-family /model swaps without
@@ -45,6 +52,8 @@ export interface BuildAgentSessionDeps {
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
+  getPendingChildTerminalWrites?: (() => readonly Promise<void>[]) | undefined;
+  getPendingChildBillingStreams?: (() => readonly Promise<void>[]) | undefined;
   /** Live bash output tail reporter factory (REPL-only, issue #1506). */
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
   /**
@@ -97,6 +106,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.temperature !== undefined ? { temperature: deps.temperature } : {}),
     ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
     ...(deps.maxToolUseIterations !== undefined ? { maxToolUseIterations: deps.maxToolUseIterations } : {}),
+    ...(deps.maxBudgetUsd !== undefined ? { maxBudgetUsd: deps.maxBudgetUsd } : {}),
     ...deps.resumeConfig,
     ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}),
     ...(deps.traceWriter !== undefined ? { traceWriter: deps.traceWriter } : {}),
@@ -110,6 +120,12 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
       : {}),
     ...(deps.processJobs !== undefined ? { processJobs: deps.processJobs } : {}),
     ...(deps.drainSubagents !== undefined ? { drainSubagents: deps.drainSubagents } : {}),
+    ...(deps.getPendingChildTerminalWrites !== undefined
+      ? { getPendingChildTerminalWrites: deps.getPendingChildTerminalWrites }
+      : {}),
+    ...(deps.getPendingChildBillingStreams !== undefined
+      ? { getPendingChildBillingStreams: deps.getPendingChildBillingStreams }
+      : {}),
     ...(deps.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
       : {}),
@@ -133,11 +149,14 @@ export function buildSharedDeps(a: {
   effort: EffortLevel | undefined;
   maxOutputTokens: number | undefined;
   maxToolUseIterations: number | undefined;
+  maxBudgetUsd: number | undefined;
   cliConfig: CliConfig;
   providerFactory: (m: string | undefined) => ModelProvider;
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
+  getPendingChildTerminalWrites?: (() => readonly Promise<void>[]) | undefined;
+  getPendingChildBillingStreams?: (() => readonly Promise<void>[]) | undefined;
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
   detachRegistry?: import('../../../agent/tools/detach-registry.js').DetachableToolRegistry;
   processJobs?: import('../../../agent/shell-jobs/process-jobs.js').ProcessJobRegistry;
@@ -155,12 +174,15 @@ export function buildSharedDeps(a: {
     effort: a.effort,
     maxOutputTokens: a.maxOutputTokens,
     maxToolUseIterations: a.maxToolUseIterations,
+    maxBudgetUsd: a.maxBudgetUsd,
     ...(a.cliConfig.baseUrl !== undefined ? { baseUrl: a.cliConfig.baseUrl } : {}),
     ...(a.cliConfig.temperature !== undefined ? { temperature: a.cliConfig.temperature } : {}),
     providerFactory: a.providerFactory,
     hookRegistry: a.hookRegistry,
     traceWriter: a.traceWriter,
     drainSubagents: a.drainSubagents,
+    getPendingChildTerminalWrites: a.getPendingChildTerminalWrites,
+    getPendingChildBillingStreams: a.getPendingChildBillingStreams,
     ...(a.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: a.bashOutputTailReporter }
       : {}),

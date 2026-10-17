@@ -13,12 +13,15 @@
  *  (f) chatgpt-oauth session, clean turn (no error) → all events emitted normally.
  *  (g) priorTurns rollback: after a 401 that triggers a retry, the user turn
  *      pushed during the failed attempt is removed before makeNewAttempt runs.
+ *  (h) events are forwarded incrementally, never buffered for the whole turn
+ *      (the idle watchdog starved on the buffer → busy gpt-* children killed).
+ *  (i) a 401 AFTER a tool ran refreshes the client but does NOT replay the turn.
  */
 
 import { describe, it, expect } from 'vitest';
 import type { ProviderEvent } from '../../../provider.js';
 import type { OpenAIMessage } from '../messages.js';
-import { wrapTurnWithOAuthRefresh, is401, type OAuthRefreshContext } from './token-refresh.js';
+import { wrapTurnWithOAuthRefresh, is401, MID_TURN_REFRESH_MESSAGE, type OAuthRefreshContext } from './token-refresh.js';
 import type { OpenAIAuthResolution, AuthResolverDeps } from '../auth.js';
 
 // ---------------------------------------------------------------------------
@@ -394,5 +397,66 @@ describe('chatgpt-oauth + clean turn', () => {
     expect(result[0].type).toBe('text.delta');
     expect(result[1].type).toBe('error');
     expect((result[1] as { type: 'error'; error: Error & { status: number } }).error.status).toBe(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (h) incremental forwarding — the subagent idle-watchdog regression
+// ---------------------------------------------------------------------------
+
+describe('chatgpt-oauth: events are forwarded as they arrive (never turn-buffered)', () => {
+  it('(h) yields each event before the inner turn generator has finished', async () => {
+    const ctx = makeCtx({ source: 'chatgpt-oauth', apiKey: 'tok-A' });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let innerFinished = false;
+    async function* slowTurn(): AsyncGenerator<ProviderEvent> {
+      yield { type: 'delta.text', text: 'working' };
+      await gate; // a long tool round / model call still in flight
+      yield { type: 'turn.completed', usage: { stopReason: 'stop', resultSubtype: 'success', isError: false }, sessionId: 'sid' };
+      innerFinished = true;
+    }
+    const wrapped = wrapTurnWithOAuthRefresh(ctx, slowTurn(), () => eventsGen([]), {});
+    const first = await wrapped.next();
+    // Pre-fix this await would hang until the whole turn ended.
+    expect(first.value).toMatchObject({ type: 'delta.text', text: 'working' });
+    expect(innerFinished).toBe(false);
+    release();
+    const rest = await collect(wrapped);
+    expect(rest.map((e) => e.type)).toEqual(['turn.completed']);
+    expect(innerFinished).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (i) 401 after a tool already ran → refresh, but never replay the turn
+// ---------------------------------------------------------------------------
+
+describe('chatgpt-oauth + 401 after a tool ran', () => {
+  it('(i) rebuilds the client, does not re-run the turn, and surfaces a mid-turn error', async () => {
+    let rebuilt: OpenAIAuthResolution | null = null;
+    const priorTurns: OpenAIMessage[] = [];
+    const ctx = makeCtx({
+      source: 'chatgpt-oauth', apiKey: 'tok-A', forceChatgptOAuth: true, priorTurns,
+      onRebuild: (a) => { rebuilt = a; },
+    });
+    async function* turn(): AsyncGenerator<ProviderEvent> {
+      priorTurns.push({ role: 'user', content: 'go' });
+      yield { type: 'tool.use.start', toolUseId: 't1', toolName: 'bash', toolInput: 'rm -rf build' };
+      yield { type: 'tool.output', toolUseId: 't1', toolName: 'bash', content: 'ok', isError: false };
+      yield { type: 'error', error: apiError(401) };
+    }
+    let replays = 0;
+    const result = await collect(wrapTurnWithOAuthRefresh(
+      ctx, turn(), () => { replays++; return eventsGen([]); },
+      makeDeps({ source: 'chatgpt-oauth', apiKey: 'tok-B' }),
+    ));
+    expect(replays).toBe(0);
+    expect(rebuilt).not.toBeNull();
+    expect((rebuilt as OpenAIAuthResolution | null)?.apiKey).toBe('tok-B');
+    // The user turn is NOT rolled back — the turn's history stands.
+    expect(priorTurns).toHaveLength(1);
+    expect(result.map((e) => e.type)).toEqual(['tool.use.start', 'tool.output', 'error']);
+    expect((result[2] as { type: 'error'; error: Error } | undefined)?.error.message).toBe(MID_TURN_REFRESH_MESSAGE);
   });
 });

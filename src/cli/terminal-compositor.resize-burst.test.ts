@@ -145,60 +145,85 @@ describe('B2: WIDTH-ONLY erase footprint is preserved unchanged by SHRINK', () =
 // ---------------------------------------------------------------------------
 // B3: Ghost-erase CUP+EL emitted after CPR resolves in a WIDTH-ONLY → SHRINK burst
 //
-// We use a tall terminal (60 rows) so the WIDTH-ONLY snapshot (row 5, near
-// the top) stays within range after a modest SHRINK (60→50), and the erase
-// can physically reach that row.  A SHRINK to fewer rows than the old frame
-// bottom would push it out of viewport and the clamping in flushResizeGhostErase
-// would correctly skip the now-nonexistent rows — not a ghost-erase failure.
+// We pin anchorRow: 5 so the frame renders near the top (ghostTop ≈ 5), then
+// shrink from 60→50 rows — a genuine SHRINK (50 < lastKnownRows 60) with the
+// ghost row well within the post-shrink viewport.  Without the anchor the
+// default bottom-pinned frame lands at row 59, making ghostTop+4 = 63 > 60
+// which takes the EXPAND path instead of SHRINK.
 // ---------------------------------------------------------------------------
 
 describe('B3: ghost-erase CUP+EL emitted after CPR resolves in WIDTH-ONLY → SHRINK burst', () => {
 
-  it('ghost-erase CUP+EL fires after WIDTH-ONLY → modest SHRINK when snapshot row stays in viewport', async () => {
+  it('erases a known ghost row outside the newly painted frame after WIDTH-ONLY → modest SHRINK + CPR', async () => {
     const stdout = makeMockStdout();
     const stdin = makeMockStdin();
     const writes = collectWrites(stdout);
-    // Use a tall terminal: frame bottom at row 59, shrink to 50 (row 59 goes
-    // out of range but lower rows stay valid — we check for any CUP+EL erase).
+    // Pin anchorRow near the top so the frame renders at a low row, making
+    // ghostTop small (≈5).  This ensures that shrinking to 50 rows is a
+    // GENUINE shrink from 60 (50 < 60) while ghostTop stays within the
+    // post-shrink viewport (ghostTop < 50) so flushResizeGhostErase fires.
+    // Without the anchor, the default bottom-pinned frame lands at row 59,
+    // and ghostTop+4 = 63 > 60 — which takes the EXPAND path, not SHRINK.
     stdout.rows = 60;
     stdout.columns = 99;
-    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), anchorRow: 5 });
     armedCompositors.push(c);
     await c.arm();
-    // Allow the initial frame to render (establishes lastMeasuredFrameBottom).
+    // Allow the initial frame to render so logUpdate.topRow is populated and
+    // lastMeasuredFrameBottom is established (drives CPR expectedRow).
     vi.advanceTimersByTime(20);
-    writes.clear();
 
     const internals = c as unknown as {
       pendingResizeErase: { top: number; bottom: number } | null;
+      lastMeasuredFrameBottom: number;
+      lastKnownRows: number;
     };
 
+    // Confirm a frame rendered (frameBottom > 0 is required for CPR to fire).
+    expect(internals.lastMeasuredFrameBottom, 'frame must have rendered before WIDTH-ONLY').toBeGreaterThan(0);
+
     // Step 1: WIDTH-ONLY SIGWINCH — columns 99→49, rows stay at 60.
+    // handleResizeImmediate snapshots the pre-resize footprint and starts a CPR.
     stdout.columns = 49;
     process.stdout.emit('resize');
 
-    // Snapshot was set.
+    // The snapshot top is the known ghost row: it is the top of the pre-resize
+    // frame/band footprint, guaranteed to be OUTSIDE the newly painted frame
+    // (the repaint places the fresh frame at a fresh position after delta apply).
     const snapshot = internals.pendingResizeErase;
     expect(snapshot, 'snapshot must be set after WIDTH-ONLY').not.toBeNull();
+    const ghostTop = snapshot!.top;
+    expect(ghostTop, 'ghost top row must be ≥ 1').toBeGreaterThanOrEqual(1);
 
-    // Step 2: modest SHRINK while CPR in-flight — rows 60→50. The snapshot
-    // top row is within [1, 50] so flushResizeGhostErase will not skip it.
-    stdout.rows = 50;
+    // Step 2: Shrink to 50 rows — a genuine SHRINK (50 < lastKnownRows 60).
+    // ghostTop (≈5) is well within the post-shrink viewport so
+    // flushResizeGhostErase will not clamp it away.
+    const shrinkTarget = 50;
+    expect(shrinkTarget, 'shrinkTarget must be a genuine shrink from 60').toBeLessThan(internals.lastKnownRows);
+    expect(ghostTop, 'ghostTop must be within post-shrink viewport').toBeLessThan(shrinkTarget);
+    stdout.rows = shrinkTarget;
     process.stdout.emit('resize');
-
-    // Snapshot survived.
     expect(internals.pendingResizeErase, 'snapshot must survive SHRINK while CPR in-flight').not.toBeNull();
 
-    // Step 3: The dirty reply re-queries; a quiescent reply repaints with erase.
-    // A timeout ends the burst directly, rather than issuing a re-query.
+    // Clear writes accumulated during setup so only the CPR-triggered repaint
+    // output is inspected.
+    writes.clear();
+
+    // Step 3: Drive dirty then quiescent CPR replies to complete the burst.
+    // completeCpr feeds a dirty reply first (re-queries) then a quiescent reply
+    // (repaints with ghost erase).  After the quiescent reply, repaint() runs
+    // flushResizeGhostErase which emits CUP+EL for every row in [top, bottom].
     completeCpr(c, stdin);
 
     const out = writes.all();
-    // The ghost-erase mechanism must have fired: at least one CUP+EL sequence.
-    // We do NOT assert the exact row (it depends on runtime frame geometry)
-    // but we assert that erasing happened — the sequence CUP+EL must appear.
-    expect(out, 'at least one ghost-erase CUP+EL must appear after WIDTH-ONLY → SHRINK burst')
-      .toMatch(/\x1b\[\d+;1H\x1b\[2K/);
+
+    // Assert that the known ghost row was erased: the exact CUP+EL sequence for
+    // `ghostTop` must appear.  Ordinary frame rendering parks the cursor at the
+    // frame bottom, not at the pre-resize snapshot row, so a match here proves
+    // the ghost-erase path fired for that specific row — not just any CUP+EL.
+    const ghostEraseSeq = `\x1b[${ghostTop};1H\x1b[2K`;
+    expect(out, `CUP+EL for known ghost row ${ghostTop} must appear after CPR resolves`)
+      .toContain(ghostEraseSeq);
 
     c.disarm();
   });
@@ -247,12 +272,18 @@ describe('B4: SHRINK with no prior CPR: existing null contract preserved', () =>
 });
 
 // ---------------------------------------------------------------------------
-// B5: WIDTH-ONLY → SHRINK (CPR in-flight) but no prior snapshot: stays null
+// B5: WIDTH-ONLY burst (CPR in-flight) but no prior snapshot: SHRINK keeps null
+//
+// Constructs the state that a WIDTH-ONLY SIGWINCH produces when no frame has
+// rendered yet (pendingResizeErase=null, cprPending=true, widthOnlyOrigin=true).
+// The SHRINK branch's preservation rule only applies when pendingResizeErase is
+// already a width-only snapshot; with null, it must remain null rather than
+// incorrectly materialising a stale footprint.
 // ---------------------------------------------------------------------------
 
 describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null', () => {
 
-  it('pendingResizeErase stays null when WIDTH-ONLY produced no snapshot', async () => {
+  it('SHRINK keeps pendingResizeErase null when width-only CPR is in-flight with no snapshot', async () => {
     const stdout = makeMockStdout();
     const stdin = makeMockStdin();
     stdout.rows = 40;
@@ -260,37 +291,61 @@ describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
     armedCompositors.push(c);
     await c.arm();
-    // Do NOT advance timers — no frame has rendered yet.
+    // Advance 20 ms so the arm() timeout fires and sets lastMeasuredFrameBottom
+    // from the initial CPR response. Without this, lastMeasuredFrameBottom is 0
+    // and the cprBurst.originalExpectedRow injected below would also be 0,
+    // making the SHRINK branch's math degenerate.
+    vi.advanceTimersByTime(20);
 
     const internals = c as unknown as {
-      pendingResizeErase: { top: number; bottom: number } | null;
-      lastMeasuredFrameBottom: number;
-      logUpdate: { topRow?: number } | null;
-      committedBand: string[];
+      pendingResizeErase: { top: number; bottom: number; origin?: string } | null;
       cprPending: boolean;
+      cprBurst: {
+        dirty: boolean;
+        originalExpectedRow: number;
+        currentRows: number;
+        growTotal: number;
+        shrinkTotal: number;
+        requeryCt: number;
+        widthOnlyOrigin: boolean;
+      } | null;
+      lastMeasuredFrameBottom: number;
     };
 
-    // Zero out all frame-position state to simulate no-frame scenario.
-    internals.lastMeasuredFrameBottom = 0;
-    internals.logUpdate = null;
-    internals.committedBand.length = 0;
+    // Construct the exact state a WIDTH-ONLY SIGWINCH produces when no frame
+    // position data is available: CPR in-flight with widthOnlyOrigin=true but
+    // pendingResizeErase=null (the top===0 guard in handleResizeImmediate skips
+    // the snapshot when logUpdate.topRow and committedBandTopRow are both 0).
+    // We set this directly rather than forcing frameBottom=0 (which also
+    // prevents CPR) or nulling logUpdate (which collapses unrelated state).
+    internals.cprPending = true;
+    internals.cprBurst = {
+      dirty: false,
+      originalExpectedRow: internals.lastMeasuredFrameBottom,
+      currentRows: stdout.rows,
+      growTotal: 0,
+      shrinkTotal: 0,
+      requeryCt: 0,
+      widthOnlyOrigin: true,   // ← width-only origin, as claimed by the test title
+    };
+    internals.pendingResizeErase = null;  // ← no snapshot: top===0 guard fired
 
-    // Step 1: WIDTH-ONLY — no snapshot set (top===0 guard), but CPR is also
-    //         not emitted when frameBottom===0.
-    stdout.columns = 49;
-    process.stdout.emit('resize');
-
-    // No CPR (frameBottom===0), no snapshot.
-    expect(internals.cprPending).toBe(false);
-    expect(internals.pendingResizeErase).toBeNull();
-
-    // Step 2: SHRINK — no CPR in-flight, existing contract applies: stays null.
+    // SHRINK while the width-only CPR is in-flight.  The preservation rule in
+    // handleResizeImmediate reads:
+    //   preserveWidthSnapshot = cprPending && pendingResizeErase?.origin === 'width-only'
+    // With pendingResizeErase===null the condition is false, so the branch must
+    // null the snapshot — but it is already null.  Crucially, it must NOT set
+    // pendingResizeErase to a non-null value (which would be a false positive).
     stdout.rows = 35;
     process.stdout.emit('resize');
 
-    expect(internals.pendingResizeErase, 'snapshot must remain null').toBeNull();
+    expect(internals.pendingResizeErase, 'SHRINK must keep pendingResizeErase null when width-only CPR has no snapshot').toBeNull();
 
-    completeCpr(c, stdin);
+    // cprPending was injected directly (no real stdin listener was installed by
+    // _requestCpr), so we cannot drive completeCpr here.  Reset the flag before
+    // disarm so the compositor does not attempt a stale cleanup path.
+    internals.cprPending = false;
+    internals.cprBurst = null;
     c.disarm();
   });
 });

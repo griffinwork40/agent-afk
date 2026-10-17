@@ -11,6 +11,14 @@
 import type { BlockedByPolicy, BrowserConfig } from '../types.js';
 import { enforceDomainPolicy } from '../config.js';
 
+function urlProtocol(rawUrl: string): string | null {
+  try {
+    return new URL(rawUrl).protocol;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Minimal page surface
 // ---------------------------------------------------------------------------
@@ -50,8 +58,13 @@ export interface RecheckablePage {
 // Callers MUST invoke this before building an observation or capturing a
 // screenshot. Returning `BlockedByPolicy` is only half the guard; the other
 // half is that the blocked page's content is never read at all.
+
 /**
  * Re-validate the URL the tab landed on after a navigation.
+ *
+ * The proxy enforces SSRF at connection time, including redirect hops. It
+ * does NOT enforce the browser's domain allow/block lists, so this landed-URL
+ * policy check must remain before observations and screenshots (#3721).
  *
  * @param page       The session tab. Only `url()` and `goBack()` are used.
  * @param config     Browser config carrying the allow/block lists.
@@ -72,6 +85,14 @@ export async function recheckLandedUrl(
 
   // Tab never moved off the already-cleared URL — nothing new to vet.
   if (landedUrl === clearedUrl) {
+    return null;
+  }
+
+  const protocol = urlProtocol(landedUrl);
+  // Browser-internal error pages such as chrome-error://chromewebdata/ are
+  // not network egress targets. Let the caller surface the real navigation
+  // error instead of relabeling it as an SSRF policy refusal.
+  if (protocol === 'chrome-error:') {
     return null;
   }
 

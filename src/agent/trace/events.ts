@@ -26,6 +26,7 @@ import {
   BackgroundAgentStartedPayloadSchema,
 } from './background-agent-schema.js';
 import { BrowserEventPayloadSchema } from './events.browser.js';
+import { SessionBillingSchema } from './events.billing.js';
 import { CompactionPayloadInputSchema, CompactionPayloadPersistedSchema } from './events.compaction.js';
 import { SessionPhasePayloadSchema } from './events.session-phase.js';
 import { ToolFailureClassSchema, SubagentLifecyclePayloadSchema } from './events.subagent-lifecycle.js';
@@ -151,6 +152,14 @@ export const HookDecisionPayloadSchema = z.object({
     .optional(),
 });
 
+/** Mirrors `HookSummaryPayload` in ./types (see ./hook-tally.ts). */
+export const HookSummaryPayloadSchema = z.object({
+  scope: z.literal('root-session-including-subagents'),
+  counts: z.record(z.string(), z.record(z.string(), z.number().int().nonnegative())),
+  written: z.number().int().nonnegative(),
+  suppressed: z.number().int().nonnegative(),
+});
+
 // ---------------------------------------------------------------------------
 // background_agent
 // ---------------------------------------------------------------------------
@@ -223,6 +232,10 @@ export const ClosurePayloadSchema = z.object({
   // guardrail, `session/closure-guidance.ts`). Optional + back-compat: older
   // traces and benign closes simply omit it.
   guidance: z.string().optional(),
+  // Present on child (forked) sessions only; absent on the root session.
+  // Allows readers to filter out child closures when deriving the root facet
+  // (#3883). Optional + back-compat: older traces simply omit it.
+  subagentId: z.string().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -283,6 +296,7 @@ export const SessionSealedPayloadSchema = z.object({
     })
     .optional(),
   subagentCostUsd: z.number().nonnegative().optional(),
+  billing: SessionBillingSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -294,6 +308,7 @@ export const SessionSealedPayloadSchema = z.object({
 export const TraceEventInputSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tool_call'), payload: ToolCallPayloadSchema }),
   z.object({ kind: z.literal('hook_decision'), payload: HookDecisionPayloadSchema }),
+  z.object({ kind: z.literal('hook_summary'), payload: HookSummaryPayloadSchema }),
   z.object({
     kind: z.literal('subagent_lifecycle'),
     payload: SubagentLifecyclePayloadSchema,
@@ -326,6 +341,12 @@ export const TraceEventSchema = z.discriminatedUnion('kind', [
     seq: z.number().int().nonnegative(),
     kind: z.literal('hook_decision'),
     payload: HookDecisionPayloadSchema,
+  }),
+  z.object({
+    ts: z.string().datetime(),
+    seq: z.number().int().nonnegative(),
+    kind: z.literal('hook_summary'),
+    payload: HookSummaryPayloadSchema,
   }),
   z.object({
     ts: z.string().datetime(),

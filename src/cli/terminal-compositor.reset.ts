@@ -49,6 +49,7 @@ export interface ResetStateHost {
   bandGeometryStale: boolean;
   resizeGeometryStale: boolean;
   lastKnownRows: number;
+  lastKnownCols: number;
   cprPending: boolean;
   pickerController: PickerController | null;
   inputMode: CompositorInputMode;
@@ -130,6 +131,7 @@ export function resetState(self: ResetStateHost): void {
   self.bandGeometryStale = false;
   self.resizeGeometryStale = false; // mirrors bandGeometryStale reset (#3212)
   self.lastKnownRows = 0;
+  self.lastKnownCols = 0;
   // Drop the between-turn resize snapshot — a fresh arm cycle has no
   // geometry yet (same as the bandGeometryStale reset above).
   self.disarmRows = 0;

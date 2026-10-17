@@ -85,6 +85,17 @@ export const PATHS_ENV_REGISTRY = [
     category: 'process',
   },
   {
+    name: '__CFBundleIdentifier',
+    description:
+      'macOS-only, set by the OS: bundle id of the app that launched this process (e.g. the terminal). ' +
+      'Read by the real-Chrome probe to name the app that needs Files & Folders access to Google Chrome ' +
+      'on macOS 27+. A hint only — under tmux it reflects the app that started the tmux server.',
+    type: 'string',
+    required: false,
+    example: 'com.apple.Terminal',
+    category: 'process',
+  },
+  {
     name: 'USERPROFILE',
     description: 'Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32.',
     type: 'string',

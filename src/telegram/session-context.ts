@@ -40,6 +40,8 @@ export interface TelegramSessionBuildContext {
   maxOutputTokens: number | undefined;
   /** Applies to BOTH providers via `resolveMaxToolIterations()`. */
   maxToolUseIterations: number | undefined;
+  /** Session-wide USD budget ceiling from `AFK_MAX_BUDGET_USD`. `undefined` = uncapped. */
+  maxBudgetUsd: number | undefined;
   traceWriter: TelegramTraceWriter;
   mcpManager: TelegramMcpManager;
   /** Bot-global store shared across every chat's hook bundle. */
@@ -63,6 +65,14 @@ export interface TelegramSessionBuildContext {
    * Undefined for General / topics-off sessions.
    */
   threadId?: number;
+  /**
+   * Per-session idle-wake callback. When defined, it is forwarded to
+   * `wireTelegramExecutors` as `onInjectable` so a settled background subagent
+   * automatically wakes this session instead of waiting for the next user
+   * message. Already bound to the session's route by the factory.
+   * Undefined when no wake hook is registered (e.g. in unit tests).
+   */
+  onInjectable?: () => void;
   /**
    * Report the session the moment it is constructed.
    *

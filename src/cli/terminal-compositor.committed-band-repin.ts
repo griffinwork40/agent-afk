@@ -9,7 +9,7 @@ import type { CommittedBandHost } from './terminal-compositor.committed-band-com
 import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
 import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
-import { contentMargin } from './render/measure.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
 
 /**
  * Physically erase the pre-resize on-screen footprint snapshotted by the
@@ -180,7 +180,7 @@ export function repositionCommittedBand(
   // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
   // terminal width so the band adapts on resize. The band stores raw (unpadded)
   // content; padding is a rendering concern applied here at paint time.
-  const pad = contentMargin();
+  const pad = compositorBand(self.stdout).margin;
   // Cursor stays hidden (the frame render hid it); CUP writes emit no '\n', so
   // the DECSTBM scroll region is never triggered — no writeWithGuard needed.
   let out = '\x1b[?25l';

@@ -292,7 +292,16 @@ export type SessionPhaseName =
   // happened; this makes it visible so operators can see which agent_type grants
   // were silently removed without inspecting the node's raw allowlist.
   // metadata: { agentType, strippedTools (comma-separated list) }
-  | 'compose_leaf_tools_stripped';
+  | 'compose_leaf_tools_stripped'
+  /** Hook-block repeat breaker trip (#3736). metadata: { tool, count, fork }. */
+  | 'hook_block_repeat_tripped'
+  // Post-cancel late billing delta settled after the `cancelled` lifecycle row
+  // was already written (#3931). Emitted only when spend accrued AFTER cancel()
+  // emitted its row — i.e. a `done` drained on interrupt. Carries the delta in
+  // `metadata` (`subagentId`, `provider`, `uncachedInput`, `cacheRead`,
+  // `cacheWrite`, `output`) so trace readers can add it to the cancelled row's
+  // totals. At most one per run; only emitted when the delta is non-zero.
+  | 'billing_settled';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
@@ -351,4 +360,10 @@ export interface SessionPhasePayload {
    * other phase kinds.
    */
   priorSessionId?: string;
+  /**
+   * Running afk package version at the time the session id was assigned.
+   * Set ONLY on `session_id_assigned` events. Absent on older traces and all
+   * other phase kinds. (#3808)
+   */
+  afkVersion?: string;
 }

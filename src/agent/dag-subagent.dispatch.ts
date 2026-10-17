@@ -4,6 +4,7 @@ import type { SubagentResult } from './subagent/result.js';
 import type { SpawnReceipt } from './tools/delegation-budget.js';
 import { appendImageBlocks } from './content/image-blocks.js';
 import { createIsolatedWorktree } from './tools/handlers/worktree-managed.js';
+import { describeWorktreeSetupFailure } from './worktree/worktree-setup.js';
 import { teardownBackgroundWorktree } from './tools/handlers/worktree-managed.background.js';
 import { errorMessage } from '../utils/errors.js';
 import { debugLog } from '../utils/debug.js';
@@ -95,16 +96,25 @@ export async function dispatchDagNode(
   // Foreground compose nodes (the only mode on the DAG path) tear down in the
   // finally block below. Dirty / commits-ahead trees are preserved and locked.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
+  let setupNotice: string | undefined; // #3601: failed repo-declared setup
   if (spec.isolation === 'worktree') {
     const effectiveCwd = anchorCwd ?? process.cwd();
     try {
       const iso = await createIsolatedWorktree({
         cwd: effectiveCwd,
         slugHint: `iso-compose-${spec.id}-${isolationCounter}-${Math.random().toString(36).slice(2, 8)}`,
+        signal: nodeSignal,
       });
       // Override the node's cwd with the worktree path so the fork runs there.
       // Mutually-exclusive with spec.cwd — enforced at parse time.
       spec = { ...spec, cwd: iso.path };
+      // Best-effort setup (#3601): tell the node its tree may lack deps.
+      setupNotice = describeWorktreeSetupFailure(iso.setup, iso.path);
+      const notice = setupNotice;
+      if (notice !== undefined) {
+        const build = spec.promptBuilder;
+        spec = { ...spec, promptBuilder: (i) => `${notice}\n\n${build(i)}` };
+      }
       isolationTeardown = { repoRoot: iso.repoRoot, worktreePath: iso.path };
     } catch (err) {
       // Fail loud: never silently fall back to the shared tree — that
@@ -211,6 +221,11 @@ export async function dispatchDagNode(
       prompt = spec.promptBuilder(inputs);
     }
     const result = await handle.runToResult(prompt);
+    // #3601: surface a failed setup to the compose caller too, not just the node.
+    const text = result.message?.content;
+    if (setupNotice !== undefined && result.message !== undefined && typeof text === 'string') {
+      return { ...result, message: { ...result.message, content: `${setupNotice}\n\n${text}` } };
+    }
     return result;
   } finally {
     nodeSignal.removeEventListener('abort', onNodeAbort);

@@ -93,6 +93,24 @@ export interface DaemonActionOptions {
   dumpPrompt?: string | boolean | undefined;
 }
 
+/** Append all enabled persisted schedules to the task list. */
+function appendPersistedSchedules(tasks: ScheduledTask[]): void {
+  for (const cfg of loadSchedules()) {
+    if (cfg.enabled) tasks.push(toScheduledTask(cfg));
+  }
+}
+
+/** Build the onTaskComplete callback for startDaemon. */
+function makeTaskCompleteHandler(verifyDone: boolean): (record: TelemetryRecord, details?: TaskCompletionDetails) => void {
+  return (record, details) => {
+    const target = resolveNotifyChatTarget(details?.notifyChat, record.taskId);
+    void pushIfConfigured(
+      formatTaskCompletion(record, details, verifyDone),
+      { markdown: true, ...(target !== undefined ? { target } : {}) },
+    ).catch(() => undefined);
+  };
+}
+
 /**
  * Body of the `afk daemon` `.action()` callback, extracted as a named function
  * so `registerDaemonCommand` stays under 200 lines.
@@ -167,12 +185,7 @@ export async function runDaemonAction(options: DaemonActionOptions): Promise<voi
         ];
   const builtinInfo = appendBuiltinTasks(tasks, config, env);
 
-  const persistedSchedules = loadSchedules();
-  for (const cfg of persistedSchedules) {
-    if (cfg.enabled) {
-      tasks.push(toScheduledTask(cfg));
-    }
-  }
+  appendPersistedSchedules(tasks);
 
   const bindInFlightSource = registerEarlyDaemonCrashHandlers();
   activateDumpPrompt(options.dumpPrompt);
@@ -194,10 +207,17 @@ export async function runDaemonAction(options: DaemonActionOptions): Promise<voi
   });
 
   try {
+    // Note: bot/primaryChatId/primaryThreadId are intentionally absent here.
+    // The standalone `afk daemon` process has no Telegraf bot instance; the rich
+    // sendHandoffQuestion path (scheduler.elicitation-notify.ts) is only reachable
+    // when startDaemon is called programmatically with a pre-constructed bot
+    // (e.g. by the Telegram bot surface). Cron-task elicitations in standalone
+    // daemon mode fall back to onHandoffWritten → onTaskComplete → pushIfConfigured.
+    // See #3243 item 2.
     const handle = await startDaemon({
       port,
       host,
-      ...(options.once ? { writePortFile: false } : {}),
+      ...(options.once ? { writePortFile: false, handoffMaintenance: false } : {}),
       sessionConfig: {
         model: daemonModel,
         ...(daemonApiKey !== undefined ? { apiKey: daemonApiKey } : {}),
@@ -227,13 +247,8 @@ export async function runDaemonAction(options: DaemonActionOptions): Promise<voi
           }
         : {}),
       ...daemonTurnHooks(daemonModel, isDoneUnverified),
-      onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
-        const target = resolveNotifyChatTarget(details?.notifyChat, record.taskId);
-        void pushIfConfigured(
-          formatTaskCompletion(record, details, config.daemon?.verifyDone !== false),
-          { markdown: true, ...(target !== undefined ? { target } : {}) },
-        ).catch(() => undefined);
-      },
+      resolveNotifyChat: resolveNotifyChatTarget,
+      onTaskComplete: makeTaskCompleteHandler(config.daemon?.verifyDone !== false),
     });
 
     bindInFlightSource(() => handle.scheduler.getInFlightTasks());

@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { CHILD_ALLOWED_TOOLS, COMPOSE_LEAF_STRIPPED_TOOLS } from './nesting.js';
+import { CHILD_ALLOWED_TOOLS } from './nesting.js';
 import {
   resolveComposeNodeAgent,
   resolveComposeAgentPrompt,
@@ -25,17 +25,8 @@ describe('CHILD_ALLOWED_TOOLS invariant', () => {
   it('does not contain "compose"', () => {
     expect(CHILD_ALLOWED_TOOLS).not.toContain('compose');
   });
-
-  it('COMPOSE_LEAF_STRIPPED_TOOLS contains "agent" and "skill"', () => {
-    expect(COMPOSE_LEAF_STRIPPED_TOOLS.has('agent')).toBe(true);
-    expect(COMPOSE_LEAF_STRIPPED_TOOLS.has('skill')).toBe(true);
-  });
-
-  it('COMPOSE_LEAF_STRIPPED_TOOLS does not contain "compose" (it is absent from CHILD_ALLOWED_TOOLS already)', () => {
-    // compose is blocked upstream (absent from CHILD_ALLOWED_TOOLS), so it
-    // needs no entry in COMPOSE_LEAF_STRIPPED_TOOLS.
-    expect(COMPOSE_LEAF_STRIPPED_TOOLS.has('compose')).toBe(false);
-  });
+  // COMPOSE_LEAF_STRIPPED_TOOLS membership and undefined/unknown-type cases
+  // are covered exhaustively in compose-leaf-tool-strip.test.ts.
 });
 
 // ---------------------------------------------------------------------------
@@ -81,13 +72,22 @@ describe('resolveComposeNodeAgent — executor-backed tool stripping', () => {
     const resolved = resolveComposeNodeAgent('test-agent', registry);
     expect(resolved.leafNotice).toBeUndefined();
   });
+  // undefined agent_type and unknown agent_type cases are covered in
+  // compose-leaf-tool-strip.test.ts (returns {} / throws 'not found').
+});
 
-  it('returns empty object when agentType is undefined', () => {
-    expect(resolveComposeNodeAgent(undefined, new Map())).toEqual({});
+// #3754: `readOnly` mirrors the agent path's `childWriteCapable` (shared
+// isChildWriteCapable predicate) and drives compose's dispatch-intent gate.
+describe('resolveComposeNodeAgent — readOnly flag', () => {
+  it('marks a read-only allowlist (no write tools, no bash) as readOnly', () => {
+    expect(resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'grep'])).readOnly).toBe(true);
   });
 
-  it('throws on unknown agentType with available-agent list', () => {
-    const registry = makeRegistry(['read_file']);
-    expect(() => resolveComposeNodeAgent('no-such-agent', registry)).toThrow('not found');
+  it('does not mark an allowlist with write_file as readOnly', () => {
+    expect(resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'write_file'])).readOnly).toBeUndefined();
+  });
+
+  it('does not mark an allowlist with unrestricted bash as readOnly', () => {
+    expect(resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'bash'])).readOnly).toBeUndefined();
   });
 });

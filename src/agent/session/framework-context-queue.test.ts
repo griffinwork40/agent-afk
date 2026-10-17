@@ -163,10 +163,8 @@ describe('AgentSession framework-context queue', () => {
   });
 
   it('does NOT deliver SessionStart injectContext for subagent (forked) sessions', async () => {
-    // Subagent forks run the same init path with the bubbled registry, so the
-    // SessionStart handler still fires — but delivery is parent-only. Gating on
-    // `parentSessionId` keeps priming context off every subagent's first prompt
-    // (token cost × fan-out + contamination of narrow tasks).
+    // perf(#3737): dispatch is skipped entirely for forks (parentSessionId set)
+    // so shell hooks never spawn and injectContext never reaches the child prompt.
     const registry = createHookRegistry();
     registry.register('SessionStart', () => ({ injectContext: NUDGE }));
     const session = new AgentSession({
@@ -179,6 +177,29 @@ describe('AgentSession framework-context queue', () => {
 
     expect(capturedTurns).toHaveLength(1);
     expect(capturedTurns[0]!.content).toBe('/resolve');
+    await session.close();
+  });
+
+  it('SessionStart handler is never called for forked sessions (#3737)', async () => {
+    // Verifies the skip-dispatch optimisation: the handler must not fire at all
+    // for forks, not merely have its injectContext discarded.  This ensures
+    // shell-hook subprocesses (e.g. jev rule-digest ~4.7 KB) never spawn for
+    // every child session in a fan-out.
+    const registry = createHookRegistry();
+    let handlerCallCount = 0;
+    registry.register('SessionStart', () => {
+      handlerCallCount++;
+      return { injectContext: NUDGE };
+    });
+    const session = new AgentSession({
+      ...config,
+      hookRegistry: registry,
+      parentSessionId: 'parent-session-id',
+    });
+
+    await drain(session.sendMessageStream('/resolve'));
+
+    expect(handlerCallCount).toBe(0);
     await session.close();
   });
 

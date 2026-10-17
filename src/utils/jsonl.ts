@@ -220,6 +220,24 @@ export class IncrementalLineReader {
 }
 
 // ---------------------------------------------------------------------------
+// collectAsyncIter — async iterable → array helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Collect all values from an async iterable into an array.
+ *
+ * Shared helper used by effect-ledger/store.ts and whatif/ledger.ts to avoid
+ * duplicating the `for await … push` pattern on every readJsonlFile call site.
+ *
+ * @param iter  Any async iterable (e.g. the result of {@link readJsonlFile}).
+ */
+export async function collectAsyncIter<T>(iter: AsyncIterable<T>): Promise<T[]> {
+  const results: T[] = [];
+  for await (const item of iter) results.push(item);
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // appendJsonl — explicit mode/error policy
 // ---------------------------------------------------------------------------
 

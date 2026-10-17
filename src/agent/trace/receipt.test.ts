@@ -8,6 +8,7 @@ import {
   generateReceipt,
   parseTraceJsonl,
   receiptPathsFor,
+  RECEIPT_SCHEMA_VERSION,
   renderReceiptMarkdown,
   runReceiptSessionEndHook,
   writeRunReceipt,
@@ -301,6 +302,15 @@ describe('renderReceiptMarkdown', () => {
     expect(md).toContain('read-only; no agent behavior was modified');
   });
 
+  it('renders the root cost as unknown after a process-exit backstop seal (#3890)', () => {
+    const md = renderReceiptMarkdown(
+      generateReceipt([closure('model_end_turn'), sealed('failed', { incomplete: true })], META),
+    );
+    expect(md).toContain('| Cost (USD, total) | 0.1234 |');
+    expect(md).toContain('| Cost (USD, root) | unknown');
+    expect(md).toContain('| Cost (USD, subagents) | 0.1234 |');
+  });
+
   it('renders a clean run without a review section', () => {
     const md = renderReceiptMarkdown(
       generateReceipt([toolDone('bash'), closure('model_end_turn'), sealed('succeeded')], META),
@@ -438,5 +448,85 @@ describe('writeRunReceipt + runReceiptSessionEndHook (filesystem)', () => {
   it('hook no-ops when no tracePath is present', async () => {
     const decision = await runReceiptSessionEndHook({ event: 'SessionEnd', sessionId: 's3' });
     expect(decision).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderReceiptMarkdown — cost rows (#3891)
+// ---------------------------------------------------------------------------
+
+describe('renderReceiptMarkdown — cost rows', () => {
+  const BASE_RECEIPT: RunReceipt = {
+    schemaVersion: RECEIPT_SCHEMA_VERSION,
+    generatedAt: '2026-10-16T00:00:00.000Z',
+    witnessLabel: 'sess-cost',
+    tracePath: '/w/sess-cost/trace.jsonl',
+    sessionId: 'sess-cost',
+    status: 'succeeded',
+    humanReviewRequired: false,
+    humanReviewReasons: [],
+    incomplete: false,
+    toolCalls: {
+      total: 2,
+      succeeded: 2,
+      errored: 0,
+      erroredNotable: 0,
+      refused: 0,
+      circuitBreakerHits: 0,
+      byTool: {},
+      byFailureClass: {},
+    },
+    events: { total: 10, byKind: {} },
+    subagents: { started: 1, succeeded: 1, failed: 0, cancelled: 0 },
+    cost: {},
+    failures: [],
+    limitations: ['Receipt summarizes trace metadata only.'],
+  };
+
+  it('renders Cost (USD, total), Cost (USD, root) and Cost (USD, subagents) for a fan-out', () => {
+    const r: RunReceipt = {
+      ...BASE_RECEIPT,
+      cost: {
+        totalCostUsd: 0.063,
+        rootCostUsd: 0.0421,
+        subagentCostUsd: 0.021,
+      },
+    };
+    const md = renderReceiptMarkdown(r);
+    expect(md).toContain('| Cost (USD, total) | 0.0630 |');
+    expect(md).toContain('| Cost (USD, root) | 0.0421 |');
+    expect(md).toContain('| Cost (USD, subagents) | 0.0210 |');
+    // Fallback row must NOT appear when totalCostUsd is present.
+    expect(md).not.toContain('| Cost (USD) |');
+  });
+
+  it('renders only Cost (USD, total) when root/subagent breakdown is absent', () => {
+    const r: RunReceipt = {
+      ...BASE_RECEIPT,
+      cost: { totalCostUsd: 0.05 },
+    };
+    const md = renderReceiptMarkdown(r);
+    expect(md).toContain('| Cost (USD, total) | 0.0500 |');
+    expect(md).not.toContain('Cost (USD, root)');
+    expect(md).not.toContain('Cost (USD, subagents)');
+    expect(md).not.toContain('| Cost (USD) |');
+  });
+
+  it('renders the fallback Cost (USD) row when totalCostUsd is absent', () => {
+    const r: RunReceipt = {
+      ...BASE_RECEIPT,
+      cost: { finalCostUsd: 0.0421 },
+    };
+    const md = renderReceiptMarkdown(r);
+    expect(md).toContain('| Cost (USD) | 0.0421 |');
+    expect(md).not.toContain('Cost (USD, total)');
+    expect(md).not.toContain('Cost (USD, root)');
+    expect(md).not.toContain('Cost (USD, subagents)');
+  });
+
+  it('renders no cost row when both totalCostUsd and finalCostUsd are absent', () => {
+    const r: RunReceipt = { ...BASE_RECEIPT, cost: {} };
+    const md = renderReceiptMarkdown(r);
+    expect(md).not.toContain('Cost (USD');
   });
 });

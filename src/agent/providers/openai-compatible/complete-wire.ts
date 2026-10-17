@@ -66,7 +66,7 @@ export async function completeWithWire(
   authDeps: AuthResolverDeps = {},
 ): Promise<string> {
   const auth = resolveOpenAIAuth(input.apiKey, authDeps, input.forceChatgptOAuth ?? false);
-  const wire = resolveWireMode(auth);
+  const wire = resolveWireMode(auth, false, input.baseURL);
 
   if (wire.mode === 'responses' && auth.apiKey !== null) {
     const clientOpts: CompleteWireClientOptions = { apiKey: auth.apiKey, maxRetries: 0, fetch: h1ModelFetch };

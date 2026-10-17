@@ -31,7 +31,7 @@ import { createTelegramAfkHookBundle } from './afk-hook-bundle.js';
 import { constructTelegramSession } from './construct-session.js';
 import { attachMcpCleanup } from './mcp-session.js';
 import type { AgentSession } from '../agent/session.js';
-import type { AgentConfig } from '../agent/types.js';
+import type { AgentConfig, PermissionMode } from '../agent/types.js';
 import type { ModelProvider } from '../agent/provider.js';
 import type { TelegramSessionBuildContext } from './session-context.js';
 import type { TelegramExecutorWiring } from './wire-telegram-executors.js';
@@ -89,11 +89,34 @@ export function finalizeTelegramSession(
     sessionCwd,
     maxOutputTokens,
     maxToolUseIterations,
+    maxBudgetUsd,
     traceWriter,
     mcpManager,
     memoryStore,
     reportSession,
   } = ctx;
+
+  // -- Plan-mode guard (#3833) -----------------------------------------------
+  // Telegram has no REPL turn boundary, so the `exit_plan_mode` seed drain
+  // (loop-iteration.ts → takePendingPlanExitSeed) never runs. If a session
+  // config carries permissionMode='plan' (e.g. via the `permissionMode` config
+  // key), the model would call exit_plan_mode, queue an implement-turn via
+  // PlanExitBridge.requestImplementSeed, and the seed would never be drained —
+  // leaving the session permanently stuck in plan mode. Guard here: downgrade
+  // 'plan' to 'default' before construction and log a notice so operators who
+  // set `permissionMode=plan` in afk.config.json know why their Telegram
+  // sessions don't honour it.
+  if (sessionConfig.permissionMode === 'plan') {
+    // Log to stderr so it's visible in the bot process logs without crashing.
+    console.warn(
+      '[telegram] permissionMode="plan" is not supported on the Telegram surface ' +
+      '(the plan-exit seed drain runs only in the REPL loop). ' +
+      'Downgrading to "default" for this session.',
+    );
+  }
+  // Resolve the effective mode: 'plan' → 'default', anything else unchanged.
+  const effectivePermissionMode: PermissionMode =
+    sessionConfig.permissionMode === 'plan' ? 'default' : (sessionConfig.permissionMode ?? 'default');
 
   // -- System-prompt assembly -----------------------------------------------
   // Identical across all three branches: apply auto-routing directives on top
@@ -135,8 +158,11 @@ export function finalizeTelegramSession(
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     maxTurns: 100,
     drainSubagents: wiring.drainSubagents,
+    getPendingChildTerminalWrites: wiring.getPendingChildTerminalWrites,
+    getPendingChildBillingStreams: wiring.getPendingChildBillingStreams,
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
+    ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
     // Provider-specific extras (baseUrl / openaiBaseUrl / xaiBaseUrl).
     // Only the keys present in providerConfig are spread; absent keys are
     // not forwarded so the session config stays clean.
@@ -152,6 +178,8 @@ export function finalizeTelegramSession(
     ...(sessionConfig.thinking !== undefined ? { thinking: sessionConfig.thinking } : {}),
     ...(sessionConfig.effort !== undefined ? { effort: sessionConfig.effort } : {}),
     ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+    // Forward the effective permission mode (plan downgraded to default above).
+    permissionMode: effectivePermissionMode,
     provider,
     hookRegistry: hookBundle.registry,
   }, { traceWriter }), mcpManager);

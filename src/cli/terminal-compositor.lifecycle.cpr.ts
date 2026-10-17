@@ -262,6 +262,15 @@ export function requestCprOrMarkDirty(
   // CPR in-flight — update burst context, do NOT emit a second CPR now.
   if (self.cprBurst === null) {
     // Defensive: pending but no context (e.g. direct test call). Create one.
+    // widthOnlyOrigin defaults to false — we cannot know how the in-flight CPR
+    // was originally seeded, so we conservatively assume row-changing origin.
+    if (env.AFK_DEBUG_COMPOSITOR) {
+      process.stderr.write(
+        `[afk/cpr] pending-without-context fallback: cprPending=true but cprBurst=null` +
+        ` (rowDelta=${rowDelta}, newRows=${newRows}) — creating synthetic burst context` +
+        ` with widthOnlyOrigin=false\n`,
+      );
+    }
     self.cprBurst = {
       dirty: true,
       originalExpectedRow: expectedRow,

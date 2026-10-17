@@ -5,10 +5,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  abortReason,
   errorMessage,
   ensureError,
   isErrnoCode,
   isEnoent,
+  errCodeOrString,
   isEgressBlocked,
   extractEgressBlockedError,
   fetchFailedMessage,
@@ -463,5 +465,76 @@ describe('egress-blocked unwrapping + fetchFailedMessage', () => {
   it('passes through other messages and non-errors', () => {
     expect(fetchFailedMessage(new Error('HTTP 500'))).toBe('HTTP 500');
     expect(fetchFailedMessage('raw')).toBe('raw');
+  });
+});
+
+// ── abortReason() ─────────────────────────────────────────────────────────────
+
+describe('abortReason', () => {
+  it('returns Error.message when reason is an Error', () => {
+    expect(abortReason(new Error('timed out after 5000ms'))).toBe('timed out after 5000ms');
+  });
+
+  it('returns String(reason) when reason is a plain string', () => {
+    expect(abortReason('cancelled')).toBe('cancelled');
+  });
+
+  it('returns "aborted" when reason is undefined', () => {
+    expect(abortReason(undefined)).toBe('aborted');
+  });
+
+  it('returns "aborted" when reason is null', () => {
+    expect(abortReason(null)).toBe('aborted');
+  });
+
+  it('returns String(reason) for other non-Error values', () => {
+    expect(abortReason(42)).toBe('42');
+    expect(abortReason(false)).toBe('false');
+  });
+
+  it('correctly extracts reason from a live AbortSignal', () => {
+    const ac = new AbortController();
+    ac.abort(new Error('session cancelled'));
+    expect(abortReason(ac.signal.reason)).toBe('session cancelled');
+  });
+
+  it('is distinct from errorMessage: undefined yields "aborted" not "undefined"', () => {
+    expect(abortReason(undefined)).toBe('aborted');
+    expect(errorMessage(undefined)).toBe('undefined');
+  });
+});
+
+// ── errCodeOrString() ─────────────────────────────────────────────────────────
+
+describe('errCodeOrString', () => {
+  it('returns the .code string for a NodeJS.ErrnoException', () => {
+    const err = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    expect(errCodeOrString(err)).toBe('ENOENT');
+  });
+
+  it('returns String(err) for a plain Error without .code', () => {
+    const err = new Error('something went wrong');
+    expect(errCodeOrString(err)).toBe('Error: something went wrong');
+  });
+
+  it('returns String(err) for a string', () => {
+    expect(errCodeOrString('boom')).toBe('boom');
+  });
+
+  it('returns String(err) for a number', () => {
+    expect(errCodeOrString(42)).toBe('42');
+  });
+
+  it('returns String(err) for null', () => {
+    expect(errCodeOrString(null)).toBe('null');
+  });
+
+  it('returns String(err) for undefined', () => {
+    expect(errCodeOrString(undefined)).toBe('undefined');
+  });
+
+  it('handles an object with code: undefined by falling back to String(err)', () => {
+    const obj = { code: undefined, toString: () => '[object]' };
+    expect(errCodeOrString(obj)).toBe('[object]');
   });
 });

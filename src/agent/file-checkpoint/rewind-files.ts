@@ -8,7 +8,8 @@ import { resolveAndContain, realpathSafe } from '../tools/handlers/_cwd-utils.js
 import { assertNotDenylisted } from '../tools/handlers/write-denylist.js';
 import { isAbsolute } from 'node:path';
 import { pinRewindParent, stageRewindFile } from './rewind-staging.js';
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, isEnoent } from '../../utils/errors.js';
+import { readCheckpointContent } from './content-store.js';
 
 export interface RewindFilesDeps {
   sessionId: string;
@@ -22,7 +23,7 @@ export interface RewindFilesDeps {
 function currentBytes(path: string): Buffer | null {
   try { return readFileSync(path); }
   catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if (!isEnoent(err)) throw err;
     return null;
   }
 }
@@ -54,14 +55,15 @@ export async function rewindFiles(
   const changedFiles: string[] = [];
   let insertions = 0;
   let deletions = 0;
-  for (const { absPath, snapshotPath, isNewFile, mode } of snapshots) {
+  for (const snapshot of snapshots) {
+    const { absPath, isNewFile, mode } = snapshot;
     try {
       // Invariant: validate the actual current destination BEFORE reading it or
       // creating directories; stored paths never grant historical permissions.
       if (!isAbsolute(absPath)) throw new Error(`Checkpoint path must be absolute: ${absPath}`);
       const target = await validatedWriteTarget(absPath, deps.writePolicy);
       const current = currentBytes(target);
-      const prior = isNewFile ? null : readFileSync(snapshotPath);
+      const prior = isNewFile ? null : readCheckpointContent(snapshot);
       if (isNewFile ? current === null : current?.equals(prior!)) continue;
       if (options?.dryRun) { changedFiles.push(absPath); continue; }
       if (isNewFile) {

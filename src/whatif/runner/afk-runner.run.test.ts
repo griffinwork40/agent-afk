@@ -470,13 +470,51 @@ describe('runEpisodeChild — done-event guard', () => {
 
   it('redacts secrets from stderr in the no-done-event error message', async () => {
     const stdout = ndjson([contentChunk('partial')]);
-    const stderr = 'key=sk-ant-api03-abc123xyz failed';
+    const stderr = 'key=sk-ant-api03-abcXYZ1234567890abcdef failed';
     const trace = await runEpisodeChild({
       ...baseArgs,
       spawnImpl: makeSpawnFn({ stdout, stderr }),
     });
     expect(trace.error).toMatch(/stream ended without a done event/);
-    expect(trace.error).not.toMatch(/sk-ant-api03-abc123xyz/);
+    expect(trace.error).not.toMatch(/sk-ant-api03-abcXYZ1234567890abcdef/);
+    expect(trace.error).toMatch(/\[REDACTED\]/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: runEpisodeChild — canonical redactSecrets (issue #3838)
+// ---------------------------------------------------------------------------
+
+describe('runEpisodeChild — canonical secret redaction', () => {
+  const baseArgs = {
+    command: 'afk',
+    spawnArgs: ['chat', '--format', 'stream-json', 'hi'],
+    spawnOptions: { env: {}, stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'] },
+    episodeId: 'ep-redact',
+    envLabel: 'baseline' as const,
+    sample: 0,
+    timeoutMs: 5000,
+  };
+
+  it('redacts a JWT in stderr (was not covered by the old sk-ant-only filter)', async () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+    const stdout = ndjson([contentChunk('partial')]);
+    const trace = await runEpisodeChild({
+      ...baseArgs,
+      spawnImpl: makeSpawnFn({ stdout, stderr: `auth failed: ${jwt}` }),
+    });
+    expect(trace.error).toMatch(/stream ended without a done event/);
+    expect(trace.error).not.toContain(jwt);
+    expect(trace.error).toMatch(/\[REDACTED\]/);
+  });
+
+  it('redacts a Bearer token in stderr', async () => {
+    const stdout = ndjson([contentChunk('partial')]);
+    const trace = await runEpisodeChild({
+      ...baseArgs,
+      spawnImpl: makeSpawnFn({ stdout, stderr: 'Authorization: Bearer ghp_supersecrettoken12345678901234' }),
+    });
+    expect(trace.error).not.toContain('ghp_supersecrettoken12345678901234');
     expect(trace.error).toMatch(/\[REDACTED\]/);
   });
 });

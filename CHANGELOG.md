@@ -11,6 +11,635 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.322.0] - 2026-10-17
+
+### Added
+- self-diagnosing real-Chrome setup for `afk browser connect` (#3933) (263b3f20)
+
+### Fixed
+- add remote_agent to tools reference (#3914) (36d51ca4)
+- shadow-git false negatives (bundled flags, backslash continuation, escaped quotes) + abort-only lost-work test (#3799) (a9ea6acf)
+- inflate pendingResizeErase footprint for centered-content narrowing resize (#3802) (b02bcd74)
+- detect lost root closure by actor provenance, not cost equality (#3935) (64ed2cfe)
+- clamp over-max timeout_ms instead of rejecting (#3820) (d5804441)
+- emit billing_settled phase for post-cancel delta; move runInProgress inside try (#3938) (9d4e021a)
+
+## [5.321.10] - 2026-10-17
+
+### Added
+- wake idle Telegram sessions when a background subagent settles (#3953) (7fa10cef)
+
+### Fixed
+- carry accumulated usage across stop-hook continuations (#3936) (ba01631a)
+- add --permission-mode to afk chat and pin it on remote runs (#3947) (2154b025)
+
+## [5.321.9] - 2026-10-17
+
+### Fixed
+- narrow read-only dispatch-intent gate, name the match, enforce in compose (#3944) (733eff5b)
+- await startup recovery in HandoffMaintenanceHandle.stop() (#3948) (e7b0dd40)
+- lost-args failureClass, alignment guard, and missing tests (#3952) (1757ff41)
+
+## [5.321.8] - 2026-10-17
+
+### Fixed
+- thread parentBillingStreams registry so depth-2+ abandoned streams reach session_sealed (#3962) (29b36826)
+
+## [5.321.7] - 2026-10-17
+
+### Added
+- mark subagent results as superseded when goal changed at delivery (#3951) (b1cdb4f1)
+
+### Fixed
+- add missing stderr tests for OAuth/refresh paths; use restoreAllMocks (#3946) (8e47c5d4)
+- harden skill-reference telemetry — non-object JSON guard, in-flight promise dedup, Set-based dedup (#3940) (57a037df)
+- address advisory findings from 2026-10-16 PR triage batch (#3955) (10b91b0e)
+
+## [5.321.6] - 2026-10-17
+
+### Fixed
+- add maxTurns to cost estimator to model multi-turn episode spend (#3949) (fa420138)
+- gate splitAtWorkspacePreamble on fork provenance, not marker text (#3943) (eeca6650)
+- clarify JournalMeta.model semantics, fix child provider source, add noop forSubagent params (#3950) (12694cb0)
+- guard sumBillingUsage provider mismatch + document outcome tag on SessionExecutorsBindTarget (#3941) (bb3f0ffe)
+- remove skippedByBudget double-count in runTask (#3945) (a4e87629)
+- add schema-version guard to loadSchedules; refuse future/unknown shapes (#3954) (4e0c0a17)
+- wire bot-level permissionMode into every Telegram session's AgentConfig (#3942) (7a9fd9f4)
+- narrow Bearer/AWS false positives from loosened anchors (#3937) (2ea8bc3d)
+
+## [5.321.5] - 2026-10-16
+
+### Fixed
+- roll nested and skill fork spend into root session (#3960) (713edaea)
+
+## [5.321.4] - 2026-10-16
+
+### Fixed
+- pin receipt cost rows and trace total; fix facet doc (#3911) (9835afd8)
+- reclaim parked lease immediately when periodic sweep expires its handoff (#3913) (72ab0460)
+
+## [5.321.3] - 2026-10-16
+
+### Fixed
+- harden remote_agent cwd validation, quoting, and output framing (#3917) (e4b55fd6)
+
+## [5.321.2] - 2026-10-16
+
+### Fixed
+- re-send handoff reminder with inline keyboard buttons on recovery (#3915) (9b6e374c)
+- stop builtin agents and fix-pr from pinning models (#3926) (801f2a85)
+- stamp subagentId on child closure events so root-filter guard works (#3912) (060ee7a1)
+
+## [5.321.1] - 2026-10-16
+
+### Fixed
+- resolve each probed slot's route once instead of twice (#3910) (0a8139a9)
+- merge prompt-dump secret shapes into canonical redactSecrets; add parity test (#3918) (d4d7fb05)
+- correct lost-root-closure under-report and backstop-seal $0 root (#3909) (b694971f)
+
+## [5.321.0] - 2026-10-16
+
+### Added
+- billing-normalized token rollups split by provider (#3889) (ff2316cf)
+
+### Fixed
+- downgrade plan mode to default on Telegram (seed drain is REPL-only) (#3916) (c5f7f45c)
+
+## [5.320.5] - 2026-10-16
+
+### Fixed
+- keep per-fork workspace preamble out of the sibling-shared cached prefix (#3923) (5d12bcde)
+
+## [5.320.4] - 2026-10-16
+
+### Fixed
+- retire dead gpt-5.4/grok-4.6 ids, add gpt-6 family (#3825) (2a1ac81c)
+
+## [5.320.3] - 2026-10-16
+
+### Fixed
+- stop runAt overlap noise, record blocked reasons, warn on date-pinned crons (#3824) (e6437fc7)
+
+## [5.320.2] - 2026-10-16
+
+### Fixed
+- truncatedByBudget false when all episodes ran despite budget exceeded (#3906) (7fa0605d)
+- send MCP status logs to stderr so -f json stdout stays clean (#3905) (1c7a04c6)
+
+## [5.320.1] - 2026-10-16
+
+### Fixed
+- preserve existing body >300 chars when reinforcing SPINE entries (#3908) (58c9dd16)
+- resolve slash-routing contradiction and measure mid-message skill references (#3884) (99ac1575)
+- stop /clear waiting on the SPINE classifier (#3843) (5817ea85)
+- route-aware credential check and suppress SPINE.md rewrites in A/B arms (#3907) (d98a6350)
+- stream chatgpt-oauth turn events instead of buffering the whole turn (#3826) (40ee2959)
+
+## [5.320.0] - 2026-10-16
+
+### Added
+- probe model slots with a custom endpoint + docs: local Mac model guide (#3887) (283cc1f0)
+
+## [5.319.6] - 2026-10-16
+
+### Fixed
+- one shared session-cost definition that includes subagent spend (#3888) (a5bb4943)
+
+## [5.319.5] - 2026-10-16
+
+### Fixed
+- guard stale-unlink retry in worktree-sweep lock on Windows (#3881) (ebeaadd9)
+- keep [vitals] notes out of the Esc-Esc rewind picker (#3870) (048b33d9)
+
+## [5.319.4] - 2026-10-16
+
+### Fixed
+- apply Windows delete-pending contention fix to 3 remaining O_EXCL lock sites (#3875) (01c74ea8)
+- treat mutating bash calls as writes for last-mutation ordering (#3872) (be5fcef5)
+- extract splitFrontmatter to unify three divergent frontmatter parsers (#3874) (f0de21bc)
+- anchor truncated-marker fallback to tail; export shared constant (#3873) (0b4fe90f)
+- accept read-only polling builtins and pipelines (#3853) (2980ab38)
+- add remote_agent to ALWAYS_EXTERNAL_TOOLS (#3871) (8b51407c)
+- ignore proven quoted heredoc data (#3855) (2a65059c)
+- let confined forks write to the OS temp dir (#3864) (95dbc2c2)
+
+### Changed
+- add explicit threat model (docs/threat-model.md) (#3851) (835fe595)
+
+## [5.319.3] - 2026-10-16
+
+### Fixed
+- run handoff maintenance and resumption in every daemon mode (#3877) (c6f259ea)
+
+## [5.319.2] - 2026-10-16
+
+### Fixed
+- pin shared WorkspaceStore lifetime across child session close (#3827) (bd119ab9)
+
+## [5.319.1] - 2026-10-15
+
+### Changed
+- retire proxy-redundant egress checks (#3854) (c2a3cb8e)
+
+## [5.319.0] - 2026-10-15
+
+### Added
+- accept free-text revision feedback in exit_plan_mode (#3832) (4d1fb31d)
+
+## [5.318.13] - 2026-10-15
+
+### Fixed
+- stop confining unconfined openai-compatible forks to read roots [] (#3815) (82aa12e4)
+
+## [5.318.12] - 2026-10-15
+
+### Added
+- read-only GET /api/handoffs lists pending daemon handoffs (#3858) (9fcc9ae5)
+
+### Fixed
+- expire daemon handoffs on the pull tick under the handoff lock (#3859) (d8e0c3fc)
+
+### Changed
+- replace fixed sleep with vi.waitFor in background-registry stopReason meta test (#3844) (e2a95438)
+
+## [5.318.11] - 2026-10-15
+
+### Added
+- remote_agent tool dispatches afk agents to other machines over SSH (#3837) (70fd1d49)
+
+### Fixed
+- canonical redactSecrets in whatif runner; escape bg-result envelope attributes (#3857) (b5b407b5)
+
+## [5.318.10] - 2026-10-15
+
+### Fixed
+- reject whatif --aa --verify, which silently ran no episodes (#3856) (0c7d88a8)
+
+## [5.318.9] - 2026-10-15
+
+### Added
+- record running afk version and the child's real model in journal meta (#3808) (#3830) (d5f4731b)
+- opt-in git_read tool replaces bash on read-only children (#3812) (74f4daba)
+
+### Fixed
+- do not dispatch tool calls whose arguments were lost or unparseable (#3829) (f0c8dd46)
+- bound seal() wait on pending child writes; InMemoryTraceWriter parity (#3831) (d336dafc)
+
+### Changed
+- pin Scenario 4, a bash write after a test pass leaves the artifact unverified (#3810) (1d8cfc99)
+
+## [5.318.8] - 2026-10-15
+
+### Fixed
+- refuse to overwrite an unreadable schedules.json (#3819) (5224e6cc)
+
+### Changed
+- pin Scenario 5, future-version schedules.json is cast, not refused (#3809) (7f76a0c5)
+- never cancel in-progress CI runs on main (#3818) (3cfa7a6b)
+- add nightly live provider test workflow (#2217) (eda80a93)
+
+## [5.318.7] - 2026-10-15
+
+### Fixed
+- stop treating "next" Done bullets as deferred work (#3813) (324d4eb7)
+
+## [5.318.6] - 2026-10-15
+
+### Fixed
+- distinguish hook command data from executable input (#3780) (36fa3b4d)
+- center status line under AFK_CENTER_CONTENT (#3801) (7b900f23)
+
+## [5.318.5] - 2026-10-15
+
+### Fixed
+- preserve GhError detail, tighten test coverage across advisory items (#3798) (1ff57c30)
+- replace fixed sleep(600) with vi.waitFor in send-failures test (#3800) (0cf36811)
+
+### Changed
+- BgResultNotifier.dispose() with pending injections (turn-ends-before-drain) (#3804) (957616d5)
+
+## [5.318.4] - 2026-10-15
+
+### Fixed
+- await pending child cancellation writes inside TraceWriter.seal() (#3807) (6f391479)
+
+### Changed
+- pin Scenario 3 – goal change while worker runs yields no superseded marker (#3806) (4af5afe4)
+
+## [5.318.3] - 2026-10-15
+
+### Fixed
+- import REDUNDANCY_THRESHOLD and add fixture similarity assertion in run.test.ts (#3803) (476bc5b5)
+- add direct unit tests for checkReadOnlyDispatchIntent gate (#3805) (3bbce2c0)
+
+## [5.318.2] - 2026-10-15
+
+### Fixed
+- correct mislabelled catch-branch line numbers in schedule.test.ts (#3733) (4981f257)
+
+## [5.318.1] - 2026-10-15
+
+### Added
+- block-evasion monitor — analyzer, tests, and afk trace show --evasion (#3785) (48f2fa56)
+- shadow-mode detector for git --no-verify and identity overrides (#3783) (b4457491)
+
+### Fixed
+- address advisory findings from 2026-10-14 PR triage batch (#3791) (4949cadf)
+
+## [5.318.0] - 2026-10-15
+
+### Added
+- hook-block repeat circuit breaker (#3789) (adcc1ace)
+
+### Changed
+- Happy Eyeballs fallback + split connect/inactivity timeout (#3792) (1612ec17)
+
+## [5.317.1] - 2026-10-15
+
+### Fixed
+- remove catchHandled dead code, fix exhaustiveness cast, drop unused generic (#3790) (ca243e50)
+- reject implementation dispatches to read-only named agents at dispatch time (#3786) (6319c4ba)
+
+### Changed
+- skip SessionStart dispatch entirely for forked children (#3784) (7dfcc534)
+
+## [5.317.0] - 2026-10-15
+
+### Added
+- read-only hooks view; config_get errors on unknown keys (#3735) (db3038da)
+
+### Fixed
+- drop redundant early-return, warn on partial mid-flight deletion, reorder collectAsyncIter, add direct unit tests (#3782) (9385e52b)
+
+## [5.316.4] - 2026-10-15
+
+### Fixed
+- document compose leaf tool restrictions (#3778) (1fa2e823)
+
+### Changed
+- restore .test-typecheck-baseline.json (2767) (#3793) (a43552fb)
+
+## [5.316.3] - 2026-10-15
+
+### Fixed
+- repair test type errors from #3765 breaking lint:tests:check on main (#3788) (69f323a3)
+
+## [5.316.2] - 2026-10-15
+
+### Fixed
+- fix value/checked precedence, escape testId, wrap map callback, JSDoc, targeted tests (#3729) (c16ea0e0)
+
+### Changed
+- Delete .test-typecheck-baseline.json (5982190e)
+- Delete .commit-msg (ccf73716)
+- Delete themes/terax directory (8b4656cd)
+
+## [5.316.1] - 2026-10-15
+
+### Fixed
+- distinguish recovered gate blocks from failed runs (#3781) (295e9b22)
+- reject fatal test typecheck input diagnostics (#3773) (000c958e)
+- make AFK_CENTER_CONTENT render as faithfully as non-centered mode (#3765) (e33892ff)
+- redact raw value from budget env warnings; say "finite" for Infinity (#3743) (14d97841)
+- tighten refusal guidance and clarify factory contracts (#3774) (42eda72b)
+- pin bug filing host and bound confirmation previews (#3776) (4275b6d3)
+
+### Changed
+- fix journal writer path in tracing section (#3787) (1e236048)
+- cover gh jq flag alternatives (#3777) (b15eac1e)
+- cover production dispatcher cwd setup (#3775) (adcb0671)
+- clarify root grants for unconfined forks (#3772) (1a76dde6)
+
+## [5.316.0] - 2026-10-14
+
+### Added
+- /bug --file files the report directly with gh after confirmation (#3750) (81098984)
+
+## [5.315.3] - 2026-10-14
+
+### Added
+- add /bug to report bugs via a prefilled GitHub issue link (#3746) (e30f0b14)
+
+### Fixed
+- show status-bar cap when maxBudgetUsd === 0 (hard-stop sentinel) (#3745) (be9a4a94)
+- name sanctioned alternatives in high-risk refusals (#3727 follow-up) (#3760) (ef09815a)
+
+## [5.315.2] - 2026-10-14
+
+### Fixed
+- restore lint:tests:check on main (merge race #3748/#3747) (#3768) (6184908e)
+
+## [5.315.1] - 2026-10-14
+
+### Fixed
+- stop confining unconfined forks to read roots [] (#3734) (761a2580)
+- match BASH_SAFE only at command position (#3761) (e608a1d6)
+- refresh advertised catalog on setCwd so execution and wire catalog agree (#3744) (c27de050)
+- make lint:tests:check gate visible by fixing TS6059 rootDir blindness (#3747) (3c1ec3ae)
+
+### Changed
+- write mutable JSON snapshots atomically (#3749) (d58ad5cb)
+- assert maxBudgetUsd reaches Telegram/REPL; add Infinity parser cases (#3748) (bd200f8f)
+- MCP tools are top-level only, not shared with subagents (#3753) (923061a4)
+
+## [5.315.0] - 2026-10-14
+
+### Added
+- content-addressed checkpoint blobs with integrity verification (#3628) (1215b324)
+
+## [5.314.0] - 2026-10-14
+
+### Added
+- suppress no-info hook_decision rows, add hook_summary and search_witness where filter (#3728) (b5c39cab)
+
+## [5.313.15] - 2026-10-14
+
+### Fixed
+- extract streamer.utils.ts, add settled guard, consolidate killGroup, add helpers tests (#3740) (6621d7a0)
+- close egress proxy test coverage gaps (items 1-4) (#3742) (484d37dd)
+
+## [5.313.14] - 2026-10-14
+
+### Fixed
+- add PreToolUse order assertion and deduplicate Invariant comment (#3730) (54af8768)
+- route browser login launch through GuardedEgress proxy (#3731) (a415bd0b)
+- batched nits — comment, unreachable fallback, mock cleanup, collectAsyncIter, named guard, debugLog (#3640) (1d93e243)
+
+## [5.313.13] - 2026-10-14
+
+### Fixed
+- name the safe alternative in two high-friction denials (#3727) (aa94b8e7)
+
+## [5.313.12] - 2026-10-14
+
+### Added
+- durable pending-question store wired into elicitation router (#3678) (3cceb09d)
+
+### Fixed
+- split question-only prompts over 4096 chars (item 3) (#3663) (990f8646)
+
+### Changed
+- adopt atomic-write at 5 hand-rolled sites (#3668) (3e47d1ec)
+- add SW(29,16) symmetric weighing matrix (#3722) (034e2f89)
+
+## [5.313.11] - 2026-10-14
+
+### Changed
+- split createDefaultHookRegistry under 200-line ceiling (#3684) (c8151569)
+- split transformProviderEvent under 200-line ceiling (#3667) (6b6691a2)
+- split startShell under 200-line ceiling (#3682) (9b1d4554)
+- split parseAgentInput under 200-line ceiling (#3666) (aa03c31a)
+- split observePage under 200-line ceiling (#3681) (2c42787c)
+- split parseComposeInput under 200-line ceiling (#3683) (4e0a74d4)
+- raise coverage on COV-009..013 modules (#3669) (688e0fa1)
+
+## [5.313.10] - 2026-10-14
+
+### Fixed
+- apply SSRF egress guard to browser_open navigation (#2313) (109db833)
+
+### Changed
+- SW(27,16) result write-up and README section (#3717) (cfcb1f06)
+
+## [5.313.9] - 2026-10-14
+
+### Changed
+- split registerChatCommand under 200-line ceiling (#3685) (55a74162)
+
+## [5.313.8] - 2026-10-14
+
+### Changed
+- split buildChildConfig under 200-line ceiling (#3688) (2c4945d7)
+
+## [5.313.7] - 2026-10-14
+
+### Added
+- write-ahead intent, outcome-unknown status, and pre-execution retry gate (#3713) (e7ee6b30)
+
+### Fixed
+- replace fixed sleeps with vi.waitFor in elicitation intercept tests (#3701) (7046c5b2)
+- make afk whatif --aa reachable from the CLI and /whatif (#3715) (1b18068f)
+
+### Changed
+- clean-install guide, task pack, and intervention log for outside-user trial (#3711) (fb322dc2)
+- shared execFileAsync export and abortReason helper (#3686) (1b612231)
+- deterministic repro for parent seal over live child subagents (#3712) (86e8ea18)
+- pathExists helper and atomic-write adoption at remaining tmp+rename sites (#3687) (d129bd58)
+- extract rawPostOAuthForm; consolidate xAI device-code POST blocks (#3702) (5523afb6)
+
+## [5.313.6] - 2026-10-14
+
+### Fixed
+- resolve nit/low advisory findings from PR triage batch #3670-#3680 (#3703) (10538e16)
+
+## [5.313.5] - 2026-10-14
+
+### Added
+- per-model-slot tool deny list (tools.disabledBySlot) (#3704) (2e6ea1aa)
+
+### Fixed
+- wire AFK_MAX_BUDGET_USD to daemon, Telegram, and REPL sessions (#2314) (ebdf6a4d)
+
+## [5.313.4] - 2026-10-14
+
+### Changed
+- split createBashHandler under 200-line ceiling (#3690) (93ff16b5)
+- split SubagentHandleImpl.run under 200-line ceiling (#3700) (cbfbe6b7)
+
+## [5.313.3] - 2026-10-14
+
+### Changed
+- split SubagentManager.forkSubagent under 200-line ceiling (#3699) (f0c909da)
+
+## [5.313.2] - 2026-10-14
+
+### Changed
+- split anthropic-direct runTurn under 200-line ceiling (#3698) (e43106db)
+- split preserveRowsBeforeFrameRender under 200-line ceiling (#3692) (1a8a234b)
+
+## [5.313.1] - 2026-10-14
+
+### Changed
+- split consumeRoundStream under 200-line ceiling (#3697) (84ca3e2b)
+- split ComposeExecutor.execute under 200-line ceiling (#3696) (d4801b60)
+- split streamToFinalMessage under 200-line ceiling (#3695) (755eaf31)
+- split handleEnter under 200-line ceiling (#3691) (300d76ee)
+- split runForegroundWithPromotion under 200-line ceiling (#3689) (e16db44d)
+
+## [5.313.0] - 2026-10-13
+
+### Added
+- tag learning facts with [auto-reflected] at recall (#3677) (d5a9697c)
+
+### Fixed
+- cosmetic comment fixes — resize-burst B5 discriminant, advanceTimersByTime explanation, rm onRetry warn (#3671) (a559dd18)
+- replace raw bash/grep overflow-kill warn with a styled tool-row label (#3680) (0ae2bdfd)
+
+## [5.312.9] - 2026-10-13
+
+### Added
+- document and test redundancy preflight warning (#2414) (#3675) (c2b661ac)
+
+### Fixed
+- static deliverClean import, restore Invariant comment, add ALS comment, dedupe JSDoc, remove unused env re-export (#3679) (3332ed78)
+
+### Changed
+- split applyPatch and createImageGenerateHandler under 200-line ceiling (#3673) (4fbf2222)
+- extract renderRootOrderLines + flush helper; handleCompact method (#3672) (8a766a43)
+- drop NodeJS.ErrnoException casts at 12 production sites (#3676) (0506684c)
+- adopt IncrementalLineReader/readJsonlFile at remaining hand-rolled sites (#3670) (c41bc657)
+
+## [5.312.8] - 2026-10-13
+
+### Fixed
+- advisory findings from PR triage batch #3638-#3647 (#3664) (9e3cf384)
+- remaining cosmetic items — fast-path comment, dedupe compose-agent-resolve tests (#3662) (e1012b60)
+
+### Changed
+- split interactive runTurn under 200-line ceiling (#3650) (43d3a44b)
+
+## [5.312.7] - 2026-10-13
+
+### Changed
+- split telegram streamResponse under 200-line ceiling (#3658) (4b286689)
+
+## [5.312.6] - 2026-10-13
+
+### Changed
+- split makeTelegramElicitationHandler under 200-line ceiling (#3656) (2d3cf0b5)
+- split runSweep under 200-line ceiling (#3657) (2fa61bb6)
+
+## [5.312.5] - 2026-10-13
+
+### Changed
+- split registerInteractiveCommand under 200-line ceiling (#3651) (7cebc1cf)
+
+## [5.312.4] - 2026-10-13
+
+### Changed
+- split setupSurface under 200-line ceiling (#3648) (26ffc64e)
+
+## [5.312.3] - 2026-10-13
+
+### Changed
+- split renderToolLaneOverlay under 200-line ceiling (#3649) (52e8909b)
+- add shared execFileAsync (#3653) (20968114)
+- add abortReason helper for AbortSignal.reason sites (#3654) (ccfe7fe5)
+- adopt isErrnoCode/isEnoent at errno cast sites (#3655) (79026f23)
+
+## [5.312.2] - 2026-10-13
+
+### Fixed
+- narrow-terminal layout: wrap to real width, force spill below 20 cols, add edge-case tests (#3643) (2cc5fb5f)
+
+## [5.312.1] - 2026-10-12
+
+### Fixed
+- use native Rolldown dashboard build options (#3592) (ee49d01a)
+- verify OAuth form global fetch fallback (#3590) (9c24cc0a)
+- advisory follow-ups — store comment, selectors guard, drain-rejects test, outcomes barrel doc (#3593) (45ddcb2e)
+- collision-only scrollback, type-guard filter, echo original, derive prefix cols, spill-ordering tests (#3639) (f5bc519c)
+- telegram ask_question edge cases near 4096-char limit (#3646) (fddb4b67)
+- address advisory findings from 2026-10-12 PR triage batch (#3642) (f59ec87c)
+- refactor updateHandoffAnswer to options object, tighten from type, add PII JSDoc, debugLog, and tests (#3641) (ecc51dbe)
+- low/cosmetic fixes — @internal, EPERM note, spawnError, workspaceClose assert, mcp example (#3644) (0bd4138c)
+- remove unused _sandboxes param, reject --aa+--spec, clarify A/A stage name (#3638) (a0045d86)
+
+### Changed
+- split stream-rendering functions under 200-line ceiling (#3609) (68740aeb)
+- telegram clear-or-queue delegation + bareSkillName helper (#3645) (9a99c78b)
+- adopt isEnoent at file-checkpoint, peer inbox, and user-skills sites (#3647) (538f6c74)
+
+## [5.312.0] - 2026-10-12
+
+### Added
+- content-addressed artifact registry (put/get/list/read) (#3629) (f22ec95a)
+
+## [5.311.0] - 2026-10-12
+
+### Added
+- return committed fact access metadata (#3623) (2ebcb5d8)
+- add --aa flag for A/A calibration mode (Step 0) (#3630) (6a50ad73)
+- install daemon elicitation handler for cron/sessionstart tasks (#3619) (8e10e234)
+
+## [5.310.14] - 2026-10-12
+
+### Added
+- add responderIdentity to HandoffRecord for response provenance (#3627) (a1e07953)
+
+### Fixed
+- address advisory findings from 2026-10-12 PR triage batch (#3626) (dec4d416)
+- thread customBaseURL into resolveWireMode on complete() and one-shot-router paths (#3624) (a93be7fe)
+
+### Changed
+- adopt readJsonlFile in ledger/store; audit remaining sites (#3622) (5f38fe77)
+
+## [5.310.13] - 2026-10-12
+
+### Added
+- opt-in repo-declared worktree setup step (#3611) (8715836c)
+
+### Changed
+- adopt atomic-write for launchd plist install/upgrade (#3615) (8788ae22)
+
+## [5.310.12] - 2026-10-12
+
+### Fixed
+- never cut off ask_question text (#3625) (4f04d330)
+
+## [5.310.11] - 2026-10-12
+
+### Fixed
+- match BASH_HIGH tokens only at shell word starts (#3610) (f4cf9300)
+- thread AFK_THINKING/AFK_EFFORT into Telegram bot constructor (#3613) (1192ede6)
+
+### Changed
+- raise bot.ts statement coverage 56.5% → 91.6% (setupHandlers closures) (#3618) (a99e34ef)
+- extract connectMcpTraced helper (MCP trace-phase duplication) (#3617) (937f8fd8)
+- adopt errorMessage at ?? 'aborted' sites in abort.ts and browser/web handlers (#3614) (01c1cb90)
+- convert score/writeScore to writeJsonFileAsync (#3612) (4037a8a2)
+- strengthen B3/B5 resize-burst precision + add cpr diagnostic (#3603) (b61e74d7)
+
 ## [5.310.10] - 2026-10-12
 
 ### Fixed

@@ -545,13 +545,14 @@ describe('formatStatusLine — edge cases', () => {
     expect(out).toContain('turn 0');
   });
 
-  it('maxBudgetUsd = 0 does not append a cap suffix', () => {
+  it('maxBudgetUsd = 0 appends a cap suffix (hard-stop sentinel)', () => {
+    // Zero is a hard-stop: show $N.NN/$0.00 so operators know why the session
+    // stops immediately. Decision recorded in PR for #3709.
     const out = stripAll(formatStatusLine(
       { model: 'sonnet', budgetUsd: 0.10, maxBudgetUsd: 0 },
       200,
     ));
-    expect(out).toContain('$0.10');
-    expect(out).not.toContain('$0.10/$');
+    expect(out).toContain('$0.10/$0.00');
   });
 
   it('does not emit a turn segment when turnCount is undefined even if maxTurns is set', () => {

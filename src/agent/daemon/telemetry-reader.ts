@@ -35,6 +35,15 @@
  * | `src/agent/journal/records.ts` | `readJournalFile` counts malformed lines separately and detects torn-tail via `endsWithNewline`; `parseJsonlLines` has no line-count or torn-tail signal. |
  * | `src/agent/tools/bash-capture-index.ts` | `extractFirstLinePreview` splits on `\n` to find the first non-empty plain-text line — no JSON parsing. |
  * | `src/agent/trace/factory.ts` | `readLastSeq` reads only the last non-empty line for a `seq` field; scanning all lines via `parseJsonlLines` would be wasteful and semantically wrong. |
+ * | `src/improve/eval-run/pipeline-recency.ts` | Read path goes through an injectable `ctx.readIndex` seam for deterministic unit testing; replacing `readFileSync` with `readJsonlFile` would break that seam. Already uses `parseJsonlLines` for the parse step. |
+ * | `src/whatif/ledger.ts` | Adopted `readJsonlFile` in `trackRecordSummary` (#3266). `appendCalibration` uses `fsp.appendFile` (async, multi-record) — `appendJsonl` is sync and single-record, so the write path stays as-is. |
+ * | `src/agent/effect-ledger/store.ts` | Adopted `readJsonlFile` in `readAllRecords` (#3266). `appendLine` uses `appendFileSync` with mode `0o600` — `appendJsonl` does not support per-file mode bits, so the write path stays as-is. |
+ * | `src/agent/session-ledger-reader.ts` | `tailLedger` `readNewRecords` inner fn adopted `IncrementalLineReader` (#3266). `readLedger` uses its own `readline` interface with a type-narrowing `parseRecord` domain guard — not a candidate for `readJsonlFile` (the guard rejects schema-invalid objects, not just malformed JSON). |
+ * | `src/agent/bg-job-log.ts` | `readEvents` adopted `readJsonlFile` (#3266). `tailEvents` `readNewLines` inner fn adopted `IncrementalLineReader` (#3266). |
+ * | `src/cli/slash/commands/spine.ts` | `JSON.parse` at :103 operates on lines from `readSpine()` — not a JSONL file read; the split/parse is over pre-loaded string content. |
+ * | `src/whatif/runner/afk-runner.stream.ts` | `parseLine` + `accumulateStreamJson` process subprocess stdout (in-memory string, not a file path). Domain-specific event dispatch — not a candidate. |
+ * | `src/service/launchd/status.ts` | Parses `launchctl list` output: JSON array/object or tab/space-separated text table. Not JSONL. |
+ * | `src/agent/tools/handlers/image-generate.chatgpt.ts` | SSE stream chunked binary reads; `split('\n')` is over SSE `data:` lines, not JSONL records. |
  *
  * @module agent/daemon/telemetry-reader
  */

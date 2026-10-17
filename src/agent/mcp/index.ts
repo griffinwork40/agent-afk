@@ -3,6 +3,14 @@
  * folder should reach in through this barrel for any symbol it exports.
  * Sub-modules may be imported directly only for symbols not re-exported here.
  *
+ * @example
+ * ```ts
+ * import { McpManager, loadMcpConfig } from './agent/mcp/index.js';
+ * const { servers } = await loadMcpConfig();
+ * const manager = new McpManager(servers);
+ * await manager.connectAll();
+ * ```
+ *
  * @module agent/mcp
  */
 

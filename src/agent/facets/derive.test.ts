@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(12); // v12: patch_apply file write, bash external effects (#3182)
+    expect(facet.facet_version).toBe(13); // v13: token_breakdown total/subagent cost (#3879)
     expect(facet.derived_from).toBe('afk-session');
   });
 

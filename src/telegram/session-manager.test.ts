@@ -7,6 +7,7 @@ import { SessionManager } from './session-manager';
 import type { IAgentSession, AgentConfig, SessionState } from '../agent/types';
 import { findSession, listSessions, loadSession } from '../cli/session-store';
 import { promises as fs, existsSync, rmSync } from 'fs';
+import { pathExists } from '../utils/fs.js';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
@@ -425,7 +426,7 @@ describe('SessionManager', () => {
       await manager.saveSessions();
 
       const filePath = join(testDataDir, '12345.json');
-      const exists = await fs.access(filePath).then(() => true).catch(() => false);
+      const exists = await pathExists(filePath);
       expect(exists).toBe(true);
     });
 
@@ -519,7 +520,7 @@ describe('SessionManager', () => {
       await manager.closeAll();
 
       const filePath = join(testDataDir, '12345.json');
-      const exists = await fs.access(filePath).then(() => true).catch(() => false);
+      const exists = await pathExists(filePath);
       expect(exists).toBe(true);
     });
 
@@ -1561,6 +1562,54 @@ describe('SessionManager — elicitation route registry cleanup (#1662)', () => 
     expect(getElicitationRoute(sid)).toBeDefined();
 
     await idleManager.closeAll().catch(() => {});
+  });
+
+  // ---------------------------------------------------------------------------
+  // #3927 — permissionMode wiring
+  // ---------------------------------------------------------------------------
+  // Verify that the bot-level permissionMode flows from SessionManagerOptions
+  // all the way into the AgentConfig passed to createSession, so the
+  // plan-mode guard in finalizeTelegramSession (session-lifecycle.ts:109) is
+  // reachable and not permanently dead code.
+
+  test('permissionMode from SessionManagerOptions reaches the AgentConfig passed to createSession (#3927)', async () => {
+    const capturedConfigs: AgentConfig[] = [];
+    const pmManager = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      permissionMode: 'plan',
+      createSession: async (config: AgentConfig) => {
+        capturedConfigs.push(config);
+        return new MockAgentSession();
+      },
+    });
+
+    await pmManager.getSession(9001);
+    await pmManager.closeAll();
+
+    expect(capturedConfigs).toHaveLength(1);
+    expect(capturedConfigs[0]!.permissionMode).toBe('plan');
+  });
+
+  test('permissionMode is absent in AgentConfig when not set in SessionManagerOptions (#3927)', async () => {
+    const capturedConfigs: AgentConfig[] = [];
+    const pmManager = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      // permissionMode intentionally omitted
+      createSession: async (config: AgentConfig) => {
+        capturedConfigs.push(config);
+        return new MockAgentSession();
+      },
+    });
+
+    await pmManager.getSession(9002);
+    await pmManager.closeAll();
+
+    expect(capturedConfigs).toHaveLength(1);
+    expect(capturedConfigs[0]!.permissionMode).toBeUndefined();
   });
 
   test('registry does not grow across multiple record-then-closeAll cycles', async () => {

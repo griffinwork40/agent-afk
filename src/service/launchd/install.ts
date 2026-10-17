@@ -1,10 +1,11 @@
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { dirname } from 'path';
 import { guiDomain, LAUNCHCTL_TIMEOUT_MS, labelFor, launchAgentsDir, plistPath, serviceLogPath, type ServiceName } from './paths.js';
 import { type PlistOptions, renderPlist, resolveServicePath, resolveWatchPaths, resolveProgramArguments } from './plist.js';
 import { errorMessage, isErrnoCode} from '../../utils/errors.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 
 /**
  * Extract `EnvironmentVariables` key→value pairs from a plist string.
@@ -73,19 +74,16 @@ export interface InstallOptions {
  * `launchctl bootstrap` runs, otherwise bootstrap fails with "input/output
  * error". So we write → bootstrap, never the inverse.
  *
- * Write atomicity: we write the rendered XML to a sibling tmp file with
- * `O_EXCL` (`flag: 'wx'`) + explicit `mode: 0o600`, then `renameSync` it
- * into place. APFS guarantees the rename is atomic relative to crashes,
- * which means an observer (including launchctl bootstrap on a retry)
- * will see either the full new plist or the previous state — never a
- * truncated half-written file that passes `existsSync` but fails XML
- * parsing. The `wx` flag closes the TOCTOU window between the
- * `existsSync` check above and the write: if another process (or a
- * symlink attack) created the tmp path between the two operations,
- * `writeFileSync` throws instead of following a symlink to clobber an
- * arbitrary file. Explicit `mode: 0o600` overrides the user's `umask` so
- * the plist file is owner-readable only — the plist may embed env-var
- * values (API keys, tokens) and should not be world-readable.
+ * Write atomicity: we delegate to `atomicWriteFile` (utils/atomic-write),
+ * which writes to a random-named sibling temp file (`.tmp-<hex>`) with
+ * `O_EXCL` and `mode: 0o600`, then renames it atomically into place.
+ * APFS guarantees the rename is atomic relative to crashes, so an observer
+ * (including launchctl bootstrap on a retry) will see either the full new
+ * plist or the previous state — never a truncated half-written file that
+ * passes `existsSync` but fails XML parsing. The random temp name and
+ * `secure: true` (O_EXCL) together close the TOCTOU symlink-attack window.
+ * Explicit `mode: 0o600` ensures the plist is owner-readable only — it
+ * may embed env-var values (API keys, tokens) and must not be world-readable.
  */
 export function installService(name: ServiceName, opts: InstallOptions = {}): InstallResult {
   const path = plistPath(name);
@@ -126,27 +124,12 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
   };
   const xml = renderPlist(plistOpts);
 
-  // Atomic write: tmp file with O_EXCL + explicit mode → rename. See
-  // function-level docstring for the threat model.
-  const tmpPath = `${path}.tmp`;
+  // Atomic write: tmp+rename via atomicWriteFile (random temp name, O_EXCL,
+  // mode 0o600). See function-level docstring for the threat model.
   try {
-    writeFileSync(tmpPath, xml, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
+    atomicWriteFile(path, xml, { mode: 0o600, secure: true, mkdirp: false });
   } catch (err) {
-    // Best-effort cleanup so a stale tmp file from a prior failed run
-    // doesn't permanently break subsequent installs. We swallow the
-    // unlink error: if it fails, the user gets a clearer message on the
-    // next install attempt naming the stale tmp path.
-    return { kind: 'failed', reason: `Failed to write plist (tmp ${tmpPath}): ${errorMessage(err)}` };
-  }
-  try {
-    renameSync(tmpPath, path);
-  } catch (err) {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // Ignore — the rename error message below is the actionable one.
-    }
-    return { kind: 'failed', reason: `Failed to install plist (rename ${tmpPath} → ${path}): ${errorMessage(err)}` };
+    return { kind: 'failed', reason: `Failed to install plist: ${errorMessage(err)}` };
   }
 
   if (opts.skipBootstrap) {
@@ -311,29 +294,14 @@ export function upgradeService(name: ServiceName, opts: InstallOptions = {}): Up
     return { kind: 'already-current', plistPath: path, label: labelFor(name) };
   }
 
-  // Atomic write: O_EXCL (wx) to close the TOCTOU symlink window at the
-  // predictable tmp path. On EEXIST (stale crash leftover), clean up and
-  // retry once — same defense-in-depth as installService().
-  const tmpPath = `${path}.tmp`;
+  // Atomic write: tmp+rename via atomicWriteFile (random temp name, O_EXCL,
+  // mode 0o600). Random temp names make EEXIST-on-tmp virtually impossible,
+  // so the stale-leftover retry loop from the hand-rolled version is not
+  // needed. secure:true preserves O_EXCL on the temp file.
   try {
-    writeFileSync(tmpPath, desired, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
-  } catch (firstErr) {
-    if (isErrnoCode(firstErr, 'EEXIST')) {
-      try { unlinkSync(tmpPath); } catch { /* ignore cleanup failure */ }
-      try {
-        writeFileSync(tmpPath, desired, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
-      } catch (retryErr) {
-        return { kind: 'failed', reason: `Failed to write upgraded plist (tmp ${tmpPath}): ${errorMessage(retryErr)}` };
-      }
-    } else {
-      return { kind: 'failed', reason: `Failed to write upgraded plist (tmp ${tmpPath}): ${errorMessage(firstErr)}` };
-    }
-  }
-  try {
-    renameSync(tmpPath, path);
+    atomicWriteFile(path, desired, { mode: 0o600, secure: true, mkdirp: false });
   } catch (err) {
-    try { unlinkSync(tmpPath); } catch { /* ignore */ }
-    return { kind: 'failed', reason: `Failed to install upgraded plist (rename ${tmpPath} -> ${path}): ${errorMessage(err)}` };
+    return { kind: 'failed', reason: `Failed to install upgraded plist: ${errorMessage(err)}` };
   }
 
   return { kind: 'upgraded', plistPath: path, label: labelFor(name) };

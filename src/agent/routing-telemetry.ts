@@ -119,6 +119,17 @@ export interface RoutingDecisionEntry {
    */
   is_gate?: boolean | undefined;
   /**
+   * On `skill.reference_seen` rows: whether the model called the `skill` tool
+   * for the referenced skill during the same turn. Privacy: boolean only.
+   */
+  invoked?: boolean | undefined;
+  /**
+   * On `skill.reference_seen` rows: whether the user's message contained a
+   * question mark — separates "should we run /x?" from "lets run /x" when
+   * reading the miss rate. Privacy: boolean only, no message text.
+   */
+  in_question?: boolean | undefined;
+  /**
    * Tool name for tool-level events (e.g. `tool.overflow_kill`).
    * Privacy: short identifier only (e.g. "grep", "bash") — not the tool input.
    */

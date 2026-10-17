@@ -34,6 +34,7 @@ import type {
   PickerController,
 } from './terminal-compositor.types.js';
 import { preserveRowsBeforeFrameRender } from './terminal-compositor.frame-preserve.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
 import {
   reflowCommittedBandToWidth,
   type BandReflowCache,
@@ -46,6 +47,7 @@ import {
 } from './terminal-compositor.frame.layout.js';
 import { buildFrameLines, buildPickerFrameLines } from './terminal-compositor.frame.lines.js';
 import { computeFramePosition } from './terminal-compositor.frame.position.js';
+import { contentBand } from './render/measure.js';
 import { contentHugAnchor, contentHugBandReserve, contentHugTargetBottom } from './terminal-compositor.content-hug.js';
 
 /**
@@ -107,6 +109,8 @@ export interface FrameHost {
   /** Frame placement regime — see {@link FramePlacementMode}. */
   placementMode: FramePlacementMode;
   lastKnownRows: number;
+  /** See field doc on the class (terminal-compositor.ts). @internal */
+  lastKnownCols: number;
   /** True while commitAbove is executing (Phase 1 → Phase 3). Guards Phase 2
    *  repaints from applying content-following, which would misplace the frame
    *  and cause Phase 3 to write into the banner zone. */
@@ -153,6 +157,7 @@ export function repaint(self: FrameHost): void {
   // expand vs shrink.
   self.flushResizeGhostErase();
   self.lastKnownRows = self.stdout.rows ?? 24;
+  self.lastKnownCols = self.stdout.columns ?? 80;
   // F1 (retained-logical-source re-wrap): re-wrap the retained band at the
   // CURRENT width before EITHER downstream consumer reads it this repaint —
   // preserveRowsBeforeFrameRender's eviction paints (called below and from
@@ -160,7 +165,9 @@ export function repaint(self: FrameHost): void {
   // sites) both read `self.committedBand` verbatim. Placed above the picker
   // short-circuit so both paths see fresh-width rows; a steady-width repeat
   // repaint is a cache hit (see reflowCommittedBandToWidth) and costs nothing.
-  reflowCommittedBandToWidth(self, self.stdout.columns ?? 80);
+  // Wrap width is the content-band width (== cols when centering is off): the
+  // band paint sites prepend the margin, so rows must fit `cols - marginCols`.
+  reflowCommittedBandToWidth(self, compositorBand(self.stdout).width);
   // Picker-mode short-circuit. The picker rents the input region
   // (dropdown + hint + input line all suppressed) and supplies its
   // own rows via `renderRows()`. Overlay/spinner/tip/attachment
@@ -203,6 +210,7 @@ export function repaint(self: FrameHost): void {
     dropdownRows,
     hintRow,
     inputLine,
+    contentBand(self.stdout.columns ?? 80).margin,
   );
   // Invariant: absoluteBottom is the maximum row the compositor may ever write
   // to — the row just above the bg-status-bar DECSTBM reservation. It is the
@@ -291,7 +299,9 @@ function repaintPickerFrame(self: FrameHost): void {
     self.scrollRegion,
     contentHugBandReserve(self, self.stdout.rows ?? 24),
   );
-  const frameLines = buildPickerFrameLines(chrome, layout.trimmedOverlay, layout.renderGap, pickerRows);
+  const frameLines = buildPickerFrameLines(
+    chrome, layout.trimmedOverlay, layout.renderGap, pickerRows, contentBand(self.stdout.columns ?? 80).margin,
+  );
   // Empty-frame guard: when the picker's renderRows() is empty and no
   // chrome is active, frameLines is []. The CupFrameRenderer clamps
   // rawLineCount to ≥1, so rendering an empty string would violate the

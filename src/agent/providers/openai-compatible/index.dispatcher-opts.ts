@@ -16,6 +16,8 @@ import type { RuntimeStateSource } from '../../awareness/index.js';
 
 export interface BuildDispatcherOpts {
   cwd?: string;
+  /** Active model input whose `tools.disabledBySlot` list applies — parity with anthropic-direct. */
+  slotModel?: string;
   readRoots?: string[];
   writeRoots?: string[];
   sessionId?: string;

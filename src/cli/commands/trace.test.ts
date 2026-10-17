@@ -130,6 +130,23 @@ describe('formatTrace — default human view', () => {
   });
 });
 
+describe('formatTrace — hook_summary', () => {
+  const sealed = { ts: '2026-06-05T12:31:00.000Z', seq: 2, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0, finalTurnCount: 1, closedAt: '2026-06-05T12:31:00.000Z' } };
+
+  it('renders the summary line and a header dispatch total', () => {
+    const summary = { ts: '2026-06-05T12:30:59.000Z', seq: 1, kind: 'hook_summary', payload: { scope: 'root-session-including-subagents', counts: { PreToolUse: { allow: 4, block: 1 }, Stop: { allow: 2 } }, written: 1, suppressed: 6 } };
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([summary, sealed])));
+    expect(out).toContain('7 hook dispatches');
+    expect(out).toContain('PreToolUse allow=4 block=1 · Stop allow=2');
+    expect(out).toContain('6 allow rows suppressed');
+  });
+
+  it('omits the dispatch total when no summary exists (unknown, not zero)', () => {
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([sealed])));
+    expect(out).not.toContain('hook dispatches');
+  });
+});
+
 describe('formatTrace — subagent timeout markers', () => {
   // PR (observable forked children): the reader must surface the new lifecycle
   // timeout signals — `[timeout]` on a failed child that blew its OWN budget
@@ -681,6 +698,66 @@ describe('formatTrace — fmtErrorHead sanitizes escape sequences', () => {
     // But the visible text 'RED' and 'text' must survive sanitization.
     expect(output).toContain('RED');
     expect(output).toContain('text');
+  });
+});
+
+describe('formatTrace — summed total with child closures (#3891)', () => {
+  // A fan-out trace: the root closure costs $0.0300 and one child closure
+  // costs $0.0200. The session_sealed carries both figures so the accumulator
+  // can compute root=$0.0300, subagent=$0.0200, total=$0.0500.
+  // formatTrace must surface the whole-trace total ($0.0500), NOT just the
+  // root seal cost.
+  const events: EventObj[] = [
+    {
+      ts: '2026-06-05T12:30:00.000Z',
+      seq: 0,
+      kind: 'subagent_lifecycle',
+      payload: { transition: 'started', subagentId: 'child-1', parentId: 'root', model: 'haiku' },
+    },
+    {
+      ts: '2026-06-05T12:31:00.000Z',
+      seq: 1,
+      kind: 'closure',
+      payload: { reason: 'subagent_end', finalTurnCount: 3, finalCostUsd: 0.02, finalTokens: {}, subagentId: 'child-1' },
+    },
+    {
+      ts: '2026-06-05T12:32:00.000Z',
+      seq: 2,
+      kind: 'subagent_lifecycle',
+      payload: { transition: 'succeeded', subagentId: 'child-1', durationMs: 120000, turnCount: 3, outputBytes: 500, totalCostUsd: 0.02 },
+    },
+    {
+      ts: '2026-06-05T12:33:00.000Z',
+      seq: 3,
+      kind: 'closure',
+      payload: { reason: 'model_end_turn', finalTurnCount: 5, finalCostUsd: 0.03, finalTokens: {} },
+    },
+    {
+      ts: '2026-06-05T12:33:01.000Z',
+      seq: 4,
+      kind: 'session_sealed',
+      payload: {
+        status: 'succeeded',
+        finalCostUsd: 0.03,
+        subagentCostUsd: 0.02,
+        finalTurnCount: 5,
+        closedAt: '2026-06-05T12:33:01.000Z',
+        subagentCount: 1,
+      },
+    },
+  ];
+
+  const out = formatTrace('sess-fanout', '/w/sess-fanout/trace.jsonl', parseTrace(toJsonl(events)));
+
+  it('shows the whole-trace total ($0.0500) in the header, not just the root cost', () => {
+    expect(out).toContain('$0.0500');
+  });
+
+  it('does not show only the root cost as the total', () => {
+    // $0.0300 is the root-only figure; it must not appear as the total.
+    // (It may appear elsewhere, e.g. in the closure line, so we assert the
+    // header cost part specifically via the fmtUsd pattern " · $0.03".)
+    expect(out).not.toMatch(/· \$0\.0300/);
   });
 });
 

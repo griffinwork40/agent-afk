@@ -95,6 +95,8 @@ describe('buildSkillManifest', () => {
     const manifest = buildSkillManifest();
 
     expect(manifest).toContain('Available skills (invoke via the `skill` tool):');
+    expect(manifest).toContain('parallel `agent` calls that each invoke `skill` once');
+    expect(manifest).not.toContain('via `agent` or `compose`');
     expect(manifest).toContain('test-skill-1: First test skill');
     expect(manifest).toContain('test-skill-2: Second test skill');
   });

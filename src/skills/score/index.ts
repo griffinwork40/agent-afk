@@ -34,7 +34,7 @@
 import { spawn, type ChildProcess } from 'child_process';
 import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
-import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { writeJsonFileAsync } from '../../utils/json-file.js';
 import { errorMessage } from '../../utils/errors.js';
 import { pathExists } from '../../utils/fs.js';
 import { isPlainObject } from '../../utils/type-guards.js';
@@ -161,8 +161,8 @@ export async function scoreBranch(opts: ScoreBranchOptions): Promise<BranchScore
 
 /**
  * Persist a score to `<farmDir>/scores/branch-<index>.json`. Creates the
- * scores dir on demand. Atomic (tmp + rename) so a crash mid-write never
- * leaves a torn JSON snapshot.
+ * scores dir on demand. Uses {@link writeJsonFileAsync} for atomic tmp+rename
+ * writes so a crash mid-write never leaves a torn JSON snapshot.
  */
 export async function writeScore(
   farmDir: string,
@@ -170,10 +170,7 @@ export async function writeScore(
   score: BranchScore,
 ): Promise<string> {
   const path = join(farmDir, 'scores', `branch-${index}.json`);
-  await atomicWriteFileAsync(path, JSON.stringify(score, null, 2) + '\n', {
-    mode: 0o600,
-    encoding: 'utf-8',
-  });
+  await writeJsonFileAsync(path, score, { mode: 0o600 });
   return path;
 }
 

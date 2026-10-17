@@ -12,8 +12,9 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { writeFileSync, unlinkSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { unlinkSync, readFileSync } from 'node:fs';
+import { atomicWriteFile } from '../utils/atomic-write.js';
+import { join } from 'node:path';
 import type { AgentConfig } from './types.js';
 import type { Telegraf } from 'telegraf';
 import { CronScheduler, type SchedulerOptions, type TelemetryRecord } from './daemon/scheduler.js';
@@ -76,6 +77,12 @@ export interface DaemonOptions {
   /** Override the queue directory for pull-mode dequeue (defaults to `getQueueDir()`). */
   queueDir?: string;
   /**
+   * Run durable-handoff maintenance (startup re-notify/expiry, periodic expiry
+   * sweep, answered-handoff resumption) for every trigger mode. Defaults to
+   * true; the CLI disables it for transient `--once` ticks.
+   */
+  handoffMaintenance?: boolean;
+  /**
    * Write the port-discovery file under the daemon state dir so tool handlers
    * (create_schedule / cancel_schedule live-sync) can find this instance.
    * Defaults to true. Set false for transient instances (`--once` ticks,
@@ -85,10 +92,11 @@ export interface DaemonOptions {
   writePortFile?: boolean;
   /**
    * Telegraf bot instance for rich daemon elicitation. When provided together
-   * with `primaryChatId`, pull-mode tasks use `sendHandoffQuestion` (inline
-   * keyboards, reply-to matching) instead of the plain push fallback. Follows
-   * the `doneUnverifiedProbe` injection pattern — injected from the co-running
-   * caller (e.g. a shared Telegram+daemon process) rather than imported.
+   * with `primaryChatId`, both pull-mode and cron/sessionstart tasks use
+   * `sendHandoffQuestion` (inline keyboards, reply-to matching) instead of
+   * the plain push fallback (#3243 item 2). Follows the `doneUnverifiedProbe`
+   * injection pattern — injected from the co-running caller (e.g. a shared
+   * Telegram+daemon process) rather than imported.
    * Has no effect when absent — fallback is always preserved.
    */
   bot?: Telegraf;
@@ -96,6 +104,13 @@ export interface DaemonOptions {
   primaryChatId?: number;
   /** Optional topic thread ID for supergroup delivery. */
   primaryThreadId?: number;
+  /**
+   * Resolve a task's `notifyChat` (alias or raw id) to an allowlisted numeric
+   * chat id. Injected by the CLI layer so `src/agent/` never imports
+   * `src/cli/`. Used by the cron elicitation handler to route the rich
+   * Telegram handoff question to the correct chat (#3243 item 2).
+   */
+  resolveNotifyChat?: (notifyChat: number | string | undefined, taskId: string) => number | undefined;
   /**
    * Proactive OAuth token refresher (optional).
    *
@@ -161,11 +176,15 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     ...(options.bot !== undefined ? { bot: options.bot } : {}),
     ...(options.primaryChatId !== undefined ? { primaryChatId: options.primaryChatId } : {}),
     ...(options.primaryThreadId !== undefined ? { primaryThreadId: options.primaryThreadId } : {}),
+    ...(options.resolveNotifyChat !== undefined ? { resolveNotifyChat: options.resolveNotifyChat } : {}),
   });
 
   if (options.pullPollIntervalMs !== undefined && options.pullPollIntervalMs > 0) {
     scheduler.startPullLoop();
   }
+  // Handoff expiry + answered-handoff resumption run in EVERY trigger mode
+  // (#1416), not only pull. Off for transient instances (`--once`).
+  if (options.handoffMaintenance !== false) scheduler.startHandoffMaintenance();
 
   for (const task of options.tasks ?? []) {
     scheduler.register(task);
@@ -191,8 +210,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   // is found (pre-existing port files from before this change).
   if (writePortFile) {
     try {
-      mkdirSync(dirname(portFilePath), { recursive: true });
-      writeFileSync(portFilePath, `${host}:${port}`, 'utf-8');
+      atomicWriteFile(portFilePath, `${host}:${port}`, { encoding: 'utf-8', mkdirp: true, mode: 0o644 });
     } catch {
       // Best-effort; daemon still functional without port file
     }

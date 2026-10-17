@@ -21,6 +21,7 @@
  * @module agent/daemon/handoff-wiring
  */
 
+import { pickResumeFields, type HandoffResumeContext } from './handoff-resume-context.js';
 import type { ElicitationHandler } from '../elicitation-router.js';
 import type { ElicitationRequest, ElicitationResult } from '../types/sdk-types.js';
 import { serializeRequest } from './elicitation-serialize.js';
@@ -32,6 +33,7 @@ import {
   type HandoffRecord,
 } from './handoff-store.js';
 import { setLeaseState } from './lease-store.js';
+import { DEFAULT_HANDOFF_TTL_MS, expireHandoff, isHandoffStale } from './handoff-expiry.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion, clearPendingTextHandoff } from '../../telegram/handoff-answer.js';
@@ -42,14 +44,6 @@ import { truncateTelegramLabel } from '../../utils/truncate-telegram-label.js';
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/**
- * Default TTL for daemon handoffs: 24 hours.
- * After this, the handoff transitions to 'expired' during the next recovery
- * sweep, and the task's lease state is restored to 'leased' so the next
- * `recoverExpiredLeases` cycle can re-enqueue or dead-letter it.
- */
-const DEFAULT_HANDOFF_TTL_MS = 24 * 60 * 60 * 1_000;
 
 /**
  * Cap on the question text echoed to Telegram. Mirrors the elicitation
@@ -95,6 +89,11 @@ export interface DaemonElicitationOpts {
   chatId?: number;
   /** Optional topic thread ID for supergroups. */
   threadId?: number;
+  /**
+   * Origin context persisted on the handoff (#1416) so the resumed run keeps
+   * the task's pinned cwd, notify policy, and overlap identity.
+   */
+  resumeContext?: HandoffResumeContext;
 }
 
 /**
@@ -131,6 +130,7 @@ export function makeDaemonElicitationHandler(
       createdAt: new Date().toISOString(),
       status: 'pending',
       originalCommand: opts.originalCommand,
+      ...pickResumeFields(opts.resumeContext),
     };
 
     // Step 1: persist the handoff record BEFORE any notification.
@@ -252,23 +252,15 @@ export async function recoverPendingHandoffs(
     const createdMs = new Date(record.createdAt).getTime();
     const age = now - createdMs;
 
-    if (age > DEFAULT_HANDOFF_TTL_MS) {
-      // Handoff has expired — transition to 'expired' and restore the lease
-      // so recoverExpiredLeases can re-enqueue or dead-letter the task.
+    if (isHandoffStale(record, now, DEFAULT_HANDOFF_TTL_MS)) {
+      // Past its TTL: expire under the handoff lock (shared with the periodic
+      // pull-tick sweep in handoff-expiry.ts), which re-reads the record so a
+      // concurrent answer is never overwritten, restores a parked lease, and
+      // notifies the operator once. Never re-notify an expired question.
       try {
-        const expired: HandoffRecord = {
-          ...record,
-          status: 'expired',
-        };
-        await writeHandoff(expired, handoffsDir);
-        // Restore lease to 'leased' so the next recoverExpiredLeases cycle
-        // picks it up instead of leaving it orphaned in waiting_human_input.
-        setLeaseState(record.taskId, 'leased', queueDir);
-        result.expired += 1;
-        // eslint-disable-next-line no-console
-        console.error(
-          `[handoff-wiring] expired stale handoff for task ${record.taskId} (age: ${Math.round(age / 3_600_000)}h)`,
-        );
+        if (await expireHandoff(record.taskId, { handoffsDir, queueDir, now })) {
+          result.expired += 1;
+        }
       } catch {
         // Skip — leave the record as-is for the next sweep.
       }
@@ -293,13 +285,23 @@ export async function recoverPendingHandoffs(
         const questionText = typeof record.question['message'] === 'string'
           ? truncateForNotify(record.question['message'] as string)
           : '(question details unavailable)';
+        const qType = typeof record.question['type'] === 'string'
+          ? record.question['type'] as string
+          : 'text';
+        const choices = Array.isArray(record.question['choices'])
+          ? record.question['choices'] as string[]
+          : undefined;
         const parts = [
           `🔔 Reminder: daemon task still waiting for your answer`,
           `📋 Task: ${record.taskId}`,
           questionText,
           `⏱️ Waiting for ${Math.round(age / 60_000)} minutes`,
         ];
-        void pushIfConfigured(parts.join('\n')).catch(() => undefined);
+        const replyMarkup = buildHandoffReplyMarkup(qType, record.taskId, choices);
+        if (!replyMarkup && choices && choices.length > 0) {
+          parts.push(`Options: ${truncateForNotify(choices.join(', '))}`);
+        }
+        void pushIfConfigured(parts.join('\n'), { replyMarkup }).catch(() => undefined);
       }
       result.renotified += 1;
     } catch {
@@ -327,11 +329,14 @@ const MAX_ANSWER_BYTES = 64 * 1024; // 64 KB
  * Called by Telegram reply handlers (or any future surface) when the operator
  * provides an answer to a pending handoff question.
  *
- * @param taskId - The daemon task ID whose handoff to answer.
- * @param answer - The human's response value (type-narrowing to known shapes
+ * @param taskId             - The daemon task ID whose handoff to answer.
+ * @param answer             - The human's response value (type-narrowing to known shapes
  *   is deferred to PR 3 when the answer is consumed by the session).
- * @param source - Which surface provided the answer ('telegram' | 'web' | 'repl').
- * @param handoffsDir - Override for testing.
+ * @param source             - Which surface provided the answer ('telegram' | 'web' | 'repl').
+ * @param handoffsDir        - Override for testing.
+ * @param responderIdentity  - Optional opaque identity token for the responder.
+ *   Surface-specific format: Telegram uses `"<userId>"` or `"<userId>:<username>"`;
+ *   web uses `"web:<remoteIp>"`; REPL omits (passes undefined).
  * @returns true if this caller won the first-writer CAS, false if another
  *   surface already answered.
  * @throws if the serialized answer exceeds MAX_ANSWER_BYTES.
@@ -341,6 +346,7 @@ export async function answerHandoff(
   answer: unknown,
   source: string,
   handoffsDir?: string,
+  responderIdentity?: string,
 ): Promise<boolean> {
   const serialized = JSON.stringify(answer);
   if (Buffer.byteLength(serialized, 'utf-8') > MAX_ANSWER_BYTES) {
@@ -348,7 +354,12 @@ export async function answerHandoff(
       `[handoff-wiring] answer for task ${taskId} exceeds ${MAX_ANSWER_BYTES} bytes — rejected`,
     );
   }
-  const result = await updateHandoffAnswer(taskId, answer, source, handoffsDir);
+  const result = await updateHandoffAnswer(
+    taskId,
+    answer,
+    source,
+    { handoffsDir, responderIdentity },
+  );
   return result.won;
 }
 

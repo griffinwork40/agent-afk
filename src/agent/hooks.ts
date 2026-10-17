@@ -275,6 +275,8 @@ export interface PreToolUseContext {
 
 export interface PostToolUseContext {
   event: 'PostToolUse';
+  /** Tool call id shared with the PreToolUse intent. */
+  toolUseId?: string;
   sessionId?: string;
   subagentId?: string;
   /**
@@ -344,6 +346,8 @@ export interface PreCompactContext {
 
 export interface PostToolUseFailureContext {
   event: 'PostToolUseFailure';
+  /** Tool call id shared with the PreToolUse intent. */
+  toolUseId?: string;
   sessionId?: string;
   subagentId?: string;
   /**
@@ -490,6 +494,21 @@ export type HookHandler = (
  */
 export interface RegisterOptions {
   longRunning?: boolean;
+  /**
+   * Contract: run this handler OFF the dispatch critical path. `dispatch()`
+   * enqueues it on a registry-owned serialized chain and returns without
+   * awaiting it; its decision is discarded, so it can never block, inject, or
+   * see an abort signal. Background handlers run one at a time in enqueue
+   * order (two `/clear`s cannot overlap the same handler), each still bounded
+   * by the per-handler timeout unless `longRunning`. Owners await completion
+   * via {@link HookRegistry.drainBackground}.
+   *
+   * Only legal for `SessionEnd` (whose decisions are already non-blocking);
+   * `register()` throws for any other event. Use for slow best-effort
+   * end-of-session work (e.g. the SPINE classifier's model call) so session
+   * reset (`/clear`) is not gated on it.
+   */
+  background?: boolean;
 }
 
 export interface HookRegistry {
@@ -516,6 +535,12 @@ export interface HookRegistry {
   ): Promise<HookDecision>;
   /** Number of handlers registered for an event (useful for tests/debugging). */
   count(event: HarnessHookEvent): number;
+  /**
+   * Resolve once every background handler enqueued so far (see
+   * {@link RegisterOptions.background}) has settled. Never rejects. Optional
+   * so hand-rolled test doubles need not implement it; callers use `?.()`.
+   */
+  drainBackground?(): Promise<void>;
 }
 
 
