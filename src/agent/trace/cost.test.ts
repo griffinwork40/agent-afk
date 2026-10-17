@@ -267,7 +267,7 @@ describe('#4007 closure provenance through emitClosureEvent', () => {
     const ev = writer.events[0];
     expect(ev?.kind).toBe('closure');
     if (ev?.kind === 'closure') {
-      expect((ev.payload as Record<string, unknown>)['subagentId']).toBe('child-abc');
+      expect(ev.payload.subagentId).toBe('child-abc');
     }
   });
 
@@ -283,7 +283,7 @@ describe('#4007 closure provenance through emitClosureEvent', () => {
     const ev = writer.events[0];
     expect(ev?.kind).toBe('closure');
     if (ev?.kind === 'closure') {
-      expect((ev.payload as Record<string, unknown>)['subagentId']).toBeUndefined();
+      expect(ev.payload.subagentId).toBeUndefined();
     }
   });
 
