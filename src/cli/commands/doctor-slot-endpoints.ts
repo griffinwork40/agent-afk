@@ -36,8 +36,6 @@ export interface SlotEndpointDeps {
   bindings?: ModelSlots;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
-  /** True when the slot routes to the Anthropic Messages wire (not probed). */
-  isAnthropicRouted?: (slot: SlotName, bindings: ModelSlots) => Promise<boolean>;
   /** The slot's resolved wire route (decides whether the probe may send the slot key). */
   routeOf?: (slot: SlotName, bindings: ModelSlots) => Promise<string>;
 }
@@ -69,10 +67,6 @@ async function defaultRouteOf(slot: SlotName, bindings: ModelSlots): Promise<str
   // instead of re-deriving it here.
   const { providerForModel } = await import('../../agent/providers/index.js');
   return providerForModel(slot, { slots: bindings });
-}
-
-async function defaultIsAnthropicRouted(slot: SlotName, bindings: ModelSlots): Promise<boolean> {
-  return (await defaultRouteOf(slot, bindings)) === 'anthropic-direct';
 }
 
 function errorCode(err: unknown): string | undefined {
@@ -268,15 +262,15 @@ export async function checkSlotEndpoints(deps: SlotEndpointDeps = {}): Promise<C
   const bindings = deps.bindings ?? getSlotBindings();
   const timeoutMs = deps.timeoutMs ?? SLOT_PROBE_TIMEOUT_MS;
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const isAnthropic = deps.isAnthropicRouted ?? defaultIsAnthropicRouted;
   const routeOf = deps.routeOf ?? defaultRouteOf;
 
   const targets: Array<{ slot: SlotName; baseUrl: string; route: string }> = [];
   for (const slot of SLOT_NAMES) {
     const baseUrl = bindings[slot]?.baseUrl;
     if (!baseUrl || !baseUrl.trim()) continue;
-    if (await isAnthropic(slot, bindings)) continue;
-    targets.push({ slot, baseUrl, route: await routeOf(slot, bindings) });
+    const route = await routeOf(slot, bindings);
+    if (route === 'anthropic-direct') continue;
+    targets.push({ slot, baseUrl, route });
   }
   return Promise.all(
     targets.map(({ slot, baseUrl, route }) =>

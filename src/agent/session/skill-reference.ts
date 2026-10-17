@@ -70,10 +70,11 @@ export function scanSkillReferences(content: string | ContentBlockParam[]): Skil
     .replace(QUOTED_LINE_RE, ' ');
   const leading = text.search(/\S/);
   const names: string[] = [];
+  const nameSet = new Set<string>();
   for (const m of text.matchAll(REFERENCE_RE)) {
     if (m.index === leading) continue;
     const name = bareSkillName(m[1]!);
-    if (!names.includes(name)) names.push(name);
+    if (!nameSet.has(name)) { nameSet.add(name); names.push(name); }
   }
   return { names, inQuestion: text.includes('?') };
 }
@@ -93,7 +94,9 @@ export function invokedSkillName(event: OutputEvent): string | undefined {
   const chunk = event.chunk;
   if (chunk.type !== 'tool_use_detail' || chunk.toolName !== 'skill' || chunk.pending) return undefined;
   try {
-    const input = JSON.parse(chunk.toolInputRaw ?? chunk.toolInput) as { name?: unknown };
+    const parsed: unknown = JSON.parse(chunk.toolInputRaw ?? chunk.toolInput);
+    if (typeof parsed !== 'object' || parsed === null) return undefined;
+    const input = parsed as { name?: unknown };
     return typeof input.name === 'string' ? bareSkillName(input.name) : undefined;
   } catch {
     return undefined;

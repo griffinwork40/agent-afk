@@ -69,9 +69,14 @@ export function openAICompatibleBilling(
 }
 
 /**
- * Sum two billing records. Counters add; `provider` takes the incoming value
- * (a single provider serves every round of a turn, so it never conflicts in
- * practice). Either side may be absent.
+ * Sum two billing records. Counters add; `provider` carries forward when both
+ * sides agree (the normal case: a single provider serves every round of a
+ * turn). Either side may be absent.
+ *
+ * If `a.provider !== b.provider` the records cannot be attributed to a single
+ * provider. A warning is emitted so the unexpected path is visible, and the
+ * result is tagged `'mixed'` so the caller's per-provider cache-hit metrics
+ * are not silently skewed toward the last record's provider.
  */
 export function sumBillingUsage(
   a: BillingUsage | undefined,
@@ -79,8 +84,17 @@ export function sumBillingUsage(
 ): BillingUsage | undefined {
   if (!a) return b ? { ...b } : undefined;
   if (!b) return { ...a };
+  let provider = b.provider;
+  if (a.provider !== b.provider) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[billing] sumBillingUsage: provider mismatch (${a.provider} vs ${b.provider}). ` +
+        `Tagging result as 'mixed'. Child sessions should use a single provider per run.`,
+    );
+    provider = 'mixed';
+  }
   return {
-    provider: b.provider,
+    provider,
     uncachedInput: a.uncachedInput + b.uncachedInput,
     cacheRead: a.cacheRead + b.cacheRead,
     cacheWrite: a.cacheWrite + b.cacheWrite,

@@ -541,6 +541,7 @@ export function createChildSkillExecutorFactory(
   pluginConfigs?: SdkPluginConfig[],
   skillAllowlist?: readonly string[],
   hookRegistry?: HookRegistry,
+  onSubagentSucceeded?: import('../subagent/fork-types.js').SubagentManagerOptions['onSubagentSucceeded'],
 ): (
   depth: number,
   maxDepth: number,
@@ -586,6 +587,7 @@ export function createChildSkillExecutorFactory(
       // and their `agent` grandchildren credit artifacts to the root record.
       ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
       defaultModel,
+      ...(onSubagentSucceeded !== undefined ? { onSubagentSucceeded } : {}),
       // Resolved default-subagent policy threaded through every depth so a
       // nested skill child (and the SubagentExecutor it builds) defaults to the
       // parent's provider rather than the Anthropic `sonnet` literal. Falls

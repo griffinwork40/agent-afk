@@ -111,6 +111,14 @@ export function composeQuerySystem(options: {
   state: SessionState;
   systemPrefix: ContentBlockParam[] | null;
   baseUrl?: string;
+  /**
+   * When `true`, `splitAtWorkspacePreamble` is attempted on the stable prefix.
+   * Must only be set by callers that know a workspace preamble was injected
+   * (i.e. `assembleChildConfig` when `injectWorkspacePreamble` ran). Absent or
+   * `false` skips the split so root sessions whose operator prompt contains a
+   * preamble header string keep their original block layout. See #3924.
+   */
+  hasWorkspacePreamble?: boolean;
 }): ContentBlockParam[] | null {
   const { state, systemPrefix, baseUrl } = options;
   if (state.userSystem) {
@@ -132,7 +140,10 @@ export function composeQuerySystem(options: {
       if (split !== null && split.stablePrefix.length > 0 && split.volatileTail.length > 0) {
         // Forked children only: the workspace preamble varies per sibling, so
         // it rides after the shared breakpoint (see splitAtWorkspacePreamble).
-        const fork = splitAtWorkspacePreamble(split.stablePrefix);
+        // Gate on explicit fork provenance (#3924) — do NOT split when
+        // hasWorkspacePreamble is absent/false, even if the operator prompt
+        // happens to contain a matching header string.
+        const fork = options.hasWorkspacePreamble ? splitAtWorkspacePreamble(split.stablePrefix) : null;
         blocks.push({
           type: 'text',
           text: fork?.sharedHead ?? split.stablePrefix,

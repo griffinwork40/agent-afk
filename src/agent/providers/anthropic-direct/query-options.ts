@@ -169,6 +169,16 @@ export interface AnthropicDirectQueryOptions {
    */
   subagentId?: string;
   /**
+   * Set to `true` by `assembleChildConfig` when `injectWorkspacePreamble`
+   * appended a workspace preamble block to the child's system prompt (#3924).
+   *
+   * `composeQuerySystem` gates `splitAtWorkspacePreamble` on this flag so it
+   * only fires for forked children that actually received the preamble — not
+   * for root sessions whose operator prompt happens to contain a matching
+   * header string. Absent/false = root session, no split attempted.
+   */
+  hasWorkspacePreamble?: boolean;
+  /**
    * When true (default), the query automatically waits for the OAuth
    * subscription reset and replays the in-flight turn on 429 usage-limit
    * errors instead of surfacing them immediately.

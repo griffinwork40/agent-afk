@@ -51,13 +51,12 @@ function slots(overrides: Partial<ModelSlots>): ModelSlots {
   };
 }
 
-const notAnthropic = async (): Promise<boolean> => false;
 // Stub the wire route so results never depend on the host's AFK_PROVIDER / env.
 const routed = (route: string) => async (): Promise<string> => route;
 const openaiRoute = routed('openai-compatible');
 
 async function run(bindings: ModelSlots, timeoutMs = 2000, route = openaiRoute): Promise<Check[]> {
-  return checkSlotEndpoints({ bindings, timeoutMs, isAnthropicRouted: notAnthropic, routeOf: route });
+  return checkSlotEndpoints({ bindings, timeoutMs, routeOf: route });
 }
 
 function lastAuthHeader(): string | undefined {
@@ -135,7 +134,7 @@ describe('checkSlotEndpoints', () => {
     const checks = await checkSlotEndpoints({
       bindings: slots({}),
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      isAnthropicRouted: notAnthropic,
+      routeOf: openaiRoute,
     });
     expect(checks).toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -146,7 +145,7 @@ describe('checkSlotEndpoints', () => {
     const checks = await checkSlotEndpoints({
       bindings: slots({ local: { id: 'local-foo', baseUrl: `${base}/ok/v1` } }),
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      isAnthropicRouted: async () => true,
+      routeOf: routed('anthropic-direct'),
     });
     expect(checks).toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();

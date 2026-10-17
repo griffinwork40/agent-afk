@@ -348,7 +348,11 @@ function stripQuotedBodyFileData(command: string): string {
   const newline = command.indexOf('\n');
   if (newline < 0) return command;
   const header = command.slice(0, newline);
-  const heredoc = /<<[ \t]*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|\\([A-Za-z_]\w*))/g;
+  // Structural guard: require that the char immediately before `<<` is NOT
+  // another `<` (which would make this a here-string `<<<`, not a heredoc).
+  // The regex `(?<!<)` is a negative lookbehind that makes the guard exact
+  // rather than relying on `isSimpleHeaderText` to reject the result later.
+  const heredoc = /(?<!<)<<[ \t]*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|\\([A-Za-z_]\w*))/g;
   const matches = [...header.matchAll(heredoc)];
   if (matches.length !== 1) return command;
   const match = matches[0]!;
@@ -359,6 +363,9 @@ function stripQuotedBodyFileData(command: string): string {
   // escapes, substitutions, comments, chaining, or other stdin redirects.
   // Balanced quotes on EACH side prove the `<<` match is not inside a string.
   if (!isSimpleHeaderText(prefix) || !isSimpleHeaderText(suffix)) return command;
+  // Dependency: this guard relies on `isStdoutOnlyCat` (below) rejecting any
+  // `cat` invocation that redirects output to a file, so a `> f` suffix here
+  // is safe only because `isStdoutOnlyCat` will return false for it.
   if (suffix !== '' && !/^[ \t>]/.test(suffix)) return command;
   const segments = tokenizeSegments(prefix + ' ' + suffix);
   if (segments.length !== 1) return command;
@@ -390,7 +397,13 @@ function stripQuotedBodyFileData(command: string): string {
  * (`cat > /tmp/run.sh <<'EOF'` … `bash /tmp/run.sh`), so it stays scanned.
  */
 function isStdoutOnlyCat(tokens: readonly string[]): boolean {
-  return tokens[0] === 'cat' && tokens.slice(1).every((t) => /^-[A-Za-z]*$/.test(t));
+  // Flags tightened to the known POSIX + BSD/GNU `cat` flag set so that an
+  // invented flag like `-x` (which could mean something on a future cat) is
+  // not silently admitted.  Known flags: -A (show-all), -b (number nonblank),
+  // -e (show ends+nonprint), -n (number), -s (squeeze), -t (show tabs+nonprint),
+  // -u (unbuffered), -v (show-nonprinting).  Long opts (`--number`, etc.) are
+  // not needed here because the tokenizer leaves them as separate tokens.
+  return tokens[0] === 'cat' && tokens.slice(1).every((t) => /^-[AbenrstuveV]*$/.test(t));
 }
 
 /**

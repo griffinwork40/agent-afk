@@ -210,6 +210,18 @@ export class SubagentManager {
   }
 
   /**
+   * Forward one descendant's OWN usage to the tree's accounting sink, verbatim
+   * (including billing-only outcome tags). Never add intermediate session
+   * totals: each handle reports its own spend exactly once. Read the sink
+   * lazily so late binding and REPL session replacement also reach descendants.
+   */
+  reportSubagentCompletion(
+    ...args: Parameters<NonNullable<SubagentManagerOptions['onSubagentSucceeded']>>
+  ): void {
+    this.onSubagentSucceededCb?.(...args);
+  }
+
+  /**
    * Wire a sink for subagent lifecycle `OutputEvent`s. When set, `forkSubagent`
    * pushes `started` immediately and `succeeded`/`failed`/`cancelled` when the
    * fork reaches its terminal state. Replaces any prior sink silently. Typically
