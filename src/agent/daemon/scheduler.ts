@@ -421,15 +421,16 @@ export class CronScheduler {
    */
   startHandoffMaintenance(intervalMs?: number): void {
     if (this.handoffMaintenance !== undefined) return;
-    this.handoffMaintenance = startHandoffMaintenance({
+    const maintenanceOpts = {
       queueDir: this.queueDir,
       ...(this.options.handoffsDir !== undefined ? { handoffsDir: this.options.handoffsDir } : {}),
       ...(this.options.bot !== undefined ? { bot: this.options.bot } : {}),
       ...(intervalMs !== undefined ? { intervalMs } : {}),
-      drainResumeQueue: (resumeDir) => this.pullTick(resumeDir),
+      drainResumeQueue: (resumeDir: string) => this.pullTick(resumeDir),
       ...((this.options.pullPollIntervalMs ?? 0) > 0 ? { recoverMainQueue: () => recoverDaemonQueues(this.queueDir) } : {}),
-      isInFlight: (id) => this.inFlightTasks.has(id),
-    });
+      isInFlight: (id: string) => this.inFlightTasks.has(id),
+    };
+    this.handoffMaintenance = startHandoffMaintenance(maintenanceOpts);
   }
 
   /** One dequeue-and-run tick against `queueDir` (pull queue or resume queue). */

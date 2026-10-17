@@ -56,6 +56,10 @@ function atomicWriteJson(dest: string, data: unknown): void {
  * running longer than the 10-minute lease TTL has leaseExpiry < now, and
  * calling recoverExpiredLeases would reclaim it mid-run.
  *
+ * Records that are missing `attempts` or `maxAttempts` (crash-window writes) are
+ * reconstructed with `attempts: 0, maxAttempts: 1`, so they dead-letter on the
+ * first reclaim attempt rather than re-enqueuing indefinitely.
+ *
  * @param taskId    - The task whose restored lease should be reclaimed.
  * @param queueDir  - Queue root directory.
  * @param isInFlight - Optional predicate; when it returns true the lease is
