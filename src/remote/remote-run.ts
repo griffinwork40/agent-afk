@@ -26,6 +26,7 @@ import {
   buildErrTailScript,
 } from './remote-script.js';
 import { SSH_CONNECT_FAILURE, type SshRunner } from './ssh-runner.js';
+import type { PermissionMode } from '../agent/types/sdk-types.js';
 import { createEventCollector } from './remote-events.js';
 import { escapeForSecurityInteractive, unlockSetupCommand } from './keychain-unlock.js';
 
@@ -69,7 +70,7 @@ export interface RemoteRunRequest {
    * Permission mode pinned on the remote `afk chat` invocation. When absent
    * the remote resolves its own default (typically `bypassPermissions`).
    */
-  permissionMode?: string;
+  permissionMode?: PermissionMode;
 }
 
 export type RemoteRunOutcome =

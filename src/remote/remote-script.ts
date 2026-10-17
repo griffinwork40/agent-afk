@@ -21,6 +21,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import type { PermissionMode } from '../agent/types/sdk-types.js';
 
 /** Line the launch script prints with the detached afk pid. */
 export const PID_MARKER = '__AFK_REMOTE_PID__';
@@ -108,7 +109,7 @@ export interface LaunchScriptOptions {
    * `--permission-mode`. When absent the remote resolves its own default
    * (typically `bypassPermissions` from `DEFAULT_CLI_PERMISSION_MODE`).
    */
-  permissionMode?: string;
+  permissionMode?: PermissionMode;
   /**
    * When set, the POSIX-escaped remote login password. The script reads it from
    * a heredoc and feeds it to `security -i` through a pipe. It is already

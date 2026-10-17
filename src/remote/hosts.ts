@@ -16,6 +16,8 @@
 
 import { promises as fs } from 'node:fs';
 import { getRemoteHostsPath } from '../paths.js';
+import type { PermissionMode } from '../agent/types/sdk-types.js';
+import { isValidPermissionMode, VALID_PERMISSION_MODES } from '../agent/types/sdk-types.js';
 
 export interface RemoteHost {
   name: string;
@@ -28,7 +30,7 @@ export interface RemoteHost {
    * Accepts any value accepted by `afk chat --permission-mode`.
    * When absent the remote resolves its own default.
    */
-  permissionMode?: string;
+  permissionMode?: PermissionMode;
 }
 
 /** Characters allowed in an ssh destination (user@host, IPv6 brackets, ssh://host:port). */
@@ -67,7 +69,15 @@ export async function loadHosts(path: string = getRemoteHostsPath()): Promise<Re
     if (typeof entry['cwd'] === 'string' && entry['cwd'] !== '') host.cwd = entry['cwd'];
     if (typeof entry['afkPath'] === 'string' && entry['afkPath'] !== '') host.afkPath = entry['afkPath'];
     if (entry['unlockKeychain'] === true) host.unlockKeychain = true;
-    if (typeof entry['permissionMode'] === 'string' && entry['permissionMode'] !== '') host.permissionMode = entry['permissionMode'];
+    if (typeof entry['permissionMode'] === 'string' && entry['permissionMode'] !== '') {
+      if (!isValidPermissionMode(entry['permissionMode'])) {
+        throw new Error(
+          `${path}: host "${name}" has invalid permissionMode "${entry['permissionMode']}". ` +
+          `Valid modes: ${[...VALID_PERMISSION_MODES].join(', ')}`,
+        );
+      }
+      host.permissionMode = entry['permissionMode'];
+    }
     hosts[name] = host;
   }
   return hosts;
