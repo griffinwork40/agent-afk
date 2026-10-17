@@ -162,13 +162,19 @@ export async function* runIteration(
     }
   }
 
-  // Wind-down round: strip tools and append budget note to THIS request only.
+  // Wind-down round: append budget note and keep tool defs with tool_choice:none.
+  // Fix #3963 (fix 1): previously tools were stripped entirely (activeTools=undefined).
+  // Servers that only parse tool-call markup when a `tools` array is present would
+  // echo raw <tool_call> markup as plain text in the final answer.  Keeping the
+  // definitions and sending tool_choice:"none" prevents that while still telling
+  // the model it must not call any tools this round.
   if (windDown !== null) {
     const note = windDown === TOOL_USE_LOOP_CAPPED ? WIND_DOWN_NOTE
       : windDown === CONTEXT_PRESSURE_WIND_DOWN ? CONTEXT_PRESSURE_NOTE : SOFT_DEADLINE_NOTE;
     messages.push({ role: 'user', content: note });
   }
-  const activeTools = windDown !== null ? undefined : ctx.activeOpenAITools();
+  const activeTools = ctx.activeOpenAITools();
+  const isWindDown = windDown !== null;
 
   // Shared context for the retry/stream-drive skeleton (query/stream-drive.ts).
   const driveCtx = {
@@ -192,6 +198,7 @@ export async function* runIteration(
       model: ctx.currentModel,
       messages,
       activeTools,
+      windDown: isWindDown,
       maxOutputTokens: windDown === CONTEXT_PRESSURE_WIND_DOWN ? WIND_DOWN_MAX_OUTPUT_TOKENS : ctx.opts.config.maxOutputTokens,
       effort: ctx.opts.config.effort, temperature: ctx.opts.config.temperature,
       isChatGptBackend,
@@ -214,6 +221,7 @@ export async function* runIteration(
       model: ctx.currentModel,
       messages,
       activeTools,
+      windDown: isWindDown,
       maxOutputTokens: windDown === CONTEXT_PRESSURE_WIND_DOWN ? WIND_DOWN_MAX_OUTPUT_TOKENS : ctx.opts.config.maxOutputTokens,
       effort: ctx.opts.config.effort, temperature: ctx.opts.config.temperature,
     });

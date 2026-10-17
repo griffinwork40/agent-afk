@@ -143,3 +143,79 @@ describe('buildResponsesRequestBody', () => {
     expect(body['temperature']).toBe(1.8);
   });
 });
+
+// Fix #3963 (fix 1): wind-down rounds keep tool defs and set tool_choice:"none"
+describe('wind-down tool_choice:none — Chat Completions', () => {
+  it('sets tool_choice:none and keeps tools when windDown:true', () => {
+    const body = buildChatCompletionsRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: TOOLS,
+      windDown: true,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: undefined,
+    });
+    expect(body['tools']).toBe(TOOLS);
+    expect(body['tool_choice']).toBe('none');
+  });
+
+  it('omits tool_choice when windDown is false/absent', () => {
+    const body = buildChatCompletionsRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: TOOLS,
+      windDown: false,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: undefined,
+    });
+    expect(body['tools']).toBe(TOOLS);
+    expect('tool_choice' in body).toBe(false);
+  });
+
+  it('omits both tools and tool_choice when activeTools is undefined', () => {
+    const body = buildChatCompletionsRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: undefined,
+      windDown: true,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: undefined,
+    });
+    expect('tools' in body).toBe(false);
+    expect('tool_choice' in body).toBe(false);
+  });
+});
+
+describe('wind-down tool_choice:none — Responses API', () => {
+  it('sets tool_choice:none and keeps tools when windDown:true', () => {
+    const body = buildResponsesRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: TOOLS,
+      windDown: true,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: undefined,
+      isChatGptBackend: false,
+    });
+    expect(body['tools']).toBeDefined();
+    expect(body['tool_choice']).toBe('none');
+  });
+
+  it('omits tool_choice when windDown is absent', () => {
+    const body = buildResponsesRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: TOOLS,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: undefined,
+      isChatGptBackend: false,
+    });
+    expect(body['tools']).toBeDefined();
+    expect('tool_choice' in body).toBe(false);
+  });
+});
