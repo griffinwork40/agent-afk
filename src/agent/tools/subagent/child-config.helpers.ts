@@ -14,6 +14,7 @@ import { CHILD_ALLOWED_TOOLS, buildSkillRestrictedProvider, createStubParentSess
 import { resolveAgentToolAccess } from '../../agents/index.js';
 import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
 import { isChildReplaySafe } from './retry-safety.js';
+import { isChildWriteCapable } from './write-capability.js';
 import { SubagentManager } from '../../subagent.js';
 import type { RegisteredAgent, AgentRegistry } from '../../agents/index.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
@@ -96,14 +97,7 @@ export function resolveChildToolAccess(
   const effectiveReadOnlyBash =
     cageReadOnlyBash === true || resolvedAccess?.bashReadOnly === true;
 
-  const canWriteFiles =
-    effectiveAllowedTools === undefined ||
-    effectiveAllowedTools.includes('write_file') ||
-    effectiveAllowedTools.includes('edit_file');
-  const canMutateViaBash =
-    (effectiveAllowedTools === undefined || effectiveAllowedTools.includes('bash')) &&
-    effectiveReadOnlyBash !== true;
-  const childWriteCapable = canWriteFiles || canMutateViaBash;
+  const childWriteCapable = isChildWriteCapable(effectiveAllowedTools, effectiveReadOnlyBash);
 
   const childSideEffectFree = isChildReplaySafe({
     effectiveAllowedTools,
@@ -248,7 +242,10 @@ interface WireChildNestingArgs {
 /**
  * Wire depth-2+ nesting: build the child `SubagentManager`, `SubagentExecutor`,
  * skill executor, and provider. When at the depth cap (or no factory), falls
- * back to a minimal restricted provider. Mutates `childConfig.provider`.
+ * back to a minimal restricted provider.
+ *
+ * **Side effect:** mutates `w.childConfig.provider` across a module boundary.
+ * Callers must not assume `childConfig.provider` is stable after this call.
  */
 export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResult {
   const { args, childConfig, effectiveAllowedTools, effectiveReadOnlyBash, resolvedAccess, depth, maxDepth, signal, currentCwd, createChildExecutor } = w;
@@ -322,16 +319,19 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
 /**
  * Build the depth-2+ {@link SubagentManager} a nested child uses for its own
  * `agent` forks. Every input is an explicit parameter.
+ *
+ * @internal Exported for `child-config.ts` only; not part of the public API.
  */
 export function buildNestedChildManager(
   args: Pick<BuildChildConfigArgs,
     'childInheritedReadRoots' | 'traceWriter' | 'surface' | 'workspaceStore' |
-    'parentRootSessionId' | 'hookRegistry'>,
+    'parentRootSessionId' | 'hookRegistry' | 'onSubagentSucceeded' | 'parentBillingStreams'>,
   signal: AbortSignal,
   currentCwd: string | undefined,
 ): SubagentManager {
   return new SubagentManager({
     parentAbortSignal: signal,
+    ...(args.onSubagentSucceeded !== undefined ? { onSubagentSucceeded: args.onSubagentSucceeded } : {}),
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
     ...(args.childInheritedReadRoots !== undefined ? { parentReadRoots: args.childInheritedReadRoots } : {}),
     ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
@@ -339,11 +339,16 @@ export function buildNestedChildManager(
     ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
     ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
     ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
+    // #3961: propagate the root's billing-stream registry so depth-2+ abandoned
+    // streams surface in rootManager.getPendingChildBillingStreams() at shutdown.
+    ...(args.parentBillingStreams !== undefined ? { parentBillingStreams: args.parentBillingStreams } : {}),
   });
 }
 
 /**
  * Tree-wide fields the recursive child executor inherits unchanged.
+ *
+ * @internal Exported for `child-config.ts` only; not part of the public API.
  */
 export function nestedExecutorInherits(
   args: Pick<BuildChildConfigArgs, 'traceWriter' | 'workspaceStore' | 'hookRegistry'>,

@@ -32,6 +32,7 @@ import type { AgentConfig } from '../agent/types.js';
 import type { TraceWriter } from '../agent/trace/index.js';
 import type { TraceSink } from '../agent/trace/writer.js';
 import { makeDeferredParentProxy } from '../agent/session/deferred-parent-proxy.js';
+import { pendingChildBillingStreams } from '../agent/session/manager-shutdown-config.js';
 
 /** Everything `SessionOwner.create` needs beyond the base `AgentConfig`. */
 export interface WebSessionWiring {
@@ -47,6 +48,9 @@ export interface WebSessionWiring {
   workspaceStore: WorkspaceStore;
   /** Wired into `AgentConfig.drainSubagents` to cascade-abort children on close. */
   drainSubagents: AgentConfig['drainSubagents'];
+  /** Wired into `AgentConfig.getPendingChildTerminalWrites` so seal() can await in-flight cancel emits (#3714). */
+  getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'];
+  getPendingChildBillingStreams?: AgentConfig['getPendingChildBillingStreams'];
 }
 
 export interface WireWebSessionOptions {
@@ -139,6 +143,9 @@ export async function wireWebSession(
   };
 
   // Late-bind helper so callers can wire after session construction.
+  const getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'] =
+    () => executors.rootManager.getPendingChildTerminalWrites();
+
   const wiring: WebSessionWiring = {
     provider,
     executors,
@@ -150,6 +157,8 @@ export async function wireWebSession(
     memoryStore,
     workspaceStore,
     drainSubagents,
+    getPendingChildTerminalWrites,
+    getPendingChildBillingStreams: () => pendingChildBillingStreams(executors.rootManager, executors.composeExecutor),
   };
 
   // Attach the late-bind setter as a post-construction hook: the caller must

@@ -541,6 +541,10 @@ export function createChildSkillExecutorFactory(
   pluginConfigs?: SdkPluginConfig[],
   skillAllowlist?: readonly string[],
   hookRegistry?: HookRegistry,
+  onSubagentSucceeded?: import('../subagent/fork-types.js').SubagentManagerOptions['onSubagentSucceeded'],
+  // #3961: shared billing-stream registry owned by the root manager. Trailing optional
+  // so all existing positional callers remain valid.
+  parentBillingStreams?: Set<Promise<void>>,
 ): (
   depth: number,
   maxDepth: number,
@@ -586,6 +590,7 @@ export function createChildSkillExecutorFactory(
       // and their `agent` grandchildren credit artifacts to the root record.
       ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
       defaultModel,
+      ...(onSubagentSucceeded !== undefined ? { onSubagentSucceeded } : {}),
       // Resolved default-subagent policy threaded through every depth so a
       // nested skill child (and the SubagentExecutor it builds) defaults to the
       // parent's provider rather than the Anthropic `sonnet` literal. Falls
@@ -663,6 +668,9 @@ export function createChildSkillExecutorFactory(
       ...(hookRegistry !== undefined ? { hookRegistry } : {}),
       // Fix A (#skill-recursion): execution guard fires when grandchild calls same skill.
       ...(skillDispatchName !== undefined ? { skillDispatchName } : {}),
+      // #3961: propagate root's billing-stream registry so depth-2+ abandoned streams
+      // from skill-fork managers surface in rootManager.getPendingChildBillingStreams().
+      ...(parentBillingStreams !== undefined ? { parentBillingStreams } : {}),
     });
   };
   return factory;

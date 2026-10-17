@@ -13,7 +13,9 @@
  *    model what happened and that findings are in the message, not a file.
  *
  * Both warnings are lightweight heuristics and are not guaranteed to fire on
- * every case; they are opt-in helpers, not hard constraints.
+ * every case; they are opt-in helpers, not hard constraints. The pre-dispatch
+ * implementation-intent gate (#3754) lives in
+ * `subagent-executor.dispatch-intent.ts`.
  *
  * @module agent/tools/subagent-executor.write-intent
  */

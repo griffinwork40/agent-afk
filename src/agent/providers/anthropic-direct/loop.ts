@@ -291,9 +291,15 @@ export async function* runTurn(
       return;
     }
 
+    // After the 'overload-exhausted' guard above, only 'translator-errored' and
+    // 'streamed' remain — use control-flow narrowing instead of a cast so a
+    // future RoundOutcome variant is a compile error here, not a silent bypass.
+    if (outcome.kind !== 'translator-errored' && outcome.kind !== 'streamed') {
+      throw new Error(`Unexpected round outcome: ${(outcome as { kind: string }).kind}`);
+    }
     const turnResult = outcome.kind === 'streamed' ? outcome.turnResult : null;
     const terminal = yield* handleStreamTerminals(
-      outcome.kind as 'translator-errored' | 'streamed',
+      outcome.kind,
       turnResult,
       input.signal,
       input.ctx.sessionId,

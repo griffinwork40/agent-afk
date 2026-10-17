@@ -19,6 +19,8 @@
  * parser later; this stays dependency-free.
  */
 
+import { splitFrontmatter } from './split-frontmatter.js';
+
 const FLAG_REGEX = /(?<![a-zA-Z0-9_/-])--([a-z][a-z0-9-]*)(?![a-zA-Z0-9_-])/g;
 
 /** Ensure a flag string has the leading `--`. */
@@ -130,16 +132,13 @@ export interface ParsedSkillMd {
  * fields. Returns `frontmatter: null` for documents without a frontmatter block.
  */
 export function parseSkillMd(content: string): ParsedSkillMd {
-  if (!content.startsWith('---\n')) {
-    return { frontmatter: null, frontmatterFlags: null, body: content };
-  }
-  const endIdx = content.indexOf('\n---\n', 4);
-  if (endIdx === -1) {
+  const split = splitFrontmatter(content);
+  if (split === null) {
     return { frontmatter: null, frontmatterFlags: null, body: content };
   }
 
-  const yamlText = content.slice(4, endIdx);
-  const body = content.slice(endIdx + 5);
+  const yamlText = split.yaml;
+  const body = split.body;
 
   const frontmatter: Record<string, string> = {};
   let frontmatterFlags: string[] | null = null;

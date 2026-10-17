@@ -476,8 +476,10 @@ describe('runBaselineSample — arm isolation', () => {
 describe('estimateBaselineSampleCost', () => {
   it('adds exactly one cold-cache start (4 warm episodes) per sample phase', () => {
     const args = { agentModel: 'claude-haiku-4-5-20250929', analystModel: 'claude-haiku-4-5-20250929', systemTokensBaseline: 5000 };
+    // Baseline-sample episodes are always single-turn, so maxTurns=1 must match
+    // the value passed inside estimateBaselineSampleCost (#3876).
     const warm = (n: number): number => estimateVerifyCost({
-      episodes: n * BASELINE_SAMPLE_K, samples: 1, ...args,
+      episodes: n * BASELINE_SAMPLE_K, samples: 1, maxTurns: 1, ...args,
       systemTokens: { baseline: 5000, candidate: 5000 }, judgeExternal: true,
     }).usd / 2;
     for (const n of [1, 3]) {

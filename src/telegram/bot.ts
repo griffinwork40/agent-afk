@@ -93,12 +93,25 @@ export class TelegramBot {
     this.bot = new Telegraf(options.botToken, { handlerTimeout: Infinity });
     // Wire resumption-offer delivery into the session manager so wave manifests
     // surface as plain messages when a new chat session is created.
+    // Build sessionManager first; messageHandler is constructed on the next line.
+    // `onInjectableForRoute` closes over `this.messageHandler` which is
+    // assigned synchronously below before any session is ever created (sessions
+    // are built lazily on the first incoming Telegram update).
+    let messageHandlerRef: MessageHandler | undefined;
     this.sessionManager = new SessionManager({
       ...options,
       onResumptionOffer: (route, text) => {
         return this.bot.telegram.sendMessage(route.chatId, text, sendOptions(route))
           .then(() => true as const)
           .catch(() => false as const);
+      },
+      // Wire the idle-wake callback: when a background subagent settles on an
+      // idle Telegram session, synthesise a new turn immediately rather than
+      // waiting for the next user message. Mirrors the REPL's
+      // `bgResultNotifier.onInjectable = tryAutoResume` path in bootstrap-infra.ts.
+      onInjectableForRoute: (chatId, threadId) => {
+        const route = { chatId, ...(threadId !== undefined ? { threadId } : {}) };
+        return () => { messageHandlerRef?.wakeIdleSession(route); };
       },
     });
     this.messageHandler = new MessageHandler(
@@ -108,6 +121,8 @@ export class TelegramBot {
       this.log.bind(this),
       options.tagOnlyChats ?? new Set()
     );
+    // Resolve the closure reference now that messageHandler is fully constructed.
+    messageHandlerRef = this.messageHandler;
     // Invariant: pass the SOLE Telegraf instance and the MessageHandler so
     // _run can render elicitation records interactively. No second bot
     // instance is created here — this.bot is the single getUpdates poller.

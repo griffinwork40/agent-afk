@@ -170,16 +170,19 @@ export function formatProgressBanner(
         return detailRaw ? shortenPaths(sanitizeLabel(detailRaw)) : '';
       })();
 
-  // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
-  // progress banner aligns with centered scrollback and tool-lane content.
+  // Content centering (AFK_CENTER_CONTENT): the banner is a live overlay row
+  // (never committed via commitAbove), so it carries its own left margin. The
+  // margin is added AFTER the clamp: the clamp budget (the measure) bounds the
+  // content, and margin + measure <= terminal width by construction. Clamping
+  // `pad + line` let the margin eat half the budget (audit A6).
   const pad = contentMargin();
   if (detail) {
     return [
-      clampToTerminal(pad + palette.dim(`  ${glyph} ${cleanDescription}`), columns),
-      clampToTerminal(pad + palette.dim(`    ${detail}${statsStr}`), columns),
+      pad + clampToTerminal(palette.dim(`  ${glyph} ${cleanDescription}`), columns),
+      pad + clampToTerminal(palette.dim(`    ${detail}${statsStr}`), columns),
     ];
   }
-  return [clampToTerminal(pad + palette.dim(`  ${glyph} ${cleanDescription}${statsStr}`), columns)];
+  return [pad + clampToTerminal(palette.dim(`  ${glyph} ${cleanDescription}${statsStr}`), columns)];
 }
 
 /**

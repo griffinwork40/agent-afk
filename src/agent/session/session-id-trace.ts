@@ -19,6 +19,7 @@
 
 import { emitSessionPhase } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
+import { getVersion } from '../../cli/version.js';
 
 /**
  * Emit a `session_id_assigned` trace event.
@@ -42,5 +43,6 @@ export function emitSessionIdAssigned(
     phase: 'session_id_assigned',
     sessionId,
     ...(priorSessionId !== undefined ? { priorSessionId } : {}),
+    afkVersion: getVersion(),
   });
 }

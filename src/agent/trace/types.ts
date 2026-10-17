@@ -102,6 +102,10 @@ export const TOOL_FAILURE_CLASSES = [
   'repeat-failure',
   /** The target the tool was asked to operate on does not exist (#75 follow-up). */
   'no-such-target',
+  /** N consecutive PreToolUse blocks on the same gate key with no success (#3736). */
+  'hook-block-repeat',
+  /** Arguments were lost in transit or failed to JSON-parse; the call was never executed (#3808). */
+  'lost-args',
 ] as const;
 
 /**
@@ -141,12 +145,17 @@ export const TOOL_FAILURE_CLASSES = [
  *                              see `_rg-exit2.ts`). The caller supplied a bad reference —
  *                              not a tool fault — so the fix is to correct the target,
  *                              not to retry the same call.
+ *   - `lost-args`            — the tool was NOT executed because its arguments were lost
+ *                              in transit (empty argument stream for a tool with required
+ *                              params) or failed to JSON-parse (#3808). The model did not
+ *                              cause this; it is asked to resend the call. A delivery
+ *                              failure, not a tool fault.
  *
  * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
- * `hook-block`, `abort`, `elicitation-declined`, and `no-such-target` as "the system
- * correctly said no" — excluded from failure stats entirely — while `timeout`, `budget`,
- * `denial-breaker`, and unclassified failures still count. That split is
- * `BENIGN_FAILURE_CLASSES` below.
+ * `hook-block`, `abort`, `elicitation-declined`, `no-such-target`, and `lost-args` as
+ * "the system correctly said no" — excluded from failure stats entirely — while
+ * `timeout`, `budget`, `denial-breaker`, and unclassified failures still count. That
+ * split is `BENIGN_FAILURE_CLASSES` below.
  */
 export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
 
@@ -165,7 +174,7 @@ export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
  *     a long run does not read as something going wrong (#75).
  *
  * Members: `policy-refusal`, `permission-denied`, `hook-block`, `abort`,
- * `elicitation-declined`, `no-such-target`.
+ * `elicitation-declined`, `no-such-target`, `lost-args`.
  *
  * Membership is deliberately narrower than "not the tool's fault". `timeout` is
  * excluded because a high timeout rate is a real problem (too tight a deadline,
@@ -173,9 +182,12 @@ export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
  * torn down for spinning is review-worthy — see the per-class notes above.
  * `no-such-target` IS included: a nonexistent path is a caller-supplied bad
  * reference (a typo, stale memory of a moved file, ordinary exploration), not
- * evidence the tool is broken. An unclassified failure (no `failureClass`) is
- * never benign: pre-classification traces and genuine handler bugs share that
- * shape, so it must stay alarming.
+ * evidence the tool is broken. `lost-args` IS included: a transport or
+ * JSON-parse failure is a delivery problem, not a tool fault — the model is told
+ * to resend, and repeated occurrences reflect a backend problem, not a broken
+ * handler. An unclassified failure (no `failureClass`) is never benign:
+ * pre-classification traces and genuine handler bugs share that shape, so it
+ * must stay alarming.
  */
 export const BENIGN_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
   'policy-refusal',
@@ -184,6 +196,7 @@ export const BENIGN_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
   'abort',
   'elicitation-declined',
   'no-such-target',
+  'lost-args',
 ]);
 
 export interface ToolCallCompletedPayload {
@@ -403,7 +416,8 @@ export interface SubagentStartedPayload {
   maxToolUseIterations?: number;
 }
 
-export interface SubagentSucceededPayload {
+/** `provider` / `tokens` (#3878) come from {@link SubagentBillingFields}. */
+export interface SubagentSucceededPayload extends SubagentBillingFields {
   incomplete?: true;
   incompleteReason?: string;
   roundsUsed?: number;
@@ -425,7 +439,7 @@ export interface SubagentSucceededPayload {
   stopReason?: string;
 }
 
-export interface SubagentFailedPayload {
+export interface SubagentFailedPayload extends SubagentBillingFields {
   transition: 'failed';
   subagentId: string;
   errorClass: string;
@@ -442,7 +456,7 @@ export interface SubagentFailedPayload {
   failureClass?: ToolFailureClass;
 }
 
-export interface SubagentCancelledPayload {
+export interface SubagentCancelledPayload extends SubagentBillingFields {
   transition: 'cancelled';
   subagentId: string;
   /**
@@ -620,6 +634,14 @@ export interface ClosurePayload {
    * Absent for benign closes and anomalous reasons not yet covered.
    */
   guidance?: string;
+  /**
+   * Present on child (forked) sessions only; absent on the root session.
+   * Mirrors the `subagentId` field on `tool_call` events so `parseTraceSignals`
+   * can distinguish a child's closure from the root's closure and avoid
+   * falsely downgrading the root facet when a child closed abnormally (#3883).
+   * Older traces that predate this field simply omit it.
+   */
+  subagentId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -831,7 +853,31 @@ export interface SessionSealedPayload {
    * free tier or providers that don't report cost).
    */
   subagentCostUsd?: number;
+  /**
+   * Billing-normalized token rollups (#3878), each `{ total, byProvider }`.
+   * Unlike `subagentTokens` (whose cache fields are latest-round only and
+   * whose OpenAI `input` includes cached tokens), every counter here is summed
+   * per model call and `uncachedInput` excludes cache reads, so hit rate =
+   * `cacheRead / (uncachedInput + cacheRead + cacheWrite)` per provider.
+   * `subagents` covers EVERY child that accrued billing — succeeded, failed,
+   * and cancelled — unlike the success-only `subagentCount`/`subagentTokens`.
+   * Omitted when no provider reported billing usage.
+   */
+  billing?: {
+    root?: BillingRollupSnapshot;
+    subagents?: BillingRollupSnapshot;
+  };
 }
+
+// Billing shapes on `session_sealed.billing` and the terminal lifecycle
+// payloads (#3878): `z.infer`-derived in `events.billing.ts` (the single source
+// of truth, zod-only imports so no cycle), re-exported under these names.
+import type { BillingRollupSnapshot, SubagentBillingFields } from './events.billing.js';
+export type {
+  BillingCounters as SessionBillingCounters,
+  BillingRollupSnapshot as SessionBillingRollup,
+  SubagentBillingFields,
+} from './events.billing.js';
 
 // ---------------------------------------------------------------------------
 // Discriminated unions

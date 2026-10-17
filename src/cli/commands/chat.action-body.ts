@@ -16,6 +16,7 @@ import ora from 'ora';
 import { handleCommandError } from '../errors/index.js';
 import type { AgentSession } from '../../agent/session.js';
 import type { AgentModelInput } from '../../agent/types.js';
+import type { PermissionMode } from '../../agent/types/sdk-types.js';
 import { wireOneShotChatSession } from './chat.session-wiring.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import {
@@ -73,6 +74,7 @@ export interface ChatActionOptions {
   sessionId?: string;
   post?: string;
   postPr?: string;
+  permissionMode?: PermissionMode;
   dangerouslySkipPermissions?: boolean;
 }
 
@@ -324,7 +326,7 @@ export async function runChatAction(
       basePrompt, operatorOverlay, providerHints, providerRaw: options.provider,
       ...modelOpts!,
       worktreeCwd, traceWriter: trace?.writer, mcpManager: mcpManagerRef, resumeConfig,
-      permissionMode: cliConfig.permissionMode,
+      permissionMode: options.permissionMode ?? cliConfig.permissionMode,
       dangerouslySkipPermissions: options.dangerouslySkipPermissions,
       maxTurns: parseInt(options.maxTurns, 10),
       temperature: cliConfig.temperature, baseUrl: cliConfig.baseUrl,

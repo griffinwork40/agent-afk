@@ -67,8 +67,27 @@ export interface CreateIssueOpts {
 }
 
 /**
+ * Reject malformed or unrelated output rather than printing it as a filed issue.
+ * A HOST/OWNER/REPO target also pins the host; a bare OWNER/REPO may use GHE.
+ */
+export function validateIssueUrl(value: string, repo: string): string {
+  const parts = repo.split('/');
+  const expectedPath = `/${parts.slice(-2).join('/')}/issues/`;
+  try {
+    const url = new URL(value);
+    if (!/^https:\/\/[^\s]+$/.test(value) || url.username || url.password || url.port
+      || url.search || url.hash || !url.pathname.startsWith(expectedPath)
+      || !/^[1-9]\d*$/.test(url.pathname.slice(expectedPath.length))
+      || (parts.length === 3 && url.hostname !== parts[0])) throw new Error('invalid');
+    return value;
+  } catch {
+    throw new Error('gh returned an invalid issue URL');
+  }
+}
+
+/**
  * Create an issue via `gh issue create --body-file -`. Returns the issue URL
- * (trimmed). Throws `GhError` on failure.
+ * (trimmed, validated as HTTPS and matching the repo). Throws `GhError` on failure.
  */
 export async function createIssue(
   opts: CreateIssueOpts,
@@ -78,11 +97,16 @@ export async function createIssue(
   for (const label of opts.labels ?? []) args.push('--label', label);
   try {
     const { stdout } = await execFn('gh', args, opts.body);
-    return stdout.trim();
+    return validateIssueUrl(stdout.trim(), opts.repo);
   } catch (err: unknown) {
     const e = err as { stderr?: string; exitCode?: number; code?: string; killed?: boolean };
     const stderr = e.stderr ?? '';
     const kind = e.killed ? 'timeout' : e.code === 'ENOENT' ? 'not-found' : /auth/i.test(stderr) ? 'unauthed' : 'unknown';
-    throw new GhError(`gh issue create failed (${kind}): ${stderr.trim()}`, kind, e.exitCode ?? 1, stderr);
+    // When stderr is empty the process may have exited cleanly but stdout failed
+    // validation (e.g. validateIssueUrl threw). Preserve the original Error
+    // message so callers see "gh issue create failed (unknown): invalid issue URL"
+    // instead of the useless "gh issue create failed (unknown): ".
+    const detail = stderr.trim() || (err instanceof Error ? err.message : '');
+    throw new GhError(`gh issue create failed (${kind}): ${detail}`, kind, e.exitCode ?? 1, stderr);
   }
 }

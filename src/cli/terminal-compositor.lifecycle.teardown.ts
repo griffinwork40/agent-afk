@@ -28,7 +28,7 @@
 import { buildScrollbackArchiveEscape, eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { flushLinesSkippingArchived } from './terminal-compositor.band-archived-prefix.js';
 import { cup } from './cup-frame-renderer.escapes.js';
-import { contentMargin } from './render/measure.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
 import type { LifecycleHost } from './terminal-compositor.lifecycle.js';
 
 /**
@@ -211,7 +211,7 @@ export function appendLinesAtCursor(
   // the same horizontal offset as the live centered frame. The band stores raw
   // (unpadded) content; padding is applied at emit time only, matching the
   // behaviour of commitPhase3Band, commitPhase3Hold, and the scrollback archive.
-  const pad = contentMargin();
+  const pad = compositorBand(self.stdout).margin;
   const paddedLines = pad
     ? lines.map((l) => (l !== '' ? pad + l : l))
     : lines;

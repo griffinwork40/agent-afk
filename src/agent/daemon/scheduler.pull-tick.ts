@@ -14,8 +14,9 @@
  */
 
 import { processAnsweredHandoffs } from './handoff-consume.js';
-import { dequeueNext } from './queue-store.js';
+import { dequeueNext, enqueue, listPending } from './queue-store.js';
 import { completeTask } from './lease-store.js';
+import { pickResumeFields } from './handoff-resume-context.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import type { ScheduledTask } from './triggers.js';
 import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
@@ -25,10 +26,31 @@ import { errorMessage } from '../../utils/errors.js';
 
 export interface PullTickContext {
   queueDir: string;
+  /** Override the handoffs directory swept for answers (tests). */
+  handoffsDir?: string;
   isIdle: () => boolean;
   getIsDequeuing: () => boolean;
   setIsDequeuing: (v: boolean) => void;
   runOnce: (task: ScheduledTask, trigger: 'pull') => Promise<TelemetryRecord>;
+  /** True while a run holding this overlap key is in flight (scheduler.inFlightTasks). */
+  isOverlapBusy?: (overlapKey: string) => boolean;
+}
+
+/**
+ * Invariant: a resume task overlap-guards as its ORIGINAL task id (#1416). If
+ * that task is running (e.g. a cron fire), dequeuing the resume would only
+ * produce an overlap skip, so the tick is deferred instead. The check, the
+ * dequeue, and runOnce's in-flight registration all run synchronously in one
+ * turn of the event loop, so no cron fire can slip in between them.
+ */
+function resumeBlockedByOverlap(ctx: PullTickContext): boolean {
+  const busy = ctx.isOverlapBusy;
+  if (busy === undefined) return false;
+  // Only the entry dequeueNext would pick next (first eligible, FIFO), so a
+  // busy cron task never blocks unrelated queued work behind it.
+  const now = Date.now();
+  const next = listPending(ctx.queueDir).find((t) => t.eligibleAfter === undefined || t.eligibleAfter <= now);
+  return next?.originalTaskId !== undefined && busy(next.originalTaskId);
 }
 
 // ─── Sweep helper ─────────────────────────────────────────────────────────────
@@ -39,8 +61,8 @@ export interface PullTickContext {
  * at call sites — this function is the single canonical implementation of the
  * four formerly copy-pasted sweep blocks.
  */
-export function sweepAnsweredHandoffs(queueDir: string): void {
-  void processAnsweredHandoffs(queueDir)
+export function sweepAnsweredHandoffs(queueDir: string, handoffsDir?: string): void {
+  void processAnsweredHandoffs(queueDir, handoffsDir)
     .then((r) => {
       if (r.requeued > 0) {
         // eslint-disable-next-line no-console
@@ -69,6 +91,7 @@ export function sweepAnsweredHandoffs(queueDir: string): void {
 export async function executePullTick(ctx: PullTickContext): Promise<void> {
   if (!ctx.isIdle()) return;
   if (ctx.getIsDequeuing()) return;
+  if (resumeBlockedByOverlap(ctx)) return;
   ctx.setIsDequeuing(true);
   try {
     // ORDERING INVARIANT: file is removed by dequeueNext BEFORE runOnce
@@ -79,16 +102,30 @@ export async function executePullTick(ctx: PullTickContext): Promise<void> {
       // Queue is empty this tick — still sweep for answered handoffs. An
       // answer that arrives between ticks would otherwise wait indefinitely
       // if no other task completes to trigger the post-run sweep below.
-      sweepAnsweredHandoffs(ctx.queueDir);
+      // Expiry is NOT swept here: handoff-maintenance.ts owns the periodic
+      // expiry sweep for every trigger mode (#1416), so pull mode never
+      // sweeps twice.
+      sweepAnsweredHandoffs(ctx.queueDir, ctx.handoffsDir);
       return;
     }
+    // A resume task (answered handoff, #1416) carries the asking task's
+    // context: it spawns in that task's pinned cwd, notifies per its policy,
+    // and overlap-guards as the ORIGINAL task id (the queue id stays the
+    // taskId so lease bookkeeping below still targets this queue entry).
+    const resume = pickResumeFields(queued);
     const syntheticTask: ScheduledTask = {
       taskId: queued.id,
       command: queued.command,
       trigger: 'pull',
       ...(queued.notifyOn !== undefined ? { notifyOn: queued.notifyOn } : {}),
+      ...(resume.cwd !== undefined ? { cwd: resume.cwd } : {}),
+      ...(resume.notifyChat !== undefined ? { notifyChat: resume.notifyChat } : {}),
+      ...(resume.originalTaskId !== undefined ? { overlapKey: resume.originalTaskId } : {}),
     };
     const record = await ctx.runOnce(syntheticTask, 'pull');
+    // Defense in depth for the deferral above: an overlap-skipped resume never
+    // ran, so put it back rather than finalising it (which would drop the answer).
+    if (record.skipReason === 'overlap') enqueue(queued.command, resume, ctx.queueDir);
     // Finalize the lease: move leased/<id>.json → completed/ so the task
     // does not appear as an expired lease on the next daemon restart.
     // Best-effort: a completeTask failure must never crash the pull loop.
@@ -104,7 +141,7 @@ export async function executePullTick(ctx: PullTickContext): Promise<void> {
       // startup) will re-enqueue or dead-letter based on the record's attempts.
     }
     // If the session answered a handoff during this run, re-enqueue it now.
-    sweepAnsweredHandoffs(ctx.queueDir);
+    sweepAnsweredHandoffs(ctx.queueDir, ctx.handoffsDir);
   } catch (err) {
     // Errors thrown INSIDE runOnce are captured there and written to
     // telemetry. Errors reaching here come from the dequeue path (now
@@ -153,8 +190,8 @@ export function fireOnTaskComplete(
   // notifyOn filter — only applies when the triggering task is known
   if (task !== undefined) {
     if (task.notifyOn === 'never') return;
-    // 'blocked' (gate hard-blocked ≥1 tool call, #3466) is treated as a failure
-    // for notification purposes — work silently never happened.
+    // 'blocked' means a gate block without a trustworthy declared recovery.
+    // Recovered success retains gateBlocks but is not a failure (#3756).
     if (task.notifyOn === 'failure' && record.status !== 'error' && record.status !== 'blocked') return;
     // 'always' or undefined (legacy behavior) falls through
   }

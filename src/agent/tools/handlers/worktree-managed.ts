@@ -22,7 +22,7 @@ import { promises as fs } from 'node:fs';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
 import { registerWorktreeRoot } from '../../worktree/worktree-root-registry.js';
-import { writeJsonFile } from '../../../utils/json-file.js';
+import { writeJsonFileAsync } from '../../../utils/json-file.js';
 import { probeNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
@@ -228,7 +228,7 @@ export async function createManagedWorktree(
     baseSha = sha.stdout.trim();
   } catch { /* non-fatal */ }
   try {
-    await writeJsonFile(join(worktreePath, '.afk-worktree-meta.json'), {
+    await writeJsonFileAsync(join(worktreePath, '.afk-worktree-meta.json'), {
       owner: args.owner ?? 'agent',
       pid: process.pid,
       createdAt: new Date().toISOString(),
@@ -529,7 +529,7 @@ export async function teardownIsolatedWorktree(args: {
         patch['ignoredDetailAtPreserve'] = outcome.detail;
         patch['ignoredBecauseAtPreserve'] = outcome.because;
       }
-      await writeJsonFile(metaPath, { ...existing, ...patch });
+      await writeJsonFileAsync(metaPath, { ...existing, ...patch });
     } catch { /* best-effort — never fail teardown over a meta write */ }
     return { removed: false, preserved: true, reason: outcome.reason, ignoredDetail, ignoredBecause };
   } catch {

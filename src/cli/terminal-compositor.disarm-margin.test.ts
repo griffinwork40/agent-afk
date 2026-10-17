@@ -11,8 +11,9 @@
  * Fix: appendLinesAtCursor prepends contentMargin() to each non-empty line,
  * matching exactly what buildScrollbackArchiveEscape does.
  *
- * Test strategy: spy on contentMargin() from render/measure.js to return a
- * fixed 25-space string (simulating a 150-col terminal with centering on), then
+ * Test strategy: stub AFK_CENTER_CONTENT=1 + AFK_TEXT_MEASURE=100 so the
+ * compositor's own 150-col mock stdout yields a real 25-space band margin
+ * (compositorBand reads the compositor's stdout width, not process.stdout), then
  * run the owner-wrote disarm path (queue a commit while suspended, owner writes
  * one line → disarmOwnerWrote=true, then disarm). Assert that the queued commit
  * line appears indented by those 25 spaces in the VirtualScreen output.
@@ -28,7 +29,6 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { TerminalCompositor } from './terminal-compositor.js';
 import { VirtualScreen } from './_lib/testing/virtual-screen.js';
-import * as measure from './render/measure.js';
 
 type MockStdout = NodeJS.WriteStream & { isTTY: boolean; columns: number; rows: number };
 type MockStdin = NodeJS.ReadStream & {
@@ -42,20 +42,14 @@ const ROWS = 24;
 const MARGIN_SPACES = 25; // floor((150 - 100) / 2) for the default 100-col measure
 const MARGIN = ' '.repeat(MARGIN_SPACES);
 
-// Spy that returns a fixed non-empty margin, simulating AFK_CENTER_CONTENT=1
-// on a 150-col terminal. Installed before each test and restored after.
-let marginSpy: ReturnType<typeof vi.spyOn>;
-
 afterEach(() => {
-  marginSpy?.mockRestore();
+  vi.unstubAllEnvs();
 });
 
+// Real centering on the compositor's 150-col stdout: floor((150 - 100) / 2) = 25.
 function installMarginSpy(): void {
-  // Spying on the module namespace object intercepts the binding used by
-  // teardown.ts under Vitest's CommonJS transform. Under native ESM this
-  // would silently stop intercepting the named import — tracked advisory
-  // finding from #2660.
-  marginSpy = vi.spyOn(measure, 'contentMargin').mockReturnValue(MARGIN);
+  vi.stubEnv('AFK_CENTER_CONTENT', '1');
+  vi.stubEnv('AFK_TEXT_MEASURE', '100');
 }
 
 function makeStdout(rows = ROWS, cols = COLS): MockStdout {
@@ -193,10 +187,8 @@ describe('#2450: pending band rows via appendLinesAtCursor are indented by conte
 
 describe('#2450 negative: queued commit is NOT indented when contentMargin() returns empty', () => {
   it('queued commit has zero leading spaces when contentMargin() returns empty string', async () => {
-    // Do NOT install the marginSpy — contentMargin() falls through to the real
-    // implementation which returns '' when AFK_CENTER_CONTENT is unset.
-    // We stub it to '' explicitly to make the test deterministic.
-    marginSpy = vi.spyOn(measure, 'contentMargin').mockReturnValue('');
+    // Centering explicitly off: the band is the identity (margin '').
+    vi.stubEnv('AFK_CENTER_CONTENT', '');
 
     const stdout = makeStdout();
     const vs = attachScreen(stdout);

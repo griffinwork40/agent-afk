@@ -29,6 +29,7 @@
 
 import { providerForModel } from '../providers/index.js';
 import { getSlotBindings, resolveBinding, SLOT_NAMES, type ModelSlots } from './model-slots.js';
+import { explicitSlotRoute } from './slot-route.js';
 
 /** The session-config fields {@link applySlotCredentials} may mutate. */
 export interface SlotCredentialTarget {
@@ -93,13 +94,8 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
   }
 
   const route =
-    binding.provider === 'anthropic'
-      ? 'anthropic-direct'
-      : binding.provider === 'openai' || binding.provider === 'chatgpt-oauth'
-        ? 'openai-compatible'
-        : binding.provider === 'xai' || binding.provider === 'xai-oauth'
-          ? 'xai'
-          : providerForModel(config.model, bindings ? { slots: bindings } : undefined);
+    explicitSlotRoute(binding.provider) ??
+    providerForModel(config.model, bindings ? { slots: bindings } : undefined);
 
   // A slot bound `provider: 'chatgpt-oauth'` selects the ChatGPT-subscription
   // token for THIS tier ahead of OPENAI_API_KEY / an explicit key — see

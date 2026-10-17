@@ -10,6 +10,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { createExitPlanModeHandler, PLAN_TEXT_REFUSAL } from './exit-plan-mode.js';
+import { MAX_PLAN_FEEDBACK_CHARS, readPlanFeedback } from './exit-plan-mode.feedback.js';
 import { MIN_PLAN_TEXT_CHARS } from '../../session/plan-text-tracker.js';
 import { elicitationRouter } from '../../elicitation-router.js';
 import { buildPlanExitPrompt } from '../../plan-mode-exit-prompt.js';
@@ -518,5 +519,87 @@ describe('AgentSession wires the visible-plan-text gate end to end', () => {
 
     expect(verdicts).toEqual(['refuse', 'ok', 'refuse']);
     await session.close();
+  });
+});
+
+describe('exit_plan_mode free-text revision feedback (allowCustom)', () => {
+  /** Answer the picker the way the REPL / Telegram custom-answer row does. */
+  function installCustomAnswer(text: string): { requests: Array<{ allowCustom?: boolean }> } {
+    const requests: Array<{ allowCustom?: boolean }> = [];
+    elicitationRouter.install(async (request) => {
+      requests.push(request);
+      return { action: 'accept', content: { value: null, custom_value: text } };
+    });
+    return { requests };
+  }
+
+  async function run(controls: PlanExitControls) {
+    return createExitPlanModeHandler(controls)({}, new AbortController().signal, { resolveBase: CWD });
+  }
+
+  it('offers the custom-answer row on the picker request', async () => {
+    const { requests } = installCustomAnswer('x');
+    await run(makeControls().controls);
+    expect(requests[0]?.allowCustom).toBe(true);
+  });
+
+  it('typed feedback: no seed, no mode flip, feedback returned to the model as a revise instruction', async () => {
+    installCustomAnswer('  Split step 3 into a migration and a backfill.  ');
+    const { controls, modeCalls, seeds } = makeControls();
+    const res = await run(controls);
+
+    expect(seeds).toEqual([]);
+    expect(modeCalls).toEqual([]);
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('<user_feedback>\nSplit step 3 into a migration and a backfill.\n</user_feedback>');
+    expect(res.content).toContain('Stay in plan mode');
+    expect(res.content).toContain('Do not implement');
+    expect(res.content).not.toContain('Plan approved');
+  });
+
+  it('approval trap: feedback containing "bypass" or "Keep" never approves or escalates', async () => {
+    for (const text of ['use bypass mode for this', 'Keep it, but also add tests', 'Approve — implement now']) {
+      installCustomAnswer(text);
+      const { controls, modeCalls, seeds } = makeControls('acceptEdits');
+      const res = await run(controls);
+      expect(seeds, text).toEqual([]);
+      expect(modeCalls, text).toEqual([]);
+      expect(res.content, text).toContain('<user_feedback>');
+    }
+  });
+
+  it('blank custom answer is treated as Keep planning (still no approval)', async () => {
+    installCustomAnswer('   \n  ');
+    const { controls, seeds } = makeControls();
+    const res = await run(controls);
+    expect(seeds).toEqual([]);
+    expect(res.content).toContain('User chose to keep planning');
+  });
+
+  it('caps very long feedback', async () => {
+    installCustomAnswer('a'.repeat(MAX_PLAN_FEEDBACK_CHARS + 500));
+    const { controls, seeds } = makeControls();
+    const res = await run(controls);
+    expect(seeds).toEqual([]);
+    expect(res.content).toContain('… [truncated]');
+    expect(res.content.length).toBeLessThan(MAX_PLAN_FEEDBACK_CHARS + 500);
+  });
+
+  it('picker message tells the user typed text is revision feedback', async () => {
+    let message = '';
+    elicitationRouter.install(async (request) => {
+      message = request.message;
+      return { action: 'accept', content: { value: request.choices?.[0] } };
+    });
+    await run(makeControls().controls);
+    expect(message).toContain('revision feedback');
+    expect(message.length).toBeLessThan(512); // REPL picker sanitize cap
+  });
+});
+
+describe('readPlanFeedback', () => {
+  it('ignores non-custom results', () => {
+    expect(readPlanFeedback({ value: 'Keep planning' })).toEqual({ kind: 'none' });
+    expect(readPlanFeedback(undefined)).toEqual({ kind: 'none' });
   });
 });

@@ -85,9 +85,9 @@ export interface TraceAggregates {
   totalCacheReadTokens: number;
   /** sum of closure `finalTokens.cacheCreation` */
   totalCacheCreationTokens: number;
-  /** sum of closure `finalCostUsd` (authoritative per-session cost) */
+  /** sum of per-trace `computeSessionCost().totalCostUsd` (root + subagents, #3879) */
   totalCostUsd: number;
-  /** count of traced sessions whose closure reported a non-zero cost */
+  /** count of traced sessions whose total cost is non-zero (once per trace) */
   sessionsWithCost: number;
 }
 

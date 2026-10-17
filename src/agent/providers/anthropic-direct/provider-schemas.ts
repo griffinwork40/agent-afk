@@ -15,6 +15,7 @@ import { workspacePublishTool, workspaceQueryTool, workspaceSubscribeTool } from
 import { getRuntimeStateTool } from '../../awareness/index.js';
 import { stateToolSchemas, stateReadToolSchemas } from '../../state/state-schemas.js';
 import type { AnthropicDirectProviderOptions } from './provider-options.js';
+import { readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
 import type { AnthropicToolDef } from '../../tools/types.js';
 
 /**
@@ -34,7 +35,8 @@ import type { AnthropicToolDef } from '../../tools/types.js';
  * without restarting the session.
  */
 export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): AnthropicToolDef[] {
-  const schemas = [...builtinToolSchemas];
+  // `git_read` (#3754) joins the builtins only while AFK_READONLY_GIT_TOOL is on.
+  const schemas = [...builtinToolSchemas, ...readOnlyGitSchemas()];
   // The executor supplies the `agent` tool def so a named-agent registry
   // can advertise its types in the description (see agents/tool-def.ts).
   // Optional chaining: test stubs without describeAgentTool fall back to

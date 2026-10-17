@@ -109,7 +109,7 @@ describe('CronScheduler.getInFlightTasks', () => {
   });
 
   it('keeps a secret-free command head verbatim (truncated to 60 chars)', async () => {
-    const command = '/forge-friction --auto ' + 'x'.repeat(80);
+    const command = '/forge-friction --auto ' + 'word '.repeat(16); // 80 chars, not token-shaped
     scheduler.register({ taskId: 'plain', command, trigger: 'cron', cronExpression: '* * * * *', executor: 'shell' });
 
     const { pending } = await startTick('plain');

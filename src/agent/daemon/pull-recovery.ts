@@ -1,4 +1,3 @@
-import { recoverPendingHandoffs } from './handoff-wiring.js';
 import { recoverExpiredLeases } from './queue-store.js';
 import { errorMessage } from '../../utils/errors.js';
 
@@ -23,17 +22,6 @@ export function recoverDaemonQueues(queueDir: string): void {
     console.error(`[daemon] lease-recovery: failed to recover expired leases: ${msg}`);
   }
 
-  // Recover pending handoffs independently — must not be skipped if lease recovery throws.
-  void recoverPendingHandoffs(undefined, queueDir)
-    .then((r) => {
-      if (r.renotified > 0 || r.expired > 0) {
-        // eslint-disable-next-line no-console
-        console.error(`[daemon] handoff-recovery: re-notified ${r.renotified}, expired ${r.expired}`);
-      }
-    })
-    .catch((err: unknown) => {
-      const hMsg = errorMessage(err);
-      // eslint-disable-next-line no-console
-      console.error(`[daemon] handoff-recovery: recovery failed: ${hMsg}`);
-    });
+  // Pending-handoff recovery (re-notify + expire) is NOT done here: it runs
+  // for every trigger mode from handoff-maintenance.ts (#1416).
 }

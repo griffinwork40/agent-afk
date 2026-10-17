@@ -175,12 +175,13 @@ export interface RuntimeWorkspace {
  */
 export type RuntimeUsageEntry = CompactUsageEntry;
 
-/** The full runtime snapshot (view='all'). Individual views return subsets. */
+/** Runtime snapshot fields. The opt in hooks field is excluded from view='all'. */
 export interface RuntimeSnapshot {
   self: RuntimeSelf;
   tools: RuntimeTools;
   subagents: RuntimeSubagents;
   workspace: RuntimeWorkspace;
+  hooks?: import('./hooks-source.js').RuntimeHooks;
   /** Compact usage summary — present in view='all' and the future view='usage'. */
   usage?: RuntimeUsageEntry[];
   /**
@@ -210,7 +211,7 @@ export interface RuntimeSnapshot {
 export type { SubagentOutcomeSummaryEntry } from '../../insights/aggregators/subagent-outcomes.js';
 
 /** Discriminator for `get_runtime_state.input.view`. */
-export type RuntimeView = 'self' | 'tools' | 'subagents' | 'workspace' | 'all';
+export type RuntimeView = 'self' | 'tools' | 'subagents' | 'workspace' | 'hooks' | 'all';
 
 /**
  * Pull-on-demand source for runtime snapshot fields. Each method MUST return
@@ -221,6 +222,8 @@ export type RuntimeView = 'self' | 'tools' | 'subagents' | 'workspace' | 'all';
  * Tests can supply hand-rolled object literals.
  */
 export interface RuntimeStateSource {
+  /** Optional for custom sources; only the explicit hooks view reads disk. */
+  getHooks?(): import('./hooks-source.js').RuntimeHooks;
   getSelf(): RuntimeSelf;
   getTools(): RuntimeTools;
   getSubagents(): RuntimeSubagents;

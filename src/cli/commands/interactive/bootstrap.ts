@@ -1,4 +1,5 @@
 import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
+import { managerShutdownConfig } from '../../../agent/session/manager-shutdown-config.js';
 import { runReplReconcile } from '../../../agent/manifest/startup-reconcile.js';
 import type { SlashContext } from '../../slash/types.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
@@ -155,8 +156,7 @@ export async function bootstrapSession(
     // Cascade-abort and drain in-flight children before the writer seals,
     // so a wave still running when this session ends emits real `cancelled`
     // rows instead of vanishing (#733).
-    drainSubagents: (reason) =>
-      rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
+    ...managerShutdownConfig(rootManager, composeExecutor),
     ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
   });
 

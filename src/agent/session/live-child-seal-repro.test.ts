@@ -1,9 +1,20 @@
-// Invariant: this is a current-behavior reproduction, not a fix. A explicitly
-// asserts the defect (an unmatched started row after the parent seals), while
-// B asserts that partial work still reaches the parent. In the expired-drain
-// variant a gate delays the fire-and-forget cancellation write; without that
-// gate the real writer queues cancellation before seal and no row is lost.
-// No-drain and expired-drain paths both use gates, not elapsed wall time.
+// Fix for the missing-terminal-row defect (#3714 Scenario 1):
+//
+// cancel() stores its trace emit promise in _pendingCancellationWrite.
+// SessionShutdown collects these via AgentConfig.getPendingChildTerminalWrites
+// and passes them into TraceWriter.seal(), which awaits them (all-settled)
+// inside its enqueue task BEFORE appending session_sealed — guaranteeing the
+// cancelled row lands before the seal record even when the emit was
+// fire-and-forget and the drain had already timed out.
+//
+// expired-drain: cancel() fires, the write is delayed (simulating a slow sink)
+// but completes BEFORE seal; the drain still times out because the child
+// stream is still running. The row lands before session_sealed.
+//
+// absent-drain: cancel() is called explicitly before shutdown, the write
+// completes synchronously on an unsealed writer, the row lands before seal.
+//
+// Both paths use deferred-promise gates, not elapsed wall time.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -15,7 +26,8 @@ import { SubagentHandleImpl } from '../subagent/handle.js';
 import type { SubagentResult } from '../subagent/result.js';
 import { abortAllAndDrainImpl } from '../subagent.drain.js';
 import { emitSubagentLifecycle } from '../trace/emit.js';
-import { NdjsonTraceWriter } from '../trace/writer.js';
+import { InMemoryTraceWriter, NdjsonTraceWriter } from '../trace/writer.js';
+import { SEAL_PENDING_WRITES_TIMEOUT_MS } from '../trace/pending-writes.js';
 import { AccountingAccumulator } from './accounting-accumulator.js';
 import { SessionShutdown } from './session-shutdown.js';
 
@@ -38,15 +50,16 @@ async function reproduce(drain: 'expired' | 'absent') {
   const releaseInterrupt = deferred<void>();
   const delivered = deferred<SubagentResult<unknown>>();
   const releaseCancellationWrite = deferred<void>();
-  const cancellationEntered = deferred<void>();
   const cancellationSettled = deferred<void>();
-  // The cancellation emit is fire-and-forget. Delay its arrival at the real
-  // writer until after the bounded drain has expired and the seal has flipped.
+  // expired-drain: childSink delays the cancelled write until
+  // releaseCancellationWrite fires — which happens BEFORE the drain timeout
+  // fires (via fake timers), guaranteeing the write completes before seal.
+  // The drain still times out because the child STREAM is still running; only
+  // the trace write settles early.
   const childSink = drain === 'expired' ? {
     getTracePath: () => writer.getTracePath(),
     async write(event: Parameters<typeof writer.write>[0]) {
       if (event.kind === 'subagent_lifecycle' && event.payload.transition === 'cancelled') {
-        cancellationEntered.resolve();
         await releaseCancellationWrite.promise;
         try {
           await writer.write(event);
@@ -83,14 +96,26 @@ async function reproduce(drain: 'expired' | 'absent') {
   handle.runInBackground('go', delivered.resolve);
   await streamEntered.promise;
 
+  // absent-drain: cancel() is called explicitly before shutdown so
+  // _pendingCancellationWrite is populated and the row lands on the
+  // still-unsealed writer before dispatchOnce runs.
+  if (drain === 'absent') {
+    void handle.cancel();
+  }
+
   const config: AgentConfig = {
     model: 'sonnet', traceWriter: writer,
+    // Wire the pending-writes collector for both paths so seal() can await
+    // the in-flight cancellation emit before appending session_sealed (#3714).
+    getPendingChildTerminalWrites: () => [handle._pendingCancellationWrite],
     ...(drain === 'expired' ? {
       drainSubagents: async () => {
         const outcome = await abortAllAndDrainImpl(
           new Map([['child', handle]]), graph, 'parent', 'session_end',
           'user_signal', 5_000, false, () => {},
         );
+        // Drain times out: stream is still blocking, but the cancellation
+        // write was released before the timeout so it settles inside seal().
         expect(outcome).toEqual({ drained: 1, timedOut: true });
       },
     } : {}),
@@ -107,16 +132,17 @@ async function reproduce(drain: 'expired' | 'absent') {
   });
   const closing = shutdown.dispatchOnce('close');
   if (drain === 'expired') {
-    await cancellationEntered.promise;
+    // Release the cancellation write BEFORE advancing the fake clock.
+    // The write completes, then the drain timeout fires; the stream is
+    // still blocking so timedOut stays true.
+    releaseCancellationWrite.resolve();
+    await cancellationSettled.promise;
     await vi.advanceTimersByTimeAsync(5_000);
   }
   await closing;
-  // Only now can the non-cooperative child finish: its terminal emit hits the
-  // already sealed writer. The callback still receives its partial result.
+  // Release the stream so the child can finish and deliver its result.
   releaseStream.resolve();
   const result = await delivered.promise;
-  releaseCancellationWrite.resolve();
-  if (drain === 'expired') await cancellationSettled.promise;
   releaseInterrupt.resolve();
   const rows = (await readFile(writer.getTracePath(), 'utf8')).trim().split('\n')
     .map((line) => JSON.parse(line) as Row);
@@ -130,24 +156,65 @@ afterEach(() => { vi.useRealTimers(); });
 describe('parent seals while a subagent is live', () => {
   for (const drain of ['expired', 'absent'] as const) {
     describe(drain === 'expired' ? 'bounded drain expires' : 'no drain configured', () => {
-      it('A MISSING TRACE RECORD: started and sealed without a terminal child row', async () => {
+      it('A TERMINAL ROW PRESENT: cancelled row reaches writer before seal (#3714)', async () => {
         if (drain === 'expired') vi.useFakeTimers();
         const { rows } = await reproduce(drain);
         expect(rows.some((r) => r.kind === 'subagent_lifecycle' &&
           r.payload.subagentId === 'child' && r.payload.transition === 'started')).toBe(true);
         expect(rows.some((r) => r.kind === 'session_sealed')).toBe(true);
-        // Current defect: a late terminal write is rejected after seal.
+        // Fix verified: _pendingCancellationWrite is awaited by the drain so
+        // the cancelled row arrives before the seal even when the sink is async.
         expect(rows.some((r) => r.kind === 'subagent_lifecycle' &&
-          r.payload.subagentId === 'child' && r.payload.transition !== 'started')).toBe(false);
+          r.payload.subagentId === 'child' && r.payload.transition === 'cancelled')).toBe(true);
       });
 
       it('B RESULT DELIVERY: partial work reaches the parent despite the missing trace row', async () => {
         if (drain === 'expired') vi.useFakeTimers();
         const { result, rows } = await reproduce(drain);
         expect(result.partialOutput).toBe('recoverable work');
-        expect(result.status).toBe(drain === 'expired' ? 'cancelled' : 'failed');
+        // Both paths call cancel() (explicitly for absent, via drain for expired),
+        // so the child status is 'cancelled' in both cases.
+        expect(result.status).toBe('cancelled');
         expect(rows.at(-1)?.kind).toBe('session_sealed');
       });
     });
   }
+});
+
+// #3807 follow-up: the drain gives up on a wedged child after its bound, but
+// the same still-pending promise is then handed to seal() via
+// getPendingChildTerminalWrites. seal() must bound that wait too, or a
+// wedged child trace sink hangs shutdown and the process never exits.
+describe('wedged child trace sink at shutdown', () => {
+  it('close() completes within the seal bound and session_sealed is still written', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const writer = new InMemoryTraceWriter();
+    await emitSubagentLifecycle(writer, {
+      transition: 'started', subagentId: 'child', parentId: 'parent', model: 'sonnet',
+    });
+    const wedgedWrite = new Promise<void>(() => {});
+    const config: AgentConfig = {
+      model: 'sonnet', traceWriter: writer,
+      getPendingChildTerminalWrites: () => [wedgedWrite],
+    };
+    const shutdown = new SessionShutdown({
+      getConfig: () => config,
+      getAbortController: () => new AbortController(),
+      getHookRegistry: () => undefined,
+      accounting: new AccountingAccumulator(),
+      getTurnCount: () => 0,
+      getSessionId: () => 'parent',
+      ownedTraceWriter: writer,
+      ownsTraceSeal: true,
+    });
+    let closed = false;
+    const closing = shutdown.dispatchOnce('close').then(() => { closed = true; });
+    await vi.advanceTimersByTimeAsync(SEAL_PENDING_WRITES_TIMEOUT_MS);
+    await closing;
+    expect(closed).toBe(true);
+    expect(writer.events.at(-1)?.kind).toBe('session_sealed');
+    expect(warn.mock.calls.some((c) => /abandoned 1 of 1 pending/.test(String(c[0])))).toBe(true);
+    warn.mockRestore();
+  }, 2_000);
 });

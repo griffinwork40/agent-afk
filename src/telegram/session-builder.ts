@@ -75,6 +75,7 @@ export function buildTelegramSession(opts: {
     traceWriter,
     chatId,
     threadId,
+    onInjectable,
   } = ctx;
 
   const wiring = wireTelegramExecutors({
@@ -86,6 +87,7 @@ export function buildTelegramSession(opts: {
     traceWriter,
     chatId,
     threadId,
+    ...(onInjectable !== undefined ? { onInjectable } : {}),
     wireExtras,
   });
 

@@ -29,7 +29,7 @@
 import type { BandRowMeta, FramePlacementMode } from './terminal-compositor.types.js';
 import { eraseAndPaintRow, scrollbackFlushLines } from './terminal-compositor.scrollback.js';
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
-import { contentMargin } from './render/measure.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
 
 /**
  * State slice the archived-prefix helpers read and mutate.
@@ -173,7 +173,7 @@ export function dropScrollingArchivedRows(self: Omit<ArchivedPrefixHost, 'placem
   self.committedBandTopRow = top + d;
 
   const remaining = self.committedBand.slice(self.committedBand.length - self.committedBandPaintedRows);
-  const pad = contentMargin();
+  const pad = compositorBand(self.stdout).margin;
   let out = '';
   for (let i = 0; i < remaining.length; i++) {
     const raw = remaining[i] ?? '';

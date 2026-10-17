@@ -217,12 +217,13 @@ describe('doneGlyph — benign rejection vs real fault (#75)', () => {
         'abort',
         'elicitation-declined',
         'hook-block',
+        'lost-args',
         'no-such-target',
         'permission-denied',
         'policy-refusal',
       ].sort(),
     );
-    expect([...real].sort()).toEqual(['budget', 'denial-breaker', 'repeat-failure', 'timeout'].sort());
+    expect([...real].sort()).toEqual(['budget', 'denial-breaker', 'hook-block-repeat', 'repeat-failure', 'timeout'].sort());
   });
 
   it('resolves the benign glyph tone from `palette` at call time (no theme-swap freeze)', () => {

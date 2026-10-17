@@ -18,13 +18,12 @@ function makeFetch(opts: {
   body?: unknown;
   jsonThrows?: boolean;
 }): typeof fetch {
-  return vi.fn().mockResolvedValue({
-    ok: opts.status >= 200 && opts.status < 300,
-    status: opts.status,
-    json: opts.jsonThrows
-      ? () => Promise.reject(new SyntaxError('bad json'))
-      : () => Promise.resolve(opts.body ?? {}),
-  }) as unknown as typeof fetch;
+  // Return a real Response so `.clone()` works — rawPostOAuthForm clones
+  // before reading to allow both JSON and text body consumption paths.
+  const bodyStr = opts.jsonThrows ? 'not json' : JSON.stringify(opts.body ?? {});
+  return vi.fn().mockResolvedValue(
+    new Response(bodyStr, { status: opts.status }),
+  ) as unknown as typeof fetch;
 }
 
 const TOKEN_URL = 'https://auth.x.ai/oauth2/token';

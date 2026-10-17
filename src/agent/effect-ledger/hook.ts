@@ -53,6 +53,10 @@ function outcome(context: HookContext): Exclude<EffectStatus, 'pending'> {
     if (context.toolName === 'web_request' && typeof output === 'string') {
       try {
         const { status } = JSON.parse(output) as { status?: number };
+        // Treat any HTTP >= 400 as unknown here. definitiveFailure() carves out
+        // the narrow set of statuses that prove non-application (400-class
+        // excluding 408/409/425/429). Keep the two in sync: if definitiveFailure
+        // is updated to include new statuses, this branch may need updating too.
         if (typeof status === 'number' && status >= 400) return 'unknown';
       } catch { /* Unparseable errors remain uncertain when flagged below. */ }
     }
@@ -125,6 +129,10 @@ export function createEffectLedgerHooks(store: EffectStore = new EffectStore()):
     if (id) activeIds.delete(id);
     try {
       // Standalone post-hook callers without a pre-hook still get a recorded outcome.
+      // Note: this path calls writePending + updateStatus — two fsynced appends per
+      // invocation. The pre+post paired path pays the same cost spread across two
+      // hook calls; this path pays it in one. Acceptable for correctness; callers
+      // that need lower write amplification should prefer the paired hook API.
       const prior = id ? null : await store.findByIdempotencyKey(effect.key, context.sessionId);
       const record = id ? { id } : store.writePending({
         idempotencyKey: effect.key, operationType: effect.operationType,

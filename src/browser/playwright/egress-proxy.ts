@@ -22,6 +22,7 @@ import { lookup } from 'node:dns/promises';
 import type { Duplex } from 'node:stream';
 import { createGuardedLookup } from '../../http-client/egress-guard.lookup.js';
 import { EgressBlockedError, isBlockedAddress } from '../../http-client/egress-guard.js';
+import { raceAddresses } from './egress-proxy.race.js';
 
 /** One refused connection attempt. */
 export interface EgressRefusal {
@@ -38,6 +39,13 @@ export interface EgressProxyDeps {
   isBlocked?: (ip: string, port: number) => boolean;
   /** Upstream connect timeout; a hung target must not hang a tool call. */
   connectTimeoutMs?: number;
+  /**
+   * Inactivity timeout for plain-HTTP forwards AFTER headers arrive.
+   * Defaults to 0 (disabled) so long-poll / SSE / slow downloads are never
+   * cut mid-stream. Set to a positive value to enforce a response-body
+   * inactivity deadline independently of the connect budget.
+   */
+  responseInactivityMs?: number;
   /** Bounded drain window for close(). */
   drainTimeoutMs?: number;
 }
@@ -103,12 +111,14 @@ export class EgressProxy {
   private readonly lookupFn: (hostname: string) => Promise<readonly { address: string }[]>;
   private readonly isBlocked: (ip: string, port: number) => boolean;
   private readonly connectTimeoutMs: number;
+  private readonly responseInactivityMs: number;
   private readonly drainTimeoutMs: number;
 
   constructor(deps: EgressProxyDeps = {}) {
     this.lookupFn = deps.lookupFn ?? ((h) => lookup(h, { all: true, verbatim: true }));
     this.isBlocked = deps.isBlocked ?? ((ip) => isBlockedAddress(ip));
     this.connectTimeoutMs = deps.connectTimeoutMs ?? 15_000;
+    this.responseInactivityMs = deps.responseInactivityMs ?? 0;
     this.drainTimeoutMs = deps.drainTimeoutMs ?? 1_000;
     this.server = http.createServer((req, res) => {
       this.onForward(req, res).catch(() => res.destroy());
@@ -195,51 +205,33 @@ export class EgressProxy {
     s.once('close', () => this.sockets.delete(s));
   }
 
-  /** Open a TCP connection to an already-validated IP literal. */
-  private dial(address: string, port: number, timeoutMs: number): Promise<net.Socket> {
-    return new Promise((resolve, reject) => {
-      const up = net.connect({ host: address, port });
-      this.track(up);
-      // Persistent: a later socket error must never be an unhandled 'error'.
-      up.on('error', reject);
-      up.setTimeout(timeoutMs, () => up.destroy(new Error('egress proxy: upstream timeout')));
-      up.once('connect', () => {
-        up.setTimeout(0);
-        resolve(up);
-      });
-      // close() destroys still-connecting sockets without an error; settle the
-      // promise so openUpstream never hangs (no-op once already resolved).
-      up.once('close', () => reject(new Error('egress proxy: upstream closed before connect')));
+  /**
+   * Resolve + classify, then connect via RFC 8305-style Happy Eyeballs:
+   * launch the first candidate immediately, stagger each subsequent candidate
+   * by HAPPY_EYEBALLS_DELAY_MS, and keep the first socket that connects —
+   * destroying all losers. Every socket opened is either returned or destroyed;
+   * no leaks.
+   *
+   * Security invariant: only pre-validated IP literals from resolve() are
+   * ever dialled; no second DNS resolution occurs.
+   */
+  private openUpstream(host: string, port: number, clientGone: () => boolean): Promise<net.Socket> {
+    const gone = (): boolean => this.closing !== undefined || clientGone();
+    if (gone()) return Promise.reject(new Error('egress proxy: closing'));
+    return this.resolve(host, port).then((addresses) => {
+      if (gone()) return Promise.reject(new Error('egress proxy: closing'));
+      return this.raceAddresses(addresses, port, gone);
     });
   }
 
-  /**
-   * Resolve + classify, then dial each validated literal in order within one
-   * connect budget. Refuses (and destroys late sockets) once close() started
-   * or the client went away — rechecked after resolve and after dial.
-   */
-  private async openUpstream(host: string, port: number, clientGone: () => boolean): Promise<net.Socket> {
-    const gone = (): boolean => this.closing !== undefined || clientGone();
-    if (gone()) throw new Error('egress proxy: closing');
-    const addresses = await this.resolve(host, port);
-    const deadline = Date.now() + this.connectTimeoutMs;
-    let lastErr: unknown = new Error('egress proxy: upstream timeout');
-    for (const [i, address] of addresses.entries()) {
-      const remaining = deadline - Date.now();
-      if (gone()) throw new Error('egress proxy: closing');
-      if (remaining <= 0) break;
-      let up: net.Socket;
-      try {
-        up = await this.dial(address, port, Math.max(1, Math.floor(remaining / (addresses.length - i))));
-      } catch (err) {
-        lastErr = err;
-        continue;
-      }
-      if (!gone()) return up;
-      up.destroy();
-      throw new Error('egress proxy: closing');
-    }
-    throw lastErr;
+  /** Delegate to the extracted Happy Eyeballs race (egress-proxy.race.ts). */
+  private raceAddresses(addresses: string[], port: number, gone: () => boolean): Promise<net.Socket> {
+    return raceAddresses(addresses, {
+      port,
+      connectTimeoutMs: this.connectTimeoutMs,
+      track: (s) => this.track(s),
+      gone,
+    });
   }
 
   /** Plain-HTTP forward request (`GET http://host/path`). */
@@ -267,8 +259,15 @@ export class EgressProxy {
     // `timeout` above is stored but never armed for a pre-connected socket from
     // createConnection (verified on Node 26), so arm the inactivity timer
     // explicitly: a silent upstream must not pin proxy sockets (#2313 R2.1).
+    // connectTimeoutMs guards the response-start window; once headers arrive
+    // it is disarmed and the (typically 0 / disabled) responseInactivityMs
+    // takes over — so long-poll, SSE, and slow downloads survive (#3718 fix 2).
     upstream.setTimeout(this.connectTimeoutMs);
     upstream.on('timeout', () => upstream.destroy(new Error('egress proxy: upstream timeout')));
+    upstream.once('response', () => {
+      upstream.setTimeout(0);
+      if (this.responseInactivityMs > 0) upstream.setTimeout(this.responseInactivityMs);
+    });
     upstream.on('response', (up) => this.relayResponse(up, res));
     upstream.on('error', () => reply(res, 502, 'egress proxy: upstream error'));
     // Downstream gone early (client cancelled / socket closed) → cancel upstream.

@@ -11,6 +11,7 @@
 import type { SubagentProgressSink } from '../types/session-types.js';
 import type { Message } from '../types.js';
 import { emitSuccessfulHandoff } from './capped-handoff.js';
+import { takeUnreportedBilling, type RunBillingContext } from './handle.billing.js';
 import { streamToFinalMessage } from './handle.streaming.js';
 import type { SubagentHandleImpl } from './handle.js';
 
@@ -27,11 +28,12 @@ import type { SubagentHandleImpl } from './handle.js';
  *   3. onSubagentSucceeded fires synchronously before _onTerminal() so the
  *      session_sealed rollup always captures this subagent's contribution.
  */
-export async function drainAndEmitSuccess<T>(
-  handle: SubagentHandleImpl<T>,
+export async function drainAndEmitSuccess(
+  handle: SubagentHandleImpl<unknown>,
   firstMsg: Message,
   startTime: number,
   sinkOverride: SubagentProgressSink | undefined,
+  billingContext: RunBillingContext = handle._billingContext,
 ): Promise<Message> {
   // Item 7: Drain pending user messages queued via sendMessage(). Each
   // message starts a new turn in the same subagent conversation.
@@ -48,7 +50,7 @@ export async function drainAndEmitSuccess<T>(
       // Item 7c: abort-signal guard — stop draining if cancelled.
       if (handle._controller.signal.aborted) break;
       const next = handle._pendingUserMessages.shift()!;
-      lastMsg = await streamToFinalMessage(handle, next, sinkOverride);
+      lastMsg = await streamToFinalMessage(handle, next, sinkOverride, billingContext);
       handle._lastMessage = lastMsg.content;
       handle._currentTrace.turnCount++;
     }
@@ -73,7 +75,7 @@ export async function drainAndEmitSuccess<T>(
   // FIFO queue BEFORE any seal can run. Safe: write() is a bounded FS append
   // and emitSubagentLifecycle already swallows errors, so the await cannot
   // introduce a new failure mode or an unbounded hang.
-  await emitSuccessfulHandoff(handle, lastMsg, startTime);
+  await emitSuccessfulHandoff(handle, lastMsg, startTime, billingContext);
   // Propagate usage and cost to the parent session's rollup accumulators.
   // Fire synchronously before onTerminal() so the session_sealed event
   // always captures this subagent's contribution even if onTerminal()
@@ -88,7 +90,16 @@ export async function drainAndEmitSuccess<T>(
   // which `recordSubagentCompletion` already tolerates.
   const costUsd =
     typeof lastMsg.metadata?.totalCostUsd === 'number' ? lastMsg.metadata.totalCostUsd : undefined;
-  handle.onSubagentSucceeded?.(handle._currentTrace.usage, costUsd);
+  // Billing (#3878) spans every turn of the run, initial + drain turns.
+  // `_currentTrace.usage` also carries the run's cumulative `billing`; strip
+  // it and attach only the UNREPORTED delta (handle.billing.ts): a cancel()
+  // that landed during the awaits above may already have settled part of it.
+  // Taking the delta records it as reported, so a later cancel()/failure
+  // reports only spend that accrues after this point — counted exactly once.
+  const { billing: _traceBilling, ...legacy } = handle._currentTrace.usage ?? {};
+  const billing = takeUnreportedBilling(billingContext);
+  const usage = handle._currentTrace.usage === undefined && billing === undefined ? undefined : legacy;
+  handle.onSubagentSucceeded?.(billing !== undefined ? { ...usage, billing } : usage, costUsd);
 
   handle._onTerminal();
   return lastMsg;

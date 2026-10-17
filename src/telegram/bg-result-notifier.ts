@@ -18,6 +18,14 @@
  * cancels are operator-initiated and cascade cancels fire during teardown when
  * nothing useful can be surfaced.
  *
+ * **Idle-wake** — mirrors the REPL's `BgResultNotifier.onInjectable` /
+ * `tryAutoResume` path. When a non-cancelled result is buffered,
+ * {@link onInjectable} is called so callers can synthesise a new Telegram
+ * turn without waiting for the next user message. The hook fires AFTER the
+ * result is pushed into `pendingInjections` so the turn sees a populated
+ * buffer. Callers must guard against concurrent turns and wake loops (see
+ * `MessageHandler.wakeIdleSession`).
+ *
  * Lifecycle: construct after the registry, call {@link dispose} on session
  * close so the `settled` listener and the route registration are removed.
  *
@@ -81,6 +89,18 @@ export class TelegramBgResultNotifier {
    */
   private disposed = false;
 
+  /**
+   * Optional wake hook, fired once AFTER an injectable (non-cancelled) result
+   * is pushed into `pendingInjections`. Mirrors the REPL's
+   * `BgResultNotifier.onInjectable` / `tryAutoResume` contract.
+   *
+   * The hook is called AFTER the buffer is populated, so the handler can
+   * drain it immediately. Callers must guard against concurrent turns and
+   * wake loops (see `MessageHandler.wakeIdleSession`). Null when nothing is
+   * wired.
+   */
+  onInjectable: (() => void) | null = null;
+
   private readonly onSettled = (job: BackgroundJob): void => {
     // Early-exit guard: if dispose() already ran, neither push nor injection
     // is meaningful — the session is torn down.
@@ -112,6 +132,11 @@ export class TelegramBgResultNotifier {
     if (this.pendingInjections.length > MAX_PENDING) {
       this.pendingInjections.shift();
     }
+    // A real injectable result just landed — nudge the wake hook (if wired)
+    // so an idle Telegram session can process it without waiting for the next
+    // user message. Fired last so the buffer is already populated when the
+    // handler drains on the woken turn. Mirrors BgResultNotifier.onInjectable.
+    this.onInjectable?.();
   };
 
   /**
@@ -132,6 +157,17 @@ export class TelegramBgResultNotifier {
       this.routeKey = routeKey({ chatId, ...(threadId !== undefined ? { threadId } : {}) });
       registerBgInjectionSource(this.routeKey, this);
     }
+  }
+
+  /**
+   * Whether the injection buffer holds at least one result waiting to be
+   * delivered. Used by `wakeIdleSession` to confirm the buffer is still
+   * populated before synthesising a new Telegram turn — guards against a
+   * race where `drainInjections` was called between the `onInjectable` fire
+   * and the wake handler running.
+   */
+  hasPendingInjections(): boolean {
+    return this.pendingInjections.length > 0;
   }
 
   /**

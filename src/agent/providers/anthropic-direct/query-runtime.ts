@@ -126,6 +126,13 @@ export class AnthropicDirectQuery implements ProviderQuery {
   /** Owning subagent id (fork only); stamped onto tool_call trace events. */
   private readonly subagentId?: string;
   /**
+   * True when `assembleChildConfig` injected a workspace preamble into this
+   * fork's system prompt. Gates `splitAtWorkspacePreamble` in `composeSystem`
+   * so root sessions whose operator prompt contains a preamble header string
+   * are not incorrectly split. See #3924.
+   */
+  private readonly hasWorkspacePreamble: boolean;
+  /**
    * The session's configured working directory — `opts.cwd ?? process.cwd()`.
    * Surfaced via `TurnDriverContext.cwd` so `session.init` reports the
    * session's own directory rather than the host process's cwd — they differ
@@ -196,6 +203,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     if (opts.softDeadlineMs !== undefined) this.softDeadlineMs = opts.softDeadlineMs;
     this.traceWriter = opts.traceWriter;
     if (opts.subagentId !== undefined) this.subagentId = opts.subagentId;
+    this.hasWorkspacePreamble = opts.hasWorkspacePreamble ?? false;
     this._cwd = opts.cwd ?? process.cwd();
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
     this.systemPromptRebuildFactory = opts.systemPromptRebuildFactory;
@@ -323,6 +331,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       state: this.state,
       systemPrefix: this.systemPrefix,
       ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}),
+      hasWorkspacePreamble: this.hasWorkspacePreamble,
     });
   }
 
@@ -373,6 +382,9 @@ export class AnthropicDirectQuery implements ProviderQuery {
     // is unchanged (no model switch), so `currentSlotDenyKey` stays as-is.
     // Documented contract: live edits take effect at the next `/model` switch or
     // session; a cwd re-anchor is treated as a second synchronisation point.
+    // Both factories are required: without cwdDependentsFactory, setLiveCwd only
+    // moves the resolve base (no dispatcher rebuild or policy re-read); without
+    // modelToolsFactory, there is no way to regenerate the advertised catalog.
     if (this.modelToolsFactory && this.cwdDependentsFactory) {
       const { tools } = this.modelToolsFactory(
         this.state.requestedModel ?? this.state.currentModel,

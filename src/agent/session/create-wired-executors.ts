@@ -31,6 +31,7 @@ import type { AgentConfig } from '../types.js';
 import type { HookRegistry } from '../hooks.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import type { TraceSink } from '../trace/writer.js';
+import { pendingChildBillingStreams } from './manager-shutdown-config.js';
 
 
 /** Options for {@link createWiredExecutors}. */
@@ -205,6 +206,8 @@ export function createWiredExecutors(
       if (toggles.compose) wired.composeExecutor.setOnSubagentSucceeded(record);
     },
     drain,
+    getPendingChildBillingStreams: () =>
+      pendingChildBillingStreams(wired.rootManager, toggles.compose ? wired.composeExecutor : undefined),
   };
 
   let disposedPromise: Promise<void> | undefined;

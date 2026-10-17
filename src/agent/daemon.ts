@@ -77,6 +77,12 @@ export interface DaemonOptions {
   /** Override the queue directory for pull-mode dequeue (defaults to `getQueueDir()`). */
   queueDir?: string;
   /**
+   * Run durable-handoff maintenance (startup re-notify/expiry, periodic expiry
+   * sweep, answered-handoff resumption) for every trigger mode. Defaults to
+   * true; the CLI disables it for transient `--once` ticks.
+   */
+  handoffMaintenance?: boolean;
+  /**
    * Write the port-discovery file under the daemon state dir so tool handlers
    * (create_schedule / cancel_schedule live-sync) can find this instance.
    * Defaults to true. Set false for transient instances (`--once` ticks,
@@ -176,6 +182,9 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   if (options.pullPollIntervalMs !== undefined && options.pullPollIntervalMs > 0) {
     scheduler.startPullLoop();
   }
+  // Handoff expiry + answered-handoff resumption run in EVERY trigger mode
+  // (#1416), not only pull. Off for transient instances (`--once`).
+  if (options.handoffMaintenance !== false) scheduler.startHandoffMaintenance();
 
   for (const task of options.tasks ?? []) {
     scheduler.register(task);

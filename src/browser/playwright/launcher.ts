@@ -21,7 +21,7 @@ import { decoratePlaywrightLaunchError } from '../playwright-missing.js';
 import { getBrowserStorageStatePath } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
-import { installRenderRouteGuard, RequestGuardTrap, renderRefusalError, watchEgressRefusals } from './egress-gate.js';
+import { installRenderRouteGuard, renderRefusalError, watchEgressRefusals } from './egress-gate.js';
 import { GuardedEgress, type RefusalLog } from './egress-launch.js';
 
 // ---------------------------------------------------------------------------
@@ -90,7 +90,6 @@ interface SessionEntry {
   consoleErrors: number;
   lastHttpStatus: number | null;
   openDialog: Dialog | undefined;
-  requestGuard: RequestGuardTrap;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,10 +331,7 @@ export class BrowserLauncher {
       consoleErrors: 0,
       lastHttpStatus: null,
       openDialog: undefined,
-      requestGuard: new RequestGuardTrap(),
     };
-
-    await entry.requestGuard.install(context);
 
     this.sessions.set(sessionId, entry);
     return context;
@@ -429,19 +425,9 @@ export class BrowserLauncher {
     return this.sessions.get(sessionId)?.page;
   }
 
-  /** Return (and clear) the last egress refusal recorded for this session. */
-  consumeRequestGuardError(sessionId: string): unknown {
-    return this.sessions.get(sessionId)?.requestGuard.consume();
-  }
-
   /** Refusal log of the guarded egress proxy, or undefined when the guard is off. */
   egressLog(): RefusalLog | undefined {
     return this.egress.isActive() ? this.egress : undefined;
-  }
-
-  /** Discard any latched egress refusal without returning it. */
-  clearRequestGuardError(sessionId: string): void {
-    this.sessions.get(sessionId)?.requestGuard.clear();
   }
 
   // -------------------------------------------------------------------------

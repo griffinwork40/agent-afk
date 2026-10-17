@@ -10,6 +10,7 @@
 
 import { makeExpiredSkipRecord, makeNotYetSkipRecord } from './scheduler.overlap-guard.js';
 import { toggleScheduleEnabled } from './schedule-store.js';
+import { errorMessage } from '../../utils/errors.js';
 import type { ScheduledTask } from './triggers.js';
 import type { TelemetryRecord, TelemetryTrigger } from './scheduler.js';
 
@@ -57,13 +58,22 @@ export function evaluateRunAtGate(
 /**
  * Auto-disable a task in the persistent store and unregister it from the live
  * scheduler. Called after an `'expired'` gate result or after a `runAt`
- * one-shot has fired. Best-effort: store write failures are swallowed so they
- * cannot crash a tick; the `unregister` callback is always invoked.
+ * one-shot has fired. Best-effort: store write failures are logged to stderr
+ * and never thrown, so they cannot crash a tick; the `unregister` callback is
+ * always invoked.
  *
  * Contract: `unregister` must be the scheduler's own `unregister` method so
  * the cron timer is stopped alongside the registry entry removal.
  */
 export function applyAutoDisable(taskId: string, unregister: (id: string) => void): void {
-  try { toggleScheduleEnabled(taskId, false); } catch { /* best-effort */ }
+  try {
+    toggleScheduleEnabled(taskId, false);
+  } catch (err) {
+    // Best-effort, but never silent: an unreadable schedules.json now throws
+    // UnreadableSchedulesError instead of being overwritten, and the operator
+    // needs to see why the task was not persisted as disabled.
+    // eslint-disable-next-line no-console
+    console.error(`[daemon] could not auto-disable ${taskId}: ${errorMessage(err)}`);
+  }
   unregister(taskId);
 }

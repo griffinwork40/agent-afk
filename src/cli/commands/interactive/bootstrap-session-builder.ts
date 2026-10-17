@@ -52,6 +52,8 @@ export interface BuildAgentSessionDeps {
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
+  getPendingChildTerminalWrites?: (() => readonly Promise<void>[]) | undefined;
+  getPendingChildBillingStreams?: (() => readonly Promise<void>[]) | undefined;
   /** Live bash output tail reporter factory (REPL-only, issue #1506). */
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
   /**
@@ -118,6 +120,12 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
       : {}),
     ...(deps.processJobs !== undefined ? { processJobs: deps.processJobs } : {}),
     ...(deps.drainSubagents !== undefined ? { drainSubagents: deps.drainSubagents } : {}),
+    ...(deps.getPendingChildTerminalWrites !== undefined
+      ? { getPendingChildTerminalWrites: deps.getPendingChildTerminalWrites }
+      : {}),
+    ...(deps.getPendingChildBillingStreams !== undefined
+      ? { getPendingChildBillingStreams: deps.getPendingChildBillingStreams }
+      : {}),
     ...(deps.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
       : {}),
@@ -147,6 +155,8 @@ export function buildSharedDeps(a: {
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
+  getPendingChildTerminalWrites?: (() => readonly Promise<void>[]) | undefined;
+  getPendingChildBillingStreams?: (() => readonly Promise<void>[]) | undefined;
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
   detachRegistry?: import('../../../agent/tools/detach-registry.js').DetachableToolRegistry;
   processJobs?: import('../../../agent/shell-jobs/process-jobs.js').ProcessJobRegistry;
@@ -171,6 +181,8 @@ export function buildSharedDeps(a: {
     hookRegistry: a.hookRegistry,
     traceWriter: a.traceWriter,
     drainSubagents: a.drainSubagents,
+    getPendingChildTerminalWrites: a.getPendingChildTerminalWrites,
+    getPendingChildBillingStreams: a.getPendingChildBillingStreams,
     ...(a.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: a.bashOutputTailReporter }
       : {}),
