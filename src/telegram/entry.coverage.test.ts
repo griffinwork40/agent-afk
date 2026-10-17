@@ -312,7 +312,8 @@ describe('entry.ts — main() happy path', () => {
     const { main } = await import('./entry.js');
     await main();
     expect(mockBotCtor).toHaveBeenCalledTimes(1);
-    const ctorArg = mockBotCtor.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const ctorArg = mockBotCtor.mock.calls[0]![0] as unknown as Record<string, unknown>;
     expect(ctorArg['permissionMode']).toBe('default');
   });
 
@@ -324,7 +325,8 @@ describe('entry.ts — main() happy path', () => {
     const { main } = await import('./entry.js');
     await main();
     expect(mockBotCtor).toHaveBeenCalledTimes(1);
-    const ctorArg = mockBotCtor.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const ctorArg = mockBotCtor.mock.calls[0]![0] as unknown as Record<string, unknown>;
     expect(ctorArg).not.toHaveProperty('permissionMode');
   });
 });
