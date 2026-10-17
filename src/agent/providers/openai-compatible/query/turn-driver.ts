@@ -16,10 +16,7 @@
 import type { ProviderEvent, ProviderUsage, ProviderUserTurn } from '../../../provider.js';
 import { sumProviderUsage } from '../../../usage.js';
 import { DenialCircuitBreakerError } from '../../../../utils/errors.js';
-import {
-  isTruncationStopReason,
-  truncationNotice,
-} from '../../shared/truncation.js';
+import { isTruncationStopReason } from '../../shared/truncation.js';
 import {
   TOOL_USE_LOOP_CAPPED,
   resolveMaxToolIterations,
@@ -57,6 +54,7 @@ import type { OpenAIJournalWiring } from './journal-wiring.js';
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { OpenAIAuthResolution } from '../auth.js';
 import { emitQueuedUserMessage } from '../../../trace/emit.js';
+import { emitTurnTerminal } from './turn-driver.emit-terminal.js';
 
 /** Full context the inner turn driver needs from the owning query. */
 export interface TurnDriverContext extends IterationContext, FinishTurnContext {
@@ -476,70 +474,4 @@ export async function* runTurnInner(
   // — end outer continuation loop —
 }
 
-/**
- * Emit the terminal assistant.message event (with truncation notice appended
- * when the stop reason is a runtime output-token ceiling) followed by
- * `turn.completed`.
- *
- * Extracted from `runTurnInner` to keep it under the 200-line ceiling.
- * All parameters are explicit — no closure over outer locals.
- */
-async function* emitTurnTerminal(
-  ctx: TurnDriverContext,
-  finalAssistantText: string,
-  droppedToolNames: string[],
-  accumulatedUsage: ProviderUsage,
-  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
-  turnStartTime: number,
-): AsyncGenerator<ProviderEvent> {
-  // Invariant: the truncation notice is APPENDED to the single terminal
-  // assistant.message, never yielded as a second one — last-wins consumers
-  // (the non-streaming sendMessage() path, a subagent's final-message
-  // capture) keep only the LAST assistant message of a turn, so a second
-  // event would discard the model's real partial answer and surface only the
-  // warning. Same rule as the anthropic-direct terminal path. Deliberately
-  // applied AFTER the priorTurns push: the notice is operator-facing and
-  // must not enter conversation history.
-  //
-  // Issue #970: textless truncations use the `notice` channel instead of
-  // silently dropping. See the analogous logic in the anthropic-direct loop.
-  const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
-    ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
-        canIncreaseOutputLimit: !(
-          ctx.opts.auth.source === 'chatgpt-oauth' &&
-          accumulatedUsage.stopReason === 'max_output_tokens'
-        ),
-      })
-    : null;
-  if (finalAssistantText.length > 0) {
-    yield {
-      type: 'assistant.message',
-      text: truncationText
-        ? `${finalAssistantText}\n\n${truncationText}`
-        : finalAssistantText,
-      sessionId: ctx.initSessionId,
-    };
-  } else {
-    yield {
-      type: 'assistant.message',
-      text: finalAssistantText,
-      sessionId: ctx.initSessionId,
-    };
-    if (truncationText !== null) {
-      yield {
-        type: 'notice',
-        text: truncationText,
-        kind: 'truncation' as const,
-        sessionId: ctx.initSessionId,
-      };
-    }
-  }
 
-  yield* finishTurn(
-    ctx,
-    windDownReason !== null
-      ? { ...accumulatedUsage, stopReason: windDownReason }
-      : accumulatedUsage,
-    turnStartTime,
-  );
-}

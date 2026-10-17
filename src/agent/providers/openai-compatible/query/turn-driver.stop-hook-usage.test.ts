@@ -42,16 +42,6 @@ function installScriptedClient(): void {
   __setOpenAIClientFactory(factory);
 }
 
-beforeEach(() => {
-  scriptedTurns = [];
-  scriptedTurnIndex = 0;
-  installScriptedClient();
-});
-
-afterEach(() => {
-  __setOpenAIClientFactory(null as never);
-});
-
 // ---- helpers --------------------------------------------------------------
 
 async function collect(q: AsyncIterable<ProviderEvent>): Promise<ProviderEvent[]> {
@@ -90,6 +80,16 @@ function stopChunk(promptTokens: number, completionTokens: number, text = ''): O
 // ---- tests ----------------------------------------------------------------
 
 describe('stop-hook continuation usage accumulation (#3930)', () => {
+  beforeEach(() => {
+    scriptedTurns = [];
+    scriptedTurnIndex = 0;
+    installScriptedClient();
+  });
+
+  afterEach(() => {
+    __setOpenAIClientFactory(null as never);
+  });
+
   it('turn.completed usage equals sum of both segments when Stop hook fires once', async () => {
     // Segment 1: model responds normally (10 in, 5 out → stop).
     // Stop hook fires → continueWith.
