@@ -13,7 +13,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdirSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
 
@@ -29,7 +29,10 @@ async function main() {
     process.exit(1);
   }
 
-  if (!existsSync(join(dashboardDir, 'node_modules'))) {
+  // Gate on the pnpm completion marker, not the bare directory.
+  // A partial install (dir created, pnpm exits nonzero) leaves node_modules/
+  // without .modules.yaml, so the next run correctly retries.
+  if (!existsSync(join(dashboardDir, 'node_modules', '.modules.yaml'))) {
     ensureDashboardDeps();
   }
 
@@ -58,10 +61,19 @@ function ensureDashboardDeps() {
   try {
     execSync(command, { cwd: dashboardDir, stdio: 'inherit', shell: true });
   } catch {
+    // Remove any partial node_modules left by the failed install so the next
+    // run retries rather than skipping the install (the gate checks for
+    // node_modules/.modules.yaml, which pnpm only writes on success).
+    const partial = join(dashboardDir, 'node_modules');
+    if (existsSync(partial)) {
+      rmSync(partial, { recursive: true, force: true });
+    }
     console.error(`build-web-ui: dashboard install failed — run \`cd dashboard && ${command}\` and retry`);
     process.exit(1);
   }
 }
+
+export { ensureDashboardDeps };
 
 /** React SPA build via Vite. Outputs directly to src/web-ui-assets/. */
 async function buildDashboard() {

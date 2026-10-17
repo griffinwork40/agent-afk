@@ -36,6 +36,7 @@ describe('renderWorkspacePreamble', () => {
     const output = renderWorkspacePreamble([makeEntry()]);
     expect(output).toContain('# Workspace context');
     expect(output).toContain('workspace_publish');
+    expect(output).toContain('only if it is available to you');
   });
 
   it('renders entry id and type', () => {

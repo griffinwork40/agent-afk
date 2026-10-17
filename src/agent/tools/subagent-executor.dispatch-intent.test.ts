@@ -27,7 +27,7 @@ describe('classifyDispatchIntent (#3754)', () => {
       ['fix the bug in auth.ts', 'fix the bug'],
       ['refactor the module to use the new API', 'refactor the module'],
       ['commit the changes to main', 'commit the changes'],
-      ['push to main branch', 'push to main'],
+      ['push to main branch', 'push to main branch'],
       ['use edit_file to update the config', 'use edit_file'],
       ['call write_file with the new content', 'call write_file'],
       ['update config.ts with the new settings', 'update config.ts'],
@@ -37,6 +37,9 @@ describe('classifyDispatchIntent (#3754)', () => {
       ['Steps:\n- edit src/a.ts\n- run the tests', 'edit src/a.ts'],
       ['You must implement the feature described below.', 'implement the feature'],
       ['When done: commit your changes.', 'commit your changes'],
+      ['commit to main', 'commit to main'],
+      ['deploy to the release branch', 'deploy to the release branch'],
+      ['push origin main', 'push origin main'],
     ])('detects %j (matched %j)', (prompt, matched) => {
       expect(classifyDispatchIntent(prompt)).toBe(matched);
     });

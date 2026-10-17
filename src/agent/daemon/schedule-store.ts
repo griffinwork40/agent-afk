@@ -37,6 +37,7 @@ import { errorMessage, isErrnoCode } from '../../utils/errors.js';
 import { sleepSync } from '../../utils/sleep-sync.js';
 import { writeJsonFile } from '../../utils/json-file.js';
 import { loadSchedulesForWrite } from './schedule-store.strict-load.js';
+import { isValidIsoDate } from '../../utils/iso-date.js';
 
 export { UnreadableSchedulesError, loadSchedulesForWrite } from './schedule-store.strict-load.js';
 
@@ -414,6 +415,12 @@ export function addSchedule(
   config: Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt'>,
   path?: string,
 ): ScheduledTaskConfig {
+  if (config.runAt !== undefined && !isValidIsoDate(config.runAt)) {
+    throw new Error(`addSchedule: runAt must be a valid ISO 8601 date string, got: ${String(config.runAt)}`);
+  }
+  if (config.expiresAt !== undefined && !isValidIsoDate(config.expiresAt)) {
+    throw new Error(`addSchedule: expiresAt must be a valid ISO 8601 date string, got: ${String(config.expiresAt)}`);
+  }
   const storePath = path ?? getSchedulesPath();
   return withFileLock(storePath, () => {
     const schedules = loadSchedulesForWrite(storePath);
@@ -491,6 +498,12 @@ export function updateSchedule(
   patch: SchedulePatch,
   path?: string,
 ): ScheduledTaskConfig | undefined {
+  if (patch.runAt !== undefined && patch.runAt !== null && !isValidIsoDate(patch.runAt)) {
+    throw new Error(`updateSchedule: runAt must be a valid ISO 8601 date string, got: ${String(patch.runAt)}`);
+  }
+  if (patch.expiresAt !== undefined && patch.expiresAt !== null && !isValidIsoDate(patch.expiresAt)) {
+    throw new Error(`updateSchedule: expiresAt must be a valid ISO 8601 date string, got: ${String(patch.expiresAt)}`);
+  }
   const storePath = path ?? getSchedulesPath();
   return withFileLock(storePath, () => {
     const schedules = loadSchedulesForWrite(storePath);

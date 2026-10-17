@@ -10,6 +10,7 @@ import type { Telegraf } from 'telegraf';
 import { handleCwd, handleModelSwitch, handleName } from './handlers/commands.js';
 import { handleAfk } from './handlers/afk.js';
 import { handleUsage } from './handlers/usage.js';
+import { handleInbox } from './handlers/inbox.js';
 import { registerFeedbackCommands } from './bot.feedback-commands.js';
 import type { SessionManager } from './session-manager.js';
 
@@ -43,5 +44,11 @@ export function registerDelegatingCommands(
   // + 7-day windows) for this chat. See handlers/usage.ts.
   bot.command('usage', (ctx) =>
     handleUsage(ctx, log)
+  );
+  // /inbox [release|drop] [<prefix>|all] — list, release, or drop held peer
+  // messages when AFK_PEER_INBOUND=hold. Reuses the peer inbox store; peer
+  // messages carry no user authority and are not elevated here.
+  bot.command('inbox', (ctx) =>
+    handleInbox(ctx, sessionManager)
   );
 }

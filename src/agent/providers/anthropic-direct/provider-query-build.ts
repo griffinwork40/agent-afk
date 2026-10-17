@@ -168,7 +168,7 @@ export function buildProviderQuery(
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
     ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
-    ...(config.hasWorkspacePreamble ? { hasWorkspacePreamble: true as const } : {}),
+    ...(config.hasWorkspacePreamble ? { hasWorkspacePreamble: true } : {}),
     ...(config.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: config.autoResumeOnUsageLimit }
       : {}),
