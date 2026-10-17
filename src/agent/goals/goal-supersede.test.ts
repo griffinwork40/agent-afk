@@ -240,4 +240,65 @@ describe('Scenario 3 (#3714): goal change while worker runs', () => {
     expect(envelope).not.toContain('superseded');
   });
 
+  /**
+   * Cleared-goal path (#3976): when a goal was active at dispatch but is
+   * cleared (no current goal) at delivery, the result is superseded.
+   */
+  it('delivered result is marked superseded when the goal was cleared after dispatch', async () => {
+    const { BgResultNotifier } = await import(
+      '../../cli/commands/interactive/bg-result-notifier.js'
+    );
+
+    const registry = makeStubRegistry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const notifier = new BgResultNotifier(registry as any);
+
+    // Goal is active at dispatch time
+    goalStore.setGoal('refactor the auth module', 'parent-session-001');
+    const goalTextAtDispatch = goalStore.getGoal()!.text;
+
+    // Operator clears the goal entirely while the worker runs
+    goalStore.clearGoal();
+    expect(goalStore.getGoal()).toBeNull();
+
+    const job = makeStubJob({ goalTextAtDispatch });
+    registry.emit('settled', job);
+
+    const envelope = notifier.drainInjections();
+
+    // Result should be annotated superseded — goal no longer exists
+    expect(envelope).toContain('superseded="true"');
+  });
+
+  /**
+   * Paused-goal path (#3976): when a goal was active at dispatch but is
+   * paused (non-active status) at delivery, the result is superseded.
+   */
+  it('delivered result is marked superseded when the goal was paused after dispatch', async () => {
+    const { BgResultNotifier } = await import(
+      '../../cli/commands/interactive/bg-result-notifier.js'
+    );
+
+    const registry = makeStubRegistry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const notifier = new BgResultNotifier(registry as any);
+
+    // Goal is active at dispatch time
+    goalStore.setGoal('refactor the auth module', 'parent-session-001');
+    const goalTextAtDispatch = goalStore.getGoal()!.text;
+
+    // Operator pauses the goal while the worker runs
+    goalStore.pauseGoal();
+    const paused = goalStore.getGoal();
+    expect(paused?.status).toBe('paused');
+
+    const job = makeStubJob({ goalTextAtDispatch });
+    registry.emit('settled', job);
+
+    const envelope = notifier.drainInjections();
+
+    // Result should be annotated superseded — goal is no longer active
+    expect(envelope).toContain('superseded="true"');
+  });
+
 });
