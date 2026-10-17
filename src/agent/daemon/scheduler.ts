@@ -16,7 +16,7 @@ import { appendFileSync } from 'node:fs';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
 import { recoverDaemonQueues } from './pull-recovery.js';
-import { startHandoffMaintenance, type HandoffMaintenanceHandle } from './handoff-maintenance.js';
+import { startHandoffMaintenance, type HandoffMaintenanceHandle, type HandoffMaintenanceOpts } from './handoff-maintenance.js';
 import { getQueueDir, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import type { TraceWriter } from '../trace/index.js';
@@ -421,7 +421,7 @@ export class CronScheduler {
    */
   startHandoffMaintenance(intervalMs?: number): void {
     if (this.handoffMaintenance !== undefined) return;
-    const maintenanceOpts = {
+    const maintenanceOpts: HandoffMaintenanceOpts = {
       queueDir: this.queueDir,
       ...(this.options.handoffsDir !== undefined ? { handoffsDir: this.options.handoffsDir } : {}),
       ...(this.options.bot !== undefined ? { bot: this.options.bot } : {}),
