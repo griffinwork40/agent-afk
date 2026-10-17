@@ -145,26 +145,27 @@ describe('loadSessionsFromDisk', () => {
     // filename, which is exactly what the loader does.
     const data = makeSessionData(900, 7);
 
-    // Gate on a read-back round-trip: NTFS Alternate Data Streams (ADS) let
-    // writeFileSync('900:7.json') succeed on Windows without error, but the
-    // resulting ADS is invisible to readdir and readFile returns empty/throws.
-    // Checking that the written content round-trips through readFileSync is the
-    // portable guard that works on both POSIX and NTFS.
-    const colonPath = path.join(dataDir, '900:7.json');
-    let couldWriteColonFile = false;
+    // Gate: the colon-named file must survive a FULL filesystem round-trip —
+    // write, read-back, AND appear in readdirSync.  On NTFS, writeFileSync
+    // and readFileSync both succeed (they silently create/read an Alternate
+    // Data Stream), but readdirSync never lists the ADS entry.  Since
+    // loadSessionsFromDisk discovers files via readdir, a file invisible to
+    // readdir is unreachable by the loader and untestable here.
+    const colonName = '900:7.json';
+    const colonPath = path.join(dataDir, colonName);
+    let colonVisibleToReaddir = false;
     try {
       fs.writeFileSync(colonPath, JSON.stringify(data));
-      // Verify the file is truly readable as a regular file (not an ADS stub).
       const readBack = fs.readFileSync(colonPath, 'utf-8');
       JSON.parse(readBack); // must be valid JSON with actual content
-      couldWriteColonFile = true;
+      // The decisive check: readdir must list the exact colon-named entry.
+      const entries = fs.readdirSync(dataDir);
+      colonVisibleToReaddir = entries.includes(colonName);
     } catch {
-      // Windows: colon filenames are either OS-rejected or written as an NTFS
-      // ADS that cannot be read back. The loader never encounters them on
-      // Windows, so nothing to assert.
+      // OS rejected the colon filename outright — nothing to test.
     }
 
-    if (couldWriteColonFile) {
+    if (colonVisibleToReaddir) {
       const sessionData = new Map<string, SessionData>();
       await loadSessionsFromDisk(dataDir, sessionData, () => {});
       // Key derived from JSON payload, not filename — must be chatId:threadId.
