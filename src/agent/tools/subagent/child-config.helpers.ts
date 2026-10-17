@@ -325,12 +325,13 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
 export function buildNestedChildManager(
   args: Pick<BuildChildConfigArgs,
     'childInheritedReadRoots' | 'traceWriter' | 'surface' | 'workspaceStore' |
-    'parentRootSessionId' | 'hookRegistry'>,
+    'parentRootSessionId' | 'hookRegistry' | 'onSubagentSucceeded'>,
   signal: AbortSignal,
   currentCwd: string | undefined,
 ): SubagentManager {
   return new SubagentManager({
     parentAbortSignal: signal,
+    ...(args.onSubagentSucceeded !== undefined ? { onSubagentSucceeded: args.onSubagentSucceeded } : {}),
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
     ...(args.childInheritedReadRoots !== undefined ? { parentReadRoots: args.childInheritedReadRoots } : {}),
     ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),

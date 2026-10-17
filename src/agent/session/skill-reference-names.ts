@@ -41,11 +41,24 @@ async function loadPluginDiscovery() {
 const PLUGIN_NAMES_TTL_MS = 5 * 60_000;
 
 const pluginNameCache = new Map<string, { at: number; names: ReadonlySet<string> }>();
+const pluginNameInflight = new Map<string, Promise<ReadonlySet<string>>>();
 
 async function pluginSkillNames(cwd: string | undefined): Promise<ReadonlySet<string>> {
   const key = cwd ?? '';
   const hit = pluginNameCache.get(key);
   if (hit && Date.now() - hit.at < PLUGIN_NAMES_TTL_MS) return hit.names;
+  const inflight = pluginNameInflight.get(key);
+  if (inflight) return inflight;
+  const promise = discoverPluginSkillNames(key, cwd);
+  pluginNameInflight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    pluginNameInflight.delete(key);
+  }
+}
+
+async function discoverPluginSkillNames(key: string, cwd: string | undefined): Promise<ReadonlySet<string>> {
   const { scanAllPluginRoots, extractPluginSkills, resolveKnownToolNames, extractPluginCommands } =
     await loadPluginDiscovery();
   const names = new Set<string>();

@@ -113,6 +113,11 @@ describe('splitFrontmatter — unterminated frontmatter', () => {
     const content = '---\nname: x\nno closer here\n';
     expect(splitFrontmatter(content)).toBeNull();
   });
+
+  it('returns null for opener-only document (---\\n with no body or closer)', () => {
+    // Regression for #3885: '---\n' has a valid opener but no closer at all.
+    expect(splitFrontmatter('---\n')).toBeNull();
+  });
 });
 
 describe('splitFrontmatter — closer with trailing whitespace', () => {

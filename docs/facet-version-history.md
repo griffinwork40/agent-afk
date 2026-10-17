@@ -9,7 +9,9 @@ Consumers should filter on `facet_version >= N` to guard against older cached fa
   `token_breakdown.subagent_cost_usd` added. Both come from the witness trace
   through `TraceSignals`, computed by `computeSessionCost` in
   `src/agent/trace/cost.ts`, the one definition shared with receipts and
-  `afk insights`. They are absent when no trace was readable.
+  `afk insights`. They are absent when no trace was readable, or when the
+  session sidecar carries no cost figure (`totalCostUsd == null`), since
+  `token_breakdown` is only populated when cost data is available.
 - `token_breakdown.cost_usd` is unchanged and is documented as root-only (the
   session sidecar's figure). Consumers that want the session's real spend should
   read `total_cost_usd ?? cost_usd`.

@@ -36,6 +36,8 @@ export interface PreflightInput {
   predictions: import('./types.js').Prediction[];
   force: boolean;
   samples: number;
+  /** Max turns per episode; forwarded to {@link estimateVerifyCost}. */
+  maxTurns: number;
   agentModel: string;
   analystModel: string;
   systemTokens: { baseline: number; candidate: number };
@@ -72,7 +74,7 @@ export interface PreflightInput {
  */
 export function runPreflightChecks(input: PreflightInput): void {
   const {
-    episodesPerArm, minProbesPerPrediction, force, samples, agentModel, analystModel,
+    episodesPerArm, minProbesPerPrediction, force, samples, maxTurns, agentModel, analystModel,
     systemTokens, judgeExternal, analystCostUsd, maxUsd, onProgress,
     predictionCount, syntheticPerArm, predictions, baselineSampleCostUsd, measuredHeadroomPending,
   } = input;
@@ -106,6 +108,7 @@ export function runPreflightChecks(input: PreflightInput): void {
   const estimate = estimateVerifyCost({
     episodes: episodesPerArm,
     samples,
+    maxTurns,
     agentModel,
     analystModel,
     systemTokens,
@@ -264,6 +267,8 @@ export interface VerifyPreflightInput {
   structural: import('./types.js').StructuralImpact;
   force: boolean;
   samples: number;
+  /** Max turns per episode; forwarded to {@link estimateVerifyCost}. */
+  maxTurns: number;
   agentModel: string;
   analystModel: string;
   judgeExternal: boolean;
@@ -288,7 +293,7 @@ export async function runVerifyPreflight(input: VerifyPreflightInput): Promise<{
   baselineSampleCostUsd: number;
 }> {
   const {
-    episodes, predictions, structural, force, samples, agentModel, analystModel,
+    episodes, predictions, structural, force, samples, maxTurns, agentModel, analystModel,
     judgeExternal, analystCostUsd, maxUsd, noBaselineSample, onProgress, closeJudges,
   } = input;
   // Total episode count across real turns + synthetic + suite — the unit
@@ -326,6 +331,7 @@ export async function runVerifyPreflight(input: VerifyPreflightInput): Promise<{
       predictions,
       force,
       samples,
+      maxTurns,
       agentModel,
       analystModel,
       systemTokens: { baseline: structural.tokens.baseline, candidate: structural.tokens.candidate },
