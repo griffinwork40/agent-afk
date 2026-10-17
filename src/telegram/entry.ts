@@ -196,6 +196,7 @@ export async function main(): Promise<void> {
   const telegramCwd = env.AFK_TELEGRAM_CWD;
   const idleSessionMs = env.AFK_TELEGRAM_SESSION_IDLE_MS !== undefined ? parseInt(env.AFK_TELEGRAM_SESSION_IDLE_MS, 10) : undefined;
 
+  const opMode = getOperatorPermissionMode();
   const bot = new TelegramBot({
     botToken,
     apiKey: config.apiKey ?? '',
@@ -218,7 +219,7 @@ export async function main(): Promise<void> {
     // Forward permissionMode only when the operator explicitly set it in afk.config.json.
     // loadConfig() always fills in DEFAULT_CLI_PERMISSION_MODE, so checking config.permissionMode
     // would unconditionally forward bypassPermissions into Telegram session metadata (#3969).
-    ...(getOperatorPermissionMode() !== undefined ? { permissionMode: getOperatorPermissionMode() } : {}),
+    ...(opMode !== undefined ? { permissionMode: opMode } : {}),
     createSession: createTelegramSessionFactory({
       config,
       frameworkBase,
