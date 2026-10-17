@@ -4,7 +4,7 @@
  * legacy `ProviderUsage` fields (summed input, latest-round cache, cost) are
  * unchanged by the additive `billing` field.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Usage } from '@anthropic-ai/sdk/resources';
 import {
   anthropicBilling,
@@ -96,6 +96,21 @@ describe('sumBillingUsage', () => {
     const out = sumBillingUsage(a, undefined)!;
     out.uncachedInput = 999;
     expect(a.uncachedInput).toBe(10);
+  });
+
+  it('tags result as mixed and warns when providers differ', () => {
+    const a = anthropicBilling({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 });
+    const b = openAICompatibleBilling(20, 10, 3);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = sumBillingUsage(a, b)!;
+    expect(result.provider).toBe('mixed');
+    expect(result.uncachedInput).toBe(a.uncachedInput + b.uncachedInput);
+    expect(result.cacheRead).toBe(a.cacheRead + b.cacheRead);
+    expect(result.cacheWrite).toBe(a.cacheWrite + b.cacheWrite);
+    expect(result.output).toBe(a.output + b.output);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0]![0]).toMatch(/provider mismatch/);
+    warnSpy.mockRestore();
   });
 });
 

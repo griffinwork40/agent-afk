@@ -328,11 +328,51 @@ describe('splitAtWorkspacePreamble', () => {
     expect(r?.preambleTail.startsWith('---\n[Workspace preamble truncated')).toBe(true);
   });
 
-  it('composeQuerySystem puts the preamble in its own uncached block after the stable breakpoint', () => {
+  it('composeQuerySystem puts the preamble in its own uncached block after the stable breakpoint (fork with hasWorkspacePreamble)', () => {
     const userSystem = makeAssembled('SHARED\n\n# Workspace (shared agent scratchpad)\n\nhint', '- Working directory: /x');
-    const blocks = composeQuerySystem({ state: makeState(userSystem), systemPrefix: null }) as Array<{ text: string; cache_control?: unknown }>;
+    // hasWorkspacePreamble: true simulates assembleChildConfig injecting the preamble (#3924).
+    const blocks = composeQuerySystem({ state: makeState(userSystem), systemPrefix: null, hasWorkspacePreamble: true }) as Array<{ text: string; cache_control?: unknown }>;
     expect(blocks.map((b) => b.text.split('\n')[0])).toEqual(['SHARED', '# Workspace (shared agent scratchpad)', '# Environment']);
     expect(blocks[0]!.cache_control).toBeDefined();
     expect(blocks[1]!.cache_control).toBeUndefined();
+  });
+});
+
+// --- composeQuerySystem — workspace preamble gate (#3924) ---
+
+describe('composeQuerySystem — workspace preamble gate (#3924)', () => {
+  beforeEach(clearCacheEnv);
+  afterEach(clearCacheEnv);
+
+  it('root session: marker text in operator prompt does NOT trigger a third block (no hasWorkspacePreamble flag)', () => {
+    // A root session whose AFK.md / systemPrompt happens to contain the
+    // cold-start header string must keep the standard 2-block layout.
+    // Before the fix, splitAtWorkspacePreamble fired on the marker text alone
+    // and produced 3 blocks, giving the root session an unexpected extra split.
+    const stableWithMarker = 'TOOLS\n\nDOCTRINE\n\n# Workspace (shared agent scratchpad)\n\nNo entries published yet';
+    const userSystem = makeAssembled(stableWithMarker, '- Working directory: /root-session');
+    const blocks = composeQuerySystem({ state: makeState(userSystem), systemPrefix: null }) as Array<{ text: string; cache_control?: unknown }>;
+    // Must be 2 blocks (stable prefix + volatile tail), not 3.
+    expect(blocks).toHaveLength(2);
+    // The full stable prefix — including the marker text — is in block 0.
+    const stableText = (blocks[0] as { text: string }).text;
+    expect(stableText).toContain('# Workspace (shared agent scratchpad)');
+    expect(stableText).toContain('TOOLS');
+    // Block 1 is the volatile tail.
+    expect((blocks[1] as { text: string }).text).toContain('# Environment');
+  });
+
+  it('forked child: marker text in stable prefix IS split when hasWorkspacePreamble is true', () => {
+    const stableWithPreamble = 'TOOLS\n\nDOCTRINE\n\n# Workspace (shared agent scratchpad)\n\nNo entries published yet';
+    const userSystem = makeAssembled(stableWithPreamble, '- Working directory: /child-session');
+    const blocks = composeQuerySystem({ state: makeState(userSystem), systemPrefix: null, hasWorkspacePreamble: true }) as Array<{ text: string; cache_control?: unknown }>;
+    // Must be 3 blocks: shared head + preamble tail + volatile tail.
+    expect(blocks).toHaveLength(3);
+    expect((blocks[0] as { text: string }).text).not.toContain('# Workspace');
+    expect((blocks[1] as { text: string }).text).toContain('# Workspace (shared agent scratchpad)');
+    expect((blocks[2] as { text: string }).text).toContain('# Environment');
+    // Only the shared head carries the stable cache breakpoint.
+    expect((blocks[0] as { cache_control?: unknown }).cache_control).toBeDefined();
+    expect((blocks[1] as { cache_control?: unknown }).cache_control).toBeUndefined();
   });
 });

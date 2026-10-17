@@ -12,7 +12,7 @@
  * @module telegram/session-manager.session-builder
  */
 
-import type { IAgentSession, AgentConfig, AgentModelInput, ThinkingConfig, EffortLevel } from '../agent/types.js';
+import type { IAgentSession, AgentConfig, AgentModelInput, ThinkingConfig, EffortLevel, PermissionMode } from '../agent/types.js';
 import { injectHotMemory, injectGoalPrompt } from '../agent/memory/index.js';
 import { injectCompanionPrimer } from '../agent/companion/index.js';
 import { setElicitationRoute } from './elicitation-route-registry.js';
@@ -29,6 +29,14 @@ export interface SessionBuilderOptions {
   thinking?: ThinkingConfig;
   effort?: EffortLevel;
   botCwd?: string;
+  /**
+   * Bot-level permissionMode from afk.config.json. When set, it is forwarded
+   * into every new session's AgentConfig so the session-lifecycle guard in
+   * finalizeTelegramSession (session-lifecycle.ts) can downgrade 'plan' to
+   * 'default' and honour other modes. Without this wire the guard is inert
+   * (#3927).
+   */
+  permissionMode?: PermissionMode;
   createSession: (config: AgentConfig) => Promise<IAgentSession>;
   onResumptionOffer?: (route: TelegramRoute, text: string) => void | Promise<boolean>;
   defaultModel: AgentModelInput;
@@ -70,6 +78,13 @@ export async function buildAndRegisterSession(
   }
   if (opts.effort !== undefined) {
     config.effort = opts.effort;
+  }
+  // Forward bot-level permissionMode so the plan-mode guard in
+  // finalizeTelegramSession (session-lifecycle.ts) is reachable. Without this
+  // wire, sessionConfig.permissionMode is always undefined and the guard is
+  // inert against `afk config set permissionMode plan` (#3927).
+  if (opts.permissionMode !== undefined) {
+    config.permissionMode = opts.permissionMode;
   }
   // Per-session cwd (set via /cd) overrides the bot-global botCwd.
   // When neither is set, leave config.cwd undefined and let the

@@ -107,7 +107,12 @@ async function runEpisodes(
 
   async function runTask(task: EpTask, release: () => void): Promise<void> {
     try {
-      if (signal?.aborted || budget.exceeded) { skippedByBudget++; return; }
+      // Do NOT increment skippedByBudget here — the dispatch loop already
+      // counted this task at the pre-acquire or post-acquire guard.  A task
+      // that slips through both dispatch guards and enters inflight is still
+      // counted by the dispatch loop, so adding it here would double-count
+      // when budget.exceeded flips between dispatch and execution (#3920).
+      if (signal?.aborted || budget.exceeded) { return; }
       const trace = await runner.run(task.env, task.ep, task.s, runnerOpts);
       allTraces.push(trace);
       budget.add(trace.costUsd);
