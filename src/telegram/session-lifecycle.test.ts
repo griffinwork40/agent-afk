@@ -102,6 +102,7 @@ function makeStubWiring(): TelegramExecutorWiring {
     backgroundRegistry: {} as TelegramExecutorWiring['backgroundRegistry'],
     bgNotifier: {} as TelegramExecutorWiring['bgNotifier'],
     drainSubagents: undefined,
+    getPendingChildTerminalWrites: () => [],
     bindSession: vi.fn(),
   };
 }
@@ -122,6 +123,7 @@ function makeCtx(sessionConfig: AgentConfig, tmpHome: string): TelegramSessionBu
     sessionCwd: tmpHome,
     maxOutputTokens: undefined,
     maxToolUseIterations: undefined,
+    maxBudgetUsd: undefined,
     traceWriter: null,
     mcpManager: undefined,
     memoryStore: undefined as unknown as TelegramSessionBuildContext['memoryStore'],
@@ -235,6 +237,30 @@ describe('finalizeTelegramSession — thinking/effort forwarding (#3289)', () =>
   });
 
   // -------------------------------------------------------------------------
+  // Item 4: maxBudgetUsd forwarded to constructTelegramSession (#3707)
+  // -------------------------------------------------------------------------
+
+  it('forwards maxBudgetUsd from ctx to constructTelegramSession when set', () => {
+    const sessionConfig: AgentConfig = {
+      model: 'claude-sonnet',
+      apiKey: 'test-key',
+    };
+    const ctx = makeCtx(sessionConfig, tmpHome);
+    ctx.maxBudgetUsd = 3;
+
+    finalizeTelegramSession(
+      makeStubProvider(),
+      {},
+      ctx,
+      makeStubWiring(),
+    );
+
+    expect(vi.mocked(constructTelegramSession)).toHaveBeenCalledOnce();
+    const capturedBaseConfig = vi.mocked(constructTelegramSession).mock.calls[0]![0];
+    expect(capturedBaseConfig.maxBudgetUsd).toBe(3);
+  });
+
+  // -------------------------------------------------------------------------
   // Bonus: both thinking and effort set simultaneously
   // -------------------------------------------------------------------------
 
@@ -257,5 +283,109 @@ describe('finalizeTelegramSession — thinking/effort forwarding (#3289)', () =>
     const capturedBaseConfig = vi.mocked(constructTelegramSession).mock.calls[0]![0];
     expect(capturedBaseConfig.thinking).toEqual(thinkingConfig);
     expect(capturedBaseConfig.effort).toBe('xhigh');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3833 — plan-mode guard
+// ---------------------------------------------------------------------------
+
+describe('finalizeTelegramSession — plan-mode guard (#3833)', () => {
+  let tmpHome: string;
+  let savedAfkHome: string | undefined;
+
+  beforeEach(async () => {
+    tmpHome = await mkdtemp(join(tmpdir(), 'afk-lifecycle-plan-'));
+    savedAfkHome = process.env['AFK_HOME'];
+    process.env['AFK_HOME'] = tmpHome;
+
+    vi.mocked(constructTelegramSession).mockReset();
+    vi.mocked(attachMcpCleanup).mockReset();
+
+    const stub = makeStubSession();
+    vi.mocked(constructTelegramSession).mockReturnValue(stub);
+    vi.mocked(attachMcpCleanup).mockImplementation((session) => session);
+  });
+
+  afterEach(async () => {
+    if (savedAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = savedAfkHome;
+    await rm(tmpHome, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('downgrades permissionMode="plan" to "default" before constructing the session', () => {
+    const sessionConfig: AgentConfig = {
+      model: 'claude-sonnet',
+      apiKey: 'test-key',
+      permissionMode: 'plan',
+    };
+
+    finalizeTelegramSession(
+      makeStubProvider(),
+      {},
+      makeCtx(sessionConfig, tmpHome),
+      makeStubWiring(),
+    );
+
+    expect(vi.mocked(constructTelegramSession)).toHaveBeenCalledOnce();
+    const capturedBaseConfig = vi.mocked(constructTelegramSession).mock.calls[0]![0];
+    expect(capturedBaseConfig.permissionMode).toBe('default');
+  });
+
+  it('logs a console.warn when permissionMode="plan" is downgraded', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sessionConfig: AgentConfig = {
+      model: 'claude-sonnet',
+      apiKey: 'test-key',
+      permissionMode: 'plan',
+    };
+
+    finalizeTelegramSession(
+      makeStubProvider(),
+      {},
+      makeCtx(sessionConfig, tmpHome),
+      makeStubWiring(),
+    );
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0]![0]).toContain('permissionMode="plan" is not supported');
+  });
+
+  it('does not warn and preserves permissionMode when not "plan"', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sessionConfig: AgentConfig = {
+      model: 'claude-sonnet',
+      apiKey: 'test-key',
+      permissionMode: 'bypassPermissions',
+    };
+
+    finalizeTelegramSession(
+      makeStubProvider(),
+      {},
+      makeCtx(sessionConfig, tmpHome),
+      makeStubWiring(),
+    );
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    const capturedBaseConfig = vi.mocked(constructTelegramSession).mock.calls[0]![0];
+    expect(capturedBaseConfig.permissionMode).toBe('bypassPermissions');
+  });
+
+  it('defaults permissionMode to "default" when not set in sessionConfig', () => {
+    const sessionConfig: AgentConfig = {
+      model: 'claude-sonnet',
+      apiKey: 'test-key',
+    };
+
+    finalizeTelegramSession(
+      makeStubProvider(),
+      {},
+      makeCtx(sessionConfig, tmpHome),
+      makeStubWiring(),
+    );
+
+    const capturedBaseConfig = vi.mocked(constructTelegramSession).mock.calls[0]![0];
+    expect(capturedBaseConfig.permissionMode).toBe('default');
   });
 });

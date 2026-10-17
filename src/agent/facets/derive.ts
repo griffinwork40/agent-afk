@@ -367,9 +367,17 @@ export function deriveSessionFacet(
   // StoredSession only carries totalTokens (a scalar sum) and does not persist
   // per-direction counts. Omitting them avoids zero-filling fields that would
   // falsely imply actual per-direction measurements.
+  //
+  // Contract (#3879): `cost_usd` is the sidecar's ROOT-only cost, kept for
+  // back-compat. `total_cost_usd` (root + every subagent) and
+  // `subagent_cost_usd` come from the witness trace via `traceSignals`; they
+  // are absent when no trace was readable, never guessed.
+  const ts = options.traceSignals;
   if (session.totalCostUsd != null) {
     facet.token_breakdown = {
       cost_usd: session.totalCostUsd,
+      ...(ts?.totalCostUsd !== undefined ? { total_cost_usd: ts.totalCostUsd } : {}),
+      ...(ts?.subagentCostUsd !== undefined ? { subagent_cost_usd: ts.subagentCostUsd } : {}),
     };
   }
 

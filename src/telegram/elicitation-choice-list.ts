@@ -20,6 +20,7 @@
 
 import { escapeHtml } from './formatter.js';
 import { truncateTelegramLabel } from '../utils/truncate-telegram-label.js';
+import { splitLongPrompt } from './elicitation-handler.send.js';
 
 const MAX_LABEL_BYTES = 64;
 
@@ -85,9 +86,18 @@ export function buildChoiceMessages(
   rendering: TelegramChoiceRendering,
   choices: readonly string[],
 ): ChoiceMessages {
-  // No overflow rendering — nothing to split.
+  // No overflow rendering — but baseText itself may exceed the limit.
+  // Fix (Finding 2, issue #3663): split oversized baseText so Telegram never
+  // rejects the send even when no choice-list overflow rendering is needed.
   if (rendering.bodySuffix === '') {
-    return { preMessages: [], keyboardText: baseText };
+    if (baseText.length <= TELEGRAM_MAX_CHARS) {
+      return { preMessages: [], keyboardText: baseText };
+    }
+    const parts = splitLongPrompt(baseText);
+    return {
+      preMessages: parts.slice(0, -1),
+      keyboardText: parts[parts.length - 1]!,
+    };
   }
 
   const candidate = baseText + rendering.bodySuffix;
@@ -112,9 +122,10 @@ export function buildChoiceMessages(
  * Pack `lines` into as few strings as possible, each ≤ `maxLen` chars,
  * joining with '\n'.
  *
- * Fix (issue #3631, item 2): a single line longer than `maxLen` is now
- * hard-split at a safe boundary (never inside an HTML entity) and truncated
- * with '…' so every emitted chunk satisfies the limit.
+ * Fix (issue #3631, item 2): a single line longer than `maxLen` is
+ * hard-split at a safe boundary (never inside an HTML entity). Truncation
+ * with '…' occurs only in the degenerate `splitAt <= 0` branch (a single
+ * entity longer than `maxLen`); normal splits do not add an ellipsis.
  */
 function chunkLines(lines: string[], maxLen: number): string[] {
   const chunks: string[] = [];
@@ -174,7 +185,7 @@ function splitLongLine(line: string, maxLen: number): string[] {
     // Walk left from maxLen to find a position not inside an entity.
     // We check whether the candidate suffix-start is preceded by an '&'
     // with no intervening ';' (meaning we are mid-entity).
-    const ENTITY_MAX_LEN = 9; // longest HTML entity like &amp;, &lt;, etc. + 1 for safety
+    const ENTITY_MAX_LEN = 9; // longest entity produced by escapeHtml (&amp; = 5, &lt;/&gt; = 4, &quot;/&#39; = 6) + safety margin
     const searchStart = Math.max(0, splitAt - ENTITY_MAX_LEN);
     const window = remaining.slice(searchStart, splitAt);
     const ampIdx = window.lastIndexOf('&');

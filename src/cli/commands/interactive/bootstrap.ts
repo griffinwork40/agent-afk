@@ -1,4 +1,5 @@
 import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
+import { managerShutdownConfig } from '../../../agent/session/manager-shutdown-config.js';
 import { runReplReconcile } from '../../../agent/manifest/startup-reconcile.js';
 import type { SlashContext } from '../../slash/types.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
@@ -66,7 +67,7 @@ export async function bootstrapSession(
 
   const {
     resumeTarget, resumeConfig, effectiveCwd, sessionModel,
-    thinking, effort, maxOutputTokens, maxToolUseIterations,
+    thinking, effort, maxOutputTokens, maxToolUseIterations, maxBudgetUsd,
     basePrompt, operatorOverlay, systemPrompt, systemPromptSource, cliConfig,
   } = resolveBootstrapConfig(options, extras);
 
@@ -146,7 +147,7 @@ export async function bootstrapSession(
   // Capture deps needed by both the initial build and the swap closure.
   const sharedDeps = buildSharedDeps({
     sessionModel, resumeConfig, systemPrompt, systemPromptSource, thinking, effort,
-    maxOutputTokens, maxToolUseIterations, cliConfig, providerFactory, hookRegistry,
+    maxOutputTokens, maxToolUseIterations, maxBudgetUsd, cliConfig, providerFactory, hookRegistry,
     traceWriter: trace?.writer, effectiveCwd, maxTurns: options.maxTurns, initialPermissionMode,
     bashOutputTailReporter,
     // #2542/#2735: Detach registry shared between REPL Ctrl+B handler and
@@ -155,8 +156,7 @@ export async function bootstrapSession(
     // Cascade-abort and drain in-flight children before the writer seals,
     // so a wave still running when this session ends emits real `cancelled`
     // rows instead of vanishing (#733).
-    drainSubagents: (reason) =>
-      rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
+    ...managerShutdownConfig(rootManager, composeExecutor),
     ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
   });
 

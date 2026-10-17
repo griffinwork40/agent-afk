@@ -12,7 +12,7 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { getWhatifDir } from '../paths.js';
 import type { Prediction, Verdict } from './types.js';
-import { readJsonlFile } from '../utils/jsonl.js';
+import { collectAsyncIter, readJsonlFile } from '../utils/jsonl.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,6 +55,27 @@ export async function appendCalibration(
 }
 
 // ---------------------------------------------------------------------------
+// Type guards
+// ---------------------------------------------------------------------------
+
+/** Minimal runtime shape-check for {@link CalibrationRecord}. */
+function isCalibrationRecord(x: unknown): x is CalibrationRecord {
+  // Discriminant triple: `ts` (ISO timestamp string), `verdict` ('confirmed' |
+  // 'refuted'), and `changeKinds` (string array) are the fields that every
+  // CalibrationRecord must carry and that plain JSON objects (e.g. index lines,
+  // partial writes) will not have. Checking all three — including the array
+  // discriminant — gives stronger narrowing than a non-null object check alone
+  // (the `isEffectRecord` pattern).
+  return (
+    x !== null &&
+    typeof x === 'object' &&
+    typeof (x as Record<string, unknown>)['ts'] === 'string' &&
+    typeof (x as Record<string, unknown>)['verdict'] === 'string' &&
+    Array.isArray((x as Record<string, unknown>)['changeKinds'])
+  );
+}
+
+// ---------------------------------------------------------------------------
 // trackRecordSummary
 // ---------------------------------------------------------------------------
 
@@ -80,28 +101,12 @@ export async function trackRecordSummary(
   // ── Aggregate per change kind ─────────────────────────────────────────────
   const stats = new Map<string, { confirmed: number; total: number }>();
 
-  // Discriminant triple: `ts` (ISO timestamp string), `verdict` ('confirmed' |
-  // 'refuted'), and `changeKinds` (string array) are the fields that every
-  // CalibrationRecord must carry and that plain JSON objects (e.g. index lines,
-  // partial writes) will not have. Checking all three — including the array
-  // discriminant — gives stronger narrowing than a non-null object check alone
-  // (the `isEffectRecord` pattern).
-  const isCalibrationRecord = (x: unknown): x is CalibrationRecord =>
-    x !== null &&
-    typeof x === 'object' &&
-    typeof (x as Record<string, unknown>)['ts'] === 'string' &&
-    typeof (x as Record<string, unknown>)['verdict'] === 'string' &&
-    Array.isArray((x as Record<string, unknown>)['changeKinds']);
-
   // readJsonlFile handles ENOENT gracefully (zero records); other I/O errors
   // propagate to the caller, preserving the previous throw-on-unexpected-error
   // contract.
-  const records: CalibrationRecord[] = [];
-  for await (const rec of readJsonlFile<CalibrationRecord>(ledgerPath, {
-    guard: isCalibrationRecord,
-  })) {
-    records.push(rec);
-  }
+  const records = await collectAsyncIter(
+    readJsonlFile<CalibrationRecord>(ledgerPath, { guard: isCalibrationRecord }),
+  );
 
   for (const rec of records) {
     if (rec.verdict !== 'confirmed' && rec.verdict !== 'refuted') continue;

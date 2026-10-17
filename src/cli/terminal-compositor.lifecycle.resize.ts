@@ -18,6 +18,44 @@ import type { LifecycleHost } from './terminal-compositor.lifecycle.js';
 import { requestCprOrMarkDirty } from './terminal-compositor.lifecycle.cpr.js';
 
 /**
+ * Compute the inflated physical-row count of the pre-resize painted footprint
+ * after a NARROWING resize (width-only or SHRINK).
+ *
+ * With AFK_CENTER_CONTENT the compositor paints each row as `margin + content`,
+ * where `margin` = `floor((oldCols - measure) / 2)` spaces. The painted width
+ * of each row is therefore up to `oldCols` columns (margin always fills to the
+ * content boundary). When the terminal narrows to `newCols < oldCols`, DECAWM
+ * autowrap reflows each old row that exceeds `newCols` into
+ * `ceil(paintedWidth / newCols)` physical rows — expanding the on-screen
+ * footprint above the `pendingResizeErase.top` anchor.
+ *
+ * Without this inflation the ghost-erase range only covers the LOGICAL row
+ * count ([top, lastKnownRows-1]), leaving the extra physical rows above `top`
+ * as duplicates of the oldest visible rows.
+ *
+ * When centering is OFF (default) or when the terminal WIDENS, each row is at
+ * most `oldCols` wide and already fits in `newCols` ≥ `oldCols`, so the factor
+ * is 1 and this is a no-op.
+ *
+ * @param logicalRows  Number of logical (model) rows in the footprint.
+ * @param oldCols      Terminal width as of the last repaint (`lastKnownCols`).
+ * @param newCols      New terminal width (post-SIGWINCH `stdout.columns`).
+ * @returns            Physical row count, always >= logicalRows.
+ */
+function reflowedPhysicalRows(logicalRows: number, oldCols: number, newCols: number): number {
+  if (newCols <= 0 || oldCols <= newCols) return logicalRows; // widen or no-op
+  // The maximum painted width per row: margin + content = oldCols (the
+  // compositor wraps content at `band.width = oldCols - marginCols`, so
+  // `margin + content` always fits exactly `oldCols` in the worst case).
+  // Using `oldCols` here is conservative but correct: it over-estimates at
+  // most by `marginCols` columns, which only inflates the erase range
+  // harmlessly (erasing blank rows is a no-op on terminal output).
+  const paintedWidth = oldCols;
+  const rowsPerOldRow = Math.ceil(paintedWidth / newCols);
+  return logicalRows * rowsPerOldRow;
+}
+
+/**
  * Synchronous SIGWINCH handler fired by ResizeBus.subscribeImmediate().
  *
  * On EXPAND: snapshots the pre-resize frame/band footprint into
@@ -134,7 +172,20 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const bandTop = self.committedBand.length > 0 ? self.committedBandTopRow : 0;
     const tops = [frameTop, bandTop].filter((r) => r > 0);
     const top = tops.length > 0 ? Math.min(...tops) : 0;
-    const bottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
+    const logicalBottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
+    // With AFK_CENTER_CONTENT the compositor paints `margin + content` per row,
+    // where the painted width equals `lastKnownCols` in the worst case.
+    // On a WIDTH-ONLY narrowing resize (e.g. 200→120 cols) DECAWM autowrap
+    // reflows each old row that is wider than the new terminal width into
+    // ceil(oldCols / newCols) physical rows, expanding the on-screen footprint
+    // above the logical `top` anchor. Without this inflation the ghost-erase
+    // range covers only logical rows, leaving the extra physical rows as
+    // duplicate copies of the oldest visible rows (issue #3763).
+    const newCols = self.stdout.columns ?? 80;
+    const logicalRows = Math.max(0, logicalBottom - top + 1);
+    const physicalRows = reflowedPhysicalRows(logicalRows, self.lastKnownCols, newCols);
+    // bottom may exceed newRows after inflation; flushResizeGhostErase clamps it.
+    const bottom = top > 0 ? top + physicalRows - 1 : logicalBottom;
     if (top > 0 && top <= bottom) {
       self.pendingResizeErase = { top, bottom, origin: 'width-only' };
     }

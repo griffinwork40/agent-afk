@@ -22,6 +22,7 @@ import { promises as fs } from 'node:fs';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
 import { registerWorktreeRoot } from '../../worktree/worktree-root-registry.js';
+import { writeJsonFileAsync } from '../../../utils/json-file.js';
 import { probeNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
@@ -226,21 +227,13 @@ export async function createManagedWorktree(
     baseSha = sha.stdout.trim();
   } catch { /* non-fatal */ }
   try {
-    await fs.writeFile(
-      join(worktreePath, '.afk-worktree-meta.json'),
-      JSON.stringify(
-        {
-          owner: args.owner ?? 'agent',
-          pid: process.pid,
-          createdAt: new Date().toISOString(),
-          baseSha,
-          baseBranch: baseRef,
-        },
-        null,
-        2,
-      ),
-      'utf-8',
-    );
+    await writeJsonFileAsync(join(worktreePath, '.afk-worktree-meta.json'), {
+      owner: args.owner ?? 'agent',
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      baseSha,
+      baseBranch: baseRef,
+    });
   } catch { /* best-effort */ }
   // Invariant (#3601): setup runs only AFTER the meta write, so the sweep
   // never sees a meta-less tree mid-setup, and runWorktreeSetup never throws,
@@ -535,7 +528,7 @@ export async function teardownIsolatedWorktree(args: {
         patch['ignoredDetailAtPreserve'] = outcome.detail;
         patch['ignoredBecauseAtPreserve'] = outcome.because;
       }
-      await fs.writeFile(metaPath, JSON.stringify({ ...existing, ...patch }, null, 2), 'utf-8');
+      await writeJsonFileAsync(metaPath, { ...existing, ...patch });
     } catch { /* best-effort — never fail teardown over a meta write */ }
     return { removed: false, preserved: true, reason: outcome.reason, ignoredDetail, ignoredBecause };
   } catch {

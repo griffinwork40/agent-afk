@@ -54,6 +54,24 @@ describe('buildForkDenialRemedy', () => {
     it('does not offer readRoots for a write denial', () => {
       expect(remedy).not.toContain('readRoots');
     });
+
+    it('offers stdin heredocs for commit-message / PR-body scratch files', () => {
+      // Most write denials in practice were forks writing /tmp/commit-msg*.txt
+      // or /tmp/pr-body*.md; both tools read the body from stdin instead.
+      expect(remedy).toContain("`git commit -F - <<'EOF'`");
+      expect(remedy).toContain("`gh pr create --body-file - <<'EOF'`");
+    });
+
+    it('tells the fork the OS temp dir needs no grant (scratch-roots.ts)', () => {
+      // A write denial is never about /tmp any more; say so, so a fork that hit
+      // a real out-of-root path is not steered away from the temp dir.
+      expect(remedy).toContain('the OS temp dir (`/tmp`, `os.tmpdir()`) is always writable');
+    });
+
+    it('does not add the scratch-file hint to read denials', () => {
+      const read = buildForkDenialRemedy({ mode: 'read', resolvedPath: P });
+      expect(read).not.toContain('--body-file');
+    });
   });
 
   it('JSON-quotes the path so a space-bearing path stays copy-pasteable', () => {

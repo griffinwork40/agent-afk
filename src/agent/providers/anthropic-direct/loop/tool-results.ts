@@ -26,6 +26,7 @@ import { buildToolCallCompletedPayload } from '../../shared/tool-call-trace.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
 import { DenialCircuitBreakerError } from '../../../../utils/errors.js';
 import { tagResultFlags } from '../../../journal/index.js';
+import { hasOutputTruncatedMarker } from '../../../tools/handlers/_output-cap.js';
 
 /**
  * Commit outcome.
@@ -67,7 +68,7 @@ export async function* emitAndCommitToolResults(
     // See issue #2249.
     const completedAt = result.completedAt ?? Date.now();
     const durationMs = typeof startedAt === 'number' ? completedAt - startedAt : 0;
-    const truncated = result.truncated === true || result.content.includes('[output truncated');
+    const truncated = result.truncated === true || hasOutputTruncatedMarker(result.content);
     void emitToolCall(
       input.traceWriter,
       buildToolCallCompletedPayload({

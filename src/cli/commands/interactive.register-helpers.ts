@@ -32,7 +32,6 @@ import type { TurnState } from './interactive/repl-loop.js';
 import type { ExitReasonRef } from './interactive/interactive.signal-handlers.js';
 import { resolveResumeTarget } from '../resume-session.js';
 import { errorMessage } from '../../utils/errors.js';
-import { env } from '../../config/env.js';
 
 // ---------------------------------------------------------------------------
 // Option registration
@@ -336,5 +335,3 @@ export function resolveWorktreeSetupArg(
   return Object.keys(opts).length > 0 ? opts : undefined;
 }
 
-// Re-export env for callers that were already importing from this module.
-export { env };

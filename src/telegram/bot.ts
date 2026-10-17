@@ -93,12 +93,25 @@ export class TelegramBot {
     this.bot = new Telegraf(options.botToken, { handlerTimeout: Infinity });
     // Wire resumption-offer delivery into the session manager so wave manifests
     // surface as plain messages when a new chat session is created.
+    // Build sessionManager first; messageHandler is constructed on the next line.
+    // `onInjectableForRoute` closes over `this.messageHandler` which is
+    // assigned synchronously below before any session is ever created (sessions
+    // are built lazily on the first incoming Telegram update).
+    let messageHandlerRef: MessageHandler | undefined;
     this.sessionManager = new SessionManager({
       ...options,
       onResumptionOffer: (route, text) => {
         return this.bot.telegram.sendMessage(route.chatId, text, sendOptions(route))
           .then(() => true as const)
           .catch(() => false as const);
+      },
+      // Wire the idle-wake callback: when a background subagent settles on an
+      // idle Telegram session, synthesise a new turn immediately rather than
+      // waiting for the next user message. Mirrors the REPL's
+      // `bgResultNotifier.onInjectable = tryAutoResume` path in bootstrap-infra.ts.
+      onInjectableForRoute: (chatId, threadId) => {
+        const route = { chatId, ...(threadId !== undefined ? { threadId } : {}) };
+        return () => { messageHandlerRef?.wakeIdleSession(route); };
       },
     });
     this.messageHandler = new MessageHandler(
@@ -108,6 +121,8 @@ export class TelegramBot {
       this.log.bind(this),
       options.tagOnlyChats ?? new Set()
     );
+    // Resolve the closure reference now that messageHandler is fully constructed.
+    messageHandlerRef = this.messageHandler;
     // Invariant: pass the SOLE Telegraf instance and the MessageHandler so
     // _run can render elicitation records interactively. No second bot
     // instance is created here — this.bot is the single getUpdates poller.
@@ -132,24 +147,7 @@ export class TelegramBot {
     this.bot.command('start', (ctx) => handleStart(ctx));
     this.bot.command('help', (ctx) => handleHelp(ctx, this.sessionManager));
     this.bot.command('clear', (ctx) => this.handleClear(ctx));
-    this.bot.command('compact', async (ctx) => {
-      const route = routeFromCtx(ctx);
-      if (!route) {
-        await ctx.reply(formatError('Could not identify chat'));
-        return;
-      }
-      const session = await this.sessionManager.getSession(route);
-      if (session.state !== 'idle') {
-        this.messageHandler.enqueueCompact(route, ctx);
-        await ctx.reply('Compact queued.');
-      } else {
-        try {
-          await handleCompact(ctx, this.sessionManager, this.log.bind(this));
-        } finally {
-          this.messageHandler.drainQueue(route).catch(err => this.log('Drain error:', err));
-        }
-      }
-    });
+    this.bot.command('compact', (ctx) => this.handleCompact(ctx));
     registerDelegatingCommands(this.bot, this.sessionManager, this.log.bind(this));
     // /sessions — list this chat's resumable conversations with tap-to-switch
     // buttons; /new — start a fresh conversation (previous preserved). One
@@ -448,7 +446,7 @@ export class TelegramBot {
     return handleHelp(ctx, this.sessionManager);
   }
 
-  async handleClear(ctx: Context): Promise<void> {
+  private async handleClear(ctx: Context): Promise<void> {
     const route = routeFromCtx(ctx);
     if (!route) {
       await ctx.reply(formatError('Could not identify chat'));
@@ -460,6 +458,25 @@ export class TelegramBot {
       await ctx.reply('Clear queued.');
     } else {
       return handleClear(ctx, this.sessionManager, this.registeredCommandChats, this.log.bind(this));
+    }
+  }
+
+  private async handleCompact(ctx: Context): Promise<void> {
+    const route = routeFromCtx(ctx);
+    if (!route) {
+      await ctx.reply(formatError('Could not identify chat'));
+      return;
+    }
+    const session = await this.sessionManager.getSession(route);
+    if (session.state !== 'idle') {
+      this.messageHandler.enqueueCompact(route, ctx);
+      await ctx.reply('Compact queued.');
+    } else {
+      try {
+        await handleCompact(ctx, this.sessionManager, this.log.bind(this));
+      } finally {
+        this.messageHandler.drainQueue(route).catch(err => this.log('Drain error:', err));
+      }
     }
   }
 

@@ -17,19 +17,26 @@ import {
   writeMcpConfigFileAtomic,
   CHROME_DEVTOOLS_SERVER_NAME,
 } from './browser.js';
+import { CHROME_DEVTOOLS_MCP_FALLBACK_VERSION } from './browser.connect-diagnosis.js';
 
 describe('buildChromeDevtoolsEntry', () => {
-  it('defaults to npx + --autoConnect on the stable channel', () => {
+  it('defaults to a pinned npx + --autoConnect on the stable channel', () => {
     expect(buildChromeDevtoolsEntry()).toEqual({
       command: 'npx',
-      args: ['chrome-devtools-mcp@latest', '--autoConnect'],
+      args: [`chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_FALLBACK_VERSION}`, '--autoConnect'],
     });
   });
 
+  it('pins the given version and never writes @latest', () => {
+    const entry = buildChromeDevtoolsEntry('stable', '1.12.3');
+    expect(entry.args).toEqual(['chrome-devtools-mcp@1.12.3', '--autoConnect']);
+    expect(JSON.stringify(entry)).not.toContain('@latest');
+  });
+
   it('appends --channel for a non-stable channel', () => {
-    expect(buildChromeDevtoolsEntry('canary')).toEqual({
+    expect(buildChromeDevtoolsEntry('canary', '1.12.3')).toEqual({
       command: 'npx',
-      args: ['chrome-devtools-mcp@latest', '--autoConnect', '--channel', 'canary'],
+      args: ['chrome-devtools-mcp@1.12.3', '--autoConnect', '--channel', 'canary'],
     });
   });
 });

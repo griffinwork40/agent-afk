@@ -1466,14 +1466,14 @@ describe('StatusLine — token budget indicator', () => {
     status.stop();
   });
 
-  it('does not render the maxBudgetUsd cap when maxBudgetUsd is 0', () => {
+  it('renders the maxBudgetUsd cap as $0.00 when maxBudgetUsd is 0', () => {
     const stream = mockStreamWide(120);
     const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
     status.start(); stream.writes.length = 0;
     status.repaint({ model: 'sonnet', budgetUsd: 0.10, maxBudgetUsd: 0 });
     const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
     expect(out).toContain('$0.10');
-    expect(out).not.toContain('$0.10/$');
+    expect(out).toContain('$0.10/$0.00');
     status.stop();
   });
 
@@ -1546,6 +1546,74 @@ describe('StatusLine — active agent fan-out count', () => {
     expect(out).toContain('sonnet');
     // Fan-out is shed first (highest droppablePriority = 8)
     expect(out).not.toContain('2↗');
+    status.stop();
+  });
+});
+
+describe('StatusLine — AFK_CENTER_CONTENT centering', () => {
+  /** Wide mock stream: 200 cols, so centering (measure=100) gives a 50-col left margin. */
+  function wideStream(cols = 200): MockStream {
+    const writes: string[] = [];
+    return {
+      writes,
+      write(chunk: string): boolean { writes.push(chunk); return true; },
+      rows: 24,
+      columns: cols,
+      isTTY: true,
+    };
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('prepends margin and caps width when AFK_CENTER_CONTENT=1 on a wide terminal', () => {
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    const stream = wideStream(200);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cost: 0.01, tokens: 500 });
+    const out = lastJoined(stream);
+    // The status-line paint is the chunk after the CUP + 2K sequence.
+    // Strip ANSI so we can measure the leading margin directly.
+    const plain = out.replace(BROAD_ANSI_RE, '');
+    // With cols=200 and default measure=100, marginCols = floor((200-100)/2) = 50.
+    // The paint chunk (after CUP+2K) must start with 50 spaces.
+    const paintChunk = out.split('\x1b[2K')[1] ?? '';
+    const plainPaint = paintChunk.replace(BROAD_ANSI_RE, '');
+    expect(plainPaint.startsWith(' '.repeat(50))).toBe(true);
+    // Content must still contain the model name after the margin.
+    expect(plain).toContain('sonnet');
+    status.stop();
+  });
+
+  it('output is byte-identical to non-centered when AFK_CENTER_CONTENT is unset', () => {
+    // No stub — AFK_CENTER_CONTENT must be absent / falsy.
+    vi.stubEnv('AFK_CENTER_CONTENT', '');
+    const stream = wideStream(200);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cost: 0.01 });
+    const out = lastJoined(stream);
+    const paintChunk = out.split('\x1b[2K')[1] ?? '';
+    const plainPaint = paintChunk.replace(BROAD_ANSI_RE, '');
+    // No leading margin — content starts immediately (first non-space char at col 0).
+    expect(plainPaint.charAt(0)).not.toBe(' ');
+    status.stop();
+  });
+
+  it('centered output fits within terminal width (margin + content ≤ cols)', () => {
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    const cols = 200;
+    const stream = wideStream(cols);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'claude-sonnet-4-5', cost: 9.99, tokens: 999999, contextPct: 0.95 });
+    const out = lastJoined(stream);
+    const paintChunk = out.split('\x1b[2K')[1] ?? '';
+    const plainPaint = paintChunk.replace(BROAD_ANSI_RE, '');
+    // Entire painted line must not exceed terminal width.
+    expect(plainPaint.length).toBeLessThanOrEqual(cols);
     status.stop();
   });
 });

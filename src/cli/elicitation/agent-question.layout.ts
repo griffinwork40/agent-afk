@@ -115,8 +115,9 @@ export function layoutAgentQuestion(request: ElicitationRequest, size: TerminalS
   const overflow = fullHeaderRows + RESERVED_ROWS + MIN_OPTION_ROWS > size.rows;
   // Below 20 columns the overlay is too narrow to be usable — force a spill
   // so the full question lands in scrollback regardless of row count.
-  // Note: `columns` (= size.columns, no clamp) may be < 20 in this path;
-  // wrapWithPrefix handles sub-20 gracefully via its own Math.max(10, …) guard.
+  // Note: `columns` (= size.columns, no clamp) may be 0 or negative in this
+  // path; wrapWithPrefix handles sub-10 via its own Math.max(10, …) guard,
+  // and wrapToWidth receives Math.max(1, columns) to stay well-formed.
   const spill = overflow || numbered || size.columns < 20;
 
   const byLabel = new Map<string, string>();

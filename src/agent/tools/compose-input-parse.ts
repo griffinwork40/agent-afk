@@ -10,6 +10,7 @@
 
 import path from 'path';
 import type { DAGEdge } from '../dag.js';
+import { parseComposeBudgets, parseToolRounds } from './compose-input-parse.budgets.js';
 import { isReadDenied, READ_DENYLIST_ENTRY_MARKER } from './handlers/read-denylist.js';
 import { isTooBroadRoot, ungatedSensitiveRoot } from './subagent/root-validation.js';
 import { realpathSafe } from './handlers/_cwd-utils.js';
@@ -73,44 +74,6 @@ export interface ParseResult {
   parsed: ComposeInput;
   /** Human-readable warnings to surface in the compose result output. */
   warnings: string[];
-}
-
-// Bounds for the per-node timeout. The lower bound rejects sub-second values
-// that are almost always a copy-paste bug (the user meant seconds, not ms),
-// and the upper bound rejects multi-hour values that would defeat the
-// purpose of having a deadline at all.
-const MIN_NODE_TIMEOUT_MS = 1_000;
-const MAX_NODE_TIMEOUT_MS = 3_600_000;
-
-// Bounds for the per-node tool-use round budget. A floor of 1 keeps at least
-// one tool-using round before the wind-down round fires (budget=0 means "no
-// cap" to the provider loop, the opposite of what a caller passing 0 wants).
-// The ceiling of 1000 is a sanity cap — past that the budget no longer
-// constrains useful work and is almost always a typo.
-const MIN_NODE_TOOL_ROUNDS = 1;
-const MAX_NODE_TOOL_ROUNDS = 1_000;
-
-/** Validate and return a positive integer tool-round budget from raw input. */
-function parseToolRounds(val: unknown, key: string): number {
-  if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) {
-    throw new Error(`"${key}" must be a positive finite number`);
-  }
-  if (!Number.isInteger(val)) {
-    throw new Error(
-      `"${key}" must be an integer (got ${val}). ` +
-      `Tool-use rounds are discrete events; fractional budgets are not meaningful.`,
-    );
-  }
-  if (val < MIN_NODE_TOOL_ROUNDS) {
-    throw new Error(`"${key}" must be at least ${MIN_NODE_TOOL_ROUNDS}`);
-  }
-  if (val > MAX_NODE_TOOL_ROUNDS) {
-    throw new Error(
-      `"${key}" must be at most ${MAX_NODE_TOOL_ROUNDS} ` +
-      `(got ${val}). A larger budget no longer constrains useful work.`,
-    );
-  }
-  return val;
 }
 
 /**
@@ -224,14 +187,8 @@ function parseRootArray(
   return roots.length > 0 ? roots : undefined;
 }
 
-export function parseComposeInput(input: unknown): ParseResult {
-  if (typeof input !== 'object' || input === null) {
-    throw new Error('Compose tool input must be an object');
-  }
-
-  const obj = input as Record<string, unknown>;
-
-  const nodes = obj['nodes'];
+/** Validate nodes in input order, sharing only the explicitly supplied ID set. */
+function parseComposeNodes(nodes: unknown, seenIds: Set<string>): ComposeNodeInput[] {
   if (!Array.isArray(nodes) || nodes.length === 0) {
     throw new Error('Compose tool requires a non-empty "nodes" array');
   }
@@ -245,127 +202,135 @@ export function parseComposeInput(input: unknown): ParseResult {
   }
 
   const parsed: ComposeNodeInput[] = [];
-  const seenIds = new Set<string>();
   for (const node of nodes) {
-    if (typeof node !== 'object' || node === null) {
-      throw new Error('Each node must be an object');
-    }
-    const n = node as Record<string, unknown>;
-    const id = n['id'];
-    if (typeof id !== 'string' || id.trim().length === 0) {
-      throw new Error('Each node must have a non-empty "id" string');
-    }
-    if (!/^[A-Za-z0-9_-]+$/.test(id)) {
-      // Strip control chars + truncate in the error itself so it cannot
-      // become a log-forge vector even on the error path.
-      const safeId = id.replace(/[\x00-\x1f\x7f]/g, '?').slice(0, 32);
-      throw new Error(
-        `Node id "${safeId}" must match /^[A-Za-z0-9_-]+$/ (alphanumeric, underscore, hyphen)`,
-      );
-    }
-    if (seenIds.has(id)) {
-      throw new Error(`Duplicate node ID: ${id}`);
-    }
-    seenIds.add(id);
+    parsed.push(parseComposeNode(node, seenIds));
+  }
+  return parsed;
+}
 
-    const prompt = n['prompt'];
-    if (typeof prompt !== 'string' || prompt.trim().length === 0) {
-      throw new Error(`Node "${id}" must have a non-empty "prompt" string`);
-    }
+/** Preserve field-validation precedence within each node. */
+function parseComposeNode(node: unknown, seenIds: Set<string>): ComposeNodeInput {
+  if (typeof node !== 'object' || node === null) {
+    throw new Error('Each node must be an object');
+  }
+  const n = node as Record<string, unknown>;
+  const id = n['id'];
+  if (typeof id !== 'string' || id.trim().length === 0) {
+    throw new Error('Each node must have a non-empty "id" string');
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+    // Strip control chars + truncate in the error itself so it cannot
+    // become a log-forge vector even on the error path.
+    const safeId = id.replace(/[\x00-\x1f\x7f]/g, '?').slice(0, 32);
+    throw new Error(
+      `Node id "${safeId}" must match /^[A-Za-z0-9_-]+$/ (alphanumeric, underscore, hyphen)`,
+    );
+  }
+  if (seenIds.has(id)) {
+    throw new Error(`Duplicate node ID: ${id}`);
+  }
+  seenIds.add(id);
 
-    let model: string | undefined;
-    if (n['model'] !== undefined) {
-      if (typeof n['model'] !== 'string') {
-        throw new Error(`Node "${id}" model must be a string`);
-      }
-      model = n['model'];
-    }
-
-    const { cwd, readRoots, writeRoots } = parseNodePaths(n, id);
-
-    let nodeMaxToolRounds: number | undefined;
-    if (n['max_tool_rounds'] !== undefined) {
-      nodeMaxToolRounds = parseToolRounds(n['max_tool_rounds'], `node "${id}" max_tool_rounds`);
-    }
-
-    let nodeMaxTurns: number | undefined;
-    if (n['max_turns'] !== undefined) {
-      const val = n['max_turns'];
-      if (typeof val !== 'number' || !Number.isFinite(val) || !Number.isInteger(val) || val <= 0) {
-        throw new Error(`Node "${id}" max_turns must be a positive integer`);
-      }
-      nodeMaxTurns = val;
-    }
-
-    let nodeAgentType: string | undefined;
-    if (n['agent_type'] !== undefined) {
-      if (typeof n['agent_type'] !== 'string' || n['agent_type'].trim().length === 0) {
-        throw new Error(`Node "${id}" agent_type must be a non-empty string`);
-      }
-      nodeAgentType = n['agent_type'];
-    }
-
-    let nodeAttachments: string[] | undefined;
-    if (n['attachments'] !== undefined) {
-      if (!Array.isArray(n['attachments'])) {
-        throw new Error(`Node "${id}" attachments must be an array`);
-      }
-      const atts: string[] = [];
-      for (const a of n['attachments'] as unknown[]) {
-        if (typeof a !== 'string' || a.trim().length === 0) {
-          throw new Error(`Node "${id}" attachments entries must be non-empty strings`);
-        }
-        atts.push(a);
-      }
-      if (atts.length > 0) nodeAttachments = atts;
-    }
-
-    let nodeIsolation: 'none' | 'worktree' | undefined;
-    if (n['isolation'] !== undefined) {
-      if (n['isolation'] !== 'none' && n['isolation'] !== 'worktree') {
-        throw new Error(`Node "${id}" isolation must be "none" or "worktree" (got ${JSON.stringify(n['isolation'])})`);
-      }
-      nodeIsolation = n['isolation'];
-      // isolation:"worktree" is mutually exclusive with cwd — the worktree
-      // path IS the node's cwd. Allowing both would ambiguously combine an
-      // explicit cwd pin with worktree creation, making the effective cwd
-      // unpredictable. Callers that need a specific directory should omit
-      // isolation and manage their own worktree, or use isolation and let
-      // the runtime derive the worktree path automatically.
-      if (nodeIsolation === 'worktree' && cwd !== undefined) {
-        throw new Error(
-          `Node "${id}" cannot set both cwd and isolation:"worktree". ` +
-          `The worktree path IS the node's cwd — omit cwd to use isolation, ` +
-          `or omit isolation to pin a specific cwd.`,
-        );
-      }
-      if (nodeIsolation === 'worktree' && writeRoots !== undefined) {
-        throw new Error(
-          `Node "${id}" cannot set both writeRoots and isolation:"worktree". ` +
-          `Isolation confines writes to the worktree; explicit writeRoots would ` +
-          `punch holes in that boundary.`,
-        );
-      }
-      // Normalize isolation:"none" to undefined so the output interface is
-      // consistent with the agent-tool parser, which never emits isolation:"none".
-      if (nodeIsolation === 'none') nodeIsolation = undefined;
-    }
-
-    parsed.push({
-      id,
-      prompt,
-      model,
-      ...(cwd !== undefined ? { cwd } : {}),
-      ...(readRoots !== undefined ? { readRoots } : {}),
-      ...(writeRoots !== undefined ? { writeRoots } : {}),
-      ...(nodeMaxToolRounds !== undefined ? { max_tool_rounds: nodeMaxToolRounds } : {}),
-      ...(nodeMaxTurns !== undefined ? { max_turns: nodeMaxTurns } : {}),
-      ...(nodeAgentType !== undefined ? { agent_type: nodeAgentType } : {}),
-      ...(nodeAttachments !== undefined ? { attachments: nodeAttachments } : {}),
-      ...(nodeIsolation !== undefined ? { isolation: nodeIsolation } : {}),
-    });
+  const prompt = n['prompt'];
+  if (typeof prompt !== 'string' || prompt.trim().length === 0) {
+    throw new Error(`Node "${id}" must have a non-empty "prompt" string`);
   }
 
+  let model: string | undefined;
+  if (n['model'] !== undefined) {
+    if (typeof n['model'] !== 'string') {
+      throw new Error(`Node "${id}" model must be a string`);
+    }
+    model = n['model'];
+  }
+
+  const { cwd, readRoots, writeRoots } = parseNodePaths(n, id);
+
+  let nodeMaxToolRounds: number | undefined;
+  if (n['max_tool_rounds'] !== undefined) {
+    nodeMaxToolRounds = parseToolRounds(n['max_tool_rounds'], `node "${id}" max_tool_rounds`);
+  }
+
+  let nodeMaxTurns: number | undefined;
+  if (n['max_turns'] !== undefined) {
+    const val = n['max_turns'];
+    if (typeof val !== 'number' || !Number.isFinite(val) || !Number.isInteger(val) || val <= 0) {
+      throw new Error(`Node "${id}" max_turns must be a positive integer`);
+    }
+    nodeMaxTurns = val;
+  }
+
+  let nodeAgentType: string | undefined;
+  if (n['agent_type'] !== undefined) {
+    if (typeof n['agent_type'] !== 'string' || n['agent_type'].trim().length === 0) {
+      throw new Error(`Node "${id}" agent_type must be a non-empty string`);
+    }
+    nodeAgentType = n['agent_type'];
+  }
+
+  let nodeAttachments: string[] | undefined;
+  if (n['attachments'] !== undefined) {
+    if (!Array.isArray(n['attachments'])) {
+      throw new Error(`Node "${id}" attachments must be an array`);
+    }
+    const atts: string[] = [];
+    for (const a of n['attachments'] as unknown[]) {
+      if (typeof a !== 'string' || a.trim().length === 0) {
+        throw new Error(`Node "${id}" attachments entries must be non-empty strings`);
+      }
+      atts.push(a);
+    }
+    if (atts.length > 0) nodeAttachments = atts;
+  }
+
+  let nodeIsolation: 'none' | 'worktree' | undefined;
+  if (n['isolation'] !== undefined) {
+    if (n['isolation'] !== 'none' && n['isolation'] !== 'worktree') {
+      throw new Error(`Node "${id}" isolation must be "none" or "worktree" (got ${JSON.stringify(n['isolation'])})`);
+    }
+    nodeIsolation = n['isolation'];
+    // isolation:"worktree" is mutually exclusive with cwd — the worktree
+    // path IS the node's cwd. Allowing both would ambiguously combine an
+    // explicit cwd pin with worktree creation, making the effective cwd
+    // unpredictable. Callers that need a specific directory should omit
+    // isolation and manage their own worktree, or use isolation and let
+    // the runtime derive the worktree path automatically.
+    if (nodeIsolation === 'worktree' && cwd !== undefined) {
+      throw new Error(
+        `Node "${id}" cannot set both cwd and isolation:"worktree". ` +
+        `The worktree path IS the node's cwd — omit cwd to use isolation, ` +
+        `or omit isolation to pin a specific cwd.`,
+      );
+    }
+    if (nodeIsolation === 'worktree' && writeRoots !== undefined) {
+      throw new Error(
+        `Node "${id}" cannot set both writeRoots and isolation:"worktree". ` +
+        `Isolation confines writes to the worktree; explicit writeRoots would ` +
+        `punch holes in that boundary.`,
+      );
+    }
+    // Normalize isolation:"none" to undefined so the output interface is
+    // consistent with the agent-tool parser, which never emits isolation:"none".
+    if (nodeIsolation === 'none') nodeIsolation = undefined;
+  }
+
+  return {
+    id,
+    prompt,
+    model,
+    ...(cwd !== undefined ? { cwd } : {}),
+    ...(readRoots !== undefined ? { readRoots } : {}),
+    ...(writeRoots !== undefined ? { writeRoots } : {}),
+    ...(nodeMaxToolRounds !== undefined ? { max_tool_rounds: nodeMaxToolRounds } : {}),
+    ...(nodeMaxTurns !== undefined ? { max_turns: nodeMaxTurns } : {}),
+    ...(nodeAgentType !== undefined ? { agent_type: nodeAgentType } : {}),
+    ...(nodeAttachments !== undefined ? { attachments: nodeAttachments } : {}),
+    ...(nodeIsolation !== undefined ? { isolation: nodeIsolation } : {}),
+  };
+}
+
+/** Validate edge endpoints against the IDs collected while parsing nodes. */
+function parseComposeEdges(obj: Record<string, unknown>, seenIds: Set<string>): DAGEdge[] | undefined {
   let edges: DAGEdge[] | undefined;
   if (obj['edges'] !== undefined) {
     if (!Array.isArray(obj['edges'])) {
@@ -390,6 +355,20 @@ export function parseComposeInput(input: unknown): ParseResult {
     }
   }
 
+  return edges;
+}
+
+export function parseComposeInput(input: unknown): ParseResult {
+  if (typeof input !== 'object' || input === null) {
+    throw new Error('Compose tool input must be an object');
+  }
+
+  const obj = input as Record<string, unknown>;
+  const seenIds = new Set<string>();
+  // Invariant: nodes, edges, fail_fast, timeout, then round-budget aliases.
+  const parsed = parseComposeNodes(obj['nodes'], seenIds);
+  const edges = parseComposeEdges(obj, seenIds);
+
   let failFast: boolean | undefined;
   if (obj['fail_fast'] !== undefined) {
     if (typeof obj['fail_fast'] !== 'boolean') {
@@ -398,56 +377,7 @@ export function parseComposeInput(input: unknown): ParseResult {
     failFast = obj['fail_fast'];
   }
 
-  const warnings: string[] = [];
-
-  let nodeTimeoutMs: number | undefined;
-  if (obj['node_timeout_ms'] !== undefined) {
-    const val = obj['node_timeout_ms'];
-    if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) {
-      throw new Error('"node_timeout_ms" must be a positive finite number (milliseconds)');
-    }
-    if (val < MIN_NODE_TIMEOUT_MS) {
-      throw new Error(
-        `"node_timeout_ms" must be at least ${MIN_NODE_TIMEOUT_MS}ms ` +
-        `(got ${val}). Sub-second timeouts are almost always a unit mistake.`,
-      );
-    }
-    // Upper clamp: cap rather than reject — a very large value expresses
-    // intent ("a long deadline is fine") and clamping preserves forward
-    // progress. Surface a warning so the model knows its value was adjusted.
-    nodeTimeoutMs = Math.min(MAX_NODE_TIMEOUT_MS, val);
-    if (val > MAX_NODE_TIMEOUT_MS) {
-      warnings.push(
-        `node_timeout_ms clamped: requested ${val}ms exceeds the maximum ` +
-        `${MAX_NODE_TIMEOUT_MS}ms; using ${MAX_NODE_TIMEOUT_MS}ms.`,
-      );
-    }
-  }
-
-  // `max_tool_calls_per_node` is the pre-wind-down name for the same knob and
-  // is still accepted; the preferred key wins when both are present so a
-  // caller migrating incrementally never silently gets the older value.
-  const ROUNDS_KEY = 'max_tool_rounds_per_node';
-  const LEGACY_ROUNDS_KEY = 'max_tool_calls_per_node';
-  const usedKey = obj[ROUNDS_KEY] !== undefined ? ROUNDS_KEY : LEGACY_ROUNDS_KEY;
-  if (obj[ROUNDS_KEY] !== undefined && obj[LEGACY_ROUNDS_KEY] !== undefined) {
-    warnings.push(
-      `both "${ROUNDS_KEY}" and the deprecated "${LEGACY_ROUNDS_KEY}" were ` +
-      `supplied; using "${ROUNDS_KEY}" and ignoring the deprecated key.`,
-    );
-  } else if (obj[LEGACY_ROUNDS_KEY] !== undefined) {
-    warnings.push(
-      `"${LEGACY_ROUNDS_KEY}" is deprecated — use "${ROUNDS_KEY}". The unit ` +
-      `is tool-use ROUNDS (a round with N parallel calls costs 1), and ` +
-      `spending the budget now triggers a tools-stripped wind-down round ` +
-      `instead of cancelling the node.`,
-    );
-  }
-
-  let maxToolRoundsPerNode: number | undefined;
-  if (obj[usedKey] !== undefined) {
-    maxToolRoundsPerNode = parseToolRounds(obj[usedKey], usedKey);
-  }
+  const { nodeTimeoutMs, maxToolRoundsPerNode, warnings } = parseComposeBudgets(obj);
 
   return {
     parsed: {

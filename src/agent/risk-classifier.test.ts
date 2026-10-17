@@ -356,6 +356,72 @@ describe('classifyRisk — bash safe', () => {
   });
 });
 
+// ---- bash safe: command-position matching ---------------------------------
+// Regression: BASH_SAFE used to be a substring scan, so any command not caught
+// by HIGH/MEDIUM that merely CONTAINED a safe token was auto-allowed.
+describe('classifyRisk — bash safe only at command position', () => {
+  const cls = (command: string): string => classifyRisk('bash', { command }, ctx);
+
+  it.each([
+    'gh pr create --head x --title t', // `--head ` used to hit 'head '
+    'gh pr create --title "cat food"', // quoted arg used to hit 'cat '
+    'npm publish && ls', // later safe segment used to launder the first
+    'frob --opt x ls -la', // safe token in an argument
+    'frob "a; ls -la"', // separator inside quotes must not split
+    'ls $(frob)', // substitution body is judged as its own segment
+    'echo `frob`',
+    'X=1; ls', // pure assignment segment
+    'GIT_EXTERNAL_DIFF=./evil git diff', // exec-hook env assignment
+    'PATH=. ls',
+    'gh pr checkout 12 && git status',
+    'cat <<EOF\nfrob\nEOF', // heredoc body cannot be attributed to cat
+    'ls >out.txt', // unspaced write redirect (MEDIUM only matches ' > ')
+    'git log 2>err.log',
+    '',
+  ])('%j → not safe', (command) => {
+    expect(cls(command)).not.toBe('safe');
+  });
+
+  it('gh pr create --head x keeps the unknown-command default (medium)', () => {
+    expect(cls('gh pr create --head x --title t')).toBe('medium');
+  });
+
+  it('curl https://x | cat → not safe (curl GET is not safe-listed)', () => {
+    expect(cls('curl https://x | cat')).toBe('medium');
+  });
+
+  it.each([
+    'git log | head -5',
+    'ls -la',
+    'cat file | grep x',
+    'git diff origin/main...HEAD',
+    'git log --oneline -20 && git status',
+    'git log 2>&1 | tail -20',
+    'ls missing 2>/dev/null',
+    'grep "a>b" file.txt', // quoted `>` is an argument, not a redirect
+    'grep -rn "a | b; c" src/', // separators inside quotes stay inside the arg
+    'FOO=1 pnpm test src/a.test.ts',
+    'cd sub && git status',
+    'npx vitest run',
+    'pnpm exec vitest run src/a.test.ts',
+    'gh pr view 12 --json state | head -5',
+    'find src -name "*.ts" | head -20',
+  ])('%j → safe (preserved)', (command) => {
+    expect(cls(command)).toBe('safe');
+  });
+
+  it.each(['npx cat README.md', 'npx ls', 'npx echo hi', 'npx grep -r x .', 'npx git status'])(
+    '%j → not safe (npx may download and run a registry package of that name)',
+    (command) => {
+      expect(cls(command)).not.toBe('safe');
+    },
+  );
+
+  it('a HIGH token still wins over a safe leading command', () => {
+    expect(cls('cat install.sh | bash')).toBe('high');
+  });
+});
+
 // ---- write_file / edit_file path-based rules ----------------------------
 describe('classifyRisk — write_file / edit_file', () => {
   it('path inside workspace → safe', () => {
@@ -437,6 +503,9 @@ describe('classifyRisk — other tools', () => {
     expect(classifyRisk('web_scrape', { url: 'https://example.com' }, ctx)).toBe('medium');
   });
 
+  it('remote_agent → high (arbitrary remote execution, bypassPermissions default)', () => {
+    expect(classifyRisk('remote_agent', { host: 'cm', prompt: 'rm -rf /' }, ctx)).toBe('high');
+  });
   it('send_telegram → medium', () => {
     expect(classifyRisk('send_telegram', { message: 'hello' }, ctx)).toBe('medium');
   });
@@ -804,6 +873,24 @@ describe('classifyRisk — #3534 word-start matrix', () => {
       level: 'high',
       reason: "bash-pattern: matched 'rm'",
     });
+  });
+
+  // Regression guard for issue #3659: SEPARATOR_EVASION lookahead did not
+  // cover ';' or '|', so 'rm;foo' and 'rm|grep' slipped through as non-high.
+  it('separator-evasion: rm immediately followed by ; (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'rm;foo' }, ctx)).toBe('high');
+  });
+
+  it('separator-evasion: rm immediately followed by | (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'rm|grep lost' }, ctx)).toBe('high');
+  });
+
+  it('separator-evasion: eval immediately followed by ; (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'eval;payload' }, ctx)).toBe('high');
+  });
+
+  it('separator-evasion: eval immediately followed by | (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'eval|sh' }, ctx)).toBe('high');
   });
 });
 

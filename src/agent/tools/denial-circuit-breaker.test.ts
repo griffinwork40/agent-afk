@@ -296,7 +296,11 @@ describe('denial circuit breaker — dispatcher integration', () => {
     for (let i = 0; i < DENIAL_CIRCUIT_BREAKER_THRESHOLD * 2; i++) {
       const r = await d.execute(readCall(i));
       expect(r.isError).toBe(true);
-      expect(r.failureClass).toBe('hook-block'); // never 'denial-breaker'
+      // Must never trip the denial-breaker (the widening-readRoots remedy would
+      // misdirect). After HOOK_BLOCK_REPEAT_THRESHOLD consecutive non-containment
+      // blocks the hook-block-repeat breaker may trip — that is correct and
+      // expected; we only assert the denial-breaker class is absent.
+      expect(r.failureClass).not.toBe(DENIAL_BREAKER_FAILURE_CLASS);
     }
   });
 
@@ -308,7 +312,8 @@ describe('denial circuit breaker — dispatcher integration', () => {
     for (let i = 0; i < DENIAL_CIRCUIT_BREAKER_THRESHOLD * 2; i++) {
       const r = await d.execute(readCall(i));
       expect(r.isError).toBe(true);
-      expect(r.failureClass).toBe('hook-block'); // never 'denial-breaker'
+      // Same: never denial-breaker; hook-block-repeat may fire after its threshold.
+      expect(r.failureClass).not.toBe(DENIAL_BREAKER_FAILURE_CLASS);
     }
   });
 });

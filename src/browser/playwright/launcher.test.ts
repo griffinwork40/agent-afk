@@ -139,11 +139,26 @@ vi.mock('playwright', () => ({
   },
 }));
 
+vi.mock('../../config/env.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/env.js')>();
+  return {
+    ...actual,
+    privateHostsAllowed: vi.fn(() => false),
+  };
+});
+
+vi.mock('../../http-client/egress-guard.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../http-client/egress-guard.js')>();
+  return { ...actual, privateHostsAllowed: vi.fn(() => false) };
+});
+
 // Import AFTER the mock so the hoisted mock is in place.
 import { BrowserLauncher } from './launcher.js';
 import type { BrowserConfig } from '../types.js';
 import { chromium } from 'playwright';
 import { getBrowserProfileStateDir, getBrowserStorageStatePath } from '../../paths.js';
+import { privateHostsAllowed } from '../../config/env.js';
+import { privateHostsAllowed as guardPrivateHostsAllowed } from '../../http-client/egress-guard.js';
 
 // ---------------------------------------------------------------------------
 // Test config fixture
@@ -418,6 +433,14 @@ describe('BrowserLauncher', () => {
       const ctx = await launcher.ensureContext('session-A');
       expect(ctx).toBeDefined();
       expect(currentStubBrowser.newContext).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves HTTP caching by not installing interactive request routes', async () => {
+      vi.mocked(privateHostsAllowed).mockReturnValue(false);
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = await launcher.ensureContext('session-A') as unknown as StubContext;
+      expect(ctx.route).not.toHaveBeenCalled();
+      expect(launcher.egressLog()).toBeDefined();
     });
 
     it('returns the cached context on repeated calls for the same session', async () => {
@@ -1320,5 +1343,49 @@ describe('BrowserLauncher — chromium-missing launch decoration', () => {
     expect(fastFailed?.message).toBe(first?.message);
     // Only one real launch attempt was paid for — the point of issue #722.
     expect(vi.mocked(chromium.launch)).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guarded egress proxy wiring (#2301, ADR 20261014 PATH_B)
+// ---------------------------------------------------------------------------
+
+describe('BrowserLauncher — guarded egress proxy launch wiring', () => {
+  beforeEach(() => {
+    currentStubBrowser = makeStubBrowser();
+    vi.mocked(chromium.launch).mockClear();
+    vi.mocked(chromium.launch).mockImplementation(async () => currentStubBrowser as never);
+  });
+
+  it('launches Chromium through a listening 127.0.0.1 proxy with QUIC/WebRTC-UDP egress disabled', async () => {
+    const launcher = new BrowserLauncher(TEST_CONFIG);
+    await launcher.ensureBrowser();
+    const opts = vi.mocked(chromium.launch).mock.calls[0]?.[0];
+    expect(opts?.proxy?.server).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(opts?.proxy?.bypass).toBe('<-loopback>');
+    expect(opts?.args).toEqual(['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']);
+    expect(launcher.egressLog()).toBeDefined();
+    await launcher.shutdown();
+    expect(launcher.egressLog()).toBeUndefined();
+  });
+
+  it('a failed launch stops the proxy', async () => {
+    vi.mocked(chromium.launch).mockRejectedValueOnce(new Error('boom'));
+    const launcher = new BrowserLauncher(TEST_CONFIG);
+    await expect(launcher.ensureBrowser()).rejects.toThrow();
+    expect(launcher.egressLog()).toBeUndefined();
+  });
+
+  it('installs no proxy when AFK_WEB_ALLOW_PRIVATE_HOSTS opts out', async () => {
+    vi.mocked(guardPrivateHostsAllowed).mockReturnValue(true);
+    try {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      await launcher.ensureBrowser();
+      expect(vi.mocked(chromium.launch).mock.calls[0]?.[0]).toEqual({ headless: true });
+      expect(launcher.egressLog()).toBeUndefined();
+      await launcher.shutdown();
+    } finally {
+      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(false);
+    }
   });
 });

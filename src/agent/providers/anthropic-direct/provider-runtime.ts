@@ -66,6 +66,7 @@ import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provide
 import { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
 import { env } from '../../../config/env.js';
 import { buildProviderSchemas } from './provider-schemas.js';
+import { applyReadOnlyGitPermissions } from '../../tools/readonly-git-surface.js';
 import type { ProviderQueryContext } from './provider-context.js';
 import { setUpQuerySession } from './provider-query-setup.js';
 import { buildProviderQuery } from './provider-query-build.js';
@@ -196,7 +197,8 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.workspaceStore = opts.workspaceStore;
     this.subscribeHandler = opts.subscribeHandler;
     this._stateStore = opts.stateStore;
-    this.permissions = snapshotOperatorPermissions(opts.permissions, opts.customTools?.map((t) => t.schema.name));
+    // #3754: with AFK_READONLY_GIT_TOOL on, a read-only-bash surface swaps `bash` for `git_read`.
+    this.permissions = snapshotOperatorPermissions(applyReadOnlyGitPermissions(opts.permissions, opts.readOnlyBash), opts.customTools?.map((t) => t.schema.name));
     this.externalTools = withOperatorDeniedDispatcher(opts.tools, this.permissions);
     this.skillExecutor = opts.skillExecutor;
     this.schemas = buildProviderSchemas(opts);
@@ -372,6 +374,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     const provider = this;
     return {
       get externalTools() { return provider.externalTools; },
+      get customToolSchemas() { return provider.customTools.map((t) => t.schema); },
       get providerFactory() { return provider.providerFactory; },
       get skillExecutor() { return provider.skillExecutor; },
       get subagentExecutor() { return provider.subagentExecutor; },

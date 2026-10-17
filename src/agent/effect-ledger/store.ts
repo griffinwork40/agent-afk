@@ -2,7 +2,7 @@
  * Durable NDJSON storage for effect records.
  *
  * File layout: `$AFK_STATE_DIR/effect-ledger.jsonl` — one JSON object per
- * line, append-only (new records) + full-rewrite on status updates (rare).
+ * line, append-only (new records and status transitions).
  *
  * Design decisions:
  *   - Append for new records: O(1) write, no in-memory state required.
@@ -23,7 +23,7 @@ import * as fs from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getEffectLedgerPath } from '../../paths.js';
-import { readJsonlFile } from '../../utils/jsonl.js';
+import { collectAsyncIter, readJsonlFile } from '../../utils/jsonl.js';
 import type {
   EffectRecord,
   EffectQuery,
@@ -38,7 +38,15 @@ import type {
 /** Write one JSONL line. Creates parent dir on first call. */
 function appendLine(path: string, record: EffectRecord): void {
   fs.mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  fs.appendFileSync(path, JSON.stringify(record) + '\n', { encoding: 'utf8', mode: 0o600 });
+  const fd = fs.openSync(path, 'a', 0o600);
+  try {
+    fs.writeFileSync(fd, JSON.stringify(record) + '\n', { encoding: 'utf8' });
+    // Invariant: write-ahead intent must be durable before remote dispatch;
+    // a buffered append alone can disappear on process or host failure.
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /** Parse a JSONL file, skipping malformed lines. Returns all valid records. */
@@ -47,11 +55,7 @@ async function readAllRecords(path: string): Promise<EffectRecord[]> {
   // propagate, preserving the previous throw-on-unexpected-error contract.
   // appendLine uses appendFileSync with mode 0o600 — appendJsonl cannot be
   // used here because it does not support per-file mode bits.
-  const records: EffectRecord[] = [];
-  for await (const rec of readJsonlFile<EffectRecord>(path, { guard: isEffectRecord })) {
-    records.push(rec);
-  }
-  return records;
+  return collectAsyncIter(readJsonlFile<EffectRecord>(path, { guard: isEffectRecord }));
 }
 
 /** Minimal runtime shape-check (not a full schema validator). */
@@ -88,8 +92,8 @@ function collapseById(records: EffectRecord[]): EffectRecord[] {
  * Durable NDJSON store for {@link EffectRecord}s.
  *
  * Instantiate once per process (or once per test) and share. All methods are
- * synchronous on the write path (appendFileSync) to stay off the critical path
- * for tool execution. Reads are async (readFile).
+ * synchronous on the write path (append + fsync) so intent is durable
+ * before tool execution. Reads are async.
  */
 export class EffectStore {
   private readonly path: string;
@@ -135,6 +139,7 @@ export class EffectStore {
       status: 'pending',
       sessionId: input.sessionId,
       taskId: input.taskId,
+      retryOf: input.retryOf,
       timestamp: Date.now(),
     };
     appendLine(this.path, record);
@@ -169,6 +174,17 @@ export class EffectStore {
         ? { reconciledAt: Date.now() }
         : {}),
     };
+    appendLine(this.path, updated);
+    this.invalidateCache();
+    return updated;
+  }
+
+  /** Persist the one-time retry warning on the uncertain attempt. */
+  async acknowledgeRetry(id: string): Promise<EffectRecord> {
+    const existing = collapseById(await this.readCached()).find((r) => r.id === id);
+    if (!existing) throw new Error(`effect-ledger: record not found: ${id}`);
+    if (existing.retryAcknowledgedAt !== undefined) return existing;
+    const updated = { ...existing, retryAcknowledgedAt: Date.now() };
     appendLine(this.path, updated);
     this.invalidateCache();
     return updated;

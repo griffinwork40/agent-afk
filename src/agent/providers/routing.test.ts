@@ -98,9 +98,11 @@ describe('providerForModel', () => {
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
+      'gpt-6.1-sol',
+      'gpt-6-astra',
+      'gpt-6-sol',
+      'gpt-6-luna',
       'gpt-5.5',
-      'gpt-5.4',
-      'gpt-5.4-mini',
       'gpt-4o',
       'gpt-4o-mini',
       'o1-preview',
@@ -341,7 +343,7 @@ describe('providerForModel', () => {
 
 describe('resolveProvider', () => {
   it('returns the openai-compatible adapter for OpenAI-routed models', () => {
-    expect(resolveProvider('gpt-5.4').name).toBe('openai-compatible');
+    expect(resolveProvider('gpt-5.6-sol').name).toBe('openai-compatible');
     expect(resolveProvider('codex-1').name).toBe('openai-compatible');
     expect(resolveProvider('o3-mini').name).toBe('openai-compatible');
   });
@@ -397,7 +399,7 @@ describe('createChildProviderFactory — child provider routing', () => {
   });
 
   it.each([
-    'gpt-5.4',
+    'gpt-5.6-sol',
     'gpt-4o-mini',
     'o1-preview',
     'o3-mini',
@@ -625,7 +627,7 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
 
   it.each([
     'gpt-4o',
-    'gpt-5.4',
+    'gpt-5.6-sol',
     'o1-preview',
     'o3-mini',
     'codex-1',
@@ -676,7 +678,7 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
   // A Grok-only user has no Anthropic credentials; dispatching medium children
   // would 401 at the Anthropic API.
   it.each([
-    'grok-4.6',
+    'grok-4.5',
     'grok-3',
   ])('inherits xAI-routed parent model %s as the subagent default', (parent) => {
     expect(getDefaultSubagentModel(parent)).toBe(parent);
@@ -686,7 +688,7 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
   // for credential correctness. A non-Claude parent with no Anthropic key must
   // never produce a child that routes to anthropic-direct.
   it('non-Claude parent never produces an anthropic-direct child by default', () => {
-    const nonClaudeParents = ['gpt-4o', 'grok-4.6', 'o3-mini', 'codex-1', 'mlx-community/Qwen3.5-35B-A3B-4bit'];
+    const nonClaudeParents = ['gpt-4o', 'grok-4.5', 'o3-mini', 'codex-1', 'mlx-community/Qwen3.5-35B-A3B-4bit'];
     for (const parent of nonClaudeParents) {
       const childModel = getDefaultSubagentModel(parent);
       const childProvider = providerForModel(childModel);

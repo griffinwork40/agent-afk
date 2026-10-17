@@ -212,4 +212,33 @@ describe('createPlanModeGate', () => {
     });
     expect(result.decision).toBeUndefined();
   });
+
+  // remote_agent is risk class high: the remote runs bypassPermissions by
+  // default, so a single call can mutate arbitrary state on another machine.
+  // It is categorized 'web' (not 'write'), so the write-category block does
+  // not catch it — the explicit remote_agent check must fire independently.
+  it('blocks remote_agent in plan mode', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({ event: 'PreToolUse', toolName: 'remote_agent', input: { host: 'cm', prompt: 'do stuff' } });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('remote_agent');
+  });
+
+  it('allows remote_agent when not in plan mode', () => {
+    const { gate } = makeGate('default');
+    const result = gate({ event: 'PreToolUse', toolName: 'remote_agent', input: { host: 'cm', prompt: 'do stuff' } });
+    expect(result.decision).toBeUndefined();
+  });
+
+  it('does not block remote_agent in a subagent context (plan mode is main-session only)', () => {
+    const { gate } = makeGate('plan');
+    // parentSessionId marks a forked subagent; plan mode must not gate its calls.
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'remote_agent',
+      input: { host: 'cm', prompt: 'do stuff' },
+      parentSessionId: 'parent-session-123',
+    });
+    expect(result.decision).toBeUndefined();
+  });
 });

@@ -12,7 +12,9 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { indentForScrollback } from './tool-lane-flush-margin.js';
+import { indentForScrollback, TOOL_LANE_INDENT } from './tool-lane-flush-margin.js';
+import { toolLaneWidth } from './tool-lane-render.js';
+import { capToMeasure, contentMargin } from '../../render/measure.js';
 import { ToolLane } from './tool-lane.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 
@@ -168,5 +170,30 @@ describe('indentForScrollback — separator column alignment with flushSource', 
         ).toBe(true);
       }),
     );
+  });
+});
+
+// ─── toolLaneWidth fits the centered band (PTY differential longtool-c102) ───
+
+describe('toolLaneWidth — centered band fit', () => {
+  it('margin + indent + a full-width tool row never exceeds the terminal', () => {
+    withCenterEnv('1', () => {
+      for (const cols of [101, 102, 103, 104, 105, 110, 120, 157, 200, 240]) {
+        withCols(cols, () => {
+          // The indent is only applied when there is a margin (indentForScrollback).
+          const margin = contentMargin(cols).length;
+          const painted = margin + (margin > 0 ? TOOL_LANE_INDENT.length : 0) + toolLaneWidth();
+          expect(painted, `cols=${cols}`).toBeLessThanOrEqual(cols);
+        });
+      }
+    });
+  });
+
+  it('is exactly capToMeasure(cols) when centering is off (default path unchanged)', () => {
+    withCenterEnv(undefined, () => {
+      for (const cols of [60, 101, 102, 200]) {
+        withCols(cols, () => expect(toolLaneWidth()).toBe(capToMeasure(cols)));
+      }
+    });
   });
 });

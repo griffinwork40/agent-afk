@@ -21,6 +21,7 @@ import {
   type MockInstance,
 } from 'vitest';
 import { runWhatif, WhatifBudgetError, WhatifMdeError } from './run.js';
+import { jaccardSimilarity, REDUNDANCY_THRESHOLD } from './redundancy.js';
 import type {
   AgentRunner,
   ChangeSpec,
@@ -105,7 +106,10 @@ function makeBaselineTrace(episodeId: string, sample: number): EpisodeTrace {
   };
 }
 
-function makeRunner(runFn?: MockInstance): AgentRunner {
+function makeRunner(
+  runFn?: MockInstance,
+  snapshotFn?: (env: Environment) => Promise<RequestSnapshot>,
+): AgentRunner {
   const runMock =
     runFn ??
     vi.fn(async (_env: Environment, ep: Episode, sample: number): Promise<EpisodeTrace> => {
@@ -116,10 +120,13 @@ function makeRunner(runFn?: MockInstance): AgentRunner {
   return {
     name: 'fake',
     run: runMock as unknown as AgentRunner['run'],
-    snapshot: vi.fn(async (env: Environment): Promise<RequestSnapshot> => {
-      if (env.label === 'candidate') return makeSnap(CANDIDATE_SYSTEM);
-      return makeSnap(BASELINE_SYSTEM);
-    }),
+    snapshot: vi.fn(
+      snapshotFn ??
+        (async (env: Environment): Promise<RequestSnapshot> => {
+          if (env.label === 'candidate') return makeSnap(CANDIDATE_SYSTEM);
+          return makeSnap(BASELINE_SYSTEM);
+        }),
+    ),
   };
 }
 
@@ -320,6 +327,51 @@ describe('runWhatif — predict-only path', () => {
     // The Jaccard pass must always emit an onProgress message — even for sub-ms
     // passes — so operators can confirm the redundancy check ran.
     expect(messages.some((m) => m.startsWith('[redundancy] Jaccard pass complete'))).toBe(true);
+  });
+
+  it('emits [redundancy] warning progress message when added paragraph restates baseline (#2414)', async () => {
+    // Contract: when the candidate system prompt adds a paragraph that closely
+    // restates an existing baseline paragraph, run.ts must emit a
+    // '[redundancy] Added paragraph may restate' progress message before any
+    // model call so the operator can abort a paid run early.
+    //
+    // We wire a custom runner whose snapshot returns a baseline with a
+    // substantive delegation paragraph and a candidate that adds a near-
+    // paraphrase of that same paragraph.  The Jaccard similarity between the
+    // two phrases reliably exceeds REDUNDANCY_THRESHOLD (0.35).
+    const RICH_BASELINE =
+      'Stay inline for: single-file edits, localized fixes visible in ' +
+      'fewer than two reads, and tasks solvable without spawning a subagent.';
+    // The added line restates the baseline rule with slightly different wording.
+    const ADDED_LINE =
+      'For tasks solvable with at most three file reads and one localized ' +
+      'edit, work directly without skills or subagents.';
+
+    // Verify the fixture pair actually exceeds REDUNDANCY_THRESHOLD so the
+    // test stays valid if the threshold or tokeniser ever changes.
+    expect(jaccardSimilarity(RICH_BASELINE, ADDED_LINE)).toBeGreaterThanOrEqual(
+      REDUNDANCY_THRESHOLD,
+    );
+
+    const customRunner = makeRunner(
+      undefined,
+      async (env: Environment): Promise<RequestSnapshot> => {
+        if (env.label === 'candidate') {
+          return makeSnap(`${RICH_BASELINE}\n\n${ADDED_LINE}`);
+        }
+        return makeSnap(RICH_BASELINE);
+      },
+    );
+
+    const deps = makeDeps({ runner: customRunner });
+    await runWhatif(makeOptions({ verify: false }), deps);
+
+    const messages = (deps.onProgress as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c: Array<{ message?: string }>) => c[0]?.message ?? '',
+    );
+    expect(
+      messages.some((m) => m.startsWith('[redundancy] Added paragraph may restate an existing rule')),
+    ).toBe(true);
   });
 
   it('includes headline', async () => {

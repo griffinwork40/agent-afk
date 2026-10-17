@@ -114,6 +114,9 @@ function checkOverflowKills(agg: InsightAggregates): Recommendation[] {
 // ---------------------------------------------------------------------------
 
 function checkCostConcentration(agg: InsightAggregates): Recommendation[] {
+  // Deliberately root-only (#3879): the per-model split exists only on the
+  // session sidecars, and closure events carry no model id, so numerator and
+  // denominator both stay on the sidecar figure to keep the ratio coherent.
   const totalCost = agg.sessions.totalCostUsd;
   if (totalCost <= T.costConcentrationMinCostUsd) return [];
 

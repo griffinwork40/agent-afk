@@ -6,6 +6,7 @@
  * enough. The real `enforceDomainPolicy` from ../config.js is used here (it is
  * a pure function over BrowserConfig), so these tests exercise the actual
  * allow/block glob semantics rather than a mock's idea of them.
+ *
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -38,6 +39,7 @@ function makePage(landedUrl: string): RecheckablePage & {
   };
 }
 
+/** Exercise domain policy without DNS: the proxy owns SSRF enforcement. */
 function recheck(page: RecheckablePage, config: BrowserConfig, clearedUrl: string) {
   return recheckLandedUrl(page, config, clearedUrl, vi.fn().mockResolvedValue(undefined));
 }
@@ -137,4 +139,22 @@ describe('recheckLandedUrl', () => {
       reason: 'invalid URL: not a url',
     });
   });
+
+
+
+  it('does not treat browser error pages as egress policy blocks', async () => {
+    const page = makePage('chrome-error://chromewebdata/');
+    const config = makeConfig({ allowedDomains: ['example.com'] });
+
+    const result = await recheckLandedUrl(
+      page,
+      config,
+      'https://example.com/start',
+      vi.fn().mockResolvedValue(undefined),
+    );
+
+    expect(result).toBeNull();
+    expect(page.goBack).not.toHaveBeenCalled();
+  });
+
 });

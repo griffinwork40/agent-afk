@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
+import { _setRealScratchRootsForTests, _resetScratchRootsCacheForTests } from '../tools/handlers/scratch-roots.js';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, readlinkSync, lstatSync, rmSync, existsSync, readdirSync, realpathSync } from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import * as fs from 'node:fs';
@@ -30,6 +31,12 @@ beforeEach(() => {
   context = { resolveBase: root, writeRoots: [root], readRoots: [root], fileCheckpoint: createFileCheckpointRegistry(session, turn, state) };
 });
 afterEach(() => { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }); });
+
+// This suite uses os.tmpdir() dirs as "outside every granted root". The OS
+// temp dir is an implicit WRITE root (scratch-roots.ts), so disable that
+// allowance here to keep testing granted-root containment, not temp policy.
+beforeEach(() => _setRealScratchRootsForTests([]));
+afterEach(() => _resetScratchRootsCacheForTests());
 
 describe('real handler checkpoint and rewind regressions', () => {
   it('write_file snapshots the final dangling link target and preserves the link', async () => {

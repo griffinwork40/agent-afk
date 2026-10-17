@@ -9,6 +9,7 @@
  */
 
 import { AgentSession } from '../../agent/session.js';
+import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
@@ -195,8 +196,7 @@ export async function buildChatSession(
     model: sessionModel,
     surface: 'cli',
     apiKey: getApiKeyForModel(sessionModel, providerHints),
-    drainSubagents: (reason) =>
-      rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
+    ...managerShutdownConfig(rootManager, composeExecutor),
     maxTurns,
     isNonInteractive: true,
     ...(dangerouslySkipPermissions

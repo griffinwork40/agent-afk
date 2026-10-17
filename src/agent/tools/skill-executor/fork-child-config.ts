@@ -60,6 +60,7 @@ function buildSkillChildManager(
 ): SubagentManager {
   return new SubagentManager({
     parentAbortSignal: signal,
+    ...(ctx.onSubagentSucceeded !== undefined ? { onSubagentSucceeded: ctx.onSubagentSucceeded } : {}),
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
     // Trace origin (#469): inherit the owning surface like traceWriter/cwd so
     // grandchild forks made directly off this manager report the real origin.
@@ -78,6 +79,9 @@ function buildSkillChildManager(
     // Hook registry (#3442): the stub parent carries none, so without it
     // SubagentStart/Stop never fire for this skill child's `agent` forks.
     ...(ctx.hookRegistry !== undefined ? { hookRegistry: ctx.hookRegistry } : {}),
+    // #3961: propagate root's billing-stream registry so depth-2+ abandoned
+    // streams surface in rootManager.getPendingChildBillingStreams() at shutdown.
+    ...(ctx.parentBillingStreams !== undefined ? { parentBillingStreams: ctx.parentBillingStreams } : {}),
   });
 }
 

@@ -106,6 +106,10 @@ export interface AnthropicDirectQueryOptions {
   permissionMode?: string;
   maxTokens: number;
   tools: AnthropicToolDef[] | null;
+  /** Rebuild the dispatcher and advertised catalog together for a changed slot deny key. */
+  modelToolsFactory?: (model: string, permissionMode: string) => { dispatcher: ToolDispatcher; tools: AnthropicToolDef[] };
+  /** Called on every non-empty setModel() so later rebuilds (cwd re-anchor) see the live model. */
+  onModelChange?: (model: string) => void;
   userSystem: string | null;
   systemPrefix: ContentBlockParam[] | null;
   /** When set, called on 401 to obtain a fresh SDK client. Retry once. */
@@ -164,6 +168,16 @@ export interface AnthropicDirectQueryOptions {
    * Absent for a top-level session. See issue #612.
    */
   subagentId?: string;
+  /**
+   * Set to `true` by `assembleChildConfig` when `injectWorkspacePreamble`
+   * appended a workspace preamble block to the child's system prompt (#3924).
+   *
+   * `composeQuerySystem` gates `splitAtWorkspacePreamble` on this flag so it
+   * only fires for forked children that actually received the preamble — not
+   * for root sessions whose operator prompt happens to contain a matching
+   * header string. Absent/false = root session, no split attempted.
+   */
+  hasWorkspacePreamble?: boolean;
   /**
    * When true (default), the query automatically waits for the OAuth
    * subscription reset and replays the in-flight turn on 429 usage-limit

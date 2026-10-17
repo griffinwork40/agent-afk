@@ -160,28 +160,44 @@ export class ProviderInitializer {
     stateManager: SessionStateManager,
   ): Promise<void> {
     try {
-      const sessionStartInjectContext = await dispatchSessionStart(
-        this.hookRegistry,
-        {
-          event: 'SessionStart',
-          sessionId: stateManager.getSessionId(),
-          parentSessionId: this.config.parentSessionId,
-        },
-        {
-          signal: this.abortSignal,
-          ...(this.config.traceWriter ? { traceWriter: this.config.traceWriter } : {}),
-        },
-      );
+      // Perf (#3737): skip SessionStart dispatch entirely for forked children.
+      //
+      // Previously the registry fired for every fork (shared hookRegistry),
+      // running all handlers — including expensive config-driven shell hooks
+      // (e.g. jev rule-digest, ~4.7 KB) — only to have the merged
+      // injectContext discarded at the `parentSessionId === undefined` guard
+      // below.  Forked children inherit the same registry as the root session
+      // but must NOT receive root-only nudge context (skill-routing hints,
+      // forge briefs, prior-session bridge, pattern-card summaries).  Skipping
+      // dispatch entirely removes the shell-hook overhead and the discarded
+      // context budget in one step, with no behaviour change for root sessions.
+      //
+      // Handlers that govern edits tree-wide (path-approval, bash-restriction,
+      // safe-destruct, etc.) are registered on PreToolUse, PostToolUse, and
+      // SubagentStop — not on SessionStart — so they are unaffected.
+      const isForkedChild = this.config.parentSessionId !== undefined;
+      const sessionStartInjectContext = isForkedChild
+        ? undefined
+        : await dispatchSessionStart(
+            this.hookRegistry,
+            {
+              event: 'SessionStart',
+              sessionId: stateManager.getSessionId(),
+              parentSessionId: this.config.parentSessionId,
+            },
+            {
+              signal: this.abortSignal,
+              ...(this.config.traceWriter ? { traceWriter: this.config.traceWriter } : {}),
+            },
+          );
       // Invariant: queue SessionStart injectContext HERE — before the init loop
       // resolves initPromise. `sendMessageStreamInternal` awaits initPromise
       // before draining the queue, so this context rides the session's FIRST
       // outbound user message.
       //
-      // Parent-only: subagent forks run this same init path with the bubbled
-      // hook registry, so an unconditional queue would prepend session-priming
-      // context to EVERY subagent's first prompt. Gate on parentSessionId so
-      // only the parent session delivers it.
-      if (sessionStartInjectContext && this.config.parentSessionId === undefined) {
+      // Root-only: forked children skip dispatch above, so this is now also
+      // unreachable for forks. The guard is kept for clarity and defence-in-depth.
+      if (sessionStartInjectContext && !isForkedChild) {
         this.queueFrameworkContext(sessionStartInjectContext);
       }
 

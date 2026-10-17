@@ -20,24 +20,13 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
-import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
-import type { AgentModelInput, IAgentSession } from '../../types.js';
+import type { AgentModelInput } from '../../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import type { MessageJournal } from '../../journal/types.js';
 import type { JournalParent } from '../../subagent/fork-types.js';
-import { providerForModel } from '../../providers/index.js';
-import { resolveChildModel } from '../../subagent/resolve-child-model.js';
-import { applyParentCredentialFallback } from '../child-credential.js';
-import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
-import {
-  CHILD_ALLOWED_TOOLS,
-  buildSkillRestrictedProvider,
-  createStubParentSession,
-  type ChildProviderFactoryArgs,
-} from '../nesting.js';
-import { resolveAgentToolAccess } from '../../agents/index.js';
+import { createStubParentSession } from '../nesting.js';
 import type { RegisteredAgent } from '../../agents/index.js';
 import type { AgentRegistry } from '../../agents/index.js';
 import type { SkillExecutor } from '../skill-executor.js';
@@ -45,7 +34,15 @@ import type { Surface } from '../../awareness/types.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
 import type { AgentInput } from './input-parse.js';
-import { isChildReplaySafe } from './retry-safety.js';
+import type { ChildProviderFactoryArgs } from '../nesting.js';
+import {
+  resolveChildModelAndProvider,
+  resolveChildToolAccess,
+  resolveChildBudgets,
+  resolveChildCredential,
+  buildBaseChildConfig,
+  wireChildNesting,
+} from './child-config.helpers.js';
 
 /**
  * Mutable child parent-session stub: `sessionId` is backfilled to `handle.id`
@@ -113,6 +110,8 @@ export interface BuildChildConfigArgs {
    *      mirroring `cwd`).
    */
   traceWriter?: TraceSink;
+  /** Tree-wide accounting sink: forward each descendant's own report, not subtree totals. */
+  onSubagentSucceeded?: import('../../subagent/fork-types.js').SubagentManagerOptions['onSubagentSucceeded'];
   /**
    * Shared workspace store. Threaded into the same TWO places as `traceWriter`
    * above, for the same reason: (1) the depth-2+ child {@link SubagentManager},
@@ -135,6 +134,13 @@ export interface BuildChildConfigArgs {
    * depth-2+ forks inherit the real root id for child-attribution.
    */
   parentRootSessionId?: string;
+  /**
+   * Shared billing-stream registry owned by the root manager (#3961).
+   * Threaded into every nested {@link SubagentManager} so abandoned streams
+   * from depth-2+ children surface in `rootManager.getPendingChildBillingStreams()`
+   * at shutdown, matching the depth-1 behaviour for the root manager's own children.
+   */
+  parentBillingStreams?: Set<Promise<void>>;
   /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so
@@ -183,392 +189,37 @@ export interface BuildChildConfigResult {
  * executor + provider). Returns the config plus the mutable child parent
  * session the caller backfills with `handle.id` after `forkSubagent`.
  */
-/**
- * Build the depth-2+ {@link SubagentManager} a nested child uses for its own
- * `agent` forks. Extracted from {@link buildChildConfig} (function-size
- * ceiling); every input is an explicit parameter.
- *
- * Each field chains one parent property to the grandchild forks:
- * - `cwd`: worktree anchor (else `forkSubagent` reads an undefined
- *   `parentCwd` and grandchild bash/grep fall back to process.cwd()).
- * - `parentReadRoots`: transitive read scope (../subagent-read-scope), so a
- *   read-open child does not re-confine its grandchildren to `[cwd]`.
- * - `traceWriter`: witness layer; without it depth-2+ forks emit no
- *   subagent_lifecycle events.
- * - `surface`: origin attribution ('cli'/'telegram'/'daemon', not 'unknown').
- * - `workspaceStore`: workspace READ channel.
- * - `parentRootSessionId` (#2442): grandchildren credit artifacts to the root.
- */
-function buildNestedChildManager(
-  args: BuildChildConfigArgs,
-  signal: AbortSignal,
-  currentCwd: string | undefined,
-): SubagentManager {
-  return new SubagentManager({
-    parentAbortSignal: signal,
-    ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
-    ...(args.childInheritedReadRoots !== undefined ? { parentReadRoots: args.childInheritedReadRoots } : {}),
-    ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
-    ...(args.surface !== undefined ? { surface: args.surface } : {}),
-    ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
-    ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
-    ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
-  });
-}
-
-/**
- * Tree-wide fields the recursive child executor inherits unchanged (trace
- * writer, workspace store, hook registry). Extracted from
- * {@link buildChildConfig} (function-size ceiling, baselined: must not grow).
- */
-function nestedExecutorInherits(
-  args: Pick<BuildChildConfigArgs, 'traceWriter' | 'workspaceStore' | 'hookRegistry'>,
-): Pick<SubagentExecutorContext, 'traceWriter' | 'workspaceStore' | 'hookRegistry'> {
-  return {
-    ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
-    ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
-    ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
-  };
-}
-
-/**
- * Resolve `systemPrompt` and the companion `isUnnamedWorker` flag together.
- * Named agents supply their own prompt; unnamed workers embed
- * `TOOL_SYSTEM_PROMPT_BASE` via `UNNAMED_SUBAGENT_WORKER_PROMPT` and signal
- * this so providers skip the duplicate `toolBase` prepend (#3359).
- */
-function resolveChildSystemPrompt(
-  namedAgent: RegisteredAgent | undefined,
-  operatorOverlay: string | undefined,
-): { systemPrompt: string; isUnnamedWorker?: true } {
-  if (namedAgent !== undefined) return { systemPrompt: namedAgent.definition.prompt };
-  return { systemPrompt: composeUnnamedWorkerPrompt(operatorOverlay), isUnnamedWorker: true };
-}
-
 export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigResult {
-  const {
-    parsed,
-    namedAgent,
-    depth,
-    maxDepth,
-    currentCwd,
-    signal,
-    defaultConfig,
-    createChildExecutor,
-  } = args;
+  const { parsed, namedAgent, depth, maxDepth, currentCwd, signal, defaultConfig, createChildExecutor } = args;
 
-  // Resolve the child's effective model and the provider it routes to FIRST,
-  // so we can decide whether the parent's Anthropic-shaped `apiKey` /
-  // `baseUrl` (sourced from `loadCredential()` + `AFK_LOCAL_BASE_URL`) should
-  // be forwarded. Forwarding them to an OpenAI-routed child causes
-  // `resolveOpenAIAuth()` to return the Anthropic key as if it were a config
-  // OpenAI key (tier 1 wins) — the OpenAI API then 401s. Clearing them lets
-  // the OpenAI auth resolver walk its env / codex precedence cleanly.
-  // Invariant: an OMITTED definition model means "policy default", never
-  // "inherit the parent". The canonical precedence chain is defined once in
-  // `resolveChildModel()` (src/agent/subagent/resolve-child-model.ts):
-  //   callSiteModel > namedAgentModel > defaultSubagentModel > defaultModel > 'sonnet'
-  // with exactly one escape hatch: an explicit `model: 'inherit'` resolves to
-  // the dispatching session's model.
-  //
-  // This is load-bearing for cost. `AFK_DEFAULT_SUBAGENT_MODEL` is documented
-  // (src/config/env.ts) as "the default model used when a subagent is
-  // dispatched without an explicit model", and `getDefaultSubagentModel`
-  // (src/cli/shared-helpers.ts) exists so a high-tier parent does not
-  // auto-spawn high-tier children. Treating an omitted model as inherit
-  // silently voided both for every NAMED dispatch — i.e. nearly all of them,
-  // since `agent_type` is the common call shape. An agent that genuinely needs
-  // parent-tier capability must now say so with `model: 'inherit'`.
-  //
-  // `parentModel` is optional ctx wiring; when absent, an explicit 'inherit'
-  // falls through to the policy chain rather than guessing.
-  let namedDefaultModel: string | undefined;
-  if (namedAgent !== undefined) {
-    const defModel = namedAgent.definition.model;
-    namedDefaultModel = defModel === 'inherit' ? args.parentModel : defModel;
-  }
-  const childModel: string = resolveChildModel({
-    callSiteModel: parsed.model,
-    namedAgentModel: namedDefaultModel,
-    defaultSubagentModel: args.defaultSubagentModel,
+  // 1. Model + provider family
+  const { childModel, childIsOpenAI } = resolveChildModelAndProvider(
+    parsed, namedAgent, args.defaultSubagentModel, args.parentModel,
+  );
+
+  // 2. Tool allowlist, bash gate, write-capability, side-effect-free
+  const { resolvedAccess, effectiveAllowedTools, effectiveReadOnlyBash, childWriteCapable, childSideEffectFree } =
+    resolveChildToolAccess(namedAgent, args.allowedTools, args.readOnlyBash, args.agentRegistry);
+
+  // 3. Turn + tool-round budgets
+  const { effectiveMaxTurns, effectiveMaxToolUseIterations } = resolveChildBudgets(parsed, namedAgent);
+
+  // 4. API key
+  const resolvedChildApiKey = resolveChildCredential(childModel, args.resolveApiKeyForModel, defaultConfig.apiKey);
+
+  // 5. Base config object (provider wired below)
+  const childConfig = buildBaseChildConfig(
+    parsed, namedAgent, defaultConfig,
+    childModel, childIsOpenAI, resolvedChildApiKey,
+    effectiveMaxTurns, effectiveMaxToolUseIterations,
+    depth, maxDepth,
+  );
+
+  // 6. Nesting wiring: child manager + executor + provider (or restricted fallback)
+  const { childParentSession, childManager } = wireChildNesting({
+    args, childConfig, effectiveAllowedTools, effectiveReadOnlyBash,
+    resolvedAccess, depth, maxDepth, signal, currentCwd, createChildExecutor,
   });
-  const childIsOpenAI = providerForModel(childModel) === 'openai-compatible';
-
-  // Named-agent tool access: resolve the definition's declared surface into
-  // runtime terms, then compose with any cage this executor already sits in
-  // (a read-only skill's fan-out). Composition is fail-closed:
-  //   allowlist  = def ∩ cage   (when both exist; either alone otherwise)
-  //   bash gate  = def ∨ cage
-  // — mirroring skill-executor.ts buildForkedChildConfig's intersection
-  // semantics, so a named dispatch can never widen an existing cage.
-  const resolvedAccess =
-    namedAgent !== undefined
-      ? resolveAgentToolAccess(namedAgent, CHILD_ALLOWED_TOOLS)
-      : undefined;
-  let effectiveAllowedTools: string[] | undefined = args.allowedTools;
-  if (resolvedAccess?.allowedTools !== undefined) {
-    const cage = args.allowedTools;
-    effectiveAllowedTools =
-      cage !== undefined
-        ? resolvedAccess.allowedTools.filter((t) => cage.includes(t))
-        : resolvedAccess.allowedTools;
-  }
-  const effectiveReadOnlyBash =
-    args.readOnlyBash === true || resolvedAccess?.bashReadOnly === true;
-
-  // Write-capability — read by the executor to decide whether
-  // isolation:"worktree" is meaningful. A child can mutate the tree when it
-  // can write/edit files OR run non-read-only bash. An unrestricted allowlist
-  // (undefined) is full access → write-capable; a read-only agent
-  // (research-agent, recon fan-out) is not, so its isolation is skipped.
-  const canWriteFiles =
-    effectiveAllowedTools === undefined ||
-    effectiveAllowedTools.includes('write_file') ||
-    effectiveAllowedTools.includes('edit_file');
-  const canMutateViaBash =
-    (effectiveAllowedTools === undefined || effectiveAllowedTools.includes('bash')) &&
-    effectiveReadOnlyBash !== true;
-  const childWriteCapable = canWriteFiles || canMutateViaBash;
-  // Retry safety is stricter than filesystem write capability: it covers the
-  // reach of a replayed prompt, not just this child's own tool names. Fail
-  // closed for unrestricted surfaces, for non-file tools that can mutate remote
-  // or persistent state, and for a nested-dispatch grant — whether unscoped, or
-  // scoped to a type that is not itself a replay-safe terminal leaf. Scoping
-  // alone is not enough: `Agent(general-purpose)` is scoped and still reaches an
-  // uncaged write-capable grandchild. See `retry-safety.ts`.
-  const childSideEffectFree = isChildReplaySafe({
-    effectiveAllowedTools,
-    nestedAgentTypes: resolvedAccess?.nestedAgentTypes,
-    // Resolve each scoped grandchild type to its own surface. Omitted when no
-    // registry is wired, which fails closed for any non-empty scope.
-    ...(args.agentRegistry !== undefined
-      ? {
-          resolveNestedAgent: (name: string) => {
-            const leaf = args.agentRegistry?.get(name);
-            if (leaf === undefined) return undefined;
-            const leafAccess = resolveAgentToolAccess(leaf, CHILD_ALLOWED_TOOLS);
-            return {
-              allowedTools: leafAccess.allowedTools,
-              bashReadOnly: leafAccess.bashReadOnly,
-              nestedAgentTypes: leafAccess.nestedAgentTypes,
-            };
-          },
-        }
-      : {}),
-  });
-  if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
-    // Fail-closed token drops silently NARROW the child's tool surface, so a
-    // misconfigured agent file must be visible by default — not only under
-    // AFK_DEBUG. Route through the same stderr sink the agent registry uses
-    // for its load-time warnings (loadAgentRegistry's default `warn`).
-    process.stderr.write(
-      `[afk] agents: agent_type ${JSON.stringify(namedAgent?.name)}: ` +
-        `unknown tool token(s) dropped fail-closed: ${resolvedAccess.droppedTokens.join(', ')}\n`,
-    );
-  }
-
-  // Turn budget: explicit per-call max_turns wins; otherwise a named agent's
-  // maxTurns frontmatter (floored to ≥1); otherwise the parse-time default
-  // (0 = unlimited). No upper ceiling — uncapped by default, opt into a cap
-  // via the call-site param or an agent definition's frontmatter.
-  const effectiveMaxTurns =
-    !parsed.max_turns_explicit && namedAgent?.definition.maxTurns !== undefined
-      ? Math.max(1, Math.floor(namedAgent.definition.maxTurns))
-      : parsed.max_turns;
-
-  // Tool-use-round budget: same precedence as turns (explicit call-site >
-  // named-agent frontmatter > parse default 0 = unlimited). Set explicitly on
-  // the child config so this agent-tool dispatch path does NOT fall through to
-  // SubagentManager's SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS (50) — that
-  // remains the anti-hang default for skill/compose internal forks, which do
-  // not build config here.
-  const effectiveMaxToolUseIterations =
-    !parsed.max_tool_use_iterations_explicit &&
-    namedAgent?.definition.maxToolUseIterations !== undefined
-      ? Math.max(1, Math.floor(namedAgent.definition.maxToolUseIterations))
-      : parsed.max_tool_use_iterations ?? 0;
-
-  // Resolve the child's API key by its own model/provider. The resolver is
-  // now available directly from the agent layer (resolveCredentialForModel),
-  // so no injection is required — `this.ctx.resolveApiKeyForModel` acts as
-  // an optional override for callers that need a custom strategy (e.g. tests).
-  // When absent, the default agent-layer resolver is used. The
-  // `childIsOpenAI ? undefined` guard below is preserved as a
-  // defense-in-depth layer (cross-provider credential anti-leak invariant).
-  //
-  // applyParentCredentialFallback adds a second safety net: when fresh
-  // per-model resolution comes up empty for an Anthropic child (the sync
-  // keychain reader bailing on an expired OAuth token), reuse the parent's
-  // bootstrap-captured credential IFF it is Anthropic-shaped — so the child
-  // gets a token to attempt with and its own 401 refresher self-heals,
-  // instead of dying at the provider pre-flight. See child-credential.ts.
-  const resolvedChildApiKey = applyParentCredentialFallback({
-    childModel,
-    resolved: args.resolveApiKeyForModel
-      ? args.resolveApiKeyForModel(childModel)
-      : resolveCredentialForModel(childModel),
-    parentApiKey: defaultConfig.apiKey,
-  });
-
-  const childConfig: AgentConfig = {
-    model: childModel,
-    apiKey: childIsOpenAI ? undefined : resolvedChildApiKey,
-    // Named-agent body IS the prompt (Claude Code parity; general-purpose
-    // bakes in SUBAGENT_HANDOFF_CONTRACT; read-only vendored agents compact).
-    // Unnamed dispatch: lean worker prompt + bare overlay (#3324); isUnnamedWorker
-    // prevents providers from prepending toolBase a second time (#3359).
-    // Identity/workspace preambles injected later by assembleChildConfig.
-    ...resolveChildSystemPrompt(namedAgent, defaultConfig.operatorOverlay),
-    baseUrl: childIsOpenAI ? undefined : defaultConfig.baseUrl,
-    ...(defaultConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: defaultConfig.xaiBaseUrl } : {}),
-    maxTurns: effectiveMaxTurns,
-    // Always set (default 0 = unlimited) so forkSubagent's `?? 50` fallback is
-    // bypassed for agent-tool dispatches — see effectiveMaxToolUseIterations.
-    maxToolUseIterations: effectiveMaxToolUseIterations,
-    // Awareness metadata (Phase 1, get_runtime_state):
-    // Thread depth + maxDepth into the child's AgentConfig so the
-    // `self` view of the child's get_runtime_state snapshot reflects
-    // its actual nesting position. `parentSessionId` is injected later
-    // by SubagentManager.forkSubagent which has options.parent.sessionId
-    // in scope; phaseRole is also handled there.
-    depth: depth + 1,
-    maxDepth,
-    // Per-call cwd override. When set, `SubagentManager.forkSubagent`
-    // applies this in preference to the manager's `parentCwd` fallback
-    // (see src/agent/subagent.ts:291-297) — the child's dispatcher
-    // resolveBase + read/write roots anchor at this path. When omitted,
-    // the parent inheritance chain stays intact.
-    ...(parsed.cwd !== undefined ? { cwd: parsed.cwd } : {}),
-    // #435: pass raw writeRoots through; SubagentManager.forkSubagent composes
-    // them with the child's effective cwd so the child never loses its own tree.
-    ...(parsed.writeRoots !== undefined ? { writeRoots: parsed.writeRoots } : {}),
-    // #662: pass readRoots through as the DISTINCT `extraReadRoots` field (never
-    // `readRoots`, which is the farm pin that SUPPRESSES inheritance).
-    // forkSubagent composes these with the child's inherited read scope.
-    ...(parsed.readRoots !== undefined ? { extraReadRoots: parsed.readRoots } : {}),
-    // Fix B: unnamed children inherit skillDispatchName; named agents excluded.
-    ...(namedAgent === undefined && defaultConfig.skillDispatchName !== undefined ? { skillDispatchName: defaultConfig.skillDispatchName } : {}),
-  } as AgentConfig;
-
-  // Wire nesting: give the child its own executor + provider so it can
-  // dispatch Agent and Skill tool calls. Skip when at maxDepth or no
-  // factory — child gracefully loses both tools.
-  //
-  // Invariant: the `depth < maxDepth` disjunct is no longer reachable from
-  // SubagentExecutor.execute(), which refuses at `depth >= maxDepth` before
-  // calling this. It is retained as defense-in-depth for direct callers (and
-  // is exercised as such by child-config.test.ts); the live production trigger
-  // is the `!childProviderFactory` half.
-  //
-  // childParentSession is a mutable stub: sessionId starts undefined and is
-  // backfilled to handle.id once forkSubagent resolves. This ensures depth-2
-  // forks (dispatched by childExecutor) see a real parentId rather than
-  // undefined, so the stream-renderer can attribute them correctly.
-  let childParentSession: ChildParentSession | undefined;
-  let childManager: SubagentManager | undefined;
-  if (args.childProviderFactory && depth < maxDepth) {
-    // Forward cwd to the child manager so depth-2 forks (this depth-1
-    // child calling the `agent` tool) inherit the worktree anchor.
-    // Without this, `SubagentManager.forkSubagent` reads `this.parentCwd`
-    // (undefined) and depth-2 child config.cwd is omitted — its
-    // bash/grep/read_file fall back to process.cwd() (host repo).
-    childManager = buildNestedChildManager(args, signal, currentCwd);
-    childParentSession = createStubParentSession(signal) as ChildParentSession;
-    const childExecutor = createChildExecutor({
-      subagentManager: childManager,
-      parentSession: childParentSession as Pick<IAgentSession, 'sessionId' | 'getInputStreamRef' | 'abortSignal'>,
-      defaultConfig,
-      // Inherit origin from the parent; `depth + 1` below makes this child's
-      // emitted rows carry actor:'subagent'.
-      ...(args.surface !== undefined ? { surface: args.surface } : {}),
-      defaultSubagentModel: args.defaultSubagentModel,
-      childProviderFactory: args.childProviderFactory,
-      childSkillExecutorFactory: args.childSkillExecutorFactory,
-      // Propagate the resolver so depth ≥ 2 forks (this depth-1 child
-      // calling the `agent` tool) also resolve credentials by child model.
-      ...(args.resolveApiKeyForModel !== undefined
-        ? { resolveApiKeyForModel: args.resolveApiKeyForModel }
-        : {}),
-      depth: depth + 1,
-      maxDepth,
-      // Forward cwd so the depth-1 child executor, when it constructs
-      // ITS own childManager for depth-3+ forks, also receives cwd. The
-      // chain holds for arbitrary depth up to maxDepth.
-      ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
-      // Forward the trace writer + workspace store for the same reason — the
-      // child executor's own childManager (depth-3+) needs both. See BuildChildConfigArgs.
-      ...nestedExecutorInherits(args),
-      ...(args.delegationBudget !== undefined ? { delegationBudget: args.delegationBudget } : {}),
-      // Propagate read-only constraints so depth ≥ 2 forks (this depth-1
-      // child calling the `agent` tool) keep the same tool allowlist and
-      // bash gate that the originating read-only skill imposed.
-      //
-      // Deliberately the CAGE (ctx) values, not the named-agent effective
-      // values: a named definition constrains the child it dispatches, not
-      // that child's own descendants (Claude Code parity — nested spawns
-      // resolve their own agent types). The cage, by contrast, cascades.
-      ...(args.allowedTools !== undefined ? { allowedTools: args.allowedTools } : {}),
-      ...(args.readOnlyBash ? { readOnlyBash: true } : {}),
-      // Named-agent registry + the child's model (for grandchild `inherit`
-      // resolution) thread through every depth.
-      ...(args.agentRegistry !== undefined ? { agentRegistry: args.agentRegistry } : {}),
-      // Scope the dispatched agent's OWN nested dispatches to the leaf types
-      // its definition named (resolve.ts `nestedAgentTypes`). This is what
-      // lets research-agent dispatch git-investigator and NOTHING else — the
-      // gate at execute() top reads this from its ctx. Unset ⇒ unrestricted
-      // (top-level, inherit-all, or bare-`Agent` agents).
-      ...(resolvedAccess?.nestedAgentTypes !== undefined
-        ? { nestedAgentAllowlist: resolvedAccess.nestedAgentTypes }
-        : {}),
-      parentModel: childModel,
-      ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
-    });
-    const childReadScope = { parentReadRoots: args.childInheritedReadRoots, parentCwd: currentCwd }; // #547
-    const childSkillExecutor = args.childSkillExecutorFactory
-      ? args.childSkillExecutorFactory(
-          depth + 1, maxDepth, signal, currentCwd, childReadScope,
-          namedAgent === undefined ? defaultConfig.skillDispatchName : undefined, childParentSession, // Fix A; journal view
-          args.parentRootSessionId, // #2442: root id for the nested skill executor
-        )
-      : undefined;
-    // Pass `model` so the factory routes between AnthropicDirect /
-    // OpenAICompatible per `providerForModel(model)`. Without this, every
-    // child inherits the legacy hardcoded AnthropicDirectProvider — which
-    // means a gpt-4o parent silently dispatches subagents to
-    // api.anthropic.com. See nesting.ts `createChildProviderFactory`.
-    childConfig.provider = args.childProviderFactory({
-      childExecutor,
-      ...(childSkillExecutor !== undefined ? { childSkillExecutor } : {}),
-      ...(childConfig.model !== undefined ? { model: childConfig.model } : {}),
-      // Effective tool access for the dispatched child: the pre-existing
-      // cage (read-only skill fan-out), intersected with the named agent's
-      // resolved allowlist when one is in play (computed above). The
-      // dispatcher both enforces this at the permission gate AND filters
-      // the advertised schema to match (dispatcher.ts toolDefs), so a
-      // research-agent child never even sees bash/write_file/agent.
-      ...(effectiveAllowedTools !== undefined ? { allowedTools: effectiveAllowedTools } : {}),
-      ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}),
-      // Thread customTools so fork-time injected tools (e.g. emit_progress)
-      // reach the grandchild's provider constructor — which is the only read
-      // point when config.provider is pre-set.
-      ...(childConfig.customTools !== undefined && childConfig.customTools.length > 0
-        ? { customTools: childConfig.customTools }
-        : {}),
-    });
-  } else if (effectiveAllowedTools !== undefined || effectiveReadOnlyBash) {
-    // Restricted dispatch at the depth cap (or with no factory wired):
-    // without an explicit provider the fork would inherit the default
-    // UNRESTRICTED provider and the named agent's contract would silently
-    // fail open. Build a minimal restricted provider instead — no nested
-    // executors (at the cap the child cannot fan out anyway). Mirrors the
-    // cap-path fix in skill-executor.ts buildForkedChildConfig.
-    childConfig.provider = buildSkillRestrictedProvider(
-      effectiveAllowedTools ?? [...CHILD_ALLOWED_TOOLS],
-      childConfig.model,
-      effectiveReadOnlyBash,
-      defaultConfig.openaiBaseUrl,
-    );
-  }
 
   return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist: resolvedAccess?.nestedAgentTypes };
 }

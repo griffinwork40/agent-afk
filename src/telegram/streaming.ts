@@ -7,9 +7,8 @@
 import type { Context } from 'telegraf';
 import type { Message } from 'telegraf/types';
 import { StreamTimeoutError } from './stream-timeout-error.js';
-import type { IAgentSession, OutputEvent, ResponseMetadata } from '../agent/types.js';
+import type { IAgentSession, ResponseMetadata } from '../agent/types.js';
 import { runWithSink } from '../agent/_lib/skill-sink-channel.js';
-import { env } from '../config/env.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import {
   formatTelegramActivity,
@@ -21,15 +20,16 @@ import {
 } from './streaming.preview.js';
 import type { ProgressEntry } from './streaming.preview.js';
 import { computeFinalBody } from './streaming.body.js';
-import { sendOrEdit, deliverClean } from './streaming.sender.js';
+import { sendOrEdit } from './streaming.sender.js';
 import {
-  handlePaused, handleResumed, handleDone, handleError, deliverOverflow,
   type StreamState, type HandlerParams,
 } from './streaming.handlers.js';
 import {
   makeNextWithTimeout, PROGRESS_START_DELAY_MS, type WatchdogState,
 } from './streaming.watchdog.js';
-import { handleProgressEvent, makeSubagentSink } from './streaming.progress.js';
+import { makeSubagentSink } from './streaming.progress.js';
+import { buildStream, runStreamLoop } from './streaming.loop.js';
+import type { ContentRunState } from './streaming.loop.js';
 
 // Backward-compat re-exports: extracted to sibling modules but callers still
 // import from this file. StreamTimeoutError is in its own module so
@@ -161,9 +161,11 @@ export async function streamResponse(
   // stream_retry rollback: snapshot accumulator lengths at the start of the
   // current content run so a mid-stream overload re-drive discards only the
   // round's partial text (the model re-streams from scratch).
-  let contentRunStartAccumulated = 0;
-  let contentRunStartAnswer = 0;
-  let inContentRun = false;
+  const run: ContentRunState = {
+    contentRunStartAccumulated: 0,
+    contentRunStartAnswer: 0,
+    inContentRun: false,
+  };
 
   const watchdog: WatchdogState = {
     receivedAny: false, timedOut: false, lastActivityAt: Date.now(),
@@ -192,25 +194,7 @@ export async function streamResponse(
   };
 
   try {
-    // For content-block arrays (e.g. photo + caption), prefer sendMessageStream —
-    // sendMessage only accepts a string, and vision content requires the streaming
-    // path so the model receives the image as a proper multi-modal message.
-    const stream = Array.isArray(content)
-      ? 'sendMessageStream' in session && typeof session.sendMessageStream === 'function'
-        ? session.sendMessageStream(content)
-        : (async function* () {
-            const msg = await session.sendMessage(
-              content.map(b => (b.type === 'text' ? b.text : '')).filter(Boolean).join('\n'), { stream: false });
-            yield { type: 'message' as const, message: msg };
-            yield { type: 'done' as const, metadata: msg.metadata };
-          })()
-      : 'sendMessageStream' in session && typeof session.sendMessageStream === 'function'
-        ? session.sendMessageStream(content)
-        : (async function* () {
-            const msg = await session.sendMessage(content, { stream: false });
-            yield { type: 'message' as const, message: msg };
-            yield { type: 'done' as const, metadata: msg.metadata };
-          })();
+    const stream = buildStream(session, content);
 
     // Send placeholder immediately so user sees activity; avoids "silent hang" if SDK is slow
     await sendOrEdit(state, ctx, chatId, 'Thinking…');
@@ -222,152 +206,23 @@ export async function streamResponse(
       () => { watchdog.lastActivityAt = Date.now(); },
       subagentState,
     );
-    const traceEnabled = !!env.AFK_TELEGRAM_TRACE;
 
     try {
+      // Intentional: post-loop finalization (deliverClean / deliverOverflow) runs
+      // inside the runWithSink AsyncLocalStorage scope so skill-sink context is
+      // still active during final delivery.
       await runWithSink(subagentSink, async () => {
-        while (true) {
-          if (traceEnabled) console.log('[trace] awaiting next event');
-          const result = await nextWithTimeout();
-          if (traceEnabled) console.log('[trace] event arrived:', result.done ? 'DONE' : (result.value as OutputEvent).type);
-          if (result.done) break;
-          const event: OutputEvent = result.value;
-          watchdog.lastActivityAt = Date.now();
-          // Any event ends the API-round silence (messages.create has streamed).
-          if (watchdog.apiRoundInFlight) { watchdog.apiRoundInFlight = false; watchdog.apiRoundSince = null; }
-          if (!watchdog.receivedAny) {
-            watchdog.receivedAny = true;
-            console.log('📡 First stream event received:', event.type);
-            logger?.('First stream event received:', event.type);
-          }
-
-          // Track in-flight FOREGROUND tool calls so the watchdog can suspend
-          // while a long tool (bash / nested afk chat) runs silently.
-          if (event.type === 'chunk' && event.chunk.type === 'tool_use_detail') {
-            if (watchdog.inFlightTools.size === 0) watchdog.toolInFlightSince = Date.now();
-            watchdog.inFlightTools.add(event.chunk.toolUseId);
-          } else if (event.type === 'chunk' && event.chunk.type === 'tool_result') {
-            watchdog.inFlightTools.delete(event.chunk.toolUseId);
-            if (watchdog.inFlightTools.size === 0) watchdog.toolInFlightSince = null;
-          }
-
-          if (event.type === 'chunk' && event.chunk.type === 'content') {
-            if (!inContentRun) {
-              contentRunStartAccumulated = state.accumulated.length;
-              contentRunStartAnswer = state.answerText.length;
-              inContentRun = true;
-            }
-            state.accumulated += event.chunk.content;
-            state.answerText += event.chunk.content;
-            await sendOrEdit(state, ctx, chatId, livePreview());
-          }
-          if (event.type === 'stream_retry') {
-            // Mid-stream overload re-drive: discard partial text from this round.
-            state.accumulated = state.accumulated.slice(0, contentRunStartAccumulated);
-            state.answerText = state.answerText.slice(0, contentRunStartAnswer);
-            inContentRun = false;
-            await sendOrEdit(state, ctx, chatId, livePreview(), true);
-          }
-          if (event.type === 'rate_limit') {
-            // Provider throttled (Claude 429/529) — show visible status, bump watchdog.
-            //
-            // Invariant: display the EFFECTIVE backoff, not the raw retry-after header.
-            // The Anthropic SDK discards retry-after >= 60s and uses its own ~8s default
-            // (SDK_HONORED_RETRY_AFTER_CEILING_MS = 60_000 in first-byte-timeout.ts). A
-            // raw retry-after: 3600 would tell the user "~3600s" while the SDK retries
-            // in seconds.
-            const SDK_RETRY_AFTER_CEILING_MS = 60_000;
-            const SDK_FALLBACK_BACKOFF_MS = 8_000;
-            const effectiveMs = event.retryAfterMs !== undefined
-              ? (event.retryAfterMs < SDK_RETRY_AFTER_CEILING_MS ? event.retryAfterMs : SDK_FALLBACK_BACKOFF_MS)
-              : null;
-            const secs = effectiveMs !== null ? Math.ceil(effectiveMs / 1_000) : null;
-            const statusLine = secs !== null ? `⏸ Rate limited · retrying in ~${secs}s…` : '⏸ Rate limited · retrying…';
-            await sendOrEdit(state, ctx, chatId, livePreview() + `\n\n${statusLine}`, true);
-            continue;
-          }
-          if (event.type === 'chunk' && event.chunk.type === 'tool_diff') {
-            // intentional no-op: diff is CLI-only; Telegram has no terminal palette
-          }
-          if (event.type === 'message' && event.message.role === 'assistant') {
-            state.accumulated = event.message.content;
-            state.answerText = event.message.content;
-            inContentRun = false;
-            // Ordering constraint: re-base BEFORE rendering. This assignment replaced the
-            // buffer wholesale, so every offset recorded against the OLD buffer now indexes
-            // unrelated text. Re-base to the new length so the preview degrades to footer
-            // placement (the interleave contract for an offset that no longer means anything).
-            // Copy, never mutate: entries are readonly and `finalBody()` maps the same list.
-            state.progressEntries = state.progressEntries.map((e) => ({ ...e, at: state.accumulated.length }));
-            await sendOrEdit(state, ctx, chatId, livePreview());
-          }
-          // Lane D — progress summaries appear in the response as dim `◦`-prefixed lines.
-          // Invariant: `inContentRun = false` MUST stay unconditional — it is the
-          // stream_retry round boundary. Gate the RENDER (via handleProgressEvent), never
-          // this assignment. See streaming.progress.ts for the full invariant comment.
-          if (event.type === 'progress') {
-            inContentRun = false;
-            // A tool round finished — the provider is about to call messages.create.
-            // Suspend the watchdog during the TTFB gap (see streaming.watchdog.ts).
-            watchdog.apiRoundInFlight = true;
-            watchdog.apiRoundSince = Date.now();
-            await handleProgressEvent(
-              event, state, progressGateOpen, progressDelayMs, ctx, chatId, livePreview,
-              (v) => { progressGateOpen = v; }, clearProgressTimer,
-            );
-          }
-          // Lane D — post-turn prompt suggestion. Skip when it duplicates the already-
-          // rendered answer (compare against `answerText`, not `accumulated`: the gate's
-          // purpose is "don't echo the ANSWER", and `accumulated` also carries `◦` lines).
-          if (event.type === 'suggestion' && event.suggestion.trim() !== state.answerText.trim()) {
-            state.accumulated += `\n\n💡 ${event.suggestion}`;
-            state.answerText += `\n\n💡 ${event.suggestion}`;
-            await sendOrEdit(state, ctx, chatId, livePreview());
-          }
-          // Display-only harness notice (issue #970). Appended inline as a
-          // distinct italic info line so the operator sees truncations and
-          // refusals without the text blending with model output. The `ℹ`
-          // prefix makes the provenance clear. Not funnelled through answerText
-          // (that carries genuine model output only) — accumulated is the write
-          // target so `livePreview()` includes it in the sent message.
-          if (event.type === 'notice') {
-            const noticeText = `\n\n_ℹ ${event.text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&')}_`;
-            state.accumulated += noticeText;
-            await sendOrEdit(state, ctx, chatId, livePreview());
-          }
-          if (event.type === 'paused') { await handlePaused(event, handlerParams); continue; }
-          if (event.type === 'resumed') { await handleResumed(event, handlerParams); continue; }
-          if (event.type === 'done') { await handleDone(event.metadata, handlerParams); break; }
-          if (event.type === 'error') { handleError(event.error, handlerParams); }
-        }
-      }); // end runWithSink
-
-      // Invariant: finalize BEFORE closing the generator so the session's
-      // currentState stays 'streaming' while Telegram messages are in flight.
-      // The in-place preview is edit-throttled and can freeze mid-stream. A `done`
-      // event handled delivery above; any other exit (no terminal event, early break)
-      // re-delivers everything as fresh messages so nothing is lost to a stale preview.
-      const preview = state.sentMessage as Message.TextMessage | null;
-      if (preview && !state.sawTerminalEvent) {
-        const full = cleanFinal && state.answerText.trim() ? state.answerText : finalBody();
-        if (full.trim()) {
-          const delivered = await deliverClean(ctx, full);
-          if (delivered) {
-            await ctx.telegram.deleteMessage?.(chatId, preview.message_id).catch(() => {});
-            state.sentMessage = null;
-          }
-        }
-      } else {
-        // Contract: deliverOverflow internalizes the full guard —
-        // `!(cleanFinal && answerText.trim()) && finalBodyText && preview` — so
-        // this bare `else` is safe without a redundant outer check. The function
-        // returns early (no-op) when: (a) the `done` handler already took the
-        // `deliverClean` path (preview null-checked out), (b) `finalBodyText` is
-        // empty/falsy, or (c) the cleanFinal+answerText guard matches the `done`
-        // handler's own delivery branch. Callers must never replicate that guard
-        // here; it belongs exclusively inside deliverOverflow (streaming.handlers.ts).
-        await deliverOverflow(ctx, cleanFinal, state.answerText, finalBody(), preview);
-      }
+        await runStreamLoop({
+          nextWithTimeout, state, watchdog, run,
+          ctx, chatId, livePreview, finalBody,
+          progressGateOpen,
+          progressDelayMs,
+          setProgressGateOpen: (v) => { progressGateOpen = v; },
+          clearProgressTimer,
+          handlerParams,
+          logger,
+        });
+      });
     } finally {
       // Park the still-running provider turn on ANY exit without a terminal event:
       // timeout, Telegram render exception, or early break. Without this, the provider

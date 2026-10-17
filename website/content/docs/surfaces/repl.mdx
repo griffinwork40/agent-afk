@@ -131,13 +131,14 @@ restarts.
 ### Exiting plan mode
 
 When the model judges its plan ready, it calls the `exit_plan_mode` tool. This presents a
-three-choice picker:
+picker:
 
 | Choice | What happens |
 |---|---|
 | **Approve — implement now (restore your previous mode)** | Restores the permission mode you were in before entering plan mode (e.g. `default`, `acceptEdits`) and seeds the implement turn |
 | **Approve — implement now (bypass mode)** | Escalates to `bypassPermissions` — no approval prompts, read/write any path — then seeds the implement turn |
 | **Keep planning** | Stays in plan mode; the model continues refining |
+| **Type your own answer** | Your text goes to the model as revision feedback; it stays in plan mode, revises, and calls `exit_plan_mode` again. Typed text never approves the plan |
 
 The mode flip is deferred to the start of the next turn — the gate stays locked in plan mode
 for the remainder of the current turn. On approval, the model is instructed to first save the

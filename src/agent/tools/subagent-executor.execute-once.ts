@@ -20,6 +20,7 @@ import { backgroundTarget } from './subagent/background-delivery.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import type { StreamCutProbe } from '../subagent/stream-cut-retry.js';
 import { addForegroundNotices } from './subagent-executor.notices.js';
+import { classifyDispatchIntent, checkReadOnlyDispatchIntent } from './subagent-executor.dispatch-intent.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budget.js';
@@ -163,6 +164,9 @@ export async function executeOnce(
   });
 
   if (probe !== undefined) probe.sideEffectFree = childSideEffectFree;
+
+  // Pre-dispatch implementation-intent gate (#3754): rejects implementation briefs sent to read-only named agents.
+  { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.release(); return r; } }
 
   // isolation:"worktree"
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;

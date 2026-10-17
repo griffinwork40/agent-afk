@@ -43,6 +43,7 @@
  */
 
 import type { HookContext, HookDecision } from './hooks.js';
+import { maskHookCommandData } from './hook-command-data.js';
 import {
   RELEASE_BOUNDARY_PATTERNS,
   type ReleaseBoundaryPattern,
@@ -83,19 +84,11 @@ function isDryRun(command: string): boolean {
 }
 
 /**
- * Strip single-quoted string literals from a shell command before pattern
- * matching. Single-quoted segments in POSIX shell are always literal — no
- * variable expansion, no command substitution, and crucially, no execution.
- * A publish keyword inside `'...'` is harmless (e.g. `rg 'npm publish'`).
- *
- * Also strips trailing `# comment` segments.
+ * Mask known message/stdin data and single-quoted literal search arguments.
+ * Shell and interpreter payloads remain visible, including their quotes.
  */
 function stripQuotedLiterals(command: string): string {
-  // Remove single-quoted segments (non-greedy, no nesting in POSIX sh).
-  let stripped = command.replace(/'[^']*'/g, '');
-  // Remove shell-comment tails.
-  stripped = stripped.replace(/#[^\n]*/g, '');
-  return stripped;
+  return maskHookCommandData(command, true);
 }
 
 /**
@@ -143,7 +136,7 @@ export function createReleaseBoundaryDetect(): (context: HookContext) => HookDec
     // BLOCK-tier match to OBSERVE-tier behavior so the agent can still run
     // these pre-flight checks without friction. The matched ids are still
     // returned so the observe record captures what would have been blocked.
-    if (isDryRun(command)) {
+    if (isDryRun(maskHookCommandData(command))) {
       return {
         decision: 'approve',
         reason: `${RELEASE_BOUNDARY_DETECT_REASON_PREFIX} [${matched.join(', ')}] (dry-run: not blocked)`,

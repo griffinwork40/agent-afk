@@ -20,11 +20,13 @@
 
 import { BudgetExceededError, TimeoutError } from '../../utils/errors.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/shared/overload-sentinel.js';
-import { emitClosure } from '../trace/emit.js';
+import { emitClosure, emitHookSummary } from '../trace/emit.js';
+import { takeHookSummary } from '../trace/hook-tally.js';
 import type { ClosureReason, TraceSink } from '../trace/index.js';
 import type { TraceWriter } from '../trace/writer.js';
 import { buildClosureGuidance } from './closure-guidance.js';
 import { classifyClosureReason } from './closure-reason.js';
+import { sealBillingField, type BillingRollupSnapshot } from './billing-rollup.js';
 
 /** Cumulative token tuple mirrored into the `closure` / `session_sealed` payloads. */
 export interface ClosureTokenCounters {
@@ -113,6 +115,13 @@ export interface ClosureTotals {
 /** Inputs for {@link emitClosureEvent}: terminal signals + session-run totals. */
 export interface EmitClosureInput extends ClosureSignals, ClosureTotals {
   runningTokens: ClosureTokenCounters;
+  /**
+   * The subagent id of this session when it is a forked child; absent for
+   * the root session. Stamped into the `closure` payload so readers
+   * (`parseTraceSignals`) can distinguish child closures from the root's
+   * and avoid falsely downgrading the root facet (#3883).
+   */
+  subagentId?: string;
 }
 
 /**
@@ -147,6 +156,7 @@ export async function emitClosureEvent(
     finalTokens,
     ...(input.lastStopReason !== undefined ? { lastStopReason: input.lastStopReason } : {}),
     ...(guidance !== null ? { guidance } : {}),
+    ...(input.subagentId !== undefined ? { subagentId: input.subagentId } : {}),
   });
 }
 
@@ -155,6 +165,17 @@ export interface SealTraceInput extends ClosureSignals, ClosureTotals {
   subagentCompletedCount: number;
   subagentRunningTokens: ClosureTokenCounters;
   subagentRunningCostUsd: number;
+  /** Billing-normalized rollups (#3878); omitted from the seal when absent. */
+  sessionBilling?: BillingRollupSnapshot;
+  subagentBilling?: BillingRollupSnapshot;
+  /**
+   * In-flight child terminal emit promises to flush before `session_sealed`.
+   * Collected from active handles via `AgentConfig.getPendingChildTerminalWrites`
+   * and passed into `TraceWriter.seal()` so child cancellation rows land
+   * before the seal record (#3714). `seal()` bounds this wait
+   * (`SEAL_PENDING_WRITES_TIMEOUT_MS`) so a wedged child cannot hang shutdown.
+   */
+  pendingChildTerminalWrites?: readonly Promise<void>[];
 }
 
 /**
@@ -167,6 +188,13 @@ export async function sealTraceWriter(
   input: SealTraceInput,
 ): Promise<void> {
   if (!writer) return;
+  // Invariant: the once-per-session `hook_summary` lands immediately before
+  // the terminal `session_sealed` record (after seal, write() rejects).
+  // takeHookSummary() returns undefined on a second call for the same writer,
+  // so a repeated seal attempt never double-emits. Fire-and-forget (INV-040):
+  // emitHookSummary swallows writer failures and the seal proceeds regardless.
+  const hookSummary = takeHookSummary(writer);
+  if (hookSummary !== undefined) await emitHookSummary(writer, hookSummary);
   const status = deriveSealStatus(input);
 
   const subagentCount =
@@ -187,13 +215,17 @@ export async function sealTraceWriter(
   const subagentCostUsd =
     input.subagentRunningCostUsd > 0 ? input.subagentRunningCostUsd : undefined;
 
-  await writer.seal({
-    status,
-    finalCostUsd: input.finalCostUsd,
-    finalTurnCount: input.finalTurnCount,
-    closedAt: new Date().toISOString(),
-    ...(subagentCount !== undefined ? { subagentCount } : {}),
-    ...(subagentTokens !== undefined ? { subagentTokens } : {}),
-    ...(subagentCostUsd !== undefined ? { subagentCostUsd } : {}),
-  });
+  await writer.seal(
+    {
+      status,
+      finalCostUsd: input.finalCostUsd,
+      finalTurnCount: input.finalTurnCount,
+      closedAt: new Date().toISOString(),
+      ...(subagentCount !== undefined ? { subagentCount } : {}),
+      ...(subagentTokens !== undefined ? { subagentTokens } : {}),
+      ...(subagentCostUsd !== undefined ? { subagentCostUsd } : {}),
+      ...sealBillingField(input.sessionBilling, input.subagentBilling),
+    },
+    input.pendingChildTerminalWrites,
+  );
 }

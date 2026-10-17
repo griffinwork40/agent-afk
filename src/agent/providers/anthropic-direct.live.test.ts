@@ -12,9 +12,15 @@ import type { ProviderEvent } from '../provider.js';
 
 const SHOULD_RUN = process.env['RUN_LIVE_API'] === '1';
 
+// Capture at module scope — vitest's global beforeEach (clean-config-env.ts)
+// deletes every ENV_REGISTRY key from process.env before each test body runs,
+// so a test-time read of process.env['CLAUDE_CODE_OAUTH_TOKEN'] always yields
+// undefined. Module-scope runs before setupFiles' beforeEach hooks.
+const OAUTH_TOKEN = process.env['CLAUDE_CODE_OAUTH_TOKEN'];
+
 describe.skipIf(!SHOULD_RUN)('AnthropicDirectProvider — live API', () => {
   it('round-trips a real call using CLAUDE_CODE_OAUTH_TOKEN', async () => {
-    const token = process.env['CLAUDE_CODE_OAUTH_TOKEN'];
+    const token = OAUTH_TOKEN;
     if (!token) throw new Error('CLAUDE_CODE_OAUTH_TOKEN not set');
     const provider = new AnthropicDirectProvider();
     async function* once(): AsyncIterable<{ content: string }> {

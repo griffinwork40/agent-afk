@@ -1,345 +1,144 @@
-/**
- * Integration tests for the PostToolUse effect-ledger hook.
- *
- * Each test creates an isolated EffectStore backed by a temp file to avoid
- * cross-test contamination.
- */
-
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createEffectLedgerPostHook, createEffectLedgerPreHook } from './hook.js';
+import { createEffectLedgerHooks } from './hook.js';
 import { EffectStore } from './store.js';
 import type { PostToolUseContext, PostToolUseFailureContext, PreToolUseContext } from '../hooks.js';
 
-let tmpDir: string;
-let ledgerPath: string;
+let dir: string;
+let path: string;
 let store: EffectStore;
-
-beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'effect-ledger-hook-test-'));
-  ledgerPath = join(tmpDir, 'effect-ledger.jsonl');
-  store = new EffectStore(ledgerPath);
-});
-
-afterEach(() => {
-  rmSync(tmpDir, { recursive: true, force: true });
-});
-
-function makeCtx(overrides: Partial<PostToolUseContext> = {}): PostToolUseContext {
-  return {
-    event: 'PostToolUse',
-    toolName: 'send_telegram',
-    input: { message: 'hello' },
-    output: { content: 'Sent Telegram message to chat 12345.' },
-    sessionId: 'test-session',
-    ...overrides,
-  };
+const input = { message: 'hello' };
+function pre(args: unknown = input, id = 'first'): PreToolUseContext {
+  return { event: 'PreToolUse', toolName: 'send_telegram', input: args, sessionId: 'session', toolUseId: id };
 }
-
-// ---------------------------------------------------------------------------
-// Non-external tools are ignored
-// ---------------------------------------------------------------------------
-
-describe('createEffectLedgerPostHook — non-external tools', () => {
-  it('does not write a record for read_file', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const ctx: PostToolUseContext = {
-      event: 'PostToolUse',
-      toolName: 'read_file',
-      input: { file_path: '/tmp/foo.ts' },
-      output: { content: 'file contents' },
-    };
-    await hook(ctx);
-    const all = await store.all();
-    expect(all).toHaveLength(0);
-  });
-
-  it('does not write a record for edit_file', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const ctx: PostToolUseContext = {
-      event: 'PostToolUse',
-      toolName: 'edit_file',
-      input: {},
-      output: {},
-    };
-    await hook(ctx);
-    expect(await store.all()).toHaveLength(0);
-  });
-
-  it('does not write a record for bash ls', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const ctx: PostToolUseContext = {
-      event: 'PostToolUse',
-      toolName: 'bash',
-      input: { command: 'ls -la' },
-      output: { content: 'file list' },
-    };
-    await hook(ctx);
-    expect(await store.all()).toHaveLength(0);
-  });
+function success(args: unknown = input, id = 'first'): PostToolUseContext {
+  return { event: 'PostToolUse', toolName: 'send_telegram', input: args, output: 'sent', sessionId: 'session', toolUseId: id };
+}
+function thrown(error = 'response timed out', args: unknown = input, id = 'first'): PostToolUseFailureContext {
+  return { event: 'PostToolUseFailure', toolName: 'send_telegram', input: args, error, sessionId: 'session', toolUseId: id };
+}
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'effect-ledger-hook-'));
+  path = join(dir, 'ledger.jsonl');
+  store = new EffectStore(path);
 });
+afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-// ---------------------------------------------------------------------------
-// External tools are recorded
-// ---------------------------------------------------------------------------
-
-describe('createEffectLedgerPostHook — external tools', () => {
-  it('records send_telegram as executed', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    await hook(makeCtx());
-    const all = await store.all();
-    expect(all).toHaveLength(1);
-    expect(all[0]?.operationType).toBe('send_telegram');
-    expect(all[0]?.status).toBe('executed');
-    expect(all[0]?.sessionId).toBe('test-session');
-  });
-
-  it('records send_telegram as failed when output has isError: true', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    await hook(makeCtx({ output: { isError: true, content: 'Telegram is not configured' } }));
-    const all = await store.all();
-    expect(all).toHaveLength(1);
-    expect(all[0]?.status).toBe('failed');
-  });
-
-  it('records bash git push as external', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const ctx: PostToolUseContext = {
-      event: 'PostToolUse',
-      toolName: 'bash',
-      input: { command: 'git push origin main' },
-      output: { content: 'Branch pushed.' },
-      sessionId: 'sess-2',
+describe('write-ahead effect hooks with fake remote', () => {
+  it('persists intent before remote dispatch, then updates the SAME record to unknown', async () => {
+    const hooks = createEffectLedgerHooks(store);
+    let applications = 0;
+    const remote = async (id: string): Promise<void> => {
+      const decision = await hooks.pre(pre(input, id));
+      if (decision.decision === 'block') return;
+      const recordsBeforeSend = await new EffectStore(path).all();
+      expect(recordsBeforeSend).toHaveLength(1);
+      expect(recordsBeforeSend[0]?.status).toBe('pending');
+      expect(readFileSync(path, 'utf8')).toContain('"status":"pending"');
+      applications++;
+      await hooks.post(thrown('response timed out', input, id));
     };
-    await hook(ctx);
-    const all = await store.all();
-    expect(all).toHaveLength(1);
-    expect(all[0]?.operationType).toBe('bash_external');
-    expect(all[0]?.status).toBe('executed');
+    await remote('first');
+    expect(applications).toBe(1);
+    const first = (await store.all())[0]!;
+    expect(first.status).toBe('unknown');
+    expect((await hooks.pre(pre(input, 'second'))).reason).toContain('Verify remote state first');
+    expect(applications).toBe(1);
+    const retry = await hooks.pre(pre(input, 'third'));
+    expect(retry.decision).toBeUndefined();
+    expect((await store.all())[1]?.retryOf).toBe(first.id);
+    applications++;
+    await hooks.post(success(input, 'third'));
+    expect(applications).toBe(2);
+    expect((await store.all()).map((r) => r.status)).toEqual(['unknown', 'executed']);
+    expect((await store.all())[0]?.retryAcknowledgedAt).toBeDefined();
   });
 
-  it('records mcp__ tool as mcp_write', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const ctx: PostToolUseContext = {
-      event: 'PostToolUse',
-      toolName: 'mcp__github__create_pr',
-      input: { title: 'My PR', body: 'desc' },
-      output: { number: 42 },
-    };
-    await hook(ctx);
-    const all = await store.all();
-    expect(all).toHaveLength(1);
-    expect(all[0]?.operationType).toBe('mcp_write:mcp__github__create_pr');
+  it('known pre-send refusal is failed and allows immediate retry', async () => {
+    const hooks = createEffectLedgerHooks(store);
+    await hooks.pre(pre());
+    await hooks.post(thrown('Telegram is not configured'));
+    expect((await store.all())[0]?.status).toBe('failed');
+    expect((await hooks.pre(pre(input, 'next'))).decision).toBeUndefined();
   });
 
-  it('stores redacted args (token removed)', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const ctx: PostToolUseContext = {
-      event: 'PostToolUse',
-      toolName: 'send_telegram',
-      input: { message: 'token sk-ant-api03-' + 'A'.repeat(30) + ' in message' },
-      output: { content: 'Sent.' },
-    };
-    await hook(ctx);
-    const all = await store.all();
-    expect(all).toHaveLength(1);
-    const argsStr = JSON.stringify(all[0]?.args);
-    expect(argsStr).not.toContain('sk-ant-api03-');
-    expect(argsStr).toContain('[REDACTED]');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Idempotency — dedup for executed records
-// ---------------------------------------------------------------------------
-
-describe('createEffectLedgerPostHook — dedup behavior', () => {
-  it('records both calls when same args sent twice (marks first ambiguous on second)', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const ctx = makeCtx();
-    // First call: records as executed.
-    await hook(ctx);
-    // Second call with same args: prior record exists with status "executed".
-    // The hook writes a new pending record (the "ambiguous" note).
-    await hook(ctx);
-
-    const all = await store.all();
-    // After id-collapse, we have 2 distinct records (2 distinct ids).
-    // One is executed; one is ambiguous (the dedup note).
-    expect(all.length).toBeGreaterThanOrEqual(2);
-    const statuses = all.map((r) => r.status);
-    expect(statuses).toContain('executed');
-    expect(statuses).toContain('ambiguous');
+  it('error result without definitive rejection is unknown; 4xx HTTP is failed', async () => {
+    const hooks = createEffectLedgerHooks(store);
+    const http = { method: 'POST', url: 'https://example.test' };
+    await hooks.pre({ ...pre(http), toolName: 'web_request' });
+    await hooks.post({ ...success(http), toolName: 'web_request', isError: true, output: 'network error' });
+    expect((await store.all())[0]?.status).toBe('unknown');
+    const rejected = { method: 'PATCH', url: 'https://example.test' };
+    await hooks.pre({ ...pre(rejected, 'other'), toolName: 'web_request' });
+    await hooks.post({ ...success(rejected, 'other'), toolName: 'web_request', output: '{"status":422}' });
+    expect((await store.all())[1]?.status).toBe('failed');
+    const ambiguous = { method: 'PUT', url: 'https://example.test' };
+    await hooks.pre({ ...pre(ambiguous, 'ambiguous'), toolName: 'web_request' });
+    await hooks.post({ ...success(ambiguous, 'ambiguous'), toolName: 'web_request', output: '{"status":408}' });
+    expect((await store.all())[2]?.status).toBe('unknown');
   });
 
-  it('second call with different args creates a new independent record', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    await hook(makeCtx({ input: { message: 'hello' } }));
-    await hook(makeCtx({ input: { message: 'world' } }));
-
-    const all = await store.all();
-    expect(all.length).toBe(2);
-    const statuses = all.map((r) => r.status);
-    expect(statuses.every((s) => s === 'executed')).toBe(true);
+  it('different arguments and separate sessions are independent', async () => {
+    const hooks = createEffectLedgerHooks(store);
+    await hooks.pre(pre());
+    await hooks.post(thrown());
+    expect((await hooks.pre(pre({ message: 'different' }, 'other'))).decision).toBeUndefined();
+    expect((await hooks.pre({ ...pre(input, 'other-session'), sessionId: 'another' })).decision).toBeUndefined();
   });
 
-  it('third identical call is still caught as ambiguous (N>=3)', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const ctx = makeCtx();
-    await hook(ctx); // executed
-    await hook(ctx); // ambiguous
-    await hook(ctx); // must also be ambiguous, not executed
-
-    const all = await store.all();
-    expect(all).toHaveLength(3);
-    const statuses = all.map((r) => r.status);
-    expect(statuses.filter((s) => s === 'executed')).toHaveLength(1);
-    expect(statuses.filter((s) => s === 'ambiguous')).toHaveLength(2);
+  it('recovers pending from a crashed process and links the acknowledged retry', async () => {
+    const abandoned = createEffectLedgerHooks(store);
+    await abandoned.pre(pre());
+    const resumed = createEffectLedgerHooks(new EffectStore(path));
+    expect((await resumed.pre(pre(input, 'next'))).reason).toContain('outcome unknown');
+    expect((await resumed.pre(pre(input, 'again'))).decision).toBeUndefined();
+    const rows = await new EffectStore(path).all();
+    expect(rows[0]?.status).toBe('pending');
+    expect(rows[1]?.retryOf).toBe(rows[0]?.id);
   });
 
-  it('two sessions sending the same message are independent (no cross-session dedup)', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    await hook(makeCtx({ sessionId: 'session-A' }));
-    await hook(makeCtx({ sessionId: 'session-B' }));
-
-    const all = await store.all();
-    expect(all).toHaveLength(2);
-    // Both should be 'executed' -- no false dedup across sessions.
-    expect(all.every((r) => r.status === 'executed')).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// PostToolUseFailure dedup behavior
-// ---------------------------------------------------------------------------
-
-describe('createEffectLedgerPostHook — PostToolUseFailure dedup', () => {
-  function makeFailureCtx(overrides: Partial<PostToolUseFailureContext> = {}): PostToolUseFailureContext {
-    return {
-      event: 'PostToolUseFailure',
-      toolName: 'send_telegram',
-      input: { message: 'hello' },
-      error: 'Telegram send failed',
-      sessionId: 'test-session',
-      ...overrides,
-    };
-  }
-
-  it('records first failure as failed', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    await hook(makeFailureCtx());
-    const all = await store.all();
-    expect(all).toHaveLength(1);
-    expect(all[0]?.status).toBe('failed');
+  it('warns but does not block an intentional repeat after execution', async () => {
+    const hooks = createEffectLedgerHooks(store);
+    await hooks.pre(pre());
+    await hooks.post(success());
+    const repeat = await hooks.pre(pre(input, 'again'));
+    expect(repeat.decision).toBeUndefined();
+    expect(repeat.injectContext).toContain('identical external action');
   });
 
-  it('marks duplicate failure (same args) as ambiguous', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    await hook(makeFailureCtx());
-    await hook(makeFailureCtx());
-
-    const all = await store.all();
-    expect(all).toHaveLength(2);
-    const statuses = all.map((r) => r.status);
-    expect(statuses).toContain('failed');
-    expect(statuses).toContain('ambiguous');
-  });
-
-  it('marks failure after prior executed record as ambiguous', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    // First call succeeds via PostToolUse.
-    await hook(makeCtx());
-    // Second call fails via PostToolUseFailure with the same args.
-    await hook(makeFailureCtx());
-
-    const all = await store.all();
-    expect(all).toHaveLength(2);
-    const statuses = all.map((r) => r.status);
-    expect(statuses).toContain('executed');
-    expect(statuses).toContain('ambiguous');
-  });
-
-  it('records failure with different args as independent failed record', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    await hook(makeFailureCtx({ input: { message: 'hello' } }));
-    await hook(makeFailureCtx({ input: { message: 'world' } }));
-
-    const all = await store.all();
-    expect(all).toHaveLength(2);
-    expect(all.every((r) => r.status === 'failed')).toBe(true);
-  });
-
-  it('ignores non-external tools on failure path', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    await hook(makeFailureCtx({ toolName: 'read_file', input: { file_path: '/tmp/foo' } }));
-    expect(await store.all()).toHaveLength(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Non-PostToolUse events are ignored
-// ---------------------------------------------------------------------------
-
-describe('createEffectLedgerPostHook — non-matching events', () => {
-  it('ignores PreToolUse events', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const ctx = { event: 'PreToolUse' as const, toolName: 'send_telegram', input: { message: 'hi' } };
-    await hook(ctx);
-    expect(await store.all()).toHaveLength(0);
-  });
-
-  it('ignores SessionEnd events', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const ctx = { event: 'SessionEnd' as const };
-    await hook(ctx);
-    expect(await store.all()).toHaveLength(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Return value is always an empty HookDecision (non-blocking)
-// ---------------------------------------------------------------------------
-
-describe('createEffectLedgerPostHook — return value', () => {
-  it('returns an empty decision (never blocks)', async () => {
-    const hook = createEffectLedgerPostHook(store);
-    const decision = await hook(makeCtx());
-    expect(decision).toEqual({});
-    expect((decision as Record<string, unknown>)['decision']).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// PreToolUse hook — computeIdempotencyKey throw guard (#1475)
-// ---------------------------------------------------------------------------
-
-describe('createEffectLedgerPreHook — computeIdempotencyKey throw guard', () => {
-  it('returns {} instead of throwing when input causes computeIdempotencyKey to throw', () => {
-    const pendingIds = new Map<string, string>();
-    const hook = createEffectLedgerPreHook(pendingIds, store);
-
-    // An object with a getter that throws causes stableStringify (used inside
-    // computeIdempotencyKey) to throw. The hook must swallow the error and
-    // return {} to satisfy its non-blocking contract.
-    const throwingInput: Record<string, unknown> = {};
-    Object.defineProperty(throwingInput, 'message', {
-      get() { throw new Error('getter throws'); },
-      enumerable: true,
+  it('blocks a concurrent identical admission before either remote request executes', async () => {
+    const hooks = createEffectLedgerHooks(store);
+    let release!: () => void;
+    const readGate = new Promise<void>((resolve) => { release = resolve; });
+    const original = store.findByIdempotencyKey.bind(store);
+    vi.spyOn(store, 'findByIdempotencyKey').mockImplementation(async (key, session) => {
+      await readGate;
+      return original(key, session);
     });
+    const first = hooks.pre(pre(input, 'one'));
+    expect((await hooks.pre(pre(input, 'two'))).decision).toBe('block');
+    release();
+    expect((await first).decision).toBeUndefined();
+    expect(await store.all()).toHaveLength(1);
+  });
 
-    const ctx: PreToolUseContext = {
-      event: 'PreToolUse',
-      toolName: 'send_telegram',
-      input: throwingInput,
-      toolUseId: 'tool-use-1',
-    };
+  it('fails open on read and append errors', async () => {
+    const broken = new EffectStore(path);
+    vi.spyOn(broken, 'findByIdempotencyKey').mockRejectedValue(new Error('read error'));
+    vi.spyOn(broken, 'writePending').mockImplementation(() => { throw new Error('write error'); });
+    const hooks = createEffectLedgerHooks(broken);
+    expect(await hooks.pre(pre())).toEqual({});
+    expect(await hooks.post(success())).toEqual({});
+  });
 
-    expect(() => hook(ctx)).not.toThrow();
-    const decision = hook(ctx);
-    expect(decision).toEqual({});
-    // No pending record should have been written for the failing input.
-    expect(pendingIds.size).toBe(0);
+  it('does not write for non-external calls or unserializable args', async () => {
+    const hooks = createEffectLedgerHooks(store);
+    expect(await hooks.pre({ ...pre(), toolName: 'read_file' })).toEqual({});
+    const bad: Record<string, unknown> = {};
+    Object.defineProperty(bad, 'message', { enumerable: true, get() { throw new Error('bad getter'); } });
+    expect(await hooks.pre(pre(bad))).toEqual({});
+    expect(await store.all()).toHaveLength(0);
   });
 });

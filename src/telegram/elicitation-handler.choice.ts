@@ -22,7 +22,7 @@ import {
   buildCustomElicitationCallback,
 } from './elicitation-callback-data.js';
 import { prepareChoiceRender } from './elicitation-handler.render.js';
-import { sendChoiceMessages } from './elicitation-handler.send.js';
+import { sendChoiceMessages, splitLongPrompt } from './elicitation-handler.send.js';
 import { CUSTOM_ENTRY_SENTINEL_INDEX } from './elicitation-handler.types.js';
 
 /** Minimal shape of the dispatch table entry. */
@@ -135,6 +135,11 @@ export function handleChoiceElicitation(
     let choicePreMessages: string[] = [];
 
     if (qType === 'confirm') {
+      // Fix (issue #3631, item 3): split a question alone over 4096 chars into
+      // pre-messages, keeping only the final chunk as the keyboard message body.
+      const confirmChunks = splitLongPrompt(displayText);
+      choicePreMessages = confirmChunks.slice(0, -1);
+      displayText = confirmChunks[confirmChunks.length - 1]!;
       buttons = [[
         Markup.button.callback('✅ Yes', buildElicitationCallback(elicitId, 1)),
         Markup.button.callback('❌ No', buildElicitationCallback(elicitId, 0)),

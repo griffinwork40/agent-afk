@@ -37,9 +37,20 @@ import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import { decoratePlaywrightLaunchError } from '../../browser/playwright-missing.js';
+import { GuardedEgress } from '../../browser/playwright/egress-launch.js';
 import { getMcpConfigPath, type McpConfigFile } from '../../agent/mcp/index.js';
 import type { McpServerConfig } from '../../agent/mcp/types.js';
 import { errorMessage } from '../../utils/errors.js';
+import {
+  CHROME_DEVTOOLS_SERVER_NAME,
+  REAL_CHROME_CHANNELS,
+  type RealChromeChannel,
+} from '../../browser/real-chrome-probe.js';
+import {
+  CHROME_DEVTOOLS_MCP_FALLBACK_VERSION,
+  printConnectDiagnosis,
+  resolveChromeDevtoolsMcpVersion,
+} from './browser.connect-diagnosis.js';
 import {
   assertSafeBrowserProfile,
   getBrowserProfileStateDir,
@@ -63,20 +74,25 @@ function waitForEnter(prompt: string): Promise<void> {
 }
 
 /** MCP server key written into mcpServers. Stable so connect/disconnect agree. */
-export const CHROME_DEVTOOLS_SERVER_NAME = 'chrome-devtools';
+export { CHROME_DEVTOOLS_SERVER_NAME };
 
-const VALID_CHANNELS = ['stable', 'beta', 'canary', 'dev'] as const;
-type ChromeChannel = (typeof VALID_CHANNELS)[number];
+const VALID_CHANNELS = REAL_CHROME_CHANNELS;
+type ChromeChannel = RealChromeChannel;
 
 /**
  * Build the mcpServers entry for chrome-devtools-mcp.
  *
- * Always runs via `npx …@latest --autoConnect`. A non-stable channel is
- * appended as `--channel <channel>` so autoConnect attaches to that channel's
- * running profile (autoConnect targets the channel's default user-data-dir).
+ * Runs via `npx chrome-devtools-mcp@<version> --autoConnect`, pinned to an
+ * exact version (resolved once by `connect`) rather than `@latest`. A
+ * non-stable channel is appended as `--channel <channel>` so autoConnect
+ * attaches to that channel's running profile (autoConnect targets the
+ * channel's default user-data-dir).
  */
-export function buildChromeDevtoolsEntry(channel: ChromeChannel = 'stable'): McpServerConfig {
-  const args = ['chrome-devtools-mcp@latest', '--autoConnect'];
+export function buildChromeDevtoolsEntry(
+  channel: ChromeChannel = 'stable',
+  version: string = CHROME_DEVTOOLS_MCP_FALLBACK_VERSION,
+): McpServerConfig {
+  const args = [`chrome-devtools-mcp@${version}`, '--autoConnect'];
   if (channel !== 'stable') {
     args.push('--channel', channel);
   }
@@ -179,8 +195,10 @@ function printSetupGuidance(): void {
     console.log(palette.meta(`  • Detected Chrome ${major} ✓ (autoConnect needs ≥ 144)`));
   }
   console.log(palette.meta('  1. In Chrome, open chrome://inspect/#remote-debugging and enable it (one time).'));
-  console.log(palette.meta('  2. The first time the agent drives Chrome, click "Allow" on the prompt.'));
-  console.log(palette.meta('  3. Chrome shows a "being controlled by automated test software" banner while active.'));
+  console.log(palette.meta('  2. macOS 27+: System Settings > Privacy & Security > Files & Folders > your terminal app >'));
+  console.log(palette.meta('     enable "Google Chrome" (one time; otherwise the agent sees "Could not find DevToolsActivePort").'));
+  console.log(palette.meta('  3. The first time the agent drives Chrome, click "Allow" on the prompt.'));
+  console.log(palette.meta('  4. Chrome shows a "being controlled by automated test software" banner while active.'));
   console.log('');
   console.log(palette.meta('The agent gains mcp__chrome-devtools__* tools (navigate, click, fill, take_snapshot, …)'));
   console.log(palette.meta('driving your REAL, logged-in profile. Run `/mcp` in the REPL to confirm it connected.'));
@@ -196,7 +214,8 @@ export function registerBrowserCommand(program: Command): void {
     .command('connect')
     .description('Wire chrome-devtools-mcp (--autoConnect) so the agent can drive your real, logged-in Chrome')
     .option('--channel <channel>', `Chrome channel autoConnect targets (${VALID_CHANNELS.join('|')})`, 'stable')
-    .action((opts: { channel?: string }) => {
+    .option('--no-open', 'Do not open chrome://inspect or System Settings when a setup step is missing')
+    .action((opts: { channel?: string; open?: boolean }) => {
       try {
         const channel = (opts.channel ?? 'stable').toLowerCase();
         if (!(VALID_CHANNELS as readonly string[]).includes(channel)) {
@@ -207,7 +226,7 @@ export function registerBrowserCommand(program: Command): void {
         const cfg = readMcpConfigFile(path);
         if (cfg.mcpServers === undefined) cfg.mcpServers = {};
 
-        const entry = buildChromeDevtoolsEntry(channel as ChromeChannel);
+        const entry = buildChromeDevtoolsEntry(channel as ChromeChannel, resolveChromeDevtoolsMcpVersion());
         const existing = cfg.mcpServers[CHROME_DEVTOOLS_SERVER_NAME];
 
         if (existing !== undefined && JSON.stringify(existing) === JSON.stringify(entry)) {
@@ -223,6 +242,7 @@ export function registerBrowserCommand(program: Command): void {
         }
 
         printSetupGuidance();
+        printConnectDiagnosis(channel as ChromeChannel, opts.open !== false);
       } catch (err) {
         handleCommandError(err);
       }
@@ -256,6 +276,9 @@ export function registerBrowserCommand(program: Command): void {
     .description("Open a headed browser, log in manually, and save the session to a vault profile the agent's native browser tools reuse")
     .option('--profile <name>', 'Vault profile name to save the session under', 'default')
     .action(async (url: string, opts: { profile?: string }) => {
+      // Hoisted so the catch block can always call stop() regardless of where
+      // the error occurs relative to guardedEgress construction (#3720).
+      const guardedEgress = new GuardedEgress();
       try {
         const profile = (opts.profile ?? 'default').trim();
         assertSafeBrowserProfile(profile);
@@ -280,7 +303,14 @@ export function registerBrowserCommand(program: Command): void {
         // hardcoded above, making this the one path that ALWAYS needs the full
         // `chromium-*` build — a cache holding only the headless shell fails
         // here while satisfying every agent-facing browser tool.
-        const browserInstance = await chromium.launch({ headless: false }).catch((err: unknown) => {
+        //
+        // Route through GuardedEgress so the login browser respects the same
+        // egress policy as agent-facing browser tools (#3720). A redirect during
+        // login could otherwise reach private/link-local addresses that the
+        // proxy would block. AFK_WEB_ALLOW_PRIVATE_HOSTS opts out, matching the
+        // existing behaviour for web_scrape / browser_open / browser_act.
+        const launchOptions = await guardedEgress.start(false);
+        const browserInstance = await chromium.launch(launchOptions).catch((err: unknown) => {
           throw decoratePlaywrightLaunchError(err, false);
         });
         // Restore an existing session if present, so re-running login refreshes
@@ -306,12 +336,15 @@ export function registerBrowserCommand(program: Command): void {
         // write-then-chmod window on freshly-written credentials.
         atomicWriteFile(statePath, JSON.stringify(state), { mode: 0o600, mkdirp: false });
         await browserInstance.close().catch(() => undefined);
+        await guardedEgress.stop();
 
         console.log(palette.success(`✓ Saved session for profile "${profile}"`));
         console.log(palette.meta(`  Vault: ${statePath} (0600 — treat as a credential)`));
         console.log(palette.meta('  Point the agent at it:'));
         console.log(palette.meta(`    export AFK_BROWSER_DEFAULT_PROFILE=${profile}`));
       } catch (err) {
+        // stop() is idempotent — safe even if already called on the success path.
+        await guardedEgress.stop();
         handleCommandError(err);
       }
     });

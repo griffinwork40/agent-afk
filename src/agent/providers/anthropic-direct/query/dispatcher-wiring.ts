@@ -43,7 +43,7 @@ import type { AgentConfig } from '../../../types/config-types.js';
 import type { AnthropicToolDef } from '../../../tools/types.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../../tools/dispatcher.js';
-import { operatorDispatcherToolDefs } from '../../../tools/operator-denied-dispatcher.js';
+import { operatorDispatcherToolDefs, withSlotDeniedDispatcher } from '../../../tools/operator-denied-dispatcher.js';
 import {
   buildRuntimeStateSource,
   getRuntimeStateTool,
@@ -67,6 +67,7 @@ export interface DispatcherWiringArgs {
   providerName: string;
   /** Non-null only when the caller injected an external dispatcher. */
   externalTools: ToolDispatcher | undefined;
+  customToolSchemas?: readonly AnthropicToolDef[] | undefined;
   sharedReadRoots: string[] | undefined;
   sharedWriteRoots: string[] | undefined;
   /**
@@ -75,6 +76,19 @@ export interface DispatcherWiringArgs {
    * {@link RuntimeSourceDeps.getCwd}.
    */
   getCwd: () => string;
+  /**
+   * Live containment base for the DISPATCHER (every build, including
+   * `modelToolsFactory` rebuilds). Distinct from {@link getCwd}, which is a
+   * display accessor that falls back to `process.cwd()`.
+   *
+   * Invariant: returns `undefined` for an UNCONFINED session (no worktree, no
+   * `config.cwd`) and must never fall back to `process.cwd()`. A dispatcher
+   * with a cwd but empty shared roots denies every path (see the
+   * `resolveAndContain` invariant in `tools/handlers/_cwd-utils.ts`); feeding
+   * it the display fallback confined every fork of an unconfined session to
+   * `read roots []` (regression from #3704).
+   */
+  getDispatcherCwd: () => string | undefined;
   /** Live MCP tool accessor for the awareness source. */
   getMcpTools: () => readonly AnthropicToolDef[];
   /** Live MCP server-state accessor for surfacing failed servers (#1702). */
@@ -100,6 +114,7 @@ export interface DispatcherWiring {
   toolDefs: AnthropicToolDef[];
   /** The session id the presence file advertises and the query must reuse. */
   resolvedSessionId: string | undefined;
+  modelToolsFactory: (model: string, permissionMode: string) => { dispatcher: ToolDispatcher; tools: AnthropicToolDef[] };
 }
 
 /**
@@ -177,16 +192,33 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
     );
   }
 
+  const rebuild = (model: string, permissionMode: string) => {
+    const result = buildQueryTools({ ...args, config: { ...config, model, cwd: args.getDispatcherCwd() }, permissionMode }, runtimeStateSource, resolvedSession.id);
+    queryDispatcher = result.dispatcher;
+    return result;
+  };
+  const initial = rebuild(typeof config.model === 'string' ? config.model : args.model, args.permissionMode);
+  return { queryDispatcher: initial.dispatcher, runtimeStateSource, toolDefs: initial.tools, resolvedSessionId: resolvedSession.id, modelToolsFactory: rebuild };
+}
+
+/** Reuse the initial dispatcher wiring without repeating presence/session registration. */
+function buildQueryTools(args: DispatcherWiringArgs, runtimeStateSource: RuntimeStateSource, sessionId: string | undefined): { dispatcher: ToolDispatcher; tools: AnthropicToolDef[] } {
+  const { config } = args;
   // STEP 3 — assign. The source built in STEP 2 is handed to the dispatcher so
   // the `get_runtime_state` handler resolves against it.
-  queryDispatcher = args.externalTools
-    ? wrapDispatcherWithRuntimeState(args.externalTools, runtimeStateSource)
+  // Per-slot denies (`tools.disabledBySlot`) follow THIS query's model —
+  // see tools/operator-denied.slots.ts. Both branches carry them.
+  const slotModel = typeof config.model === 'string' ? config.model : undefined;
+  const externalTools = withSlotDeniedDispatcher(args.externalTools, slotModel, args.customToolSchemas?.map((t) => t.name));
+  const queryDispatcher = externalTools
+    ? wrapDispatcherWithRuntimeState(externalTools, runtimeStateSource)
     : args.buildDispatcher(args.permissionMode, {
         cwd: config.cwd,
+        ...(slotModel !== undefined ? { slotModel } : {}),
         readRoots: args.sharedReadRoots,
         writeRoots: args.sharedWriteRoots,
         ...(config.env !== undefined ? { env: config.env } : {}),
-        sessionId: resolvedSession.id,
+        sessionId,
         parentSessionId: config.parentSessionId,
         ...(config.rootSessionId !== undefined ? { rootSessionId: config.rootSessionId } : {}),
         ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
@@ -221,7 +253,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // Without adding the schema here the model has no way to know the tool
   // exists — leaving the awareness layer reachable only via the
   // `SessionToolDispatcher` path.
-  const baseToolDefs = [...operatorDispatcherToolDefs(queryDispatcher, [...builtinToolSchemas, getRuntimeStateTool])];
+  const baseToolDefs = [...operatorDispatcherToolDefs(externalTools ?? queryDispatcher, [...builtinToolSchemas, getRuntimeStateTool])];
   // Invariant: skill-dispatch sub-agents are dispatched AS a specific skill, so
   // they must neither (a) pause to ask the operator "which skill?" nor (b) mutate
   // the operator's environment. Strip `ask_question` (the operator-prompt escape
@@ -262,10 +294,5 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
           )
         : baseToolDefs;
 
-  return {
-    queryDispatcher,
-    runtimeStateSource,
-    toolDefs,
-    resolvedSessionId: resolvedSession.id,
-  };
+  return { dispatcher: queryDispatcher, tools: toolDefs };
 }

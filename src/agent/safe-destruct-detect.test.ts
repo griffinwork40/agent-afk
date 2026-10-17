@@ -228,6 +228,55 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
     expect(hook(preCtx('git status'))).toEqual({});
   });
 
+  // ── hint text: actionable alternatives in blockReason ────────────────────
+  it('git-reset-hard blockReason names rescue-branch and git switch -C alternative', () => {
+    const decision = hook(preCtx('git reset --hard HEAD~3'));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('rescue branch');
+    expect(decision.reason).toContain('git stash push --include-untracked');
+    expect(decision.reason).toContain('git switch -C');
+    expect(decision.reason).toContain('deliberate');
+    // Never recommend staging everything: `git add -A` can commit secrets.
+    expect(decision.reason).not.toContain('git add -A');
+  });
+
+  it.each([
+    'git reset --hard HEAD~3',
+    'git clean -fd .',
+    'git push --force origin main',
+  ])('deliberate-block reasons keep the ask-the-operator escalation: %s', (cmd) => {
+    const decision = hook(preCtx(cmd));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('ask the operator to run it');
+  });
+
+  it('git-clean-force blockReason names quarantine directory alternative', () => {
+    const decision = hook(preCtx('git clean -fd .'));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('quarantine');
+    expect(decision.reason).toContain('.afk/quarantine');
+    expect(decision.reason).toContain('deliberate');
+  });
+
+  it('git-push-force blockReason names new-branch alternative and --force-with-lease', () => {
+    const decision = hook(preCtx('git push --force origin main'));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('new branch');
+    expect(decision.reason).toContain('--force-with-lease');
+    expect(decision.reason).toContain('deliberate');
+  });
+
+  // ── classification levels unchanged ──────────────────────────────────────
+  it('git-reset-hard level is still high (block tier), not downgraded', () => {
+    const decision = hook(preCtx('git reset --hard HEAD'));
+    expect(decision.decision).toBe('block');
+  });
+
+  it('git-push-force level is still block tier, not downgraded', () => {
+    const decision = hook(preCtx('git push -f'));
+    expect(decision.decision).toBe('block');
+  });
+
   it('ignores non-bash tools', () => {
     expect(hook(preCtx('rm -rf /tmp/x', 'read_file'))).toEqual({});
   });

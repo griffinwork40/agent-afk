@@ -106,8 +106,8 @@ describe('isIdempotentMethod', () => {
   it('GET → true', () => expect(isIdempotentMethod('GET')).toBe(true));
   it('HEAD → true', () => expect(isIdempotentMethod('HEAD')).toBe(true));
   it('OPTIONS → true', () => expect(isIdempotentMethod('OPTIONS')).toBe(true));
-  it('PUT → true', () => expect(isIdempotentMethod('PUT')).toBe(true));
-  it('DELETE → true', () => expect(isIdempotentMethod('DELETE')).toBe(true));
+  it('PUT → false (remote application may precede response loss)', () => expect(isIdempotentMethod('PUT')).toBe(false));
+  it('DELETE → false (remote application may precede response loss)', () => expect(isIdempotentMethod('DELETE')).toBe(false));
   it('POST → false', () => expect(isIdempotentMethod('POST')).toBe(false));
   it('PATCH → false', () => expect(isIdempotentMethod('PATCH')).toBe(false));
 });

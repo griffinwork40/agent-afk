@@ -12,8 +12,9 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { writeFileSync, unlinkSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { unlinkSync, readFileSync } from 'node:fs';
+import { atomicWriteFile } from '../utils/atomic-write.js';
+import { join } from 'node:path';
 import type { AgentConfig } from './types.js';
 import type { Telegraf } from 'telegraf';
 import { CronScheduler, type SchedulerOptions, type TelemetryRecord } from './daemon/scheduler.js';
@@ -75,6 +76,12 @@ export interface DaemonOptions {
   pullPollIntervalMs?: number;
   /** Override the queue directory for pull-mode dequeue (defaults to `getQueueDir()`). */
   queueDir?: string;
+  /**
+   * Run durable-handoff maintenance (startup re-notify/expiry, periodic expiry
+   * sweep, answered-handoff resumption) for every trigger mode. Defaults to
+   * true; the CLI disables it for transient `--once` ticks.
+   */
+  handoffMaintenance?: boolean;
   /**
    * Write the port-discovery file under the daemon state dir so tool handlers
    * (create_schedule / cancel_schedule live-sync) can find this instance.
@@ -175,6 +182,9 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   if (options.pullPollIntervalMs !== undefined && options.pullPollIntervalMs > 0) {
     scheduler.startPullLoop();
   }
+  // Handoff expiry + answered-handoff resumption run in EVERY trigger mode
+  // (#1416), not only pull. Off for transient instances (`--once`).
+  if (options.handoffMaintenance !== false) scheduler.startHandoffMaintenance();
 
   for (const task of options.tasks ?? []) {
     scheduler.register(task);
@@ -200,8 +210,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   // is found (pre-existing port files from before this change).
   if (writePortFile) {
     try {
-      mkdirSync(dirname(portFilePath), { recursive: true });
-      writeFileSync(portFilePath, `${host}:${port}`, 'utf-8');
+      atomicWriteFile(portFilePath, `${host}:${port}`, { encoding: 'utf-8', mkdirp: true, mode: 0o644 });
     } catch {
       // Best-effort; daemon still functional without port file
     }

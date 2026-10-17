@@ -1221,4 +1221,72 @@ describe('createAfkModeGate — specific block reasons and temp-dir writes', () 
       rmSync(sessRoot, { recursive: true, force: true });
     }
   });
+
+  // ── workspace-escape refusal carries actionable hint text (#3727 follow-up) ─
+  it('non-daemon workspace-escape refusal names sanctioned scratch locations and heredoc forms', async () => {
+    const { gate } = makeGate(false);
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: P_USERS_DEV_ELSEWHERE },
+    });
+    expect(result.decision).toBe('block');
+    // Sanctioned scratch: session temp root / $TMPDIR
+    expect(result.reason).toMatch(/\$TMPDIR|os\.tmpdir/);
+    // Heredoc hints for commit messages and PR bodies
+    expect(result.reason).toContain(`git commit -F - <<'EOF'`);
+    expect(result.reason).toContain(`gh pr create --body-file - <<'EOF'`);
+    // .afk/ for artifacts
+    expect(result.reason).toContain('.afk/');
+    // deliberate boundary note
+    expect(result.reason).toContain('deliberate');
+    // classification unchanged: still 'block', not downgraded
+    expect(result.reason).toContain('workspace-escape: ');
+  });
+
+  it('daemon workspace-escape refusal names heredoc forms and .afk/ directory', async () => {
+    const route = vi.fn(async (): Promise<ElicitationResult> => ({ action: 'decline' }));
+    const daemonGate = createAfkModeGate(
+      () => 'autonomous' as PermissionMode,
+      P_USERS_DEV,
+      () => P_USERS_DEV,
+      { promptForApproval: false, daemonTaskId: 'my-task', route },
+    );
+    const result = await daemonGate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: P_USERS_DEV_ELSEWHERE },
+    });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain(`git commit -F - <<'EOF'`);
+    expect(result.reason).toContain(`gh pr create --body-file - <<'EOF'`);
+    expect(result.reason).toContain('.afk/');
+    expect(result.reason).toContain('deliberate');
+    // daemon tail still present
+    expect(result.reason).toContain('no operator can approve this run');
+    // classification unchanged
+    expect(result.reason).toContain('workspace-escape: ');
+    // sanctioned-scratch hint must NOT appear in a workspace-escape block
+    expect(result.reason).not.toContain('Sanctioned scratch');
+  });
+
+  it.each([false, true])('non-workspace-escape hard-block does NOT gain the escape hint (daemon=%s)', async (daemon) => {
+    const gate = createAfkModeGate(
+      () => 'autonomous' as PermissionMode,
+      P_USERS_DEV,
+      () => P_USERS_DEV,
+      { promptForApproval: false, ...(daemon ? { daemonTaskId: 'my-task' } : {}) },
+    );
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command: 'sudo ls' },
+    });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain("bash-pattern: matched 'sudo'");
+    expect(result.reason).not.toContain(`git commit -F - <<'EOF'`);
+    expect(result.reason).not.toContain(`gh pr create --body-file - <<'EOF'`);
+    expect(result.reason).not.toContain('Sanctioned scratch');
+    expect(result.reason).not.toContain('This boundary is deliberate');
+  });
 });

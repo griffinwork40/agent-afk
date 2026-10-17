@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { appendCalibration, trackRecordSummary } from './ledger.js';
 import type { CalibrationRecord } from './ledger.js';
+import { pathExists } from '../utils/fs.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -77,7 +78,7 @@ describe('appendCalibration', () => {
 
   it('is a no-op for empty records array', async () => {
     await appendCalibration([], ledgerFile);
-    const exists = await fsp.access(ledgerFile).then(() => true).catch(() => false);
+    const exists = await pathExists(ledgerFile);
     // File should not be created for empty records.
     expect(exists).toBe(false);
   });

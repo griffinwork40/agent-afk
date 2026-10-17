@@ -23,7 +23,7 @@ import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/p
 import { join } from 'node:path';
 import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
-import { isErrnoCode } from '../../utils/errors.js';
+import { isErrnoCode, isWindowsLockContention } from '../../utils/errors.js';
 import { debugLog } from '../../utils/debug.js';
 
 // ---------------------------------------------------------------------------
@@ -100,6 +100,8 @@ export interface HandoffRecord {
   answeredAt?: string;
   /** Which surface recorded the answer ('telegram' | 'web' | 'repl'). */
   answerSource?: string;
+  /** ISO 8601 timestamp when the record transitioned to 'expired' (handoff-expiry.ts). */
+  expiredAt?: string;
   /**
    * Opaque identity of the responder for provenance tracking.
    *
@@ -130,6 +132,16 @@ export interface HandoffRecord {
    * Populated after the Telegram message is successfully sent.
    */
   telegramMessageId?: number;
+  /**
+   * Origin context of the task that asked (#1416), carried into the resumed
+   * run: original task id (overlap identity), pinned cwd, and notification
+   * policy. Optional; absent on records written before these fields existed.
+   * See handoff-resume-context.ts.
+   */
+  originalTaskId?: string;
+  cwd?: string;
+  notifyOn?: 'failure' | 'always' | 'never';
+  notifyChat?: number | string;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +303,8 @@ export async function withHandoffLock<T>(
   taskId: string,
   handoffsDir: string,
   cb: () => Promise<T>,
+  /** Injectable for unit-testing on any OS; defaults to `process.platform`. */
+  platform: string = process.platform,
 ): Promise<T | null> {
   const lock = lockPath(handoffsDir, taskId);
 
@@ -298,7 +312,10 @@ export async function withHandoffLock<T>(
   try {
     await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
   } catch (err) {
-    if (isErrnoCode(err, 'EEXIST')) {
+    // On Windows, a just-released lock sits in "delete-pending" state until
+    // the last handle closes. An O_EXCL create during that window gets
+    // EPERM/EACCES/EBUSY. Treat those as contention — same as EEXIST.
+    if (isErrnoCode(err, 'EEXIST') || isWindowsLockContention(err, platform)) {
       // Check whether the lock is stale (crash-leftover). A fresh lock means a
       // genuine concurrent holder — give up immediately.
       let lockMtime: number;
@@ -319,7 +336,7 @@ export async function withHandoffLock<T>(
       try {
         await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
       } catch (retryErr) {
-        if (isErrnoCode(retryErr, 'EEXIST')) {
+        if (isErrnoCode(retryErr, 'EEXIST') || isWindowsLockContention(retryErr, platform)) {
           // Genuine race on the retry — another process won.
           return null;
         }
@@ -405,7 +422,7 @@ export async function updateHandoffAnswer(
     await atomicWriteJson(handoffPath(handoffsDir, taskId), updated);
 
     if (responderIdentity !== undefined) {
-      debugLog(`[handoff-store] responderIdentity captured for task ${taskId}: ${responderIdentity}`);
+      debugLog(`[handoff-store] responderIdentity captured for task ${taskId} (present, masked)`);
     } else {
       debugLog(`[handoff-store] responderIdentity absent for task ${taskId} (source: ${source})`);
     }

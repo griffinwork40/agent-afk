@@ -144,6 +144,11 @@ export function buildProviderQuery(
       : {}),
     maxTokens,
     tools: toolDefs,
+    modelToolsFactory: setup.modelToolsFactory,
+    // Every live switch (same slot-deny key or not) re-points the shared
+    // `config` the cwd re-anchor factory reads, so a later setCwd() rebuilds
+    // under the ACTIVE slot's policy, never the launch model's.
+    onModelChange: (model) => { config.model = model; },
     userSystem: toolSystemAppend,
     systemPrefix,
     tokenRefresher,
@@ -163,6 +168,7 @@ export function buildProviderQuery(
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
     ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
+    ...(config.hasWorkspacePreamble ? { hasWorkspacePreamble: true as const } : {}),
     ...(config.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: config.autoResumeOnUsageLimit }
       : {}),

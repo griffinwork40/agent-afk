@@ -163,6 +163,7 @@ export interface ParsedWhatifArgs {
 
 // WHATIF_USAGE is re-exported from args.usage.ts (extracted for the 350-line ceiling).
 import { WHATIF_USAGE } from './args.usage.js';
+import { checkFlagConflicts } from './args.conflicts.js';
 
 // ---------------------------------------------------------------------------
 // Parser
@@ -349,17 +350,14 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
 
   const text = positionals.length > 0 ? positionals.join(' ') : undefined;
 
-  if (state.specFile && (flagChanges.length > 0 || text || state.aaMode)) {
-    return `--spec cannot be combined with change flags or plain-text\n\n${WHATIF_USAGE}`;
-  }
-
-  if (state.aaMode && (flagChanges.length > 0 || text)) {
-    return `--aa cannot be combined with change flags or plain-text (A/A mode uses no changes)\n\n${WHATIF_USAGE}`;
-  }
-
-  if (!text && !state.specFile && flagChanges.length === 0 && !state.aaMode) {
-    return `whatif: nothing to predict — provide a description, flags, or --spec\n\n${WHATIF_USAGE}`;
-  }
+  const conflict = checkFlagConflicts({
+    specFile: state.specFile,
+    changeFlagCount: flagChanges.length,
+    text,
+    aaMode: state.aaMode,
+    verify: state.verify,
+  });
+  if (conflict !== null) return conflict;
 
   return {
     flagChanges,
