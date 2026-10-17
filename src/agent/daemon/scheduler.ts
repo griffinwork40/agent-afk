@@ -382,9 +382,15 @@ export class CronScheduler {
     this.shutdownController = new AbortController();
     if (this.pullPollTimer !== undefined) clearInterval(this.pullPollTimer);
     this.pullPollTimer = undefined;
+    // Invariant: unregister (stop+destroy cron timers) BEFORE awaiting
+    // handoffMaintenance.stop(). The await window is non-zero when startup
+    // recovery is still in progress (e.g. a slow Telegram re-notification).
+    // A live cron timer can fire runOnce() inside that window using the
+    // freshly-reset, non-aborted shutdownController, spawning agent sessions
+    // after shutdown has begun. Stopping the cron tasks first closes that gap.
+    for (const taskId of this.registry.keys()) this.unregister(taskId);
     await this.handoffMaintenance?.stop();
     this.handoffMaintenance = undefined;
-    for (const taskId of this.registry.keys()) this.unregister(taskId);
   }
 
   /**

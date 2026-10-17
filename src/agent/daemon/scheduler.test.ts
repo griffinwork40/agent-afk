@@ -1600,6 +1600,157 @@ describe('elicitationRouter — installForSession / uninstallForSession isolatio
   });
 });
 
+describe('CronScheduler.stop() — unregister before awaiting handoffMaintenance (#3948)', () => {
+  /**
+   * Regression: stop() used to await handoffMaintenance.stop() BEFORE
+   * unregistering cron tasks. A slow-resolving startup recovery (e.g. Telegram
+   * re-notification) opened a window where a live cron timer could fire
+   * runOnce() against the freshly-reset shutdownController, spawning sessions
+   * mid-shutdown. The fix moves the unregister loop before the await.
+   *
+   * This test verifies that a cron callback does NOT fire runOnce() during the
+   * await window by:
+   *   1. Freezing the handoffMaintenance.stop() promise behind a gate.
+   *   2. Triggering stop() (which now unregisters first, then awaits the gate).
+   *   3. Releasing the gate and asserting no session was spawned after stop()
+   *      was called.
+   */
+  it('cron callbacks do not spawn sessions during the handoffMaintenance.stop() await window', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'afk-stop-order-'));
+    const telemetryPath = join(dir, 'telemetry.jsonl');
+
+    let sessionCallCount = 0;
+    let releaseStopGate!: () => void;
+    const stopGate = new Promise<void>((r) => { releaseStopGate = r; });
+
+    // Fake handoffMaintenance whose stop() suspends until we release it.
+    let fakeHandoffStopped = false;
+    const fakeHandoff = {
+      stop: () => stopGate.then(() => { fakeHandoffStopped = true; }),
+    };
+
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      budgetGate: async () => ({ skip: false }),
+      sessionFactory: () => {
+        sessionCallCount += 1;
+        return {
+          sendMessage: () => Promise.resolve({ content: 'ok' }),
+          close: () => Promise.resolve(),
+        } as unknown as AgentSession;
+      },
+    });
+
+    // Inject the fake handle before stop() is called.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (scheduler as any).handoffMaintenance = fakeHandoff;
+
+    scheduler.register({
+      taskId: 'stop-order-task',
+      command: 'run',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    // Begin stop() — with the fix, this unregisters the cron task first, then
+    // suspends on fakeHandoff.stop() (which awaits stopGate).
+    const stopPromise = scheduler.stop();
+
+    // Yield to allow stop() to reach the await.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Capture session count at this point — the cron task is already
+    // unregistered, so no new sessions should be spawned from here.
+    const sessionsBeforeRelease = sessionCallCount;
+
+    // Simulate a cron tick firing (as node-cron would) while stop() is still
+    // suspended. Because unregister already called destroy(), the entry is gone
+    // from the registry and runOnce() is a no-op.
+    // We verify by directly checking registry is empty.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const registrySize = (scheduler as any).registry.size;
+    expect(registrySize).toBe(0);
+
+    // Release the gate so stop() can finish.
+    releaseStopGate();
+    await stopPromise;
+
+    expect(fakeHandoffStopped).toBe(true);
+    // No new sessions should have been created after stop() began.
+    expect(sessionCallCount).toBe(sessionsBeforeRelease);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('HandoffMaintenanceHandle.stop() — slow startup recovery (#3948)', () => {
+  /**
+   * Verifies that stop() does not resolve until the startup-recovery promise
+   * settles, even when recovery is slow (simulating a slow Telegram call).
+   * Also verifies idempotency: calling stop() multiple times is safe and all
+   * callers receive the same settled promise.
+   */
+  it('stop() does not resolve until startup recovery completes', async () => {
+    const { startHandoffMaintenance } = await import('./handoff-maintenance.js');
+
+    let releaseRecovery!: () => void;
+    const recoveryGate = new Promise<void>((r) => { releaseRecovery = r; });
+    let recoverySettled = false;
+
+    // Stub runStartupRecovery via the drainResumeQueue seam — we override the
+    // whole opts.drainResumeQueue to be a no-op and inject a slow recovery
+    // by replacing the module. Instead, we use startHandoffMaintenance directly
+    // with a custom runStartupRecovery path via a fake opts that delays.
+    //
+    // Because startHandoffMaintenance calls runStartupRecovery internally, we
+    // test the observable contract: stop() must await it.
+    // We wrap the real startHandoffMaintenance with a patched runStartupRecovery
+    // by monkey-patching the module import.
+    const handoffMaintMod = await import('./handoff-maintenance.js');
+    const realRunStartupRecovery = handoffMaintMod.runStartupRecovery;
+    const runStartupRecoverySpy = vi.spyOn(handoffMaintMod, 'runStartupRecovery').mockImplementation(
+      async (...args) => {
+        await recoveryGate;
+        recoverySettled = true;
+        return realRunStartupRecovery(...args);
+      }
+    );
+
+    const dir = mkdtempSync(join(tmpdir(), 'afk-handoff-stop-'));
+    try {
+      const handle = startHandoffMaintenance({
+        queueDir: dir,
+        drainResumeQueue: async () => {},
+      });
+
+      // stop() is called while recovery is still pending.
+      let stopResolved = false;
+      const stopPromise = handle.stop().then(() => { stopResolved = true; });
+
+      // Yield — stop() should NOT have resolved yet because recoveryGate is open.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(stopResolved).toBe(false);
+      expect(recoverySettled).toBe(false);
+
+      // Release recovery — stop() must now settle.
+      releaseRecovery();
+      await stopPromise;
+
+      expect(recoverySettled).toBe(true);
+      expect(stopResolved).toBe(true);
+
+      // Idempotency: calling stop() again re-awaits the already-settled promise
+      // and resolves immediately.
+      await handle.stop();
+    } finally {
+      runStartupRecoverySpy.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('CronScheduler — concurrent cron tasks each get their own elicitation handler (#3619)', () => {
   /**
    * Integration regression test: two schedulers with different taskIds tick

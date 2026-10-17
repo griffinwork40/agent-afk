@@ -63,8 +63,14 @@ export interface HandoffMaintenanceHandle {
    * Clear the periodic maintenance interval and await the one-shot startup
    * recovery that was fired on construction. Awaiting `stop()` guarantees no
    * further writes into `queueDir` can race a subsequent directory removal
-   * (e.g. `rmSync(tmpHome, { recursive: true })` in test teardown). Safe to
-   * call multiple times — idempotent after the first call.
+   * (e.g. `rmSync(tmpHome, { recursive: true })` in test teardown).
+   *
+   * Idempotent: every caller that `await`s `stop()` receives the same captured
+   * `startupRecovery` promise. The first call clears the interval and awaits
+   * the promise; subsequent calls re-await the already-settled promise, which
+   * resolves immediately at zero cost. There is no "already stopped" guard
+   * needed — `clearInterval` on an already-cleared timer is a safe no-op and
+   * the captured promise never changes identity after construction.
    */
   stop(): Promise<void>;
 }
