@@ -53,7 +53,10 @@ export async function resolveRepoContext(
   const raw = result.stdout.trim();
   if (!raw) throw new Error('Not in a git repository.');
   const absoluteGitDir = isAbsolute(raw) ? raw : resolve(cwd, raw);
-  const repoRoot = dirname(absoluteGitDir);
+  // Contract: realpath the repo root so downstream isPathWithin comparisons
+  // match even when git returns 8.3 short-name paths on Windows (e.g.
+  // RUNNER~1 vs runneradmin from os.tmpdir vs fs.realpath).
+  const repoRoot = await fs.realpath(dirname(absoluteGitDir));
   return { repoRoot, afkWorktreesRoot: join(repoRoot, '.afk-worktrees') };
 }
 
