@@ -9,6 +9,7 @@
  * @module agent/subagent/resolve-fork-scope.test
  */
 
+import path from 'path';
 import { describe, it, expect, vi } from 'vitest';
 import { resolveReadScope, composeWriteRoots } from './resolve-fork-scope.js';
 
@@ -33,8 +34,8 @@ describe('composeWriteRoots', () => {
     // This pins the behaviour described in schema and issue #3766:
     // when the parent is unconfined (no cwd), composeWriteRoots produces
     // a roots-only array (base = []), but the child's resolveBase stays
-    // undefined so _cwd-utils.ts:127-129 fires the unconfined fast-path
-    // BEFORE consulting writeRoots — making these roots have no effect.
+    // undefined so the `resolveBase === undefined` fast-path in `_cwd-utils.ts`
+    // fires BEFORE consulting writeRoots — making these roots have no effect.
     const result = composeWriteRoots(['/would/be/ignored'], undefined);
     expect(result).toEqual(['/would/be/ignored']);
   });
@@ -111,7 +112,9 @@ describe('resolveReadScope — confined parent', () => {
       resolveMainRoot: noMainRoot,
     });
     // Child will be confined (effectiveChildCwd is defined), so extras are composed.
-    expect(result).toContain('/extra/read');
+    // Use path.resolve so the assertion holds on Windows (path.resolve('/extra/read')
+    // → 'D:\extra\read' on win32, matching what resolveReadScope produces internally).
+    expect(result).toContain(path.resolve('/extra/read'));
   });
 
   it('does not compose extraReadRoots when callerReadRoots pins (Invariant #1)', async () => {
