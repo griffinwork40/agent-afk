@@ -62,9 +62,10 @@ export const ASK_QUESTION_GATE_REASON =
 export interface AskQuestionGateOptions {
   /**
    * Override the handler-availability probe. Default: the module-scope
-   * {@link elicitationRouter}. Injected in tests.
+   * {@link elicitationRouter}. Injected in tests. Receives the calling
+   * session's key so concurrent sessions don't see each other's handlers.
    */
-  hasHandler?: () => boolean;
+  hasHandler?: (sessionKey?: string) => boolean;
   /**
    * Override the best-effort operator notification. Default: Telegram
    * `pushIfConfigured` (no-op when Telegram is unconfigured; transport
@@ -80,14 +81,16 @@ function defaultNotify(message: string): void {
 export function createAskQuestionGate(
   options: AskQuestionGateOptions = {},
 ): (context: HookContext) => HookDecision {
-  const hasHandler = options.hasHandler ?? ((): boolean => elicitationRouter.hasHandler());
+  const hasHandler = options.hasHandler ?? ((sessionKey?: string): boolean => elicitationRouter.hasHandler(sessionKey));
   const notify = options.notify ?? defaultNotify;
 
   return function askQuestionGate(context: HookContext): HookDecision {
     if (context.event !== 'PreToolUse') return {};
     if (context.toolName !== 'ask_question') return {};
     // Interactive operator attached — asking (and waiting) is legitimate.
-    if (hasHandler()) return {};
+    // Pass the session's own key so a concurrent session's handler is not
+    // mistaken for this session's handler (#3660).
+    if (hasHandler(context.sessionId)) return {};
 
     // Park-and-notify parity with the router's unattended path: the block
     // must not cost the operator their async visibility. Best-effort and
