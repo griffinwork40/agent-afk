@@ -94,7 +94,7 @@ async function listRegisteredWorktrees(
   for (const line of out.stdout.split('\n')) {
     if (line.startsWith('worktree ')) {
       if (current) entries.push(current);
-      current = { path: line.slice('worktree '.length).trim(), locked: false };
+      current = { path: resolve(line.slice('worktree '.length).trim()), locked: false };
     } else if (line.startsWith('branch ') && current) {
       current.branch = line.slice('branch '.length).trim();
     } else if (line.startsWith('locked') && current) {
@@ -250,17 +250,31 @@ export function createWorktreeHandler(
       };
     }
 
-    const anchor = context?.resolveBase ?? cwd ?? process.cwd();
+    const repo = obj['repo'];
+    if (repo !== undefined && (
+      typeof repo !== 'string' || !isAbsolute(repo) || repo.split(/[/\\]/).includes('..')
+    )) {
+      return { content: 'Invalid input: repo must be an absolute path with no .. segments', isError: true };
+    }
+    let anchor = typeof repo === 'string' ? repo : context?.resolveBase ?? cwd ?? process.cwd();
     let ctx: RepoContext;
     try {
+      if (repo !== undefined) {
+        if (!(await fs.stat(anchor)).isDirectory()) {
+          return { content: 'Invalid input: repo must be an existing directory in a git repository', isError: true };
+        }
+        // Contract: realpath before resolveRepoContext so findEntry matches canonical
+        // paths from `git worktree list --porcelain` when repo is a symlink.
+        anchor = await fs.realpath(anchor);
+      }
       ctx = await resolveRepoContext(execFile, anchor);
     } catch (err) {
       return {
         content:
           `Cannot resolve git repo root from ${anchor}: ${errorMessage(err)}\n\n` +
           `This usually means the subagent was dispatched without an explicit \`cwd\` pointing at a git repository. ` +
-          `Fix: pass \`cwd\` set to the project root when dispatching the subagent (e.g. the repo root returned by a prior worktree create, or the session's own git checkout root). ` +
-          `The worktree tool requires a git working directory to locate \`.afk-worktrees/\`.`,
+          `Fix: pass \`repo\` set to an existing absolute project path on this tool call, or pass \`cwd\` set to the project root when dispatching the subagent. ` +
+          `The worktree tool requires a git repository to locate \`.afk-worktrees/\`.`,
         isError: true,
       };
     }

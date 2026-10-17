@@ -124,6 +124,15 @@ During sessions, the agent has access to a `worktree` tool for managing the full
 
 Worktrees created through this tool write a `.afk-worktree-meta.json` file that the sweep engine uses to track ownership and age. Worktrees created with raw `git worktree add` in the shell lack this metadata and are eventually reaped as ghosts — or leak forever if created outside `.afk-worktrees/`.
 
+All actions accept an optional `repo`: an existing absolute directory inside the target git repository, with no `..` segments. Omit it to use the session cwd. The tool resolves the main checkout even when `repo` points inside a linked worktree, and manages that checkout's `.afk-worktrees/`. This lets daemon or scratch-directory sessions use the managed lifecycle without changing cwd:
+
+```
+worktree { action: "create", repo: "/projects/my-repo", name: "my-feature", base: "origin/main" }
+worktree { action: "list", repo: "/projects/my-repo" }
+```
+
+Pass the same `repo` on subsequent `keep`, `release`, and `remove` calls. Slugs and repo-relative `path` values are resolved against the selected repo, and removal still refuses the main checkout and paths outside its `.afk-worktrees/`.
+
 ### Actions
 
 | Action | Description |
@@ -140,6 +149,8 @@ Worktrees created through this tool write a `.afk-worktree-meta.json` file that 
 worktree { action: "create", name: "my-feature", base: "HEAD" }
 → { path: "/repo/.afk-worktrees/my-feature", branch: "afk/my-feature", base: "...", note: "..." }
 ```
+
+New branches do not track the base ref, including remote bases such as `origin/main`; publish them explicitly with `git push -u origin HEAD` rather than risking an upstream push to the base branch.
 
 Pass the returned `path` as `cwd` when dispatching subagents into the new tree:
 

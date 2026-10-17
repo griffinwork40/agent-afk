@@ -22,9 +22,13 @@ export const worktreeTool: AnthropicToolDef = {
     'it writes the `.afk-worktree-meta.json` the background sweep engine uses to know a worktree is ' +
     'owned and alive. Worktrees created via bare `bash: git worktree add` have no meta and are ' +
     'eventually reaped as ghosts (or leak forever if created outside `.afk-worktrees/`).\n\n' +
+    'All actions accept `repo`: an existing absolute path inside the target git repository, with no ' +
+    '`..` segments. Defaults to the session cwd; pass it when cwd is outside a repo. Managed trees ' +
+    'live under the resolved main checkout\'s `.afk-worktrees/`.\n\n' +
     'Actions:\n' +
     '- `create` — new worktree + branch under `.afk-worktrees/<name>` with proper meta. `base` picks ' +
-    'the start ref (default HEAD). Returns { path, branch, base, note }, where `note` warns that the ' +
+    'the start ref (default HEAD); the new branch never tracks the base ref. ' +
+    'Returns { path, branch, base, note }, where `note` warns that the ' +
     'fresh worktree has no installed dependencies (no shared node_modules) and gives the install ' +
     'command to run before building/testing. Pass the returned path as `cwd` when dispatching ' +
     'subagents into it.\n' +
@@ -65,6 +69,12 @@ export const worktreeTool: AnthropicToolDef = {
         type: 'string',
         enum: ['create', 'keep', 'release', 'list', 'remove'],
         description: 'The lifecycle operation to perform.',
+      },
+      repo: {
+        type: 'string',
+        description:
+          'All actions: existing absolute directory inside the target git repository, with no .. ' +
+          'segments. Defaults to session cwd. Resolves the main checkout even from a linked worktree.',
       },
       name: {
         type: 'string',
