@@ -77,6 +77,7 @@ import {
 import { TurnAccumulator } from './loop/turn-accumulator.js';
 import { TurnTrace } from '../shared/turn-trace.js';
 import { applyBeforeNextRound } from './loop/inter-round.js';
+import { assertNever } from '../../../utils/type-guards.js';
 // ---------------------------------------------------------------------------
 // Stop-hook seam (issue #2714): extracted helper to keep runTurn under 200 lines
 // ---------------------------------------------------------------------------
@@ -292,10 +293,10 @@ export async function* runTurn(
     }
 
     // After the 'overload-exhausted' guard above, only 'translator-errored' and
-    // 'streamed' remain — use control-flow narrowing instead of a cast so a
-    // future RoundOutcome variant is a compile error here, not a silent bypass.
+    // 'streamed' remain — assertNever gives a compile error if a future
+    // RoundOutcome variant reaches here without a handler.
     if (outcome.kind !== 'translator-errored' && outcome.kind !== 'streamed') {
-      throw new Error(`Unexpected round outcome: ${(outcome as { kind: string }).kind}`);
+      assertNever(outcome);
     }
     const turnResult = outcome.kind === 'streamed' ? outcome.turnResult : null;
     const terminal = yield* handleStreamTerminals(

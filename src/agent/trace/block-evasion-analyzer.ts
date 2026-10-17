@@ -218,6 +218,7 @@ export function detectEvasions(
     // Scan forward up to windowSize *completed* tool_call events
     // from the same actor.
     let toolCallsSeen = 0;
+    let blockedToolOwnCompletionSkipped = false; // guard: skip only the first isError of the blocked tool
     for (let j = bi + 1; j < events.length && toolCallsSeen < windowSize; j++) {
       const ev = events[j]!;
       if (ev.kind !== 'tool_call') continue;
@@ -227,10 +228,14 @@ export function detectEvasions(
       // Scope to same actor (subagentId match; both undefined = root).
       if (p.subagentId !== blockActor) continue;
 
-      // Exclude the blocked call's own (failed) completion: same tool
-      // name + isError immediately after the block should not consume
-      // a window slot.
-      if (p.name === blockedTool && p.isError) continue;
+      // Exclude the blocked call's own (failed) completion: same tool name +
+      // isError, but only once — a later unrelated failure of the same tool
+      // must consume a window slot normally so the window does not extend
+      // indefinitely (#3796).
+      if (p.name === blockedTool && p.isError && !blockedToolOwnCompletionSkipped) {
+        blockedToolOwnCompletionSkipped = true;
+        continue;
+      }
 
       toolCallsSeen++;
       const name = p.name;

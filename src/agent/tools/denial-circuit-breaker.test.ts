@@ -17,6 +17,7 @@ import {
   READ_DENYLIST_ENTRY_MARKER,
   PROTECTED_CREDENTIAL_PATH_MARKER,
 } from './handlers/read-denylist.js';
+import { HOOK_BLOCK_REPEAT_FAILURE_CLASS, HOOK_BLOCK_REPEAT_THRESHOLD } from './hook-block-repeat-breaker.js';
 
 // Representative non-containment hook-block reasons the breaker must IGNORE.
 // Byte-for-byte prefixes of the real producers (path-approval-hook.ts's
@@ -299,8 +300,11 @@ describe('denial circuit breaker — dispatcher integration', () => {
       // Must never trip the denial-breaker (the widening-readRoots remedy would
       // misdirect). After HOOK_BLOCK_REPEAT_THRESHOLD consecutive non-containment
       // blocks the hook-block-repeat breaker may trip — that is correct and
-      // expected; we only assert the denial-breaker class is absent.
+      // expected; once it fires, assert explicitly that the class is hook-block-repeat.
       expect(r.failureClass).not.toBe(DENIAL_BREAKER_FAILURE_CLASS);
+      if (i >= HOOK_BLOCK_REPEAT_THRESHOLD - 1 && r.failureClass !== undefined) {
+        expect(r.failureClass).toBe(HOOK_BLOCK_REPEAT_FAILURE_CLASS);
+      }
     }
   });
 
@@ -312,8 +316,12 @@ describe('denial circuit breaker — dispatcher integration', () => {
     for (let i = 0; i < DENIAL_CIRCUIT_BREAKER_THRESHOLD * 2; i++) {
       const r = await d.execute(readCall(i));
       expect(r.isError).toBe(true);
-      // Same: never denial-breaker; hook-block-repeat may fire after its threshold.
+      // Same: never denial-breaker; hook-block-repeat fires after its threshold —
+      // assert explicitly that the class is hook-block-repeat once it does.
       expect(r.failureClass).not.toBe(DENIAL_BREAKER_FAILURE_CLASS);
+      if (i >= HOOK_BLOCK_REPEAT_THRESHOLD - 1 && r.failureClass !== undefined) {
+        expect(r.failureClass).toBe(HOOK_BLOCK_REPEAT_FAILURE_CLASS);
+      }
     }
   });
 });
