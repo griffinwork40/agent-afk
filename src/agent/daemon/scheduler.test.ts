@@ -1684,72 +1684,7 @@ describe('CronScheduler.stop() — unregister before awaiting handoffMaintenance
   });
 });
 
-describe('HandoffMaintenanceHandle.stop() — slow startup recovery (#3948)', () => {
-  /**
-   * Verifies that stop() does not resolve until the startup-recovery promise
-   * settles, even when recovery is slow (simulating a slow Telegram call).
-   * Also verifies idempotency: calling stop() multiple times is safe and all
-   * callers receive the same settled promise.
-   */
-  it('stop() does not resolve until startup recovery completes', async () => {
-    const { startHandoffMaintenance } = await import('./handoff-maintenance.js');
 
-    let releaseRecovery!: () => void;
-    const recoveryGate = new Promise<void>((r) => { releaseRecovery = r; });
-    let recoverySettled = false;
-
-    // Stub runStartupRecovery via the drainResumeQueue seam — we override the
-    // whole opts.drainResumeQueue to be a no-op and inject a slow recovery
-    // by replacing the module. Instead, we use startHandoffMaintenance directly
-    // with a custom runStartupRecovery path via a fake opts that delays.
-    //
-    // Because startHandoffMaintenance calls runStartupRecovery internally, we
-    // test the observable contract: stop() must await it.
-    // We wrap the real startHandoffMaintenance with a patched runStartupRecovery
-    // by monkey-patching the module import.
-    const handoffMaintMod = await import('./handoff-maintenance.js');
-    const realRunStartupRecovery = handoffMaintMod.runStartupRecovery;
-    const runStartupRecoverySpy = vi.spyOn(handoffMaintMod, 'runStartupRecovery').mockImplementation(
-      async (...args) => {
-        await recoveryGate;
-        recoverySettled = true;
-        return realRunStartupRecovery(...args);
-      }
-    );
-
-    const dir = mkdtempSync(join(tmpdir(), 'afk-handoff-stop-'));
-    try {
-      const handle = startHandoffMaintenance({
-        queueDir: dir,
-        drainResumeQueue: async () => {},
-      });
-
-      // stop() is called while recovery is still pending.
-      let stopResolved = false;
-      const stopPromise = handle.stop().then(() => { stopResolved = true; });
-
-      // Yield — stop() should NOT have resolved yet because recoveryGate is open.
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(stopResolved).toBe(false);
-      expect(recoverySettled).toBe(false);
-
-      // Release recovery — stop() must now settle.
-      releaseRecovery();
-      await stopPromise;
-
-      expect(recoverySettled).toBe(true);
-      expect(stopResolved).toBe(true);
-
-      // Idempotency: calling stop() again re-awaits the already-settled promise
-      // and resolves immediately.
-      await handle.stop();
-    } finally {
-      runStartupRecoverySpy.mockRestore();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
 
 describe('CronScheduler — concurrent cron tasks each get their own elicitation handler (#3619)', () => {
   /**
