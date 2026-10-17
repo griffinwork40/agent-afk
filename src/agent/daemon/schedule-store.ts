@@ -262,8 +262,49 @@ export interface ScheduledTaskConfig {
 }
 
 /**
+ * Current schema version understood by this build.
+ *
+ * Future AFK releases that introduce a breaking structural change to
+ * schedules.json MUST bump this constant AND write a top-level
+ * `"version": <N>` field into the file so older builds can refuse to load
+ * rather than silently misinterpreting the data.
+ *
+ * Backward-compat invariant: files written by current/older releases carry no
+ * top-level `version` field (bare JSON array). Those files are always accepted
+ * unchanged — only a file whose explicit `version` exceeds this constant, or
+ * an entry whose `_schemaVersion` exceeds this constant, is refused.
+ */
+export const SCHEDULES_SCHEMA_VERSION = 1;
+
+/**
+ * Thrown by `loadSchedules` when the on-disk file declares a schema version
+ * that exceeds `SCHEDULES_SCHEMA_VERSION`.  Callers can catch this specifically
+ * to surface an "upgrade afk" message rather than treating it as generic
+ * corruption.
+ */
+export class SchedulesVersionError extends Error {
+  readonly path: string;
+  readonly fileVersion: number | undefined;
+
+  constructor(path: string, message: string, fileVersion?: number) {
+    super(message);
+    this.name = 'SchedulesVersionError';
+    this.path = path;
+    this.fileVersion = fileVersion;
+  }
+}
+
+/**
  * Load all scheduled task configs from the store.
  * Returns [] when the file is missing or contains invalid JSON.
+ *
+ * Schema-version guard: if the file is an object with a `version` field that
+ * exceeds `SCHEDULES_SCHEMA_VERSION`, or if any entry carries a
+ * `_schemaVersion` field that exceeds it, an error is thrown so the caller
+ * can surface "upgrade required" rather than silently loading data written for
+ * a schema the current code does not understand.  Legacy files (bare JSON
+ * array, no version field) are always accepted — backward compatibility is a
+ * hard requirement.
  *
  * Read-only: never use this inside a read-modify-write. Its lenient fallback
  * would let a mutation overwrite an unreadable file with only the new state;
@@ -280,8 +321,63 @@ export function loadSchedules(path?: string): ScheduledTaskConfig[] {
   if (!existsSync(storePath)) return [];
   try {
     const raw = readFileSync(storePath, 'utf-8');
-    return JSON.parse(raw) as ScheduledTaskConfig[];
+    const parsed: unknown = JSON.parse(raw);
+
+    // Object-wrapped format: a future AFK may write { version: N, tasks: [...] }.
+    // Refuse rather than silently cast — the shape is not understood by this build.
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      const fileVersion = typeof obj['version'] === 'number' ? obj['version'] : undefined;
+      if (fileVersion !== undefined && fileVersion > SCHEDULES_SCHEMA_VERSION) {
+        throw new SchedulesVersionError(
+          storePath,
+          `[schedule-store] ${storePath} declares schema version ${fileVersion} ` +
+            `but this build only understands version ${SCHEDULES_SCHEMA_VERSION}. ` +
+            'Upgrade afk to load this file.',
+          fileVersion,
+        );
+      }
+      // Object wrapper with unknown or low version: still refuse —
+      // the bare-array format is canonical for all current/older releases.
+      throw new SchedulesVersionError(
+        storePath,
+        `[schedule-store] ${storePath} is not a JSON array. ` +
+          `Found an object${fileVersion !== undefined ? ` with version ${fileVersion}` : ''}. ` +
+          'Expected a bare JSON array of schedule configs.',
+        fileVersion,
+      );
+    }
+
+    if (!Array.isArray(parsed)) {
+      throw new SchedulesVersionError(
+        storePath,
+        `[schedule-store] ${storePath} is not a JSON array (found ${parsed === null ? 'null' : typeof parsed}).`,
+      );
+    }
+
+    // Per-entry _schemaVersion guard: an individual entry written by a future
+    // build may carry _schemaVersion > current.  Refuse the whole file so no
+    // entry is silently misinterpreted.
+    for (const entry of parsed as unknown[]) {
+      if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+        const entryVersion = (entry as Record<string, unknown>)['_schemaVersion'];
+        if (typeof entryVersion === 'number' && entryVersion > SCHEDULES_SCHEMA_VERSION) {
+          throw new SchedulesVersionError(
+            storePath,
+            `[schedule-store] ${storePath} contains an entry with _schemaVersion ${entryVersion} ` +
+              `but this build only understands schema version ${SCHEDULES_SCHEMA_VERSION}. ` +
+              'Upgrade afk to load this file.',
+            entryVersion,
+          );
+        }
+      }
+    }
+
+    return parsed as ScheduledTaskConfig[];
   } catch (err) {
+    // SchedulesVersionError is structural — re-throw so callers can surface
+    // "upgrade required" rather than silently returning an empty list.
+    if (err instanceof SchedulesVersionError) throw err;
     const msg = errorMessage(err);
     // eslint-disable-next-line no-console
     console.error(`[schedule-store] failed to parse ${storePath}: ${msg}`);

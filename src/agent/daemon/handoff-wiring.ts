@@ -285,13 +285,23 @@ export async function recoverPendingHandoffs(
         const questionText = typeof record.question['message'] === 'string'
           ? truncateForNotify(record.question['message'] as string)
           : '(question details unavailable)';
+        const qType = typeof record.question['type'] === 'string'
+          ? record.question['type'] as string
+          : 'text';
+        const choices = Array.isArray(record.question['choices'])
+          ? record.question['choices'] as string[]
+          : undefined;
         const parts = [
           `🔔 Reminder: daemon task still waiting for your answer`,
           `📋 Task: ${record.taskId}`,
           questionText,
           `⏱️ Waiting for ${Math.round(age / 60_000)} minutes`,
         ];
-        void pushIfConfigured(parts.join('\n')).catch(() => undefined);
+        const replyMarkup = buildHandoffReplyMarkup(qType, record.taskId, choices);
+        if (!replyMarkup && choices && choices.length > 0) {
+          parts.push(`Options: ${truncateForNotify(choices.join(', '))}`);
+        }
+        void pushIfConfigured(parts.join('\n'), { replyMarkup }).catch(() => undefined);
       }
       result.renotified += 1;
     } catch {

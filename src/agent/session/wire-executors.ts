@@ -247,6 +247,7 @@ function buildChildSkillFactory(
   childProviderFactory: ReturnType<typeof createChildProviderFactory>,
   agentRegistry: ReturnType<typeof loadAgentRegistry>,
   delegationBudget: DelegationBudget | undefined,
+  onSubagentSucceeded: NonNullable<import('../subagent/fork-types.js').SubagentManagerOptions['onSubagentSucceeded']>,
 ): ReturnType<typeof createChildSkillExecutorFactory> {
   return createChildSkillExecutorFactory(
     opts.model,
@@ -267,6 +268,7 @@ function buildChildSkillFactory(
     opts.pluginConfigs,
     opts.skillAllowlist,
     opts.hookRegistry,
+    onSubagentSucceeded,
   );
 }
 
@@ -370,7 +372,8 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
 
   // 4. Shared by the `agent` and `skill` executors so plugin skill children
   //    nest with identical depth-aware wiring at every hop.
-  const childSkillExecutorFactory = buildChildSkillFactory(opts, childProviderFactory, agentRegistry, delegationBudget);
+  const onSubagentSucceeded = (usage: import('../subagent/result.js').SubagentTrace['usage'], cost: number | undefined): void => rootManager.reportSubagentCompletion(usage, cost);
+  const childSkillExecutorFactory = buildChildSkillFactory(opts, childProviderFactory, agentRegistry, delegationBudget, onSubagentSucceeded);
 
   // 5. `agent` tool.
   const subagentExecutor = new SubagentExecutor({
@@ -403,6 +406,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   // 6. `skill` tool.
   const skillExecutor = new SkillExecutor({
     parentSession,
+    onSubagentSucceeded,
     surface,
     defaultModel: model,
     defaultSubagentModel,

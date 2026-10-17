@@ -232,6 +232,10 @@ export const ClosurePayloadSchema = z.object({
   // guardrail, `session/closure-guidance.ts`). Optional + back-compat: older
   // traces and benign closes simply omit it.
   guidance: z.string().optional(),
+  // Present on child (forked) sessions only; absent on the root session.
+  // Allows readers to filter out child closures when deriving the root facet
+  // (#3883). Optional + back-compat: older traces simply omit it.
+  subagentId: z.string().optional(),
 });
 
 // ---------------------------------------------------------------------------

@@ -126,6 +126,13 @@ export class AnthropicDirectQuery implements ProviderQuery {
   /** Owning subagent id (fork only); stamped onto tool_call trace events. */
   private readonly subagentId?: string;
   /**
+   * True when `assembleChildConfig` injected a workspace preamble into this
+   * fork's system prompt. Gates `splitAtWorkspacePreamble` in `composeSystem`
+   * so root sessions whose operator prompt contains a preamble header string
+   * are not incorrectly split. See #3924.
+   */
+  private readonly hasWorkspacePreamble: boolean;
+  /**
    * The session's configured working directory — `opts.cwd ?? process.cwd()`.
    * Surfaced via `TurnDriverContext.cwd` so `session.init` reports the
    * session's own directory rather than the host process's cwd — they differ
@@ -196,6 +203,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     if (opts.softDeadlineMs !== undefined) this.softDeadlineMs = opts.softDeadlineMs;
     this.traceWriter = opts.traceWriter;
     if (opts.subagentId !== undefined) this.subagentId = opts.subagentId;
+    this.hasWorkspacePreamble = opts.hasWorkspacePreamble ?? false;
     this._cwd = opts.cwd ?? process.cwd();
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
     this.systemPromptRebuildFactory = opts.systemPromptRebuildFactory;
@@ -323,6 +331,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       state: this.state,
       systemPrefix: this.systemPrefix,
       ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}),
+      hasWorkspacePreamble: this.hasWorkspacePreamble,
     });
   }
 

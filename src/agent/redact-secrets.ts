@@ -61,9 +61,22 @@ export function redactSecrets(text: string): string {
     // Must run BEFORE the Authorization-header rule so the header form is also
     // caught by this pass (the header rule is kept as a belt-and-suspenders
     // variant that preserves the `Authorization: Bearer` label text).
-    .replace(/\bbearer\s+\S+/gi, 'Bearer [REDACTED]')
-    // Authorization: Bearer <token>  (case-insensitive header — label preserved)
-    .replace(/\bauthorization:\s*bearer\s+\S+/gi, 'Authorization: Bearer [REDACTED]')
+    //
+    // False-positive guard: require ≥8 non-whitespace chars after `bearer ` AND
+    // exclude common English stopwords (`of`, `to`, `the`, `a`, `an`, `token`,
+    // `tokens`) via a negative lookahead — so `the bearer of bad news` and
+    // `invalid bearer token` are NOT redacted, while `Bearer abcdef01234567`
+    // still is. The 8-char floor is low enough to catch real short-lived tokens
+    // (per-request nonces) while rejecting single English words.
+    // The `bearer` keyword itself is captured so its original casing is preserved
+    // in the replacement (e.g. `authorization: bearer …` keeps lower-case `bearer`
+    // rather than being rewritten to Title-case by a literal replacement string).
+    .replace(/\b(bearer)\s+(?!(?:of|to|the|an?|tokens?)\b)\S{8,}/gi, '$1 [REDACTED]')
+    // Authorization: Bearer <token>  (case-insensitive header — full label
+    // preserved via capture group so `authorization: bearer …` is not rewritten
+    // to Title-case. Belt-and-suspenders over the bare-bearer rule above; fires
+    // on any residual header forms the bare rule did not reach).
+    .replace(/\b(authorization:\s*bearer)\s+\S+/gi, '$1 [REDACTED]')
     // Anthropic API keys: sk-ant-<payload ≥8 chars> (floor matches original inline pattern)
     .replace(/\bsk-ant-[A-Za-z0-9_-]{8,}/g, '[REDACTED]')
     // OpenAI / generic sk- keys (non-ant): sk-<payload ≥20 chars>
@@ -85,10 +98,12 @@ export function redactSecrets(text: string): string {
     // Prefixes per AWS docs: long-term (AKIA), STS temporary (ASIA), role
     // (AROA), user (AIDA), group (AGPA), instance profile (AIPA), managed
     // policy (ANPA/ANVA), public key (APKA), server cert (ABIA), context (ACCA).
-    // No leading \b — the old inline pattern had none, so `keyAKIA…` is still
-    // caught. Trailing \b is kept: the 20-char token must end at a word boundary
-    // so we don't clip a longer uppercase run mid-token.
-    .replace(/(?:AKIA|ASIA|AROA|AIDA|AGPA|AIPA|ANPA|ANVA|APKA|ABIA|ACCA)[A-Z0-9]{16}\b/g, '[REDACTED]')
+    // No leading \b — the old inline pattern had none, so `keyAKIA…` (lowercase
+    // before the prefix) is still caught. A negative lookbehind for uppercase
+    // letters blocks matches mid-uppercase-run (e.g. `XAKIAFAKEKEY…` would
+    // match the `AKIA` inside `XAKIA`). Trailing \b is kept so we don't clip a
+    // longer uppercase run mid-token.
+    .replace(/(?<![A-Z])(?:AKIA|ASIA|AROA|AIDA|AGPA|AIPA|ANPA|ANVA|APKA|ABIA|ACCA)[A-Z0-9]{16}\b/g, '[REDACTED]')
     // Generic long hex/base64 secrets (≥32 chars of [A-Za-z0-9+/=_-]).
     // The word-boundary lookaround only guards where a match may START — it
     // does NOT stop the class from swallowing `/`, so a long bare path argument

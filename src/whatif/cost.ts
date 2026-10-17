@@ -7,17 +7,34 @@
  *
  * ## Estimation model (per episode × per sample)
  *
- * Agent model calls (×1 per episode per env):
- *   - Input: systemTokens (baseline or candidate) + 1 500 user/tool tokens.
- *   - Output: 800 tokens.
+ * Agent model calls — each `runner.run()` call is one episode but internally
+ * executes `maxTurns` LLM calls.  Conversation history accumulates across
+ * turns, so the effective input grows with each turn.  The estimator models
+ * this as a single aggregated call with:
+ *
+ *   effectiveInput  = systemTokens + maxTurns × USER_TOKENS_PER_TURN
+ *                   + (maxTurns − 1) × OUTPUT_TOKENS_PER_TURN
+ *   effectiveOutput = maxTurns × OUTPUT_TOKENS_PER_TURN
+ *
+ * where USER_TOKENS_PER_TURN = 1 000 and OUTPUT_TOKENS_PER_TURN = 800.
+ * System tokens are charged at full rate for every turn (conservative; actual
+ * runs benefit from prompt-cache reads after turn 1, so the true cost is
+ * lower, giving the estimator a small upward bias by design).
+ *
+ * Calibration data (issue #3876):
+ *   - Pilot run 20260928-153056-015fbb (maxTurns≈1, 52 traces, $6.21 actual):
+ *     estimate ~$6.14 (0.99×) — conservative model in the short-episode limit.
+ *   - No-op control run 20261015-204001-687bfc (maxTurns=3, 78 agent traces,
+ *     $20.90 actual verify portion): estimate ~$22.27 (1.07×) — conservative.
+ *   - Large-effect control 20261016-112101-3ae838 (episodes stopped early,
+ *     actual $16.06 verify portion): estimate ~$22.27 (1.39×) — over-estimates
+ *     for short episodes, which is the safe direction for budget gating.
  *
  * History: the original formula counted ×2 per episode per env, which doubled
- * every agent-call cost.  The pilot run (20260928-153056-015fbb, 52 traces,
- * $6.21 actual) showed exactly 52 traces = 13 episodes × 2 envs × 2 samples,
- * i.e. 1 call per (episode, env, sample).  The old multiplier 2×2×samples = 8
- * should be 2×1×samples = 4, giving a corrected total of $6.01 (0.97×).
- * Output raised from 600 to 800 to stay mildly above actual median (575) and
- * cover variance from multi-tool episodes; combined ratio vs the pilot is ~1.00×.
+ * every agent-call cost.  The old multiplier 2×2×samples = 8 should be
+ * 2×1×samples = 4.  maxTurns was then added (issue #3876) to model
+ * multi-turn history accumulation; single-turn runs (maxTurns=1) collapse
+ * back to the prior single-call model.
  * Provenance: src/whatif/run.verify.ts `runEpisodes` -- each EpTask calls
  * runner.run() exactly once.
  *
@@ -36,6 +53,25 @@
 
 import { deriveCallCostUsd } from '../agent/providers/anthropic-direct/pricing.js';
 import { resolveModelId } from '../agent/session/model-resolution.js';
+
+// ---------------------------------------------------------------------------
+// Per-turn token assumptions
+// ---------------------------------------------------------------------------
+
+/**
+ * Assumed user + tool tokens per episode turn.
+ * Calibrated against runs in issue #3876: short prompts rarely exceed 1 000
+ * tokens per turn, and multi-turn history is captured separately via the
+ * `(maxTurns − 1) × OUTPUT_TOKENS_PER_TURN` history term.
+ */
+const USER_TOKENS_PER_TURN = 1_000;
+
+/**
+ * Assumed output tokens per episode turn.
+ * Calibrated against pilot run 20260928-153056-015fbb (median 575 tokens);
+ * raised to 800 to cover multi-tool episodes and output variance.
+ */
+const OUTPUT_TOKENS_PER_TURN = 800;
 
 // ---------------------------------------------------------------------------
 // Fallback pricing for unknown models
@@ -78,6 +114,15 @@ export interface VerifyCostInput {
   episodes: number;
   /** Samples per episode per environment. */
   samples: number;
+  /**
+   * Maximum turns per episode (default 3 when omitted).
+   *
+   * Each `runner.run()` call executes up to `maxTurns` LLM turns internally.
+   * Conversation history grows each turn, so the effective input token count
+   * increases with `maxTurns`.  Pass `1` for `--quick` / baseline-sample
+   * phases where episodes are intentionally single-turn.
+   */
+  maxTurns?: number;
   /** Model id for the agent under test. */
   agentModel: string;
   /** Model id for the analyst (predict / discover / judge fallback). */
@@ -114,6 +159,11 @@ export function estimateVerifyCost(input: VerifyCostInput): VerifyCostEstimate {
     judgeExternal,
   } = input;
 
+  // Default maxTurns to 3 (the CLI default) when the caller does not supply it.
+  const maxTurns = (input.maxTurns !== undefined && input.maxTurns >= 1)
+    ? Math.round(input.maxTurns)
+    : 3;
+
   // ── fixed overhead: discover + predict ──────────────────────────────────
   const discoverResult = callCost(analystModel, 20_000, 1_000);
   const predictResult = callCost(analystModel, 15_000, 2_000);
@@ -122,21 +172,33 @@ export function estimateVerifyCost(input: VerifyCostInput): VerifyCostEstimate {
   const predictUsd = predictResult.usd;
 
   // ── per-episode-per-sample agent calls ──────────────────────────────────
-  // 1 agent call per episode per env (baseline + candidate), repeated for
-  // each sample.  Each call: systemTokens + 1 500 user/tool in, 800 out.
+  // Each runner.run() call executes up to maxTurns LLM turns.  Conversation
+  // history accumulates: turn k sees all prior user + assistant tokens in
+  // its input.  We model the aggregate cost as a single call with:
+  //
+  //   effectiveInput  = systemTokens + maxTurns × USER_TOKENS_PER_TURN
+  //                   + (maxTurns − 1) × OUTPUT_TOKENS_PER_TURN
+  //   effectiveOutput = maxTurns × OUTPUT_TOKENS_PER_TURN
+  //
+  // System tokens are charged at full rate for every turn (conservative;
+  // prompt-cache reads after turn 1 cost ~0.1× in practice, so real spend
+  // is lower — the estimator intentionally errs on the high side).
+  //
   // Contract: runEpisodes() in run.verify.ts issues exactly one runner.run()
   // per (episode, env, sample) tuple — one baseline call and one candidate
   // call per (episode, sample) pair.
-  // 1 call per env = 2 calls per episode-sample pair (baseline + candidate).
+  const historyTokens = (maxTurns - 1) * OUTPUT_TOKENS_PER_TURN;
+  const nonSysTokens = maxTurns * USER_TOKENS_PER_TURN + historyTokens;
+  const effectiveOut = maxTurns * OUTPUT_TOKENS_PER_TURN;
+
   const agentCallsPerEp = (1 + 1) * samples; // 1 baseline call + 1 candidate call × samples
   const totalAgentCalls = agentCallsPerEp * episodes;
 
-  const agentBaselineIn = systemTokens.baseline + 1_500;
-  const agentCandidateIn = systemTokens.candidate + 1_500;
-  const agentOut = 800;
+  const agentBaselineIn = systemTokens.baseline + nonSysTokens;
+  const agentCandidateIn = systemTokens.candidate + nonSysTokens;
 
-  const agentBaselineResult = callCost(agentModel, agentBaselineIn, agentOut);
-  const agentCandidateResult = callCost(agentModel, agentCandidateIn, agentOut);
+  const agentBaselineResult = callCost(agentModel, agentBaselineIn, effectiveOut);
+  const agentCandidateResult = callCost(agentModel, agentCandidateIn, effectiveOut);
 
   // Each episode × sample spawns 1 baseline call + 1 candidate call.
   const agentUsdPerEpSample =

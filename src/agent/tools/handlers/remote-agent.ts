@@ -59,7 +59,11 @@ export function parseRemoteAgentInput(raw: unknown): RemoteAgentInput | ToolResu
   if (prompt.trim() === '') return fail('`prompt` must be a non-empty string.');
   const input: RemoteAgentInput = { host, prompt };
   const cwd = optString(obj, 'cwd');
-  if (cwd !== undefined) input.cwd = cwd;
+  if (cwd !== undefined) {
+    if (/[\0\n\r]/.test(cwd)) return fail('`cwd` must not contain NUL, newline, or carriage-return.');
+    if (cwd.startsWith('-')) return fail('`cwd` may not start with "-".');
+    input.cwd = cwd;
+  }
   const model = optString(obj, 'model');
   if (model !== undefined) {
     if (model.startsWith('-')) return fail('`model` may not start with "-".');
@@ -79,21 +83,49 @@ export function isRemoteRun(): boolean {
   return depth !== '' && depth !== '0';
 }
 
+/**
+ * Neutralise any `</remote-output` tag (case-insensitive) in remote-sourced
+ * text so injected content cannot close the frame early.
+ *
+ * This is the single authoritative implementation — used by both
+ * {@link frameRemote} (for success replies) and {@link formatOutcome} (for
+ * error/lost `remoteDetail` fragments). No other module may neutralise tags.
+ */
+export function neutraliseRemoteOutput(text: string): string {
+  return text.replace(/<\/remote-output/gi, '<\\/remote-output');
+}
+
+/**
+ * Wrap remote-sourced text in `<remote-output>` tags after neutralising any
+ * closing tag that could be forged by injected content.
+ */
+function frameRemote(text: string): string {
+  return `<remote-output>\n${neutraliseRemoteOutput(text)}\n</remote-output>`;
+}
+
 function formatOutcome(outcome: RemoteRunOutcome, host: RemoteHost, runId: string, sessionId: string): ToolResult {
   const where = `host=${host.name} session=${sessionId} run=${runId}`;
   if (outcome.kind === 'aborted') return fail(`aborted; the remote run was stopped (${where}).`);
   if (outcome.kind === 'error' || outcome.kind === 'lost') {
-    const partial = outcome.partial ? `\n\nPartial output:\n${outcome.partial.slice(0, 4000)}` : '';
+    const partial = outcome.partial ? `\n\nPartial output:\n${frameRemote(outcome.partial.slice(0, 4000))}` : '';
     const lostNote = outcome.kind === 'lost'
       ? ` The run continues on the remote: ~/.afk/state/remote-runs/${runId}/out.ndjson.`
       : '';
     const reason = outcome.reason.replace(/\.+$/, '');
-    return fail(`${reason}.${lostNote} (${where})${partial}`);
+    // Frame any remote-sourced detail separately from the local prose reason.
+    const detail = outcome.remoteDetail
+      ? `: ${frameRemote(outcome.remoteDetail)}`
+      : '';
+    return fail(`${reason}${detail}.${lostNote} (${where})${partial}`);
   }
   const footer = `\n\n[remote_agent: ${where}; pass resume="${sessionId}" to continue there]`;
-  const reply = outcome.message.trim() === '' ? '(remote agent finished with an empty reply)' : outcome.message;
-  if (reply.length > MAX_REPLY_CHARS) {
-    return { content: `${reply.slice(0, MAX_REPLY_CHARS)}\n… [truncated at ${MAX_REPLY_CHARS} chars]${footer}`, truncated: true };
+  const rawReply = outcome.message.trim() === '' ? '(remote agent finished with an empty reply)' : outcome.message;
+  // Truncate the raw reply BEFORE framing so </remote-output> always survives.
+  const truncated = rawReply.length > MAX_REPLY_CHARS;
+  const clipped = truncated ? `${rawReply.slice(0, MAX_REPLY_CHARS)}\n… [truncated at ${MAX_REPLY_CHARS} chars]` : rawReply;
+  const reply = frameRemote(clipped);
+  if (truncated) {
+    return { content: `${reply}${footer}`, truncated: true };
   }
   return { content: `${reply}${footer}` };
 }
@@ -122,6 +154,10 @@ export function createRemoteAgentHandler(deps: RemoteAgentDeps): ToolHandler {
     const runId = `${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
     const sessionId = input.resume ?? randomUUID();
     const cwd = input.cwd ?? host.cwd;
+    if (cwd !== undefined) {
+      if (/[\0\n\r]/.test(cwd)) return fail('resolved `cwd` must not contain NUL, newline, or carriage-return.');
+      if (cwd.startsWith('-')) return fail('resolved `cwd` may not start with "-".');
+    }
     const permissionMode = host.permissionMode;
     const outcome = await runRemoteAgent(
       {
