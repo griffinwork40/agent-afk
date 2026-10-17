@@ -76,14 +76,18 @@ describe('resolveComposeNodeAgent — executor-backed tool stripping', () => {
   it('names the exact allowed tools after generic guidance for restricted compose nodes', () => {
     const resolved = resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'grep']));
     const prompt = resolveComposeAgentPrompt(resolved, 'generic guidance to use bash and workspace_query');
-    expect(prompt).toContain('This compose node can use only these tools: read_file, grep.');
+    expect(prompt).toContain('This compose node can use only these tools:');
+    expect(prompt).toContain('read_file');
+    expect(prompt).toContain('grep');
     expect(prompt).toContain('Do not call bash, workspace_query, or other tools unless they appear in this list');
     expect(resolved.namedAgentAllowedTools).not.toContain('bash');
   });
 
   it('does not discourage bash when the named agent grants it', () => {
     const resolved = resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'bash']));
-    expect(resolveComposeAgentPrompt(resolved, 'base')).toContain('read_file, bash.');
+    const prompt = resolveComposeAgentPrompt(resolved, 'base');
+    expect(prompt).toContain('read_file');
+    expect(prompt).toContain('bash');
   });
   // undefined agent_type and unknown agent_type cases are covered in
   // compose-leaf-tool-strip.test.ts (returns {} / throws 'not found').

@@ -247,7 +247,13 @@ export function resolveComposeAgentPrompt(agent: ResolvedComposeAgent, basePromp
   const base = agent.systemPrompt ?? basePrompt;
   const withLeafNotice = agent.leafNotice ? `${base}\n\n${agent.leafNotice}` : base;
   if (agent.namedAgentAllowedTools === undefined) return withLeafNotice;
-  return `${withLeafNotice}\n\nThis compose node can use only these tools: ${agent.namedAgentAllowedTools.join(', ') || '(none)'}. ` +
+  // Invariant: render from the SAME effective list the provider advertises.
+  // buildComposeNodeProvider intersects CHILD_ALLOWED_TOOLS (minus
+  // COMPOSE_LEAF_STRIPPED_TOOLS) with namedAgentAllowedTools; mirror that
+  // here so the prompt suffix never names a tool the provider withholds.
+  const leafTools = CHILD_ALLOWED_TOOLS.filter((t) => !COMPOSE_LEAF_STRIPPED_TOOLS.has(t));
+  const effectiveTools = leafTools.filter((t) => agent.namedAgentAllowedTools!.includes(t));
+  return `${withLeafNotice}\n\nThis compose node can use only these tools: ${effectiveTools.join(', ') || '(none)'}. ` +
     'Do not call bash, workspace_query, or other tools unless they appear in this list; ' +
     'use available read tools or return the missing capability to the parent.';
 }
