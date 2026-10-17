@@ -606,7 +606,7 @@ describe('verifyRun: truncatedByBudget (#3876)', () => {
       snapshot: vi.fn(),
     } as unknown as AgentRunner;
 
-    const { verifyResult } = await verifyRun(input(episodes, [], {
+    const { verifyResult, allTraces } = await verifyRun(input(episodes, [], {
       runner,
       options: {
         samples: 1,
@@ -621,17 +621,11 @@ describe('verifyRun: truncatedByBudget (#3876)', () => {
 
     // truncatedByBudget must be true (some tasks were skipped).
     expect(verifyResult.truncatedByBudget).toBe(true);
-    // The number of tasks actually run + skipped must equal the total (12).
-    // runCalls counts tasks that entered runTask (run + any that hit the
-    // internal budget guard without running).  skipped = 12 - runCalls that
-    // actually called runner.run and returned a trace.
     const totalTasks = 6 * 2 * 1; // episodes × envs × samples
-    expect(runCalls + (totalTasks - runCalls)).toBe(totalTasks);
-    // The key assertion: truncatedByBudget is derived from skippedByBudget > 0.
-    // If double-counting were present and skippedByBudget > totalTasks the
-    // boolean would still be true, but we can verify the counter is sane by
-    // checking that the number of successful traces + skipped = totalTasks.
-    const ran = verifyResult.episodes; // episodes field = episode count, not task count
+    // The key accounting assertion: traces that ran + tasks skipped by budget
+    // must equal the total planned tasks.  Before the #3945 fix, double-counting
+    // in runTask inflated skippedByBudget so this sum exceeded totalTasks.
+    expect(allTraces.length + verifyResult.skippedByBudget!).toBe(totalTasks);
     // Concrete: at most 2 tasks ran (cap $11, cost $5 each → 2 fit).
     expect(runCalls).toBeLessThanOrEqual(4); // concurrency=4, so up to 4 may start
   });
