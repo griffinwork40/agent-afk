@@ -143,7 +143,17 @@ too. Two deliberate exclusions: `~/.afk/state` stays readable (subagents read to
 and skill inputs there), and `~/.afk/config/mcp.json` is carved out as an exact file — the MCP
 registry holds `${VAR}` placeholders, not literal secrets, and agents need it to diagnose a server
 that will not connect. The carve-out is exact: `mcp.json.bak` and anything else in that directory
-stays blocked.
+stays blocked. `~/.afk/config/schedules.json`, `~/.ssh/config`, and `~/.ssh/known_hosts` are
+carved out the same way, and SSH **public** keys are readable by pattern: any direct child of
+`~/.ssh` whose name ends in `.pub` (resolved through symlinks first, so `foo.pub -> id_rsa` stays
+blocked; subdirectories and private keys stay blocked). A private key misnamed `*.pub` would be
+readable — name is the only signal.
+
+Every exception is **read-only**. Writes to `~/.ssh` and `~/.afk/config` are blocked on every
+surface (a `ProxyCommand` in `~/.ssh/config` or a server in `mcp.json` is code execution). In bash,
+an exception applies only to a provably read-only command — a pipeline of plain readers (`cat`,
+`grep`, `head`, `tail`, `wc`, `ls`, `diff`, …) with no redirection, chaining, or substitution.
+`ssh -i ~/.ssh/<key>` stays blocked; use a host alias with `IdentityFile` in `~/.ssh/config`.
 
 The browser list is deliberately **narrower** than the bash hook's floor over the whole
 `~/Library/Application Support` directory (see [Bash restrictions](#bash-restrictions)). Bash's
@@ -158,8 +168,8 @@ readable. Safari's secrets live outside Application Support entirely (`~/Library
 
 Add your own entries with `AFK_READ_DENYLIST` (colon-separated absolute paths; a leading `~/` is
 expanded, but `~user/` is not — spell those out). Operator entries are matched *before* the
-carve-out, so `AFK_READ_DENYLIST=~/.afk/config/mcp.json` re-protects the registry if yours holds
-inline secrets. Built-in entries always apply and cannot be removed.
+carve-outs, so `AFK_READ_DENYLIST=~/.afk/config/mcp.json` re-protects the registry if yours holds
+inline secrets, and `AFK_READ_DENYLIST=~/.ssh` re-denies every `~/.ssh` exception. Built-in entries always apply and cannot be removed.
 
 The same list backs the bash restrictions below, so on **interactive** surfaces (REPL, Telegram) a
 credential path is protected whether the agent reaches for `read_file` or for `cat` — and bash

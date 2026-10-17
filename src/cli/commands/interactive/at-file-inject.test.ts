@@ -6,7 +6,7 @@
  * ambient AFK_AT_FILE_INJECT setting.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -479,5 +479,55 @@ describe('expandAtFileTokens — SEC-1 secret-store denylist (PR #688 review)', 
     });
     expect(r.warnings).toEqual([]);
     expect(r.fileBlocks).toHaveLength(3);
+  });
+});
+
+// SSH public-key pattern carve-out — same rule as the typed read surface
+// (direct `*.pub` child of the resolved ~/.ssh, symlink-resolved first).
+describe('expandAtFileTokens — SSH public keys', () => {
+  const inject = (tok: string) =>
+    expandAtFileTokens(tok, { rootDir: '/nonexistent-cwd', homeDir: tmpRoot, ...ON });
+
+  beforeEach(() => {
+    mkdirSync(join(tmpRoot, '.ssh', 'keys'), { recursive: true });
+    writeFileSync(join(tmpRoot, '.ssh', 'id_ed25519.pub'), 'ssh-ed25519 AAAAPUB me@host\n');
+    writeFileSync(join(tmpRoot, '.ssh', 'id_ed25519'), 'PRIVATE KEY\n');
+    writeFileSync(join(tmpRoot, '.ssh', '.pub'), 'bare\n');
+    writeFileSync(join(tmpRoot, '.ssh', 'keys', 'x.pub'), 'nested\n');
+    symlinkSync(join(tmpRoot, '.ssh', 'id_ed25519'), join(tmpRoot, '.ssh', 'foo.pub'));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    _resetReadDenylistCacheForTests();
+  });
+
+  it('injects a direct *.pub child', () => {
+    const r = inject('@~/.ssh/id_ed25519.pub');
+    expect(r.warnings).toEqual([]);
+    expect(r.fileBlocks[0]!.text).toContain('AAAAPUB');
+  });
+
+  it.each(['@~/.ssh/id_ed25519', '@~/.ssh/.pub', '@~/.ssh/keys/x.pub', '@~/.ssh/foo.pub'])(
+    'blocks %s',
+    (tok) => {
+      const r = inject(tok);
+      expect(r.fileBlocks).toEqual([]);
+      expect(r.warnings.some((w) => w.includes('sensitive'))).toBe(true);
+    },
+  );
+
+  it('blocks when ~/.ssh is a symlink into another secret store', () => {
+    rmSync(join(tmpRoot, '.ssh'), { recursive: true, force: true });
+    mkdirSync(join(tmpRoot, '.gnupg'));
+    writeFileSync(join(tmpRoot, '.gnupg', 'k.pub'), 'x\n');
+    symlinkSync(join(tmpRoot, '.gnupg'), join(tmpRoot, '.ssh'), 'dir');
+    expect(inject('@~/.ssh/k.pub').fileBlocks).toEqual([]);
+  });
+
+  it('honors an AFK_READ_DENYLIST re-deny of the key', () => {
+    vi.stubEnv('AFK_READ_DENYLIST', join(tmpRoot, '.ssh', 'id_ed25519.pub'));
+    _resetReadDenylistCacheForTests();
+    expect(inject('@~/.ssh/id_ed25519.pub').fileBlocks).toEqual([]);
   });
 });
