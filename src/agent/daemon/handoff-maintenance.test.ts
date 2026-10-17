@@ -122,7 +122,7 @@ describe('handoff maintenance in a non-pull (cron) daemon', () => {
     await vi.waitFor(async () => {
       expect((await readHandoff('q-later', handoffsDir))?.status).toBe('expired');
     });
-    expect(expiry.sweepExpiredHandoffs).toHaveBeenCalledWith(queueDir, expect.any(Number), handoffsDir);
+    expect(expiry.sweepExpiredHandoffs).toHaveBeenCalledWith(queueDir, expect.any(Number), handoffsDir, expect.any(Function));
   });
 
   it('resumes an answered cron handoff without draining the general queue', async () => {

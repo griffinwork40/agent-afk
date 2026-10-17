@@ -634,6 +634,14 @@ export interface ClosurePayload {
    * Absent for benign closes and anomalous reasons not yet covered.
    */
   guidance?: string;
+  /**
+   * Present on child (forked) sessions only; absent on the root session.
+   * Mirrors the `subagentId` field on `tool_call` events so `parseTraceSignals`
+   * can distinguish a child's closure from the root's closure and avoid
+   * falsely downgrading the root facet when a child closed abnormally (#3883).
+   * Older traces that predate this field simply omit it.
+   */
+  subagentId?: string;
 }
 
 // ---------------------------------------------------------------------------

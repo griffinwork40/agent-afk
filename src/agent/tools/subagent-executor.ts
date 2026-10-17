@@ -149,6 +149,7 @@ export class SubagentExecutor implements SubagentControl {
     const c = this.ctx;
     const rootSessionId = c.parentRootSessionId ?? c.parentSession.sessionId;
     return {
+      onSubagentSucceeded: (usage, cost) => c.subagentManager.reportSubagentCompletion(usage, cost),
       ...(c.surface !== undefined ? { surface: c.surface } : {}),
       ...(c.allowedTools !== undefined ? { allowedTools: c.allowedTools } : {}),
       ...(c.readOnlyBash !== undefined ? { readOnlyBash: c.readOnlyBash } : {}),

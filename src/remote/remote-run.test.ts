@@ -12,16 +12,17 @@ type StreamPlan = string[][];
 
 interface Fake {
   runner: SshRunner;
-  calls: { kind: string; script: string; stdin?: string }[];
+  calls: { kind: string; script: string }[];
 }
 
 function fakeRunner(opts: { launch?: SshExecResult; streams: StreamPlan; errTail?: string }): Fake {
   const calls: Fake['calls'] = [];
   let streamIdx = 0;
   const runner: SshRunner = {
-    async exec(_target, script, o = {}) {
-      if (script.includes('cat > "$d/prompt"')) {
-        calls.push({ kind: 'launch', script, ...(o.stdin !== undefined ? { stdin: o.stdin } : {}) });
+    async exec(_target, script, _o = {}) {
+      // Identify launch by PID_MARKER pattern in the script (heredoc-based prompt)
+      if (script.includes(PID_MARKER)) {
+        calls.push({ kind: 'launch', script });
         return opts.launch ?? { code: 0, stdout: `${PID_MARKER} 4242\n`, stderr: '' };
       }
       if (script.includes('tail -c 2000')) {
@@ -48,18 +49,20 @@ const REQ: RemoteRunRequest = { target: 'user@box', prompt: 'do it', runId: 'r1'
 const noSleep = async (): Promise<void> => {};
 
 describe('runRemoteAgent', () => {
-  it('launches with the prompt on stdin and returns the last message on done', async () => {
+  it('launches with the prompt embedded in the script and returns the last message on done', async () => {
     const f = fakeRunner({ streams: [[MSG('first'), MSG('final answer'), DONE]] });
     const out = await runRemoteAgent(REQ, new AbortController().signal, { runner: f.runner, sleep: noSleep });
     expect(out).toEqual({ kind: 'done', message: 'final answer', pid: 4242, metadata: { durationMs: 5 } });
-    expect(f.calls[0]).toMatchObject({ kind: 'launch', stdin: 'do it' });
+    // Prompt is embedded in the script, not sent as trailing stdin
+    expect(f.calls[0]).toMatchObject({ kind: 'launch' });
+    expect(f.calls[0]?.script).toContain('do it');
     expect(f.calls[1]?.script).toContain('tail -n +1 -f');
   });
 
   it('reports a remote error event', async () => {
     const f = fakeRunner({ streams: [[ev({ type: 'error', error: { message: 'boom' } })]] });
     const out = await runRemoteAgent(REQ, new AbortController().signal, { runner: f.runner, sleep: noSleep });
-    expect(out).toMatchObject({ kind: 'error', reason: 'remote agent error: boom' });
+    expect(out).toMatchObject({ kind: 'error', reason: 'remote agent error', remoteDetail: 'boom' });
   });
 
   it('reconnects after a dropped connection from the next unseen line', async () => {
@@ -83,7 +86,7 @@ describe('runRemoteAgent', () => {
   it('reports the stderr tail when the remote process exits without a result', async () => {
     const f = fakeRunner({ streams: [[MSG('x'), EXIT_MARKER]], errTail: 'Error: not logged in' });
     const out = await runRemoteAgent(REQ, new AbortController().signal, { runner: f.runner, sleep: noSleep });
-    expect(out).toMatchObject({ kind: 'error', reason: 'remote afk exited without a result: Error: not logged in' });
+    expect(out).toMatchObject({ kind: 'error', reason: 'remote afk exited without a result', remoteDetail: 'Error: not logged in' });
   });
 
   it('explains the locked-keychain cause when the remote has no credential', async () => {

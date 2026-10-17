@@ -75,9 +75,21 @@ const GIT: RegisteredAgent = {
     description: 'Read-only git specialist',
     prompt: 'You are the git investigator.',
     tools: ['Bash', 'Read', 'Grep', 'Glob'],
-    model: 'sonnet',
+    // Mirrors the real builtin: no pinned model (policy delegation).
   },
   bashReadOnly: true,
+};
+
+// A user-scope agent that declares an explicit model, used to cover the
+// def-model > policy precedence now that no builtin pins one.
+const PINNED_AGENT: RegisteredAgent = {
+  name: 'pinned',
+  source: 'user',
+  definition: {
+    description: 'declares a model',
+    prompt: 'pinned prompt',
+    model: 'sonnet',
+  },
 };
 
 const INHERIT_AGENT: RegisteredAgent = {
@@ -130,7 +142,7 @@ describe('SubagentExecutor named-agent dispatch', () => {
       defaultConfig: { apiKey: 'k', systemPrompt: 'BASE PROMPT' },
       depth: 0,
       childProviderFactory: childProviderFactory as never,
-      agentRegistry: makeRegistry([RESEARCH, GIT, INHERIT_AGENT]),
+      agentRegistry: makeRegistry([RESEARCH, GIT, INHERIT_AGENT, PINNED_AGENT]),
       parentModel: 'opus',
       ...overrides,
     };
@@ -222,13 +234,19 @@ describe('SubagentExecutor named-agent dispatch', () => {
 
   it('model precedence: def model > policy default; call-site wins over def', async () => {
     const executor = makeExecutor({ defaultSubagentModel: 'haiku' });
-    await executor.execute(makeCall({ prompt: 'go', agent_type: 'git-investigator' }));
+    await executor.execute(makeCall({ prompt: 'go', agent_type: 'pinned' }));
     expect(forkSubagent.mock.calls[0]?.[0].config.model).toBe('sonnet');
 
     forkSubagent.mockClear();
     await executor.execute(
-      makeCall({ prompt: 'go', agent_type: 'git-investigator', model: 'haiku' }),
+      makeCall({ prompt: 'go', agent_type: 'pinned', model: 'opus' }),
     );
+    expect(forkSubagent.mock.calls[0]?.[0].config.model).toBe('opus');
+  });
+
+  it('git-investigator (no pinned model) follows the policy default', async () => {
+    const executor = makeExecutor({ defaultSubagentModel: 'haiku' });
+    await executor.execute(makeCall({ prompt: 'go', agent_type: 'git-investigator' }));
     expect(forkSubagent.mock.calls[0]?.[0].config.model).toBe('haiku');
   });
 

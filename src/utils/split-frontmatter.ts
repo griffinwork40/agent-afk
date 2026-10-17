@@ -85,7 +85,9 @@ export function splitFrontmatter(content: string): SplitFrontmatter | null {
     const trailingMatch = /^[ \t]*(\r?\n|$)/.exec(afterDashes);
     if (trailingMatch === null) {
       // This `\n---` is `\n----` or `\n---word` — keep searching.
-      searchFrom = idx + 1;
+      // Advance past the full `---` (+ at least one extra char that made it
+      // invalid) to avoid O(n²) re-scanning on inputs with many `\n---X` runs.
+      searchFrom = idx + 4; // skip `\n---` (4 chars); the next char is guaranteed non-closer
       continue;
     }
 

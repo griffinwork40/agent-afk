@@ -291,7 +291,7 @@ export function completeTask(
 
   if (finalState === 'retrying') {
     // Re-enqueue for retry — only terminal states go to completed/.
-    reEnqueue(record, queueDir);
+    reEnqueueRecord(record, queueDir);
     // Clean up the lease file now that the queue entry is written.
     if (existsSync(src)) {
       try { unlinkSync(src); } catch { /* ignore */ }
@@ -416,7 +416,7 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
     if (record.attempts < record.maxAttempts) {
       // Re-enqueue: write a new queue file and move the lease to completed.
       record.state = 'retrying';
-      reEnqueue(record, queueDir);
+      reEnqueueRecord(record, queueDir);
     } else {
       // Exhausted attempts — dead-letter.
       record.state = 'dead-letter';
@@ -498,7 +498,7 @@ export function recoverExpiredLeases(queueDir: string = getQueueDir()): TaskReco
 
     if (claimRecord.attempts < claimRecord.maxAttempts) {
       claimRecord.state = 'retrying';
-      reEnqueue(claimRecord, queueDir);
+      reEnqueueRecord(claimRecord, queueDir);
     } else {
       claimRecord.state = 'dead-letter';
       claimRecord.lastError = claimRecord.lastError ?? 'lease expired';
@@ -583,7 +583,7 @@ function buildFallbackRecord(taskId: string, status: 'succeeded' | 'failed'): Ta
  * task is not immediately dequeued on the next poll tick, preventing retry
  * storms when many tasks fail concurrently.
  */
-function reEnqueue(record: TaskRecord, queueDir: string): void {
+export function reEnqueueRecord(record: TaskRecord, queueDir: string): void {
   mkdirSync(queueDir, { recursive: true });
   const existing = readdirSync(queueDir).filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-'));
   const sequence = existing.length + 1;

@@ -100,6 +100,8 @@ export interface SkillExecutorContext {
    * none, so SubagentStart/Stop fire for skill forks at every depth.
    */
   hookRegistry?: HookRegistry;
+  /** Tree-wide accounting sink, shared by skill forks and every descendant manager. */
+  onSubagentSucceeded?: import('../../subagent/fork-types.js').SubagentManagerOptions['onSubagentSucceeded'];
   depth?: number;
   maxDepth?: number;
   /**
