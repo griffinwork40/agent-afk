@@ -45,6 +45,16 @@ import {
 } from '../auth.js';
 
 /**
+ * Error text for a 401 that arrives after a tool already ran in the turn: the
+ * token was refreshed from disk, but the turn is not replayed (replaying would
+ * re-execute its tools). Exported for tests.
+ */
+export const MID_TURN_REFRESH_MESSAGE =
+  'ChatGPT-OAuth token expired mid-turn after tools had already run. A fresh token was ' +
+  'loaded from ~/.codex/auth.json and will be used from the next turn; this turn was not ' +
+  'replayed to avoid re-running its tools.';
+
+/**
  * Minimal context the refresh wrapper needs from the owning query.
  * Kept narrow so this module never imports the full query class (avoids cycles).
  */
@@ -80,10 +90,14 @@ export function is401(err: unknown): boolean {
  *
  * Behaviour:
  *   - `auth.source !== 'chatgpt-oauth'`: pass through every event unchanged.
- *   - `auth.source === 'chatgpt-oauth'` + no 401: pass through unchanged.
+ *   - `auth.source === 'chatgpt-oauth'` + no 401: pass through unchanged, each
+ *     event forwarded as it arrives (never buffered — liveness consumers such
+ *     as the subagent idle watchdog depend on it).
  *   - `auth.source === 'chatgpt-oauth'` + 401 + different fresh token on disk:
- *     rebuild client, roll back the duplicate user turn from `priorTurns`, then
- *     run `makeNewAttempt()` exactly once and yield those events.
+ *     rebuild client; if no tool has run this turn, roll back the duplicate
+ *     user turn from `priorTurns`, then run `makeNewAttempt()` exactly once and
+ *     yield those events. If a tool already ran, do not replay — emit
+ *     {@link MID_TURN_REFRESH_MESSAGE} (the next turn uses the fresh token).
  *   - `auth.source === 'chatgpt-oauth'` + 401 + same/expired/missing token:
  *     replace the raw-401 error event with the diagnostic message.
  *
@@ -107,18 +121,26 @@ export async function* wrapTurnWithOAuthRefresh(
     return;
   }
 
+  // Invariant: events are FORWARDED AS THEY ARRIVE — never buffered for the
+  // turn. Downstream liveness consumers (the subagent idle watchdog in
+  // subagent/idle-watchdog.ts, the TUI, Telegram streaming) observe nothing a
+  // provider holds back, so the original whole-turn buffer here starved the
+  // watchdog for the entire turn and killed every busy gpt-* subscription
+  // child at exactly its idle window with `last event: none`.
+  //
+  // Consequence for the 401 replay: re-running the turn is only safe while no
+  // tool has been dispatched. A 401 is an HTTP status, so in practice it lands
+  // at the connection phase of the FIRST model request, before any output —
+  // the common case replays exactly as before. A 401 after a tool already ran
+  // must NOT replay the turn (that would re-execute side-effecting tools); the
+  // client is still rebuilt so the NEXT turn uses the fresh token.
+
   // Snapshot priorTurns length BEFORE the first attempt so we can roll back
   // the user turn that pushUserTurn appends inside runTurnInner.
   const priorTurnsLenBefore = ctx.priorTurns.length;
 
-  // Invariant: `runTurnInner` emits no events before the first model request
-  // returns — session.init and any synthetic pre-turn events are yielded only
-  // after the request is in flight.  This means `preTurnEvents` is empty when
-  // a 401 fires on the very first request, so replaying it on retry is safe:
-  // no duplicate session.init or tool events are emitted.  If that ordering
-  // ever changes, the replay below must be audited for idempotence.
-  const preTurnEvents: ProviderEvent[] = [];
   let detected401 = false;
+  let toolDispatched = false;
 
   for await (const event of firstAttempt) {
     if (event.type === 'error' && is401(event.error)) {
@@ -126,20 +148,14 @@ export async function* wrapTurnWithOAuthRefresh(
       detected401 = true;
       break;
     }
-    // Non-401 errors: flush buffered events and re-emit unchanged.
-    if (event.type === 'error') {
-      for (const e of preTurnEvents) yield e;
-      yield event;
-      return;
-    }
-    preTurnEvents.push(event);
+    if (event.type === 'tool.use.start') toolDispatched = true;
+    yield event;
+    // Any other error is terminal for the turn — already forwarded above.
+    if (event.type === 'error') return;
   }
 
-  // No 401 encountered: flush the buffered events (turn completed normally).
-  if (!detected401) {
-    for (const e of preTurnEvents) yield e;
-    return;
-  }
+  // No 401 encountered: every event was already forwarded.
+  if (!detected401) return;
 
   // 401 detected — attempt a token refresh (read-only: AFK never writes auth).
   const currentKey = ctx.opts.auth.apiKey;
@@ -154,17 +170,19 @@ export async function* wrapTurnWithOAuthRefresh(
     freshAuth.apiKey !== currentKey;
 
   if (hasNewToken) {
-    // Rebuild the underlying OpenAI client with the new token so this turn and
-    // all future turns use it. This also updates opts.auth in place.
+    // Rebuild the underlying OpenAI client with the new token so this turn (if
+    // replayable) and all future turns use it. Also updates opts.auth in place.
     ctx.rebuildClient(freshAuth);
+
+    if (toolDispatched) {
+      // Not replay-safe (see the Invariant above): surface the interruption.
+      yield { type: 'error', error: new Error(MID_TURN_REFRESH_MESSAGE) };
+      return;
+    }
 
     // Roll back the user turn that runTurnInner pushed during the failed
     // attempt. The retry call to makeNewAttempt() will re-push it.
     ctx.priorTurns.splice(priorTurnsLenBefore);
-
-    // Replay any buffered non-error events from the first attempt (e.g.
-    // session.init), then run the second attempt with the fresh client.
-    for (const e of preTurnEvents) yield e;
     yield* makeNewAttempt();
     return;
   }
@@ -181,6 +199,5 @@ export async function* wrapTurnWithOAuthRefresh(
 
   const diagMessage = formatAuthDiagnostic(diagAuth);
 
-  for (const e of preTurnEvents) yield e;
   yield { type: 'error', error: new Error(diagMessage) };
 }

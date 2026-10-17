@@ -379,8 +379,10 @@ export const COMPOSE_LEAF_STRIPPED_TOOLS: ReadonlySet<string> = new Set(['agent'
  * `childProviderFactory` (which bundles both executors) must never be used for
  * this purpose.
  *
- * Tool surface: `CHILD_ALLOWED_TOOLS` (same as normal children) — `compose` is
- * already absent from that set, so no additional stripping is needed.
+ * Tool surface: `CHILD_ALLOWED_TOOLS` minus `COMPOSE_LEAF_STRIPPED_TOOLS` —
+ * `compose` is already absent from `CHILD_ALLOWED_TOOLS`, and `agent`/`skill`
+ * are stripped via `COMPOSE_LEAF_STRIPPED_TOOLS` (compose nodes are leaves and
+ * have no `subagentExecutor`/`skillExecutor` to back those tools).
  *
  * @param model      Effective model for this node. Drives provider routing so
  *                   OpenAI-routed nodes get `OpenAICompatibleProvider`,
@@ -539,6 +541,10 @@ export function createChildSkillExecutorFactory(
   pluginConfigs?: SdkPluginConfig[],
   skillAllowlist?: readonly string[],
   hookRegistry?: HookRegistry,
+  onSubagentSucceeded?: import('../subagent/fork-types.js').SubagentManagerOptions['onSubagentSucceeded'],
+  // #3961: shared billing-stream registry owned by the root manager. Trailing optional
+  // so all existing positional callers remain valid.
+  parentBillingStreams?: Set<Promise<void>>,
 ): (
   depth: number,
   maxDepth: number,
@@ -584,6 +590,7 @@ export function createChildSkillExecutorFactory(
       // and their `agent` grandchildren credit artifacts to the root record.
       ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
       defaultModel,
+      ...(onSubagentSucceeded !== undefined ? { onSubagentSucceeded } : {}),
       // Resolved default-subagent policy threaded through every depth so a
       // nested skill child (and the SubagentExecutor it builds) defaults to the
       // parent's provider rather than the Anthropic `sonnet` literal. Falls
@@ -661,6 +668,9 @@ export function createChildSkillExecutorFactory(
       ...(hookRegistry !== undefined ? { hookRegistry } : {}),
       // Fix A (#skill-recursion): execution guard fires when grandchild calls same skill.
       ...(skillDispatchName !== undefined ? { skillDispatchName } : {}),
+      // #3961: propagate root's billing-stream registry so depth-2+ abandoned streams
+      // from skill-fork managers surface in rootManager.getPendingChildBillingStreams().
+      ...(parentBillingStreams !== undefined ? { parentBillingStreams } : {}),
     });
   };
   return factory;

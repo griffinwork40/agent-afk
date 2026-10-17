@@ -15,7 +15,7 @@
 import { AgentSession } from '../agent/session.js';
 import { providerForModel } from '../agent/providers/index.js';
 import { resolveModelId } from '../agent/session/model-resolution.js';
-import { getMaxOutputTokens, getMaxToolUseIterations, composeSystemPrompt } from '../cli/shared-helpers.js';
+import { getMaxOutputTokens, getMaxToolUseIterations, getMaxBudgetUsd, composeSystemPrompt } from '../cli/shared-helpers.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { MemoryStore } from '../agent/memory/index.js';
 import type { StateStore } from '../agent/state/state-store.js';
@@ -72,6 +72,10 @@ export function createTelegramSessionFactory(
     // provider. undefined = unlimited (no behavior change). No per-chat
     // override exists, so this is the env default only.
     const maxToolUseIterations = getMaxToolUseIterations();
+    // Session-wide USD budget ceiling (AFK_MAX_BUDGET_USD). Applies to ALL
+    // providers. undefined = uncapped (no behavior change for operators who
+    // have not set the variable). No per-chat override; env default only.
+    const maxBudgetUsd = getMaxBudgetUsd();
 
     // System-prompt layering (mirrors chat.ts / bootstrap.ts): the framework
     // base is unconditional; the operator overlay (per-chat sessionConfig
@@ -107,42 +111,57 @@ export function createTelegramSessionFactory(
         : undefined,
     });
 
-    // Per-chat isolation; the factory releases this owned store after session
-    // teardown, never the bot-global memory/state stores passed in by the caller.
-    const workspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
+    // Declared before try so the catch/finally can call closeWorkspace() even
+    // when WorkspaceStore construction itself throws (see #3588).
     let workspaceClosed = false;
+    let workspaceStore: WorkspaceStore | undefined;
     const closeWorkspace = () => {
       if (workspaceClosed) return;
       workspaceClosed = true;
       workspaceStore?.close();
     };
     let returnedSession: AgentSession | undefined;
-    const ctx: TelegramSessionBuildContext = {
-      sessionConfig,
-      config,
-      layeredBasePrompt,
-      ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
-      sessionCwd,
-      maxOutputTokens,
-      maxToolUseIterations,
-      traceWriter,
-      mcpManager,
-      memoryStore,
-      ...(stateStore !== undefined ? { stateStore } : {}),
-      workspaceStore,
-      ...(sessionConfig.telegramChatId !== undefined ? { chatId: sessionConfig.telegramChatId } : {}),
-      ...(sessionConfig.telegramThreadId !== undefined ? { threadId: sessionConfig.telegramThreadId } : {}),
-      reportSession: (session) => {
-        returnedSession = session;
-        const close = session.close.bind(session);
-        let closing: Promise<void> | undefined;
-        session.close = () => closing ??= (async () => {
-          try { await close(); } finally { closeWorkspace(); }
-        })();
-      },
-    };
 
     try {
+      // Per-chat isolation; the factory releases this owned store after session
+      // teardown, never the bot-global memory/state stores passed in by the caller.
+      // Constructed inside the try so that a SQLite-open failure triggers MCP
+      // teardown via the catch rather than leaking the connected servers (#3588).
+      workspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
+      const ctx: TelegramSessionBuildContext = {
+        sessionConfig,
+        config,
+        layeredBasePrompt,
+        ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
+        sessionCwd,
+        maxOutputTokens,
+        maxToolUseIterations,
+        maxBudgetUsd,
+        traceWriter,
+        mcpManager,
+        memoryStore,
+        ...(stateStore !== undefined ? { stateStore } : {}),
+        workspaceStore,
+        ...(sessionConfig.telegramChatId !== undefined ? { chatId: sessionConfig.telegramChatId } : {}),
+        ...(sessionConfig.telegramThreadId !== undefined ? { threadId: sessionConfig.telegramThreadId } : {}),
+        // Wire the pre-bound idle-wake hook injected by SessionManager.
+        // When onInjectableForRoute was configured on the SessionManager,
+        // buildAndRegisterSession placed the bound callback in
+        // sessionConfig.telegramOnInjectable. Forward it into the session
+        // context so wireTelegramExecutors can set bgNotifier.onInjectable.
+        ...(sessionConfig.telegramOnInjectable !== undefined
+          ? { onInjectable: sessionConfig.telegramOnInjectable }
+          : {}),
+        reportSession: (session) => {
+          returnedSession = session;
+          const close = session.close.bind(session);
+          let closing: Promise<void> | undefined;
+          session.close = () => closing ??= (async () => {
+            try { await close(); } finally { closeWorkspace(); }
+          })();
+        },
+      };
+
       if (isXaiRouted) {
         const xaiName = sessionProviderName === 'xai-oauth' ? 'xai-oauth' as const : 'xai' as const;
         return await buildXaiTelegramSession({ ...ctx, providerName: xaiName });
@@ -157,7 +176,9 @@ export function createTelegramSessionFactory(
       // leak for the life of the bot process.
       try {
         if (returnedSession !== undefined) {
-          await returnedSession.close().catch(() => undefined);
+          await returnedSession.close().catch((e: unknown) => {
+            log(`[create-session] warn: session close failed during recovery — ${String(e)}`);
+          });
         } else if (mcpManager !== undefined) {
           await mcpManager.disconnectAll();
         }

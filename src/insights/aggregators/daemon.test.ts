@@ -56,6 +56,14 @@ function makeRecord(overrides: Record<string, unknown> = {}): string {
 // ---------------------------------------------------------------------------
 
 describe('aggregateDaemonTelemetry', () => {
+  it('counts recovered success by status, independently of gateBlocks', () => {
+    writeTelemetry([makeRecord({ gateBlocks: 1, gateRecoveryNote: 'Recovered',
+      gateBlockCalls: [{ blockedTool: 'bash', followingTools: ['read_file'] }] })]);
+    const result = aggregateDaemonTelemetry({ days: 30, afkHome: tmpRoot });
+    expect(result.totalRuns).toBe(1);
+    expect(result.successCount).toBe(1);
+    expect(result.errorCount).toBe(0);
+  });
   it('missing forge-telemetry.jsonl → zero aggregates, no throw', () => {
     const result = aggregateDaemonTelemetry({ days: 30, afkHome: '/nonexistent/xyz' });
     expect(result.totalRuns).toBe(0);

@@ -1,0 +1,7 @@
+{
+  "commands": [
+    "pnpm install --frozen-lockfile",
+    "pnpm --dir dashboard install --frozen-lockfile"
+  ],
+  "timeoutMs": 300000
+}

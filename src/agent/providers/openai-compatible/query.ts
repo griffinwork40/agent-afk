@@ -54,6 +54,7 @@ import type {
 } from '../../provider.js';
 import { contextLimitFor, autoCompactLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
+import { slotDenyKey } from '../../tools/operator-denied.slots.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { TurnTrace } from '../shared/turn-trace.js';
 import { debugLog } from '../../../utils/debug.js';
@@ -61,10 +62,8 @@ import {
   formatAuthDiagnostic,
 } from './auth.js';
 import { type OpenAIMessage } from './messages.js';
-import {
-  toolDefsToOpenAIFunctions,
-  type OpenAIFunctionTool,
-} from './loop.js';
+import type { OpenAIFunctionTool } from './loop.js';
+import { dispatcherCatalog } from './query/tool-catalog.js';
 import { resolveWireMode, envFlagEnabled, CHATGPT_BACKEND_BASE_URL, type WireMode } from './responses-config.js';
 import { maybePrintChatGptOAuthNotice } from './query.chatgpt-notice.js';
 import { env } from '../../../config/env.js';
@@ -80,7 +79,6 @@ import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.j
 import { FileCheckpointState } from './query.file-checkpoint.js';
 import { currentWritePolicy } from '../../file-checkpoint/write-policy.js';
 import { HookBlockedError, ensureError } from '../../../utils/errors.js';
-
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { OpenAIJournalWiring } from './query/journal-wiring.js';
 
@@ -121,12 +119,6 @@ export { resolveReasoningEffort };
 
 const PROVIDER_NAME = 'openai-compatible';
 
-
-
-
-
-
-
 /**
  * OpenAI-compatible ProviderQuery implementation.
  *
@@ -151,7 +143,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   /** @internal Package-visible so extracted query/ modules can read the synthesized session id. */
   readonly initSessionId: string;
   /** @internal Package-visible so turn-driver.ts can dispatch tool calls. */
-  readonly toolDispatcher: ToolDispatcher | undefined;
+  toolDispatcher: ToolDispatcher | undefined;
   private readonly onPermissionMode?: (mode: string) => void;
   private readonly onCwdChange?: (cwd: string) => void;
   private readonly systemPromptRebuildFactory?: (basePrompt: string | undefined) => string;
@@ -163,8 +155,9 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   /** Provider-side stop-hook seam (issue #2714); set via setBeforeTurnEnd(). */
   private _beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined = undefined;
   get beforeTurnEnd(): ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined { return this._beforeTurnEnd; }
-  /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
-  private readonly openAITools: OpenAIFunctionTool[] | undefined;
+  /** Catalog and deny identity are refreshed together on a slot-policy change. */
+  private openAITools: OpenAIFunctionTool[] | undefined;
+  private currentSlotDenyKey: string;
   /** @internal Which wire this session speaks: Chat Completions (default) or Responses. */
   readonly wireMode: WireMode;
   /** @internal Static OpenAI list prices apply only when using the official public API endpoint. */
@@ -252,6 +245,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this._currentModel = opts.model;
     this._currentPermissionMode = normalizePermissionMode(opts.config.permissionMode);
     this.toolDispatcher = opts.toolDispatcher;
+    this.currentSlotDenyKey = slotDenyKey(opts.config.model ?? opts.model);
     this.onPermissionMode = opts.onPermissionMode;
     this.onCwdChange = opts.onCwdChange;
     this.systemPromptRebuildFactory = opts.systemPromptRebuildFactory;
@@ -260,15 +254,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
     this.checkpoint = new FileCheckpointState(opts.config.enableFileCheckpointing ?? false, opts.synthesizedSessionId);
 
-    // Pre-compute the OpenAI tool catalog once.
-    if (this.toolDispatcher) {
-      const td = this.toolDispatcher as { toolDefs?: readonly unknown[] };
-      if (Array.isArray(td.toolDefs) && td.toolDefs.length > 0) {
-        this.openAITools = toolDefsToOpenAIFunctions(
-          td.toolDefs as Parameters<typeof toolDefsToOpenAIFunctions>[0],
-        );
-      }
-    }
+    this.openAITools = dispatcherCatalog(this.toolDispatcher);
 
     // Resolve the wire (Chat Completions vs Responses) once.
     // Pass opts.baseURL so resolveWireMode can suppress the chatgpt-oauth
@@ -460,7 +446,17 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   }
 
   async setModel(model?: string): Promise<void> {
-    if (model !== undefined) this._currentModel = resolveModelId(model) ?? model;
+    if (model === undefined) return;
+    const key = slotDenyKey(model);
+    if (key !== this.currentSlotDenyKey) {
+      if (!this.opts.modelDispatcherFactory) throw new Error('Slot tool policy changed; rebuild the session before changing model.');
+      const dispatcher = this.opts.modelDispatcherFactory(model, this.currentPermissionMode);
+      this.openAITools = dispatcherCatalog(dispatcher);
+      this.toolDispatcher = dispatcher;
+      this.currentSlotDenyKey = key;
+    }
+    this.opts.config.model = model;
+    this._currentModel = resolveModelId(model) ?? model;
   }
 
   async setPermissionMode(mode: string): Promise<void> {

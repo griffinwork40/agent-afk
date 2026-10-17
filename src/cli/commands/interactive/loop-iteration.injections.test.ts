@@ -26,6 +26,9 @@ import {
 function makeSource(content: string): InjectionSource {
   let called = false;
   return {
+    hasPendingInjections(): boolean {
+      return !called && content.length > 0;
+    },
     drainInjections(): string {
       if (called) return '';
       called = true;

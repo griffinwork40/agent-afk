@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, realpathSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { classifyFilePath } from './risk-classifier.paths.js';
 import { setSessionTmpdirRootForTests } from './session/session-tmpdir.js';
 import { _resetFsCaseCacheForTests } from './tools/fs-case.js';
+import { _resetWriteDenylistCacheForTests } from './tools/handlers/write-denylist.js';
 
 const workspace = path.resolve('/opt/afk-risk-state-roots-workspace');
 const ctx = { cwd: workspace, workspaceRoot: workspace };
@@ -16,6 +17,8 @@ describe('AFK state roots never receive the private-temp carve-out', () => {
   beforeEach(() => {
     tempRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-state-roots-')));
     setSessionTmpdirRootForTests(tempRoot);
+    // Only stub AFK_HOME here when it is not the variable under test; individual
+    // tests that test AFK_HOME behaviour re-stub it as needed (item 3 fix).
     vi.stubEnv('AFK_HOME', path.join(tempRoot, 'Home'));
     vi.stubEnv('AFK_STATE_DIR', path.join(tempRoot, 'State'));
     vi.stubEnv('AFK_FRAMEWORK_DIR', path.join(tempRoot, 'Framework'));
@@ -23,24 +26,36 @@ describe('AFK state roots never receive the private-temp carve-out', () => {
 
   afterEach(() => {
     _resetFsCaseCacheForTests();
+    _resetWriteDenylistCacheForTests(); // item 5: reset denylist cache for consistency
     vi.unstubAllEnvs();
     setSessionTmpdirRootForTests(undefined);
     rmSync(tempRoot, { recursive: true, force: true });
   });
 
   it.each(rootVars)('excludes relocated %s itself and descendants', (variable) => {
-    // Home lives elsewhere when checking the independently relocated tiers.
-    vi.stubEnv('AFK_HOME', path.resolve('/opt/afk-risk-home-outside-temp'));
+    // When testing AFK_HOME itself, the beforeEach stub is correct — re-stub
+    // to the protected root below. For other variables, move AFK_HOME outside
+    // temp so the independent relocation is exercised (item 3 fix).
+    if (variable !== 'AFK_HOME') {
+      vi.stubEnv('AFK_HOME', path.resolve('/opt/afk-risk-home-outside-temp'));
+    }
     const root = path.join(tempRoot, 'Protected');
+    // Create the root on disk so safeRealpath resolves it to its own real path
+    // rather than collapsing it to the tempRoot ancestor. Without this the
+    // safeRealpath ancestor walk makes every AFK root resolve to tempRoot,
+    // meaning dropping one root from the list would still pass — a false green.
+    mkdirSync(root, { recursive: true });
     vi.stubEnv(variable, root);
     for (const target of [root, path.join(root, 'nested', 'new-file.md')]) {
       expect(classifyFilePath(target, ctx).level).toBe('high');
     }
   });
 
-  describe.each(['darwin', 'win32'])('%s case-insensitive filesystem semantics', () => {
+  // item 4 fix: the platform string was never used inside the suite — collapse
+  // to a single describe and pass the case-insensitive flag directly.
+  describe('case-insensitive filesystem semantics', () => {
     it.each(rootVars)('refuses case-variant %s with missing path components', (variable) => {
-      // Inject volume semantics, not the host OS: every case runs on POSIX and Windows.
+      // Inject volume semantics, not the host OS: runs on POSIX and Windows.
       _resetFsCaseCacheForTests(true);
       const root = path.join(tempRoot, 'Missing', 'Protected');
       vi.stubEnv(variable, root);
@@ -63,5 +78,51 @@ describe('AFK state roots never receive the private-temp carve-out', () => {
   it.each(rootVars)('fails closed for malformed %s', (variable) => {
     vi.stubEnv(variable, 'relative/root');
     expect(classifyFilePath(path.join(tempRoot, 'scratch.md'), ctx).level).toBe('high');
+  });
+
+  // item 1 contract: afkStateRootsResolved() is fail-closed — if ANY root
+  // cannot be resolved the whole function returns null and the private-temp
+  // carve-out is denied. A malformed AFK_FRAMEWORK_DIR must therefore deny
+  // writes under AFK_HOME and AFK_STATE_DIR (which are valid), AND also deny
+  // a plain temp write that would otherwise be outside all AFK roots.
+  //
+  // This test would fail if someone changed the function to return partial roots:
+  // the plain-temp write would become 'safe' because it is outside the two
+  // resolvable roots, proving the hole that partial roots create.
+  it('malformed AFK_FRAMEWORK_DIR is fail-closed: denies AFK-root writes AND plain temp writes', () => {
+    vi.stubEnv('AFK_FRAMEWORK_DIR', 'relative/bad-framework');
+    // All three targets are inside tempRoot, which is outside the workspace
+    // root (/opt/...). Workspace-escape fires for each, calling isSafeTempWrite.
+    // Because AFK_FRAMEWORK_DIR is relative, getAgentFrameworkDir() throws and
+    // afkStateRootsResolved() returns null — making isSafeTempWrite fail-closed
+    // (returns false). The verdict is therefore 'high' for all three paths.
+    // Writes under valid AFK roots must be denied.
+    const homeTarget = path.join(tempRoot, 'Home', 'config', 'secret.json');
+    const stateTarget = path.join(tempRoot, 'State', 'sessions', 'data.json');
+    expect(classifyFilePath(homeTarget, ctx).level).toBe('high');
+    expect(classifyFilePath(stateTarget, ctx).level).toBe('high');
+    // A plain temp write outside all AFK roots must also be denied — because
+    // we cannot prove it is outside the unresolvable AFK_FRAMEWORK_DIR.
+    // If afkStateRootsResolved() returned partial roots this would be 'safe'.
+    const plainTemp = path.join(tempRoot, 'scratch', 'unrelated.txt');
+    expect(classifyFilePath(plainTemp, ctx).level).toBe('high');
+  });
+
+  // item 6: relocated AFK_STATE_DIR is hard-blocked by getWriteDenylist().
+  it('relocated AFK_STATE_DIR is hard-blocked by getWriteDenylist()', () => {
+    // Place AFK_STATE_DIR somewhere real so the denylist entry is registered.
+    const stateDir = path.join(tempRoot, 'RelocatedState');
+    vi.stubEnv('AFK_STATE_DIR', stateDir);
+    _resetWriteDenylistCacheForTests();
+
+    // Use tempRoot as workspaceRoot so workspace-escape does not fire — the
+    // target is inside tempRoot, which keeps it inside the workspace boundary.
+    // This ensures the 'high' verdict comes from the denylist, not from
+    // workspace-escape, so the reason assertion is meaningful.
+    const localCtx = { cwd: tempRoot, workspaceRoot: tempRoot };
+    const target = path.join(stateDir, 'sessions', 'new-file.json');
+    const verdict = classifyFilePath(target, localCtx);
+    expect(verdict.level).toBe('high');
+    expect(verdict.reason).toMatch(/^write-denylist:/);
   });
 });

@@ -76,6 +76,7 @@ import {
 } from './query-maintenance.js';
 import { rewindFiles as rewindFilesImpl } from '../../file-checkpoint/rewind-files.js';
 import { currentWritePolicy } from '../../file-checkpoint/write-policy.js';
+import { slotDenyKey } from '../../tools/operator-denied.slots.js';
 
 // Re-exported so the historical `from './query-runtime.js'` (and thence
 // `query.js` / `index.js`) import paths stay valid after the #824 split.
@@ -100,7 +101,10 @@ export class AnthropicDirectQuery implements ProviderQuery {
    * requiring a session reset.
    */
   private readonly maxTokens: number;
-  private readonly tools: AnthropicToolDef[] | null;
+  private tools: AnthropicToolDef[] | null;
+  private currentSlotDenyKey: string;
+  private readonly modelToolsFactory: AnthropicDirectQueryOptions['modelToolsFactory'];
+  private readonly onModelChange: AnthropicDirectQueryOptions['onModelChange'];
   private readonly systemPrefix: ContentBlockParam[] | null;
   /** Resolved thinking config for the LAUNCH model. Used as the per-turn value
    * when no rawThinkingConfig is available (external/legacy callers). */
@@ -121,6 +125,13 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly traceWriter?: import('../../trace/index.js').TraceSink;
   /** Owning subagent id (fork only); stamped onto tool_call trace events. */
   private readonly subagentId?: string;
+  /**
+   * True when `assembleChildConfig` injected a workspace preamble into this
+   * fork's system prompt. Gates `splitAtWorkspacePreamble` in `composeSystem`
+   * so root sessions whose operator prompt contains a preamble header string
+   * are not incorrectly split. See #3924.
+   */
+  private readonly hasWorkspacePreamble: boolean;
   /**
    * The session's configured working directory — `opts.cwd ?? process.cwd()`.
    * Surfaced via `TurnDriverContext.cwd` so `session.init` reports the
@@ -176,6 +187,9 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.promptStream = opts.promptStream;
     this.maxTokens = opts.maxTokens;
     this.tools = opts.tools;
+    this.currentSlotDenyKey = slotDenyKey(opts.requestedModel ?? opts.model);
+    this.modelToolsFactory = opts.modelToolsFactory;
+    this.onModelChange = opts.onModelChange;
     this.systemPrefix = opts.systemPrefix;
     this.thinking = opts.thinking;
     if (opts.rawThinkingConfig !== undefined) this.rawThinkingConfig = opts.rawThinkingConfig;
@@ -189,6 +203,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     if (opts.softDeadlineMs !== undefined) this.softDeadlineMs = opts.softDeadlineMs;
     this.traceWriter = opts.traceWriter;
     if (opts.subagentId !== undefined) this.subagentId = opts.subagentId;
+    this.hasWorkspacePreamble = opts.hasWorkspacePreamble ?? false;
     this._cwd = opts.cwd ?? process.cwd();
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
     this.systemPromptRebuildFactory = opts.systemPromptRebuildFactory;
@@ -316,6 +331,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       state: this.state,
       systemPrefix: this.systemPrefix,
       ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}),
+      hasWorkspacePreamble: this.hasWorkspacePreamble,
     });
   }
 
@@ -328,6 +344,16 @@ export class AnthropicDirectQuery implements ProviderQuery {
   }
 
   async setModel(model?: string): Promise<void> {
+    if (model === undefined || model.length === 0) return;
+    const key = slotDenyKey(model);
+    if (key !== this.currentSlotDenyKey) {
+      if (!this.modelToolsFactory) throw new Error('Slot tool policy changed; rebuild the session before changing model.');
+      const { dispatcher, tools } = this.modelToolsFactory(model, this.state.currentPermissionMode);
+      this.state.toolDispatcher = dispatcher;
+      this.tools = tools;
+      this.currentSlotDenyKey = key;
+    }
+    this.onModelChange?.(model);
     setLiveModel(this.state, model);
   }
 
@@ -347,6 +373,25 @@ export class AnthropicDirectQuery implements ProviderQuery {
         ? { cwdDependentsFactory: this.cwdDependentsFactory }
         : {}),
     });
+    // Refresh the advertised catalog so it stays consistent with the freshly
+    // rebuilt dispatcher. `setLiveCwd` re-runs `buildDispatcher` (which re-reads
+    // `tools.disabledBySlot` for the live model), but `this.tools` was set only
+    // at construction and in `setModel`. Without this refresh the execution guard
+    // and the wire catalog can diverge when a slot deny is added while the
+    // session is live and the session then re-anchors its cwd. The slot deny key
+    // is unchanged (no model switch), so `currentSlotDenyKey` stays as-is.
+    // Documented contract: live edits take effect at the next `/model` switch or
+    // session; a cwd re-anchor is treated as a second synchronisation point.
+    // Both factories are required: without cwdDependentsFactory, setLiveCwd only
+    // moves the resolve base (no dispatcher rebuild or policy re-read); without
+    // modelToolsFactory, there is no way to regenerate the advertised catalog.
+    if (this.modelToolsFactory && this.cwdDependentsFactory) {
+      const { tools } = this.modelToolsFactory(
+        this.state.requestedModel ?? this.state.currentModel,
+        this.state.currentPermissionMode,
+      );
+      this.tools = tools;
+    }
   }
 
   setSystemPrompt(basePrompt: string | undefined): boolean {

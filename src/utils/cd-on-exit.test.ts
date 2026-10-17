@@ -68,6 +68,11 @@ describe('cd-on-exit', () => {
     expect(existsSync(join(tmp, 'state'))).toBe(false);
     recordCdIntent(resolve('/another/path'));
     expect(existsSync(getCdIntentPath())).toBe(true);
+    const reference = join(tmp, 'private-reference');
+    mkdirSync(reference, { mode: 0o700 });
+    // Contract: newly created state directories match native owner-only permissions.
+    expect(lstatSync(join(tmp, 'state')).mode & 0o777)
+      .toBe(lstatSync(reference).mode & 0o777);
   });
 
   it('recordCdIntent overwrites prior contents', () => {

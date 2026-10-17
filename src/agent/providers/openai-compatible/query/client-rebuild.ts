@@ -19,7 +19,8 @@ import type { OpenAICompatibleQueryOptions } from './query-options.js';
 
 /**
  * Apply a ChatGPT-OAuth token refresh to a query instance: mutate opts.auth
- * and rebuild the backing OpenAI client in one atomic step.
+ * and rebuild the backing OpenAI client at a single site.
+ * This is not atomic: if construction throws, opts.auth already holds newAuth.
  *
  * Extracted from `OpenAICompatibleQuery.rebuildClient` to keep query.ts under
  * the 350-code-line ceiling. Callers pass the mutable opts bag cast to allow

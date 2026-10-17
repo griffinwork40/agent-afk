@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearOidcCache, discoverXaiOidc, discoverXaiOidcCached, tokenResponseToBundle } from './oauth-http.js';
+import {
+  clearOidcCache, discoverXaiOidc, discoverXaiOidcCached, tokenResponseToBundle,
+  rawPostOAuthForm, postOAuthForm,
+} from './oauth-http.js';
 
 // ---------------------------------------------------------------------------
 // tokenResponseToBundle
@@ -237,5 +240,77 @@ describe('discoverXaiOidc — RFC 8414 §3 origin validation', () => {
     await expect(
       discoverXaiOidc({ fetchFn: fetchFn as unknown as typeof fetch, issuer: 'https://auth.x.ai' }),
     ).rejects.toThrow('body issuer origin does not match configured issuer');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rawPostOAuthForm — clone always happens (body-consumed fix)
+// ---------------------------------------------------------------------------
+
+describe('rawPostOAuthForm — body read behaviour', () => {
+  it('returns json on a JSON ok response', async () => {
+    const fetchFn = vi.fn(async () =>
+      new Response(JSON.stringify({ access_token: 'at' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ) as unknown as typeof fetch;
+    const result = await rawPostOAuthForm('https://auth.x.ai/token', { grant_type: 'client_credentials' }, fetchFn);
+    expect(result.ok).toBe(true);
+    expect(result.json['access_token']).toBe('at');
+    expect(result.text).toBe('');
+  });
+
+  it('returns text when body is not JSON (always-clone fix)', async () => {
+    // A plain-text body: JSON.parse fails, the clone must still be readable.
+    const fetchFn = vi.fn(async () =>
+      new Response('Service Unavailable', {
+        status: 503,
+        headers: { 'Content-Type': 'text/plain' },
+      }),
+    ) as unknown as typeof fetch;
+    const result = await rawPostOAuthForm('https://auth.x.ai/token', { grant_type: 'client_credentials' }, fetchFn);
+    expect(result.ok).toBe(false);
+    expect(result.json).toEqual({});
+    expect(result.text).toBe('Service Unavailable');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// postOAuthForm — plain-text error body surfaces in thrown message
+// ---------------------------------------------------------------------------
+
+describe('postOAuthForm — error message includes plain-text body', () => {
+  it('appends plain-text body when no json.error field present', async () => {
+    const fetchFn = vi.fn(async () =>
+      new Response('Rate limit exceeded', {
+        status: 429,
+        headers: { 'Content-Type': 'text/plain' },
+      }),
+    ) as unknown as typeof fetch;
+    await expect(
+      postOAuthForm('https://auth.x.ai/token', { grant_type: 'client_credentials' }, 'xAI refresh failed', fetchFn),
+    ).rejects.toThrow('xAI refresh failed: http_429: Rate limit exceeded');
+  });
+
+  it('uses json.error when present (plain text ignored)', async () => {
+    const fetchFn = vi.fn(async () =>
+      new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'Token expired' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ) as unknown as typeof fetch;
+    await expect(
+      postOAuthForm('https://auth.x.ai/token', { grant_type: 'refresh_token' }, 'xAI refresh failed', fetchFn),
+    ).rejects.toThrow('xAI refresh failed: invalid_grant: Token expired');
+  });
+
+  it('omits suffix when body is empty and no json.error', async () => {
+    const fetchFn = vi.fn(async () =>
+      new Response('', { status: 500, headers: { 'Content-Type': 'text/plain' } }),
+    ) as unknown as typeof fetch;
+    await expect(
+      postOAuthForm('https://auth.x.ai/token', { grant_type: 'client_credentials' }, 'xAI refresh failed', fetchFn),
+    ).rejects.toThrow('xAI refresh failed: http_500');
   });
 });

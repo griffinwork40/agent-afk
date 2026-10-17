@@ -232,6 +232,11 @@ export class ShellPassthrough {
     return true;
   }
 
+  /** True when at least one shell-passthrough result is buffered and ready to inject. */
+  hasPendingInjections(): boolean {
+    return this.pendingInjections.length > 0;
+  }
+
   /**
    * Drain and return the structured injection block to prepend to the
    * next user message. Returns the empty string when nothing is queued

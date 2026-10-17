@@ -9,7 +9,9 @@
  * @module agent/tools/dispatch-batching
  */
 
-import { builtinToolSchemas, agentTool, skillTool, composeTool } from './schemas.js';
+import { builtinToolSchemas } from './schemas.js';
+import { agentTool, skillTool, composeTool } from './schemas.agent-tools.js';
+import { gitReadTool } from './schemas.git-read.js';
 import { memoryToolSchemas } from '../memory/memory-tools.js';
 import { stateToolSchemas } from '../state/state-schemas.js';
 import { getRuntimeStateTool } from '../awareness/index.js';
@@ -22,16 +24,24 @@ import type { ConcurrencyClassifier } from './types.js';
  * This replaces the former hand-maintained list and stays automatically in sync
  * with schema changes.
  *
+ * Imports `builtinToolSchemas` + the individual orchestration tools directly
+ * rather than the aggregate `ALL_TOOL_SCHEMAS` re-export, so that test files
+ * which vi.mock('schemas.js') with a minimal stub (builtinToolSchemas + named
+ * tools, but no ALL_TOOL_SCHEMAS) do not trigger a missing-export error at
+ * module-load time (#3812). The set of schemas covered is identical.
+ *
  * External constraint: schemas.ts, memory-tools.ts, and state-schemas.ts are
  * the single source of truth. Mutations to those files propagate here without
  * any secondary edit.
  */
 const SAFE_TOOLS: ReadonlySet<string> = new Set(
   [
+    // builtins + agent/skill/compose + opt-in git_read (#3754).
     ...builtinToolSchemas,
     agentTool,
     skillTool,
     composeTool,
+    gitReadTool,
     ...memoryToolSchemas,
     ...stateToolSchemas,
     getRuntimeStateTool,

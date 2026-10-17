@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'node:os';
 import { dirname, join, isAbsolute } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -19,6 +20,7 @@ import {
   toggleScheduleEnabled,
   updateSchedule,
   toScheduledTask,
+  isLockContention,
   type ScheduledTaskConfig,
 } from './schedule-store.js';
 
@@ -74,7 +76,7 @@ describe('loadSchedules', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('returns [] for missing file', () => {
@@ -116,7 +118,7 @@ describe('addSchedule', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('writes and reloads correctly', () => {
@@ -231,7 +233,7 @@ describe('removeSchedule', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('returns true and removes entry', () => {
@@ -261,7 +263,7 @@ describe('getSchedule', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('returns config by id', () => {
@@ -286,7 +288,7 @@ describe('toggleScheduleEnabled', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('enables a disabled task and returns the updated config', () => {
@@ -352,7 +354,7 @@ describe('updateSchedule', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('patches a single field and preserves others', () => {
@@ -582,7 +584,7 @@ describe('toScheduledTask', () => {
     const loaded = loadSchedules(path);
     expect(loaded).toHaveLength(1);
     expect(loaded[0]).toEqual(config);
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSyncRetry(tmpDir);
   });
 });
 
@@ -594,7 +596,7 @@ describe('schedule-store cwd field', () => {
   let realDir: string;
 
   afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSyncRetry(tmpDir);
   });
 
   function setup() {
@@ -738,8 +740,12 @@ function waitForChild(scriptPath: string, args: string[]): Promise<void> {
     });
     let stderr = '';
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on('error', reject);
-    child.on('exit', (code) => {
+    let settled = false;
+    child.on('error', (error) => { if (!settled) { settled = true; reject(error); } });
+    // close follows exit after stdio handles are released, including on Windows.
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
       if (code === 0) resolve();
       else reject(new Error(`schedule writer exited ${code ?? 'unknown'}: ${stderr}`));
     });
@@ -770,9 +776,9 @@ describe('schedule-store concurrent mutation', () => {
       }
     `, 'utf-8');
 
+    const children = Array.from({ length: workerCount }, (_, i) =>
+      waitForChild(scriptPath, [storePath, startPath, String(i), String(perWorker)]));
     try {
-      const children = Array.from({ length: workerCount }, (_, i) =>
-        waitForChild(scriptPath, [storePath, startPath, String(i), String(perWorker)]));
       await new Promise((resolve) => setTimeout(resolve, 50));
       writeFileSync(startPath, 'go', 'utf-8');
       await Promise.all(children);
@@ -782,7 +788,9 @@ describe('schedule-store concurrent mutation', () => {
       const ids = loaded.map((s) => s.id);
       expect(new Set(ids).size).toBe(workerCount * perWorker);
     } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
+      // Promise.all rejects early: still drain every writer before removing its files.
+      await Promise.allSettled(children);
+      rmSyncRetry(tmpDir);
     }
   });
 
@@ -806,7 +814,7 @@ describe('schedule-store concurrent mutation', () => {
     expect(ids).toContain('beta');         // untouched
     expect(ids).toContain('gamma');        // added
 
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSyncRetry(tmpDir);
   });
 
   it('updateSchedule concurrent: each patch is applied without clobbering others', () => {
@@ -825,7 +833,7 @@ describe('schedule-store concurrent mutation', () => {
     expect(loaded).toHaveLength(1);
     expect(loaded[0]?.cron).toBe('9 1 * * *');
 
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSyncRetry(tmpDir);
   });
 });
 
@@ -835,7 +843,7 @@ describe('retry fields (maxAttempts / retryDelayMs)', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('round-trips through add → load → toScheduledTask', () => {
@@ -860,5 +868,53 @@ describe('retry fields (maxAttempts / retryDelayMs)', () => {
     const after = getSchedule('patch-me', path)!;
     expect(after.maxAttempts).toBe(2);
     expect(after.retryDelayMs).toBe(5_000);
+  });
+});
+
+// ── isLockContention ─────────────────────────────────────────────────────────
+// Tests run on all platforms — the helper is pure and accepts `platform` as a
+// parameter so behaviour for both platforms can be verified without skip/runIf.
+
+describe('isLockContention', () => {
+  function makeErr(code: string): NodeJS.ErrnoException {
+    const e: NodeJS.ErrnoException = new Error(`${code}`);
+    e.code = code;
+    return e;
+  }
+
+  describe('win32 platform', () => {
+    it('returns true for EPERM', () => {
+      expect(isLockContention(makeErr('EPERM'), 'win32')).toBe(true);
+    });
+    it('returns true for EACCES', () => {
+      expect(isLockContention(makeErr('EACCES'), 'win32')).toBe(true);
+    });
+    it('returns true for EBUSY', () => {
+      expect(isLockContention(makeErr('EBUSY'), 'win32')).toBe(true);
+    });
+    it('returns false for EEXIST (handled separately by the caller)', () => {
+      expect(isLockContention(makeErr('EEXIST'), 'win32')).toBe(false);
+    });
+    it('returns false for ENOENT', () => {
+      expect(isLockContention(makeErr('ENOENT'), 'win32')).toBe(false);
+    });
+    it('returns false for non-errno values', () => {
+      expect(isLockContention(new Error('plain error'), 'win32')).toBe(false);
+      expect(isLockContention(null, 'win32')).toBe(false);
+    });
+  });
+
+  describe('posix platforms', () => {
+    for (const platform of ['linux', 'darwin', 'freebsd'] as const) {
+      it(`returns false for EPERM on ${platform} (real permission error)`, () => {
+        expect(isLockContention(makeErr('EPERM'), platform)).toBe(false);
+      });
+      it(`returns false for EACCES on ${platform}`, () => {
+        expect(isLockContention(makeErr('EACCES'), platform)).toBe(false);
+      });
+      it(`returns false for EBUSY on ${platform}`, () => {
+        expect(isLockContention(makeErr('EBUSY'), platform)).toBe(false);
+      });
+    }
   });
 });

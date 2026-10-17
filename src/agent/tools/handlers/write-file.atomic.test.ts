@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { _setRealScratchRootsForTests, _resetScratchRootsCacheForTests } from './scratch-roots.js';
 import {
   chmodSync,
   existsSync,
@@ -30,6 +31,12 @@ afterEach(() => {
   try { chmodSync(dir, 0o755); } catch { /* ignore */ }
   rmSync(dir, { recursive: true, force: true });
 });
+
+// This suite uses os.tmpdir() dirs as "outside every granted root". The OS
+// temp dir is an implicit WRITE root (scratch-roots.ts), so disable that
+// allowance here to keep testing granted-root containment, not temp policy.
+beforeEach(() => _setRealScratchRootsForTests([]));
+afterEach(() => _resetScratchRootsCacheForTests());
 
 describe('commitFileWrite', () => {
   it('replaces an existing file and leaves no temp files behind', async () => {

@@ -16,6 +16,7 @@
 
 import type { AgentDefinition } from '../types/sdk-types.js';
 import { parseToolsField } from '../plugins/tool-injector.js';
+import { splitFrontmatter } from '../../utils/split-frontmatter.js';
 
 /** Parse outcome for a single agent markdown file. */
 export interface ParsedAgentFile {
@@ -100,20 +101,18 @@ export function parseAgentMarkdown(
   content: string,
   warn: (message: string) => void = () => {},
 ): ParsedAgentFile | undefined {
-  if (!content.startsWith('---')) {
-    warn('missing frontmatter (file must start with ---)');
+  const split = splitFrontmatter(content);
+  if (split === null) {
+    // Distinguish "doesn't start with ---" from "unterminated" for better warnings.
+    if (!content.startsWith('---')) {
+      warn('missing frontmatter (file must start with ---)');
+    } else {
+      warn('unterminated frontmatter (no closing ---)');
+    }
     return undefined;
   }
-  const afterOpen = content.slice(3);
-  const endIdx = afterOpen.indexOf('\n---');
-  if (endIdx === -1) {
-    warn('unterminated frontmatter (no closing ---)');
-    return undefined;
-  }
-  const frontmatterText = afterOpen.slice(0, endIdx);
-  // Body starts after the closing `---` line.
-  const rest = afterOpen.slice(endIdx + 4);
-  const body = rest.startsWith('\n') ? rest.slice(1) : rest;
+  const frontmatterText = split.yaml;
+  const body = split.body;
 
   const lines = frontmatterText.split('\n');
   let name: string | undefined;

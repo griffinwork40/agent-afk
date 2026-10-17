@@ -30,6 +30,10 @@ import { join } from 'node:path';
 import { handleCommandError } from '../errors/index.js';
 import { buildTraceResults, DEFAULT_RESULT_LINES } from './trace-results.js';
 import { formatTrace } from './trace-summary-render.js';
+import {
+  analyzeBlockEvasion,
+  formatBlockEvasionReport,
+} from '../../agent/trace/block-evasion-analyzer.js';
 import { getTraceDir, getWitnessRoot } from '../../paths.js';
 import { readLedger } from '../../agent/session-ledger.js';
 import type { TraceEvent } from '../../agent/trace/index.js';
@@ -218,10 +222,12 @@ export function registerTraceCommand(program: Command): void {
     .option('-n, --limit <number>', 'Show only the last N events')
     .option('--results', 'Print each tool call\'s full result (from the message journal) under its row', false)
     .option('--results-lines <number>', `Max lines per result with --results (0 = no limit, default ${DEFAULT_RESULT_LINES})`)
+    .option('--evasion', 'Run the block-evasion and lost-work analyzer and print its report', false)
+    .option('--evasion-window <number>', 'Tool-call window size for evasion detection (default 10)')
     .action(
       async (
         session: string | undefined,
-        options: { all: boolean; json: boolean; limit?: string; results: boolean; resultsLines?: string },
+        options: { all: boolean; json: boolean; limit?: string; results: boolean; resultsLines?: string; evasion: boolean; evasionWindow?: string },
       ) => {
         try {
           const selector = session ?? 'latest';
@@ -234,6 +240,16 @@ export function registerTraceCommand(program: Command): void {
           }
 
           const loaded = await loadTrace(selector);
+
+          if (options.evasion) {
+            const window = options.evasionWindow !== undefined
+              ? Math.max(1, parseInt(options.evasionWindow, 10) || 10)
+              : 10;
+            const report = analyzeBlockEvasion(loaded.sessionId, loaded.events, { evasionWindow: window });
+            process.stdout.write(formatBlockEvasionReport(report));
+            return;
+          }
+
           let limit: number | undefined;
           if (options.limit !== undefined) {
             const n = parseInt(options.limit, 10);

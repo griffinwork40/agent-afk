@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { _setRealScratchRootsForTests, _resetScratchRootsCacheForTests } from './scratch-roots.js';
 import { promises as fs } from 'fs';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -40,6 +41,12 @@ afterEach(() => {
 });
 
 const sig = () => new AbortController().signal;
+
+// This suite uses os.tmpdir() dirs as "outside every granted root". The OS
+// temp dir is an implicit WRITE root (scratch-roots.ts), so disable that
+// allowance here to keep testing granted-root containment, not temp policy.
+beforeEach(() => _setRealScratchRootsForTests([]));
+afterEach(() => _resetScratchRootsCacheForTests());
 
 describe('multi-root containment — read_file', () => {
   it('allows path inside rootA when readRoots = [rootA, rootB]', async () => {

@@ -22,6 +22,7 @@ import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { getPeerInboxDir } from '../../paths.js';
 import { parseEnvelope } from './envelope.js';
+import { isEnoent } from '../../utils/errors.js';
 
 /**
  * Check whether `file` in `pending/` is an orphan from a prior crash.
@@ -75,7 +76,6 @@ export async function checkOrphanPending(
 export async function clearDeliveredReceipt(sessionId: string, file: string): Promise<void> {
   const path = join(getPeerInboxDir(sessionId), 'delivered', file);
   await unlink(path).catch((err: unknown) => {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code !== 'ENOENT') throw err;
+    if (!isEnoent(err)) throw err;
   });
 }

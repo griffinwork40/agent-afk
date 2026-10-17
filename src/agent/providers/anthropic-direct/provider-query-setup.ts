@@ -38,6 +38,7 @@ export interface QuerySetupResult {
   queryDispatcher: ReturnType<typeof wireQueryDispatcher>['queryDispatcher'];
   runtimeStateSource: ReturnType<typeof wireQueryDispatcher>['runtimeStateSource'];
   toolDefs: ReturnType<typeof wireQueryDispatcher>['toolDefs'];
+  modelToolsFactory: ReturnType<typeof wireQueryDispatcher>['modelToolsFactory'];
   resolvedSessionId: ReturnType<typeof wireQueryDispatcher>['resolvedSessionId'];
   stableSystemPrefix: ReturnType<typeof assembleQueryPrompt>['stableSystemPrefix'];
   toolSystemAppend: ReturnType<typeof assembleQueryPrompt>['toolSystemAppend'];
@@ -139,13 +140,14 @@ export function setUpQuerySession(
   // declare/capture/assign sequence for `queryDispatcher` lives entirely
   // inside this helper — see its module header; splitting it reintroduces
   // the stale-tool-list hazard (#824).
-  const { queryDispatcher, runtimeStateSource, toolDefs, resolvedSessionId } = wireQueryDispatcher({
+  const { queryDispatcher, runtimeStateSource, toolDefs, resolvedSessionId, modelToolsFactory } = wireQueryDispatcher({
     config,
     model,
     permissionMode,
     surface: ctx.surface,
     providerName,
     externalTools: ctx.externalTools,
+    customToolSchemas: ctx.customToolSchemas,
     sharedReadRoots,
     sharedWriteRoots,
     // Live cwd: `_currentCwd` is re-seeded from this query's config above,
@@ -154,6 +156,10 @@ export function setUpQuerySession(
     // is re-read. Same `||` fall-through as the `cwd` const below, so the
     // `- Working directory:` and `- Workspace:` lines can never disagree.
     getCwd: () => ctx.getCurrentCwd() || config.cwd || process.cwd(),
+    // Containment base for the dispatcher: the live re-anchored cwd or the
+    // configured one, and NEVER the `process.cwd()` display fallback above
+    // (undefined = unconfined; see DispatcherWiringArgs.getDispatcherCwd).
+    getDispatcherCwd: () => ctx.getCurrentCwd() || config.cwd,
     getMcpTools: () => ctx.mcpManager?.getMcpTools() ?? [],
     getMcpServerStates: () => ctx.mcpManager?.getServerStates() ?? [],
     getSubagents: () =>
@@ -220,6 +226,7 @@ export function setUpQuerySession(
     queryDispatcher,
     runtimeStateSource,
     toolDefs,
+    modelToolsFactory,
     resolvedSessionId,
     stableSystemPrefix,
     toolSystemAppend,

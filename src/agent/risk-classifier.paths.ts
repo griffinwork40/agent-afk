@@ -153,12 +153,12 @@ export function getTempRoots(): readonly string[] {
 }
 
 /** Boundary-safe containment on realpath'd values (`<tmp>-evil/x` is NOT inside). */
-function isInsideTempRoot(p: string): boolean {
-  return getTempRoots().some((root) => p === root || p.startsWith(root + path.sep));
+function isInsideTempRoot(p: string, roots: readonly string[]): boolean {
+  return roots.some((root) => p === root || p.startsWith(root + path.sep));
 }
 
 function errCode(err: unknown): string | undefined {
-  return err instanceof Error && 'code' in err ? String((err as NodeJS.ErrnoException).code) : undefined;
+  return err instanceof Error && 'code' in err ? String((err as { code: unknown }).code) : undefined;
 }
 
 /**
@@ -233,6 +233,19 @@ export function isOutsideRoot(
  * All independently relocatable AFK state roots, or `null` if any is invalid.
  * Resolve through existing ancestors even when a root has not been created.
  * Unknown root → fail closed: no private-temp carve-out may be granted.
+ *
+ * Invariant: if ANY root fails to resolve, the entire function returns `null`
+ * and the private-temp carve-out is denied for the write. These roots are
+ * EXCLUSIONS — we must be able to prove the write target is outside all of
+ * them. A partial list creates a security hole: if AFK_FRAMEWORK_DIR resolves
+ * to a temp path but we cannot check it, we might erroneously allow a write
+ * into it. The cost of fail-closed is only a false-positive denial; the cost
+ * of partial roots is a false-negative permission grant.
+ *
+ * This deliberately differs from `derivedAfkHomeWriteEntries()` in
+ * write-denylist.ts, which builds an additive block list — dropping one entry
+ * there is safe (the write is merely un-blocked by that entry; other entries
+ * still apply). Here, dropping one exclusion root silently opens a hole.
  */
 function afkStateRootsResolved(): readonly string[] | null {
   try {
@@ -250,15 +263,21 @@ function afkStateRootsResolved(): readonly string[] | null {
  * These must not be silently writable via a temp-root carve-out.
  */
 function isSafeTempWrite(abs: string, resolved: string): boolean {
-  if (!isInsideTempRoot(resolved)) return false;
+  // Invariant: re-validate cached roots once per write classification, never once
+  // per process. Both containment checks use the same fail-closed snapshot.
+  const tempRoots = getTempRoots();
+  if (!isInsideTempRoot(resolved, tempRoots)) return false;
   const target = finalWriteTarget(abs);
-  if (!isInsideTempRoot(target)) return false;
+  if (!isInsideTempRoot(target, tempRoots)) return false;
   if (hardBlock(target) !== undefined) return false;
   // AFK state under a temp root must not become writable through the carve-out.
   // Keep the original exact comparison additive; the case-aware check only
   // excludes more, including missing leaves on case-insensitive volumes.
   const roots = afkStateRootsResolved();
   if (roots === null) return false;
+  // Fast path: exact match or literal prefix skips the isCaseInsensitiveFs
+  // probe on the common hot path. pathIsWithin subsumes both checks, so this
+  // only changes performance, not correctness.
   return !roots.some((root) =>
     target === root || target.startsWith(root + path.sep) || pathIsWithin(target, root));
 }

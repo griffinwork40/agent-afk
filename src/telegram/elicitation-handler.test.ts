@@ -71,6 +71,7 @@ vi.mock('./formatter.js', () => ({
 
 import { makeTelegramElicitationHandler } from './elicitation-handler.js';
 import { Telegraf } from 'telegraf';
+import { splitLongPrompt } from './elicitation-handler.send.js';
 
 // ---------------------------------------------------------------------------
 // Type helpers for the mock ctx used in callback tests.
@@ -1874,5 +1875,449 @@ describe('dynamic route resolution (topic-aware routing, issue #1021)', () => {
     await Promise.all([p1, p2]);
 
     clearElicitationRoute('test-session-general');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Long-choice splitting: pre-messages sent before keyboard, index mapping intact
+// ---------------------------------------------------------------------------
+
+describe('choice type: long choices split into pre-messages before keyboard', () => {
+  // 20 choices each ~250 chars — overflow rendering fires, total > 4096.
+  const longChoices = Array.from({ length: 20 }, (_, i) => `Option ${i + 1}: ${'x'.repeat(240)}`);
+
+  it('sends pre-messages before the keyboard message when list exceeds 4096 chars', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(choiceRequest(longChoices), { signal: ac.signal });
+    // Let the async pre-message chain run
+    await new Promise((r) => setTimeout(r, 10));
+
+    // At least 2 sendMessage calls: ≥1 pre-message + 1 keyboard
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    // All pre-messages must be ≤ 4096 chars
+    const calls = sendMessage.mock.calls as [number, string, object][];
+    const preMessages = calls.slice(0, -1); // everything except the last (keyboard)
+    for (const call of preMessages) {
+      expect(call[1].length).toBeLessThanOrEqual(4096);
+    }
+
+    // Keyboard message (last call) must also be ≤ 4096 chars
+    const lastCall = calls[calls.length - 1]!;
+    expect(lastCall[1].length).toBeLessThanOrEqual(4096);
+
+    // Pre-messages come before the keyboard message (ordering guaranteed by await-in-order)
+    // Verify: the last call has reply_markup (the keyboard), earlier calls do not
+    const lastOpts = lastCall[2] as { reply_markup?: unknown };
+    expect(lastOpts.reply_markup).toBeDefined();
+    for (const pre of preMessages) {
+      const opts = pre[2] as { reply_markup?: unknown };
+      expect(opts.reply_markup).toBeUndefined();
+    }
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('button callback index i still maps to request.choices[i]', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(choiceRequest(longChoices), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Extract the keyboard call (last sendMessage call)
+    const calls = sendMessage.mock.calls as [number, string, { reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] } }][];
+    const kbCall = calls[calls.length - 1]!;
+    const rows = kbCall[2].reply_markup.inline_keyboard;
+
+    // Fire button 0 → should resolve to longChoices[0]
+    const firstButtonData = rows[0]![0]!.callback_data;
+    // Simulate the callback via the captured action handler
+    await capturedActionHandler!({
+      chat: { id: CHAT_ID },
+      callbackQuery: { data: firstButtonData },
+      answerCbQuery: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(resultPromise).resolves.toEqual({
+      action: 'accept',
+      content: { value: longChoices[0] },
+    });
+  });
+
+  it('pre-message send failure → decline (same as keyboard failure)', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    // First sendMessage (pre-message) rejects
+    sendMessage.mockRejectedValueOnce(new Error('Network error'));
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(choiceRequest(longChoices), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 10));
+
+    await expect(resultPromise).resolves.toEqual({ action: 'decline' });
+  });
+
+  it('keyboard send failing after pre-messages succeed → decline', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    // Pre-messages succeed (first N calls), keyboard send (last call) fails.
+    // mockRejectedValueOnce on the LAST sendMessage call: we let pre-messages
+    // resolve, then reject the keyboard send.
+    let callCount = 0;
+    sendMessage.mockImplementation(() => {
+      callCount++;
+      // Allow a few pre-message sends, then fail on the keyboard send
+      // (pre-messages are typically 2–3 for longChoices; reject on call 3+)
+      if (callCount >= 3) {
+        return Promise.reject(new Error('keyboard send failed'));
+      }
+      return Promise.resolve({ message_id: callCount });
+    });
+
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(choiceRequest(longChoices), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 20));
+
+    await expect(resultPromise).resolves.toEqual({ action: 'decline' });
+  });
+
+  it('abort during pre-sends stops further sends', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const ac = makeAbort();
+
+    let sendCount = 0;
+    sendMessage.mockImplementation(() => {
+      sendCount++;
+      // Abort after the first pre-message send
+      if (sendCount === 1) {
+        ac.abort();
+      }
+      return Promise.resolve({ message_id: sendCount });
+    });
+
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const resultPromise = handler(choiceRequest(longChoices), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const result = await resultPromise;
+    // Either declined (abort fired before resolve) or decline from abort signal
+    expect(result.action).toBe('decline');
+    // Crucially: should NOT have sent all pre-messages + keyboard after abort
+    // (at most 1 pre-message + possibly the keyboard attempt before abort propagated)
+    expect(sendCount).toBeLessThan(longChoices.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #3631 item 1: keyboardText (question + pointer) measured; falls back
+// to baseText when question alone is near the 4096-char limit.
+// ---------------------------------------------------------------------------
+
+describe('choice type: question near 4096-char limit (issue #3631 item 1)', () => {
+  it('keyboardText ≤ 4096 when question is ~4040 chars (pointer would overflow)', async () => {
+    // A question of 4040 chars + 57-char pointer = 4097 → should fall back to baseText.
+    const longQuestion = 'Q'.repeat(4040);
+    const choices = ['alpha-choice-that-is-over-64-bytes-long-xxxxxxxxxxxxxxxxxxx', 'beta'];
+
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(
+      choiceRequest(choices, { message: longQuestion }),
+      { signal: ac.signal },
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    // All sendMessage calls must have text ≤ 4096
+    const calls = sendMessage.mock.calls as [number, string, object][];
+    for (const call of calls) {
+      expect(call[1].length).toBeLessThanOrEqual(4096);
+    }
+
+    ac.abort();
+    await resultPromise;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #3631 item 2: single choice > 4096 chars after escapeHtml is hard-split.
+// ---------------------------------------------------------------------------
+
+describe('choice type: single choice over 4096 chars (issue #3631 item 2)', () => {
+  it('a choice longer than 4096 chars is split so every pre-message is ≤ 4096', async () => {
+    // One huge choice: 5000 chars after escaping (no HTML entities, so length = chars).
+    const hugeChoice = 'x'.repeat(5000);
+    const choices = [hugeChoice, 'short'];
+
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(
+      choiceRequest(choices, { message: 'Pick one' }),
+      { signal: ac.signal },
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    const calls = sendMessage.mock.calls as [number, string, object][];
+    // At least one pre-message call expected
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of calls) {
+      expect(call[1].length).toBeLessThanOrEqual(4096);
+    }
+
+    ac.abort();
+    await resultPromise;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #3631 item 3: question alone > 4096 chars on text/number/confirm types
+// is split into pre-messages + final interceptable prompt, never declined.
+// ---------------------------------------------------------------------------
+
+describe('splitLongPrompt', () => {
+  it('returns the original string when it fits', () => {
+    expect(splitLongPrompt('hello')).toEqual(['hello']);
+  });
+
+  it('splits at a newline boundary when possible', () => {
+    const a = 'A'.repeat(3000);
+    const b = 'B'.repeat(3000);
+    const prompt = `${a}\n${b}`;
+    const chunks = splitLongPrompt(prompt);
+    expect(chunks.length).toBe(2);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(4096);
+    // Rejoined content must equal original (newline at split is consumed)
+    expect(chunks.join('\n')).toBe(prompt);
+  });
+
+  it('hard-splits when no newline exists within the window', () => {
+    const prompt = 'x'.repeat(5000);
+    const chunks = splitLongPrompt(prompt);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(4096);
+    expect(chunks.join('')).toBe(prompt);
+  });
+
+  it('handles a prompt of exactly 4096 chars without splitting', () => {
+    const prompt = 'z'.repeat(4096);
+    expect(splitLongPrompt(prompt)).toEqual([prompt]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Finding 1 (issue #3663): HTML-aware splitting
+  // -------------------------------------------------------------------------
+
+  it('closes open <i> tag at chunk boundary and reopens it in the next chunk', () => {
+    // Use maxLen=100 so tag overhead (<i> = 3, </i> = 4) fits comfortably.
+    // 200 chars of inner content forces at least 2 chunks.
+    const maxLen = 100;
+    const longContext = 'C'.repeat(200);
+    const bigPrompt = `<i>${longContext}</i>`;
+    const chunks = splitLongPrompt(bigPrompt, maxLen);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(maxLen);
+    // Every chunk must have balanced tags
+    for (const c of chunks) {
+      const opens = (c.match(/<i>/g) ?? []).length;
+      const closes = (c.match(/<\/i>/g) ?? []).length;
+      expect(opens).toBe(closes);
+    }
+  });
+
+  it('does not split inside an HTML entity near the boundary', () => {
+    // Place &amp; right before position maxLen so a naive split would cut through it.
+    const maxLen = 30;
+    // prefix of 27 chars + &amp; (5 chars) = 32, so entity straddles boundary at 30.
+    const prompt = 'A'.repeat(27) + '&amp;' + 'B'.repeat(27);
+    const chunks = splitLongPrompt(prompt, maxLen);
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(maxLen);
+      // No chunk should contain a broken entity (& without ;)
+      // i.e. a bare & that is not part of a complete &xxx; sequence
+      const brokenEntity = /&(?![a-zA-Z#][a-zA-Z0-9]*;)/.test(c);
+      expect(brokenEntity).toBe(false);
+    }
+  });
+
+  it('<b> tag spanning chunks: each chunk is self-contained valid HTML', () => {
+    // maxLen=100: <b> (3) + </b> (4) = 7 bytes overhead; 300 chars forces 3+ chunks.
+    const maxLen = 100;
+    const inner = 'B'.repeat(300);
+    const prompt = `<b>${inner}</b>`;
+    const chunks = splitLongPrompt(prompt, maxLen);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(maxLen);
+      const opens = (c.match(/<b>/g) ?? []).length;
+      const closes = (c.match(/<\/b>/g) ?? []).length;
+      expect(opens).toBe(closes);
+    }
+    // Concatenation after stripping tag wrappers reconstructs inner content
+    const stripped = chunks.map((c) => c.replace(/<\/?b>/g, '')).join('');
+    expect(stripped).toBe(inner);
+  });
+
+  it('long <i>-wrapped context spanning two chunks has valid HTML in each', () => {
+    // Mirrors the real displayText shape: <b>header</b>\n\n<i>context</i>\n\nquestion
+    const context = 'X'.repeat(3800);
+    const question = 'Q'.repeat(500);
+    const prompt = `💬 <b>Question from agent</b>\n\n<i>${context}</i>\n\n${question}`;
+    const chunks = splitLongPrompt(prompt); // default 4096 maxLen
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(4096);
+      // Count open/close for i and b — must be balanced
+      for (const tag of ['i', 'b'] as const) {
+        const opens = (c.match(new RegExp(`<${tag}>`, 'g')) ?? []).length;
+        const closes = (c.match(new RegExp(`</${tag}>`, 'g')) ?? []).length;
+        expect(opens).toBe(closes);
+      }
+    }
+  });
+
+  it('entity &amp; near split boundary is never broken across chunks', () => {
+    // Build a prompt where &amp; sits exactly at various positions near 4096
+    const prefix = 'A'.repeat(4090);
+    const prompt = `${prefix}&amp;BBBBB`;
+    const chunks = splitLongPrompt(prompt);
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(4096);
+      // No partial entity: every & must be followed by word chars and ;
+      const partial = /&(?![a-zA-Z#][a-zA-Z0-9]*;)/.test(c);
+      expect(partial).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding 2 (issue #3663): buildChoiceMessages splits oversized baseText
+// even when bodySuffix is empty (no overflow rendering).
+// ---------------------------------------------------------------------------
+
+import { buildChoiceMessages, renderTelegramChoices } from './elicitation-choice-list.js';
+
+describe('buildChoiceMessages — oversized baseText with no bodySuffix (Finding 2)', () => {
+  it('returns preMessages + keyboardText when baseText alone exceeds 4096 chars', () => {
+    // Short choices that all fit their buttons — bodySuffix will be ''
+    const choices = ['yes', 'no'];
+    const rendering = renderTelegramChoices(choices);
+    expect(rendering.bodySuffix).toBe('');
+
+    const baseText = 'Q'.repeat(5000);
+    const result = buildChoiceMessages(baseText, rendering, choices);
+
+    expect(result.preMessages.length).toBeGreaterThanOrEqual(1);
+    expect(result.keyboardText.length).toBeLessThanOrEqual(4096);
+    for (const msg of result.preMessages) {
+      expect(msg.length).toBeLessThanOrEqual(4096);
+    }
+  });
+
+  it('returns empty preMessages when baseText fits within 4096 chars', () => {
+    const choices = ['yes', 'no'];
+    const rendering = renderTelegramChoices(choices);
+    expect(rendering.bodySuffix).toBe('');
+
+    const baseText = 'Q'.repeat(100);
+    const result = buildChoiceMessages(baseText, rendering, choices);
+
+    expect(result.preMessages).toHaveLength(0);
+    expect(result.keyboardText).toBe(baseText);
+  });
+
+  it('keyboardText is the last chunk of the split baseText', () => {
+    const choices = ['alpha', 'beta'];
+    const rendering = renderTelegramChoices(choices);
+    expect(rendering.bodySuffix).toBe('');
+
+    // Just over the limit so it splits into exactly 2 parts
+    const baseText = 'Z'.repeat(4097);
+    const result = buildChoiceMessages(baseText, rendering, choices);
+
+    // keyboardText must be non-empty and ≤ 4096
+    expect(result.keyboardText.length).toBeGreaterThan(0);
+    expect(result.keyboardText.length).toBeLessThanOrEqual(4096);
+    // preMessages must be non-empty
+    expect(result.preMessages.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('text type: question over 4096 chars is split, not declined (issue #3631 item 3)', () => {
+  it('sends pre-messages then the final prompt for a 5000-char text question', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const longQuestion = 'Q'.repeat(5000);
+    const resultPromise = handler(textRequest({ message: longQuestion }), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // At least 2 sendMessage calls: ≥1 pre-message + 1 final prompt
+    const calls = sendMessage.mock.calls as [number, string, object][];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of calls) {
+      expect(call[1].length).toBeLessThanOrEqual(4096);
+    }
+
+    // A pending intercept should be registered (the final chunk is the prompt)
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
+
+    // Simulate user reply — should resolve normally
+    const pendingFn = messageHandler.pendingElicitations.get(ROUTE_KEY)!;
+    pendingFn('my answer');
+    await expect(resultPromise).resolves.toEqual({ action: 'accept', content: { value: 'my answer' } });
+  });
+
+  it('sends pre-messages then keyboard for a 5000-char confirm question', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const longQuestion = 'C'.repeat(5000);
+    const resultPromise = handler(confirmRequest({ message: longQuestion }), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const calls = sendMessage.mock.calls as [number, string, object][];
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    for (const call of calls) {
+      expect(call[1].length).toBeLessThanOrEqual(4096);
+    }
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('pre-message send failure on long text question → decline', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    // First sendMessage (pre-message) rejects
+    sendMessage.mockRejectedValueOnce(new Error('network error'));
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const longQuestion = 'Q'.repeat(5000);
+    const resultPromise = handler(textRequest({ message: longQuestion }), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 10));
+
+    await expect(resultPromise).resolves.toEqual({ action: 'decline' });
   });
 });

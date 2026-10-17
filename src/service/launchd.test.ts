@@ -14,21 +14,38 @@
  * dark and silently regress on refactors.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // vi.hoisted: the mock fn must exist before vi.mock factories run
 // (factories are hoisted to top-of-file by Vitest's transform).
-const { mockExecFileSync } = vi.hoisted(() => ({
+const { mockExecFileSync, mockAtomicWriteFile } = vi.hoisted(() => ({
   mockExecFileSync: vi.fn(),
+  // Default impl is set to pass-through inside vi.mock below; individual
+  // error-path tests override with mockImplementationOnce to inject a throw.
+  mockAtomicWriteFile: vi.fn(),
 }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return {
     ...actual,
     execFileSync: mockExecFileSync,
+  };
+});
+
+// Selective mock for atomicWriteFile: the mock fn delegates to the real
+// implementation by default so real-tmpdir tests exercise genuine I/O.
+// Individual error-path tests call mockImplementationOnce() to inject a
+// throw; the default impl restores pass-through on the next call.
+vi.mock('../utils/atomic-write.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/atomic-write.js')>();
+  // Set the default implementation to call through to the real function.
+  mockAtomicWriteFile.mockImplementation(actual.atomicWriteFile);
+  return {
+    ...actual,
+    atomicWriteFile: mockAtomicWriteFile,
   };
 });
 
@@ -436,8 +453,12 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
       expect(contents).toContain('<string>com.afk.telegram</string>');
       expect(contents).toContain('<string>/fake/dist/telegram.mjs</string>');
 
-      // Tmp file must be cleaned up after successful rename.
-      expect(existsSync(`${expectedPath}.tmp`)).toBe(false);
+      // Tmp file must be cleaned up after successful rename. atomicWriteFile
+      // uses random `.tmp-<hex>` names, so check the dir for any leftover
+      // `.tmp-*` entries rather than a fixed `.tmp` path.
+      const plistDir = dirname(expectedPath);
+      const leftover = readdirSync(plistDir).filter((f) => f.startsWith('.tmp-'));
+      expect(leftover).toHaveLength(0);
 
       // M-3: plist file mode must be 0o600 (owner-read/write only) so env
       // var values (API tokens) embedded in the plist are not world-readable.
@@ -609,6 +630,20 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
       if (result.kind !== 'failed') return;
       expect(result.reason).toMatch(/afk service restart/);
     });
+
+    it('returns failed when atomicWriteFile throws inside installService', () => {
+      mockAtomicWriteFile.mockImplementationOnce(() => {
+        throw new Error('disk full');
+      });
+      const result = installService('telegram', {
+        skipBootstrap: true,
+        _entrypointExistsCheck: () => true,
+      });
+      expect(result.kind).toBe('failed');
+      if (result.kind !== 'failed') return;
+      expect(result.reason).toMatch(/Failed to install plist/);
+      expect(result.reason).toMatch(/disk full/);
+    });
   });
 
   describe('uninstallService', () => {
@@ -707,8 +742,10 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
       expect(contents).toContain('<integer>30</integer>');
       expect(contents).toContain('<key>Label</key>');
 
-      // Tmp file must be cleaned up.
-      expect(existsSync(`${path}.tmp`)).toBe(false);
+      // Tmp file must be cleaned up. atomicWriteFile uses random `.tmp-<hex>`
+      // names, so check the dir for any leftover `.tmp-*` entries.
+      const leftoverTmp = readdirSync(launchAgentsDir).filter((f) => f.startsWith('.tmp-'));
+      expect(leftoverTmp).toHaveLength(0);
     });
 
     it('preserves 0o600 mode on upgraded plist', () => {
@@ -825,6 +862,28 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
       // The new var must be present.
       expect(upgraded).toContain('<key>NEW_VAR</key>');
       expect(upgraded).toContain('<string>new-value</string>');
+    });
+
+    it('returns failed when atomicWriteFile throws inside upgradeService', () => {
+      // Seed an existing plist so upgradeService reaches the write step.
+      const launchAgentsDir = join(tmpHome, 'Library', 'LaunchAgents');
+      const fsModule = require('fs') as typeof import('fs');
+      fsModule.mkdirSync(launchAgentsDir, { recursive: true });
+      const path = plistPath('telegram', tmpHome);
+      // Write stale content so desired !== current and the write is attempted.
+      fsModule.writeFileSync(path, '<stale/>');
+
+      mockAtomicWriteFile.mockImplementationOnce(() => {
+        throw new Error('permission denied');
+      });
+      const result = upgradeService('telegram', { _entrypointExistsCheck: () => true });
+      expect(result.kind).toBe('failed');
+      if (result.kind !== 'failed') return;
+      expect(result.reason).toMatch(/Failed to install upgraded plist/);
+      expect(result.reason).toMatch(/permission denied/);
+      // Atomicity guarantee: the existing plist must survive a failed write
+      // (tmp+rename means the original is never clobbered on error).
+      expect(readFileSync(path, 'utf-8')).toBe('<stale/>');
     });
   });
 

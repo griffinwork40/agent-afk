@@ -177,7 +177,7 @@ export function renameWithRetrySync(
       renameFn(tmp, dest);
       return;
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
+      const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
       if (platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
       lastErr = err;
       // Emit on entry to the retry path so Windows transient rename races are
@@ -218,7 +218,7 @@ export async function renameWithRetry(
       await _renameFn(tmp, dest);
       return;
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
+      const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
       // Invariant: only retry transient Windows rename races; on POSIX these
       // codes are permanent and must propagate immediately.
       if (_platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
@@ -326,7 +326,7 @@ export async function atomicWriteFileAsync(
   if (mkdirp) {
     await mkdir(dirname(dest), {
       recursive: true,
-      ...(opts.mkdirMode !== undefined ? { mode: opts.mkdirMode } : {}),
+      mode: opts.mkdirMode,
     });
   }
 

@@ -53,7 +53,7 @@ import { buildClosureGuidance } from '../../agent/session/closure-guidance.js';
 import type { ClosureReason } from '../../agent/trace/index.js';
 import { detectRepeatedToolUse } from '../scan/detectors/repeated-tool-use.js';
 import { detectClosureAnomaly } from '../scan/detectors/closure-anomaly.js';
-import { parseTraceContent } from '../scan/reader.js';
+import { parseTraceContent, type SessionRead } from '../scan/reader.js';
 import type { DetectorResult, EvalCase, EvalCheck, EvalRunEvidenceRef, FailurePattern } from '../schemas.js';
 import { makeCheck, snapshot, type ContractProbeResult } from './contracts.js';
 
@@ -185,7 +185,7 @@ function runLengthOf(result: DetectorResult): number {
 function parseFixtureSession(
   evalCase: EvalCase,
   fixtureBytes: Buffer,
-): ReturnType<typeof parseTraceContent> {
+): SessionRead {
   const content = fixtureBytes.toString('utf8');
   return parseTraceContent({
     sessionId: evalCase.replay.sourceSessionId,

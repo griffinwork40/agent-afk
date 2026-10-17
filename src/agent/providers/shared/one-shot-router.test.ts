@@ -5,9 +5,10 @@ import type { OneShotStopReason } from './one-shot-router.js';
 const chat = vi.fn(async (): Promise<{ text: string; stopReason: OneShotStopReason }> => ({
   text: 'chat reply', stopReason: 'end',
 }));
+const oneShotResponsesMock = vi.hoisted(() => vi.fn(async () => 'responses-reply'));
 vi.mock('../openai-compatible/oneshot.js', () => ({
   oneShotChatCompletionWithStop: (...args: unknown[]) => chat(...(args as [])),
-  oneShotResponses: vi.fn(),
+  oneShotResponses: (...args: unknown[]) => oneShotResponsesMock(...(args as [])),
 }));
 
 const anthropicOneshot = vi.hoisted(() => ({
@@ -55,6 +56,15 @@ const xaiQueryHelpers = vi.hoisted(() => ({
 }));
 vi.mock('../xai/query-helpers.js', () => xaiQueryHelpers);
 
+const openAIAuth = vi.hoisted(() => ({
+  // Default: echo the first arg as apiKey (mirrors real behaviour for explicit keys).
+  resolveOpenAIAuth: vi.fn((key?: string) => ({
+    apiKey: key ?? 'sk-platform',
+    source: 'env' as const,
+  })),
+}));
+vi.mock('../openai-compatible/auth.js', () => openAIAuth);
+
 import { resolveOneShotTarget, routedOneShot, routedOneShotWithStop } from './one-shot-router.js';
 import {
   CLAUDE_OPUS_ID,
@@ -76,8 +86,13 @@ afterEach(() => {
   xaiOauth.ensureFreshAccessToken.mockReset();
   xaiQueryHelpers.isAccessTokenExpired.mockReset();
 
+  openAIAuth.resolveOpenAIAuth.mockReset();
+  oneShotResponsesMock.mockReset();
+
   // Re-wire defaults used by the openai-compatible tests that run
   // before any per-test override.
+  openAIAuth.resolveOpenAIAuth.mockImplementation((key?: string) => ({ apiKey: key ?? 'sk-platform', source: 'env' as const }));
+  oneShotResponsesMock.mockImplementation(async () => 'responses-reply');
   chat.mockImplementation(async () => ({ text: 'chat reply', stopReason: 'end' as OneShotStopReason }));
   anthropicOneshot.oneShotCompletionWithStop.mockImplementation(async () => ({ text: 'anthropic reply', stopReason: 'end' as OneShotStopReason }));
   credentialResolver.loadAnthropicCredential.mockImplementation(() => 'sk-ant-ambient');
@@ -453,5 +468,65 @@ describe('routedOneShotWithStop — xai branch', () => {
     })).rejects.toThrow('[test]');
 
     expect(chat).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression #3620: OAuth custom-endpoint guard — one-shot-router path
+// ---------------------------------------------------------------------------
+
+describe('routedOneShotWithStop — chatgpt-oauth branch', () => {
+  it('without a custom baseUrl, routes to Responses on the ChatGPT backend', async () => {
+    openAIAuth.resolveOpenAIAuth.mockReturnValueOnce({
+      apiKey: 'chatgpt-access',
+      source: 'chatgpt-oauth' as const,
+      accountId: 'acct_1',
+    });
+
+    const result = await routedOneShotWithStop({
+      model: 'gpt-6-luna',
+      provider: 'openai-compatible',
+      binding: {},
+      system: 'sys',
+      user: 'usr',
+      maxTokens: 64,
+      label: LABEL,
+    });
+
+    expect(result.text).toBe('responses-reply');
+    expect(result.stopReason).toBe('end');
+    expect(oneShotResponsesMock).toHaveBeenCalledTimes(1);
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it('with a custom baseUrl, falls back to Chat Completions on that endpoint (not the ChatGPT backend)', async () => {
+    // Regression #3620: the custom endpoint guard was missing — chatgpt-oauth
+    // always redirected to CHATGPT_BACKEND_BASE_URL even when binding.baseUrl
+    // was set, bypassing the user's intended endpoint.
+    openAIAuth.resolveOpenAIAuth.mockReturnValueOnce({
+      apiKey: 'chatgpt-access',
+      source: 'chatgpt-oauth' as const,
+      accountId: 'acct_1',
+    });
+
+    const result = await routedOneShotWithStop({
+      model: 'gpt-6-luna',
+      provider: 'openai-compatible',
+      binding: { baseUrl: 'http://my-proxy.internal/v1' },
+      system: 'sys',
+      user: 'usr',
+      maxTokens: 64,
+      label: LABEL,
+    });
+
+    expect(result.text).toBe('chat reply');
+    expect(oneShotResponsesMock).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'chatgpt-access',
+        baseURL: 'http://my-proxy.internal/v1',
+        model: 'gpt-6-luna',
+      }),
+    );
   });
 });

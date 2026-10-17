@@ -8,6 +8,7 @@ import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
 import type { StateStore } from '../../../agent/state/state-store.js';
 import type { AgentModelInput } from '../../../agent/types.js';
+import type { PermissionMode } from '../../../agent/types/sdk-types.js';
 import type { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import type { SubagentControl } from '../../../agent/tools/subagent-executor.js';
@@ -193,6 +194,12 @@ export interface CliOptions {
    * (the permission-mode cycle: default → plan → bypass).
    */
   dangerouslySkipPermissions?: boolean;
+  /**
+   * `--permission-mode <mode>` — explicit permission mode from the CLI flag.
+   * Takes precedence over `afk.config.json` `permissionMode` but is overridden
+   * by `--dangerously-skip-permissions` (which always forces `bypassPermissions`).
+   */
+  permissionMode?: PermissionMode;
   /**
    * `--worktree [branch]` flag. `true` when the flag was passed without a value
    * (auto-named branch). String when the user supplied a branch name.
@@ -888,8 +895,10 @@ export function formatStatusFields(
 
   // Token budget consumption: always include budgetUsd when there is any cost
   // to show (even $0.00 after the first turn completes). Include maxBudgetUsd
-  // only when a positive cap is configured so the segment renders as
-  // `$N.NN/$M.NN`. Suppress when no cost has been recorded yet (undefined
+  // when a finite cap is configured (>= 0) so the segment renders as
+  // `$N.NN/$M.NN`. Zero is a hard-stop sentinel (every dollar is over budget,
+  // enforced via `>= maxBudgetUsd` in stream-consumer.turn-handlers.ts:96) and
+  // must be shown. Suppress when no cost has been recorded yet (undefined
   // totalCostUsd) to keep the status line clean before the first API call.
   const budgetUsd = stats.totalCostUsd;
 
@@ -916,7 +925,7 @@ export function formatStatusFields(
     ...(turnCount !== undefined ? { turnCount } : {}),
     ...(turnCount !== undefined && maxTurns && maxTurns > 0 ? { maxTurns } : {}),
     ...(budgetUsd !== undefined ? { budgetUsd } : {}),
-    ...(budgetUsd !== undefined && maxBudgetUsd !== undefined && maxBudgetUsd > 0
+    ...(budgetUsd !== undefined && maxBudgetUsd !== undefined && maxBudgetUsd >= 0
       ? { maxBudgetUsd }
       : {}),
     ...(activeAgentCount !== undefined && activeAgentCount > 0 ? { activeAgentCount } : {}),

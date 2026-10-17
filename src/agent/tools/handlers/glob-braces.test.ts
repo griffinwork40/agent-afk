@@ -98,8 +98,15 @@ describe('glob brace integration', () => {
 
   it('supports empty arms and normalizes Windows separators', async () => {
     const result = await createGlobHandler(root)({ pattern: '{src\\,}**\\*.{ts,tsx}' }, signal());
+    expect(result.isError).toBeUndefined();
     expect(result.content).toContain('root.ts');
     expect(result.content).toContain('src/deep/nested.tsx');
+    // Negative: .js files must NOT appear (over-match guard).
+    expect(result.content).not.toContain('no.js');
+    // Exact count: root.ts, view.tsx, src/direct.ts, src/deep/nested.tsx, lib/index.ts,
+    // {literal}/file.ts, {a,b/file.ts — 7 entries.
+    const matchedFiles = result.content.split('\n').filter((l) => l.trim().length > 0);
+    expect(matchedFiles).toHaveLength(7);
   });
 
   it.each(['{literal}/**/*.ts', '{a,b/**/*.ts'])('keeps literal brace directories: %s', async (pattern) => {

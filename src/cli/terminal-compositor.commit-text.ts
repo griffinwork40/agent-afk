@@ -1,6 +1,7 @@
 import type { BandRowMeta } from './terminal-compositor.types.js';
 import { hardWrapToWidth } from './wrap.js';
 import { buildBandMeta } from './terminal-compositor.scrollback.js';
+import { contentBand } from './render/measure.js';
 
 export interface CommitText {
   logicalLines: string[];
@@ -13,7 +14,8 @@ export interface CommitText {
 
 /**
  * Decompose a raw commit text string into its logical lines, physical
- * content rows (hard-wrapped to `cols`), per-row provenance metadata, and
+ * content rows (hard-wrapped to the content-band width for a `cols`-wide
+ * terminal — `cols` itself when centering is off), per-row provenance metadata, and
  * separator detection — everything the caller needs for geometry/routing
  * without doing any terminal I/O.
  */
@@ -51,7 +53,13 @@ export function decomposeCommitText(text: string, cols: number): CommitText {
   // matches the terminal) makes commitAbove position/scroll/paint exactly one
   // terminal row per array entry — so a wide line's wrapped tail is not "eaten"
   // by the next commit's paint, and the band-hold row math is exact.
-  const contentLines = logicalLines.flatMap((l) => hardWrapToWidth(l, cols).split('\n'));
+  //
+  // Content centering (AFK_CENTER_CONTENT): every paint site prepends the band
+  // margin, so rows are wrapped at the band width (`cols - marginCols`), not
+  // `cols` — otherwise `margin + row` overruns the terminal and is clipped or
+  // spills onto the next row. Identity (`width === cols`) when centering is off.
+  const wrapWidth = contentBand(cols).width;
+  const contentLines = logicalLines.flatMap((l) => hardWrapToWidth(l, wrapWidth).split('\n'));
   const contentLineCount = Math.max(1, contentLines.length);
 
   // #540 axis-2 (retained logical source): the per-physical-row provenance for
@@ -60,7 +68,7 @@ export function decomposeCommitText(text: string, cols: number): CommitText {
   // can later emit the logical line (terminal-soft-wrapped, reflow-clean)
   // instead of these pre-hard-wrapped rows. The separator blank row (added to
   // textLines/bandTextLines below) is its own logical line ''.
-  const contentMeta = buildBandMeta(logicalLines, cols);
+  const contentMeta = buildBandMeta(logicalLines, wrapWidth);
   const separatorMeta: BandRowMeta = { logicalText: '', isHead: true };
 
   return {

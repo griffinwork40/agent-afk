@@ -23,6 +23,7 @@
 
 import type { ProviderEvent, ProviderUsage } from '../../provider.js';
 import { deriveCallCostUsdWithTier } from './pricing.js';
+import { openAICompatibleBilling } from '../../usage.billing.js';
 
 /**
  * Minimal shape of a Chat Completions streaming chunk. We do not import the
@@ -217,6 +218,7 @@ export function usageFromState(
     outputTokens,
     cachedInputTokens,
     totalTokens: u.total_tokens ?? inputTokens + outputTokens,
+    billing: openAICompatibleBilling(inputTokens, cachedInputTokens, outputTokens),
     stopReason: state.finishReason ?? null,
     resultSubtype: 'success',
     isError: false,

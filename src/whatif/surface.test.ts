@@ -113,6 +113,31 @@ describe('resolveSpec — flag changes', () => {
 });
 
 // ---------------------------------------------------------------------------
+// resolveSpec — A/A calibration (#2415 Step 0)
+// ---------------------------------------------------------------------------
+
+describe('resolveSpec — --aa', () => {
+  it('returns an empty spec instead of throwing "no change to predict"', async () => {
+    const parsed = makeParsed({ aaMode: true });
+    const spec = await resolveSpec(parsed, fakeDeps);
+    expect(spec.changes).toEqual([]);
+    expect(spec.title).toMatch(/A\/A/);
+    expect(compileChangeSpec).not.toHaveBeenCalled();
+  });
+
+  it('end to end: parseWhatifArgs("--aa") reaches an empty spec', async () => {
+    // Dynamic import intentional: args.ts is vi.mock'd at the top of this file
+    // for most tests; this case needs the real implementation, so it imports
+    // after the mock boundary to get the un-mocked module.
+    const { parseWhatifArgs } = await import('./args.js');
+    const result = parseWhatifArgs(['--aa']);
+    if (typeof result === 'string') throw new Error(`parse rejected --aa: ${result}`);
+    const spec = await resolveSpec(result, fakeDeps);
+    expect(spec.changes).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // resolveSpec — spec file
 // ---------------------------------------------------------------------------
 

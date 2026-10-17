@@ -11,7 +11,11 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel in-progress runs on the default branch — a cancelled main run
+  # leaves main's health unobserved, which is exactly the problem during merge
+  # bursts where ratchet-regenerating PRs land back-to-back (issue #3770).
+  # PRs and feature refs still cancel eagerly so redundant runs don't queue up.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Opt JS-based actions into Node.js 24 ahead of the June 2026 default flip.
 env:

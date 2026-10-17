@@ -14,7 +14,22 @@ import type {
   SubagentLifecyclePayload,
   BackgroundAgentPayload,
 } from '../../agent/trace/index.js';
+import type { SubagentBillingFields } from '../../agent/trace/events.billing.js';
 import { fmtBytes, fmtDuration, fmtUsd, truncate } from './trace-format.js';
+import { formatTokens } from '../format-utils.js';
+
+/**
+ * Compact billing suffix for a terminal lifecycle row (#3878), e.g.
+ * `  [anthropic-direct in 1.2k / cr 30k / cw 2k / out 900]`. Empty when the
+ * payload carries no `tokens` (provider reported no usage, or a pre-#3878
+ * trace). Plain text like the rest of the line — `line()` owns styling.
+ */
+export function fmtBillingSuffix(p: SubagentBillingFields): string {
+  const t = p.tokens;
+  if (t === undefined) return '';
+  const who = p.provider !== undefined ? `${p.provider} ` : '';
+  return `  [${who}in ${formatTokens(t.uncachedInput)} / cr ${formatTokens(t.cacheRead)} / cw ${formatTokens(t.cacheWrite)} / out ${formatTokens(t.output)}]`;
+}
 
 /**
  * Render a `subagent_lifecycle` event.
@@ -42,7 +57,7 @@ export function renderSubagentLifecycle(
       const cost = p.totalCostUsd !== undefined ? `  ${fmtUsd(p.totalCostUsd)}` : '';
       return line(
         'subagent',
-        `succeeded  ${fmtDuration(p.durationMs)}  ${p.turnCount} turns  ${fmtBytes(p.outputBytes)}${cost}  [${p.subagentId}]`,
+        `succeeded  ${fmtDuration(p.durationMs)}  ${p.turnCount} turns  ${fmtBytes(p.outputBytes)}${cost}${fmtBillingSuffix(p)}  [${p.subagentId}]`,
       );
     }
     case 'failed': {
@@ -52,14 +67,14 @@ export function renderSubagentLifecycle(
       const to = p.failureClass === 'timeout' ? '  [timeout]' : '';
       return line(
         'subagent',
-        `FAILED  ${p.errorClass}: ${truncate(p.errorMessage, 80)}${to}  [${p.subagentId}]`,
+        `FAILED  ${p.errorClass}: ${truncate(p.errorMessage, 80)}${to}${fmtBillingSuffix(p)}  [${p.subagentId}]`,
       );
     }
     case 'cancelled': {
       // `(timeout)` marks a cascade that originated from an ancestor's
       // wall-clock budget expiry vs an ordinary parent/explicit cancel.
       const to = p.timeout ? ' (timeout)' : '';
-      return line('subagent', `cancelled (${p.source})${to}  [${p.subagentId}]`);
+      return line('subagent', `cancelled (${p.source})${to}${fmtBillingSuffix(p)}  [${p.subagentId}]`);
     }
   }
   return null;

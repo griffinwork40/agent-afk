@@ -41,7 +41,11 @@ export function buildForkDenialRemedy(args: { mode: ForkDenialMode; resolvedPath
       `Writes are confined to this fork's granted write roots by design ` +
       `(worktree isolation). To allow it, the parent must re-dispatch you via ` +
       `the \`agent\` tool with \`writeRoots: [${grant}]\`, or perform the write ` +
-      `itself. Return this exact path requirement to your parent.`
+      `itself. Return this exact path requirement to your parent. ` +
+      `Exception: a scratch file (commit message, PR body, notes) needs no ` +
+      `grant: the OS temp dir (\`/tmp\`, \`os.tmpdir()\`) is always writable, or ` +
+      `skip the file and pipe the text on stdin with a quoted heredoc: ` +
+      `\`git commit -F - <<'EOF'\` or \`gh pr create --body-file - <<'EOF'\`.`
     );
   }
 

@@ -11,6 +11,7 @@
 
 import { existsSync, opendirSync, readFileSync, statSync } from 'fs';
 import { normalizeSkillSource } from './source-guard.js';
+import { splitFrontmatter } from '../../utils/split-frontmatter.js';
 import { join } from 'path';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
@@ -339,18 +340,13 @@ export function parseSkillMetadata(
     // no frontmatter at all.
     const content = normalizeSkillSource(readFileSync(skillPath, 'utf-8'));
 
-    if (!content.startsWith('---\n')) {
+    const split = splitFrontmatter(content);
+    if (split === null) {
       return {};
     }
 
-    const afterFirstDashes = content.slice(4); // Skip "---\n"
-    const endIdx = afterFirstDashes.indexOf('\n---');
-    if (endIdx === -1) {
-      return {};
-    }
-
-    const frontmatterText = afterFirstDashes.slice(0, endIdx);
-    const bodyText = afterFirstDashes.slice(endIdx + 4).trim(); // Skip "\n---"
+    const frontmatterText = split.yaml;
+    const bodyText = split.body.trim();
     const metadata: PluginSkillMetadata = {};
     let frontmatterFlags: string[] | null = null;
 

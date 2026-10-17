@@ -8,6 +8,28 @@ export function errorMessage(err: unknown): string {
 }
 
 /**
+ * Extracts a human-readable message from an {@link AbortSignal}'s `reason`.
+ *
+ * This is NOT a drop-in for {@link errorMessage}: when `reason` is `undefined`
+ * (the signal was never aborted, or was aborted without a reason) it returns
+ * the sentinel string `'aborted'` rather than `'undefined'`.
+ *
+ * Use wherever code reads `signal.reason` and needs a displayable string:
+ *
+ * ```ts
+ * // Before
+ * const reason = signal.reason;
+ * const msg = errorMessage(reason ?? 'aborted');
+ *
+ * // After
+ * const msg = abortReason(signal.reason);
+ * ```
+ */
+export function abortReason(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+}
+
+/**
  * Coerces an unknown caught value to an `Error` instance.
  *
  * If `err` is already an `Error` (or subclass) it is returned unchanged.
@@ -53,6 +75,53 @@ export function isErrnoCode(err: unknown, code: string): boolean {
  */
 export function isEnoent(err: unknown): boolean {
   return isErrnoCode(err, 'ENOENT');
+}
+
+/**
+ * Returns `true` when `err` from an O_EXCL lock-create represents lock
+ * contention rather than a real permission problem.
+ *
+ * On Windows, unlinking a lock file leaves it in a "delete-pending" state
+ * until every open handle is closed. A concurrent `open(path, 'wx')` during
+ * that window receives EPERM, EACCES, or EBUSY — none of which are the EEXIST
+ * the caller normally expects for contention. On POSIX those same codes always
+ * mean a real permission problem and must propagate.
+ *
+ * Invariant: mirrors the semantics of `isLockContention` in
+ * `src/agent/daemon/schedule-store.ts` exactly. `schedule-store.ts` keeps its
+ * own private copy because open PR #3591 edits that file heavily; once #3591
+ * lands, schedule-store can be switched to this shared helper.
+ *
+ * @param err      - The error thrown by the O_EXCL open/create call.
+ * @param platform - `process.platform`; injectable for unit-testing on any OS.
+ */
+export function isWindowsLockContention(err: unknown, platform: string): boolean {
+  if (platform !== 'win32') return false;
+  return (
+    isErrnoCode(err, 'EPERM') ||
+    isErrnoCode(err, 'EACCES') ||
+    isErrnoCode(err, 'EBUSY')
+  );
+}
+
+/**
+ * Returns the errno `code` string for an unknown caught value, or falls back
+ * to `String(err)` when the value is not an ErrnoException.
+ *
+ * Use in `catch (err)` blocks that need the OS error code (e.g. `'EACCES'`)
+ * for logging or user-facing messages, replacing the inline ternary:
+ * `(err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : String(err)`
+ */
+export function errCodeOrString(err: unknown): string {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: unknown }).code !== undefined
+  ) {
+    return String((err as { code: unknown }).code);
+  }
+  return String(err);
 }
 
 /**

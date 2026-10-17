@@ -6,8 +6,8 @@
  */
 
 import { McpManager, loadMcpConfig } from '../../agent/mcp/index.js';
+import { connectMcpTraced } from '../../agent/mcp/connect-traced.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
-import { emitSessionPhase } from '../../agent/trace/emit.js';
 import type { TraceWriter } from '../../agent/trace/writer.js';
 
 // ---------------------------------------------------------------------------
@@ -52,27 +52,5 @@ export async function connectMcpForChat(
     return undefined;
   }
 
-  const mcpStartedAt = Date.now();
-  void emitSessionPhase(traceWriter, {
-    phase: 'mcp_connect_start',
-    metadata: { serverCount: enabledCount },
-  });
-
-  let mcpManager: McpManager | undefined;
-  try {
-    mcpManager = await McpManager.fromConfig(loaded.mcpServers, {
-      warnings: loaded.warnings,
-      serverLayers: loaded.serverLayers,
-      userAllowSecretEnv: loaded.userAllowSecretEnv,
-      ...(traceWriter !== undefined ? { traceWriter } : {}),
-    });
-  } finally {
-    void emitSessionPhase(traceWriter, {
-      phase: 'mcp_connect_done',
-      durationMs: Date.now() - mcpStartedAt,
-      metadata: { serverCount: enabledCount },
-    });
-  }
-
-  return mcpManager;
+  return connectMcpTraced(loaded, traceWriter);
 }

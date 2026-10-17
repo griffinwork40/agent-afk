@@ -82,6 +82,12 @@ export interface WhatifOptions {
    * `--verify`), so runs are deterministic.
    */
   operatorPredictions?: OperatorPrediction[];
+  /**
+   * A/A calibration mode (#2415 Step 0): both arms run with zero changes.
+   * Any measured difference is harness noise, not a real effect.
+   * Skips the predict phase; always produces an empty prediction list.
+   */
+  aaMode?: boolean;
 }
 
 export interface WhatifDeps {

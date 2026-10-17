@@ -345,14 +345,14 @@ describe('routesToOpenAICompatible fallback — third-party OpenAI-shim prefix f
 describe('contextLimitFor — Codex catalog fallback', () => {
   beforeEach(() =>
     useCodexCatalog([
-      { slug: 'gpt-6-sol', context_window: 272000 },
+      { slug: 'gpt-6.1-sol-preview', context_window: 272000 },
       { slug: 'gpt-5.5', context_window: 272000 },
     ]),
   );
   afterAll(() => resetCatalogCache());
 
   it('uses the catalog window for ids the table does not list', () => {
-    expect(contextLimitFor('gpt-6-sol')).toBe(272_000);
+    expect(contextLimitFor('gpt-6.1-sol-preview')).toBe(272_000);
   });
 
   it('keeps the hand-table value when both know the model', () => {
@@ -363,6 +363,21 @@ describe('contextLimitFor — Codex catalog fallback', () => {
   it('falls back to the per-provider default when the catalog has no entry', () => {
     expect(contextLimitFor('gpt-6-unlisted')).toBe(262_144);
     useCodexCatalog(null);
-    expect(contextLimitFor('gpt-6-sol')).toBe(262_144);
+    expect(contextLimitFor('gpt-6.1-sol-preview')).toBe(262_144);
+  });
+
+  it('resolves the real gpt-6 ids from the catalog, not a hardcoded table guess', () => {
+    // #3825: the table once pinned these at 1M, above even the catalog's 872k
+    // maxContextWindow, which made compaction fire too late.
+    useCodexCatalog([
+      { slug: 'gpt-6.1-sol', context_window: 500000 },
+      { slug: 'gpt-6-sol', context_window: 272000 },
+      { slug: 'gpt-6-astra', context_window: 272000 },
+      { slug: 'gpt-6-luna', context_window: 272000 },
+    ]);
+    expect(contextLimitFor('gpt-6.1-sol')).toBe(500_000);
+    for (const id of ['gpt-6-sol', 'gpt-6-astra', 'gpt-6-luna']) {
+      expect(contextLimitFor(id)).toBe(272_000);
+    }
   });
 });

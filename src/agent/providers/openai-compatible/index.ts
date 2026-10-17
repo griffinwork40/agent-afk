@@ -22,7 +22,8 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
 import { type OpenAICompatibleProviderOptions } from './index.options.js';
 export type { OpenAICompatibleProviderOptions } from './index.options.js';
-import { snapshotOperatorOptions, operatorDispatcherToolDefs } from '../../tools/operator-denied-dispatcher.js';
+import { snapshotOperatorOptions } from '../../tools/operator-denied-dispatcher.js';
+import { buildQueryDispatcher } from './index.query-dispatcher.js';
 
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
@@ -48,6 +49,7 @@ import { createStateHandlers } from '../../state/state-tools.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
+import { applyReadOnlyGitPermissions, readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
@@ -55,14 +57,13 @@ import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
-  wrapDispatcherWithRuntimeState,
   buildRuntimeStateSource,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import { isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
-import { headlessSignalOpts, interactivityOpts, sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
+import { headlessSignalOpts, sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
 import { chainProviderClose } from '../shared/chain-provider-close.js';
 
 const PROVIDER_NAME = 'openai-compatible';
@@ -122,7 +123,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
 
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
-    this.providerOpts = snapshotOperatorOptions(opts);
+    // #3754: with AFK_READONLY_GIT_TOOL on, a read-only-bash surface swaps `bash` for `git_read`.
+    this.providerOpts = snapshotOperatorOptions({ ...opts, permissions: applyReadOnlyGitPermissions(opts.permissions, opts.readOnlyBash) });
     this._defaultHeaders = opts.defaultHeaders;
     this._injectedMemoryStore = opts.memoryStore !== undefined;
     this._injectedStateStore = opts.stateStore !== undefined;
@@ -130,7 +132,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.workspaceStore = opts.workspaceStore;
     this._stateStore = opts.stateStore;
 
-    const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
+    const schemas: AnthropicToolDef[] = [...builtinToolSchemas, ...readOnlyGitSchemas()];
     // Executor-supplied `agent` def advertises named agent types when a
     // registry is wired — parity with anthropic-direct (see agents/tool-def.ts).
     if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
@@ -214,6 +216,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // `setCwd()` (query.ts) is reflected in `get_runtime_state` AND the
     // system prompt the next turn sees — not just the dispatcher's resolve base.
     let _currentCwd = config.cwd ?? process.cwd();
+    // Invariant: containment base for the DISPATCHER, distinct from the display
+    // cell above. `undefined` = UNCONFINED (no worktree, no `config.cwd`) and it
+    // must never take the `process.cwd()` display fallback: a dispatcher with a
+    // cwd but empty shared roots denies every path (see the resolveAndContain
+    // invariant in tools/handlers/_cwd-utils.ts). Feeding it `_currentCwd`
+    // confined every fork of an unconfined session to `read roots []` (#3704
+    // regression; anthropic-direct twin fixed in #3734 via getDispatcherCwd).
+    let _dispatcherCwd: string | undefined = config.cwd;
 
     // Resolve FIRST so awareness source + dispatcher share the same id, not the
     // resume-only config.sessionId absent on fresh telegram/daemon sessions (#2353).
@@ -254,37 +264,16 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // its schema list. See wrapDispatcherWithRuntimeState for the invariant.
     // Stamp toolDefs on the external-dispatcher wrapper so query.ts:246 picks
     // up the schema list — mirrors dispatcher-wiring.ts:219 (Anthropic path).
-    dispatcher = this.providerOpts.tools
-      ? Object.assign(wrapDispatcherWithRuntimeState(this.providerOpts.tools, runtimeStateSource),
-          { toolDefs: operatorDispatcherToolDefs(this.providerOpts.tools, selectBaseSchemas(this.schemas, { isSkillDispatch: config.isSkillDispatch, isNonInteractive: config.isNonInteractive })) })
-      : this.buildDispatcher(permissionMode, {
-          ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
-          ...(this._sharedReadRoots !== undefined ? { readRoots: this._sharedReadRoots } : {}),
-          ...(this._sharedWriteRoots !== undefined ? { writeRoots: this._sharedWriteRoots } : {}),
-          ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
-          ...(config.parentSessionId !== undefined ? { parentSessionId: config.parentSessionId } : {}),
-          ...(config.rootSessionId !== undefined ? { rootSessionId: config.rootSessionId } : {}),
-          ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
-          ...(config.env !== undefined ? { env: config.env } : {}), // PLUGIN_ROOT, session TMPDIR
-          // Fork-scoped central output cap (#661): forwarded from the child
-          // config that forkSubagent stamped, arming maxOutputBytes for forks
-          // only (top-level leaves it unset). Parity with anthropic-direct.
-          ...(config.subagentToolOutputCapBytes !== undefined
-            ? { subagentToolOutputCapBytes: config.subagentToolOutputCapBytes }
-            : {}),
-          ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
-          ...(config.bashOutputTailReporter !== undefined
-            ? { bashOutputTailReporter: config.bashOutputTailReporter }
-            : {}),
-          // #2542/#2735 detach registry + background process registry,
-          // forwarded from AgentConfig (root REPL sessions only).
-          ...sessionRegistryOpts(config),
-          runtimeStateSource,
-          ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
-          ...interactivityOpts(config), // ask_question strip + #2302 headless bash floor
-          ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
-          ...(config.planExitControls !== undefined ? { planExitControls: config.planExitControls } : {}),
-        });
+    const dispatcherFactory = (model: string, mode: string): ToolDispatcher => buildQueryDispatcher({
+      config: { ...config, model, cwd: _dispatcherCwd }, permissionMode: mode,
+      externalTools: this.providerOpts.tools,
+      customNames: (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
+      schemas: this.schemas, runtimeStateSource,
+      readRoots: this._sharedReadRoots, writeRoots: this._sharedWriteRoots,
+      sessionId: resolvedSession.id,
+      buildDispatcher: (m, opts) => this.buildDispatcher(m, opts),
+    });
+    dispatcher = dispatcherFactory(modelName, permissionMode);
 
     const buildOpts: NonNullable<Parameters<typeof buildQueryFromConfig>[2]> = {};
     // Undefined for forks — they keep the factory's own per-call mint.
@@ -297,6 +286,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (effectiveBaseURL !== undefined) buildOpts.baseURL = effectiveBaseURL;
     if (this._defaultHeaders !== undefined) buildOpts.defaultHeaders = this._defaultHeaders;
     buildOpts.toolDispatcher = dispatcher;
+    buildOpts.modelDispatcherFactory = (model, mode) => (dispatcher = dispatcherFactory(model, mode));
     // Path-approval half of the live `/bypass` toggle: keep the provider's
     // `_currentPermissionMode` (read by getGrants().allowAll) in sync with the
     // query handle's mode. File-tool half is the dispatcher's setAllowAll().
@@ -341,6 +331,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // `this.opts.config` by reference) so the next turn picks up the new string.
     buildOpts.onCwdChange = (newCwd: string): void => {
       _currentCwd = newCwd;
+      _dispatcherCwd = newCwd; // a live re-anchor confines later rebuilds to the new tree
       this._sharedCurrentCwd = newCwd; // Option A: migrate the non-revocable anchor with the cwd.
       patchedConfig.systemPrompt = spw.rebuildAfterCwdChange();
     };
@@ -434,6 +425,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       this.providerOpts.permissions,
       this.providerOpts.mcpManager?.getMcpToolWireNames(),
       (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
+      opts.slotModel,
     );
     if (effectivePermissions !== undefined) dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined) dispatcherOpts.subagentExecutor = this.providerOpts.subagentExecutor;

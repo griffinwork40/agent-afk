@@ -23,6 +23,7 @@ import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { leaseTask as _leaseTask, recoverExpiredLeases } from './lease-store.js';
 import { errorMessage, isEnoent } from '../../utils/errors.js';
+import { pickResumeFields, type HandoffResumeContext } from './handoff-resume-context.js';
 
 export { recoverExpiredLeases };
 
@@ -57,9 +58,17 @@ export interface QueuedTask {
    * dequeueNext skips tasks where eligibleAfter > Date.now().
    */
   eligibleAfter?: number;
+  /**
+   * Resume context (#1416): present only on answered-handoff resume tasks.
+   * `originalTaskId` is the overlap identity of the resumed run; `cwd` and
+   * `notifyChat` are the originating task's. See handoff-resume-context.ts.
+   */
+  originalTaskId?: string;
+  cwd?: string;
+  notifyChat?: number | string;
 }
 
-export interface EnqueueOptions {
+export interface EnqueueOptions extends HandoffResumeContext {
   notifyOn?: 'failure' | 'always' | 'never';
 }
 
@@ -92,7 +101,7 @@ export function enqueue(
     command,
     enqueuedAt,
     sequence,
-    ...(opts.notifyOn !== undefined ? { notifyOn: opts.notifyOn } : {}),
+    ...pickResumeFields(opts),
   };
 
   // Zero-pad sequence to 4 digits for reliable lexicographic (FIFO) sort.

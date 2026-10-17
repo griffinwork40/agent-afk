@@ -42,6 +42,10 @@ export function buildRuntimeSnapshot(
         ...(subagentSummary.length > 0 ? { subagentOutcomeSummary: subagentSummary } : {}),
       };
     }
+    case 'hooks':
+      // Callers (the get_runtime_state handler) pre-check getHooks and return a
+      // tool error; an absent getHooks here yields an empty slice, never a throw.
+      return source.getHooks ? { hooks: source.getHooks() } : {};
     case 'workspace':
       return { workspace: source.getWorkspace() };
     case 'all':
@@ -67,7 +71,7 @@ export function snapshotClock(epochMs: number): { iso: string; local: string } {
 
 /** Coerce arbitrary model-supplied string to a known `RuntimeView` or 'all'. */
 export function parseView(raw: unknown): RuntimeView {
-  if (raw === 'self' || raw === 'tools' || raw === 'subagents' || raw === 'workspace' || raw === 'all') {
+  if (raw === 'self' || raw === 'tools' || raw === 'subagents' || raw === 'workspace' || raw === 'hooks' || raw === 'all') {
     return raw;
   }
   return 'all';

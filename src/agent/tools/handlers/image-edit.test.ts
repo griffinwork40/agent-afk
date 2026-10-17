@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { _setRealScratchRootsForTests, _resetScratchRootsCacheForTests } from './scratch-roots.js';
 import * as fs from 'node:fs/promises';
 import * as fsSync from 'node:fs';
 import * as os from 'node:os';
@@ -49,6 +50,12 @@ const TINY_PNG_BUF = Buffer.from(TINY_PNG_B64, 'base64');
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+// This suite uses os.tmpdir() dirs as "outside every granted root". The OS
+// temp dir is an implicit WRITE root (scratch-roots.ts), so disable that
+// allowance here to keep testing granted-root containment, not temp policy.
+beforeEach(() => _setRealScratchRootsForTests([]));
+afterEach(() => _resetScratchRootsCacheForTests());
 
 describe('image_edit handler', () => {
   const signal = new AbortController().signal;
@@ -436,7 +443,7 @@ describe('image_edit handler', () => {
     const form: UndiciFormData = opts.body as UndiciFormData;
     expect(form.get('output_format')).toBe('jpeg');
     // The saved file must also carry the matching extension (#3429).
-    expect(result.isError).toBeFalsy();
+    expect(result.isError).toBeUndefined();
     const meta = JSON.parse(result.content);
     expect(meta.path).toMatch(/\.jpeg$/);
   });

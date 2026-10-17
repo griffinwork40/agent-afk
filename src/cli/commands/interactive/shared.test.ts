@@ -324,9 +324,13 @@ describe('formatStatusFields — token budget indicator', () => {
     expect(fields.maxBudgetUsd).toBeUndefined();
   });
 
-  it('omits maxBudgetUsd when supplied as 0 (unconstrained)', () => {
+  it('includes maxBudgetUsd when supplied as 0 (hard-stop sentinel)', () => {
+    // Zero is a documented hard-stop: every dollar is over budget (enforced via
+    // `>= maxBudgetUsd` in stream-consumer.turn-handlers.ts). Show the cap so
+    // operators setting AFK_MAX_BUDGET_USD=0 can see why the session stops
+    // immediately. Decision recorded in PR for #3709.
     const fields = formatStatusFields(makeCostStats(1.0), undefined, undefined, undefined, undefined, 0);
-    expect(fields.maxBudgetUsd).toBeUndefined();
+    expect(fields.maxBudgetUsd).toBe(0);
   });
 
   it('includes maxBudgetUsd when a positive cap is supplied', () => {

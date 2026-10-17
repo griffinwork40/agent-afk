@@ -5,9 +5,11 @@
  * operator-facing UI (status line, permission prompts) and the audit log.
  * Does NOT wire to `permissions.onAsk` — that is Stream C's job.
  *
- * The bash rule table uses substring-matching against the raw command string
- * and is intentionally conservative: we catch the shapes a model naturally
- * emits; we do not attempt to parse shell syntax comprehensively.
+ * The bash rule tables use substring-matching against the raw command string
+ * and are intentionally conservative: we catch the shapes a model naturally
+ * emits; we do not attempt to parse shell syntax comprehensively. `high`
+ * tokens must additionally sit at a word start (see
+ * `risk-classifier.bash-boundary.ts`, #3534).
  *
  * BUILTIN_WRITE_DENYLIST from `src/agent/tools/handlers/write-denylist.ts`
  * is reused for the write_file / edit_file path-based risk check so the
@@ -19,6 +21,8 @@
 import { categorizeTool } from './tool-category.js';
 import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
 import { classifyFilePath, classifyPatchApply } from './risk-classifier.paths.js';
+import { findHighBashPattern } from './risk-classifier.bash-boundary.js';
+import { isSafeAtCommandPosition } from './risk-classifier.bash-safe.js';
 
 /** Three-tier risk level for a tool invocation. */
 export type RiskLevel = 'safe' | 'medium' | 'high';
@@ -131,6 +135,22 @@ const BASH_HIGH: readonly string[] = [
   'systemctl enable ',
   'systemctl start ',
   'systemctl daemon-reload',
+  // Real binaries whose names merely CONTAIN a token above (GNU coreutils `g*`
+  // on macOS, secure-rm, partitioners, sudoers editor). Plain `includes` used
+  // to catch them; word-start matching (#3534) needs them listed explicitly.
+  'grm ',
+  'srm ',
+  'gchmod',
+  'gchown',
+  'gdd if=',
+  'gdd of=',
+  'dcfldd',
+  'dc3dd',
+  'gsudo',
+  'sfdisk',
+  'cfdisk',
+  'gfdisk',
+  'visudo',
 ];
 
 /**
@@ -191,10 +211,10 @@ const BASH_SAFE: readonly string[] = [
   // checks, status, diff) are safe-listed; mutating verbs (merge, create, edit,
   // close, comment, review, approve) are NOT listed here and fall through to
   // the default-medium rule.
-  // Matched by substring so `gh pr view --json` and `gh run list --limit 5`
-  // both hit the entry. The check order (high → medium → safe) means any
-  // command that ALSO contains a BASH_HIGH token (e.g. `| bash`) is gated
-  // before it ever reaches this table.
+  // Matched by leading words at command position (risk-classifier.bash-safe.ts)
+  // so `gh pr view --json` and `gh run list --limit 5` both hit the entry. The
+  // check order (high → medium → safe) means any command that ALSO contains a
+  // BASH_HIGH token (e.g. `| bash`) is gated before it ever reaches this table.
   'gh pr view',
   'gh pr list',
   'gh pr checks',
@@ -242,19 +262,19 @@ function extractFilePath(input: unknown): string {
 
 function classifyBash(cmd: string): RiskVerdict {
   // Invariant: scan the original command for HIGH before MEDIUM before SAFE.
-  // Wrappers and shell syntax can introduce executable positions anywhere;
-  // heredoc payloads may be executed later. Without a complete shell parser,
-  // neither boundary narrowing nor body stripping may lower main's verdict.
-  // Prose false positives are intentional until that safety can be proven.
-  for (const p of BASH_HIGH) {
-    if (cmd.includes(p)) return { level: 'high', reason: `bash-pattern: matched '${p}'` };
-  }
+  // No heredoc stripping or quote parsing: wrappers, interpreters and later
+  // consumers can execute any payload. HIGH tokens are only discounted when
+  // glued to a preceding word character (`platform `, `retrieval `), which
+  // can never start a shell word — see risk-classifier.bash-boundary.ts.
+  const high = findHighBashPattern(cmd, BASH_HIGH);
+  if (high !== undefined) return { level: 'high', reason: `bash-pattern: matched '${high}'` };
   for (const p of BASH_MEDIUM) {
     if (cmd.includes(p)) return { level: 'medium', reason: `bash-pattern: matched '${p}'` };
   }
-  for (const p of BASH_SAFE) {
-    if (cmd.includes(p)) return { level: 'safe' };
-  }
+  // SAFE requires every segment to start with a safe-table command — never a
+  // substring hit inside an argument (`--head`, `"cat food"`); see
+  // risk-classifier.bash-safe.ts.
+  if (isSafeAtCommandPosition(cmd, BASH_SAFE)) return { level: 'safe' };
   // Default: medium — unknown bash commands are not safe by assumption.
   return { level: 'medium' };
 }
@@ -437,6 +457,12 @@ export function classifyRiskDetailed(
     // Can't be unsent — medium risk.
     return { level: 'medium' };
   }
+  // remote_agent executes arbitrary code on another machine over SSH. The
+  // remote afk process runs in headless/bypassPermissions mode by default
+  // (no --permission-mode flag is injected by the launcher), so a destructive
+  // prompt could bypass the local AFK gate by routing through the remote.
+  // High risk ensures autonomous mode (AFK gate) holds this tool for approval.
+  if (tool === 'remote_agent') return { level: 'high' };
 
   // ---- MCP tools ----------------------------------------------------------
   // Any `mcp__*` tool is an externally-contributed function from a third-party

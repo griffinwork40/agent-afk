@@ -33,7 +33,8 @@
  * @module agent/mcp/oauth
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { readJsonFileLoose, writeJsonFile } from '../../utils/json-file.js';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -133,8 +134,7 @@ function defaultBackend(): KeychainBackend {
         );
       } else if (isLinux) {
         const path = join(homedir(), '.claude', '.credentials.json');
-        mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, blob, { encoding: 'utf-8', mode: 0o600 });
+        atomicWriteFile(path, blob, { encoding: 'utf-8', mode: 0o600 });
       }
       // Other platforms: no-op (unsupported).
     },

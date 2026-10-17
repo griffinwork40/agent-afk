@@ -20,7 +20,7 @@ import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-
 import { getProjectSkillsDir } from '../../paths.js';
 import { registerOrReplace } from './registry.js';
 import { runSkillDispatchTurn } from './_lib/run-skill-dispatch-turn.js';
-import { invokeSkillPreflight } from './_lib/run-skill-preflight.js';
+import { bareSkillName, invokeSkillPreflight } from './_lib/run-skill-preflight.js';
 import { initBuiltinPreflights, type SkillInvocation } from './preflight/index.js';
 import type { SlashCommand, SlashContext, SlashResult } from './types.js';
 import type { ImageAttachment } from '../input/attachments.js';
@@ -76,7 +76,7 @@ export function makeImmediateHandler(skill: SkillMetadata): SlashCommand {
           // exception that ever reaches the helper is a synchronous
           // throw in this closure (e.g. SkillInvocation construction).
           preflight: () =>
-            invokeSkillPreflight(skill.name, args, originToSource(skill.origin), ctx),
+            invokeSkillPreflight(bareSkillName(skill.name), args, originToSource(skill.origin), ctx),
         });
       } catch (err) {
         ctx.out.line();

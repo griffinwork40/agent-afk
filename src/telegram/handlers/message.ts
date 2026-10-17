@@ -18,6 +18,7 @@ import { forwardProvenancePrefix } from '../forward-provenance.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { handleDocumentMessage } from './document.js';
 import { drainBgInjections, prependToContent } from '../bg-injection.js';
+import { wakeIdleSessionImpl, type WakeIdleDeps } from './message.wake-idle.js';
 import { addressedToBot } from './message.addressed-to-bot.js';
 import { reactionMap } from '../reaction-map.js';
 import { handlePhotoImpl } from './message.photo-handler.js';
@@ -287,7 +288,7 @@ export class MessageHandler {
     // the durable store. Checked BEFORE in-process elicitation (disjoint).
     if (tgMsg.reply_to_message?.message_id !== undefined) {
       const { matchReplyToHandoff } = await import('../handoff-answer.js');
-      if (await matchReplyToHandoff(this.bot, chatId, tgMsg.reply_to_message.message_id, messageText)) return;
+      if (await matchReplyToHandoff(this.bot, chatId, tgMsg.reply_to_message.message_id, messageText, undefined, tgMsg.from)) return;
     }
 
     // Answer consumed by active ask_question elicitation -- never reaches
@@ -641,6 +642,9 @@ export class MessageHandler {
       this.releaseClaim(routeKey(route));
     }
   }
+
+  /** Wake an idle session when a background subagent result settles (#3839). */
+  wakeIdleSession(route: TelegramRoute): void { wakeIdleSessionImpl(route, this as unknown as WakeIdleDeps); }
 
   /**
    * Process the next queued item for this route, if any.

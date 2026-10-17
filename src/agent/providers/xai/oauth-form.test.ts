@@ -18,13 +18,12 @@ function makeFetch(opts: {
   body?: unknown;
   jsonThrows?: boolean;
 }): typeof fetch {
-  return vi.fn().mockResolvedValue({
-    ok: opts.status >= 200 && opts.status < 300,
-    status: opts.status,
-    json: opts.jsonThrows
-      ? () => Promise.reject(new SyntaxError('bad json'))
-      : () => Promise.resolve(opts.body ?? {}),
-  }) as unknown as typeof fetch;
+  // Return a real Response so `.clone()` works — rawPostOAuthForm clones
+  // before reading to allow both JSON and text body consumption paths.
+  const bodyStr = opts.jsonThrows ? 'not json' : JSON.stringify(opts.body ?? {});
+  return vi.fn().mockResolvedValue(
+    new Response(bodyStr, { status: opts.status }),
+  ) as unknown as typeof fetch;
 }
 
 const TOKEN_URL = 'https://auth.x.ai/oauth2/token';
@@ -119,13 +118,32 @@ describe('postOAuthForm — tolerant JSON decode', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Default fetch fallback (uses global fetch when none supplied)
+// Fetch injection and global fallback
 // ---------------------------------------------------------------------------
 
-describe('postOAuthForm — fetchFn injection', () => {
+describe('postOAuthForm — fetchFn injection and defaulting', () => {
   it('uses the injected fetchFn when provided', async () => {
     const fetchFn = makeFetch({ status: 200, body: { access_token: 'x', refresh_token: 'y' } });
     await postOAuthForm(TOKEN_URL, PARAMS, 'p', fetchFn);
     expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it.each(['omitted', 'undefined'] as const)('uses global fetch when fetchFn is %s', async (mode) => {
+    const body = { access_token: 'global-at', refresh_token: 'global-rt' };
+    const fetchFn = makeFetch({ status: 200, body });
+    vi.stubGlobal('fetch', fetchFn);
+    try {
+      const result = mode === 'omitted'
+        ? await postOAuthForm(TOKEN_URL, PARAMS, 'p')
+        : await postOAuthForm(TOKEN_URL, PARAMS, 'p', undefined);
+      expect(result).toEqual(body);
+      expect(fetchFn).toHaveBeenCalledExactlyOnceWith(TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams(PARAMS).toString(),
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

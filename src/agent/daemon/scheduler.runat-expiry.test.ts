@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CronScheduler } from './scheduler.js';
 import * as runAtGate from './scheduler.runat-gate.js';
+import * as cron from 'node-cron';
 import type { AgentSession } from '../session/agent-session.js';
 import type { ScheduledTask } from './triggers.js';
 import { validateScheduledTask } from './triggers.js';
@@ -211,6 +212,38 @@ describe('CronScheduler — runAt one-shot', () => {
     try { content = readFileSync(telemetryPath, 'utf-8'); } catch { /* file may not exist */ }
     expect(content.trim()).toBe('');
     await scheduler.stop();
+  });
+
+  it('does not re-poll an in-flight one-shot or emit misleading overlap telemetry', async () => {
+    let finish!: () => void;
+    const session = makeSession();
+    vi.mocked(session.sendMessage).mockImplementation(async () => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return { content: 'done' } as never;
+    });
+    const scheduler = new CronScheduler({
+      telemetryPath, sessionFactory: () => session,
+      budgetGate: async () => ({ skip: false }),
+    });
+    scheduler.register(task(PAST_ISO));
+    const poll = vi.mocked(cron.schedule).mock.calls.at(-1)![1] as () => void;
+    try {
+      const running = scheduler.tick('one-shot');
+      await vi.waitFor(() => expect(session.sendMessage).toHaveBeenCalledOnce());
+      poll();
+      poll();
+      await Promise.resolve();
+      expect(() => readFileSync(telemetryPath, 'utf8')).toThrow();
+      expect(scheduler.getInFlightTasks()).toHaveLength(1);
+      finish();
+      expect((await running).status).toBe('success');
+      expect(scheduler.getInFlightTasks()).toEqual([]);
+      expect(scheduler.list()).toEqual([]);
+      expect(readFileSync(telemetryPath, 'utf8').trim().split('\n')).toHaveLength(1);
+    } finally {
+      finish?.();
+      await scheduler.stop();
+    }
   });
 
   it('fires the task when runAt is in the past', async () => {

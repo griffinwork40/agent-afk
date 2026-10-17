@@ -39,9 +39,14 @@ export function autoResumeDirective(bgResultPending: boolean): string {
  */
 export const AUTO_RESUME_PREFIX = '[auto-resume]';
 
-/** Anything exposing a one-shot `drainInjections()`. */
+/** Anything exposing a one-shot `drainInjections()` and a non-destructive probe. */
 export interface InjectionSource {
   drainInjections(): string;
+  /**
+   * True when at least one injection is buffered and ready to drain.
+   * Non-destructive: does not consume the buffer.
+   */
+  hasPendingInjections(): boolean;
 }
 
 /**

@@ -26,6 +26,17 @@ vi.mock('child_process', () => ({
   }),
 }));
 
+// connect-diagnosis mock — keeps `connect` hermetic: no `npm view` network
+// call, no probe of the real Chrome profile folder, no open(1).
+vi.mock('./browser.connect-diagnosis.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./browser.connect-diagnosis.js')>();
+  return {
+    ...actual,
+    resolveChromeDevtoolsMcpVersion: vi.fn(() => actual.CHROME_DEVTOOLS_MCP_FALLBACK_VERSION),
+    printConnectDiagnosis: vi.fn(),
+  };
+});
+
 vi.mock('../../agent/mcp/index.js', () => ({
   getMcpConfigPath: vi.fn(() => '/mock/mcp.json'),
 }));
@@ -115,6 +126,7 @@ import {
   CHROME_DEVTOOLS_SERVER_NAME,
   registerBrowserCommand,
 } from './browser.js';
+import { printConnectDiagnosis, resolveChromeDevtoolsMcpVersion } from './browser.connect-diagnosis.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockGetMcpConfigPath = vi.mocked(getMcpConfigPath);
@@ -224,6 +236,42 @@ describe('afk browser connect', () => {
     mockExecFileSync.mockReturnValueOnce('Google Chrome 120.0.0.0\n' as unknown as Buffer);
     await buildProgram().parseAsync(['node', 'afk', 'browser', 'connect']);
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Please update Chrome'));
+  });
+
+  it('pins the version resolved at connect time instead of @latest', async () => {
+    vi.mocked(resolveChromeDevtoolsMcpVersion).mockReturnValueOnce('9.8.7');
+    await buildProgram().parseAsync(['node', 'afk', 'browser', 'connect']);
+    const cfg = readMcpConfigFile(cfgPath);
+    expect(cfg.mcpServers![CHROME_DEVTOOLS_SERVER_NAME]).toEqual(buildChromeDevtoolsEntry('stable', '9.8.7'));
+  });
+
+  it('upgrades a legacy @latest entry to a pinned one ("Updated")', async () => {
+    writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        mcpServers: { [CHROME_DEVTOOLS_SERVER_NAME]: { command: 'npx', args: ['chrome-devtools-mcp@latest', '--autoConnect'] } },
+      }),
+    );
+    await buildProgram().parseAsync(['node', 'afk', 'browser', 'connect']);
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Updated'));
+    expect(JSON.stringify(readMcpConfigFile(cfgPath))).not.toContain('@latest');
+  });
+
+  it('runs the readiness diagnosis for the chosen channel, opening pages by default', async () => {
+    vi.mocked(printConnectDiagnosis).mockClear();
+    await buildProgram().parseAsync(['node', 'afk', 'browser', 'connect', '--channel', 'beta']);
+    expect(printConnectDiagnosis).toHaveBeenCalledWith('beta', true);
+  });
+
+  it('passes open=false with --no-open', async () => {
+    vi.mocked(printConnectDiagnosis).mockClear();
+    await buildProgram().parseAsync(['node', 'afk', 'browser', 'connect', '--no-open']);
+    expect(printConnectDiagnosis).toHaveBeenCalledWith('stable', false);
+  });
+
+  it('mentions the macOS Files & Folders step in setup guidance', async () => {
+    await buildProgram().parseAsync(['node', 'afk', 'browser', 'connect']);
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Files & Folders'));
   });
 
   it('preserves existing unrelated MCP servers when adding chrome-devtools', async () => {

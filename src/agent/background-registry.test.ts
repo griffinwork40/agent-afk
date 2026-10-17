@@ -1130,9 +1130,18 @@ describe('BackgroundAgentRegistry', () => {
         stopReason: longReason,
       });
 
-      await new Promise((r) => setTimeout(r, 200));
-
+      // Poll instead of a fixed sleep: the terminal meta.json write is async,
+      // and a 200ms sleep lost the race on a slow Windows runner (main CI run
+      // 38801071279 read meta before stopReason landed).
       const { BgJobLogReader } = await import('./bg-job-log.js');
+      await vi.waitFor(
+        async () => {
+          const polled = await BgJobLogReader.readMeta(job.jobId);
+          expect(polled?.stopReason).toBeDefined();
+        },
+        { timeout: 5000 },
+      );
+
       const meta = await BgJobLogReader.readMeta(job.jobId);
       expect(meta).not.toBeNull();
       expect(meta!.stopReason).toBe('z'.repeat(64) + '…');

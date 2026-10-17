@@ -18,7 +18,7 @@ export const NOOP_JOURNAL: MessageJournal = Object.freeze({
   append(): void {},
   truncate(): void {},
   mark(): void {},
-  forSubagent(): MessageJournal {
+  forSubagent(_subagentId: string, _childMeta?: { model?: string; provider?: string }): MessageJournal {
     return NOOP_JOURNAL;
   },
   flush(): Promise<void> {

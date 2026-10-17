@@ -71,6 +71,54 @@ describe('oneShotChatCompletion', () => {
     vi.clearAllMocks();
   });
 
+  it.each([false, true])('preserves a custom endpoint with OAuth (forced: %s)', async (forced) => {
+    mockResolveAuth.mockReturnValue({ apiKey: 'oauth-token', source: 'chatgpt-oauth', accountId: 'acct' });
+    const factory = vi.fn(() => makeClient(async () => ({
+      choices: [{ finish_reason: 'stop', message: { content: 'custom' } }],
+    })));
+    const result = await oneShotChatCompletionWithStop({
+      model: 'gpt-5.5', system: 'sys', user: 'msg',
+      baseURL: 'https://custom.example/v1', defaultHeaders: { 'x-custom': 'yes' },
+      forceChatgptOAuth: forced, clientFactory: factory,
+    });
+    expect(mockResolveAuth).toHaveBeenCalledWith(undefined, {}, forced);
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'oauth-token', baseURL: 'https://custom.example/v1',
+      defaultHeaders: { 'x-custom': 'yes' }, maxRetries: 0,
+    }));
+    expect(result).toEqual({ text: 'custom', stopReason: 'end' });
+  });
+
+  it.each([undefined, 'https://chatgpt.com/backend-api/codex'])(
+    'routes OAuth via Responses when no different endpoint is configured (%s)', async (baseURL) => {
+      mockResolveAuth.mockReturnValue({ apiKey: 'oauth-token', source: 'chatgpt-oauth', accountId: 'acct' });
+      const create = vi.fn(() => streamOf(...completedStreamOf('  subscribed  ')));
+      const factory = vi.fn(() => makeResponsesClient(create));
+      const signal = new AbortController().signal;
+      const result = await oneShotChatCompletionWithStop({
+        model: 'gpt-5.5', system: 'sys', user: 'msg', maxTokens: 32, signal,
+        ...(baseURL === undefined ? {} : { baseURL }), clientFactory: factory,
+      });
+      expect(factory).toHaveBeenCalledWith(expect.objectContaining({
+        apiKey: 'oauth-token', baseURL: 'https://chatgpt.com/backend-api/codex',
+        defaultHeaders: {
+          'OpenAI-Beta': 'responses=experimental', originator: 'agent-afk', 'chatgpt-account-id': 'acct',
+        }, maxRetries: 0,
+      }));
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ store: false, stream: true }), { signal });
+      expect(create.mock.calls[0]?.[0]).not.toHaveProperty('max_output_tokens');
+      expect(result).toEqual({ text: 'subscribed', stopReason: 'end' });
+    },
+  );
+
+  it('does not report an incomplete OAuth response as a completed one-shot', async () => {
+    mockResolveAuth.mockReturnValue({ apiKey: 'oauth-token', source: 'chatgpt-oauth' });
+    await expect(oneShotChatCompletionWithStop({
+      model: 'gpt-5.5', system: 'sys', user: 'msg',
+      clientFactory: () => makeResponsesClient(() => streamOf({ type: 'response.output_text.delta', delta: 'partial' })),
+    })).rejects.toBeInstanceOf(ResponsesSummaryIncompleteError);
+  });
+
   // ── happy path ────────────────────────────────────────────────────────────
 
   it('returns the assistant message content', async () => {
@@ -321,7 +369,7 @@ describe('oneShotChatCompletion', () => {
       system: 'sys',
       user: 'msg',
       forceChatgptOAuth: true,
-      clientFactory: () => makeClient(async () => ({ choices: [{ message: { content: 'ok' } }] })),
+      clientFactory: () => makeResponsesClient(() => streamOf(...completedStreamOf('ok'))),
     });
     expect(mockResolveAuth).toHaveBeenCalledWith(undefined, {}, true);
   });

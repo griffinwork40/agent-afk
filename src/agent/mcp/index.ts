@@ -1,8 +1,15 @@
 /**
  * Public surface for the MCP client subsystem. Importers outside this
  * folder should reach in through this barrel for any symbol it exports.
- * Sub-modules may be imported directly only for symbols not re-exported
- * here (e.g. dynamic imports of readOauthPending from oauth.ts).
+ * Sub-modules may be imported directly only for symbols not re-exported here.
+ *
+ * @example
+ * ```ts
+ * import { McpManager, loadMcpConfig } from './agent/mcp/index.js';
+ * const { servers } = await loadMcpConfig();
+ * const manager = new McpManager(servers);
+ * await manager.connectAll();
+ * ```
  *
  * @module agent/mcp
  */

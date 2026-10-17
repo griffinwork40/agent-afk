@@ -12,6 +12,7 @@ import { fmtUsd } from './trace-format.js';
 import { renderEvent, withToolResult } from './trace-event-render.js';
 import type { RenderContext } from './trace-event-render.js';
 import type { TraceEvent } from '../../agent/trace/index.js';
+import { SessionCostAccumulator } from '../../agent/trace/cost.js';
 
 /** Inlined to avoid a circular import with trace.ts (which re-exports ParsedTrace). */
 interface ParsedTrace {
@@ -30,6 +31,8 @@ interface TraceSummary {
   subagents: number;
   claims: number;
   blocks: number;
+  /** Total hook dispatches from the `hook_summary` event; null = unknown (no summary). */
+  hookDispatches: number | null;
   /** Count of rate_limit events (429/503/529 backoff). */
   throttles: number;
   /** Count of ttfb_timeout events (our client-side watchdog re-drove a stalled request). */
@@ -37,7 +40,8 @@ interface TraceSummary {
   /** Count of boot_warning events (agent-registry builtin-shadow, MCP config; #754). */
   bootWarnings: number;
   sealStatus: string | null;
-  finalCostUsd: number | null;
+  /** Whole-trace spend, root + every subagent (`agent/trace/cost.ts`, #3879). */
+  totalCostUsd: number | null;
   /** Operator-typed model for the root session (from session_init_start). */
   model: string | null;
   /** Resolved wire id for the root session, when it differs from `model`. */
@@ -50,15 +54,17 @@ function summarize(events: TraceEvent[]): TraceSummary {
   let subagents = 0;
   let claims = 0;
   let blocks = 0;
+  let hookDispatches: number | null = null;
   let throttles = 0;
   let ttfbStalls = 0;
   let bootWarnings = 0;
   let sealStatus: string | null = null;
-  let finalCostUsd: number | null = null;
+  const costAcc = new SessionCostAccumulator();
   let model: string | null = null;
   let resolvedModel: string | null = null;
 
   for (const e of events) {
+    costAcc.add(e);
     switch (e.kind) {
       case 'tool_call':
         if (e.payload.phase === 'completed') {
@@ -88,12 +94,13 @@ function summarize(events: TraceEvent[]): TraceSummary {
       case 'hook_decision':
         if (e.payload.decision === 'block') blocks++;
         break;
+      case 'hook_summary':
+        hookDispatches = Object.values(e.payload.counts)
+          .flatMap((byOutcome) => Object.values(byOutcome))
+          .reduce((a, b) => a + b, 0);
+        break;
       case 'session_sealed':
         sealStatus = e.payload.status;
-        finalCostUsd = e.payload.finalCostUsd;
-        break;
-      case 'closure':
-        if (finalCostUsd === null) finalCostUsd = e.payload.finalCostUsd;
         break;
       default:
         break;
@@ -110,8 +117,9 @@ function summarize(events: TraceEvent[]): TraceSummary {
     throttles,
     ttfbStalls,
     bootWarnings,
+    hookDispatches,
     sealStatus,
-    finalCostUsd,
+    totalCostUsd: costAcc.result().totalCostUsd ?? null,
     model,
     resolvedModel,
   };
@@ -159,7 +167,9 @@ export function formatTrace(
     summary.sealStatus !== null
       ? `sealed (${summary.sealStatus})`
       : 'unsealed (live or crashed)';
-  const costPart = summary.finalCostUsd !== null ? ` · ${fmtUsd(summary.finalCostUsd)}` : '';
+  const costPart = summary.totalCostUsd !== null ? ` · ${fmtUsd(summary.totalCostUsd)}` : '';
+  // Missing hook_summary = unknown (crash / pre-feature trace), never "0 hooks".
+  const hookPart = summary.hookDispatches !== null ? ` · ${summary.hookDispatches} hook dispatches` : '';
   const throttlePart = summary.throttles > 0 ? ` · ${summary.throttles} throttled` : '';
   // Surfaced separately from `throttled`: a ttfb stall is dead wall-clock our own
   // watchdog spent, and folding it into the throttle count is what hid it.
@@ -184,7 +194,7 @@ export function formatTrace(
   out.push(
     `       ${status} · ${summary.total} events · ${summary.toolCalls} tool calls` +
       ` (${summary.toolErrors} err) · ${summary.subagents} subagents · ${summary.claims} claims` +
-      ` · ${summary.blocks} blocks${throttlePart}${ttfbPart}${bootWarningPart}${costPart}`,
+      ` · ${summary.blocks} blocks${hookPart}${throttlePart}${ttfbPart}${bootWarningPart}${costPart}`,
   );
   if (options.resultsNote !== undefined) out.push(options.resultsNote);
   out.push('');

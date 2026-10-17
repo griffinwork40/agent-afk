@@ -30,7 +30,7 @@ import { applyManagerApiKeyFallback } from '../tools/child-credential.js';
 import { injectToolBudgetPreamble } from './budget-preamble.js';
 import { injectSubagentIdentityPreamble } from './identity-preamble.js';
 import { injectWorkspacePreamble } from '../workspace/index.js';
-import type { WorkspaceStore } from '../workspace/workspace-store.js';
+import type { WorkspaceStore, WorkspaceEntry } from '../workspace/workspace-store.js';
 import { DENY_ELICITATION, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
 import { resolveSoftDeadlineMs } from '../providers/shared/soft-deadline.js';
 import { childTmpEnvPatch } from '../session/session-tmpdir.js';
@@ -201,6 +201,24 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
 }
 
 /**
+ * Inject the workspace preamble into an assembled child config and stamp
+ * `hasWorkspacePreamble: true` so `composeQuerySystem` can gate
+ * `splitAtWorkspacePreamble` on actual fork provenance (#3924).
+ *
+ * Extracted from {@link assembleChildConfig} to keep that function under the
+ * 200-line ceiling. Returns the config unchanged when no workspace store is set.
+ */
+function applyWorkspacePreamble(
+  assembled: AgentConfig,
+  workspaceStore: WorkspaceStore | undefined,
+  workspaceEntries: WorkspaceEntry[],
+): AgentConfig {
+  if (!workspaceStore) return assembled;
+  const withPreamble = injectWorkspacePreamble(assembled, workspaceEntries);
+  return { ...withPreamble, hasWorkspacePreamble: true };
+}
+
+/**
  * Build the `AgentConfig` for a forked child, applying all fork-time defaults,
  * invariants, and inheritance rules in a single deterministic pass.
  *
@@ -219,6 +237,17 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
  * stops the two providers from drifting on it — see the module header on
  * ./subagent/budget-preamble.js.
  */
+
+/**
+ * Resolve the provider name for a child's journal `meta` record.
+ * Prefers the caller-injected `provider.name` (mirrors journal-lifecycle.ts
+ * which reads `config.provider?.name` for root sessions); falls back to
+ * model-based routing so the common no-injected-provider path still works. (#3836)
+ */
+function resolveChildJournalProvider(injectedProviderName: string | undefined, model: AgentModelInput): string {
+  return injectedProviderName ?? providerForModel(typeof model === 'string' ? model : undefined);
+}
+
 export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentConfig {
   const {
     options,
@@ -245,6 +274,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
   // Invariant: pass `null` as sessionId — the store is already scoped to one
   // root session, and children publish under their own IDs, so a session-
   // filtered query would miss sibling findings (the partition mismatch bug).
+  // Store lifetime: see the Invariant in providers/shared/chain-provider-close.ts.
   const taskPrompt = resume ?? (typeof options.config.systemPrompt === 'string'
     ? options.config.systemPrompt
     : '');
@@ -376,8 +406,9 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     // spread so an inherited `options.config.messageJournal` (a caller that
     // cloned the parent's config) can never leak through; `resumeMessages` is
     // cleared for the same reason: children never reseed from the parent's
-    // journal, they start from their own prompt.
-    messageJournal: options.parent.messageJournal?.forSubagent(id),
+    // journal, they start from their own prompt. Child model + provider are
+    // passed so the subagent meta record reflects what THIS child runs. (#3808)
+    messageJournal: options.parent.messageJournal?.forSubagent(id, { model: String(effectiveChildModel), provider: resolveChildJournalProvider(options.config.provider?.name, effectiveChildModel) }),
     resumeMessages: undefined,
     // Child session inherits the SAME resolved registry (see `registry`
     // in forkSubagent) so its own SessionStart/SessionEnd/PreToolUse fire
@@ -412,7 +443,5 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
       : {}),
   }, args.nestedAgentAllowlist);
 
-  return args.workspaceStore
-    ? injectWorkspacePreamble(assembled, workspaceEntries)
-    : assembled;
+  return applyWorkspacePreamble(assembled, args.workspaceStore, workspaceEntries);
 }

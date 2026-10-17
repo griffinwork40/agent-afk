@@ -38,6 +38,7 @@ export interface CwdDependentsFactoryArgs {
   composeExecutor: ComposeExecutor | undefined;
   buildDispatcher: (permissionMode: string, opts: {
     cwd?: string;
+    slotModel?: string;
     env?: Record<string, string>;
     readRoots?: string[];
     writeRoots?: string[];
@@ -123,6 +124,8 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
     // the dispatcher with the current allowAll, never reverting the toggle.
     const newDispatcher = args.buildDispatcher(args.getCurrentPermissionMode(), {
       cwd: newCwd,
+      // Keep the per-slot deny list across a cwd re-anchor (parity with dispatcher-wiring.ts).
+      ...(typeof args.config.model === 'string' ? { slotModel: args.config.model } : {}),
       readRoots: args.sharedReadRoots,
       writeRoots: args.sharedWriteRoots,
       ...(args.config.env !== undefined ? { env: args.config.env } : {}),

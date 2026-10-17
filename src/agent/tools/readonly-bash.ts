@@ -137,6 +137,12 @@ const GH_EXTENDED_MUTATING =
 // interpreters that execute piped stdin: `… | python`, `… | perl`.)
 const PIPE_TO_SHELL =
   /\|\s*(sh|bash|zsh|dash|ksh|mksh|csh|tcsh|fish|ash|python3?|node|nodejs|perl|ruby|php|bun)\b/i;
+// The block reason names the safe alternative. Recon agents mostly hit this
+// rule piping JSON into `python3 -c` to parse it; `-c`/`-e` is still arbitrary
+// code (`exec(sys.stdin.read())`), so the pipe stays blocked and the reason
+// points at `jq`, which is not an interpreter and is allowed through.
+export const PIPE_TO_SHELL_REASON =
+  'pipe-to-shell (RCE via piped interpreter); to parse JSON use `| jq` or `gh ... --jq <expr>` instead';
 
 // ── filesystem mutations ───────────────────────────────────────────────────
 // Bare destructive/creative filesystem verbs. Word-boundary anchored so we
@@ -298,7 +304,7 @@ const RAW_RULES: readonly MutationRule[] = [
 // `rg "git push"` through while a genuine invocation (whose verb survives
 // stripping) is still caught. These must not see the contents of string literals.
 const STRIPPED_RULES: readonly MutationRule[] = [
-  { re: PIPE_TO_SHELL, reason: 'pipe-to-shell (RCE via piped interpreter)' },
+  { re: PIPE_TO_SHELL, reason: PIPE_TO_SHELL_REASON },
   { re: FS_MUTATING, reason: 'filesystem mutation' },
   { re: FIND_DELETE, reason: 'find -delete (file removal)' },
   { re: PATCH_CMD, reason: 'patch (applies a diff to files)' },

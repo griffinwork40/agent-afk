@@ -69,6 +69,21 @@ describe('create_schedule handler', () => {
     ]);
   });
 
+  it('warns that a date-pinned cron repeats annually, without changing its semantics', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Annual', command: '/cmd', cron: '30 20 12 10 *' }, fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content as string).warning).toMatch(/annually.*runAt/);
+    expect(loadSchedules()[0]?.enabled).toBe(true);
+    const updated = await updateScheduleHandler({ taskId: 'annual', command: '/new' }, fakeSignal);
+    expect(JSON.parse(updated.content as string).warning).toMatch(/annually.*runAt/);
+    const recurring = await updateScheduleHandler({ taskId: 'annual', cron: '0 2 * * *' }, fakeSignal);
+    expect(JSON.parse(recurring.content as string).warning).toBeUndefined();
+    const oneShot = await updateScheduleHandler({ taskId: 'annual', cron: '30 20 12 10 *', runAt: '2099-10-12T20:30:00Z' }, fakeSignal);
+    expect(JSON.parse(oneShot.content as string).warning).toBeUndefined();
+  });
+
   it('rejects a create request without cron or runAt', async () => {
     const result = await createScheduleHandler({ name: 'Missing Time', command: '/cmd' }, fakeSignal);
     expect(result.isError).toBe(true);

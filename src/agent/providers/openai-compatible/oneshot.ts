@@ -18,6 +18,7 @@
 
 import OpenAI from 'openai';
 import { resolveOpenAIAuth } from './auth.js';
+import { resolveWireMode } from './responses-config.js';
 import { isReasoningModel } from '../../model-capabilities.js';
 import type { OpenAIMessage } from './messages.js';
 import { buildResponsesRequestBody } from './query/request-body.js';
@@ -113,8 +114,11 @@ export interface OpenAIOneShotInput {
 }
 
 /**
- * Single non-streaming `chat.completions.create` call. Returns the assistant
- * message text paired with the mapped {@link OneShotStopReason}:
+ * Contract: single non-streaming `chat.completions.create` call, except newly
+ * resolved ChatGPT OAuth without a different endpoint uses {@link oneShotResponses}.
+ * That path omits the output cap and returns `'end'` only on response.completed;
+ * incomplete Responses throw. Pre-built clients retain the caller's chat wire.
+ * Returns the assistant message text paired with the mapped {@link OneShotStopReason}:
  *   - `'max_tokens'` when `finish_reason === 'length'`
  *   - `'end'`        when `finish_reason === 'stop'`
  *   - `'other'`      for any other finish reason
@@ -165,10 +169,23 @@ export async function oneShotChatCompletionWithStop(
       maxRetries: number;
       fetch: typeof globalThis.fetch;
     } = { apiKey: auth.apiKey, maxRetries: 0, fetch: h1ModelFetch };
-    if (baseURL !== undefined) clientOpts.baseURL = baseURL;
-    if (defaultHeaders !== undefined) clientOpts.defaultHeaders = defaultHeaders;
+    // Invariant: respect custom endpoints exactly as the query path does;
+    // only OAuth without a different endpoint selects the ChatGPT Responses wire.
+    const wire = resolveWireMode(auth, false, baseURL);
+    const resolvedBaseURL = wire.baseURL ?? baseURL;
+    if (resolvedBaseURL !== undefined) clientOpts.baseURL = resolvedBaseURL;
+    if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
+    else if (defaultHeaders !== undefined) clientOpts.defaultHeaders = defaultHeaders;
     const factory = clientFactory ?? oneShotClientFactory;
     client = factory ? factory(clientOpts) : new OpenAI(clientOpts);
+    if (wire.mode === 'responses') {
+      const text = await oneShotResponses({
+        client, model, system, user, maxTokens, isChatGptBackend: true,
+        ...(signal ? { signal } : {}),
+      });
+      // oneShotResponses throws unless the backend completed the response.
+      return { text, stopReason: 'end' };
+    }
   }
 
   // Reasoning models (o-series ∪ gpt-5.x) reject `max_tokens` and require
