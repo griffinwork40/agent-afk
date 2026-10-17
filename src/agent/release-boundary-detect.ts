@@ -148,9 +148,18 @@ export function createReleaseBoundaryDetect(): (context: HookContext) => HookDec
     // where words() rejects the separator and the fallback returns raw text,
     // we test each semicolon/pipe-delimited segment independently so that
     // `git commit -m "--dry-run"; npm publish` is not incorrectly exempted.
+    // Dry-run exemption logic: split the command on shell separators and test
+    // each segment independently. A segment that does NOT match any release
+    // boundary pattern (e.g. `echo done`) is harmless regardless of dry-run
+    // flags — it must not veto the exemption. Only segments that themselves
+    // match a release-boundary pattern are required to carry a dry-run flag.
+    // This means `npm publish --dry-run && echo done` is correctly exempted
+    // (the `echo done` segment is non-release, so it is skipped), while
+    // `git commit -m "--dry-run"; npm publish` is still blocked (the
+    // `npm publish` segment matches and has no --dry-run flag).
     const segments = command.split(/(?:;|\|\|?|&&)/)
       .map((s) => maskHookCommandData(s.trim()));
-    if (segments.every((s) => isDryRun(s))) {
+    if (segments.every((s) => !detectReleaseBoundaryCommands(s).length || isDryRun(s))) {
       return {
         decision: 'approve',
         reason: `${RELEASE_BOUNDARY_DETECT_REASON_PREFIX} [${matched.join(', ')}] (dry-run: not blocked)`,
