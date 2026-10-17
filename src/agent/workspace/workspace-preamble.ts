@@ -23,8 +23,9 @@ export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
     WORKSPACE_CONTEXT_HEADER,
     '',
     'The following findings were published by other agents working on this task.',
-    'Use them to avoid re-discovering known facts. Call `workspace_query` to poll',
-    'for newer entries mid-run. Publish new discoveries with `workspace_publish`.',
+    'Use them to avoid re-discovering known facts. If your tool allowlist includes',
+    '`workspace_query`, poll for newer entries mid-run; publish new discoveries',
+    'with `workspace_publish` only if it is available to you.',
   ];
 
   for (const entry of entries) {
@@ -134,13 +135,13 @@ export const WORKSPACE_PREAMBLE_MARKERS: readonly string[] = [
 const COLD_START_HINT = [
   WORKSPACE_COLD_START_HEADER,
   '',
-  'No entries published yet — you may be the first. Call `workspace_publish` when you:',
+  'No entries published yet — you may be the first. If `workspace_publish` is available, call it when you:',
   '- confirm an architectural invariant or key export surface of a module,',
   '- rule out a hypothesis (so siblings skip the same dead end),',
   '- read a file another sibling will likely need (publish the insight, not the raw content).',
   '',
-  'Call `workspace_query` before reading a file or grepping a module — a sibling may have',
-  'already analyzed it. Publishing is free to batch alongside other tools in the same reply.',
+  'If `workspace_query` is available, call it before reading a file or grepping a module —',
+  'a sibling may have analyzed it. Otherwise use your available read tools directly.',
 ].join('\n');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -147,4 +147,74 @@ describe('demandLoadSidecar', () => {
 
     expect(result).toBeUndefined();
   });
+
+  // -------------------------------------------------------------------------
+  // New-format (tilde) and legacy-fallback tests
+  // -------------------------------------------------------------------------
+
+  test('topic route: finds the new tilde-encoded file', () => {
+    const data = makeData({ chatId: 900, threadId: 7 });
+    writeFileSync(join(dataDir, '900~7.json'), JSON.stringify(data));
+
+    const sessionData = new Map<string, SessionData>();
+    const result = demandLoadSidecar(dataDir, sessionData, { chatId: 900, threadId: 7 });
+
+    expect(result).toBeDefined();
+    expect(result?.threadId).toBe(7);
+    expect(sessionData.has('900:7')).toBe(true);
+  });
+
+  test('topic route: legacy colon fallback (POSIX-only write, portable test)', () => {
+    // On Windows the OS rejects colon filenames at the syscall level.
+    // The test writes the legacy file where the OS allows it and verifies the
+    // fallback path; on Windows it confirms the absence does not throw.
+    const data = makeData({ chatId: 500, threadId: 3 });
+    let wroteColonFile = false;
+    try {
+      writeFileSync(join(dataDir, '500:3.json'), JSON.stringify(data));
+      wroteColonFile = true;
+    } catch {
+      // Windows: colon filenames are illegal at the OS level.
+    }
+
+    const sessionData = new Map<string, SessionData>();
+    const result = demandLoadSidecar(dataDir, sessionData, { chatId: 500, threadId: 3 });
+
+    if (wroteColonFile) {
+      // POSIX: legacy fallback must find the file.
+      expect(result).toBeDefined();
+      expect(result?.threadId).toBe(3);
+      expect(sessionData.has('500:3')).toBe(true);
+    } else {
+      // Windows: no file exists — must return undefined without throwing.
+      expect(result).toBeUndefined();
+    }
+  });
+
+  test('topic route: prefers tilde file over legacy colon file when both exist', () => {
+    // Write stale data to the legacy colon file and fresh data to the tilde
+    // file. demandLoadSidecar must return the fresh (tilde) data.
+    const staleData = makeData({ chatId: 800, threadId: 5, model: 'haiku' });
+    const freshData = makeData({ chatId: 800, threadId: 5, model: 'opus' });
+
+    let wroteColonFile = false;
+    try {
+      writeFileSync(join(dataDir, '800:5.json'), JSON.stringify(staleData));
+      wroteColonFile = true;
+    } catch {
+      // Windows: cannot write colon-named file.
+    }
+    writeFileSync(join(dataDir, '800~5.json'), JSON.stringify(freshData));
+
+    const sessionData = new Map<string, SessionData>();
+    const result = demandLoadSidecar(dataDir, sessionData, { chatId: 800, threadId: 5 });
+
+    // Both platforms: the tilde file must win.
+    expect(result).toBeDefined();
+    expect(result?.model).toBe('opus');
+    if (wroteColonFile) {
+      // Belt-and-suspenders: must NOT have loaded the stale colon file.
+      expect(result?.model).not.toBe('haiku');
+    }
+  });
 });

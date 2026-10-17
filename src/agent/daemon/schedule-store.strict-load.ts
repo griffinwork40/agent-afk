@@ -106,8 +106,11 @@ export function loadSchedulesForWrite(
     storePath,
     parsed,
     currentSchemaVersion,
-    (path, message) => {
-      throw new UnreadableSchedulesError(path, message.replace(/^\[schedule-store\] [^ ]+ /, ''));
+    (path, _message, entryVersion) => {
+      throw new UnreadableSchedulesError(
+        path,
+        `contains an entry with _schemaVersion ${entryVersion} but this build only understands schema version ${currentSchemaVersion}. Upgrade afk to load this file.`,
+      );
     },
   );
   return parsed as ScheduledTaskConfig[];

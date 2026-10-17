@@ -114,6 +114,12 @@ describe('read-modify-write on an unreadable schedules.json', () => {
     writeFileSync(storePath, INVALID_JSON);
     expect(loadSchedules(storePath)).toEqual([]);
   });
+
+  it('loadSchedules returns [] and does not throw SchedulesVersionError for a primitive top-level JSON value', () => {
+    writeFileSync(storePath, '42');
+    expect(() => loadSchedules(storePath)).not.toThrow();
+    expect(loadSchedules(storePath)).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

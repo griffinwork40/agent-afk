@@ -289,7 +289,7 @@ export async function recoverPendingHandoffs(
           ? record.question['type'] as string
           : 'text';
         const choices = Array.isArray(record.question['choices'])
-          ? record.question['choices'] as string[]
+          ? record.question['choices'] as readonly string[]
           : undefined;
         const parts = [
           `🔔 Reminder: daemon task still waiting for your answer`,
@@ -300,6 +300,9 @@ export async function recoverPendingHandoffs(
         const replyMarkup = buildHandoffReplyMarkup(qType, record.taskId, choices);
         if (!replyMarkup && choices && choices.length > 0) {
           parts.push(`Options: ${truncateForNotify(choices.join(', '))}`);
+        }
+        if (!replyMarkup) {
+          parts.push(`\nReply to this task's next run to provide your answer.`);
         }
         void pushIfConfigured(parts.join('\n'), { replyMarkup }).catch(() => undefined);
       }
