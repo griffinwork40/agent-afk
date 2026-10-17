@@ -11,6 +11,51 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.321.7] - 2026-10-17
+
+### Added
+- mark subagent results as superseded when goal changed at delivery (#3951) (b1cdb4f1)
+
+### Fixed
+- add missing stderr tests for OAuth/refresh paths; use restoreAllMocks (#3946) (8e47c5d4)
+- harden skill-reference telemetry — non-object JSON guard, in-flight promise dedup, Set-based dedup (#3940) (57a037df)
+- address advisory findings from 2026-10-16 PR triage batch (#3955) (10b91b0e)
+
+## [5.321.6] - 2026-10-17
+
+### Fixed
+- add maxTurns to cost estimator to model multi-turn episode spend (#3949) (fa420138)
+- gate splitAtWorkspacePreamble on fork provenance, not marker text (#3943) (eeca6650)
+- clarify JournalMeta.model semantics, fix child provider source, add noop forSubagent params (#3950) (12694cb0)
+- guard sumBillingUsage provider mismatch + document outcome tag on SessionExecutorsBindTarget (#3941) (bb3f0ffe)
+- remove skippedByBudget double-count in runTask (#3945) (a4e87629)
+- add schema-version guard to loadSchedules; refuse future/unknown shapes (#3954) (4e0c0a17)
+- wire bot-level permissionMode into every Telegram session's AgentConfig (#3942) (7a9fd9f4)
+- narrow Bearer/AWS false positives from loosened anchors (#3937) (2ea8bc3d)
+
+## [5.321.5] - 2026-10-16
+
+### Fixed
+- roll nested and skill fork spend into root session (#3960) (713edaea)
+
+## [5.321.4] - 2026-10-16
+
+### Fixed
+- pin receipt cost rows and trace total; fix facet doc (#3911) (9835afd8)
+- reclaim parked lease immediately when periodic sweep expires its handoff (#3913) (72ab0460)
+
+## [5.321.3] - 2026-10-16
+
+### Fixed
+- harden remote_agent cwd validation, quoting, and output framing (#3917) (e4b55fd6)
+
+## [5.321.2] - 2026-10-16
+
+### Fixed
+- re-send handoff reminder with inline keyboard buttons on recovery (#3915) (9b6e374c)
+- stop builtin agents and fix-pr from pinning models (#3926) (801f2a85)
+- stamp subagentId on child closure events so root-filter guard works (#3912) (060ee7a1)
+
 ## [5.321.1] - 2026-10-16
 
 ### Fixed

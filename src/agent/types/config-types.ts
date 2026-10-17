@@ -620,6 +620,17 @@ export interface AgentConfig {
   isSubagentFork?: true;
 
   /**
+   * Set to `true` by `assembleChildConfig` when `injectWorkspacePreamble`
+   * appended a workspace preamble block to a forked child's system prompt.
+   *
+   * Threaded into `AnthropicDirectQueryOptions.hasWorkspacePreamble` so
+   * `composeQuerySystem` gates `splitAtWorkspacePreamble` on actual fork
+   * provenance rather than scanning for a marker string that could appear in
+   * any operator prompt. Absent/false = root session, no split. See #3924.
+   */
+  hasWorkspacePreamble?: true;
+
+  /**
    * Model provider. Defaults to the Anthropic SDK adapter
    * (`anthropicProvider`) when omitted. Supplying a custom provider lets
    * the harness drive non-Anthropic backends without touching session

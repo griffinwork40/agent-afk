@@ -60,6 +60,7 @@ function buildSkillChildManager(
 ): SubagentManager {
   return new SubagentManager({
     parentAbortSignal: signal,
+    ...(ctx.onSubagentSucceeded !== undefined ? { onSubagentSucceeded: ctx.onSubagentSucceeded } : {}),
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
     // Trace origin (#469): inherit the owning surface like traceWriter/cwd so
     // grandchild forks made directly off this manager report the real origin.
