@@ -26,7 +26,7 @@ import { validateBotToken } from './setup-wizard.js';
 import { MemoryStore } from '../agent/memory/index.js';
 import { StateStore } from '../agent/state/state-store.js';
 import { providerForModel } from '../agent/providers/index.js';
-import { loadConfig, loadTelegramConfig } from '../cli/config.js';
+import { loadConfig, loadTelegramConfig, getOperatorPermissionMode } from '../cli/config.js';
 import { getEnvConfigPath, getStateDatabasePath } from '../paths.js';
 import { loadSystemPrompt, getThinking, getEffort } from '../cli/shared-helpers.js';
 import type { AgentModelInput } from '../agent/types.js';
@@ -215,12 +215,10 @@ export async function main(): Promise<void> {
     // override is set via /cd. Per-session `data.cwd` takes precedence.
     ...(telegramCwd !== undefined && telegramCwd.length > 0 ? { botCwd: telegramCwd } : {}),
     ...(idleSessionMs !== undefined && !isNaN(idleSessionMs) && idleSessionMs > 0 ? { idleSessionMs } : {}),
-    // Forward the operator's permissionMode so it reaches every new session's
-    // AgentConfig and the plan-mode guard in finalizeTelegramSession is live.
-    // Without this, `afk config set permissionMode plan` is silently ignored on
-    // Telegram (#3927). Undefined when not set — SessionManager passes it through
-    // only when present so the downstream ?? 'default' fallback still applies.
-    ...(config.permissionMode !== undefined ? { permissionMode: config.permissionMode } : {}),
+    // Forward permissionMode only when the operator explicitly set it in afk.config.json.
+    // loadConfig() always fills in DEFAULT_CLI_PERMISSION_MODE, so checking config.permissionMode
+    // would unconditionally forward bypassPermissions into Telegram session metadata (#3969).
+    ...(getOperatorPermissionMode() !== undefined ? { permissionMode: getOperatorPermissionMode() } : {}),
     createSession: createTelegramSessionFactory({
       config,
       frameworkBase,
