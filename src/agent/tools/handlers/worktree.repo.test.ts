@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
-import { join, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 import { createWorktreeHandler } from './worktree.js';
@@ -105,7 +105,7 @@ describe('worktree explicit repo (#3755)', () => {
       expect(result.isError).toBe(true);
       expect(result.content).toContain('outside .afk-worktrees/');
     }
-    expect(await git(repo, 'rev-parse', '--show-toplevel')).toBe(repo);
+    expect(resolve(await git(repo, 'rev-parse', '--show-toplevel'))).toBe(resolve(repo));
   });
 
   it('retains dirty, ignored-local-state and commits-ahead removal guards with explicit repo', async () => {
