@@ -125,6 +125,13 @@ export function classifyDoneEvidence(
       // so a verification that ran BEFORE it is not counted as post-mutation.
       if (isVerificationCommand(e.input)) {
         lastVerificationIndex = i;
+        // A bash command can match a verification pattern AND also write to disk
+        // (e.g. `pnpm test > results.txt`, `pnpm test 2>&1 | tee log.txt`).
+        // When classifyBashCommand considers it mutating, advance lastMutationIndex
+        // too — so the verification no longer counts as post-mutation confirmation.
+        if (classifyBashCommand(e.input).mutating) {
+          lastMutationIndex = i;
+        }
       } else if (classifyBashCommand(e.input).mutating) {
         lastMutationIndex = i;
       }
