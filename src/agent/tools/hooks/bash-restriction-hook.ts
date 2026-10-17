@@ -403,7 +403,7 @@ function isStdoutOnlyCat(tokens: readonly string[]): boolean {
   // -e (show ends+nonprint), -n (number), -s (squeeze), -t (show tabs+nonprint),
   // -u (unbuffered), -v (show-nonprinting).  Long opts (`--number`, etc.) are
   // not needed here because the tokenizer leaves them as separate tokens.
-  return tokens[0] === 'cat' && tokens.slice(1).every((t) => /^-[AbenrstuveV]*$/.test(t));
+  return tokens[0] === 'cat' && tokens.slice(1).every((t) => /^-[Abenstuve]*$/.test(t));
 }
 
 /**
