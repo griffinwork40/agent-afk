@@ -127,6 +127,14 @@ describe('execution hardening', () => {
     expect(planGitRead({ subcommand: 'branch', args: ['--format=%(refname) %(objectname:short)', '--sort=refname'] }, CWD).ok).toBe(true);
   });
 
+  it('%(contents:signature) raw-text format is allowed (no gpg invocation)', () => {
+    // %(contents:signature) emits the raw PGP block stored in the tag object —
+    // it does NOT invoke gpg.program. Only %(signature) / %G… run the verifier.
+    // This test confirms the policy does not over-block the raw-text variant.
+    expect(planGitRead({ subcommand: 'tag', args: ['--format=%(contents:signature)'] }, CWD).ok).toBe(true);
+    expect(planGitRead({ subcommand: 'log', args: ['--format=%(contents:signature)'] }, CWD).ok).toBe(true);
+  });
+
   it('env pins GIT_PAGER/PAGER/GIT_EDITOR and drops inherited GIT_* overrides', () => {
     const DROPPED = [
       'GIT_DIR', 'GIT_EXTERNAL_DIFF', 'GIT_CONFIG_PARAMETERS', 'GIT_SSH_COMMAND', 'GIT_EXEC_PATH',

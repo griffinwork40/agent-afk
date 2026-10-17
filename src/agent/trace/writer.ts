@@ -344,7 +344,7 @@ export class NdjsonTraceWriter implements TraceWriter {
    * falls through to this backstop.
    */
   sealOnProcessExit(): void {
-    if (this.sealRecordPersisted || this.seq === 0) return;
+    if (this.sealRecordPersisted || this.sealing || this.seq === 0) return;
     this.sealed = true;
     liveTraceWriters.delete(this);
     try {
