@@ -49,9 +49,12 @@ export interface WakeIdleDeps {
 export function wakeIdleSessionImpl(route: TelegramRoute, deps: WakeIdleDeps): void {
   const key = routeKey(route);
   if (deps.isClaimed(key)) return;
-  // Snapshot the session synchronously; if none exists the route is idle.
+  // Snapshot the session synchronously; if none exists for this route there is
+  // nothing to wake — early-return so we never create a brand-new session just
+  // to carry a synthetic auto-resume turn.
   const existing = deps.sessionManager.getSessionIfExists(route);
-  if (existing && existing.state !== 'idle') return;
+  if (!existing) return;
+  if (existing.state !== 'idle') return;
   // A queued real message will carry the injection — no synthetic turn needed.
   const q = deps.messageQueues.get(key);
   if (q && q.length > 0) return;

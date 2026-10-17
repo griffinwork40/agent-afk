@@ -14,10 +14,7 @@ import type { Context } from 'telegraf';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 
 const { mockStreamResponse } = vi.hoisted(() => ({
-  mockStreamResponse: vi.fn<
-    [Context, unknown, string | ContentBlockParam[], ...unknown[]],
-    Promise<void>
-  >(async () => { /* no-op */ }),
+  mockStreamResponse: vi.fn<(ctx: Context, session: unknown, content: string | ContentBlockParam[], ...rest: unknown[]) => Promise<void>>(async () => { /* no-op */ }),
 }));
 
 vi.mock('../streaming.js', () => ({ streamResponse: mockStreamResponse }));
@@ -41,7 +38,7 @@ function makeSessionManager(state: 'idle' | 'streaming' = 'idle'): SessionManage
     }),
     getSessionIfExists: vi.fn().mockReturnValue(
       state === 'idle'
-        ? undefined // no existing session — definitely idle
+        ? { state: 'idle', sessionId: 'idle-wake-test-session' }
         : { state, sessionId: 'busy-session' },
     ),
     resetSession: vi.fn(),
@@ -172,7 +169,7 @@ describe('MessageHandler.wakeIdleSession (#3839)', () => {
     // We use a long-running mock to keep the claim held.
     let releaseTurn!: () => void;
     mockStreamResponse.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { releaseTurn = resolve; }),
+      (_ctx, _sess, _content) => new Promise<void>((resolve) => { releaseTurn = resolve; }),
     );
 
     // Start a turn that claims the slot.
@@ -196,6 +193,17 @@ describe('MessageHandler.wakeIdleSession (#3839)', () => {
     const handler = makeHandler(sm);
 
     handler.wakeIdleSession({ chatId: 9999 });
+
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire when no session exists for the route', () => {
+    const sm = makeSessionManager('idle');
+    // Override: no session exists for this route.
+    (sm.getSessionIfExists as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+    const handler = makeHandler(sm);
+
+    handler.wakeIdleSession({ chatId: 5555 });
 
     expect(mockStreamResponse).not.toHaveBeenCalled();
   });
