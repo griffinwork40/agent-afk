@@ -25,7 +25,9 @@
  *     symlink to a secret cannot bypass it. System config like `/etc/hosts`
  *     is intentionally NOT blocked — reading it is a supported use case, and
  *     neither is `~/.afk/config/mcp.json` (shared exact-file carve-out with the
- *     typed read tools — see `READ_ALLOWLIST_REL`).
+ *     typed read tools — see `READ_ALLOWLIST_REL`), nor an SSH public key
+ *     (a direct `*.pub` child of `~/.ssh`, symlink-resolved — the typed
+ *     tools' `SSH_PUBKEY_SUFFIX` pattern carve-out).
  *   - Non-regular files (devices/FIFOs) and directories warn + skip, so a
  *     `@/dev/random` reference cannot hang the read.
  *   - Missing / unreadable targets warn + skip; the `@` token is left in the
@@ -35,12 +37,13 @@
  */
 
 import { readFileSync, statSync } from 'fs';
-import { extname, join } from 'path';
+import { basename, dirname, extname, join } from 'path';
 import { homedir } from 'os';
 import { resolveQuery } from '../../multi-line-reader.js';
 import { safeRealpath } from '../../../agent/tools/handlers/write-denylist.js';
 import { READ_ALLOWLIST_REL, isReadDenied } from '../../../agent/tools/handlers/read-denylist.js';
 import { pathIsWithin } from '../../../agent/tools/fs-case.js';
+import { isSshPubKeyChild } from '../../../agent/tools/handlers/read-denylist-carveout.js';
 
 /** Per-file injection ceiling. Files larger than this are skipped with a warning. */
 export const AT_FILE_MAX_SIZE_BYTES = 100 * 1024;
@@ -142,14 +145,41 @@ function isSensitiveRead(
   realPath: string,
   sensitiveDirs: readonly string[],
   allowedFiles: readonly string[],
+  sshDir: string,
 ): boolean {
   // An allowlisted file is sensitive iff the read denylist re-denies it.
   if (allowedFiles.includes(realPath)) return isReadDenied(realPath).denied;
+  if (isInjectablePubKey(realPath, sshDir, sensitiveDirs)) return isReadDenied(realPath).denied;
   if (SENSITIVE_RE.test(realPath)) return true;
   for (const dir of sensitiveDirs) {
     if (pathIsWithin(realPath, dir)) return true;
   }
   return false;
+}
+
+/**
+ * The typed read denylist's SSH public-key pattern carve-out
+ * (`SSH_PUBKEY_SUFFIX`), resolved against this module's injectable home.
+ *
+ * Invariant: same rule as `isReadDenied` — `realPath` is fully dereferenced and
+ * must be a DIRECT `*.pub` child of the resolved `<home>/.ssh` (so a
+ * `foo.pub -> id_rsa` symlink is judged as `id_rsa`), and the carve-out is
+ * dropped entirely when that ssh dir itself resolves into another secret store
+ * (`SENSITIVE_RE` on its parent, or any `SENSITIVE_DIRS_REL` entry) — fail
+ * closed, mirroring `gateSshPubKeyDir`. The caller still consults
+ * `isReadDenied`, so an `AFK_READ_DENYLIST` re-deny wins here too.
+ */
+function isInjectablePubKey(
+  realPath: string,
+  sshDir: string,
+  sensitiveDirs: readonly string[],
+): boolean {
+  if (!isSshPubKeyChild(realPath, sshDir)) return false;
+  // Judge the dir the carve-out lives in, minus its own `.ssh` leaf: a
+  // `~/.ssh -> ~/.gnupg` link resolves to a dir SENSITIVE_RE flags by name.
+  const outer = basename(sshDir) === '.ssh' ? dirname(sshDir) : sshDir;
+  if (SENSITIVE_RE.test(outer)) return false;
+  return !sensitiveDirs.some((dir) => pathIsWithin(sshDir, dir));
 }
 
 const EXT_TO_LANG: Record<string, string> = {
@@ -228,6 +258,7 @@ export function expandAtFileTokens(
   // Exact-file carve-outs inside those dirs, resolved against the SAME
   // effective home so an injected `homeDir` (tests) stays consistent.
   const allowedFiles = READ_ALLOWLIST_REL.map((f) => safeRealpath(join(home, f)));
+  const sshDir = safeRealpath(join(home, '.ssh'));
   const fileBlocks: AtFileBlock[] = [];
   const warnings: string[] = [];
   const seen = new Set<string>();
@@ -243,7 +274,7 @@ export function expandAtFileTokens(
     if (seen.has(realPath)) continue;
     seen.add(realPath);
 
-    if (isSensitiveRead(realPath, sensitiveDirs, allowedFiles)) {
+    if (isSensitiveRead(realPath, sensitiveDirs, allowedFiles, sshDir)) {
       warnings.push(`@${rawPath}: sensitive path, not injected`);
       continue;
     }

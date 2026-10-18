@@ -130,6 +130,25 @@ jobs:
         # sealer directly, so the existing suite would not catch the fork.
         run: pnpm audit:module-state:check
 
+      - name: Audit new copy-paste clones (jscpd, ratchet against base ref)
+        # Fails only on NEW clones whose fragments overlap lines ADDED in
+        # this PR's diff. jscpd fingerprints are content-keyed, so editing
+        # both halves of an existing grandfathered clone identically would
+        # produce a "new" fingerprint — scripts/check-new-clones.ts filters
+        # those false positives by intersecting new-clone ranges with the
+        # git diff. No committed baseline file, so parallel PRs never
+        # merge-race on one. A pure file move or rename is not a new clone.
+        # The default checkout is shallow and has no base ref, so fetch
+        # just its tip here. This runs AFTER the filesize/funcsize --changed-vs
+        # steps on purpose: fetching earlier would silently activate their
+        # TOUCHED check, which is a separate policy call (see that step).
+        # Intentional duplication: wrap it in `// jscpd:ignore-start` /
+        # `// jscpd:ignore-end` with a reason comment. List all clones with
+        # `pnpm audit:clones`.
+        run: |
+          git fetch --no-tags --depth=1 origin +${{ github.base_ref || 'main' }}:refs/remotes/origin/${{ github.base_ref || 'main' }}
+          CLONE_GATE_BASE_REF=origin/${{ github.base_ref || 'main' }} pnpm audit:clones:check
+
       - name: Audit vendored/bundled hash pins are unstale (#775)
         # `fix:pins:check` (scripts/update-hash-pins.ts --check) re-hashes the
         # vendored/bundled files on disk and independently re-derives, via its

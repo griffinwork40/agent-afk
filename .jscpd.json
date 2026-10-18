@@ -1,0 +1,13 @@
+{
+  "path": ["src", "scripts"],
+  "format": ["typescript"],
+  "minTokens": 80,
+  "minLines": 10,
+  "ignore": [
+    "**/*.test.ts",
+    "**/__fixtures__/**",
+    "**/__test-utils__/**",
+    "**/*.d.ts"
+  ],
+  "reporters": ["console"]
+}
