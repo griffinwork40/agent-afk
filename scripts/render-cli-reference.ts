@@ -12,6 +12,7 @@ import { registerConfigCommand } from '../src/cli/commands/config-command.js';
 import { registerDaemonCommand } from '../src/cli/commands/daemon.js';
 import { registerWebCommand } from '../src/cli/commands/web.js';
 import { registerQueueCommand } from '../src/cli/commands/queue.js';
+import { registerEventsCommand } from '../src/cli/commands/events.js';
 import { registerLoginCommand } from '../src/cli/commands/login-command.js';
 import { registerPluginCommand } from '../src/cli/commands/plugin.js';
 import { registerMarketplaceCommand } from '../src/cli/commands/marketplace.js';
@@ -54,6 +55,7 @@ export function buildCli(): Command {
   registerDaemonCommand(program);
   registerWebCommand(program);
   registerQueueCommand(program);
+  registerEventsCommand(program);
   registerInteractiveCommand(program);
   registerLoginCommand(program);
   registerPluginCommand(program);
