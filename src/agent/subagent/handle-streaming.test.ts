@@ -1669,7 +1669,7 @@ describe('SubagentHandle streaming', () => {
       );
     }
 
-    it('forwards usage and cost from msg.metadata.totalCostUsd on success', async () => {
+    it('forwards usage and cost from billingContext.cumulativeCostUsd on success', async () => {
       const onSucceeded = vi.fn();
       const finalMessage: Message = {
         role: 'assistant',
@@ -1714,6 +1714,30 @@ describe('SubagentHandle streaming', () => {
 
       expect(onSucceeded).toHaveBeenCalledTimes(1);
       const costArg = onSucceeded.mock.calls[0]![1];
+      expect(costArg).toBeUndefined();
+    });
+
+    it('ignores a negative totalCostUsd value (defense-in-depth guard)', async () => {
+      const onSucceeded = vi.fn();
+      const finalMessage: Message = {
+        role: 'assistant',
+        content: 'negative cost response',
+        timestamp: new Date(),
+        metadata: {
+          usage: { inputTokens: 10, outputTokens: 5 },
+          totalCostUsd: -0.001, // negative — must be rejected by the >= 0 guard
+          stopReason: 'end_turn',
+        },
+      };
+      const handle = buildHandleWithRollup(finalMessage, onSucceeded, {
+        input_tokens: 10,
+        output_tokens: 5,
+      });
+      await handle.run('p');
+
+      expect(onSucceeded).toHaveBeenCalledTimes(1);
+      const costArg = onSucceeded.mock.calls[0]![1];
+      // Negative value must be dropped; cumulativeCostUsd stays undefined.
       expect(costArg).toBeUndefined();
     });
 

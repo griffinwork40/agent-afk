@@ -160,8 +160,10 @@ describe('live frame margin under AFK_CENTER_CONTENT (compositor owns the margin
 
   it('centered picker: a label wider than the band does not wrap or land at col 0', async () => {
     // A label wider than the content band (100 cols) but within the terminal
-    // (200 cols) must be truncated before withMargin is applied, so the row
-    // still starts at MARGIN and does not autowrap.
+    // (200 cols). withMargin (frame.lines.ts) prepends the margin without
+    // truncation; the row fits because 120 + margin + prefix stays under the
+    // 200-col terminal width, so no autowrap occurs. Band-width truncation
+    // itself is deferred — see #3765.
     const wideLabel = 'W'.repeat(120); // 120 > band (100), < terminal (200)
     const { rows } = await scenario(true, (c) => {
       const state: PickerState = { cursor: 0, scrollOffset: 0, filterQuery: '', filteredResults: [], selected: new Set() };

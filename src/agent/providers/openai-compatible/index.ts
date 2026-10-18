@@ -47,6 +47,7 @@ import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspac
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
+import { grantsWorkspacePrompt, providerGrantsTool } from '../shared/tool-grant.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
 import { applyReadOnlyGitPermissions, readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
@@ -313,7 +314,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const spw = buildSystemPromptWiring({
       config,
       skillExecutor: this.providerOpts.skillExecutor ?? undefined,
-      hasWorkspaceStore: this.workspaceStore !== undefined,
+      workspacePromptEnabled: grantsWorkspacePrompt((toolName) => this.grantsTool(toolName)),
       readOnlyMemory: this.providerOpts.readOnlyMemory,
       readOnlyState: this.providerOpts.readOnlyState,
       resolvedSessionId: resolvedSession.id,
@@ -538,6 +539,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
     return this.grantManager.getGrants();
+  }
+
+  /** See {@link ModelProvider.grantsTool}. Same permissions + store the dispatcher uses. */
+  grantsTool(toolName: string): boolean {
+    return providerGrantsTool(toolName, this.providerOpts.permissions, this.workspaceStore !== undefined);
   }
 
   close(): void {

@@ -408,11 +408,16 @@ export function setupPeerBoundary(
   // which is correct but surprising — surface it once so the operator knows.
   if (steerMode === 'boundary') {
     const comp = surface.getCompositor() as BoundaryCompositor | null;
-    if (comp && !comp.peekQueuedText) {
-      process.stderr.write(
-        '[afk] warning: AFK_STEER_MODE=boundary is set but the compositor does not expose ' +
-        'peekQueuedText — mid-turn human-queue drain will be inactive.\n',
-      );
+    if (comp) {
+      const missing: string[] = [];
+      if (!comp.peekQueuedText) missing.push('peekQueuedText');
+      if (!comp.dropQueued) missing.push('dropQueued');
+      if (missing.length > 0) {
+        process.stderr.write(
+          '[afk] warning: AFK_STEER_MODE=boundary is set but the compositor does not expose ' +
+          `${missing.join(', ')} — mid-turn human-queue drain will be inactive.\n`,
+        );
+      }
     }
   }
   const opts: PeerBoundaryOpts = {

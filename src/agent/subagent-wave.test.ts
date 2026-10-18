@@ -40,7 +40,7 @@ vi.mock('./session.js', () => {
     private mockInputStreamMessages: string[] = [];
 
     constructor(config: Record<string, unknown>) {
-      this.sessionId = (config.sessionId as string | undefined) ?? 'child-session-id';
+      this.sessionId = (config['sessionId'] as string | undefined) ?? 'child-session-id';
       this.state = { config, replyContent: '', replyDelayMs: 0 };
       this.sendMessage = vi.fn(async (content: string): Promise<Message> => {
         if (this.state.replyDelayMs > 0) {
@@ -72,12 +72,13 @@ vi.mock('./session.js', () => {
       });
       // Streaming version: handle delays and emit message then done
       // First try to call sendMessage to match its mocking behavior
+      const self = this;
       this.sendMessageStream = vi.fn(async function* (content: string) {
         // Call sendMessage to trigger any mocked rejections
-        const result = await this.sendMessage(content);
+        const result = await self.sendMessage(content);
         yield { type: 'message', message: result };
         yield { type: 'done' };
-      }.bind(this));
+      });
       shared.sessions.push({
         state: this.state,
         sendMessage: this.sendMessage,
@@ -87,7 +88,7 @@ vi.mock('./session.js', () => {
     }
 
     get abortSignal(): AbortSignal {
-      return (this.state.config.abortSignal as AbortSignal) ?? new AbortController().signal;
+      return (this.state.config['abortSignal'] as AbortSignal) ?? new AbortController().signal;
     }
 
     getInputStreamRef() {
@@ -104,14 +105,20 @@ vi.mock('./session.js', () => {
 // Import AFTER vi.mock is registered so SubagentManager picks up the mock.
 import { SubagentManager } from './subagent.js';
 import { runWave } from './subagent/wave.js';
+import type { ForkSubagentOptions } from './subagent/fork-types.js';
+
+/** Cast stub args to satisfy strict ForkSubagentOptions in tests. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const stubOpts = (o: { parent: { sessionId: string }; config: Record<string, unknown>; [k: string]: unknown }) =>
+  o as unknown as ForkSubagentOptions<unknown>;
 
 describe('runWave', () => {
   it('resolves with one SubagentResult per task, in task order, when all succeed', async () => {
     const mgr = new SubagentManager();
     shared.sessions.length = 0;
-    const h1 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
-    const h2 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
-    const h3 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
+    const h1 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
+    const h2 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
+    const h3 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
 
     const results = await runWave([
       { handle: h1, prompt: 'a' },
@@ -138,8 +145,8 @@ describe('runWave', () => {
 
     const mgr = new SubagentManager({ hookRegistry: registry });
     shared.sessions.length = 0;
-    const h1 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
-    const h2 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
+    const h1 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
+    const h2 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
 
     await runWave([
       { handle: h1, prompt: 'a' },
@@ -155,9 +162,9 @@ describe('runWave', () => {
   it('does NOT short-circuit when one task fails — aggregate preserves partial successes', async () => {
     const mgr = new SubagentManager();
     shared.sessions.length = 0;
-    const h1 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
-    const h2 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
-    const h3 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
+    const h1 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
+    const h2 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
+    const h3 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
 
     // Middle task fails.
     shared.sessions[1]!.sendMessage.mockRejectedValueOnce(new Error('nope'));
@@ -180,14 +187,14 @@ describe('runWave', () => {
   it('fail-fast cancels still-running peers when any task fails', async () => {
     const mgr = new SubagentManager();
     shared.sessions.length = 0;
-    const hFast = await mgr.forkSubagent({
+    const hFast = await mgr.forkSubagent(stubOpts({
       parent: { sessionId: 'p' },
       config: { model: 'sonnet' },
-    });
-    const hSlow = await mgr.forkSubagent({
+      }));
+    const hSlow = await mgr.forkSubagent(stubOpts({
       parent: { sessionId: 'p' },
       config: { model: 'sonnet' },
-    });
+      }));
 
     // Fast task fails immediately; slow task would take 200ms if allowed to run.
     shared.sessions[0]!.sendMessage.mockRejectedValueOnce(new Error('fast-fail'));
@@ -213,14 +220,14 @@ describe('runWave', () => {
   it('failFast: false lets peers run to natural completion', async () => {
     const mgr = new SubagentManager();
     shared.sessions.length = 0;
-    const hFast = await mgr.forkSubagent({
+    const hFast = await mgr.forkSubagent(stubOpts({
       parent: { sessionId: 'p' },
       config: { model: 'sonnet' },
-    });
-    const hSlow = await mgr.forkSubagent({
+      }));
+    const hSlow = await mgr.forkSubagent(stubOpts({
       parent: { sessionId: 'p' },
       config: { model: 'sonnet' },
-    });
+      }));
 
     shared.sessions[0]!.sendMessage.mockRejectedValueOnce(new Error('fast-fail'));
     shared.sessions[1]!.state.replyDelayMs = 50;
@@ -249,8 +256,8 @@ describe('runWave', () => {
 
     const mgr = new SubagentManager({ hookRegistry: registry });
     shared.sessions.length = 0;
-    const h1 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
-    const h2 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
+    const h1 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
+    const h2 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
 
     await runWave(
       [
@@ -279,10 +286,10 @@ describe('runWave', () => {
 
     const mgr = new SubagentManager({ hookRegistry: registry });
     shared.sessions.length = 0;
-    const handle = await mgr.forkSubagent({
+    const handle = await mgr.forkSubagent(stubOpts({
       parent: { sessionId: 'p' },
       config: { model: 'sonnet' },
-    });
+      }));
 
     const results = await runWave([{ handle, prompt: 'solo' }]);
 
@@ -296,7 +303,7 @@ describe('runWave', () => {
     shared.sessions.length = 0;
     const handles = await Promise.all(
       [0, 1, 2, 3, 4].map(() =>
-        mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }),
+        mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } })),
       ),
     );
 
@@ -335,7 +342,7 @@ describe('runWave', () => {
       shared.sessions.length = 0;
       const handles = await Promise.all(
         [0, 1, 2, 3].map(() =>
-          mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }),
+          mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } })),
         ),
       );
 
@@ -363,12 +370,53 @@ describe('runWave', () => {
     }
   });
 
+  it('explicit maxConcurrency beats provider in RunWaveOptions', async () => {
+    // When both maxConcurrency and provider are supplied, the explicit numeric
+    // cap must win — the per-provider env lookup is skipped entirely because
+    // the destructuring default is never evaluated.
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC', '1');
+    try {
+      const mgr = new SubagentManager();
+      shared.sessions.length = 0;
+      const handles = await Promise.all(
+        [0, 1, 2].map(() =>
+          mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } })),
+        ),
+      );
+
+      let live = 0;
+      let peak = 0;
+      for (const s of shared.sessions) {
+        s.sendMessage.mockImplementation(async (content: string): Promise<Message> => {
+          live++;
+          peak = Math.max(peak, live);
+          await new Promise((r) => setTimeout(r, 20));
+          live--;
+          return { role: 'assistant', content: `ok:${content}`, timestamp: new Date() };
+        });
+      }
+
+      // maxConcurrency: 3 should override the per-provider cap of 1.
+      const results = await runWave(
+        handles.map((handle, i) => ({ handle, prompt: `p${i}` })),
+        { maxConcurrency: 3, provider: 'anthropic-direct' },
+      );
+
+      expect(results).toHaveLength(3);
+      expect(results.every((r) => r?.status === 'succeeded')).toBe(true);
+      // All three ran concurrently — the provider cap of 1 was NOT used.
+      expect(peak).toBe(3);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('fail-fast skips still-QUEUED peers behind maxConcurrency — no wasted provider call', async () => {
     const mgr = new SubagentManager();
     shared.sessions.length = 0;
-    const h0 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
-    const h1 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
-    const h2 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
+    const h0 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
+    const h1 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
+    const h2 = await mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }));
 
     // Task 0 fails immediately. With maxConcurrency: 1, tasks 1 and 2 never
     // start until a worker frees up — they are QUEUED, not running, when
@@ -399,7 +447,7 @@ describe('runWave', () => {
     shared.sessions.length = 0;
     const handles = await Promise.all(
       [0, 1, 2, 3].map(() =>
-        mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }),
+        mgr.forkSubagent(stubOpts({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } })),
       ),
     );
 

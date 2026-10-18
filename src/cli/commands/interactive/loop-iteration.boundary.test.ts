@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AdmissionQueue } from '../../../agent/peer/admission-queue.js';
-import { installPeerBoundary, reinstallPeerBoundary, applyDeferPeers, resolveSteerMode } from './loop-iteration.boundary.js';
+import { installPeerBoundary, reinstallPeerBoundary, applyDeferPeers, resolveSteerMode, setupPeerBoundary } from './loop-iteration.boundary.js';
 import type { InjectionSource } from './loop-iteration.injections.js';
 
 // ── Minimal fakes ────────────────────────────────────────────────────────────
@@ -1344,6 +1344,48 @@ describe('consumeEnvelopes synchronous-callback invariant (#2901 medium)', () =>
     expect(notifier.hasPendingInjections()).toBe(false);
     // A second drain returns empty.
     expect(notifier.drainInjections()).toBe('');
+  });
+});
+
+describe('setupPeerBoundary capability warning', () => {
+  it.each([
+    { mode: 'boundary', missing: 'dropQueued', peek: true, drop: false },
+    { mode: 'boundary', missing: 'peekQueuedText, dropQueued', peek: false, drop: false },
+    { mode: 'boundary', missing: '', peek: true, drop: true },
+    { mode: 'turn-end', missing: '', peek: true, drop: false },
+  ])('mode=$mode peek=$peek drop=$drop warns only for missing boundary capabilities', ({ mode, missing, peek, drop }) => {
+    const orig = process.env['AFK_STEER_MODE'];
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      process.env['AFK_STEER_MODE'] = mode;
+      const session = makeSession();
+      const compositor = {
+        hasPendingSubmission: () => false,
+        ...(peek ? { peekQueuedText: () => undefined } : {}),
+        ...(drop ? { dropQueued: () => 0 } : {}),
+      };
+      const boundary = setupPeerBoundary(
+        { session: { current: session } } as never,
+        { getCompositor: () => compositor } as never,
+        makePeerNotifier() as never,
+        () => false,
+      );
+      // Reinstall and tool-round callbacks must not repeat the setup warning.
+      boundary.reinstall();
+      expect(session.invokeCallback()).toBeUndefined();
+      if (missing) {
+        expect(stderr).toHaveBeenCalledExactlyOnceWith(
+          '[afk] warning: AFK_STEER_MODE=boundary is set but the compositor does not expose ' +
+          `${missing} — mid-turn human-queue drain will be inactive.\n`,
+        );
+      } else {
+        expect(stderr).not.toHaveBeenCalled();
+      }
+    } finally {
+      stderr.mockRestore();
+      if (orig === undefined) delete process.env['AFK_STEER_MODE'];
+      else process.env['AFK_STEER_MODE'] = orig;
+    }
   });
 });
 

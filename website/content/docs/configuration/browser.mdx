@@ -1,217 +1,55 @@
 ---
-title: "Browser Control"
-description: "Drive a real Chromium browser from the agent using five native tools. Covers setup, the tool surface, domain policies, and configuration."
+title: "Use a browser with AFK"
+description: "Browse with isolated Playwright sessions, save a login in the session vault, or connect your own Chrome profile."
 ---
 
-`agent-afk` ships five native tools for driving a real Chromium browser. Each session gets its own isolated browser context. Subagents share the parent session's context.
+AFK's native `browser_*` tools use Playwright Chromium in an isolated context. Use them for ordinary web tasks, or save a browser login when an unattended run must access a signed-in site. Your regular Chrome profile is separate; connect it through Chrome DevTools MCP only when you want the agent to act inside your own browser.
 
-## Prerequisites
+## Start browsing
 
-The Playwright Node package ships as a regular dependency and is installed with
-`pnpm install`. The ~300 MB Chromium binaries are not bundled — install them
-once before using a browser tool:
+<Steps>
+<Step>Install the Playwright Chromium binary once with `pnpm exec playwright install chromium` in a source checkout, or use the install hint returned by `browser_open` if the browser binary is missing.</Step>
+<Step>Start `afk i` and ask the agent to open a site. `browser_open` navigates, `browser_observe` returns actionable elements, and `browser_act` interacts with them.</Step>
+<Step>Use `browser_screenshot` for visual inspection and `browser_close` when the session is done.</Step>
+</Steps>
 
-```bash
-pnpm exec playwright install chromium
-```
+`browser_act` prefers visible text and ARIA roles. Use an `element_id` from the latest observation to disambiguate duplicate labels; IDs are not stable across observations. Domain restrictions configured with `AFK_BROWSER_ALLOWED_DOMAINS` and `AFK_BROWSER_BLOCKED_DOMAINS` also apply to navigation. The blocklist wins over the allowlist.
 
-## Quick start
+## Save an authenticated session
 
-```bash
-# Install Chromium binaries (one-time)
-pnpm exec playwright install chromium
+<Steps>
+<Step>Run `afk browser login https://example.com/login --profile work` from an interactive terminal. AFK opens a headed Playwright window.</Step>
+<Step>Log in yourself in that window, then return to the terminal and press Enter. The command saves the browser's storage state in a profile vault and closes the window.</Step>
+<Step>Set `AFK_BROWSER_DEFAULT_PROFILE=work` for later agent runs. Check available profiles with `afk browser profiles`.</Step>
+</Steps>
 
-# Start the REPL and ask the agent to browse
-afk
-> Open github.com and tell me what's on the homepage.
-```
+Profiles contain cookies and tokens. Storage state is saved under AFK's state root with restrictive `0600` file permissions and restored when that profile is opened by the native browser tools. Established profiles are refreshed on close. An unset default profile starts fresh unless you previously saved a profile named `default`. Login requires a human; the agent does not silently create an authenticated vault. The login browser follows AFK's guarded egress policy. For an unattended run that needs a new login or human decision, the agent should stop, ask through the available elicitation channel, and notify rather than claim it authenticated on its own. See [Unattended runs](/guides/unattended-runs).
 
-The agent issues `browser_open` → `browser_observe` → additional actions under
-the hood. In REPL mode, Chromium is headless by default — the CLI entrypoint
-reports surface `afk`, which is in the headless set. Set `AFK_BROWSER_HEADLESS=0`
-to open a visible window and watch the agent work.
+<Callout type="warn">
+A saved browser profile is a credential. Do not commit, copy into a prompt, or share its storage state file. A login may expire and require another human login.
+</Callout>
 
-## The five tools
+## Use your own Chrome instead
 
-| Tool | Purpose |
-|------|---------|
-| `browser_open` | Navigate to a URL and return a page observation |
-| `browser_observe` | Re-snapshot the current page without navigating |
-| `browser_act` | Click, fill, press, select, hover, scroll, or wait |
-| `browser_screenshot` | Capture a PNG of the viewport or a specific element |
-| `browser_close` | Tear down the current session's browser context |
+`afk browser connect` registers `chrome-devtools-mcp` in your MCP config for a Chrome 144 or newer profile. Enable remote debugging at `chrome://inspect/#remote-debugging`, then accept Chrome's consent prompt when the agent connects. Run `/mcp` to inspect the connection. `afk browser disconnect` removes the registration. This path grants access to your real signed-in profile; use it only when intended. The native Playwright tools continue to use an isolated browser, not your Chrome profile.
 
-All five appear in `afk --help` once the package is built, alongside `bash`,
-`read_file`, and other tools.
+## Configuration and limitations
 
-### Targeting elements in `browser_act`
+| Variable | Effect |
+|---|---|
+| `AFK_BROWSER_HEADLESS=0` | Show a visible window for native browser tools. The default is headless. |
+| `AFK_BROWSER_DEFAULT_PROFILE` | Restore a named saved vault profile. |
+| `AFK_BROWSER_ALLOWED_DOMAINS` | Restrict navigation to comma-separated host globs. |
+| `AFK_BROWSER_BLOCKED_DOMAINS` | Refuse matching host globs even if allowed. |
+| `AFK_BROWSER_DOM_SNAPSHOTS=1` | Save DOM snapshots with browser witness data. |
+| `AFK_BROWSER_CONFIG` | Point to an alternate browser JSON configuration file. |
 
-`browser_act` accepts three target shapes:
+Playwright is the **only native browser backend**. `AFK_BROWSER_BACKEND=auto` (the default) and `playwright` both choose Playwright. The old value `agent-browser` is accepted only for compatibility: it warns and resolves to Playwright, not to a second backend. Browser observations and screenshots are recorded as witness sidecars; password-shaped tool input is redacted from witness metadata, but the page receives what you entered.
 
-```jsonc
-// Preferred — by visible label and ARIA role.
-{ "kind": "semantic", "text": "Sign in", "role": "button" }
+## Related
 
-// For unambiguous follow-up on an element from a recent observation.
-{ "kind": "element_id", "element_id": "el_a1b2c3" }
-
-// Escape hatch when the page has no accessible labels.
-{ "kind": "selector", "selector": "button.primary[type=submit]" }
-```
-
-When a semantic target matches two or more elements, the tool returns an error
-with a disambiguation list of up to five candidates. The agent retries using
-`element_id`. Nothing silently picks among ambiguous matches.
-
-Element IDs are stable **within one observation** only. Re-observe after any
-DOM mutation to get fresh IDs.
-
-## Configuration
-
-All browser environment variables are optional.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AFK_BROWSER_HEADLESS` | headless | `1` forces headless; `0` forces headed. Defaults to headless on every surface — the CLI entrypoint reports surface `afk`, so the REPL is headless too. Headed is opt-in via `0`. Note the two modes use different chromium downloads (`chromium-*` vs `chromium_headless_shell-*`), so a cache that satisfies one can fail the other. |
-| `AFK_BROWSER_ALLOWED_DOMAINS` | (empty — permissive) | Comma-separated host globs. Non-matching navigation is blocked. |
-| `AFK_BROWSER_BLOCKED_DOMAINS` | (empty) | Comma-separated host globs. Matching navigation is blocked regardless of the allowlist. |
-| `AFK_BROWSER_DOM_SNAPSHOTS` | off | `1` writes a gzipped DOM snapshot per `browser_act` to `~/.afk/state/witness/<sid>/browser/dom-snapshots/`. |
-| `AFK_BROWSER_BACKEND` | `auto` | Browser provider backend. `playwright` or `auto` (default) — both use Playwright. The legacy value `agent-browser` is accepted but deprecated and resolves to Playwright with a warning. |
-| `AFK_BROWSER_CONFIG` | (none) | Absolute path to a JSON config file that overrides env-derived settings. |
-| `AFK_SESSION_ID` | `default` | Override the per-session BrowserContext key. Set when running multiple concurrent AFK processes that need isolated browser contexts. |
-
-### Domain policy
-
-```bash
-export AFK_BROWSER_ALLOWED_DOMAINS="github.com,*.atlassian.net"
-export AFK_BROWSER_BLOCKED_DOMAINS="*.ads.example.com"
-```
-
-**Block wins over allow.** The match uses simple `*` glob against the URL host —
-not a regex, not a path matcher. When the allowlist is non-empty, any host not
-on the list is refused. When the allowlist is empty (default), only the
-blocklist applies.
-
-A blocked navigation returns an error the agent can read and act on — it tries a different URL instead of crashing.
-
-### JSON config file
-
-For per-project overrides, create `~/.afk/config/browser.json` (or point
-`AFK_BROWSER_CONFIG` at any absolute path):
-
-```json
-{
-  "headless": true,
-  "allowedDomains": ["my-internal-tool.example.com"],
-  "blockedDomains": [],
-  "domSnapshots": false,
-  "backend": "auto"
-}
-```
-
-File values override env-derived values. Arrays replace rather than append.
-
-## Trace and screenshots
-
-Every browser tool emits records to
-`~/.afk/state/witness/<sessionId>/trace.jsonl`:
-
-- `tool_call` — the generic dispatcher record for every tool.
-- `browser_event` — browser-domain semantics: URL transitions, action outcomes,
-  screenshot paths, ambiguity verdicts, policy refusals.
-
-Screenshots are written as sidecar files under
-`~/.afk/state/witness/<sessionId>/browser/screenshots/` and referenced by path
-in the trace — never embedded in the JSONL line.
-
-The witness layer redacts known credential formats (AWS keys, OpenAI bearer
-tokens, GitHub PATs, Slack tokens, JWTs, `password=` form values) before
-persisting. The page receives the real value; only the trace file is redacted.
-
-## Driving your real Chrome (`afk browser`)
-
-The native `browser_*` tools use Playwright against an isolated Chromium instance — they cannot attach to your real, logged-in Chrome profile. The `afk browser` command group wires Google's [`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp) into agent-afk's MCP client so the agent can drive the browser you're already signed into.
-
-### Why not Playwright?
-
-Chrome 136+ refuses `--remote-debugging-port` on the default user-data-dir, and Chrome M144's sanctioned `--autoConnect` consent flow requires Puppeteer's `handleDevToolsAsPage` option, which Playwright lacks. `chrome-devtools-mcp` vendors Puppeteer and implements the `--autoConnect` flow, so wiring it in via MCP is the supported path.
-
-### Subcommands
-
-#### `afk browser connect`
-
-Writes a `chrome-devtools` entry to `~/.afk/config/mcp.json` (idempotent — preserves any other servers you have configured) and prints one-time setup steps.
-
-```bash
-afk browser connect                    # target stable Chrome (default)
-afk browser connect --channel canary   # target Chrome Canary's profile
-```
-
-**Flag:**
-
-| Flag | Values | Default | Description |
-|------|--------|---------|-------------|
-| `--channel <channel>` | `stable`, `beta`, `canary`, `dev` | `stable` | Chrome channel whose default profile `--autoConnect` targets |
-
-The MCP entry written looks like:
-
-```json
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
-      "args": ["chrome-devtools-mcp@latest", "--autoConnect"]
-    }
-  }
-}
-```
-
-Non-stable channels append `--channel <channel>` to that `args` array.
-
-#### `afk browser disconnect`
-
-Removes the `chrome-devtools` entry from `~/.afk/config/mcp.json`.
-
-```bash
-afk browser disconnect
-```
-
-No flags. Safe to run even if the entry is not present (prints a warning and exits cleanly).
-
-### One-time Chrome setup
-
-1. Open `chrome://inspect/#remote-debugging` and **enable** remote debugging.
-2. The first time the agent drives Chrome, click **Allow** on the prompt Chrome shows.
-3. A *"being controlled by automated test software"* banner appears in Chrome while a session is active — that is expected.
-
-**Requirement:** Chrome ≥ 144. The `connect` command detects your installed version and warns if it is too old.
-
-### How it relates to the native browser tools
-
-Once connected, the agent gains `mcp__chrome-devtools__*` tools (`navigate_page`, `click`, `fill`, `take_snapshot`, `take_screenshot`, …) that operate on your real profile. The native `browser_*` tools (Playwright / isolated Chromium) remain available alongside them for throwaway automation that does not need your real logins. Run `/mcp` in the REPL to confirm the `chrome-devtools` server connected.
-
-### Security note
-
-The consent flow is intentionally human-gated and cannot be bypassed: you enable it once at `chrome://inspect`, then approve each new session. While connected, the agent can read and interact with anything in your logged-in profile — only connect when you want it acting as you.
-
-### Known limitation
-
-`chrome-devtools-mcp`'s `take_screenshot` returns an image, but agent-afk's MCP bridge currently text-stubs image results, so those screenshots are not yet visible to the model. Use `take_snapshot` (an accessibility-tree snapshot) as the primary automation surface; it works today.
-
-## Troubleshooting
-
-**`browserType.launch: Executable doesn't exist`** — run
-`pnpm exec playwright install chromium`.
-
-**`Cannot find module 'playwright'`** — run `pnpm install`.
-
-**Navigation blocked by policy** — the agent tried to reach a host outside
-`AFK_BROWSER_ALLOWED_DOMAINS`. Adjust the allowlist or unset it for permissive
-mode.
-
-**Zombie Chromium after a crash** — SIGINT/SIGTERM/exit handlers normally close
-the browser provider. After an ungraceful kill:
-
-```bash
-ps aux | grep chromium | awk '{print $2}' | xargs kill
-```
+<Cards>
+<Card title="Unattended runs" href="/guides/unattended-runs" description="Handle human decisions in automation." />
+<Card title="MCP plugins" href="/guides/mcp-plugins" description="Connect external browser tools and servers." />
+<Card title="Tool reference" href="/reference/tools" description="Look up native browser tool parameters." />
+</Cards>

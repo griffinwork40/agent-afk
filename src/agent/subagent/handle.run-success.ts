@@ -81,10 +81,10 @@ export async function drainAndEmitSuccess(
   // always captures this subagent's contribution even if onTerminal()
   // triggers an immediate session teardown.
   //
-  // Use the cumulative cost accumulated across ALL turns (initial + drain)
-  // from `billingContext.cumulativeCostUsd` (#3882 case 3). The previous
-  // code read `lastMsg.metadata.totalCostUsd`, which is a per-turn figure
-  // and therefore missed every turn except the last in a drained run.
+  // `billingContext.cumulativeCostUsd` accumulates each turn's `totalCostUsd`
+  // across ALL turns (initial + drain) so the full run cost is reported (#3882
+  // case 3). Reading `lastMsg.metadata.totalCostUsd` instead would give only
+  // the final turn's cost, missing every earlier turn in a drained run.
   // `cumulativeCostUsd` is undefined when no provider reports pricing.
   const costUsd = billingContext.cumulativeCostUsd;
   // Billing (#3878) spans every turn of the run, initial + drain turns.

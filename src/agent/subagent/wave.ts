@@ -27,7 +27,8 @@
 
 import type { SubagentHandle } from './handle.js';
 import type { SubagentResult } from './result.js';
-import { settleWithConcurrencyLimit, resolveMaxConcurrentSubagentCalls } from '../concurrency-pool.js';
+import { settleWithConcurrencyLimit } from '../concurrency-pool.js';
+import { resolveMaxConcurrentSubagentCallsForProvider } from '../../config/concurrency.js';
 
 export interface WaveTask<T = unknown> {
   handle: SubagentHandle<T>;
@@ -51,8 +52,24 @@ export interface RunWaveOptions {
    * Max subagent runs in flight at once (each is a forked AgentSession).
    * Bounds a wide wave so it cannot storm memory / the provider rate limit.
    * Default: {@link DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS}; floored at 1.
+   *
+   * When both `provider` and `maxConcurrency` are supplied, `maxConcurrency`
+   * wins — an explicit numeric cap always takes precedence over the env-based
+   * per-provider lookup. This preserves the existing API: callers that already
+   * pass an explicit `maxConcurrency` are unaffected by `provider`.
    */
   maxConcurrency?: number;
+  /**
+   * The canonical provider name (as returned by `providerForModel()`) that the
+   * tasks in this wave will run against — e.g. `'anthropic-direct'` or
+   * `'openai-compatible'`. When set AND `maxConcurrency` is not explicitly
+   * supplied, the resolver checks `AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC`
+   * / `AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI` before falling back to the
+   * global `AFK_MAX_CONCURRENT_SUBAGENT_CALLS`. Defaults to `undefined`
+   * (no per-provider lookup) so existing callers that do not set this field
+   * behave identically to before #3886. Part of #3886.
+   */
+  provider?: string;
 }
 
 /**
@@ -66,7 +83,12 @@ export async function runWave<T = unknown>(
   tasks: ReadonlyArray<WaveTask<T>>,
   options: RunWaveOptions = {},
 ): Promise<SubagentResult<T>[]> {
-  const { failFast = true, teardown = true, maxConcurrency = resolveMaxConcurrentSubagentCalls() } = options;
+  const {
+    failFast = true,
+    teardown = true,
+    provider,
+    maxConcurrency = resolveMaxConcurrentSubagentCallsForProvider(provider),
+  } = options;
   if (tasks.length === 0) return [];
 
   const results = new Array<SubagentResult<T>>(tasks.length);

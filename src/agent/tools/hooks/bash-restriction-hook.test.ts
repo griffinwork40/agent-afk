@@ -861,10 +861,12 @@ describe.skipIf(isWin32)('createBashRestrictionHook — mcp.json carve-out parit
     expect(hook(ctx(`cat ${mcp} ${home}/.afk/config/afk.env`)).decision).toBe('block');
   });
 
-  it('extends the carve-out to the interpreter guard', () => {
+  // Write-hole fix: an interpreter one-liner is not provably read-only (it can
+  // open the registry for append), so the carve-out no longer applies to it.
+  it('does NOT extend the carve-out to interpreter one-liners (write hole)', () => {
     expect(
       hook(ctx('python -c "import json; json.load(open(\'~/.afk/config/mcp.json\'))"')).decision,
-    ).not.toBe('block');
+    ).toBe('block');
   });
 
   // PR #805 P1 — quote-concatenation bypass. Shell concatenates
@@ -964,13 +966,15 @@ describe.skipIf(isWin32)('createBashRestrictionHook — ssh config / known_hosts
     expect(hook(ctx(`cat ${sshConfig} ${home}/.ssh/id_rsa`)).decision).toBe('block');
   });
 
-  it('extends the carve-out to the interpreter guard', () => {
+  // Write-hole fix: `open('~/.ssh/config','a')` is the same shape, so no
+  // interpreter one-liner gets the carve-out (ProxyCommand = code execution).
+  it('does NOT extend the carve-out to interpreter one-liners (write hole)', () => {
     expect(
       hook(ctx('python -c "print(open(\'~/.ssh/config\').read())"')).decision,
-    ).not.toBe('block');
+    ).toBe('block');
     expect(
       hook(ctx('python -c "print(open(\'~/.ssh/known_hosts\').read())"')).decision,
-    ).not.toBe('block');
+    ).toBe('block');
   });
 });
 
