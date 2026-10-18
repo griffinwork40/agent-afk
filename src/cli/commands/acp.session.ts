@@ -8,6 +8,7 @@
  */
 
 import { AgentSession } from '../../agent/session.js';
+import { makeDeferredParentProxy } from '../../agent/session/deferred-parent-proxy.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
@@ -59,18 +60,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
   const memoryStore = new MemoryStore();
   const stateStore = new StateStore(getStateDatabasePath());
 
-  let boundSession: AgentSession | undefined;
-  const deferredParent = {
-    get sessionId() { return boundSession?.sessionId; },
-    getInputStreamRef() {
-      return boundSession?.getInputStreamRef?.() ?? { pushUserMessage: () => {} };
-    },
-    get abortSignal() {
-      return boundSession?.abortSignal ?? new AbortController().signal;
-    },
-    get hookRegistry() { return boundSession?.hookRegistry; },
-    get messageJournal() { return boundSession?.messageJournal; },
-  };
+  const { proxy: deferredParent, bind: bindParent } = makeDeferredParentProxy();
 
   const apiKey = getApiKeyForModel(model);
   const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
@@ -118,7 +108,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
     undefined,
   );
 
-  boundSession = session;
+  bindParent(session);
   return { session, memoryStore, stateStore };
 }
 

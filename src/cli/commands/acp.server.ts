@@ -281,10 +281,15 @@ async function handleSessionPrompt(
   }
 }
 
-async function handleSessionClose(
+/**
+ * Resolve a session entry from params.sessionId, returning either the entry or
+ * a ready-to-send error response. Extracted to eliminate the duplicated
+ * lookup prologue shared by handleSessionClose and handleSessionCancel.
+ */
+function resolveSessionEntry(
   state: ServerState,
   req: JsonRpcRequest,
-): Promise<JsonRpcResponse> {
+): SessionEntry | JsonRpcResponse {
   const params = req.params as { sessionId?: string } | undefined;
   const sessionId = params?.sessionId;
   if (typeof sessionId !== 'string' || !sessionId) {
@@ -294,8 +299,18 @@ async function handleSessionClose(
   if (!entry) {
     return errorResponse(req.id, INVALID_PARAMS, `Unknown sessionId: ${sessionId}`);
   }
-  state.sessions.delete(sessionId);
-  await closeAcpSession(entry.handle);
+  return entry;
+}
+
+async function handleSessionClose(
+  state: ServerState,
+  req: JsonRpcRequest,
+): Promise<JsonRpcResponse> {
+  const result = resolveSessionEntry(state, req);
+  if (!('handle' in result)) return result;
+  const params = req.params as { sessionId: string };
+  state.sessions.delete(params.sessionId);
+  await closeAcpSession(result.handle);
   return successResponse(req.id, { closed: true });
 }
 
@@ -304,17 +319,10 @@ async function handleSessionCancel(
   state: ServerState,
   req: JsonRpcRequest,
 ): Promise<JsonRpcResponse> {
-  const params = req.params as { sessionId?: string } | undefined;
-  const sessionId = params?.sessionId;
-  if (typeof sessionId !== 'string' || !sessionId) {
-    return errorResponse(req.id, INVALID_PARAMS, 'params.sessionId must be a non-empty string');
-  }
-  const entry = state.sessions.get(sessionId);
-  if (!entry) {
-    return errorResponse(req.id, INVALID_PARAMS, `Unknown sessionId: ${sessionId}`);
-  }
-  entry.abort.abort();
-  entry.handle.session.abort('acp-cancel');
+  const result = resolveSessionEntry(state, req);
+  if (!('handle' in result)) return result;
+  result.abort.abort();
+  result.handle.session.abort('acp-cancel');
   return successResponse(req.id, { cancelled: true });
 }
 

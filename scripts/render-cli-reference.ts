@@ -39,6 +39,10 @@ import { registerTranscriptCommand } from '../src/cli/commands/transcript.js';
 import { registerInsightsCommand } from '../src/cli/commands/insights.js';
 import { registerCapturesCommand } from '../src/cli/commands/captures.js';
 import { registerDefectsCommand } from '../src/cli/commands/defects.js';
+// jscpd:ignore-start — intentional mirror of src/cli/index.ts registrar block;
+// the renderer must declare the same import to build metadata-only, never execute.
+import { registerAcpCommand } from '../src/cli/commands/acp.js';
+// jscpd:ignore-end
 import { renderCli } from './render-cli-reference.mdx.js';
 import { isMain, writeReference } from './lib/docs-reference.js';
 
@@ -85,6 +89,10 @@ export function buildCli(): Command {
   registerInsightsCommand(program);
   registerCapturesCommand(program);
   registerDefectsCommand(program);
+  // jscpd:ignore-start — intentional mirror of src/cli/index.ts registrar block;
+  // the renderer must call the same registrar to expose metadata, never execute.
+  registerAcpCommand(program);
+  // jscpd:ignore-end
 
   program.commands.find((c) => c.name() === 'chat')?.alias('c');
   program.commands.find((c) => c.name() === 'interactive')?.alias('i');

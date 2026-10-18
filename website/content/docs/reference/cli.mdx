@@ -60,6 +60,7 @@ Usage: `afk [options] [command]`
 | `insights` | Generate a local usage analytics report from AFK telemetry |
 | `captures` | List bash output captures — full output files written when a command produces more than 100 KB. Captures live under the witness directory and are evicted automatically by the 30-day / 2 GiB retention sweep. |
 | `defects` | Show top recurring pre-existing defects from the session ledger |
+| `acp` | Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed, JetBrains, and other ACP clients) |
 
 ## `afk chat`
 
@@ -2519,4 +2520,19 @@ Guide: [self-improvement](/guides/self-improvement)
 | `--days <n>` | Lookback window in days | `"90"` |
 | `--top <n>` | Maximum clusters to show | `"10"` |
 | `--json` | Emit raw JSON (for scripting) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk acp`
+
+Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed, JetBrains, and other ACP clients)
+
+Usage: `afk acp [options]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-m, --model <model>` | model to use for sessions (default: configured default) |  |
+| `--max-turns <n>` | maximum agent turns per prompt (default: 10) | `"10"` |
+| `--dangerously-skip-permissions` | Force bypass mode: skip all permission prompts for all sessions created by this server |  |
 | `-h, --help` | display help for command |  |
