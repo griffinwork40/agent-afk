@@ -89,7 +89,7 @@ function checkToken(tok: string, policy: SubcommandPolicy, sub: GitReadSubcomman
   if (policy.valued.some((p) => tok.startsWith(p) && tok.length > p.length)) {
     // `%G?`/`%GS`/… (pretty) and `%(signature…)`/`%(*signature…)` (ref-filter, tag/branch)
     // make git run gpg.program / gpg.ssh.program to verify signatures.
-    if (/^--(format|pretty)=/.test(tok) && (tok.includes('%G') || /%\(\s*\*?\s*signature/i.test(tok))) {
+    if (/^--(format|pretty)=/.test(tok) && (/%G/.test(tok) || /%\(\s*\*?\s*signature/i.test(tok))) {
       return `Rejected ${JSON.stringify(tok)}: signature placeholders (%G…, %(signature…)) run an external program.`;
     }
     // Sorting by a `signature` key verifies every ref's signature the same way.

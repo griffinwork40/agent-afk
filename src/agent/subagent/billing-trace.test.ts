@@ -121,9 +121,16 @@ describe('subagent billing across turns', () => {
     await handle.runToResult('go');
 
     expect(onSucceeded).toHaveBeenCalledTimes(1);
-    const reportedCost: number | undefined = onSucceeded.mock.calls[0]?.[1];
+    const [usageArg, reportedCost] = onSucceeded.mock.calls[0]! as [unknown, number | undefined];
     // Must be the sum of both turns, not just the last ($0.05).
     expect(reportedCost).toBeCloseTo(0.08, 10);
+    // The billing delta (arg[0]) must reflect both turns summed — each turn
+    // contributes uncachedInput=1000, output=10 → two turns = 2000/20.
+    expect(usageArg).toMatchObject({
+      billing: { provider: 'openai-compatible', uncachedInput: 2000, cacheRead: 0, cacheWrite: 0, output: 20 },
+    });
+    // Token-level context.total accumulation: inputTokens from both turns.
+    expect(usageArg).toMatchObject({ inputTokens: 1000, outputTokens: 10 });
   });
 
   it('a child whose provider reports no billing keeps the succeeded payload byte-compatible', async () => {

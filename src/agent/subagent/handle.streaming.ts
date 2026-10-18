@@ -227,7 +227,7 @@ function processDoneEvent<T>(
   }
   // Accumulate per-turn USD cost so the success path reports the full run
   // cost rather than just the final drain turn (#3882 case 3).
-  if (typeof event.metadata?.totalCostUsd === 'number' && Number.isFinite(event.metadata.totalCostUsd)) {
+  if (typeof event.metadata?.totalCostUsd === 'number' && Number.isFinite(event.metadata.totalCostUsd) && event.metadata.totalCostUsd >= 0) {
     context.cumulativeCostUsd = (context.cumulativeCostUsd ?? 0) + event.metadata.totalCostUsd;
   }
   if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {

@@ -1,193 +1,106 @@
 ---
-title: "Telegram Bot"
-description: "Run Agent AFK as a Telegram bot — same tools, same memory, on your phone. Set up takes under five minutes."
+title: "Telegram bot"
+description: "Talk to Agent AFK, receive unattended results, and answer questions from your phone."
 ---
 
-Agent AFK can run as a Telegram bot, giving you a private chat interface backed by the same
-session manager and full tool set as the REPL. You can also use Telegram as a notification
-channel — the daemon pushes a message whenever a scheduled task completes.
+The Telegram bot gives each allowed chat an agent conversation and can deliver daemon notifications. Use it when you need to work from your phone, inspect a running session, or answer a task's question while away from the terminal.
 
-## Setup
+## Set up the bot
 
-### 1. Create a bot token
+<Steps>
+<Step>
 
-Open Telegram and message `@BotFather`:
+Create a bot with `@BotFather` using `/newbot` and copy its token.
 
-1. Send `/newbot`
-2. Follow the prompts to name your bot
-3. Copy the token BotFather gives you (it looks like `1234567890:ABC...`)
+</Step>
+<Step>
 
-### 2. Run the setup wizard
+Run the interactive wizard. It validates the token, discovers your chat ID after you message the bot, and stores the token and allowlist in your user configuration:
 
 ```bash
 afk telegram setup
 ```
 
-The wizard validates your token against the Telegram API, then walks you through discovering
-your chat ID (send your bot a message and it polls for it automatically), and writes both to
-`~/.afk/config/afk.env`:
+</Step>
+<Step>
 
-```
-TELEGRAM_BOT_TOKEN=1234567890:ABC...
-AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
-```
-
-### 3. Start the bot
+Start the bot and check its status:
 
 ```bash
 afk telegram start
+afk telegram status
 ```
 
-The bot starts as a background daemon and logs to `~/.afk/logs/telegram.log`.
+</Step>
+</Steps>
 
-## Manual configuration
+The wizard sets `TELEGRAM_BOT_TOKEN` and `AFK_TELEGRAM_ALLOWED_CHAT_IDS` in `~/.afk/config/afk.env`. The allowlist is a comma separated set of chat IDs; all other chats are ignored. If you configure it manually, use `afk config env set TELEGRAM_BOT_TOKEN` for masked secret entry. `AFK_TELEGRAM_CWD` selects the working directory for bot sessions when run as a service. Manage the process with `afk telegram stop`, `restart`, and `logs`; `afk telegram logs -f` follows the log. See [Run as a service](/guides/run-as-service) for persistent hosting.
 
-Skip the wizard by setting the env vars directly in `~/.afk/config/afk.env` or your shell profile:
+## Commands in the chat
 
-```bash
-export TELEGRAM_BOT_TOKEN=1234567890:ABC...
-export AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
-```
+The following handlers are registered by the bot. Telegram's command picker and `/help` show a subset; `/help` can also show available session slash commands.
 
-`AFK_TELEGRAM_ALLOWED_CHAT_IDS` is a comma-separated list of chat IDs whose messages the bot
-will accept. Messages from any other chat are silently ignored. You must set at least one ID or
-the bot will start but never respond.
-
-To allow multiple users:
-
-```bash
-AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678,87654321
-```
-
-### Environment variable reference
-
-All Telegram-related env vars belong in `~/.afk/config/afk.env`. Prefer `afk config env set
-<VAR>` for secrets — it masks input so the value never appears in your shell history.
-
-| Variable | Required | Description |
-|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather. |
-| `AFK_TELEGRAM_BOT_TOKEN` | No | Alternative name for the bot token, accepted by the setup wizard. Use this when `TELEGRAM_BOT_TOKEN` conflicts with another tool in your environment. |
-| `AFK_TELEGRAM_ALLOWED_CHAT_IDS` | Yes | Comma-separated chat IDs the bot will accept messages from. |
-| `AFK_TELEGRAM_PRIMARY_CHAT_ID` | No | Default chat for outbound notifications. When unset, notifications go to the first private/DM chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS`. Overridden by `telegram.notify` in `afk.config.json`. |
-| `AFK_TELEGRAM_NOTIFY_MODE` | No | Outbound notification fan-out: `primary` (default — one chat), `broadcast` (every allowed chat), or `custom` (`telegram.notify.targets` in `afk.config.json` picks the list). Overridden by `telegram.notify.mode`. |
-| `AFK_TELEGRAM_TAG_ONLY_CHAT_IDS` | No | Comma-separated chat IDs where the bot responds only when directly addressed — a reply to the bot, an @mention, or a `text_mention` entity resolving to the bot. Slash-commands are unaffected; unlisted chats behave normally. Requires Telegram privacy mode OFF (BotFather `/setprivacy Disable`) for non-addressed group messages to reach the bot at all. Overridden by `telegram.tagOnlyChats` in `afk.config.json`. |
-| `AFK_TELEGRAM_CWD` | No | Override the working directory used when the bot spawns agent sessions. Useful when the bot runs as a service and the default `cwd` is not your project root. |
-
-### `afk.config.json` — telegram block
-
-Structured Telegram settings live under the `telegram` key in `afk.config.json` (typically at
-`~/.afk/config/afk.config.json` for global settings, or `<cwd>/afk.config.json` for
-per-project overrides).
-
-```json
-{
-  "telegram": {
-    "notify": {
-      "mode": "primary",
-      "primaryChatId": 12345678,
-      "targets": [12345678, 87654321]
-    },
-    "tagOnlyChats": [-100987654321],
-    "chatAliases": {
-      "ops": -100987654321,
-      "personal": 12345678
-    },
-    "verifyDone": false
-  }
-}
-```
-
-| Key | Type | Description |
-|---|---|---|
-| `telegram.notify.mode` | `"primary"` \| `"broadcast"` \| `"custom"` | Fan-out strategy for outbound notifications. `primary` (default): one target chat. `broadcast`: every chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS`. `custom`: only the IDs in `targets`. |
-| `telegram.notify.primaryChatId` | `number` | Explicit primary chat, overriding the env var and the first-DM fallback. |
-| `telegram.notify.targets` | `number[]` | Chat IDs used when `mode` is `custom`. |
-| `telegram.tagOnlyChats` | `number[]` | Per-chat tag-only policy (takes precedence over `AFK_TELEGRAM_TAG_ONLY_CHAT_IDS`). The bot responds to non-command messages in these chats only when directly addressed. |
-| `telegram.chatAliases` | `Record<string, number>` | Named aliases for chat IDs. The `send_telegram` tool's `chat` param and a scheduled task's `notifyChat` accept an alias name in place of a raw numeric ID. The resolved alias must still be in the allowlist (fail-closed). |
-| `telegram.verifyDone` | `boolean` | When `true`, a Done notification is downgraded to "⚠️ Done (unverified)" unless the session produced corroborating evidence (a file write or executed command). Default: `false`. |
-
-## Bot commands
-
-Inside Telegram, the bot recognizes:
-
-| Command | Description |
+| Command | Use |
 |---|---|
-| `/start` | Welcome message |
-| `/clear` | Clear conversation history and start fresh |
-| `/model opus` | Switch the active model (`opus`, `sonnet`, `haiku`, `fable`) |
+| `/start`, `/help` | Welcome text and command help. |
+| `/clear`, `/compact` | Start over by clearing history, or compact the current conversation. |
+| `/model`, `/model opus` | Choose a model, with buttons when no argument is given. The advertised short aliases are `opus`, `sonnet`, and `haiku`. |
+| `/cd`, `/cwd`, `/name` | Show or change the session directory, or show or set its name. |
+| `/new`, `/sessions` | Start another conversation or list saved conversations with buttons to switch back. |
+| `/afk on`, `/afk off` | Enable or disable autonomous mode for this chat session. |
+| `/usage` | Show Claude subscription usage. |
+| `/watch`, `/unwatch`, `/abort` | Follow another live session in this chat, stop following, or request an authenticated abort of the watched session. |
+| `/inbox`, `/inbox release all`, `/inbox drop all` | Review, accept, or discard peer messages held for this chat's session. A message ID prefix can replace `all`. |
+| `/good`, `/bad` | Record positive or negative feedback on the current session. |
 
-Any other message is sent to the session as a regular turn. The bot runs in the **default**
-permission mode — tools execute without per-tool prompts, and file access outside the working
-directory stays contained, the same as the REPL. See [Permissions](/configuration/permissions).
+`/inbox` is especially useful when `AFK_PEER_INBOUND=hold`. It shows each held peer message's sender, age, and preview. Releasing one accepts it even while hold mode remains active. Peer messages are not user instructions; inspect them before releasing. See [Peer messaging](/guides/peer-messaging).
 
-## Managing the bot process
+A chat has one **active** conversation at a time, not just one conversation forever. `/new` preserves the old session; `/sessions` lists resumable sessions and lets you tap one to stage a resume on your next message. Switching or creating a session is refused while a turn is running. A topic has its own conversation route, so a button tapped inside a topic switches that topic's session rather than the General topic's.
 
-```bash
-afk telegram start       # start as a background daemon
-afk telegram stop        # SIGTERM (then SIGKILL after 5 seconds)
-afk telegram restart     # stop + start
-afk telegram status      # running state, PID, uptime, memory, recent log lines
-afk telegram logs        # print the last 50 log lines
-afk telegram logs -f     # follow the log (like tail -f)
-afk telegram logs -n 100 # show the last 100 lines
-```
+## Send files, photos, and background work
 
-`afk telegram status` shows:
-- Running / stopped state with PID
-- Uptime (when running)
-- Memory usage in MB (when running)
-- Path to the PID file and log file
-- Recent log entries
+Send a text or code document, or a PDF, as a Telegram attachment. Text formats such as `.txt`, `.md`, `.json`, `.py`, and `.ts` are decoded as UTF-8; PDF content is passed as a document block to the model. Add a caption to explain what you want done with it. The document limit is **5 MB**, including files whose downloaded size exceeds that limit. Unsupported formats receive an error message. Photos are also supported; voice, audio, video, and stickers are not.
 
-## Telegram as a notification channel
+You can ask the agent to dispatch a long investigation with the `agent` tool in background mode. The dispatch returns a job ID without waiting for the result, letting you continue the conversation. When a noncancelled background subagent finishes, the bot pushes its result to the originating chat and topic. If that session is idle and has no user message waiting, it also wakes automatically to process the result. Otherwise the result is injected into the next turn. Long result bodies are capped in the notification and include a `/bgsub:join` marker identifying the job; use the CLI background job command to retrieve its full output when available. See [Subagents](/guides/subagents).
 
-Even without the interactive bot surface, you can use Telegram purely for push notifications.
-The daemon pushes a message on every scheduled task completion; where that message goes is
-controlled by the notification routing described above — `primary` (default), `broadcast`, or
-`custom`.
+In groups, inbound messages include a sanitized sender marker with the Telegram sender ID so the agent can distinguish participants. Replies and manually quoted text carry a short reference to the earlier message; a reply to the bot is marked as a reply to the assistant. Referenced content is truncated, and unaddressed group messages may never enter a tag only session.
 
-The `send_telegram` tool is also available inside agent sessions. You can target a specific chat
-by raw numeric ID or by a `chatAliases` name defined in `afk.config.json`:
+## Chats, groups, and topics
+
+`AFK_TELEGRAM_ALLOWED_CHAT_IDS` controls **inbound** access. Outbound notifications default to the first private chat in that list (or the first allowed chat). Set `AFK_TELEGRAM_PRIMARY_CHAT_ID` to pick a different default, or configure `telegram.notify.mode` as `primary`, `broadcast`, or `custom` in `afk.config.json`; custom mode uses `telegram.notify.targets`. `AFK_TELEGRAM_NOTIFY_MODE` fills in the mode when file configuration does not specify one.
+
+For a quieter allowed group, set `telegram.tagOnlyChats` to its chat ID, or use `AFK_TELEGRAM_TAG_ONLY_CHAT_IDS` as the fallback. In such a chat the bot answers ordinary text or photo only when you reply to the bot, mention its `@username`, or use a Telegram text mention of the bot. Slash commands remain available. Turn off Telegram bot privacy mode with BotFather `/setprivacy Disable` if you expect the bot to receive nonaddressed group messages at all.
 
 ```json
 {
   "telegram": {
-    "chatAliases": {
-      "ops": -100987654321,
-      "personal": 12345678
-    }
+    "notify": { "mode": "primary", "primaryChatId": 12345678 },
+    "tagOnlyChats": [-100987654321],
+    "chatAliases": { "ops": -100987654321 }
   }
 }
 ```
 
-Then in a session the agent can route to `"ops"` by name instead of the raw ID. The resolved
-alias is still validated against the allowlist — a non-allowlisted target is rejected.
+To send to one chat instead of the default, the agent's `send_telegram` tool accepts `chat: "ops"` (or an allowed numeric chat ID). A scheduled task's `notifyChat` accepts the same kind of target. Explicit chat targets must resolve to an ID in the inbound allowlist: `send_telegram` refuses an invalid target, while a daemon task warns and falls back to its default notification route. `telegram.chatAliases` lets you keep raw IDs out of routine prompts. For a supergroup with topics enabled, `send_telegram` also accepts a numeric `thread_id`, but **only** together with an explicit `chat`. Ordinary bot replies and background results follow the topic they originated in. See [Schedule unattended work](/guides/scheduling).
 
-The `send_telegram` tool is safe to attempt unconditionally: if Telegram is not configured,
-it returns an error instead of crashing.
+## Autonomous runs and approvals
+
+From a **CLI session**, `/afk on` lets the agent continue reversible work while you are away. Each turn's parsed Done, Blocked, Asking, or Interrupted state is sent to Telegram as a compact report. The report prefers structured verdict fields rather than tool output, applies secret redaction, and limits notification volume. The chat bot's own `/afk on` similarly enables autonomous mode for that chat; `/afk off` restores normal mode. Its mode is runtime only, so a bot restart requires you to reenable it.
+
+<Callout type="warn">
+There are two different high risk approval paths. A CLI session in autonomous mode can ask you to approve or deny a **single** high risk operation. Use `/watch` from Telegram to follow that CLI session; its approval request appears as inline Approve and Deny buttons. A refusal, timeout, or unrecognized answer denies the call. The always on **Telegram bot's own** autonomous session deliberately does **not** offer one tap approval of high risk operations: it refuses the operation and asks you to handle it deliberately. Never assume `/afk on` in the bot makes irreversible actions phone approvable.
+</Callout>
+
+The bot also renders ordinary path approval and agent questions through Telegram prompts. A scheduled daemon task can save a question as a durable handoff; you can answer it in Telegram and the daemon resumes later. These are distinct from the CLI autonomous high risk gate. See [Permissions](/configuration/permissions) and [Daemon](/surfaces/daemon).
 
 ## Troubleshooting
 
-**Bot starts but never responds** — the most common cause is a missing or incorrect
-`AFK_TELEGRAM_ALLOWED_CHAT_IDS`. Run `afk telegram status` and check the log with
-`afk telegram logs`. Send your bot a message, then check the log for "message from unknown chat"
-or similar.
+If the bot starts but stays silent, verify the chat ID in `AFK_TELEGRAM_ALLOWED_CHAT_IDS` and check `afk telegram status` and `afk telegram logs`. If a service cannot see a token exported only in your interactive shell, set it in the user `afk.env` instead. If a tag only group is silent, confirm you mentioned the bot or replied to it, and check BotFather privacy mode.
 
-**`afk telegram start` exits immediately** — the bot process crashed on startup. Check the logs:
+## Related
 
-```bash
-afk telegram logs
-```
-
-Common causes: invalid `TELEGRAM_BOT_TOKEN`, network connectivity, or a port conflict.
-
-**Token not set** — `afk telegram setup` reads from and writes to `~/.afk/config/afk.env`.
-If you set the token in your shell profile, it may not be available to the bot daemon. Write
-it to `afk.env` instead — `afk config env set` prompts for the token with a masked input so it
-never lands in your shell history:
-
-```bash
-afk config env set TELEGRAM_BOT_TOKEN          # masked prompt (recommended)
-echo "TELEGRAM_BOT_TOKEN=<token>" >> ~/.afk/config/afk.env   # or append by hand
-```
+<Cards>
+<Card title="Daemon" href="/surfaces/daemon" description="Schedule tasks and route their results to Telegram." />
+<Card title="Run as a service" href="/guides/run-as-service" description="Keep the bot running between terminal sessions." />
+<Card title="Subagents" href="/guides/subagents" description="Delegate longer investigations from a conversation." />
+</Cards>

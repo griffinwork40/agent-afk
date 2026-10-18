@@ -11,6 +11,69 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.324.1] - 2026-10-18
+
+### Fixed
+- correct misleading comment in live-frame-margin test (#4091) (5622b70b)
+- stop telling children to call workspace tools they are not granted (#4071) (3374497a)
+- address advisory findings from #4025 per-slot maxOutputTokens (#4100) (f64c0bd0)
+- add regression test for baseline-sample cost deduction from verifyRun budget (#4098) (acfb2e87)
+- move bash_timeout_clamped telemetry after min-1000 guard, add spy assertions and background clamp test (#4096) (7f779581)
+- address advisory findings from #4005 review (#4097) (7efdf98c)
+
+### Changed
+- regenerate env-registry after #4037 + #4044 (unbreak main scan:env:check) (#4113) (b4084131)
+
+## [5.324.0] - 2026-10-18
+
+### Added
+- post-edit LSP diagnostics (phase 1, opt-in, off by default) (#4044) (8573cfa3)
+- per-provider subagent concurrency caps for fan-out waves (#4037) (c6cf83d9)
+
+### Changed
+- complete docs overhaul: new navigation, every feature documented, generated references with CI drift gates (#4070) (ff5c18b2)
+
+## [5.323.0] - 2026-10-18
+
+### Added
+- add jscpd clone gate that blocks only NEW copy-paste clones (#4043) (6666a9d1)
+- add RiskCategory enum to every gate verdict and hook_decision trace event (#4045) (9dce34ea)
+- measure guardrail false-positive rate for hook-block-repeat meta-guard (#4035) (c08d437a)
+
+## [5.322.19] - 2026-10-18
+
+### Added
+- RemoteSubagentHandle implementing SubagentHandle over SSH transport (#4038) (b29df7f8)
+- GitHub event polling producer for the pull queue (#4039) (77838847)
+
+### Fixed
+- replace Array.prototype.push.apply with concat in maskHookCommandData (#4031) (ad950330)
+- advisory findings from PR triage batch (#3831, #3812, #3810) (#4029) (6d0465c3)
+- gate bash read carve-outs on read-only commands; grant SSH public keys (#4030) (964679ff)
+
+### Changed
+- introduce decidePathAccess — single resolve-then-decide credential floor (#4036) (61bb3f8e)
+- bump react-dom from 19.3.0 to 19.3.1 in /website (#4083) (5a9a225e)
+- bump the dashboard-dev-minor-patch group across 1 directory with 3 updates (#4089) (b61d201e)
+- bump @vitejs/plugin-react in /dashboard (#4087) (09c90e17)
+- bump next from 16.4.0 to 16.4.1 in /website (#4080) (863aae3a)
+- bump pnpm/action-setup from 4 to 6 (#4077) (9bd433d4)
+- bump the dev-minor-patch group across 1 directory with 3 updates (#4088) (23a52b97)
+
+## [5.322.18] - 2026-10-18
+
+### Fixed
+- MCP-aware unknown-tool messages and session-init failure notice (#4068) (ad38d39a)
+
+### Changed
+- bump @types/node from 26.6.4 to 26.6.5 in /website (#4082) (6aeac344)
+- bump the fumadocs group in /website with 3 updates (#4079) (46697ce8)
+- bump actions/setup-node from 4 to 7 (#4078) (4b475ed7)
+- bump the prod-minor-patch group with 7 updates (#4086) (e093c5ec)
+- bump the dashboard-prod-minor-patch group (#4084) (55c38a76)
+- bump react from 19.3.0 to 19.3.1 in /website (#4081) (862168d2)
+- bump actions/checkout from 4 to 7 (#4076) (9d149f55)
+
 ## [5.322.17] - 2026-10-18
 
 ### Added

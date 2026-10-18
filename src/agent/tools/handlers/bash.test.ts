@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bashHandler, createBashHandler } from './bash.js';
+import * as routingTelemetry from '../../routing-telemetry.js';
 
 describe('bashHandler', () => {
   /**
@@ -208,6 +209,7 @@ describe('bashHandler', () => {
     });
 
     it('clamps timeout_ms above 600000 and warns in result', async () => {
+      const telemetrySpy = vi.spyOn(routingTelemetry, 'appendRoutingDecision');
       const result = await bashHandler({ command: 'echo test', timeout_ms: 700000 }, createSignal());
       expect(result.isError).toBeFalsy();
       // Clamp-warning contract: result must open with the [Warning] sentinel,
@@ -219,6 +221,35 @@ describe('bashHandler', () => {
       expect(result.content).toMatch(/clamped/i);
       // The warning must appear before any command output so the model sees it.
       expect(result.content.indexOf('[Warning]')).toBeLessThan(result.content.indexOf('test'));
+      // Telemetry contract: appendRoutingDecision must be called with the
+      // tool.bash_timeout_clamped event and the correct mode (advisory finding
+      // from PR #4022 review — ensure the call is actually made).
+      expect(telemetrySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'tool.bash_timeout_clamped', mode: 'foreground' }),
+      );
+      telemetrySpy.mockRestore();
+    });
+
+    it('clamps timeout_ms above MAX_PROCESS_MAX_RUNTIME_MS in background mode and warns', async () => {
+      // Background mode uses MAX_PROCESS_MAX_RUNTIME_MS (24 h = 86400000 ms) as its ceiling.
+      // This is the background-mode clamp path: run_in_background: true + oversized timeout_ms.
+      // We cannot actually launch a background process in unit tests (requires a root REPL
+      // ProcessJobRegistry), so we assert the parseBashInput validation path via the handler
+      // throwing before any spawn occurs — confirming the clamp fires at the right ceiling.
+      // The foreground clamp path (timeout_ms > 600000) is already covered by the test above.
+      const telemetrySpy = vi.spyOn(routingTelemetry, 'appendRoutingDecision');
+      // MAX_PROCESS_MAX_RUNTIME_MS = 86400000; use a value just above it.
+      const overMax = 86400000 + 1;
+      // startBackgroundBash requires a ProcessJobRegistry context and will fail without one,
+      // but parseBashInput (and the telemetry emit) runs before the background launch.
+      // The handler rejects because background mode requires a session context — that is
+      // expected; what matters is the telemetry was called with mode: 'background'.
+      await bashHandler({ command: 'echo bg', timeout_ms: overMax, run_in_background: true }, createSignal())
+        .catch(() => { /* background launch fails without a registry — expected */ });
+      expect(telemetrySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'tool.bash_timeout_clamped', mode: 'background' }),
+      );
+      telemetrySpy.mockRestore();
     });
 
     it('throws on negative timeout_ms', async () => {

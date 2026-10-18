@@ -157,7 +157,7 @@ export const CHILD_ALLOWED_TOOLS = [
 ];
 ```
 
-A read-only skill's forked child uses the tighter `RECON_ALLOWED_TOOLS` instead (no `write_file`/`edit_file`; `bash` admitted only behind the mutating-command guard). With `AFK_READONLY_GIT_TOOL=1`, every read-only-bash surface (read-only skill forks, `bash: read-only` named agents, compose nodes running them) has `bash` replaced by the structured `git_read` tool (`src/agent/tools/readonly-git-surface.ts`), because the mutating-command guard is best-effort and was evaded by obfuscated writes (#3754). Override per-session by passing `config.tools.allowedTools` to `AgentSession`, or disable individual tools via `config.tools.disallowedTools`.
+A read-only skill's forked child uses the tighter `RECON_ALLOWED_TOOLS` instead (no `write_file`/`edit_file`; `bash` admitted only behind the mutating-command guard). With `AFK_READONLY_GIT_TOOL=1`, every read-only-bash surface has `bash` replaced by the structured `git_read` tool (`src/agent/tools/readonly-git-surface.ts`). This surface covers read-only skill forks, `bash: read-only` named agents, and compose nodes running them. The replacement is necessary because the mutating-command guard is best-effort and was evaded by obfuscated writes (#3754). Override per-session by passing `config.tools.allowedTools` to `AgentSession`, or disable individual tools via `config.tools.disallowedTools`.
 
 ## `AgentSession` API
 

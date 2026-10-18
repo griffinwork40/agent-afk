@@ -12,6 +12,7 @@ import { TurnStreamRunner, type TurnRunnerDeps } from './turn-stream-runner.js';
 import { buildProviderLifecycle, rebuildProviderQuery } from './provider-lifecycle.js';
 import { ProviderInitializer } from './provider-lifecycle.js';
 import { ensureError } from '../../utils/errors.js';
+import { debugLog } from '../../utils/debug.js';
 import type { AgentConfig } from '../types.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { SessionShutdown } from './session-shutdown.js';
@@ -165,7 +166,20 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
         // pendingResolve slot is last-writer-wins — both are harmless today.
         // An injected config.provider that holds resources from query() would
         // leak them without this close(), so we close defensively.
-        await opts.getProviderQuery().close();
+        //
+        // Phase-1 provider close() may throw synchronously or return a
+        // rejecting promise. Catch either; never let a failure abort Phase 2 —
+        // the provider is discarded regardless of whether close() succeeds.
+        try {
+          await opts.getProviderQuery().close();
+        } catch (err: unknown) {
+          debugLog(`🟡 AgentSession: Phase-1 provider close() rejected (continuing): ${ensureError(err).message}`);
+        }
+        // Recheck isClosed() AFTER the await (which may have
+        // yielded while AgentSession.close() ran concurrently). If the session
+        // closed while we awaited the Phase-1 close, skip the rebuild so a
+        // freshly-constructed Phase-2 provider is never started after close.
+        if (opts.isClosed()) return;
         // Item 1: reuse the Phase-1 inputStream's iterable so sendMessage
         // pushes into the stream the rebuilt provider actually reads.
         const promptIterable = opts.getInputStream().createIterable();
@@ -174,6 +188,10 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
         opts.setProviderIterator(rebuilt.providerIterator);
       }
 
+      // #4064: read the manager here, after MCP init has settled, so an
+      // SDK-built manager (#4063) gets the failure notice as well as a
+      // caller-supplied one.
+      const mcpManager = opts.getConfig().mcpManager;
       const initializer = new ProviderInitializer(
         opts.getConfig(),
         opts.abortSignal,
@@ -181,6 +199,7 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
         opts.shutdown,
         opts.hookRegistry,
         opts.queueFrameworkContext,
+        mcpManager !== undefined ? () => mcpManager.getServerStates() : undefined,
       );
       return initializer.run(
         opts.getProviderIterator,

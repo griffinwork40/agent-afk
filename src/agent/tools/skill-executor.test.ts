@@ -2791,10 +2791,12 @@ describe('SkillExecutor', () => {
 
       expect(result.isError).toBeUndefined();
       expect(result.content).toBe('restricted output');
+      // Trailing undefined = ctx.workspaceStore (none on this executor), #4073.
       expect(buildRestrictedSpy).toHaveBeenCalledWith(
         ['read_file', 'grep', 'glob', 'list_directory'],
         'sonnet',
         false,
+        undefined,
         undefined,
       );
     });
@@ -2853,7 +2855,8 @@ describe('SkillExecutor', () => {
       // the child is restricted to the declared subset (`write_file` dropped: not
       // in RECON) instead of silently receiving the full RECON superset. The
       // readOnlyBash + readOnlyMemory gates are still baked in by the builder.
-      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, ['read_file', 'bash']);
+      // Trailing undefined = ctx.workspaceStore (none on this executor), #4073.
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, ['read_file', 'bash'], undefined);
       expect(restrictedSpy).not.toHaveBeenCalled();
     });
 
@@ -2894,7 +2897,7 @@ describe('SkillExecutor', () => {
       const result = await executor.execute(makeCall({ name: 'recon-no-tools' }));
 
       expect(result.isError).toBeUndefined();
-      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, [...RECON_ALLOWED_TOOLS]);
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, [...RECON_ALLOWED_TOOLS], undefined);
     });
 
     it('does NOT call buildSkillRestrictedProvider when allowedTools is absent', async () => {
@@ -2971,6 +2974,7 @@ describe('SkillExecutor', () => {
         ['read_file', 'grep'],
         'sonnet',
         false,
+        undefined,
         undefined,
       );
     });

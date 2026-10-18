@@ -1,0 +1,221 @@
+---
+title: "Install afk on your computer"
+description: "Install, update, and remove afk on macOS, Linux, or Windows."
+---
+
+Install the `agent-afk` npm package to get the `afk` command. It runs on macOS, Linux, and native Windows. WSL2 is an alternative if you prefer a Linux environment on Windows.
+
+## Requirements
+
+* Node.js matching `^22.22.2 || ^24.15.0 || >=26.0.0`. In plain terms: Node 22.22.2 or newer within 22.x, Node 24.15.0 or newer within 24.x, or Node 26 and later.
+* npm, available with a standard Node.js installation. You do not need pnpm to install the published CLI.
+* A terminal and access to a configured model provider, or a [local model server](/guides/local-models).
+* Git if you want to use repository and [worktree](/guides/worktrees) workflows.
+
+## Install for your platform
+
+<Tabs items={['macOS', 'Linux', 'Windows']}>
+<Tab value="macOS">
+
+<Steps>
+<Step>
+### Check Node.js
+
+Use a supported Node.js installation, then verify it in your terminal:
+
+```bash
+node --version
+npm --version
+```
+</Step>
+<Step>
+### Install the CLI
+
+```bash
+npm install -g agent-afk
+afk --version
+```
+
+If the executable is not found, check that your Node installation's global npm binary directory is on `PATH`.
+</Step>
+</Steps>
+
+</Tab>
+<Tab value="Linux">
+
+<Steps>
+<Step>
+### Check Node.js
+
+Your distribution's default Node package may be older than the supported range. Verify the version before installing:
+
+```bash
+node --version
+npm --version
+```
+</Step>
+<Step>
+### Install the CLI
+
+```bash
+npm install -g agent-afk
+afk --version
+```
+
+If global installation fails with a permissions error, use a Node installation with a user-writable npm prefix rather than running agent sessions as root.
+</Step>
+</Steps>
+
+</Tab>
+<Tab value="Windows">
+
+<Steps>
+<Step>
+### Choose native Windows or WSL2
+
+For native Windows, install a supported Windows Node.js version and Git for Windows. Open a fresh Windows Terminal or PowerShell session after installation. afk prefers Git Bash for agent shell commands, with PowerShell as a fallback when Git Bash is unavailable. Git Bash is preferable because agent commands commonly use POSIX syntax.
+
+For WSL2, install a Linux distribution from an elevated PowerShell session:
+
+```powershell
+wsl --install
+```
+
+Restart if prompted. Inside the WSL terminal, install a supported Linux Node.js version and follow the Linux tab. Keep projects in the WSL filesystem when possible to avoid the slower access through `/mnt/c/`.
+</Step>
+<Step>
+### Install the CLI
+
+For native Windows, run in PowerShell:
+
+```powershell
+node --version
+npm --version
+npm install -g agent-afk
+afk --version
+```
+
+WSL and native Windows use separate Node installations. Install afk in the environment where you intend to run it. Native background services use Windows Task Scheduler; see [Run as a service](/guides/run-as-service).
+</Step>
+</Steps>
+
+</Tab>
+</Tabs>
+
+## Authenticate and check the installation
+
+On an unconfigured install using Claude, start with:
+
+```bash
+afk login
+afk doctor
+```
+
+`afk login` reuses an existing Anthropic credential when one is available, or prompts for a key or OAuth token and saves it. It is not a browser sign-in command. See [API keys and authentication](/configuration/api-keys) for other providers and credential sources, then follow the [Quickstart](/quickstart) for your first model request.
+
+## Bring an existing setup
+
+If you have Claude Code or Codex plugins, skills, or MCP configuration, preview an import:
+
+```bash
+afk migrate --dry-run
+```
+
+Run `afk migrate` to review and confirm the detected sources. It records a trust grant and live-reads the source directories on later sessions rather than copying the files. MCP servers are excluded unless you pass `--mcp`, because they can run commands at startup. `-y` skips the confirmation for a deliberately unattended import. See [Migrate an existing setup](/guides/migrate) before granting that trust.
+
+## Shell completion
+
+`afk completion` requires a shell name and prints a completion script. Supported shells are zsh, bash, and fish, not PowerShell. Add the appropriate line to your shell startup configuration to load it in future terminals:
+
+<Tabs items={['zsh', 'bash', 'fish']}>
+<Tab value="zsh">
+
+Enable zsh's completion system before loading the script:
+
+```zsh
+autoload -Uz compinit
+compinit
+eval "$(afk completion zsh)"
+```
+
+</Tab>
+<Tab value="bash">
+
+```bash
+eval "$(afk completion bash)"
+```
+
+</Tab>
+<Tab value="fish">
+
+```fish
+afk completion fish | source
+```
+
+</Tab>
+</Tabs>
+
+## Optional worktree shell integration
+
+The optional `shell-init` wrapper lets afk change your parent shell's directory into a preserved worktree after a session exits. Without it, afk can print the directory but cannot change your shell's working directory.
+
+For bash or zsh, add this line to your shell startup configuration:
+
+```bash
+eval "$(afk shell-init)"
+```
+
+For fish:
+
+```fish
+afk shell-init fish | source
+```
+
+<Callout type="info">
+This defines an `afk` shell function and replaces any existing alias or function with that name. It is separate from completion, and is not required to run afk. It does not provide a PowerShell wrapper.
+</Callout>
+
+## Update afk
+
+```bash
+afk update --check
+afk update
+```
+
+`--check` reports whether a newer version exists without installing it. `afk update` installs the latest published version through npm using the running Node installation. `afk upgrade` is an alias. Use `--pin` with a specific published version if you need to install that version instead of the latest.
+
+Automatic update behavior is controlled by `updatePolicy`:
+
+| Value | Behavior |
+| --- | --- |
+| `notify` | Default. Check for updates and show a notice. |
+| `auto` | Also trigger a background update when a newer version is detected. |
+| `off` | Disable the automatic update check. Explicit `afk update` still works. |
+
+To disable automatic checks:
+
+```bash
+afk config set updatePolicy off
+```
+
+Use [Editing configuration](/configuration/editing-config) for other values and configuration scope. For service behavior and all update options, see [Run as a service](/guides/run-as-service) and the [CLI reference](/reference/cli).
+
+## Uninstall
+
+If you installed background services, remove them through `afk service uninstall` before removing the CLI. See [Run as a service](/guides/run-as-service) for service names and removal steps.
+
+Remove the npm package:
+
+```bash
+npm uninstall -g agent-afk
+```
+
+This does not erase your saved configuration, credentials, or sessions under `~/.afk/`. Remove any completion and `shell-init` lines you added to your shell startup files. Keep or back up the state directory unless you deliberately want to remove that data too.
+
+## Related
+
+<Cards>
+  <Card title="Get started" href="/quickstart" description="Authenticate and run a first useful prompt." />
+  <Card title="Run your first session" href="/first-session" description="Learn the interactive terminal workflow." />
+  <Card title="Troubleshoot authentication" href="/troubleshooting/auth-and-providers" description="Resolve provider and credential problems." />
+</Cards>

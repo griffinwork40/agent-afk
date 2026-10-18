@@ -1,239 +1,114 @@
 ---
 title: "Daemon"
-description: "afk daemon runs Agent AFK as a long-running headless process that fires scheduled tasks on cron expressions or session-start triggers."
+description: "Run scheduled agent or shell tasks without keeping an interactive session open."
 ---
 
-`afk daemon` runs Agent AFK as a long-running headless process. It fires scheduled tasks on
-cron expressions, on session start, or from a pull queue — and optionally pushes completion
-notifications via Telegram.
+`afk daemon` is a headless process for recurring work, startup work, and commands you enqueue on demand. It loads persisted schedules, records execution history, and can notify you through Telegram. For a complete scheduling walkthrough, see [Schedule unattended work](/guides/scheduling); to keep the process running across logouts, see [Run as a service](/guides/run-as-service).
+
+## Start a task
+
+<Steps>
+<Step>
+
+Add a recurring agent task:
 
 ```bash
-afk daemon --cron "0 */6 * * *" --task "/review --auto"
+afk schedule add --name "Daily review" --command "Review the open issues" --cron "0 9 * * 1-5" --notify failure
 ```
 
-## Trigger modes
+</Step>
+<Step>
 
-The daemon supports four trigger modes set with `--trigger`:
+Start the daemon. Persisted schedules are loaded at startup, so you do not need to repeat the task flags:
 
-| Mode | Description |
+```bash
+afk daemon
+```
+
+</Step>
+<Step>
+
+Check the task ID and its execution history:
+
+```bash
+afk schedule list
+afk schedule logs daily-review
+```
+
+</Step>
+</Steps>
+
+You can also supply an ad hoc task directly: `afk daemon --cron "0 */6 * * *" --task "Review the repository"`. Test one tick with `--once`; the daemon prints a JSON telemetry record and exits.
+
+## Triggers and the pull queue
+
+| Trigger | When it fires |
 |---|---|
-| `cron` | Fire on a cron expression (requires `--cron`) |
-| `sessionstart` | Fire once when the daemon starts |
-| `both` | Fire on sessionstart and then on the cron schedule |
-| `pull` | Dequeue tasks from a file-based queue (no cron expression needed) |
+| `cron` | On a five field cron expression. Requires `--cron` and a task command for an ad hoc daemon task. |
+| `sessionstart` | Once at daemon startup, subject to the session start cooldown. |
+| `both` | At startup and on the cron schedule. |
+| `pull` | Polls the durable queue, by default every 30 seconds. No `--cron` or `--task` needed. This is a daemon flag, not a persisted schedule trigger. |
 
-### Pull mode
-
-`--trigger pull` starts the daemon without a cron expression. Instead of firing on a schedule,
-it polls `~/.afk/state/queue/` every 30 seconds and dequeues tasks written there by `afk queue add`.
+The daemon's `--trigger` defaults to `cron` when `--cron` is supplied, otherwise `sessionstart`. Persisted schedules accept `cron`, `sessionstart`, and `both`. To feed a pull daemon:
 
 ```bash
 afk daemon --trigger pull
 ```
 
-No `--cron` or `--task` flag is needed. Tasks are consumed one-by-one in the order they were
-enqueued. Use pull mode when you want to push work to a running daemon on demand rather than
-on a fixed schedule.
-
-## Common options
+In another terminal, add work and inspect the FIFO queue:
 
 ```bash
-afk daemon \
-  --cron "0 9 * * 1-5" \     # every weekday at 9am
-  --task "/review --auto" \  # command to run
-  --task-id nightly-review \ # human-readable task ID
-  --trigger cron             # default when --cron is set
+afk queue add "Review the latest failures" --notify-on failure
+afk queue list
 ```
 
-| Flag | Description |
+Use `afk queue remove TASK_ID` to remove a pending item by the ID shown in the list. `afk queue clear` asks before removing all pending items; `afk queue clear --yes` is the noninteractive form. Neither command cancels a task already claimed for execution.
+
+## Schedule fields
+
+`afk schedule add` accepts `--name`, `--command`, and a required `--cron` along with `--executor agent|shell`, `--trigger cron|sessionstart|both`, `--notify failure|always|never`, `--cwd`, and `--disabled`. The command line cannot set every field below. Use the `create_schedule` and `update_schedule` agent tools for one shots, expiry, retries, and targeted notifications. See [CLI reference](/reference/cli) for the command line options.
+
+| Field | Meaning |
 |---|---|
-| `--cron <expr>` | 5-field cron expression. Required when trigger includes `cron`. |
-| `--task <command>` | Command to fire on each tick |
-| `--task-id <id>` | Task identifier (used in telemetry and notifications) |
-| `--trigger <mode>` | `cron` \| `sessionstart` \| `both` \| `pull` |
-| `--once` | Fire one tick and exit (useful for testing) |
-| `--timeout-ms <ms>` | Per-tick session timeout. Overrides `AFK_TIMEOUT_MS`. |
-| `--thinking <mode>` | Extended thinking: `adaptive` \| `disabled` \| `max` \| `enabled:<N>` |
-| `--effort <level>` | Effort level: `low` \| `medium` \| `high` \| `xhigh` \| `max` |
-| `--sessionstart-cooldown-ms <ms>` | Cooldown between sessionstart fires |
-| `--port <n>` | HTTP port for live schedule sync (default `7777`) |
-| `--host <address>` | Bind address for the control HTTP surface (default `127.0.0.1`, loopback only). Overrides `AFK_DAEMON_HOST`. **The control surface is unauthenticated** — bind a non-loopback address (e.g. `0.0.0.0`) only on a trusted or firewalled network. |
-| `--briefs-dir <path>` | Override the directory scanned for pending briefs (default `~/.afk/agent-framework/briefs`). |
+| `cron` | Five field schedule. A date pinned in a yearless cron expression repeats annually; it is not a one shot. |
+| `runAt` | ISO 8601 date or timestamp for a one shot. Set this instead of cron through `create_schedule`. The scheduler checks the clock each minute, runs once at or after the specified time, then disables the task. |
+| `expiresAt` | ISO 8601 deadline. A task that reaches this deadline is skipped with an expired telemetry record and disabled, whether recurring or one shot. Expiry takes priority over firing. |
+| `trigger` | `cron` (default), `sessionstart`, or `both` on a persisted schedule. |
+| `executor` | `agent` (default) starts an Agent AFK session for the prompt or slash command. `shell` runs the command directly through the platform shell without a model session. Choose `shell` for simple backups or health checks. |
+| `notifyOn` | `failure` (default), `always`, or `never`. Requires Telegram configuration to deliver. |
+| `notifyChat` | Numeric chat ID or a `telegram.chatAliases` name for this task's completion notification. Invalid or nonallowlisted targets fall back to default routing with a daemon warning. |
+| `cwd` | Existing absolute directory or a path beginning with `~/`. For agent tasks: task `cwd`, then `AFK_DAEMON_CWD`, then the daemon process directory. Shell tasks without either configured directory use the daemon state directory instead. |
+| `maxAttempts` | Total attempts per scheduled **agent** run, from 1 to 5. Defaults to 1, with no retry. Only classified transient failures such as provider 429, network errors, or provider 5xx retry. |
+| `retryDelayMs` | Retry backoff base, from 1,000 to 300,000 milliseconds; defaults to 30,000. Delay doubles after each failed attempt, capped at five minutes. |
 
-## Testing a single tick
+A `runAt` task does not need a cron expression in `create_schedule`; the stored polling placeholder is not its firing condition. On the CLI, `afk schedule add` still requires `--cron`, so use the agent tool for a true one shot. `update_schedule` can change a task's fields, including clearing `runAt` or `expiresAt` with `null`. `afk schedule enable`, `disable`, and `remove` manage persisted tasks; write operations attempt live sync and remain on disk for the next start if the daemon is offline.
 
-Use `--once` to fire one tick and exit. Useful to verify a command works before committing to
-a long-running process:
+### Two different backoff paths
 
-```bash
-afk daemon --cron "* * * * *" --task "/diagnose --auto" --once
-```
+Scheduled agent retries happen within one run. A second mechanism applies to **pull queue lease recovery**: a failed or expired leased item that still has attempts available is requeued with an `eligibleAfter` timestamp, so the next poll will not immediately claim it. Its retry policy uses fixed 30 second backoff by default, or exponential backoff if configured on the queued record, capped at five minutes. `afk queue add` does not expose pull retry policy flags; do not confuse this lease recovery with a scheduled task's `maxAttempts` and `retryDelayMs`.
 
-The daemon prints the telemetry record as JSON and exits with `0` on success or `1` on failure.
+## Operational limits and safety
 
-## Telegram notifications
+<Callout type="warn">
+Only pin `cwd` to directories you trust. An agent task loads project hooks and `.mcp.json` from its effective directory, and daemon sessions run without interactive permission prompts. A shell task executes its command directly. The daemon control HTTP surface is unauthenticated; its default `--host` is loopback (`127.0.0.1`). Do not expose it to an untrusted network.
+</Callout>
 
-When `TELEGRAM_BOT_TOKEN` and `AFK_TELEGRAM_ALLOWED_CHAT_IDS` are configured, the daemon pushes
-a notification to your Telegram chat on every task completion. The message includes the task ID,
-status (✅ success / ⏭️ skipped / ❌ failed), duration, and a response excerpt.
+Before a scheduled `agent` task runs, the daemon checks the subscription used by its model. At or above `AFK_DAEMON_BUDGET_SKIP_PCT` (default `90`), it skips that run, records `skipReason: budget-over`, and sends at most one Telegram alert per budget episode. Shell and built in tasks are not gated. Missing credentials, network errors, and stale readings fail open. `AFK_DAEMON_BUDGET_GATE_DISABLED=1` disables this gate. Check the current readings with `afk usage` and the skip history with `afk schedule logs TASK_ID`.
 
-```bash
-export TELEGRAM_BOT_TOKEN=1234567890:ABC...
-export AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
-afk daemon --cron "0 2 * * *" --task "run the nightly test suite and triage any failures"
-```
+When a task asks a blocking question, the daemon writes a durable handoff before attempting notification. The run does not wait synchronously for your answer. A standalone `afk daemon` process sends a task aware Telegram notice when configured, but it does **not** own a bot instance to display interactive answer buttons. An integration that starts the daemon with a Telegram bot can show buttons for choices and accept replies to text questions. Once an answer is recorded, handoff maintenance resumes the task with its original command, working directory, and notification routing. Startup recovery reoffers unanswered questions; unanswered handoffs expire after 24 hours. Without a working Telegram route, delivery is not guaranteed, but the handoff record remains on disk. See [Telegram bot](/surfaces/telegram).
 
-## Scheduled tasks with `afk schedule`
+`daemon.verifyDone` defaults to `true`. When the agent calls its own result Done without a successful file write, edit, or command in that turn, the Telegram completion header is marked `Done (unverified)`. This is a heuristic warning, not independent verification of the work. A human can turn it off in `afk.config.json` for a task whose legitimate result has no such evidence.
 
-`afk schedule` manages a persisted schedule stored in `~/.afk/config/schedules.json`. Tasks
-registered here are automatically loaded every time the daemon starts — no need to pass them
-as flags each time.
+The daemon writes task telemetry and supports `afk schedule logs TASK_ID`. Task completion delivery follows `notifyOn`; do not assume every successful run sends a Telegram message. Uncaught process crashes also trigger a rate limited Telegram notice when configured.
 
-### Add a task
+<Callout type="info">
+`--predict` is **not** an `afk daemon` flag. It belongs to `afk whatif` for supplying operator predictions during behavioral evaluations. See [What if](/guides/whatif).
+</Callout>
 
-```bash
-afk schedule add \
-  --name "Daily review" \
-  --command "/review --auto" \
-  --cron "0 9 * * 1-5" \
-  --trigger cron \
-  --notify failure
-```
+## Related
 
-| Flag | Required | Description |
-|---|---|---|
-| `--name <label>` | Yes | Human-readable label |
-| `--command <cmd>` | Yes | Command to run on each tick |
-| `--cron <expr>` | Yes | 5-field cron expression |
-| `--trigger <mode>` | No | `cron` \| `sessionstart` \| `both` (default: `cron`) |
-| `--notify <when>` | No | `failure` \| `always` \| `never` (default: `failure`) |
-| `--cwd <path>` | No | Per-task working directory (absolute path or `~/…`). Pins this task to a specific repo. Precedence: task `cwd` → `AFK_DAEMON_CWD` → `process.cwd()` |
-| `--disabled` | No | Add in disabled state |
-
-### List tasks
-
-```bash
-afk schedule list
-```
-
-Prints a table of all scheduled tasks with their ID, name, cron, and enabled state.
-
-### Manage task lifecycle
-
-```bash
-afk schedule enable <id>    # re-enable a disabled task
-afk schedule disable <id>   # disable without deleting
-afk schedule remove <id>    # permanently delete
-```
-
-### View execution history
-
-```bash
-afk schedule logs <id>            # last 10 runs (default)
-afk schedule logs <id> -n 25      # last 25 runs
-```
-
-Returns JSON telemetry records in chronological order.
-
-### Live sync
-
-Write operations (`add`, `enable`, `disable`, `remove`) attempt to live-sync the change to a
-running daemon via its control port. If the daemon isn't running, the change is saved to disk
-and will take effect on next start.
-
-## Environment variables
-
-| Variable | Description |
-|---|---|
-| `AFK_DAEMON_TASK` | Default task command (overridden by `--task`) |
-| `AFK_DAEMON_TASK_ID` | Default task ID (overridden by `--task-id`) |
-| `AFK_TIMEOUT_MS` | Per-tick session timeout in milliseconds |
-| `AFK_DAEMON_CWD` | Daemon-wide working directory for spawned sessions. Overridden by a per-task `cwd` field. Precedence: task `cwd` → `AFK_DAEMON_CWD` → `process.cwd()` |
-| `AFK_DAEMON_HOST` | Bind address for the control HTTP surface (default `127.0.0.1`, loopback only). Overridden by `--host`. |
-| `AFK_SESSIONSTART_COOLDOWN_MS` | Cooldown between sessionstart fires |
-
-## Security: per-task cwd trust model
-
-Pinning a task to a `cwd` has the same trust implications as `AFK_DAEMON_CWD`:
-
-- **Hooks config** — daemon sessions load `hooks` config relative to the effective `cwd`
-  (task `cwd` → `AFK_DAEMON_CWD` → `process.cwd()`). A task pinned to an untrusted
-  directory will load that directory's hooks config.
-- **MCP servers** — the session reads `.mcp.json` from the effective `cwd`. Any stdio MCP
-  server defined there runs under `bypassPermissions`, the same mode all daemon tasks use.
-- **Recommendation** — only pin tasks to directories you control and trust. This is the same
-  boundary that governs `AFK_DAEMON_CWD`; per-task `cwd` does not introduce a new trust
-  escalation path.
-
-## State and logs
-
-The daemon writes state to `~/.afk/state/daemon/` and logs to `~/.afk/logs/`. Telemetry records
-(task ID, status, duration, cost, response excerpt) are appended to
-`~/.afk/agent-framework/forge-telemetry.jsonl`.
-
-## Durable handoffs
-
-When a daemon task raises a blocking question — via the `ask_question` tool — the daemon has no
-interactive surface to answer it. Instead of silently declining and continuing, the daemon persists
-the question as a **handoff record** on disk before sending a Telegram notification. If the Telegram
-bot is running, it routes the question to your chat with an inline keyboard (for confirm/choice
-questions) or a reply-to message (for text/number questions). Your answer is recorded back to the
-durable store, and the daemon task resumes with the response injected.
-
-The write-before-send order is load-bearing: a crash between persisting the record and delivering
-the Telegram message is recoverable. On the next daemon start, `recoverPendingHandoffs` scans
-`~/.afk/state/daemon/handoffs/` for unanswered records and re-presents them to the operator
-without losing the question.
-
-| Handoff lifecycle | Description |
-|---|---|
-| `pending` | Question written to disk; Telegram message sent |
-| `answered` | Operator replied; answer recorded via CAS lock |
-| `expired` | Not answered within 24 hours; task lease restored for re-enqueue |
-| `cancelled` | Task was cancelled before an answer arrived |
-
-```
-~/.afk/state/daemon/handoffs/<taskId>.json
-```
-
-**No Telegram, no problem (sort of).** If Telegram is not configured, the router still fires a
-best-effort push when no interactive handler is installed, then declines the elicitation so the
-task continues rather than hanging indefinitely. The operator won't be able to answer the
-question, but the run won't stall.
-
-## Done verification
-
-The daemon is unattended — there is no operator watching to catch a false completion claim.
-On each cron tick the daemon runs a **Done verification probe**: if the agent's final response
-self-certifies `Done` but no corroborating tool succeeded during that turn
-(`write_file`, `edit_file`, or `bash`), the completion is flagged as unverified.
-
-When `daemon.verifyDone` is enabled (the default), the Telegram notification header is
-downgraded from ✅ to ⚠️:
-
-```
-⚠️ Done (unverified) — daemon task: nightly-review (success)
-⚠️ Unverified: no file write/edit or successful command recorded this turn — confirm before relying on this.
-```
-
-This is a **human-tier config key** — the agent cannot disable it on its own. To turn it off
-explicitly (e.g. for a task that legitimately produces no file output):
-
-```json title="~/.afk/config/afk.config.json"
-{
-  "daemon": {
-    "verifyDone": false
-  }
-}
-```
-
-The verification is heuristic, not a re-run. It checks what tools succeeded in the *same tick*
-rather than spawning a secondary session. For tasks where the only honest Done is one that
-committed a file or ran a command, this catches the most common false-completion pattern
-(an agent that says "Done" after reading files but writing nothing) without adding any
-latency to clean runs.
-
-## Crash notifications
-
-Uncaught exceptions and unhandled rejections push a crash notification to Telegram (rate-limited
-to once per 60 seconds to prevent crash-loop self-DOS). The daemon then exits with code `1`.
+<Cards>
+<Card title="Schedule unattended work" href="/guides/scheduling" description="Create, test, and inspect scheduled tasks." />
+<Card title="Run as a service" href="/guides/run-as-service" description="Keep the daemon running without a terminal." />
+<Card title="Telegram bot" href="/surfaces/telegram" description="Set up notifications and answer handoff questions." />
+</Cards>
