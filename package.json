@@ -76,7 +76,7 @@
     "audit:module-state": "tsx scripts/audit-module-state.ts",
     "audit:module-state:check": "tsx scripts/audit-module-state.ts --check",
     "audit:clones": "jscpd --config .jscpd.json",
-    "audit:clones:check": "jscpd --config .jscpd.json --baseline-from-ref origin/main --fail-on-new-clones 0",
+    "audit:clones:check": "tsx scripts/check-new-clones.ts",
     "fix:pins": "tsx scripts/update-hash-pins.ts",
     "fix:pins:check": "tsx scripts/update-hash-pins.ts --check",
     "stats:tools": "tsx scripts/count-tool-calls.ts",
