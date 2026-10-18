@@ -781,6 +781,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_OTLP_ENDPOINT",
+      "description": "OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). When set, `afk trace export-otlp` will POST the converted payload to this endpoint in addition to (or instead of) writing to stdout. Currently informational — live push support is a follow-up to the offline converter (issue #3901).",
+      "type": "string",
+      "required": false,
+      "example": "http://localhost:4318/v1/traces",
+      "category": "misc"
+    },
+    {
       "name": "AFK_OVERLOAD_PAUSE_MS",
       "description": "Wall-clock ceiling (ms) for the bounded pause after a mid-stream overload (529) exhausts its retry budget. Overrides the per-surface default for ALL surfaces: 0 disables the pause (fail fast). Interactive surfaces (cli/repl/telegram) default to 600000; daemon/cron default to 0 so an always-on runner never silently parks on upstream capacity.",
       "type": "number",
