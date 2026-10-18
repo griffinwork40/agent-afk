@@ -33,6 +33,10 @@ export function providerGrantsTool(
   hasWorkspaceStore: boolean,
 ): boolean {
   if (STORE_BACKED_TOOLS.has(toolName) && !hasWorkspaceStore) return false;
+  // NOTE: `tools.disabledBySlot` is applied per-query in the dispatcher and is
+  // not visible to child providers at construction time, so it is not consulted
+  // here. No mismatch is reachable today. If slot-disabled tools are ever
+  // carried into the provider, add a `disabledBySlot?.has(toolName)` guard.
   return checkToolPermission(toolName, permissions).allowed;
 }
 
