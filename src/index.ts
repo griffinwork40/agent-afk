@@ -69,6 +69,10 @@ export type { DiffHunk, DiffLine, DiffPayload } from './utils/diff.js';
 // SDK opt-in executors (#3442): build the `agent` / `skill` / `compose` tool
 // executors for a library-constructed session (`AgentConfig.executors`, also
 // accepted by query()/queryText() via QueryOptions).
+// #4063: export McpManager so embedders can build and pass a manager themselves.
+export { McpManager } from './agent/mcp/manager.js';
+export type { McpManagerInitOptions, McpClientState, McpServerConfig } from './agent/mcp/index.js';
+
 export { createWiredExecutors } from './agent/session/create-wired-executors.js';
 export type {
   CreateWiredExecutorsOptions,

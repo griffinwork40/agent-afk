@@ -92,6 +92,15 @@ export interface ModelSlotBinding {
    * at load time; rejected at the config_set write path.
    */
   contextWindow?: number;
+  /**
+   * Optional output-token cap override. When set, {@link maxOutputTokensOverrideFor}
+   * returns this value instead of the built-in table / default. Useful for
+   * self-hosted OpenAI-compatible models whose real reply cap differs from the
+   * 64k {@link DEFAULT_MAX_OUTPUT} fallback (e.g. a Qwen3 server capped at 32k).
+   * Must be a positive integer ≤ 10_000_000. Invalid values are silently ignored
+   * at load time; rejected at the config_set write path.
+   */
+  maxOutputTokens?: number;
 }
 
 /** Full set of resolved tier bindings. */
@@ -291,6 +300,7 @@ export function computeSlotBindings(
     if (apiKey) binding.apiKey = apiKey;
     const contextWindow = file?.contextWindow;
     if (contextWindow !== undefined) binding.contextWindow = contextWindow;
+    if (file?.maxOutputTokens !== undefined) binding.maxOutputTokens = file.maxOutputTokens;
     out[slot] = binding;
   }
   return out;
@@ -495,6 +505,9 @@ export function contextWindowOverrideFor(
   return undefined;
 }
 
+// Re-exported from sibling (350-line ceiling — see model-slots.output-override.ts).
+export { maxOutputTokensOverrideFor } from './model-slots.output-override.js';
+
 /** Slots for which we've already emitted a JSON-string recovery warning. */
 const warnedJsonStringSlots = new Set<string>();
 
@@ -593,6 +606,7 @@ function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | und
     if (apiKey) binding.apiKey = apiKey;
     const cw = parseContextWindow(obj['contextWindow']);
     if (cw !== undefined) binding.contextWindow = cw;
+    const mot = parseContextWindow(obj['maxOutputTokens']); if (mot !== undefined) binding.maxOutputTokens = mot;
     return binding;
   }
   return undefined;
@@ -620,6 +634,23 @@ function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | und
  * afk.config.json so hand-edited files and env-var overrides remain functional at
  * runtime — only the agent-writable WRITE path is gated.
  */
+
+/** Shared coerce helper for positive-integer binding fields (contextWindow, maxOutputTokens). */
+function coercePositiveIntField(
+  obj: Record<string, unknown>,
+  field: 'contextWindow' | 'maxOutputTokens',
+  binding: ModelSlotBinding,
+): string | undefined {
+  const val = obj[field];
+  if (val === undefined || val === '') return undefined;
+  const n = typeof val === 'number' ? val : Number(val);
+  if (!Number.isInteger(n) || n <= 0 || n > MAX_CONTEXT_WINDOW_OVERRIDE) {
+    return `model binding "${field}" must be a positive integer ≤ ${MAX_CONTEXT_WINDOW_OVERRIDE.toLocaleString()} (got ${JSON.stringify(val)})`;
+  }
+  binding[field] = n;
+  return undefined;
+}
+
 export function coerceSlotBindingInput(
   raw: unknown,
 ): { ok: true; value: ModelSlotBinding } | { ok: false; error: string } {
@@ -671,16 +702,9 @@ export function coerceSlotBindingInput(
     }
     binding.provider = provider;
   }
-  if (obj['contextWindow'] !== undefined && obj['contextWindow'] !== '') {
-    const raw = obj['contextWindow'];
-    const n = typeof raw === 'number' ? raw : Number(raw);
-    if (!Number.isInteger(n) || n <= 0 || n > MAX_CONTEXT_WINDOW_OVERRIDE) {
-      return {
-        ok: false,
-        error: `model binding "contextWindow" must be a positive integer ≤ ${MAX_CONTEXT_WINDOW_OVERRIDE.toLocaleString()} (got ${JSON.stringify(raw)})`,
-      };
-    }
-    binding.contextWindow = n;
+  for (const field of ['contextWindow', 'maxOutputTokens'] as const) {
+    const err = coercePositiveIntField(obj, field, binding);
+    if (err) return { ok: false, error: err };
   }
   return { ok: true, value: binding };
 }

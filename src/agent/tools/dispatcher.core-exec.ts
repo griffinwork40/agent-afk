@@ -29,6 +29,7 @@ import { dispatchPostToolUse, dispatchPostToolUseFailure } from '../subagent-hoo
 import { headAndTail } from './handlers/_output-cap.js';
 import { emitPreToolUseBlock } from './dispatcher.pre-dispatch-gates.js';
 import { executeSubagentProviderTool, isSubagentProviderTool } from './dispatcher.subagent-tools.js';
+import { mcpUnknownToolMessage } from '../mcp/failure-notice.js';
 import type { HookRegistry, PostToolUseContext, PostToolUseFailureContext } from '../hooks.js';
 import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
 import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.js';
@@ -41,6 +42,7 @@ import type { GrantManager } from './grant-manager.js';
 import type { PreDispatchGateDeps } from './dispatcher.pre-dispatch-gates.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
 import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
+import type { McpServerStateLike } from '../mcp/failure-notice.js';
 import { errorMessage } from '../../utils/errors.js';
 import { OPERATOR_DENIED_MARKER } from './operator-denied.match.js';
 
@@ -114,6 +116,14 @@ export interface CoreExecDeps {
    */
   toolDefs: readonly AnthropicToolDef[];
   /**
+   * Live accessor for MCP server states. When an unknown tool name matches
+   * `mcp__<server>__*` and `<server>` is in `error` state, the message names
+   * the failed server and its error instead of the generic "tool does not
+   * exist" text. Returns `[]` when no manager is wired (#4064).
+   * Optional: callers that omit it receive the generic unknown-tool message.
+   */
+  getMcpServerStates?: () => readonly McpServerStateLike[];
+  /**
    * This session's private TMPDIR (session-tmpdir.ts). Every call runs inside
    * it as the async scope so forks created by `agent`/`skill`/`compose` nest
    * their own temp dir under this session's.
@@ -146,8 +156,18 @@ export function isRegisteredTool(toolName: string, deps: CoreExecDeps): boolean 
  * Suggestions come from `toolDefs` (what was advertised), never `handlers`
  * (which may contain tools the gate will reject). See the long comment in
  * `dispatcher.ts` on `unknownToolMessage` for the full invariant.
+ *
+ * MCP-aware (#4064): when the tool name matches `mcp__<server>__*` and that
+ * server is in `error` state, returns a server-specific message instead of
+ * the generic text so the model does not hallucinate causes.
  */
 export function unknownToolMessage(toolName: string, deps: CoreExecDeps): string {
+  // MCP-aware path: name a failing server explicitly rather than generic text.
+  const mcpMsg = deps.getMcpServerStates
+    ? mcpUnknownToolMessage(toolName, deps.getMcpServerStates())
+    : undefined;
+  if (mcpMsg !== undefined) return mcpMsg;
+
   const available = deps.toolDefs.map((s) => s.name).join(', ');
   // An empty listing means no schema survived the allowlist filter — the
   // model was shown nothing, so pointing at "the tools listed above" is a
