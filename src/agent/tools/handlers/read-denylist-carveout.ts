@@ -82,16 +82,25 @@ export function gateDerivedCarveOuts(
  * than silently going ungated.
  *
  * Invariant: on win32, BUILTIN_READ_DENYLIST contains BOTH a forward-slash
- * HOME-based entry and a backslash USERPROFILE-based entry for the same
- * credential dir. Their source strings differ but they resolve to the SAME
- * root. A source-only filter would retain the USERPROFILE duplicate as a gate
- * root and silently drop the carve-out. Deduplicating by resolved root closes
- * the hole while preserving the per-entry provenance contract.
+ * `${HOME}/.ssh` entry and a backslash `${USERPROFILE}\\.ssh` entry. Their
+ * source strings differ but they resolve to the SAME root. A source-only
+ * filter would retain the USERPROFILE duplicate as a gate root and silently
+ * drop the carve-out it is meant to pierce. Deduplicating by resolved root
+ * closes the hole while preserving the per-entry provenance contract: two
+ * genuinely INDEPENDENT roots that happen to resolve identically (via a
+ * symlink) would also be excluded, but that is the fail-OPEN direction for
+ * carve-outs and the module contract already accepts it — the sibling test
+ * file catches any regression via the "every READ_ALLOWLIST_REL entry stays
+ * allowed" invariant.
  */
 function gateRootsExcludingSource(
   resolvedBuiltinEntries: readonly { source: string; root: string }[],
   piercedSource: string | undefined,
 ): string[] {
+  // Invariant: resolve the pierced source the same way resolveLists() resolves
+  // each BUILTIN_READ_DENYLIST entry (safeRealpath(resolve(source))), so the
+  // root comparison is symmetric regardless of separator or casing differences
+  // in the source string.
   const piercedRoot = piercedSource !== undefined
     ? safeRealpath(resolve(piercedSource))
     : undefined;
@@ -114,11 +123,19 @@ function gateRootsExcludingSource(
  * mechanism, static and derived alike; read-denylist.ts only supplies the
  * resolved entries and the builtin roots.
  */
+// Invariant: these values must be byte-equal to the corresponding SOURCE
+// strings in BUILTIN_READ_DENYLIST (read-denylist.ts). That list builds
+// sources as `${HOME}/.ssh` where HOME = safeRealpath(homedir()). Using raw
+// homedir() here silently breaks the source-identity match on Windows when
+// safeRealpath changes drive-letter casing (e.g. d:\ → D:\), causing
+// gateRootsExcludingSource to retain the very root the carve-out is meant
+// to pierce — and the carve-out is gated out (#4036 CI).
+const HOME = safeRealpath(homedir());
 const CARVEOUT_PIERCED_SOURCE: Readonly<Record<string, string>> = {
-  '.afk/config/mcp.json': `${homedir()}/.afk/config`,
-  '.afk/config/schedules.json': `${homedir()}/.afk/config`,
-  '.ssh/config': `${homedir()}/.ssh`,
-  '.ssh/known_hosts': `${homedir()}/.ssh`,
+  '.afk/config/mcp.json': `${HOME}/.afk/config`,
+  '.afk/config/schedules.json': `${HOME}/.afk/config`,
+  '.ssh/config': `${HOME}/.ssh`,
+  '.ssh/known_hosts': `${HOME}/.ssh`,
 };
 
 /**
