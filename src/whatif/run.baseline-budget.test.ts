@@ -148,11 +148,13 @@ function makeFakeJudge(): Judge {
   return {
     name: 'claude',
     external: false,
-    grade: vi.fn(async (_input: JudgeInput): Promise<JudgeResult> => ({
-      verdict: 'confirmed',
-      reasoning: 'looks good',
-      costUsd: 0.001,
-    })),
+    grade: vi.fn(async (input: JudgeInput): Promise<JudgeResult> => {
+      const result: JudgeResult = {};
+      for (const q of input.questions) {
+        result[q.id] = 0.9;
+      }
+      return result;
+    }),
     close: vi.fn(async () => {}),
   };
 }
