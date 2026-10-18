@@ -142,9 +142,13 @@ function snapshotLines(self: SnapshotHost): ReflowLine[] | null {
   while (physical.length > 0 && physical[physical.length - 1] === '') physical.pop();
   physical.forEach((text, i) => {
     const w = displayWidth(stripAnsi(text));
-    // A frame row that reaches the last column may sit in the DECAWM
-    // deferred-wrap state; we cannot prove tmux treats it as hard.
-    lines.push({ row: frame.bottom - physical.length + 1 + i, width: w, hard: w < frame.cols });
+    // tmux grid_reflow: a line whose width equals the terminal width is
+    // grid_reflow_move'd unchanged (GRID_LINE_WRAPPED is NOT set), so it is
+    // treated as hard during reflow — ceil(w/newCols) fragments, never joined
+    // with the next line. hardWrapToWidth also inserts an explicit '\n' at
+    // every wrap boundary, so a full-width row is always a separate physical
+    // row, never in the DECAWM deferred-wrap state. Mark it hard.
+    lines.push({ row: frame.bottom - physical.length + 1 + i, width: w, hard: w <= frame.cols });
   });
   // The cursor is parked at column 1 of the frame's bottom row, so that row's
   // own rewrap fragments land BELOW the cursor and never move rows above it.
