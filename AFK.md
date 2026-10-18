@@ -49,7 +49,17 @@ Every gate above plus `pnpm lint` and `pnpm build` runs on each PR (`.github/wor
 
 ## Keeping the docs site current
 
-The docs gates run in `.github/workflows/ci.yml` and `pnpm check:audits`: `scan:surface:check` catches drift between registries and the committed snapshot, `docs:surface:check` catches public symbols missing from handwritten pages or `website/docs-backlog.json`, and `docs:refs:check` catches stale symbol references. For snapshot drift, run `pnpm scan:surface` and commit `docs/public-surface.json`. For a coverage failure, document the symbol in a handwritten page or add a dated, reasoned backlog entry; remove stale or resolved entries. For a stale reference, verify the actual current symbol before updating the page. Run `pnpm docs:report` for a read-only authoring brief and `pnpm docs:impact --base origin/main` for a PR advisory. Generated reference pages must be regenerated with `pnpm scan:cli`, `pnpm scan:slash`, `pnpm scan:config`, and `pnpm scan:env`, never hand-edited.
+The docs site (`website/`, docs.agentafk.com) is kept honest by deterministic gates in CI lint-build and `pnpm check:audits` (so also pre-push). When one fails, fix the docs in the same PR:
+
+| Gate fails | Meaning | Fix |
+|---|---|---|
+| `scan:cli:check` / `scan:slash:check` / `scan:config:check` / `scan:env:check` | a generated reference page is out of date | run the matching `pnpm scan:<x>` and commit; never hand-edit `reference/{cli,slash-commands,config-keys,environment-variables}.mdx` |
+| `scan:surface:check` | `docs/public-surface.json` no longer matches the code registries | `pnpm scan:surface` and commit the snapshot |
+| `docs:surface:check` | a command, slash command, tool, config key, or hook is named on no hand-written page | document it on the page for that task (see `pnpm docs:impact --base origin/main` for where), or add a reasoned entry to `website/docs-backlog.json`; remove entries once documented |
+| `docs:refs:check` | a hand-written page names a command, flag, slash command, `AFK_*` var, config key, tool, or hook that no longer exists | update the page to the current name (verify in code); `{/* docs-refs-ignore-next-line */}` only for deliberate historical examples |
+| `scan:docs-coverage:check` / `docs:links:check` | a tool or hook is missing from its reference page, or a link/sidebar entry is broken | add the entry or fix the link |
+
+Behaviour changes that rename nothing are not caught mechanically: when you change what a user-facing feature does, update its guide. `pnpm docs:report` prints the backlog, symbols only covered by generated pages, `feat` commits since the last docs change, and a ready prompt for drafting the docs.
 
 ### Running
 
