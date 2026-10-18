@@ -37,12 +37,59 @@ export class UnreadableSchedulesError extends Error {
 }
 
 /**
+ * Shared per-entry `_schemaVersion` guard used by both `loadSchedules` (read-
+ * only) and `loadSchedulesForWrite` (read-modify-write).
+ *
+ * Iterates over `entries` and throws when any entry carries a `_schemaVersion`
+ * field that exceeds `currentVersion`.  The `throwFn` callback lets callers
+ * inject the appropriate error type (`SchedulesVersionError` for the read-only
+ * path, `UnreadableSchedulesError` for the write path) without creating a
+ * circular module dependency between the two files.
+ *
+ * @param storePath      - Path to schedules.json (for error messages).
+ * @param entries        - Parsed array of schedule entries.
+ * @param currentVersion - The schema version this build understands.
+ * @param throwFn        - Called with (storePath, message, entryVersion) when
+ *                         a future-schema entry is detected; must throw.
+ */
+export function checkEntrySchemaVersions(
+  storePath: string,
+  entries: unknown[],
+  currentVersion: number,
+  throwFn: (path: string, message: string, entryVersion: number) => never,
+): void {
+  for (const entry of entries) {
+    if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+      const entryVersion = (entry as Record<string, unknown>)['_schemaVersion'];
+      if (typeof entryVersion === 'number' && entryVersion > currentVersion) {
+        throwFn(
+          storePath,
+          `[schedule-store] ${storePath} contains an entry with _schemaVersion ${entryVersion} ` +
+            `but this build only understands schema version ${currentVersion}. ` +
+            'Upgrade afk to load this file.',
+          entryVersion,
+        );
+      }
+    }
+  }
+}
+
+/**
  * Load the schedule list for a read-modify-write. Returns [] only when the
  * file does not exist. Throws `UnreadableSchedulesError` when the file exists
- * but is not valid JSON or is not a JSON array. Read errors (EACCES, EISDIR)
- * propagate unchanged.
+ * but is not valid JSON, is not a JSON array, or contains an entry whose
+ * `_schemaVersion` exceeds `currentSchemaVersion`. Read errors (EACCES,
+ * EISDIR) propagate unchanged.
+ *
+ * The `currentSchemaVersion` parameter is injected by the caller
+ * (`schedule-store.ts`) to avoid a circular module dependency: strict-load
+ * cannot import `SCHEDULES_SCHEMA_VERSION` from schedule-store because
+ * schedule-store already imports `loadSchedulesForWrite` from strict-load.
  */
-export function loadSchedulesForWrite(storePath: string): ScheduledTaskConfig[] {
+export function loadSchedulesForWrite(
+  storePath: string,
+  currentSchemaVersion: number,
+): ScheduledTaskConfig[] {
   if (!existsSync(storePath)) return [];
   const raw = readFileSync(storePath, 'utf-8');
   let parsed: unknown;
@@ -55,5 +102,16 @@ export function loadSchedulesForWrite(storePath: string): ScheduledTaskConfig[] 
     const kind = parsed === null ? 'null' : typeof parsed;
     throw new UnreadableSchedulesError(storePath, `file is not a JSON array (found ${kind})`);
   }
+  checkEntrySchemaVersions(
+    storePath,
+    parsed,
+    currentSchemaVersion,
+    (path, _message, entryVersion) => {
+      throw new UnreadableSchedulesError(
+        path,
+        `contains an entry with _schemaVersion ${entryVersion} but this build only understands schema version ${currentSchemaVersion}. Upgrade afk to load this file.`,
+      );
+    },
+  );
   return parsed as ScheduledTaskConfig[];
 }

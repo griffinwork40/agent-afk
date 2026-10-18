@@ -55,11 +55,16 @@ beforeEach(async () => {
   dbPath = join(tmpDir, 'test.db');
   vi.resetModules();
   goalStore = await import('./goal-store.js');
+  // BgResultNotifier.onSettled early-returns when AFK_BG_AUTO_DELIVER=0.
+  // Stub explicitly so the test does not silently pass via that branch if
+  // the env var happens to be unset or disabled in the test runner.
+  vi.stubEnv('AFK_BG_AUTO_DELIVER', '1');
 });
 
 afterEach(() => {
   goalStore.closeStore();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs(); // undo vi.stubEnv() — restoreAllMocks() does NOT cover env stubs
   rmSync(tmpDir, { recursive: true, force: true });
 });
 

@@ -239,7 +239,7 @@ describe('BgResultNotifier.dispose() — undelivered notice', () => {
     // Buffer is populated; dispose without draining.
     notifier.dispose();
 
-    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    const written = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
     expect(written).toContain('background job(s) completed but were never delivered');
     expect(written).toContain('/bgsub:join');
   });
@@ -258,7 +258,7 @@ describe('BgResultNotifier.dispose() — undelivered notice', () => {
   it('emits no notice when the buffer is empty at dispose', () => {
     notifier.dispose();
     // No writes to stderr about undelivered jobs.
-    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    const written = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
     expect(written).not.toContain('background job(s) completed');
   });
 
@@ -270,7 +270,7 @@ describe('BgResultNotifier.dispose() — undelivered notice', () => {
     notifier.drainInjections(); // fully delivered
     notifier.dispose();
 
-    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    const written = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
     expect(written).not.toContain('background job(s) completed but were never delivered');
   });
 
@@ -284,7 +284,7 @@ describe('BgResultNotifier.dispose() — undelivered notice', () => {
 
     notifier.dispose();
 
-    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    const written = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
     expect(written).toContain(jobA.jobId);
     expect(written).toContain(jobB.jobId);
   });

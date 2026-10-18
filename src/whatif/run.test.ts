@@ -338,7 +338,7 @@ describe('runWhatif — predict-only path', () => {
     // We wire a custom runner whose snapshot returns a baseline with a
     // substantive delegation paragraph and a candidate that adds a near-
     // paraphrase of that same paragraph.  The Jaccard similarity between the
-    // two phrases reliably exceeds REDUNDANCY_THRESHOLD (0.35).
+    // two phrases reliably exceeds REDUNDANCY_THRESHOLD.
     const RICH_BASELINE =
       'Stay inline for: single-file edits, localized fixes visible in ' +
       'fewer than two reads, and tasks solvable without spawning a subagent.';

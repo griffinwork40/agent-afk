@@ -34,7 +34,7 @@ describe('create_schedule handler', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('writes file and returns correct shape', async () => {
@@ -144,7 +144,7 @@ describe('update_schedule handler', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('updates cron on an existing schedule', async () => {
@@ -273,7 +273,7 @@ describe('list_schedules handler', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('empty store → returns []', async () => {
@@ -314,7 +314,7 @@ describe('cancel_schedule handler', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('non-existent taskId → { error: "task not found" }, no throw', async () => {
@@ -434,7 +434,7 @@ describe('get_schedule_history handler', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('no telemetry file → returns []', async () => {
@@ -516,7 +516,7 @@ describe('live-sync surface (daemonSynced)', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   interface SyncShape {
@@ -675,7 +675,7 @@ describe('create_schedule handler — cwd field', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('accepts and stores a valid existing directory', async () => {
@@ -723,7 +723,7 @@ describe('update_schedule handler — cwd field', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('patches cwd on an existing schedule', async () => {
@@ -817,7 +817,7 @@ describe('shell executor live-sync — create_schedule + update_schedule with li
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   interface SyncShape {
@@ -936,7 +936,7 @@ describe('schedule handlers — retry fields (#3243)', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('create_schedule persists maxAttempts / retryDelayMs and list_schedules shows them', async () => {
