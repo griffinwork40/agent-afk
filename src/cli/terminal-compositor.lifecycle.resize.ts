@@ -16,6 +16,7 @@
 import { resetArchivedReveal } from './terminal-compositor.archived-reveal.js';
 import type { LifecycleHost } from './terminal-compositor.lifecycle.js';
 import { requestCprOrMarkDirty } from './terminal-compositor.lifecycle.cpr.js';
+import { noteResizeForReflow } from './terminal-compositor.reflow-shift.js';
 
 /**
  * Compute the inflated physical-row count of the pre-resize painted footprint
@@ -124,6 +125,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     // until the terminal is quiescent, then the cumulative delta is applied once.
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
+      noteResizeForReflow(self, newCols, !self.cprPending);
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
     }
   } else if (newRows < self.lastKnownRows) {
@@ -160,6 +162,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     // CPR repaint can erase the ghost spinner row left by the soft-wrap reflow.
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
+      noteResizeForReflow(self, self.stdout.columns ?? 80, !self.cprPending, /* rowShrink= */ true);
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
     }
   } else {
@@ -176,9 +179,9 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     //      which is the only repaint path that runs while cprPending suppresses
     //      the debounced SIGWINCH repaint. Without the CPR, the debounced repaint
     //      fires immediately (no suppression) but BEFORE the erase snapshot is
-    //      consumed, so the ghost can survive.  The plausibility range is [0, 0];
-    //      a non-zero measured delta is discarded and the repaint still proceeds,
-    //      which is safe: the worst case is a frame that did not shift at all.
+    //      consumed, so the ghost can survive.  The plausibility range is [0, N]
+    //      where N is the predicted tmux reflow (0 outside tmux); an implausible
+    //      delta is discarded and the repaint still proceeds.
     const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
     const frameTop = self.logUpdate?.topRow ?? 0;
     const bandTop = self.committedBand.length > 0 ? self.committedBandTopRow : 0;
@@ -206,6 +209,8 @@ export function handleResizeImmediate(self: LifecycleHost): void {
 
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
+      // Predict tmux's cursor-pinned reflow shift (terminal-compositor.reflow-shift.ts).
+      noteResizeForReflow(self, newCols, !self.cprPending);
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ 0);
     }
   }

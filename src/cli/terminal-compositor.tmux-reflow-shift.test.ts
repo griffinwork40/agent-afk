@@ -1,0 +1,122 @@
+/**
+ * Compositor-level tests for the tmux narrowing-reflow shift
+ * (terminal-compositor.reflow-shift.ts): a width-only shrink under tmux
+ * rewraps the full-width echo row into 2 rows with the cursor pinned, so every
+ * row above the cursor moves UP by N. The compositor must translate its floor
+ * and band up by N and drop rows pushed into tmux history.
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { TerminalCompositor } from './terminal-compositor.js';
+import { makeMockStdout, makeMockStdin, collectWrites } from './terminal-compositor.test-helpers.js';
+import { __resetStdinClaimForTests } from './input/stdin-claim.js';
+import { __resetCprRttForTests, CPR_REQUEST } from './terminal-compositor.lifecycle.cpr.js';
+import { setReflowShiftGateForTests } from './terminal-compositor.reflow-shift.js';
+import { formatSubmittedEcho } from './input/echo.js';
+
+interface Internals {
+  anchorRow: number | undefined;
+  committedBand: string[];
+  committedBandTopRow: number;
+  lastMeasuredFrameBottom: number;
+}
+
+async function setup(anchorRow: number, preLines: number) {
+  const stdout = makeMockStdout();
+  const stdin = makeMockStdin();
+  stdout.rows = 50;
+  stdout.columns = 230;
+  const writes = collectWrites(stdout);
+  const c = new TerminalCompositor({ contentHug: true, stdout, stdin, onCancel: vi.fn(), anchorRow });
+  await c.arm();
+  vi.advanceTimersByTime(20);
+  for (let i = 0; i < preLines; i++) c.commitAbove(`FILLER_${i}`);
+  const echo = formatSubmittedEcho({ buffer: 'DUPCHECK hello', promptText: 'afk › ', isTTY: true, terminalWidth: 230 });
+  c.commitAbove(echo);
+  c.commitAbove('AFTER_LINE');
+  vi.advanceTimersByTime(20);
+  return { c, stdout, stdin, writes, internals: c as unknown as Internals };
+}
+
+/** Width-only shrink, then answer the CPR with the unchanged cursor row (tmux). */
+function splitPane(s: Awaited<ReturnType<typeof setup>>): string {
+  const row = s.internals.lastMeasuredFrameBottom;
+  s.writes.clear();
+  s.stdout.columns = 115;
+  process.stdout.emit('resize');
+  expect(s.writes.all()).toContain(CPR_REQUEST);
+  s.stdin.emit('data', Buffer.from(`\x1b[${row};1R`));
+  vi.advanceTimersByTime(50);
+  return s.writes.all();
+}
+
+describe('tmux narrowing-reflow shift (compositor)', () => {
+  beforeEach(() => {
+    __resetStdinClaimForTests();
+    __resetCprRttForTests();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    setReflowShiftGateForTests(null);
+    vi.useRealTimers();
+  });
+
+  it('banner case: anchorRow 11 → 10, row 10 erased, band repainted from row 10', async () => {
+    setReflowShiftGateForTests(() => true);
+    const s = await setup(11, 0);
+    expect(s.internals.committedBandTopRow).toBe(11);
+    const out = splitPane(s);
+    expect(s.internals.anchorRow).toBe(10);
+    expect(out).toContain('\x1b[10;1H\x1b[2K');
+    // Band (rewrapped echo: '▶' fragment first) repainted starting at row 10.
+    expect(out).toMatch(/\x1b\[10;1H\x1b\[2K▶/);
+    expect(s.internals.committedBandTopRow).toBe(10);
+    s.c.disarm();
+  });
+
+  it('anchorRow 1: band rows pushed above row 1 are evicted, not repainted', async () => {
+    setReflowShiftGateForTests(() => true);
+    const s = await setup(1, 0);
+    expect(s.internals.committedBandTopRow).toBe(1);
+    const out = splitPane(s);
+    // The echo's '▶' head fragment went into tmux history: dropped from the model.
+    expect(s.internals.committedBand.some((r) => r.startsWith('▶'))).toBe(false);
+    expect(out).not.toContain('▶');
+    expect(out).toContain('DUPCHECK hello');
+    expect(s.internals.anchorRow).toBe(1);
+    s.c.disarm();
+  });
+
+  it('gate off (no TMUX): behaviour unchanged — floor stays, band repainted at old floor', async () => {
+    setReflowShiftGateForTests(() => false);
+    const s = await setup(11, 0);
+    const out = splitPane(s);
+    expect(s.internals.anchorRow).toBe(11);
+    expect(out).not.toContain('\x1b[10;1H');
+    expect(out).toMatch(/\x1b\[11;1H\x1b\[2K▶/);
+    s.c.disarm();
+  });
+
+  it('CPR timeout under tmux: no shift (fallback)', async () => {
+    setReflowShiftGateForTests(() => true);
+    const s = await setup(11, 0);
+    s.stdout.columns = 115;
+    process.stdout.emit('resize');
+    vi.advanceTimersByTime(500);
+    expect(s.internals.anchorRow).toBe(11);
+    s.c.disarm();
+  });
+
+  it('top-pinned terminal (cursor moved down N) under the gate: no shift', async () => {
+    setReflowShiftGateForTests(() => true);
+    const s = await setup(11, 0);
+    const row = s.internals.lastMeasuredFrameBottom;
+    s.stdout.columns = 115;
+    process.stdout.emit('resize');
+    s.stdin.emit('data', Buffer.from(`\x1b[${row + 1};1R`));
+    // Net shift above the cursor is delta − N = 0: the floor stays at 11.
+    expect(s.internals.anchorRow).toBe(11);
+    vi.advanceTimersByTime(50);
+    expect(s.internals.anchorRow).toBe(11);
+    s.c.disarm();
+  });
+});
