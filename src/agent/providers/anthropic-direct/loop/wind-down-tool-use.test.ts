@@ -152,7 +152,7 @@ describe('runToolRound — wind-down tool_use settlement (#4072)', () => {
       expect(content).toBe(WIND_DOWN_NO_ANSWER_PLACEHOLDER);
     } else {
       // If content is an array, it must be non-empty and contain no tool_use.
-      const arr = last!.content as Array<Record<string, unknown>>;
+      const arr = last!.content as unknown as Array<Record<string, unknown>>;
       expect(arr.every((b) => b['type'] !== 'tool_use')).toBe(true);
     }
   });
@@ -181,7 +181,7 @@ describe('runToolRound — wind-down tool_use settlement (#4072)', () => {
     const last = input.messages[input.messages.length - 1];
     expect(last!.role).toBe('assistant');
     // Content must contain the text block and NOT the tool_use block.
-    const arr = Array.isArray(last!.content) ? (last!.content as Array<Record<string, unknown>>) : [];
+    const arr = Array.isArray(last!.content) ? (last!.content as unknown as Array<Record<string, unknown>>) : [];
     const textBlocks = arr.filter((b) => b['type'] === 'text');
     const toolBlocks = arr.filter((b) => b['type'] === 'tool_use');
     expect(textBlocks.length).toBeGreaterThanOrEqual(1);
