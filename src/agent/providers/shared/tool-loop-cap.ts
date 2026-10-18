@@ -43,6 +43,17 @@ export const TOOL_USE_LOOP_CAPPED = 'tool_use_loop_capped';
 export const DEFAULT_MAX_TOOL_USE_ITERATIONS = 0;
 
 /**
+ * Placeholder emitted as the turn's final text when a wind-down round returns
+ * only tool calls and leaves no prose answer. Worded consistently with the
+ * context-pressure placeholder so callers see one family of "partial, resume
+ * from saved work" messages. Used by both anthropic-direct and
+ * openai-compatible wind-down settlement paths.
+ */
+export const WIND_DOWN_NO_ANSWER_PLACEHOLDER =
+  'Wind-down incomplete: the final round requested tools instead of answering, ' +
+  'and no tool calls were executed. Partial tool outputs are journaled; resume from saved work.';
+
+/**
  * Instruction appended to the LAST turn of the wind-down round's request (never
  * persisted to history). Tells the model its tool budget is spent so it answers
  * in text. Identical wording across providers so behavior matches exactly.

@@ -188,6 +188,94 @@ describe('openRound — orphan_repair trace event', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// wind-down rounds keep the tools array (#4072)
+// ---------------------------------------------------------------------------
+
+describe('openRound — tools array on wind-down rounds', () => {
+  it('sends the identical tools array when windDownReason is set (main request path)', async () => {
+    const capturedParams: unknown[] = [];
+    const controller = new AbortController();
+    const tools: AnthropicToolDef[] = [
+      { name: 'bash', description: 'Run a command', input_schema: SCHEMA },
+      { name: 'read_file', description: 'Read a file', input_schema: SCHEMA },
+    ];
+    const input: RunTurnInput = {
+      client: {
+        messages: {
+          create: (params: unknown) => {
+            capturedParams.push(params);
+            return Promise.resolve(minimalStream());
+          },
+        },
+      },
+      messages: [{ role: 'user', content: 'hi' }],
+      system: null,
+      tools,
+      toolDispatcher: {} as RunTurnInput['toolDispatcher'],
+      model: 'claude-test',
+      maxTokens: 1024,
+      headers: {},
+      signal: controller.signal,
+      ctx: { sessionId: 'test-session' },
+    } as unknown as RunTurnInput;
+
+    const turn = new TurnAccumulator();
+    turn.windDownReason = 'tool_use_loop_capped';
+    const retry = new RoundRetryBudget();
+
+    await drainGen(openRound({ input, turn, retry, ttfbTimeoutMs: 10_000, stallTimeoutMs: 30_000 }));
+
+    expect(capturedParams).toHaveLength(1);
+    const params = capturedParams[0] as Record<string, unknown>;
+    // Tools must be present and non-empty — not null, not undefined, not [].
+    expect(Array.isArray(params['tools'])).toBe(true);
+    expect((params['tools'] as unknown[]).length).toBe(2);
+    // Wire names must match — confirms the array is the SAME definitions.
+    const names = (params['tools'] as Array<{ name: string }>).map((t) => t.name);
+    expect(names).toContain('bash');
+    expect(names).toContain('read_file');
+  });
+
+  it('sends the identical tools array when windDownReason is null (normal round)', async () => {
+    const capturedParams: unknown[] = [];
+    const controller = new AbortController();
+    const tools: AnthropicToolDef[] = [
+      { name: 'bash', description: 'Run a command', input_schema: SCHEMA },
+    ];
+    const input: RunTurnInput = {
+      client: {
+        messages: {
+          create: (params: unknown) => {
+            capturedParams.push(params);
+            return Promise.resolve(minimalStream());
+          },
+        },
+      },
+      messages: [{ role: 'user', content: 'hi' }],
+      system: null,
+      tools,
+      toolDispatcher: {} as RunTurnInput['toolDispatcher'],
+      model: 'claude-test',
+      maxTokens: 1024,
+      headers: {},
+      signal: controller.signal,
+      ctx: { sessionId: 'test-session' },
+    } as unknown as RunTurnInput;
+
+    const turn = new TurnAccumulator();
+    // windDownReason === null — normal round
+    const retry = new RoundRetryBudget();
+
+    await drainGen(openRound({ input, turn, retry, ttfbTimeoutMs: 10_000, stallTimeoutMs: 30_000 }));
+
+    expect(capturedParams).toHaveLength(1);
+    const params = capturedParams[0] as Record<string, unknown>;
+    expect(Array.isArray(params['tools'])).toBe(true);
+    expect((params['tools'] as unknown[]).length).toBe(1);
+  });
+});
+
 describe('buildRoundParams', () => {
   it('includes temperature in the wire request when set', () => {
     const params = buildRoundParams({

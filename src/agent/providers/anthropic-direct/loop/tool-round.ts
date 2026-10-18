@@ -29,6 +29,7 @@ import {
 import {
   TOOL_USE_LOOP_CAPPED,
   WIND_DOWN_NOTE,
+  WIND_DOWN_NO_ANSWER_PLACEHOLDER,
   formatRoundLabel,
   shouldWindDown,
   roundDeliveryNotice,
@@ -64,6 +65,39 @@ export async function* runToolRound(
   // terminating in an unmatched `tool_use` — every subsequent API call 400s.
   const messagesRollbackIdx = input.messages.length;
   input.messages.push({ role: 'assistant', content: turnResult.assistantBlocks });
+
+  // Wind-down early exit: BEFORE dispatch. The wind-down round keeps tools
+  // advertised (prefix-cache fix #4072), so the model can legitimately return
+  // `stop_reason: 'tool_use'`. We must NEVER dispatch in that case — settle
+  // the turn immediately with the round's own text (or the placeholder), strip
+  // any tool_use blocks from the assistant push so the API cannot 400 on an
+  // orphaned tool_use, then yield turn.completed with the wind-down reason.
+  //
+  // This mirrors the openai-compatible settlement in wind-down-final.ts and
+  // turn-driver.ts, where the wind-down round is settled BEFORE the dispatch
+  // branch. Placing it here (after the assistant push, before the try) keeps
+  // the rollback-idx contract intact: the splice-on-throw below is still
+  // reachable by any subsequent (non-wind-down) throws.
+  if (turn.windDownReason !== null) {
+    const safeBlocks = turnResult.assistantBlocks.filter((b) => b.type !== 'tool_use');
+    const finalText = turnResult.text.length > 0 ? turnResult.text : WIND_DOWN_NO_ANSWER_PLACEHOLDER;
+    // Replace the assistant push with a safe version (no orphan tool_use blocks).
+    if (safeBlocks.length > 0) {
+      input.messages[input.messages.length - 1] = { role: 'assistant', content: safeBlocks };
+    } else {
+      // No text blocks — use the placeholder string so the conversation ends
+      // with a real assistant message, never an empty or markup-only one.
+      input.messages[input.messages.length - 1] = { role: 'assistant', content: finalText };
+    }
+    input.journalSync?.sync(input.messages);
+    yield {
+      type: 'turn.completed',
+      usage: turn.withDuration({ ...turn.usage, stopReason: turn.windDownReason }),
+      sessionId: input.ctx.sessionId,
+    };
+    return 'terminated';
+  }
+
   // Journal commit point: durably record the tool_use round BEFORE tools run,
   // so a crash mid-dispatch still leaves the model's request on disk. A
   // rollback splice below is reconciled (truncate) by the next sync.
@@ -138,28 +172,14 @@ export async function* runToolRound(
     sessionId: input.ctx.sessionId,
   };
 
-  if (turn.windDownReason !== null) {
-    // The wind-down round (tools stripped) still came back as `tool_use` — only
-    // reachable if the model emits a tool call against an empty toolset. Honor
-    // the spent budget with a hard stop rather than looping unbounded, stamping
-    // the reason that armed the wind-down so a turn cut short by TIME is not
-    // reported as one cut short by ROUNDS.
-    yield {
-      type: 'turn.completed',
-      usage: turn.withDuration({ ...turn.usage, stopReason: turn.windDownReason }),
-      sessionId: input.ctx.sessionId,
-    };
-    return 'terminated';
-  }
-
   // Two independent budgets trip the SAME wind-down mechanism: the tool-round
   // cap and the soft wall-clock deadline. Round-cap wins a tie — it is the more
   // specific budget, and its note is the more accurate diagnosis when both are
-  // spent. Either way the loop runs ONE more round with tools stripped (see the
-  // params build in round-request.ts) rather than cutting the turn off HERE,
-  // which would end it with no final assistant message and read as a silent
-  // hang. `windDownReason` guarantees this fires at most once; the guard above
-  // hard-stops if the wind-down round pathologically emits another tool_use.
+  // spent. Either way the loop runs ONE more round (tools kept for cache
+  // preservation — see round-request.ts and #4072) rather than cutting the turn
+  // off HERE, which would end it with no final assistant message and read as a
+  // silent hang. `windDownReason` guarantees the early-exit above fires at most
+  // once; any tool_use the wind-down round returns is settled without dispatch.
   const notice = roundDeliveryNotice(turn.iterations, maxIterations);
   const lastResult = input.messages[input.messages.length - 1];
   if (notice && lastResult?.role === 'user' && Array.isArray(lastResult.content)) {
