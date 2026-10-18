@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**226 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**229 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -99,6 +99,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_TELEGRAM_PRIMARY_CHAT_ID` | string |  |  | `123456789` | Default chat ID for outbound notifications (primary-mode routing). When unset, notifications go to the first private/DM chat in AFK_TELEGRAM_ALLOWED_CHAT_IDS. The afk.config.json telegram.notify block takes precedence. |
 | `AFK_TELEGRAM_SESSION_IDLE_MS` | number |  | `14400000` | `3600000` | Milliseconds of inactivity after which an idle AgentSession is closed and its memory freed. sessionData (model/cwd preferences) is kept in-memory and reloaded on demand from disk. Default: 14400000 (4 hours). |
 | `AFK_TELEGRAM_TAG_ONLY_CHAT_IDS` | string |  |  | `-100987654321,123456789` | Comma-separated list of Telegram chat IDs where the bot answers only when addressed (a reply to the bot, an @mention of the bot, or a text_mention resolving to the bot). Slash-commands are unaffected; chats not listed behave as usual. The afk.config.json telegram.tagOnlyChats block takes precedence. Requires Telegram privacy mode OFF (BotFather /setprivacy Disable) for non-addressed group messages to reach the bot. |
+| `AFK_TRANSCRIBE_API_KEY` | string |  |  |  | Bearer token for the AFK_TRANSCRIBE_API_URL transcription endpoint. Leave unset for unauthenticated local servers. |
+| `AFK_TRANSCRIBE_API_URL` | string |  |  | `https://api.openai.com/v1/audio/transcriptions` | OpenAI-compatible /audio/transcriptions endpoint URL used to transcribe inbound Telegram voice and audio messages. When unset, voice/audio messages receive a refusal reply naming this variable. Supports any OpenAI-compatible server including local Whisper deployments. |
+| `AFK_TRANSCRIBE_MODEL` | string |  | `whisper-1` | `whisper-large-v3` | Model name forwarded to the AFK_TRANSCRIBE_API_URL endpoint (default: whisper-1). Change when using an endpoint that expects a different model identifier. |
 | `TELEGRAM_BOT_TOKEN` | string |  |  |  | Telegram bot token from @BotFather. Required to run the Telegram bot surface. |
 | `TELEGRAM_DATA_DIR` | string |  |  |  | Override the directory where Telegram bot state is stored. Defaults to ~/.afk/state/telegram/. |
 | `TELEGRAM_VERBOSE` | boolean |  |  | `true` | Set to a truthy value ('1'/'true'/'yes'/'on', case-insensitive) to log per-message details from the Telegram bot — chat IDs, message text, latency. |

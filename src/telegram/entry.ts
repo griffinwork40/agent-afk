@@ -40,6 +40,7 @@ import { startStatsTicker } from './stats-ticker.js';
 import { pushIfConfigured } from './push.js';
 import { installCrashNotifier } from '../utils/crash-notifier.js';
 import { errorMessage } from '../utils/errors.js';
+import { createTranscriber } from './audio-transcriber.js';
 
 /**
  * Crash-notification handler for the Telegram bot process.
@@ -82,6 +83,15 @@ function recordTelegramStartup(daemonVersion: string): void {
   if (!writeServiceStartupSidecar('telegram', daemonVersion)) {
     console.warn('warn: failed to write service startup sidecar — `afk service status` may not show the running version');
   }
+}
+
+/**
+ * Build a transcriber from the typed env object, or return null when
+ * AFK_TRANSCRIBE_API_URL is unset (opt-in; no silent paid calls by default).
+ * Extracted from main() to keep that function within the 200-line ceiling.
+ */
+function resolveTranscriber(e: typeof env): ReturnType<typeof createTranscriber> {
+  return createTranscriber(e);
 }
 
 export async function main(): Promise<void> {
@@ -216,6 +226,7 @@ export async function main(): Promise<void> {
     // override is set via /cd. Per-session `data.cwd` takes precedence.
     ...(telegramCwd !== undefined && telegramCwd.length > 0 ? { botCwd: telegramCwd } : {}),
     ...(idleSessionMs !== undefined && !isNaN(idleSessionMs) && idleSessionMs > 0 ? { idleSessionMs } : {}),
+    transcriber: resolveTranscriber(env),
     // Forward permissionMode only when the operator explicitly set it in afk.config.json.
     // loadConfig() always fills in DEFAULT_CLI_PERMISSION_MODE, so checking config.permissionMode
     // would unconditionally forward bypassPermissions into Telegram session metadata (#3969).
