@@ -79,17 +79,32 @@ export async function* runToolRound(
   // the rollback-idx contract intact: the splice-on-throw below is still
   // reachable by any subsequent (non-wind-down) throws.
   if (turn.windDownReason !== null) {
+    // Invariant: retain signed thinking blocks, but never leave history without
+    // prose when tool_use is stripped from a textless wind-down response.
     const safeBlocks = turnResult.assistantBlocks.filter((b) => b.type !== 'tool_use');
     const finalText = turnResult.text.length > 0 ? turnResult.text : WIND_DOWN_NO_ANSWER_PLACEHOLDER;
     // Replace the assistant push with a safe version (no orphan tool_use blocks).
     if (safeBlocks.length > 0) {
-      input.messages[input.messages.length - 1] = { role: 'assistant', content: safeBlocks };
+      // If safeBlocks has no text block (only thinking/redacted_thinking), append
+      // a text block so the answer is always reachable as prose.
+      const hasText = safeBlocks.some((b) => b.type === 'text');
+      const settlementBlocks = hasText
+        ? safeBlocks
+        : [...safeBlocks, { type: 'text' as const, text: finalText }];
+      input.messages[input.messages.length - 1] = { role: 'assistant', content: settlementBlocks };
     } else {
-      // No text blocks — use the placeholder string so the conversation ends
-      // with a real assistant message, never an empty or markup-only one.
+      // No safe blocks at all — use the placeholder string so the conversation
+      // ends with a real assistant message, never an empty or markup-only one.
       input.messages[input.messages.length - 1] = { role: 'assistant', content: finalText };
     }
     input.journalSync?.sync(input.messages);
+    // Emit assistant.message BEFORE turn.completed to match the normal terminal
+    // event shape expected by all consumers of the provider event stream.
+    yield {
+      type: 'assistant.message',
+      text: finalText,
+      sessionId: input.ctx.sessionId,
+    };
     yield {
       type: 'turn.completed',
       usage: turn.withDuration({ ...turn.usage, stopReason: turn.windDownReason }),

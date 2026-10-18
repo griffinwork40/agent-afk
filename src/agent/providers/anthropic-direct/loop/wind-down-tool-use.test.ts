@@ -1,16 +1,30 @@
 /**
- * Regression tests for #4072: wind-down rounds on anthropic-direct keep the
- * tools array (cache-preserving) but NEVER dispatch a tool_use reply.
+ * Regression tests for #4072 and PR4094:
+ *
+ * #4072 — wind-down rounds on anthropic-direct keep the tools array
+ * (cache-preserving) but NEVER dispatch a tool_use reply.
+ *
+ * PR4094 — Items 1 and 2:
+ *   Item 1: the wind-down early exit MUST yield assistant.message (with
+ *     finalText and sessionId) BEFORE turn.completed, matching the normal
+ *     terminal event shape expected by all consumers.
+ *   Item 2: thinking/redacted_thinking blocks that survive the tool_use filter
+ *     must be retained in safeBlocks; if no text block survives alongside them,
+ *     a synthetic text block carrying finalText is appended so the answer is
+ *     always reachable as prose — the placeholder is never silently swallowed.
  *
  * When the model responds to a wind-down round with `stop_reason: 'tool_use'`
  * the turn must:
  *   1. NOT dispatch any tools.
- *   2. End with a `turn.completed` event whose `stopReason` equals the
+ *   2. Yield assistant.message BEFORE turn.completed (PR4094 Item 1).
+ *   3. End with a `turn.completed` event whose `stopReason` equals the
  *      wind-down reason (not 'tool_use').
- *   3. Leave history terminating in a safe assistant message (no orphan
+ *   4. Leave history terminating in a safe assistant message (no orphan
  *      `tool_use` block without a matching `tool_result`).
- *   4. Use the round's own text as the final answer, or the placeholder when
+ *   5. Use the round's own text as the final answer, or the placeholder when
  *      there is no text.
+ *   6. Retain thinking/redacted_thinking blocks and append text if needed
+ *      (PR4094 Item 2).
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -206,5 +220,170 @@ describe('runToolRound — wind-down tool_use settlement (#4072)', () => {
     await drainGen(runToolRound(makeTurnResult(), input, turn, 3, 0));
 
     expect(dispatchCalled).toBe(false);
+  });
+
+  // PR4094 Item 1 — assistant.message must precede turn.completed
+  it('emits assistant.message BEFORE turn.completed on wind-down tool_use settlement (PR4094 Item 1)', async () => {
+    const messages = makeMessages();
+    const input = makeInput(messages);
+
+    const turn = new TurnAccumulator();
+    turn.windDownReason = TOOL_USE_LOOP_CAPPED;
+
+    const result = makeTurnResult({ text: 'Summary of findings.' });
+
+    const { yielded } = await drainGen(runToolRound(result, input, turn, 3, 0));
+
+    const types = yielded.map((e) => (e as Record<string, unknown>)['type']);
+    const msgIdx = types.indexOf('assistant.message');
+    const cmpIdx = types.indexOf('turn.completed');
+
+    expect(msgIdx).toBeGreaterThanOrEqual(0);
+    expect(cmpIdx).toBeGreaterThanOrEqual(0);
+    expect(msgIdx).toBeLessThan(cmpIdx);
+  });
+
+  it('assistant.message carries finalText and sessionId on wind-down settlement (PR4094 Item 1)', async () => {
+    const messages = makeMessages();
+    const input = makeInput(messages);
+
+    const turn = new TurnAccumulator();
+    turn.windDownReason = TOOL_USE_LOOP_CAPPED;
+
+    const result = makeTurnResult({ text: 'My final answer.' });
+
+    const { yielded } = await drainGen(runToolRound(result, input, turn, 3, 0));
+
+    const msgEvent = yielded.find(
+      (e) => (e as Record<string, unknown>)['type'] === 'assistant.message',
+    ) as Record<string, unknown> | undefined;
+
+    expect(msgEvent).toBeDefined();
+    expect(msgEvent!['text']).toBe('My final answer.');
+    expect(msgEvent!['sessionId']).toBe('test-wind-down');
+  });
+
+  it('assistant.message uses placeholder when wind-down round has no text (PR4094 Item 1)', async () => {
+    const messages = makeMessages();
+    const input = makeInput(messages);
+
+    const turn = new TurnAccumulator();
+    turn.windDownReason = TOOL_USE_LOOP_CAPPED;
+
+    const result = makeTurnResult({ text: '' }); // tool_use only, no text
+
+    const { yielded } = await drainGen(runToolRound(result, input, turn, 3, 0));
+
+    const msgEvent = yielded.find(
+      (e) => (e as Record<string, unknown>)['type'] === 'assistant.message',
+    ) as Record<string, unknown> | undefined;
+
+    expect(msgEvent).toBeDefined();
+    expect(msgEvent!['text']).toBe(WIND_DOWN_NO_ANSWER_PLACEHOLDER);
+  });
+
+  // PR4094 Item 2 — thinking/redacted_thinking blocks retained; text appended when needed
+  it('retains thinking blocks and appends text block when wind-down has thinking+tool_use only (PR4094 Item 2)', async () => {
+    const messages = makeMessages();
+    const input = makeInput(messages);
+
+    const turn = new TurnAccumulator();
+    turn.windDownReason = TOOL_USE_LOOP_CAPPED;
+
+    // Model emits thinking + tool_use, no text block.
+    const result = makeTurnResult({
+      text: '',
+      assistantBlocks: [
+        { type: 'thinking', thinking: 'I should look this up.', signature: 'sig' } as unknown as TurnResult['assistantBlocks'][0],
+        { type: 'tool_use', id: 'toolu_wd_03', name: 'bash', input: {} } as unknown as TurnResult['assistantBlocks'][0],
+      ],
+      toolUseBlocks: [
+        { type: 'tool_use', id: 'toolu_wd_03', name: 'bash', input: {} } as unknown as TurnResult['toolUseBlocks'][0],
+      ],
+    });
+
+    await drainGen(runToolRound(result, input, turn, 3, 0));
+
+    const last = input.messages[input.messages.length - 1];
+    expect(last!.role).toBe('assistant');
+    const arr = Array.isArray(last!.content)
+      ? (last!.content as unknown as Array<Record<string, unknown>>)
+      : [];
+
+    // thinking block must be retained
+    expect(arr.some((b) => b['type'] === 'thinking')).toBe(true);
+    // tool_use must be stripped
+    expect(arr.some((b) => b['type'] === 'tool_use')).toBe(false);
+    // a text block must have been appended with the placeholder
+    const textBlocks = arr.filter((b) => b['type'] === 'text');
+    expect(textBlocks).toHaveLength(1);
+    expect(textBlocks[0]!['text']).toBe(WIND_DOWN_NO_ANSWER_PLACEHOLDER);
+  });
+
+  it('retains redacted_thinking blocks and appends text block when wind-down has no prose (PR4094 Item 2)', async () => {
+    const messages = makeMessages();
+    const input = makeInput(messages);
+
+    const turn = new TurnAccumulator();
+    turn.windDownReason = TOOL_USE_LOOP_CAPPED;
+
+    const result = makeTurnResult({
+      text: '',
+      assistantBlocks: [
+        { type: 'redacted_thinking', data: 'opaque' } as unknown as TurnResult['assistantBlocks'][0],
+        { type: 'tool_use', id: 'toolu_wd_04', name: 'bash', input: {} } as unknown as TurnResult['assistantBlocks'][0],
+      ],
+      toolUseBlocks: [
+        { type: 'tool_use', id: 'toolu_wd_04', name: 'bash', input: {} } as unknown as TurnResult['toolUseBlocks'][0],
+      ],
+    });
+
+    await drainGen(runToolRound(result, input, turn, 3, 0));
+
+    const last = input.messages[input.messages.length - 1];
+    const arr = Array.isArray(last!.content)
+      ? (last!.content as unknown as Array<Record<string, unknown>>)
+      : [];
+
+    expect(arr.some((b) => b['type'] === 'redacted_thinking')).toBe(true);
+    expect(arr.some((b) => b['type'] === 'tool_use')).toBe(false);
+    const textBlocks = arr.filter((b) => b['type'] === 'text');
+    expect(textBlocks).toHaveLength(1);
+    expect(textBlocks[0]!['text']).toBe(WIND_DOWN_NO_ANSWER_PLACEHOLDER);
+  });
+
+  it('does NOT append a duplicate text block when wind-down has thinking + text + tool_use (PR4094 Item 2)', async () => {
+    const messages = makeMessages();
+    const input = makeInput(messages);
+
+    const turn = new TurnAccumulator();
+    turn.windDownReason = TOOL_USE_LOOP_CAPPED;
+
+    // Model emits thinking + real text + tool_use — text must NOT be duplicated.
+    const result = makeTurnResult({
+      text: 'Safe prose answer.',
+      assistantBlocks: [
+        { type: 'thinking', thinking: 'Reasoning...', signature: 'sig2' } as unknown as TurnResult['assistantBlocks'][0],
+        { type: 'text', text: 'Safe prose answer.' } as unknown as TurnResult['assistantBlocks'][0],
+        { type: 'tool_use', id: 'toolu_wd_05', name: 'bash', input: {} } as unknown as TurnResult['assistantBlocks'][0],
+      ],
+      toolUseBlocks: [
+        { type: 'tool_use', id: 'toolu_wd_05', name: 'bash', input: {} } as unknown as TurnResult['toolUseBlocks'][0],
+      ],
+    });
+
+    await drainGen(runToolRound(result, input, turn, 3, 0));
+
+    const last = input.messages[input.messages.length - 1];
+    const arr = Array.isArray(last!.content)
+      ? (last!.content as unknown as Array<Record<string, unknown>>)
+      : [];
+
+    // Exactly one text block — the real one, not a synthetic duplicate.
+    const textBlocks = arr.filter((b) => b['type'] === 'text');
+    expect(textBlocks).toHaveLength(1);
+    expect(textBlocks[0]!['text']).toBe('Safe prose answer.');
+    expect(arr.some((b) => b['type'] === 'thinking')).toBe(true);
+    expect(arr.some((b) => b['type'] === 'tool_use')).toBe(false);
   });
 });

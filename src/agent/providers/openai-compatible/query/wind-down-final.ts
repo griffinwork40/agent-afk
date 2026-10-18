@@ -20,15 +20,10 @@
  * @module agent/providers/openai-compatible/query/wind-down-final
  */
 
-/**
- * Explicit incomplete marker used when a wind-down round leaves no answer text
- * after tool-call markup is removed. Worded like the existing context-pressure
- * placeholder in `turn-driver.ts` so the parent sees one consistent family of
- * "partial, resume from saved work" messages, never an empty string or markup.
- */
-export const WIND_DOWN_NO_ANSWER_PLACEHOLDER =
-  'Wind-down incomplete: the final round requested tools instead of answering, ' +
-  'and no tool calls were executed. Partial tool outputs are journaled; resume from saved work.';
+import { WIND_DOWN_NO_ANSWER_PLACEHOLDER } from '../../shared/tool-loop-cap.js';
+
+// Preserve this module's public export while sharing one provider-neutral value.
+export { WIND_DOWN_NO_ANSWER_PLACEHOLDER };
 
 /**
  * Tool-call markup shapes emitted as plain text by common open-weight chat
