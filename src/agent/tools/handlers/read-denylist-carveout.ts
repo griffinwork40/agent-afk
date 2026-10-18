@@ -32,9 +32,10 @@
  * Platform-aware prefix-or-equal containment. `relative` avoids hard-coding
  * `/`, which would silently disable nested-root checks on Windows.
  */
-import { basename, dirname, isAbsolute, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { isCaseInsensitiveFs } from '../fs-case.js';
+import { safeRealpath } from './write-denylist.js';
 
 function isUnderRoot(candidate: string, root: string): boolean {
   const rel = relative(root, candidate);
@@ -79,13 +80,23 @@ export function gateDerivedCarveOuts(
  * `piercedSource` of `undefined` (no mapping for this carve-out) excludes
  * nothing, so an unmapped entry is gated by every root — fails CLOSED rather
  * than silently going ungated.
+ *
+ * Invariant: on win32, BUILTIN_READ_DENYLIST contains BOTH a forward-slash
+ * HOME-based entry and a backslash USERPROFILE-based entry for the same
+ * credential dir. Their source strings differ but they resolve to the SAME
+ * root. A source-only filter would retain the USERPROFILE duplicate as a gate
+ * root and silently drop the carve-out. Deduplicating by resolved root closes
+ * the hole while preserving the per-entry provenance contract.
  */
 function gateRootsExcludingSource(
   resolvedBuiltinEntries: readonly { source: string; root: string }[],
   piercedSource: string | undefined,
 ): string[] {
+  const piercedRoot = piercedSource !== undefined
+    ? safeRealpath(resolve(piercedSource))
+    : undefined;
   return resolvedBuiltinEntries
-    .filter(({ source }) => source !== piercedSource)
+    .filter(({ source, root }) => source !== piercedSource && root !== piercedRoot)
     .map(({ root }) => root);
 }
 
