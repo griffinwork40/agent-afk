@@ -418,6 +418,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // AnthropicDirectProvider; the required key on the dispatcher options
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
+      // #4064: MCP-aware unknown-tool messages. Forward a live accessor so that
+      // when a model calls mcp__<server>__<tool> for a failed server the response
+      // names the server and its error instead of the generic "tool does not exist".
+      // Mirrors AnthropicDirectProvider build-dispatcher.ts:389-391.
+      getMcpServerStates: this.providerOpts.mcpManager
+        ? () => this.providerOpts.mcpManager!.getServerStates()
+        : () => [],
     };
     // MCP + custom-tool unions, then operator denies LAST (shared with
     // AnthropicDirectProvider; invariant in tools/permissions-compose.ts).

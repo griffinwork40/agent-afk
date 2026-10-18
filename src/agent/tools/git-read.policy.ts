@@ -133,10 +133,17 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   }
   const subcommand = sub as GitReadSubcommand;
   const policy = POLICIES[subcommand];
-  const args = asStringArray(req.args, 'args');
-  if (typeof args === 'string') return { ok: false, error: args };
-  const paths = asStringArray(req.paths, 'paths');
-  if (typeof paths === 'string') return { ok: false, error: paths };
+  const rawArgs = asStringArray(req.args, 'args');
+  if (typeof rawArgs === 'string') return { ok: false, error: rawArgs };
+  const fieldPaths = asStringArray(req.paths, 'paths');
+  if (typeof fieldPaths === 'string') return { ok: false, error: fieldPaths };
+  // Accept git's own grammar: a literal `--` in `args` separates revisions
+  // from pathspecs. Tokens after it join `paths` and are confined below like
+  // any other path, so this widens nothing.
+  const sep = rawArgs.indexOf('--');
+  const args = sep === -1 ? rawArgs : rawArgs.slice(0, sep);
+  const paths = sep === -1 ? fieldPaths : [...fieldPaths, ...rawArgs.slice(sep + 1)];
+  if (paths.length > MAX_ARGS) return { ok: false, error: `"paths" accepts at most ${MAX_ARGS} entries.` };
   for (const tok of args) {
     const err = checkToken(tok, policy, subcommand);
     if (err !== null) return { ok: false, error: err };

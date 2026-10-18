@@ -281,4 +281,18 @@ export const MISC_ENV_REGISTRY = [
     example: 'boundary',
     category: 'misc',
   },
+
+  // ── Observability / OTLP export ───────────────────────────────────────────
+  {
+    name: 'AFK_OTLP_ENDPOINT',
+    description:
+      'OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). ' +
+      'When set, `afk trace export-otlp` will POST the converted payload to this endpoint ' +
+      'in addition to (or instead of) writing to stdout. Currently informational — live push ' +
+      'support is a follow-up to the offline converter (issue #3901).',
+    type: 'string',
+    required: false,
+    example: 'http://localhost:4318/v1/traces',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];
