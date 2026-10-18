@@ -9,7 +9,7 @@
  * `isProvablyReadOnly`. Every command here is spelled with `~/` / `$HOME/`
  * so the suite is portable (no platform gate — POSIX guard R4).
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { homedir } from 'os';
 import { join, resolve } from 'path';
 
@@ -162,6 +162,37 @@ describe('bash <-> isReadDenied parity for ssh public keys', () => {
   ])('cat ~/.ssh/%s agrees with the typed read surface', (name) => {
     const typedDenied = isReadDenied(join(homedir(), '.ssh', name)).denied;
     expect(decide(`cat ~/.ssh/${name}`) === 'block').toBe(typedDenied);
+  });
+});
+
+// Advisory: when AFK_HOME is relocated UNDER ~/.ssh, a pubkey inside that
+// AFK subtree (e.g. ~/.ssh/afk/id_ed25519.pub) is still blocked on the bash
+// surface — it fails the DIRECT-child test (it is nested two levels under
+// ~/.ssh, not one), and the enclosing ~/.ssh root catches it.
+// A pubkey at the TOP of ~/.ssh (e.g. ~/.ssh/id_ed25519.pub) is still ALLOWED
+// because the derived AFK config root (~/.ssh/afk/config) is a CHILD of
+// ~/.ssh, not a parent, so gateSshPubKeyDir returns ~/.ssh unchanged.
+describe('advisory — AFK_HOME relocated under ~/.ssh: nested pubkeys blocked, top-level still allowed', () => {
+  beforeEach(() => {
+    process.env['AFK_HOME'] = join(homedir(), '.ssh', 'afk');
+    _resetReadDenylistCacheForTests();
+  });
+  afterEach(() => {
+    delete process.env['AFK_HOME'];
+    _resetReadDenylistCacheForTests();
+  });
+
+  it('cat ~/.ssh/afk/id_ed25519.pub is blocked (nested, not a direct .ssh child)', () => {
+    // ~/.ssh/afk/id_ed25519.pub is two levels under ~/.ssh; isSshPubKeyChild
+    // requires a DIRECT child, so this falls through to the enclosing ~/.ssh block.
+    expect(decide('cat ~/.ssh/afk/id_ed25519.pub')).toBe('block');
+  });
+
+  it('cat ~/.ssh/id_ed25519.pub is still allowed (gateSshPubKeyDir keeps the pattern)', () => {
+    // The derived root ~/.ssh/afk/config is a CHILD of ~/.ssh, so it is not
+    // an ancestor gate — gateSshPubKeyDir returns ~/.ssh, the pattern is active,
+    // and a direct *.pub child is scrubbed as allowed.
+    expect(decide('cat ~/.ssh/id_ed25519.pub')).not.toBe('block');
   });
 });
 

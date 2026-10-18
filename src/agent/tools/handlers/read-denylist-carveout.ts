@@ -34,6 +34,7 @@
  */
 import { basename, dirname, isAbsolute, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
+import { isCaseInsensitiveFs } from '../fs-case.js';
 
 function isUnderRoot(candidate: string, root: string): boolean {
   const rel = relative(root, candidate);
@@ -168,11 +169,26 @@ export function gateSshPubKeyDir(
  *
  * Contract: callers MUST pass the fully dereferenced path. That is what makes
  * the pattern symlink-safe — `~/.ssh/foo.pub -> id_rsa` resolves to
- * `~/.ssh/id_rsa`, which fails the suffix test and stays denied. Comparison is
- * exact-case on purpose: a case-variant spelling simply falls through to the
- * case-folding builtin floor (over-block, never under-block).
+ * `~/.ssh/id_rsa`, which fails the suffix test and stays denied.
+ *
+ * Win32 portability: NTFS is case-insensitive, so `safeRealpath` on a
+ * non-existent leaf (the file exists as `foo.pub` but the resolved dirname may
+ * carry OS-canonical casing) can differ from the `sshDir` the caller built
+ * with `path.join`. The strict `===` then silently returns false on Windows CI
+ * even when the paths name the same directory. We fall back to a
+ * case-insensitive comparison when the filesystem under `sshDir` is
+ * case-insensitive (`isCaseInsensitiveFs`), which is the common NTFS case.
+ * Over-blocking (false) is safe; under-blocking (false positive allow) is not
+ * — so the default for indeterminate probes stays case-sensitive.
  */
 export function isSshPubKeyChild(real: string, sshDir: string): boolean {
   const name = basename(real);
-  return dirname(real) === sshDir && name.length > '.pub'.length && name.endsWith('.pub');
+  if (name.length <= '.pub'.length || !name.endsWith('.pub')) return false;
+  const parent = dirname(real);
+  if (parent === sshDir) return true;
+  // Case-insensitive fallback for win32 / NTFS: equality via lowercasing only
+  // when the filesystem is confirmed case-insensitive. We need EQUALITY (not
+  // containment), so we check both directions explicitly rather than calling
+  // pathIsWithin (which is an ancestor-or-equal check, not pure equality).
+  return isCaseInsensitiveFs(sshDir) && parent.toLowerCase() === sshDir.toLowerCase();
 }
