@@ -8,7 +8,7 @@ import { afkSegments, tokenize } from '../scripts/lib/docs-refs-command.js';
 import type { Surface } from '../scripts/lib/public-surface.js';
 
 const surface: Surface = { version: 1, symbols: [
-  { kind: 'command', name: 'afk' }, { kind: 'command', name: 'afk interactive' }, { kind: 'command', name: 'afk schedule' },
+  { kind: 'command', name: 'afk' }, { kind: 'command', name: 'afk interactive' }, { kind: 'command', name: 'afk chat' }, { kind: 'command', name: 'afk schedule' },
   { kind: 'command', name: 'afk schedule add' }, { kind: 'command', name: 'afk provider' }, { kind: 'command', name: 'afk provider auth' },
   { kind: 'flag', name: 'afk --version' }, { kind: 'flag', name: 'afk interactive --resume' }, { kind: 'flag', name: 'afk schedule add --cron' },
   { kind: 'env', name: 'AFK_MODEL' }, { kind: 'env', name: 'AFK_MODEL_LARGE_BASE_URL' }, { kind: 'env', name: 'AFK_WORKTREE_BASE' },
@@ -47,6 +47,38 @@ describe('docs refs: afk command lines', () => {
   });
 });
 
+describe('docs refs: reviewer regressions', () => {
+  const bare = (text: string): string[] => check(text).map((f) => f.replace(/ \(did you mean .*\)$/, ''));
+  const bogus = (line: number, path = 'afk schedule add'): string => `guides/x.mdx:${line}: flag ${path} --bogus not found`;
+  it('#1 keeps checking option tokens after an unquoted placeholder', () => {
+    expect(bare('```bash\nafk chat $PROMPT --bogus\n```')).toEqual([bogus(2, 'afk chat')]);
+    expect(bare('```bash\nafk schedule add --name $NAME --bogus\n```')).toEqual([bogus(2)]);
+    expect(bare('```bash\nafk schedule <subcommand> --anything\n```')).toEqual([]);
+  });
+  it('#2 treats runner prefixes and command substitution as afk invocations', () => {
+    for (const prefix of ['npx', 'npx -y', 'pnpm', 'pnpm exec', 'bunx', 'yarn', 'npm exec --']) {
+      expect(bare(`\`\`\`bash\n${prefix} afk schedule add --bogus\n\`\`\``)).toEqual([bogus(2)]);
+    }
+    expect(bare('```bash\necho $(afk schedule add --bogus)\n```')).toEqual([bogus(2)]);
+    expect(bare('```bash\necho `afk schedule add --bogus`\n```')).toEqual([bogus(2)]);
+    expect(bare('Run `npx afk schedule add --bogus` or `pnpm exec afk schedule add --bogus`.')).toEqual([bogus(1), bogus(1)]);
+    expect(bare('Run `X=$(afk schedule add --bogus)`.')).toEqual([bogus(1)]);
+  });
+  it('#3 consumes option arguments by arity and handles --flag=value', () => {
+    expect(bare('```bash\nafk schedule add --name "--fake"\n```')).toEqual([]);
+    expect(bare('```bash\nafk --model sonnet schedule add --cron "0 2 * * *"\n```')).toEqual([]);
+    expect(bare('```bash\nafk -m sonnet schedule add --cron=x --bogus=1\n```')).toEqual([bogus(2)]);
+  });
+  it('#4 checks shell-like and unlabeled fences, the latter only for afk-first lines', () => {
+    for (const lang of ['terminal', 'ps1', 'pwsh', 'powershell', 'console', 'shell', 'shellsession', 'cmd']) {
+      expect(bare(`\`\`\`${lang}\nafk schedule add --bogus\n\`\`\``)).toEqual([bogus(2)]);
+    }
+    expect(bare('```\n$ afk schedule add --bogus\nPS> afk schedule add --bogus\n> npx afk schedule add --bogus\n```')).toEqual([bogus(2), bogus(3), bogus(4)]);
+    expect(bare('```\necho afk --bogus\ncat x | afk --bogus\nafk is great --bogus? no\n```')).toEqual([]);
+    expect(bare('```md\nafk schedule add --bogus\n```')).toEqual([bogus(2)]);
+  });
+});
+
 describe('docs refs: slash, config, tools, hooks', () => {
   it('checks slash tokens but not paths, filesystem roots, or API paths', () => {
     expect(check('Use `/model sonnet`, `/tmp`, `/usr/bin`, `/v1`, `~/x/y`, `/a.txt`, and [x](/guides/y).')).toEqual([]);
@@ -76,8 +108,9 @@ describe('docs refs: comments and opt-outs', () => {
 
 describe('docs refs: known-symbol sources', () => {
   it('reads aliases/short flags from the generated CLI reference and file-only config keys', () => {
-    const cli = parseCliReference('## `afk chat`\n\nAliases: `c`\n\n| `-m, --model <model>` | x |  |');
-    expect(cli.get('afk chat')).toEqual({ aliases: ['c'], flags: ['-m', '--model'] });
+    const cli = parseCliReference('## `afk chat`\n\nAliases: `c`\n\n| `-m, --model <model>` | x |  |\n| `-w, --worktree [branch]` | x |  |\n| `--json` | x |  |');
+    expect(cli.get('afk chat')).toEqual({ aliases: ['c'], flags: ['-m', '--model', '-w', '--worktree', '--json'],
+      args: { '-m': 'required', '--model': 'required', '-w': 'optional', '--worktree': 'optional' } });
     const paths = configSchemaPaths('interface ConfigFileSchema { a?: { b?: string; m?: Record<string, number> }; c?: number[] }');
     expect(paths).toEqual(['a', 'a.b', 'a.m', 'a.m.*', 'c']);
   });

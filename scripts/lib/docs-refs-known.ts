@@ -8,7 +8,10 @@ import { join } from 'node:path';
 import ts from 'typescript';
 import { loadPublicSurface, type Surface } from './public-surface.js';
 
-export interface CommandInfo { path: string; flags: Set<string>; children: Set<string> }
+export type OptionArity = 'required' | 'optional';
+/** `args` holds value-taking options only, derived from the generated CLI reference. */
+export interface CommandInfo { path: string; flags: Set<string>; children: Set<string>; args: Map<string, OptionArity> }
+export interface CliRefEntry { aliases: string[]; flags: string[]; args: Record<string, OptionArity> }
 export interface KnownRefs {
   env: Set<string>;
   /** Canonical command path keyed by every spelling (aliases included). */
@@ -29,18 +32,23 @@ export const DYNAMIC_TOOLS: Readonly<Record<string, string>> = {
 /** Third-party commands the docs legitimately name (Telegram's BotFather). */
 export const EXTERNAL_SLASH: readonly string[] = ['/newbot', '/setprivacy'];
 
-/** Aliases and short flags from the generated CLI reference, keyed by path. */
-export function parseCliReference(text: string): Map<string, { aliases: string[]; flags: string[] }> {
-  const out = new Map<string, { aliases: string[]; flags: string[] }>();
-  let current: { aliases: string[]; flags: string[] } | undefined;
+/** Aliases, short flags, and option arity (`<v>` required, `[v]` optional)
+ * from the generated CLI reference, keyed by path. */
+export function parseCliReference(text: string): Map<string, CliRefEntry> {
+  const out = new Map<string, CliRefEntry>();
+  let current: CliRefEntry | undefined;
   for (const line of text.split(/\r?\n/)) {
     const heading = /^## `(afk(?: [^`]+)?)`$/.exec(line);
-    if (heading) { current = { aliases: [], flags: [] }; out.set(heading[1]!, current); continue; }
+    if (heading) { current = { aliases: [], flags: [], args: {} }; out.set(heading[1]!, current); continue; }
     if (!current) continue;
     const alias = /^Aliases: (.*)$/.exec(line);
     if (alias) current.aliases.push(...[...alias[1]!.matchAll(/`([^`]+)`/g)].map((m) => m[1]!));
     const flag = /^\| `(-[^`]+)` \|/.exec(line);
-    if (flag) current.flags.push(...[...flag[1]!.matchAll(/(?:^|[ ,])(--?[A-Za-z0-9][\w-]*)/g)].map((m) => m[1]!));
+    if (!flag) continue;
+    const names = [...flag[1]!.matchAll(/(?:^|[ ,])(--?[A-Za-z0-9][\w-]*)/g)].map((m) => m[1]!);
+    current.flags.push(...names);
+    const value = /\s([<[])/.exec(flag[1]!.replace(/&lt;/g, '<'));
+    if (value) for (const name of names) current.args[name] = value[1] === '<' ? 'required' : 'optional';
   }
   return out;
 }
@@ -101,7 +109,7 @@ export function buildKnown(surface: Surface, root: string): KnownRefs {
   const cliRef = parseCliReference(readFileSync(join(root, 'website/content/docs/reference/cli.mdx'), 'utf8'));
   const commands = new Map<string, CommandInfo>();
   const info = new Map<string, CommandInfo>();
-  for (const path of names('command')) info.set(path, { path, flags: new Set(cliRef.get(path)?.flags ?? []), children: new Set() });
+  for (const path of names('command')) info.set(path, { path, flags: new Set(cliRef.get(path)?.flags ?? []), children: new Set(), args: new Map(Object.entries(cliRef.get(path)?.args ?? {})) });
   for (const flag of names('flag')) {
     const at = flag.lastIndexOf(' ');
     info.get(flag.slice(0, at))?.flags.add(flag.slice(at + 1));
