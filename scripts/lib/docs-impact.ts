@@ -16,9 +16,23 @@ export function handwrittenPages(root: string): Page[] {
 
 /** A missing/unrelated base must not turn an advisory report into a failing check. */
 export function changedFiles(base: string, git: GitRead): { files: string[]; note?: string } {
-  try { return { files: git(['diff', '--name-only', `${base}...HEAD`]).trim().split('\n').filter(Boolean) }; }
+  const committed = committedFiles(base, git);
+  // Local runs: include uncommitted edits so the report matches the working-tree snapshot.
+  // CI checkouts are clean, so this adds nothing there.
+  let uncommitted: string[] = [];
+  try { uncommitted = lines(git(['diff', '--name-only', 'HEAD'])); } catch { /* advisory: ignore */ }
+  const files = [...new Set([...committed.files, ...uncommitted])].sort();
+  return committed.note ? { files, note: committed.note } : { files };
+}
+
+function lines(output: string): string[] {
+  return output.trim().split('\n').filter(Boolean);
+}
+
+function committedFiles(base: string, git: GitRead): { files: string[]; note?: string } {
+  try { return { files: lines(git(['diff', '--name-only', `${base}...HEAD`])) }; }
   catch {
-    try { return { files: git(['diff', '--name-only', `${base}..HEAD`]).trim().split('\n').filter(Boolean), note: 'No merge base; used two-dot diff.' }; }
+    try { return { files: lines(git(['diff', '--name-only', `${base}..HEAD`])), note: 'No merge base; used two-dot diff.' }; }
     catch { return { files: [], note: `Base ${base} unavailable; changed-file list is empty.` }; }
   }
 }
