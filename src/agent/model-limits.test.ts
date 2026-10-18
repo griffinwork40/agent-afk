@@ -387,6 +387,7 @@ import {
   setSlotBindings,
   resetSlotBindings,
   DEFAULT_SLOT_BINDINGS,
+  resolveModelInput,
 } from './session/model-slots.js';
 import { afterEach as afterEachHook } from 'vitest';
 
@@ -468,5 +469,116 @@ describe('#3964: per-slot maxOutputTokens override', () => {
     const headroom = window - outputCap;
     // With 64k default: headroom = 67_072 (~51%). With 16k override: headroom = 114_688 (~87%).
     expect(headroom).toBe(114_688);
+  });
+});
+
+// ── #4062: advisory findings ──────────────────────────────────────────────────
+describe('#4062: _1m id with per-slot maxOutputTokens override', () => {
+  afterEachHook(() => { resetSlotBindings(); });
+
+  it('per-slot maxOutputTokens on a _1m id is honoured (was skipped by early return)', () => {
+    // sonnet_1m resolves to the concrete sonnet-5 wire id; bind that id with
+    // a narrowed output cap and confirm maxOutputTokensFor respects it.
+    const concreteId = resolveModelInput('sonnet_1m') ?? 'sonnet_1m';
+    setSlotBindings({
+      local: DEFAULT_SLOT_BINDINGS.local,
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: { id: concreteId, maxOutputTokens: 32_000 },
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // Before the fix this returned 128_000 (the _1m table entry) because the
+    // early return ran before the slot override check.
+    expect(maxOutputTokensFor('sonnet_1m')).toBe(32_000);
+  });
+
+  it('_1m table entry is still returned when no slot override is present', () => {
+    resetSlotBindings();
+    expect(maxOutputTokensFor('sonnet_1m')).toBe(128_000);
+    expect(maxOutputTokensFor('opus_1m')).toBe(128_000);
+  });
+});
+
+describe('#4062: derived default floor — contextWindow < 4', () => {
+  afterEachHook(() => { resetSlotBindings(); });
+
+  it('contextWindow 1 → Math.max(1, floor(1/4)) = 1, not 0', () => {
+    setSlotBindings({
+      local: { id: 'gpt-tiny', contextWindow: 1 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // floor(1/4) = 0; Math.max(1, 0) = 1
+    expect(maxOutputTokensFor('gpt-tiny')).toBe(1);
+  });
+
+  it('contextWindow 3 → Math.max(1, floor(3/4)) = 1, not 0', () => {
+    setSlotBindings({
+      local: { id: 'gpt-micro', contextWindow: 3 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(maxOutputTokensFor('gpt-micro')).toBe(1);
+  });
+
+  it('contextWindow 4 → floor(4/4) = 1 (boundary stays correct)', () => {
+    setSlotBindings({
+      local: { id: 'gpt-four', contextWindow: 4 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(maxOutputTokensFor('gpt-four')).toBe(1);
+  });
+});
+
+describe('#4062: derived default — 256k contextWindow boundary', () => {
+  afterEachHook(() => { resetSlotBindings(); });
+
+  it('contextWindow 256k → min(64k, 64k) = 64k (cap at boundary)', () => {
+    setSlotBindings({
+      local: { id: 'gpt-256k', contextWindow: 256_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // floor(256_000 / 4) = 64_000 = DEFAULT_MAX_OUTPUT → capped at 64k
+    expect(maxOutputTokensFor('gpt-256k')).toBe(64_000);
+  });
+
+  it('contextWindow 255_999 → min(64k, 63_999) = 63_999 (just under cap)', () => {
+    setSlotBindings({
+      local: { id: 'gpt-255k', contextWindow: 255_999 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(maxOutputTokensFor('gpt-255k')).toBe(63_999);
+  });
+});
+
+describe('#4062: two-slots-same-id tie-breaking for maxOutputTokens', () => {
+  afterEachHook(() => { resetSlotBindings(); });
+
+  it('first slot in SLOT_NAMES order wins (local beats small)', () => {
+    setSlotBindings({
+      local: { id: 'shared-llm', maxOutputTokens: 16_000 },
+      small: { id: 'shared-llm', maxOutputTokens: 8_000 },
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // local is first in SLOT_NAMES → 16_000 wins
+    expect(maxOutputTokensFor('shared-llm')).toBe(16_000);
+  });
+
+  it('second slot is used when the first slot id does not match', () => {
+    setSlotBindings({
+      local: { id: 'different-llm', maxOutputTokens: 16_000 },
+      small: { id: 'shared-llm', maxOutputTokens: 8_000 },
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(maxOutputTokensFor('shared-llm')).toBe(8_000);
   });
 });
