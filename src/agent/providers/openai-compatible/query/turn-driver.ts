@@ -423,7 +423,10 @@ export async function* runTurnInner(
       if (windDownForContextPressure(ctx, appendedAt)) {
         windDownReason = CONTEXT_PRESSURE_WIND_DOWN;
         if (!canSynthesizeUnderPressure(ctx, appendedAt)) {
-          finalAssistantText ||= 'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
+          // Fix #3963 (B): always overwrite finalAssistantText with the incomplete
+          // marker — the ||= would silently pass a stale planning sentence as the
+          // answer when an earlier round had text.
+          finalAssistantText = 'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
           break;
         }
         continue;

@@ -40,14 +40,14 @@ interface ScriptedTurn {
 
 let scriptedTurns: ScriptedTurn[] = [];
 let turnIndex = 0;
-let createCalls: Array<{ args: { messages: unknown[]; tools?: unknown[] } }> = [];
+let createCalls: Array<{ args: { messages: unknown[]; tools?: unknown[]; tool_choice?: unknown } }> = [];
 
 function installScriptedClient(): void {
   const factory: OpenAIClientFactory = () =>
     ({
       chat: {
         completions: {
-          create: async (args: { stream?: boolean; messages: unknown[]; tools?: unknown[] }) => {
+          create: async (args: { stream?: boolean; messages: unknown[]; tools?: unknown[]; tool_choice?: unknown }) => {
             createCalls.push({ args });
             if (!args.stream) throw new Error('test mock only supports streaming');
             const script = scriptedTurns[turnIndex++];
@@ -804,7 +804,9 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     });
     const events = await collect(q);
     expect(createCalls).toHaveLength(2);
-    expect(createCalls[1]!.args.tools).toBeUndefined();
+    // New contract (fix #3963): wind-down keeps tool defs + tool_choice:'none'
+    expect(createCalls[1]!.args.tools).toBeDefined();
+    expect(createCalls[1]!.args.tool_choice).toBe('none');
     const toolMessages = (createCalls[1]!.args.messages as Array<{ role: string; content: string }>).filter(m => m.role === 'tool');
     expect(109000 + Buffer.byteLength(JSON.stringify(toolMessages)) / 3 + 4096).toBeLessThan(128000);
     expect(events.some(e => e.type === 'assistant.message' && e.text.includes('Partial findings'))).toBe(true);
@@ -844,7 +846,9 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     expect(warningMessages.some(m => typeof m.content === 'string' && m.content.includes('Deliver useful findings now'))).toBe(true);
     // The first (tool) round advertised tools; the wind-down round (last) did not.
     expect(createCalls[0]!.args.tools?.length ?? 0).toBeGreaterThan(0);
-    expect(createCalls[3]!.args.tools).toBeUndefined();
+    // New contract (fix #3963): wind-down keeps tool defs + tool_choice:'none'
+    expect(createCalls[3]!.args.tools).toBeDefined();
+    expect(createCalls[3]!.args.tool_choice).toBe('none');
     // The wind-down produced a real final assistant message (not a silent stop).
     const assistantMsg = events.find((e) => e.type === 'assistant.message');
     expect(assistantMsg?.type === 'assistant.message' ? assistantMsg.text : '').toContain(
@@ -914,7 +918,9 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
       // Exactly ONE tools-stripped extra round — not an unbounded loop.
       expect(createCalls.length).toBe(2);
       expect(createCalls[0]!.args.tools?.length ?? 0).toBeGreaterThan(0);
-      expect(createCalls[1]!.args.tools).toBeUndefined();
+      // New contract (fix #3963): wind-down keeps tool defs + tool_choice:'none'
+      expect(createCalls[1]!.args.tools).toBeDefined();
+      expect(createCalls[1]!.args.tool_choice).toBe('none');
 
       // The model's synthesis is delivered rather than lost to a hard abort.
       const assistantMsg = events.find((e) => e.type === 'assistant.message');
