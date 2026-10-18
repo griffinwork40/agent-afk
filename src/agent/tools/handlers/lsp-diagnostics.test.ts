@@ -234,12 +234,17 @@ describe('queryLspDiagnostics', () => {
 
       await queryLspDiagnostics(filePath, nodeCmd(scriptPath));
 
-      // Give the OS a moment to reap the process
-      await new Promise((r) => setTimeout(r, 200));
-
+      // Invariant: Windows process reaping is slower on CI — TerminateProcess
+      // is async and the PID may linger for several hundred ms.  Poll with
+      // back-off instead of a fixed sleep so the test is reliable on both
+      // fast dev machines and slow CI runners.
       const pid = parseInt(await import('fs').then(fs => fs.promises.readFile(pidFile, 'utf8')), 10);
-      let alive = false;
-      try { process.kill(pid, 0); alive = true; } catch { /* expected */ }
+      const deadline = Date.now() + 3_000;
+      let alive = true;
+      while (alive && Date.now() < deadline) {
+        try { process.kill(pid, 0); } catch { alive = false; break; }
+        await new Promise((r) => setTimeout(r, 100));
+      }
       expect(alive).toBe(false);
     } finally {
       if (origTimeout === undefined) delete process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'];

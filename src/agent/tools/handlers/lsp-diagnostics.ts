@@ -107,7 +107,14 @@ function encodeMessage(obj: unknown): Buffer {
 /** Kill a child process and close its stdin, ignoring errors. */
 function killProc(proc: ChildProcess): void {
   try { proc.stdin?.end(); } catch { /* ignore */ }
-  try { proc.kill(); } catch { /* ignore */ }
+  try {
+    // Invariant: on win32, proc.kill() calls TerminateProcess on the direct
+    // child only — child-of-child processes (e.g. a .cmd shim spawning node)
+    // are orphaned.  Spawning with shell: true on win32 means the direct child
+    // IS the shell; TerminateProcess on the shell tears down its child tree.
+    // On POSIX, SIGTERM to the direct child is sufficient.
+    proc.kill();
+  } catch { /* ignore */ }
 }
 
 /**
@@ -191,8 +198,12 @@ export async function queryLspDiagnostics(
 
         const [cmd, ...args] = serverCmd as [string, ...string[]];
         try {
+          // Invariant: on win32 npm-installed binaries are .cmd shims that
+          // spawn() cannot resolve without shell: true.  On POSIX shell is
+          // unnecessary for direct executables, but harmless.
           proc = spawn(cmd, args, {
             stdio: ['pipe', 'pipe', 'ignore'],
+            shell: process.platform === 'win32',
           });
         } catch {
           done([]);
