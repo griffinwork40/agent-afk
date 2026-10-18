@@ -13,50 +13,22 @@
  *   pnpm audit:clones:check            # runs this script
  *
  * Requires `origin/main` (or the PR base ref) to be fetchable.
+ *
+ * Shallow-clone handling: on CI the checkout is depth=1. `git diff
+ * baseRef...HEAD` (three-dot) requires a merge-base commit that may not exist
+ * in the shallow history. When `git merge-base` fails, this script falls back
+ * to two-dot `git diff baseRef HEAD`. On pull_request CI, HEAD is the
+ * synthetic merge commit whose first parent is the base tip, so two-dot and
+ * three-dot are equivalent for the added-lines set.
  */
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { hasMergeBase, parseDiffOutput } from './lib/clone-gate.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Lines added in the diff of `baseRef...HEAD`, keyed by relative path. */
-function addedLinesByFile(baseRef: string): Map<string, Set<number>> {
-  const raw = execFileSync(
-    'git',
-    ['diff', '--unified=0', '--diff-filter=ACMR', `${baseRef}...HEAD`],
-    { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 },
-  );
-
-  const map = new Map<string, Set<number>>();
-  let currentFile: string | null = null;
-
-  for (const line of raw.split('\n')) {
-    // +++ b/src/foo.ts
-    if (line.startsWith('+++ b/')) {
-      currentFile = line.slice(6);
-      continue;
-    }
-    // @@ -old,count +new,count @@
-    if (line.startsWith('@@') && currentFile) {
-      const m = line.match(/\+(\d+)(?:,(\d+))?/);
-      if (!m) continue;
-      const start = Number(m[1]);
-      const count = m[2] !== undefined ? Number(m[2]) : 1;
-      let set = map.get(currentFile);
-      if (!set) {
-        set = new Set();
-        map.set(currentFile, set);
-      }
-      for (let i = start; i < start + count; i++) {
-        set.add(i);
-      }
-    }
-  }
-  return map;
-}
 
 interface CloneFile {
   name: string;
@@ -72,6 +44,36 @@ interface Clone {
   isNew: boolean;
   lines: number;
   tokens: number;
+}
+
+/**
+ * Lines added in the diff of this PR, keyed by relative path.
+ *
+ * Uses three-dot diff (`baseRef...HEAD`) when a merge-base exists, which
+ * isolates exactly the PR's own commits. Falls back to two-dot diff
+ * (`baseRef HEAD`) on shallow clones where the merge-base commit is absent;
+ * on pull_request CI this is equivalent because HEAD is the synthetic merge
+ * commit whose first parent is the base tip.
+ */
+function addedLinesByFile(baseRef: string): Map<string, Set<number>> {
+  const threeDot = hasMergeBase(baseRef);
+  const diffArgs = threeDot
+    ? ['diff', '--unified=0', '--diff-filter=ACMR', `${baseRef}...HEAD`]
+    : ['diff', '--unified=0', '--diff-filter=ACMR', baseRef, 'HEAD'];
+
+  if (!threeDot) {
+    console.log(
+      `[clone-gate] shallow checkout: no merge base for ${baseRef}; ` +
+        `using two-dot diff (${baseRef} HEAD) — equivalent on pull_request CI.`,
+    );
+  }
+
+  const raw = execFileSync('git', diffArgs, {
+    encoding: 'utf-8',
+    maxBuffer: 50 * 1024 * 1024,
+  });
+
+  return parseDiffOutput(raw);
 }
 
 /** Check whether a clone fragment overlaps any added line in the diff. */
