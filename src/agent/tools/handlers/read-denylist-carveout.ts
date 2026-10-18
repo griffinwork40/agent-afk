@@ -34,6 +34,7 @@
  */
 import { isAbsolute, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
+import { safeRealpath } from './write-denylist.js';
 
 function isUnderRoot(candidate: string, root: string): boolean {
   const rel = relative(root, candidate);
@@ -102,11 +103,19 @@ function gateRootsExcludingSource(
  * mechanism, static and derived alike; read-denylist.ts only supplies the
  * resolved entries and the builtin roots.
  */
+// Invariant: these values must be byte-equal to the corresponding SOURCE
+// strings in BUILTIN_READ_DENYLIST (read-denylist.ts). That list builds
+// sources as `${HOME}/.ssh` where HOME = safeRealpath(homedir()). Using raw
+// homedir() here silently breaks the source-identity match on Windows when
+// safeRealpath changes drive-letter casing (e.g. d:\ → D:\), causing
+// gateRootsExcludingSource to retain the very root the carve-out is meant
+// to pierce — and the carve-out is gated out (#4036 CI).
+const HOME = safeRealpath(homedir());
 const CARVEOUT_PIERCED_SOURCE: Readonly<Record<string, string>> = {
-  '.afk/config/mcp.json': `${homedir()}/.afk/config`,
-  '.afk/config/schedules.json': `${homedir()}/.afk/config`,
-  '.ssh/config': `${homedir()}/.ssh`,
-  '.ssh/known_hosts': `${homedir()}/.ssh`,
+  '.afk/config/mcp.json': `${HOME}/.afk/config`,
+  '.afk/config/schedules.json': `${HOME}/.afk/config`,
+  '.ssh/config': `${HOME}/.ssh`,
+  '.ssh/known_hosts': `${HOME}/.ssh`,
 };
 
 /**
