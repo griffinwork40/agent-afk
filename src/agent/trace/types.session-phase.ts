@@ -295,12 +295,13 @@ export type SessionPhaseName =
   | 'compose_leaf_tools_stripped'
   /** Hook-block repeat breaker trip (#3736). metadata: { tool, count, fork }. */
   | 'hook_block_repeat_tripped'
-  // Post-cancel late billing delta settled after the `cancelled` lifecycle row
-  // was already written (#3931). Emitted only when spend accrued AFTER cancel()
-  // emitted its row — i.e. a `done` drained on interrupt. Carries the delta in
-  // `metadata` (`subagentId`, `provider`, `uncachedInput`, `cacheRead`,
-  // `cacheWrite`, `output`) so trace readers can add it to the cancelled row's
-  // totals. At most one per run; only emitted when the delta is non-zero.
+  // Post-cancel late billing settled after the `cancelled` lifecycle row was
+  // already written (#3931). Emitted only when spend accrued AFTER cancel()
+  // emitted its row — i.e. a `done` drained on interrupt. Carries cumulative
+  // run totals (not a delta) in `metadata` (`subagentId`, `provider`,
+  // `uncachedInput`, `cacheRead`, `cacheWrite`, `output`); consumers derive
+  // the post-cancel delta by subtracting the `cancelled` row's watermark.
+  // At most one per run; only emitted when the delta is non-zero.
   | 'billing_settled';
 
 export interface SessionPhasePayload {

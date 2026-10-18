@@ -60,7 +60,7 @@ import { JournalLifecycle } from './journal-lifecycle.js';
 import type { MessageJournal } from '../journal/index.js';
 import { SessionStateManager } from './session-state.js';
 import { AccountingAccumulator } from './accounting-accumulator.js';
-import { buildProviderLifecycle, ProviderInitializer } from './provider-lifecycle.js';
+
 import { TurnStreamRunner } from './turn-stream-runner.js';
 import { SessionShutdown } from './session-shutdown.js';
 import { withSessionTmpdir } from './session-tmpdir.js';
@@ -72,6 +72,9 @@ import * as sc from './session-config.js';
 import { toModelInfo, toAgentInfo, toContextUsageResponse, toMcpServerStatus } from './provider-type-mappers.js';
 import { applyStopHookWiring } from './agent-session.stop-hook-wiring.js';
 import { bindSessionExecutors, recordSubagentCompletionInTree } from './agent-session.executors.js';
+import { startMcpInit, disconnectOwnedManager } from './agent-session.mcp.js';
+import { buildSessionRunner, buildSessionInitPromise, applyLifecycle } from './agent-session.lifecycle.js';
+import type { McpManager } from '../mcp/manager.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -83,6 +86,22 @@ export class AgentSession implements IAgentSession {
   private readonly ownedTraceWriter: TraceWriter | undefined;
   private config: AgentConfig;
   private stopWiring: StopWiring | undefined;
+  /**
+   * MCP manager built and owned by the SDK when the caller passes
+   * `config.mcpServers` without `config.mcpManager`. Must be disconnected on
+   * close. Undefined when the caller supplied their own manager (they own
+   * teardown) or when no MCP servers are configured.
+   */
+  private ownedMcpManager: McpManager | undefined;
+  /**
+   * Resolves once the SDK-owned MCP manager is connected (or immediately if
+   * the caller supplied a manager or no servers are configured). Awaited by
+   * `initSdkLifecycle` so the manager is patched into `config.mcpManager`
+   * before `buildProviderLifecycle` runs.
+   * Initialized to a resolved promise so that `reset()` → `initSdkLifecycle()`
+   * re-uses the already-patched config without repeating MCP construction.
+   */
+  private mcpInitPromise: Promise<void> = Promise.resolve();
   /**
    * Plan-mode-exit state machine: the pending implement-turn seed, the captured
    * pre-plan mode to restore, and the transient Shift+Tab ring-gesture memory.
@@ -202,6 +221,15 @@ export class AgentSession implements IAgentSession {
 
     // Private per-session TMPDIR (session-tmpdir.ts); a no-op for forks.
     this.config = withSessionTmpdir(this.journal.open(this.config));
+
+    // #4063: start SDK-owned MCP manager construction before initSdkLifecycle.
+    this.mcpInitPromise = startMcpInit(
+      this.config,
+      (m) => { this.ownedMcpManager = m; },
+      (m) => { this.config = { ...this.config, mcpManager: m }; },
+      () => this.currentState === 'closed',
+    );
+
     this.initSdkLifecycle();
     this.journal.arm(this.config);
 
@@ -220,19 +248,16 @@ export class AgentSession implements IAgentSession {
    * state manager, and the provider iterator. Pulls `session.init` eagerly
    * so `waitForInitialization` resolves without a user turn.
    *
-   * The internal `abortController` and `hookRegistry` are NOT touched — they
-   * live for the entire session-object lifetime so that an externally-supplied
-   * `config.abortSignal` keeps propagating across resets and registered
-   * SessionStart/SessionEnd hooks fire on each cycle.
+   * #4063: two-phase init — see {@link buildSessionInitPromise} for the MCP
+   * await / provider-rebuild logic extracted to `agent-session.lifecycle.ts`.
    */
   private initSdkLifecycle(): void {
-    const { stateManager, inputStream, providerQuery, providerIterator } =
-      buildProviderLifecycle(this.config);
-
-    this.stateManager = stateManager;
-    this.inputStream = inputStream;
-    this.providerQuery = providerQuery;
-    this.providerIterator = providerIterator;
+    this.stateManager = applyLifecycle(this.config, {
+      setStateManager: (v) => { this.stateManager = v; },
+      setInputStream: (v) => { this.inputStream = v; },
+      setProviderQuery: (v) => { this.providerQuery = v; },
+      setProviderIterator: (v) => { this.providerIterator = v; },
+    });
 
     this.conversationHistory = [];
     this.turnCount = 0;
@@ -242,7 +267,7 @@ export class AgentSession implements IAgentSession {
     this.currentState = 'idle';
     this.pendingFrameworkContext = [];
 
-    this.runner = new TurnStreamRunner({
+    this.runner = buildSessionRunner({
       getConfig: () => this.config,
       getAbortController: () => this.abortController,
       getProviderIterator: () => this.providerIterator,
@@ -264,25 +289,20 @@ export class AgentSession implements IAgentSession {
       getTurnCount: () => this.turnCount,
       incTurnCount: () => { this.turnCount++; },
       getProviderQuery: () => this.providerQuery,
-      getLedgerMetadata: () => this.stateManager.getSessionMetadata(),
-      observeProviderEvent: (e) => this.planExit.planText.observe(e),
-      // Read lazily: surfaces call wireStopHook() after construction.
       getStopWiring: () => this.stopWiring,
+      observeProviderEvent: (e) => this.planExit.planText.observe(e),
     });
 
-    const initializer = new ProviderInitializer(
-      this.config,
-      this.abortController.signal,
-      this.accounting,
-      this.shutdown,
-      this._hookRegistry,
-      (text) => this.queueFrameworkContext(text),
-    );
-    this.initPromise = initializer.run(
-      () => this.providerIterator,
-      () => this.runner.buildTransformDeps(),
-      this.stateManager,
-    );
+    this.initPromise = buildSessionInitPromise({
+      mcpInitPromise: this.mcpInitPromise, stateManager: this.stateManager,
+      getConfig: () => this.config, getRunner: () => this.runner,
+      setProviderQuery: (q) => { this.providerQuery = q; }, setProviderIterator: (i) => { this.providerIterator = i; },
+      getProviderIterator: () => this.providerIterator, getInputStream: () => this.inputStream,
+      isClosed: () => this.currentState === 'closed', abortSignal: this.abortController.signal,
+      accounting: this.accounting, shutdown: this.shutdown,
+      hookRegistry: this._hookRegistry,
+      queueFrameworkContext: (text) => this.queueFrameworkContext(text),
+    });
   }
 
   get state(): SessionState { return this.currentState; }
@@ -482,6 +502,8 @@ export class AgentSession implements IAgentSession {
       initPromise: this.initPromise, journal: this.journal, shutdown: this.shutdown,
       env: this.config.env,
     });
+    // #4063: disconnect SDK-owned manager; caller-supplied mcpManager is not touched.
+    await disconnectOwnedManager(this.ownedMcpManager);
   }
 
   /**

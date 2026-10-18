@@ -90,6 +90,42 @@ describe('subagent billing across turns', () => {
     expect(SubagentLifecyclePayloadSchema.safeParse(succeeded.payload).success).toBe(true);
   });
 
+  it('costUsd passed to onSubagentSucceeded is the sum across initial + drain turns, not last turn only (#3882 case 3)', async () => {
+    // Regression: previously costUsd was read from lastMsg.metadata.totalCostUsd,
+    // which is a per-turn figure — a drained run only reported the FINAL turn's cost.
+    const graph = new AbortGraph();
+    const controller = new AbortController();
+    graph.register('root', controller);
+    const writer = new InMemoryTraceWriter();
+    const onSucceeded = vi.fn();
+    const final: Message = { role: 'assistant', content: 'done', timestamp: new Date() };
+
+    // Two turns: initial ($0.03) + drain ($0.05). Cumulative should be $0.08.
+    const doneWithCost = (cost: number): OutputEvent => ({
+      type: 'done',
+      metadata: usageToMetadata(
+        { inputTokens: 1000, outputTokens: 10, totalCostUsd: cost, billing: openAICompatibleBilling(1000, 0, 10) },
+        'mock-session',
+      ),
+    });
+    const session = mockSession([
+      [{ type: 'message', message: final }, doneWithCost(0.03)],
+      [{ type: 'message', message: final }, doneWithCost(0.05)],
+    ]);
+
+    const handle = new SubagentHandleImpl(
+      'cost-child', session, controller, graph, undefined, 5000, undefined, vi.fn(),
+      undefined, undefined, undefined, undefined, undefined, writer, onSucceeded,
+    );
+    handle._pendingUserMessages.push('drain-turn');
+    await handle.runToResult('go');
+
+    expect(onSucceeded).toHaveBeenCalledTimes(1);
+    const reportedCost: number | undefined = onSucceeded.mock.calls[0]?.[1];
+    // Must be the sum of both turns, not just the last ($0.05).
+    expect(reportedCost).toBeCloseTo(0.08, 10);
+  });
+
   it('a child whose provider reports no billing keeps the succeeded payload byte-compatible', async () => {
     const graph = new AbortGraph();
     const controller = new AbortController();
