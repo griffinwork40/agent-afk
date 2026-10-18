@@ -21,6 +21,7 @@ import { researchAgent } from '../../skills/_agents/research-agent.js';
 import { gitInvestigator } from '../../skills/_agents/git-investigator.js';
 import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
 import { parseAgentMarkdown } from './parser.js';
+import { withGitReadSubstitution } from '../tools/readonly-git-surface.js';
 import type { RegisteredAgent } from './types.js';
 
 /**
@@ -197,7 +198,9 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
       source: 'builtin',
       definition: {
         description: gitInvestigator.description,
-        prompt: vendoredPromptBody(gitInvestigator.systemPrompt),
+        // Flag-conditional: under AFK_READONLY_GIT_TOOL the bashReadOnly gate
+        // below swaps Bash for git_read, so the prompt must say so too.
+        prompt: withGitReadSubstitution(vendoredPromptBody(gitInvestigator.systemPrompt)),
         tools: [...gitInvestigator.allowedTools],
         // No `model`: builtins never pin a model, so dispatch follows the
         // operator's subagent policy (getDefaultSubagentModel). Guarded in
