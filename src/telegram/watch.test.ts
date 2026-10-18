@@ -150,7 +150,11 @@ describe('SessionWatchManager', () => {
     });
     await sleep(300);
     await writer.close('close');
-    await sleep(600);
+    // vi.waitFor instead of a fixed sleep(600): on slow Windows runners the
+    // debounce + tail flush can take longer than a fixed budget.
+    await vi.waitFor(() => {
+      expect(sent.join('\n')).toContain('watch ended');
+    }, { timeout: 2000 });
 
     const all = sent.join('\n');
     expect(all).toContain('👤 hello from CLI');
@@ -435,7 +439,11 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
     writer.recordUser('normal record');
     await sleep(300);
     await writer.close();
-    await sleep(600);
+    // vi.waitFor instead of a fixed sleep(600): on slow Windows runners the
+    // debounce + tail flush can take longer than a fixed budget.
+    await vi.waitFor(() => {
+      expect(sent.join('\n')).toContain('normal record');
+    }, { timeout: 2000 });
 
     expect(sent.join('\n')).toContain('normal record');
 

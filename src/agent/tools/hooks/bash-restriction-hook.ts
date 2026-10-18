@@ -391,7 +391,7 @@ function stripQuotedBodyFileData(command: string): string {
   const bodyFile = tokens.indexOf('--body-file');
   const isBodyFile = consumer === 'gh' && (noun === 'issue' || noun === 'pr') &&
     ['create', 'comment', 'edit'].includes(verb ?? '') && bodyFile >= 3 && tokens[bodyFile + 1] === '-';
-  if (!isBodyFile && !isStdoutOnlyCat(tokens)) return command;
+  if (!isBodyFile && !isStdoutOnlyCat(tokens) && !isGitCommitStdin(tokens)) return command;
   const bodyStart = newline + 1;
   let end = bodyStart;
   while (end < command.length) {
@@ -421,6 +421,41 @@ function isStdoutOnlyCat(tokens: readonly string[]): boolean {
   // -u (unbuffered), -v (show-nonprinting).  Long opts (`--number`, etc.) are
   // not needed here because the tokenizer leaves them as separate tokens.
   return tokens[0] === 'cat' && tokens.slice(1).every((t) => /^-[Abenstuve]*$/.test(t));
+}
+
+/**
+ * True only for `git [[-c key=val]…] commit -F -` — reads stdin as a commit
+ * message string, never executes it. Covers the AFK-canonical commit form
+ * `git -c user.name=X -c user.email=Y commit -F -` where the message body
+ * is passed via a quoted heredoc.
+ *
+ * Contract: `tokens` is the result of `tokenizeSegments` on the header (prefix
+ * + suffix). The caller already guarantees at most one heredoc and a simple
+ * header, so `tokens[0]` is the first word after any `git -c` flags.
+ *
+ * Allowed: only `-c key=val` flags before `commit`, `-F -` after it, and no
+ * other arguments — an unknown flag or a file operand other than `-` is
+ * rejected (fails closed). `--` is intentionally not permitted here because
+ * the tokenizer would split the command at it anyway.
+ */
+function isGitCommitStdin(tokens: readonly string[]): boolean {
+  if (tokens[0] !== 'git') return false;
+  let i = 1;
+  // Skip zero or more `-c key=val` flags.
+  while (i < tokens.length && tokens[i] === '-c') {
+    i++; // advance past '-c'
+    if (i >= tokens.length || !/^\w[\w.]*=/.test(tokens[i]!)) return false;
+    i++; // advance past 'key=val'
+  }
+  // Next must be 'commit'.
+  if (tokens[i] !== 'commit') return false;
+  i++;
+  // Remaining tokens must be exactly '-F' '-'.
+  if (tokens[i] !== '-F') return false;
+  i++;
+  if (tokens[i] !== '-') return false;
+  i++;
+  return i === tokens.length;
 }
 
 /**

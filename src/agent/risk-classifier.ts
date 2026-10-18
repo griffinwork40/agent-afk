@@ -23,6 +23,7 @@ import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
 import { classifyFilePath, classifyPatchApply } from './risk-classifier.paths.js';
 import { findHighBashPattern } from './risk-classifier.bash-boundary.js';
 import { isSafeAtCommandPosition } from './risk-classifier.bash-safe.js';
+import { classifyBashCommand } from './tools/readonly-bash.js';
 
 /** Three-tier risk level for a tool invocation. */
 export type RiskLevel = 'safe' | 'medium' | 'high';
@@ -274,7 +275,23 @@ function classifyBash(cmd: string): RiskVerdict {
   // SAFE requires every segment to start with a safe-table command — never a
   // substring hit inside an argument (`--head`, `"cat food"`); see
   // risk-classifier.bash-safe.ts.
-  if (isSafeAtCommandPosition(cmd, BASH_SAFE)) return { level: 'safe' };
+  //
+  // Guard: even when the command-position check passes, run `classifyBashCommand`
+  // (the readonly-bash tokenizer-based classifier) as a second opinion. It catches
+  // mutation patterns that the simple substring HIGH table misses when the signal
+  // is quoted or flag-separated — e.g. `curl -I … -X "POST"` where `-X POST`
+  // (unquoted) is in BASH_HIGH but `-X "POST"` (quoted method) is not, yet the
+  // tokenizer's CURL_WRITE_METHOD regex still flags it. If either classifier says
+  // mutating, return high. This is strictly tightening: no previously-high or
+  // previously-medium verdict changes, only safe→high for the divergent cases.
+  // (#3846 golden case: `curl -I https://example.com -X "POST"`)
+  if (isSafeAtCommandPosition(cmd, BASH_SAFE)) {
+    const guard = classifyBashCommand(cmd);
+    if (guard.mutating) {
+      return { level: 'high', reason: `bash-mutation-guard: ${guard.reason ?? 'mutation detected'}` };
+    }
+    return { level: 'safe' };
+  }
   // Default: medium — unknown bash commands are not safe by assumption.
   return { level: 'medium' };
 }
