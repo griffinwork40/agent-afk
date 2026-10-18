@@ -347,6 +347,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_EVENTS_GITHUB_POLL_MS",
+      "description": "Poll interval in milliseconds for `afk events github`. Overrides the --interval flag. Must be >= 5000. Default 60000 (1 minute). Part of #3896 (event-triggered runs).",
+      "type": "number",
+      "required": false,
+      "default": "60000",
+      "example": "30000",
+      "category": "daemon"
+    },
+    {
       "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
       "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even to tool calls whose context carries no grant manager. Every production provider wires itself as the grant manager on every surface (REPL, Telegram, afk chat, daemon, subagents), so there the denylist is already active; without one it fails open. Set to 1 to force it on for those contexts too. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off.",
       "type": "boolean",
