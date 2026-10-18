@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.324.2] - 2026-10-18
+
+### Fixed
+- clone gate falls back to two-dot diff when shallow checkout has no merge base (#4115) (0bd621db)
+
 ## [5.324.1] - 2026-10-18
 
 ### Fixed
