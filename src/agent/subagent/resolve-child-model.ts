@@ -29,17 +29,59 @@ export interface ResolveChildModelOpts {
 }
 
 /**
- * Resolve the effective child model for a subagent dispatch.
+ * Which tier of the precedence chain supplied the resolved model. Used by
+ * the default-tier fallback: only 'default' and 'floor' are eligible for an
+ * automatic retry on the parent model when the initial run fails with a
+ * model-rejection error. Explicit choices ('callSite', 'namedAgent',
+ * 'parent') must fail loudly so the operator's intent is respected.
+ */
+export type ChildModelSource = 'callSite' | 'namedAgent' | 'default' | 'parent' | 'floor';
+
+export interface ResolvedChildModel {
+  model: string;
+  source: ChildModelSource;
+}
+
+/**
+ * Resolve the effective child model for a subagent dispatch, returning both
+ * the model string and the provenance tier that supplied it.
  *
  * Every dispatch path (`agent` tool, `compose`, skill fork, plugin fork,
  * inline skill) calls this instead of inlining its own fallback chain.
  */
-export function resolveChildModel(opts: ResolveChildModelOpts): string {
-  return (
-    opts.callSiteModel
-    ?? opts.namedAgentModel
-    ?? opts.defaultSubagentModel
-    ?? opts.defaultModel
-    ?? 'sonnet'
-  );
+export function resolveChildModel(opts: ResolveChildModelOpts): string;
+/**
+ * Overload with `{ withSource: true }` — returns the model string AND the
+ * provenance tier. Use this overload when the caller needs to gate on whether
+ * the model came from an explicit choice or the default tier.
+ */
+export function resolveChildModel(
+  opts: ResolveChildModelOpts,
+  extra: { withSource: true },
+): ResolvedChildModel;
+export function resolveChildModel(
+  opts: ResolveChildModelOpts,
+  extra?: { withSource: true },
+): string | ResolvedChildModel {
+  let model: string;
+  let source: ChildModelSource;
+
+  if (opts.callSiteModel !== undefined) {
+    model = opts.callSiteModel;
+    source = 'callSite';
+  } else if (opts.namedAgentModel !== undefined) {
+    model = opts.namedAgentModel;
+    source = 'namedAgent';
+  } else if (opts.defaultSubagentModel !== undefined) {
+    model = opts.defaultSubagentModel;
+    source = 'default';
+  } else if (opts.defaultModel !== undefined) {
+    model = opts.defaultModel;
+    source = 'parent';
+  } else {
+    model = 'sonnet';
+    source = 'floor';
+  }
+
+  return extra?.withSource ? { model, source } : model;
 }

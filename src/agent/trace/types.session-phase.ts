@@ -302,7 +302,17 @@ export type SessionPhaseName =
   // `uncachedInput`, `cacheRead`, `cacheWrite`, `output`); consumers derive
   // the post-cancel delta by subtracting the `cancelled` row's watermark.
   // At most one per run; only emitted when the delta is non-zero.
-  | 'billing_settled';
+  | 'billing_settled'
+  // Default-tier subagent model was rejected by the backend (HTTP 400/404
+  // or a known model-rejection pattern) and the dispatch was automatically
+  // retried on the parent session model. Emitted once per retry attempt,
+  // before the fallback run starts. `metadata` carries `fromModel` (the
+  // rejected slot), `toModel` (the parent model used for the retry), and
+  // `reason` (a ≤120-char excerpt of the rejection error). Only fires when
+  // source is 'default' or 'floor' — explicit callSite/namedAgent models
+  // fail loudly. PURE OBSERVABILITY: the retry already happened when this
+  // fires; the event makes the substitution visible in `afk trace show`.
+  | 'subagent_model_fallback';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

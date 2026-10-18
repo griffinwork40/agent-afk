@@ -19,6 +19,7 @@
  * @module agent/tools/subagent/child-config
  */
 
+import type { ChildModelSource } from '../../subagent/resolve-child-model.js';
 import { SubagentManager } from '../../subagent.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
@@ -182,6 +183,8 @@ export interface BuildChildConfigResult {
    * resolved value.
    */
   nestedAgentAllowlist: readonly string[] | undefined;
+  /** Provenance tier that chose childConfig.model — for default-tier fallback. */
+  childModelSource: ChildModelSource;
 }
 
 /**
@@ -193,7 +196,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   const { parsed, namedAgent, depth, maxDepth, currentCwd, signal, defaultConfig, createChildExecutor } = args;
 
   // 1. Model + provider family
-  const { childModel, childIsOpenAI } = resolveChildModelAndProvider(
+  const { childModel, childIsOpenAI, childModelSource } = resolveChildModelAndProvider(
     parsed, namedAgent, args.defaultSubagentModel, args.parentModel,
   );
 
@@ -221,5 +224,5 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     resolvedAccess, depth, maxDepth, signal, currentCwd, createChildExecutor,
   });
 
-  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist: resolvedAccess?.nestedAgentTypes };
+  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist: resolvedAccess?.nestedAgentTypes, childModelSource };
 }

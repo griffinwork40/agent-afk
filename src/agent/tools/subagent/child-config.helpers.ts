@@ -7,7 +7,7 @@
  */
 
 import { providerForModel } from '../../providers/index.js';
-import { resolveChildModel } from '../../subagent/resolve-child-model.js';
+import { resolveChildModel, type ChildModelSource } from '../../subagent/resolve-child-model.js';
 import { applyParentCredentialFallback } from '../child-credential.js';
 import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
 import { CHILD_ALLOWED_TOOLS, buildSkillRestrictedProvider, createStubParentSession } from '../nesting.js';
@@ -29,6 +29,8 @@ import type { BuildChildConfigArgs, ChildParentSession } from './child-config.js
 export interface ResolvedChildModel {
   childModel: string;
   childIsOpenAI: boolean;
+  /** Provenance tier that chose childModel — used by the default-tier fallback. */
+  childModelSource: ChildModelSource;
 }
 
 /**
@@ -50,13 +52,16 @@ export function resolveChildModelAndProvider(
     const defModel = namedAgent.definition.model;
     namedDefaultModel = defModel === 'inherit' ? parentModel : defModel;
   }
-  const childModel: string = resolveChildModel({
-    callSiteModel: parsed.model,
-    namedAgentModel: namedDefaultModel,
-    defaultSubagentModel,
-  });
+  const { model: childModel, source: childModelSource } = resolveChildModel(
+    {
+      callSiteModel: parsed.model,
+      namedAgentModel: namedDefaultModel,
+      defaultSubagentModel,
+    },
+    { withSource: true },
+  );
   const childIsOpenAI = providerForModel(childModel) === 'openai-compatible';
-  return { childModel, childIsOpenAI };
+  return { childModel, childIsOpenAI, childModelSource };
 }
 
 // ─── Tool access ─────────────────────────────────────────────────────────────

@@ -16,8 +16,7 @@ import type { RegisteredAgent } from '../agents/index.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { parseAgentInput, type AgentInput } from './subagent/input-parse.js';
 import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
-import { backgroundTarget } from './subagent/background-delivery.js';
-import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
+import type { PromotionTrigger } from './subagent/foreground-promotion.js';
 import type { StreamCutProbe } from '../subagent/stream-cut-retry.js';
 import { addForegroundNotices } from './subagent-executor.notices.js';
 import { classifyDispatchIntent, checkReadOnlyDispatchIntent } from './subagent-executor.dispatch-intent.js';
@@ -27,6 +26,7 @@ import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budge
 import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
 import { errorMessage } from '../../utils/errors.js';
+import { runForegroundWithFallback } from './subagent-executor.execute-once.fallback.js';
 import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
 import { prependSetupNotice } from '../worktree/worktree-setup.js';
@@ -146,7 +146,7 @@ export async function executeOnce(
     childCwd: parsed.cwd ?? currentCwd,
   });
 
-  const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist } = buildChildConfig({
+  const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist, childModelSource } = buildChildConfig({
     parsed,
     namedAgent,
     depth,
@@ -226,34 +226,34 @@ export async function executeOnce(
     return promptResult.error!;
   }
 
-  const budgetRelease = budgetReceipt?.release;
-  const promotionTookBudget = { value: false };
-  const result = await runForegroundWithPromotion({
+  // Run foreground promotion then, if it fails with a default-tier model
+  // rejection, retry once on the parent session model (see model-fallback.ts).
+  const finalResult = await runForegroundWithFallback({
     handle,
-    signal: call.signal,
+    childModelSource,
+    budgetRelease: budgetReceipt?.release,
+    ctx,
+    call,
+    childConfig,
+    childManager,
+    childParentSession,
+    namedAgent,
     prompt: promptResult.prompt,
     backgroundPrompt: parsed.prompt,
     idPrefix: parsed.id_prefix,
-    model: childConfig.model,
-    ...(ctx.parentModel !== undefined ? { parentModel: ctx.parentModel } : {}),
-    childManager,
-    identity,
-    ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
     depth,
-    parentSessionId: ctx.parentSession.sessionId,
-    ...backgroundTarget(ctx),
+    identity,
     promotionTriggers,
     activeForegroundHandles,
-    ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
-    ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
+    isolationTeardown,
   });
-  if (!promotionTookBudget.value) budgetRelease?.();
-  addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, ctx.traceWriter);
-  prependSetupNotice(setupNotice, result);
-  if (result.isError === true) {
-    updateCurrentWaveUnit(call.id, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
+
+  addForegroundNotices(finalResult, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, ctx.traceWriter);
+  prependSetupNotice(setupNotice, finalResult);
+  if (finalResult.isError === true) {
+    updateCurrentWaveUnit(call.id, 'failed', typeof finalResult.content === 'string' ? finalResult.content.slice(0, 500) : undefined);
   } else {
     updateCurrentWaveUnit(call.id, 'done');
   }
-  return result;
+  return finalResult;
 }
