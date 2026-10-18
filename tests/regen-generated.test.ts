@@ -155,6 +155,42 @@ describe('regen-generated CLI', () => {
     expect(fs.existsSync(path.join(root, 'calls.log'))).toBe(false);
   });
 
+  it('refuses markers present only in the staged version (working tree already fixed)', () => {
+    // Stage a file with markers, then overwrite the working tree with clean content.
+    write('src/code.ts', '<<<<<<< ours\nfoo\n=======\nbar\n>>>>>>> theirs\n');
+    git('add', 'src/code.ts');
+    write('src/code.ts', 'export const value = 1;\n'); // working tree is clean, index is not
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Resolve code conflicts first');
+    expect(result.stderr).toContain('src/code.ts');
+    expect(fs.existsSync(path.join(root, 'calls.log'))).toBe(false);
+  });
+
+  it('resolves a conflicted .funcsize-baseline.json by unioning both sides', () => {
+    const funcName = '.funcsize-baseline.json';
+    write(funcName, serializeBaseline(baseline(200))); commit('base funcsize');
+    conflict(funcName, serializeBaseline(baseline(210, 'ours')), serializeBaseline(baseline(220, 'theirs', true)));
+    const result = run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(git('show', `:${funcName}`))).toEqual(baseline(220, 'ours', true));
+    expect(git('diff', '--name-only', '--diff-filter=U')).toBe('');
+    expect(git('diff', '--cached', '--name-only')).toContain(funcName);
+  });
+
+  it('throws on invalid JSON (non-numeric errors) in a conflicted typecheck stage', () => {
+    const tcName = '.test-typecheck-baseline.json';
+    // Use .gitattributes -merge so git leaves both sides verbatim (no auto-merge marker).
+    write('.gitattributes', `${baselineName} -merge\n${tcName} -merge\n`);
+    write(tcName, JSON.stringify({ errors: 0 })); commit('base typecheck');
+    // "ours" has a valid baseline; "theirs" has a non-numeric errors field.
+    conflict(tcName, JSON.stringify({ errors: 5 }), JSON.stringify({ errors: 'not-a-number' }));
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Invalid typecheck baseline');
+    expect(fs.existsSync(path.join(root, 'calls.log'))).toBe(false);
+  });
+
   it('does not mistake inline fixture strings or divider comments for markers', () => {
     write('src/code.ts', '// ======= divider\nconst marker = "<<<<<<<";\n');
     expect(run().status).toBe(0);

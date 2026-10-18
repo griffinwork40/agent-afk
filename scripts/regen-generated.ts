@@ -33,20 +33,43 @@ function readStage(root: string, stage: 2 | 3, file: string): string {
   return present ? git(root, ['show', `:${stage}:${file}`]) : '';
 }
 
-function readJsonStage<T>(root: string, stage: 2 | 3, file: string): T | null {
-  const raw = readStage(root, stage, file);
-  return raw ? JSON.parse(raw) as T : null;
+function parsePosixStage(raw: string): PosixBaseline | null {
+  if (!raw.trim()) return null;
+  const parsed = JSON.parse(raw) as PosixBaseline;
+  if (!parsed.entries || typeof parsed.entries !== 'object') throw new Error('Invalid POSIX baseline: missing entries');
+  for (const counts of Object.values(parsed.entries)) {
+    for (const v of Object.values(counts as Record<string, unknown>)) {
+      if (!Number.isFinite(v)) throw new Error('Invalid POSIX baseline: non-finite count');
+    }
+  }
+  return parsed;
 }
 
-/** Includes staged resolutions: leftover markers must not be hidden by git add. */
+function parseTypecheckStage(raw: string): TypecheckBaseline | null {
+  if (!raw.trim()) return null;
+  const parsed = JSON.parse(raw) as TypecheckBaseline;
+  if (!Number.isFinite(parsed.errors)) throw new Error('Invalid typecheck baseline: errors must be a finite number');
+  return parsed;
+}
+
+/** Scans both the working tree and the staged index for leftover conflict markers. */
 function assertCodeResolved(root: string, unmerged: string[]): void {
   const unresolved = unmerged.filter((file) => !GENERATED_PATHS.has(file));
-  const changed = paths(root, ['diff', 'HEAD', '--name-only', '--diff-filter=ACMR']);
-  for (const file of changed) {
+  // Invariant: match marker lines, not inline fixture strings or // ===== dividers.
+  const markerRe = /^(?:<{7}|>{7})(?: |\r?$)/m;
+  // Working-tree scan: catches markers not yet staged.
+  const wtChanged = paths(root, ['diff', 'HEAD', '--name-only', '--diff-filter=ACMR']);
+  for (const file of wtChanged) {
     if (GENERATED_PATHS.has(file) || unresolved.includes(file)) continue;
     const text = fs.readFileSync(path.join(root, file), 'utf8');
-    // Invariant: match marker lines, not inline fixture strings or // ===== dividers.
-    if (!text.includes('\0') && /^(?:<{7}|>{7})(?: |\r?$)/m.test(text)) unresolved.push(file);
+    if (!text.includes('\0') && markerRe.test(text)) unresolved.push(file);
+  }
+  // Staged scan: catches markers that were staged but not fixed in the working tree.
+  const stagedChanged = paths(root, ['diff', '--cached', 'HEAD', '--name-only', '--diff-filter=ACMR']);
+  for (const file of stagedChanged) {
+    if (GENERATED_PATHS.has(file) || unresolved.includes(file)) continue;
+    const text = git(root, ['show', `:0:${file}`]);
+    if (!text.includes('\0') && markerRe.test(text)) unresolved.push(file);
   }
   if (unresolved.length) {
     throw new Error(`Resolve code conflicts first, then re-run regen:generated:\n${unresolved.map((p) => `  ${p}`).join('\n')}`);
@@ -63,11 +86,11 @@ function unionConflicts(root: string, unmerged: string[]): number {
       ));
     } else if (file === '.posix-guard-baseline.json') {
       serialized = serializePosixBaseline(unionPosix(
-        readJsonStage<PosixBaseline>(root, 2, file), readJsonStage<PosixBaseline>(root, 3, file),
+        parsePosixStage(readStage(root, 2, file)), parsePosixStage(readStage(root, 3, file)),
       ));
     } else if (file === '.test-typecheck-baseline.json') {
       serialized = JSON.stringify(unionTypecheck(
-        readJsonStage<TypecheckBaseline>(root, 2, file), readJsonStage<TypecheckBaseline>(root, 3, file),
+        parseTypecheckStage(readStage(root, 2, file)), parseTypecheckStage(readStage(root, 3, file)),
       )) + '\n';
     } else continue; // Registry renders do not read their previous outputs.
     fs.writeFileSync(path.join(root, file), serialized);
@@ -112,7 +135,9 @@ export function main(argv = process.argv.slice(2), cwd = process.cwd()): void {
   ]);
   const stage = [...GENERATED_PATHS].filter((file) => changed.has(file));
   if (stage.length) git(root, ['add', '-A', '--', ...stage]);
+  const mergedRatchets = unmerged.filter((f) => GENERATED_PATHS.has(f));
   console.log(`✓ regen:generated: ${unmerged.length} conflict(s), ${unions} ratchet union(s); regenerated all artifacts.`);
+  if (mergedRatchets.length) console.log(`  Merged ratchets: ${mergedRatchets.join(', ')}`);
   console.log(`  Staged ${stage.length} generated file(s)${stage.length ? `: ${stage.join(', ')}` : '.'}`);
 }
 
