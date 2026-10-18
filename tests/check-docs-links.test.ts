@@ -62,6 +62,20 @@ describe('documentation links and navigation', () => {
     expect(checkDocsLinks(tree({ redirects }))).toContain('next.config.ts: redirect /old has missing destination /missing');
   });
 
+  it('uses the first matching redirect even when a later redirect resolves', () => {
+    expect(resolves('/old', new Set(['/ok']), [
+      { source: '/old', destination: '/missing' },
+      { source: '/old', destination: '/ok' },
+    ])).toBe(false);
+  });
+
+  it('applies redirects before page lookup, including shadowed pages and cycles', () => {
+    const pages = new Set(['/old', '/ok']);
+    expect(resolves('/old', pages, [{ source: '/old', destination: '/missing' }])).toBe(false);
+    expect(resolves('/old', pages, [{ source: '/old', destination: '/old' }])).toBe(false);
+    expect(resolves('/old', pages, [{ source: '/old', destination: '/ok' }])).toBe(true);
+  });
+
   it('extracts JSX and balanced Markdown destinations, skips code and comments', () => {
     expect(links(`
 [Text](/a(b)) [Angle](</space%20page> "title")

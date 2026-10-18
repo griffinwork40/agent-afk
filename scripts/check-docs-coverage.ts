@@ -31,29 +31,58 @@ function propertyName(node: ts.PropertyName | undefined): string | undefined {
 /** AST scan is side effect free, including schemas colocated with handlers. */
 export function schemaNames(text: string, filename = 'schema.ts'): string[] {
   const source = ts.createSourceFile(filename, text, ts.ScriptTarget.Latest, true);
-  const constants = new Map<string, string>();
+  const declarations = new Map<string, ts.Node[]>();
+  const constants = new Map<string, ts.Expression>();
   const names = new Set<string>();
-  const literal = (node: ts.Expression | undefined): string | undefined => {
+  function collectDeclarations(node: ts.Node): void {
+    // Count bindings in every scope, including imports and destructuring. A local
+    // shadow must never borrow the value of an unrelated top-level constant.
+    if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node)
+      || ts.isImportSpecifier(node) || ts.isImportClause(node) || ts.isNamespaceImport(node)
+      || ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node))
+      && node.name && ts.isIdentifier(node.name)) {
+      const entries = declarations.get(node.name.text) ?? [];
+      entries.push(node);
+      declarations.set(node.name.text, entries);
+    }
+    if (ts.isVariableStatement(node) && node.parent === source && (node.declarationList.flags & ts.NodeFlags.Const)) {
+      for (const declaration of node.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && declaration.initializer) {
+          constants.set(declaration.name.text, declaration.initializer);
+        }
+      }
+    }
+    ts.forEachChild(node, collectDeclarations);
+  }
+  collectDeclarations(source);
+  function literal(node: ts.Expression | undefined, seen = new Set<string>()): string | undefined {
     if (!node) return undefined;
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
-    if (ts.isIdentifier(node)) return constants.get(node.text);
-    return undefined;
-  };
-  function collectConstants(node: ts.Node): void {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
-      const value = literal(node.initializer);
-      if (value !== undefined) constants.set(node.name.text, value);
-    }
-    ts.forEachChild(node, collectConstants);
+    if (!ts.isIdentifier(node) || seen.has(node.text) || declarations.get(node.text)?.length !== 1) return undefined;
+    seen.add(node.text);
+    return literal(constants.get(node.text), seen);
   }
-  collectConstants(source);
   function visit(node: ts.Node): void {
+    // The MCP wire adapter converts server-supplied schemas, not shipped tools.
+    // Exempt only its direct return object; other schemas in this file still fail
+    // closed. No unresolved identifier in the static tool universe is exempt.
+    const parent = node.parent;
+    const owner = parent?.parent?.parent;
+    if (ts.isObjectLiteralExpression(node) && /(?:^|[/\\])src[/\\]agent[/\\]mcp[/\\]manager\.ts$/.test(filename)
+      && parent && ts.isReturnStatement(parent) && owner && ts.isFunctionDeclaration(owner)
+      && owner.name?.text === 'mcpToolToAnthropic') return;
     if (ts.isObjectLiteralExpression(node)) {
       const props = node.properties.filter(ts.isPropertyAssignment);
       if (props.some((prop) => propertyName(prop.name) === 'input_schema')) {
         const prop = props.find((item) => propertyName(item.name) === 'name');
-        const name = literal(prop?.initializer);
-        if (name !== undefined) names.add(name);
+        if (prop) {
+          const name = literal(prop.initializer);
+          if (name === undefined) {
+            const line = source.getLineAndCharacterOfPosition(prop.getStart(source)).line + 1;
+            throw new Error(`${filename}:${line}: cannot unambiguously resolve tool name ${prop.initializer.getText(source)}; expected a string literal or unique same-file top-level const`);
+          }
+          names.add(name);
+        }
       }
     }
     ts.forEachChild(node, visit);
@@ -85,7 +114,8 @@ export function collectCoverageNames(root: string): { tools: string[]; hooks: st
 
 /** Exact inline-code tokens only; mentions in prose or fenced code do not pass. */
 export function missingTokens(names: readonly string[], content: string): string[] {
-  const text = content.replace(/^\s*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\s*\1\s*$/gm, '');
+  const text = content.replace(/^\s*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\s*\1\s*$/gm, '')
+    .replace(/\{\/\*[\s\S]*?\*\/\}|<!--[\s\S]*?-->/g, '');
   const tokens = new Set([...text.matchAll(/(?<!`)`([^`\n]+)`(?!`)/g)].map((match) => match[1]));
   return names.filter((name) => !tokens.has(name));
 }

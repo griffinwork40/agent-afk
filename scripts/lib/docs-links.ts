@@ -42,13 +42,17 @@ function redirectTarget(path: string, redirect: Redirect): string | undefined {
 
 export function resolves(path: string, pages: ReadonlySet<string>, redirects: readonly Redirect[], seen = new Set<string>()): boolean {
   const target = slug(path);
-  if (pages.has(target)) return true;
   if (seen.has(target)) return false;
   seen.add(target);
-  return redirects.some((redirect) => {
+  // Invariant: Next.js applies redirects before filesystem routes, in declaration
+  // order. A broken first match cannot fall through to a page or later redirect.
+  for (const redirect of redirects) {
     const destination = redirectTarget(target, redirect);
-    return destination !== undefined && !/^[a-z][a-z\d+.-]*:/i.test(destination) && resolves(destination, pages, redirects, new Set(seen));
-  });
+    if (destination !== undefined) {
+      return !/^[a-z][a-z\d+.-]*:/i.test(destination) && resolves(destination, pages, redirects, seen);
+    }
+  }
+  return pages.has(target);
 }
 
 /** Exclude fenced/inline code and comments, not links illustrated as examples.
