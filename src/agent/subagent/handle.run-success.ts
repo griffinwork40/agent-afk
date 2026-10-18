@@ -81,15 +81,12 @@ export async function drainAndEmitSuccess(
   // always captures this subagent's contribution even if onTerminal()
   // triggers an immediate session teardown.
   //
-  // `lastMsg` reflects the final drain turn (or the initial turn when no
-  // drain occurred). `lastMsg.metadata.totalCostUsd` is populated by the
-  // provider's stream-consumer (turn.completed retroactively mutates the
-  // assistant message's metadata in place — see stream-consumer.ts), so by
-  // the time `run()` reads `lastMsg` here the cost is present for providers
-  // that report it. It is `undefined` for backends without pricing data,
-  // which `recordSubagentCompletion` already tolerates.
-  const costUsd =
-    typeof lastMsg.metadata?.totalCostUsd === 'number' ? lastMsg.metadata.totalCostUsd : undefined;
+  // `billingContext.cumulativeCostUsd` accumulates each turn's `totalCostUsd`
+  // across ALL turns (initial + drain) so the full run cost is reported (#3882
+  // case 3). Reading `lastMsg.metadata.totalCostUsd` instead would give only
+  // the final turn's cost, missing every earlier turn in a drained run.
+  // `cumulativeCostUsd` is undefined when no provider reports pricing.
+  const costUsd = billingContext.cumulativeCostUsd;
   // Billing (#3878) spans every turn of the run, initial + drain turns.
   // `_currentTrace.usage` also carries the run's cumulative `billing`; strip
   // it and attach only the UNREPORTED delta (handle.billing.ts): a cancel()

@@ -288,11 +288,13 @@ export function resolveProvider(
     customTools?: import('../tools/custom-tool.js').CustomToolDef[];
     canUseTool?: import('../types/sdk-types.js').CanUseTool;
     executors?: import('../session/session-executors.js').ProviderExecutorOpts;
+    mcpManager?: import('../mcp/index.js').McpManager;
   },
 ): ModelProvider {
   const name = providerForModel(model, hints);
   const customTools = opts?.customTools;
   const canUseTool = opts?.canUseTool;
+  const mcpManager = opts?.mcpManager;
   // Mirror the customTools threading: forward each only when present so the
   // default path constructs the provider with an empty options bag.
   const ctorOpts = {
@@ -301,6 +303,9 @@ export function resolveProvider(
     // #3442: SDK opt-in executors (only the defined ones) gate the
     // agent/skill/compose tool schemas on every provider family.
     ...providerExecutorOpts(opts?.executors),
+    // #4063: forward SDK-resolved mcpManager so the provider can bridge
+    // MCP tools and report server status correctly.
+    ...(mcpManager !== undefined ? { mcpManager } : {}),
   };
   switch (name) {
     case 'openai-compatible':

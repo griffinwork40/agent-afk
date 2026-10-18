@@ -26,7 +26,7 @@ export const MISC_ENV_REGISTRY = [
   },
   {
     name: 'AFK_READ_DENYLIST',
-    description: 'Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read, and that the bash-restriction hook refuses to let a shell command reference on interactive surfaces (REPL, Telegram) — on headless surfaces (afk chat, daemon) bash fails open regardless of this list. A leading ~/ is expanded (~user/ is not — spell those absolutely). Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed. One built-in exception exists: ~/.afk/config/mcp.json (the MCP registry) IS readable — paths listed here outrank that carve-out, so set this to ~/.afk/config/mcp.json if your registry holds inline secrets rather than ${VAR} placeholders.',
+    description: 'Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read, and that the bash-restriction hook refuses to let a shell command reference on interactive surfaces (REPL, Telegram) — on headless surfaces (afk chat, daemon) bash fails open regardless of this list. A leading ~/ is expanded (~user/ is not — spell those absolutely). Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed. Built-in READ-only exceptions: ~/.afk/config/mcp.json (the MCP registry), ~/.afk/config/schedules.json, ~/.ssh/config, ~/.ssh/known_hosts, and SSH public keys (direct *.pub children of ~/.ssh, symlink-resolved). Paths listed here outrank every exception — e.g. set this to ~/.afk/config/mcp.json if your registry holds inline secrets rather than ${VAR} placeholders, or to ~/.ssh to re-deny all of ~/.ssh. Bash honors the exceptions only for provably read-only commands (cat/grep/head/… pipelines with no redirection); writes stay blocked on every surface.',
     type: 'string',
     required: false,
     example: '/Users/me/project/.env:/Users/me/secrets',
@@ -260,6 +260,20 @@ export const MISC_ENV_REGISTRY = [
     type: 'string',
     required: false,
     example: '1',
+    category: 'misc',
+  },
+
+  // ── Observability / OTLP export ───────────────────────────────────────────
+  {
+    name: 'AFK_OTLP_ENDPOINT',
+    description:
+      'OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). ' +
+      'When set, `afk trace export-otlp` will POST the converted payload to this endpoint ' +
+      'in addition to (or instead of) writing to stdout. Currently informational — live push ' +
+      'support is a follow-up to the offline converter (issue #3901).',
+    type: 'string',
+    required: false,
+    example: 'http://localhost:4318/v1/traces',
     category: 'misc',
   },
 ] as const satisfies readonly EnvVarMeta[];

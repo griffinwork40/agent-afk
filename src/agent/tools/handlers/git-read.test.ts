@@ -103,6 +103,25 @@ describe('path confinement', () => {
     expect(plan.ok && plan.argv.slice(-4)).toEqual(['--', 'src/a.ts', 'b.ts', '.']);
   });
 
+  it('treats a literal -- in args as the revision/path separator', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['--oneline', 'main', '--', 'src/a.ts'], paths: ['b.ts'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['log', '--no-ext-diff', '--no-textconv', '--oneline', 'main', '--', 'b.ts', 'src/a.ts']);
+  });
+
+  it('confines paths given after -- in args', () => {
+    expect(rejected({ subcommand: 'log', args: ['--', '../etc/passwd'] })).toContain('outside the session working directory');
+    expect(rejected({ subcommand: 'log', args: ['--', ':(top)x'] })).toContain('pathspec magic');
+  });
+
+  it('keeps revisions containing / as revisions', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['origin/main..HEAD'] }, CWD);
+    expect(plan.ok && plan.argv.slice(-2)).toEqual(['origin/main..HEAD', '--']);
+  });
+
+  it('caps paths merged from args at the entry limit', () => {
+    expect(rejected({ subcommand: 'log', args: ['--', 'a'], paths: Array(40).fill('b') })).toContain('at most');
+  });
+
   it.each(['../etc/passwd', '/etc/passwd', 'src/../../x', ':(top)x', ':/x'])('rejects %s', (p) => {
     expect(typeof confinePathspec(CWD, p)).not.toBe('string');
     expect(planGitRead({ subcommand: 'diff', paths: [p] }, CWD).ok).toBe(false);
@@ -122,9 +141,24 @@ describe('execution hardening', () => {
     }
   });
 
+  it('lowercase reflog placeholders (%gd %gn %ge %gs) are safe', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--format=%gd %gn'] }, CWD).ok).toBe(true);
+    expect(planGitRead({ subcommand: 'log', args: ['--pretty=%gd %ge %gs'] }, CWD).ok).toBe(true);
+    // literal text containing %g is also safe
+    expect(planGitRead({ subcommand: 'log', args: ['--format=100%good'] }, CWD).ok).toBe(true);
+  });
+
   it('signature-free format and sort values are still accepted', () => {
     expect(planGitRead({ subcommand: 'tag', args: ['--format=%(refname:short)', '--sort=-creatordate'] }, CWD).ok).toBe(true);
     expect(planGitRead({ subcommand: 'branch', args: ['--format=%(refname) %(objectname:short)', '--sort=refname'] }, CWD).ok).toBe(true);
+  });
+
+  it('%(contents:signature) raw-text format is allowed (no gpg invocation)', () => {
+    // %(contents:signature) emits the raw PGP block stored in the tag object —
+    // it does NOT invoke gpg.program. Only %(signature) / %G… run the verifier.
+    // This test confirms the policy does not over-block the raw-text variant.
+    expect(planGitRead({ subcommand: 'tag', args: ['--format=%(contents:signature)'] }, CWD).ok).toBe(true);
+    expect(planGitRead({ subcommand: 'log', args: ['--format=%(contents:signature)'] }, CWD).ok).toBe(true);
   });
 
   it('env pins GIT_PAGER/PAGER/GIT_EDITOR and drops inherited GIT_* overrides', () => {

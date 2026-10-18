@@ -262,6 +262,71 @@ describe('hook_decision payload', () => {
       }),
     ).toThrow();
   });
+
+  // ── riskCategory (#3900) ──────────────────────────────────────────────────
+  it('accepts riskCategory on a block event', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        reason: 'bash-pattern: matched \'rm -rf\'',
+        blockedTool: 'bash',
+        durationMs: 5,
+        approvalOutcome: 'hard-block',
+        riskCategory: 'bash-destructive',
+      }),
+    ).not.toThrow();
+  });
+
+  it('accepts riskCategory on an approved event', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({
+        hookEvent: 'PreToolUse',
+        durationMs: 42,
+        approvalOutcome: 'approved',
+        riskCategory: 'workspace-write',
+      }),
+    ).not.toThrow();
+  });
+
+  it('accepts payload without riskCategory (backward compat — pre-#3900 traces)', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        blockedTool: 'bash',
+        approvalOutcome: 'hard-block',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects an unknown riskCategory value', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({
+        hookEvent: 'PreToolUse',
+        riskCategory: 'not-a-real-category',
+      }),
+    ).toThrow();
+  });
+
+  it('round-trips riskCategory through JSON (the reader path)', () => {
+    const event = {
+      ts: '2026-10-17T00:00:00.000Z',
+      seq: 1,
+      kind: 'hook_decision' as const,
+      payload: {
+        hookEvent: 'PreToolUse' as const,
+        decision: 'block' as const,
+        blockedTool: 'bash',
+        approvalOutcome: 'hard-block' as const,
+        riskCategory: 'bash-destructive' as const,
+      },
+    };
+    const onDisk = JSON.parse(JSON.stringify(event));
+    expect(TraceEventSchema.safeParse(onDisk).success).toBe(true);
+    const parsed = TraceEventSchema.parse(onDisk);
+    expect(parsed.kind === 'hook_decision' && parsed.payload.riskCategory).toBe('bash-destructive');
+  });
 });
 
 describe('subagent_lifecycle payload', () => {

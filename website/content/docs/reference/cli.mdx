@@ -30,6 +30,7 @@ Usage: `afk [options] [command]`
 | `daemon` | Run agent-afk as a daemon that fires scheduled tasks (e.g. /forge-friction --auto) |
 | `web` | Serve a local web UI for live agent sessions |
 | `queue` | Manage the pull-trigger task queue (used with `afk daemon --trigger pull`) |
+| `events` | Event ingress producers that write into the pull queue (Part of #3896) |
 | `interactive` | Start interactive chat session |
 | `login` | Save an Anthropic API key or OAuth token for afk to use |
 | `plugin` | Manage AFK plugins (install / update / list / remove / enable / disable) |
@@ -417,6 +418,41 @@ Guide: [scheduling](/guides/scheduling)
 | Flags | Description | Default |
 | --- | --- | --- |
 | `-y, --yes` | Skip the confirmation prompt (non-interactive / CI) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk events`
+
+Event ingress producers that write into the pull queue (Part of #3896)
+
+Usage: `afk events [options] [command]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `github` | Poll GitHub for events and enqueue tasks into the pull queue. Requires `gh` CLI authenticated (`gh auth status`). Supported event types: pr_comment, check_failure, issue_opened |
+
+## `afk events github`
+
+Poll GitHub for events and enqueue tasks into the pull queue. Requires `gh` CLI authenticated (`gh auth status`). Supported event types: pr_comment, check_failure, issue_opened
+
+Usage: `afk events github [options]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--repo <owner/repo>` | GitHub repository to watch (e.g. owner/repo) |  |
+| `--on <events>` | Comma-separated event types to watch: pr_comment, check_failure, issue_opened |  |
+| `--command <template>` | Command template for enqueued tasks. Placeholders: &#123;&#123;event_type&#125;&#125;, &#123;&#123;repo&#125;&#125;, &#123;&#123;event_id&#125;&#125;. Event payload is appended as untrusted data. | `"A GitHub event occurred in {{repo}}. Event type: {{event_type}}. Event id: {{event_id}}. Review the untrusted payload below and take appropriate action if warranted."` |
+| `--interval <ms>` | Poll interval in milliseconds | `"60000"` |
+| `--once` | Poll once and exit (useful for cron or testing) |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk interactive`
@@ -1546,6 +1582,7 @@ Guide: [observability](/guides/observability)
 | --- | --- |
 | `show` | Pretty-print a session's trace for humans. [session] is a session id or "latest" (the default) — the most recently written trace. |
 | `list` | List sessions that have a trace, most recent first |
+| `export-otlp` | Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest). Emits GenAI semantic convention spans: one session root, one span per subagent fork (gen_ai.agent.invoke), one span per tool call. Output is written to stdout; pipe to a collector or save with -o. [session] is a session id or "latest" (default). |
 
 ## `afk trace show`
 
@@ -1587,6 +1624,27 @@ Guide: [observability](/guides/observability)
 | Flags | Description | Default |
 | --- | --- | --- |
 | `-n, --max <number>` | Maximum sessions to show | `"20"` |
+| `-h, --help` | display help for command |  |
+
+## `afk trace export-otlp`
+
+Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest). Emits GenAI semantic convention spans: one session root, one span per subagent fork (gen_ai.agent.invoke), one span per tool call. Output is written to stdout; pipe to a collector or save with -o. [session] is a session id or "latest" (default).
+
+Usage: `afk trace export-otlp [options] [session]`
+
+Guide: [observability](/guides/observability)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[session]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-o, --out <file>` | Write output to a file instead of stdout |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk whatif`

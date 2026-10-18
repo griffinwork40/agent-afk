@@ -55,6 +55,7 @@ import type { AgentConfig } from '../../../types/config-types.js';
 import type { OpenAIAuthResolution } from '../auth.js';
 import { emitQueuedUserMessage } from '../../../trace/emit.js';
 import { emitTurnTerminal } from './turn-driver.emit-terminal.js';
+import { windDownFinalText } from './wind-down-final.js';
 
 /** Full context the inner turn driver needs from the owning query. */
 export interface TurnDriverContext extends IterationContext, FinishTurnContext {
@@ -385,15 +386,19 @@ export async function* runTurnInner(
       finalReasoningText = result.state.reasoningText;
       finalReasoningField = result.state.reasoningField;
 
-      if (!result.needsToolDispatch) {
+      if (windDownReason !== null) {
+        // Tools stay advertised on wind-down; NEVER dispatch. See wind-down-final.ts.
+        finalAssistantText = windDownFinalText(result.text);
         if (isTruncationStopReason(result.state.finishReason)) {
           droppedToolNames = finalizedToolCalls(result.state).map((c) => c.name);
         }
         break;
       }
 
-      if (windDownReason !== null) {
-        // Wind-down round still asked for a tool (model fabricated one). Hard stop.
+      if (!result.needsToolDispatch) {
+        if (isTruncationStopReason(result.state.finishReason)) {
+          droppedToolNames = finalizedToolCalls(result.state).map((c) => c.name);
+        }
         break;
       }
 

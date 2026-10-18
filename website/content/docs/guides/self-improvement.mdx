@@ -47,6 +47,7 @@ Read `afk improve cards show` with that slug to inspect evidence before changing
 | Run | `afk improve eval-run card-slug` | Runs the latest eval case's smallest available deterministic validation contract against the current codebase. |
 
 Replace `card-slug` with the actual value shown by `cards list`. `afk improve proposals list` and `afk improve eval-cases list` let you inspect generated artifacts; use `afk improve proposals show` or `afk improve eval-cases show` with the artifact's slug for its details. `afk improve approve <slug>` marks a **proposal or eval case** approved and records who approved it. Approval is an artifact state change, not an automatic patch or deployment.
+Replace `card-slug` with the actual value shown by `cards list`. `afk improve proposals list` and `afk improve eval-cases list` let you inspect generated artifacts; both groups have a `show` command. `afk improve approve <slug>` marks a **proposal or eval case** approved and records who approved it. Approval is an artifact state change, not an automatic patch or deployment.
 
 The registered scan patterns include `repeated-tool-use`, `closure-anomaly`, and `tool-failure-density` by default. `subagent-block` and `subagent-read-denial` are opt-in because legitimate work can trigger them; select one with `--only subagent-read-denial` or use `--include-disabled`. The read-denial pattern checks repeated forked-child path approval refusals. `scan --since all` includes all retained traces. See the [witness guide](/guides/observability) for inspecting individual events.
 

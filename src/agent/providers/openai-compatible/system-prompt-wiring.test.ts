@@ -41,7 +41,7 @@ function makeArgs(
       systemPrompt: { type: 'preset', preset: 'claude_code', append: APPEND },
     },
     hasSkillExecutor: false,
-    hasWorkspaceStore: false,
+    workspacePromptEnabled: false,
     readOnlyMemory: false,
     readOnlyState: false,
     resolvedSessionId: undefined,

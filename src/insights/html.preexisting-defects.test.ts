@@ -44,6 +44,8 @@ function makeAgg(
     daemon: { totalRuns: 0, successCount: 0, errorCount: 0, skipCount: 0, byTaskId: {}, triggerBreakdown: {}, skipReasons: {}, recentErrors: [], avgDurationMs: 0 },
     routing: { totalRoutingEvents: 0, skillDispatchModes: {}, skillFrequency: {}, composeCallCount: 0, avgComposeNodes: 0, avgComposeEdges: 0, overflowKills: {} },
     outcomes: { byWeek: {}, totalRecords: 0, parseErrors: 0 },
+    subagentOutcomes: { dispatchedCount: 0, outcomeCount: 0, byModelTypeDepth: {} },
+    guardrailFalsePositives: { totalTrips: 0, falsePositiveTrips: 0, falsePositiveRate: null, totalPreToolUseBlocks: 0, sessionsWithTrips: 0, sessionsScanned: 0 },
   } as InsightAggregates;
 }
 

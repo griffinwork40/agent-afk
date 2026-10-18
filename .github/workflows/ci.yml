@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -41,7 +41,7 @@ jobs:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -154,6 +154,25 @@ jobs:
         # sealer directly, so the existing suite would not catch the fork.
         run: pnpm audit:module-state:check
 
+      - name: Audit new copy-paste clones (jscpd, ratchet against base ref)
+        # Fails only on NEW clones whose fragments overlap lines ADDED in
+        # this PR's diff. jscpd fingerprints are content-keyed, so editing
+        # both halves of an existing grandfathered clone identically would
+        # produce a "new" fingerprint — scripts/check-new-clones.ts filters
+        # those false positives by intersecting new-clone ranges with the
+        # git diff. No committed baseline file, so parallel PRs never
+        # merge-race on one. A pure file move or rename is not a new clone.
+        # The default checkout is shallow and has no base ref, so fetch
+        # just its tip here. This runs AFTER the filesize/funcsize --changed-vs
+        # steps on purpose: fetching earlier would silently activate their
+        # TOUCHED check, which is a separate policy call (see that step).
+        # Intentional duplication: wrap it in `// jscpd:ignore-start` /
+        # `// jscpd:ignore-end` with a reason comment. List all clones with
+        # `pnpm audit:clones`.
+        run: |
+          git fetch --no-tags --depth=1 origin +${{ github.base_ref || 'main' }}:refs/remotes/origin/${{ github.base_ref || 'main' }}
+          CLONE_GATE_BASE_REF=origin/${{ github.base_ref || 'main' }} pnpm audit:clones:check
+
       - name: Audit vendored/bundled hash pins are unstale (#775)
         # `fix:pins:check` (scripts/update-hash-pins.ts --check) re-hashes the
         # vendored/bundled files on disk and independently re-derives, via its
@@ -226,7 +245,7 @@ jobs:
     timeout-minutes: ${{ matrix.os == 'windows-2022' && 30 || 15 }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -234,7 +253,7 @@ jobs:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -277,7 +296,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -285,7 +304,7 @@ jobs:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@v7
         with:
           node-version: 26
           cache: pnpm
@@ -307,7 +326,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -315,7 +334,7 @@ jobs:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -338,7 +357,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -346,7 +365,7 @@ jobs:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -438,7 +457,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -446,7 +465,7 @@ jobs:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -479,7 +498,7 @@ jobs:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -513,7 +532,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -521,7 +540,7 @@ jobs:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -547,7 +566,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -555,7 +574,7 @@ jobs:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm

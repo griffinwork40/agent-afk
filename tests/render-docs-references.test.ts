@@ -64,7 +64,8 @@ describe('CLI reference', () => {
   it('imports/registers in an empty isolated home with no state writes and neutralizes ambient config', () => {
     const result = runIsolated('cli', { AFK_MODEL: 'POISON_MODEL', CLAUDE_MODEL: 'POISON_MODEL', AFK_INTERNAL: '1' });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain('34 top level commands');
+    // Derived, not hardcoded: a literal count breaks on every new top-level command.
+    expect(result.stdout).toContain(`${buildCli().commands.length} top level commands`);
   }, 60_000);
 });
 
@@ -107,7 +108,10 @@ describe('Slash reference', () => {
       writeFileSync(join(dir, 'SKILL.md'), '---\nname: poison-skill\ndescription: Should not be discovered\n---\nPrivate body');
       const result = runIsolated('slash', { AFK_HOME: temp, AFK_INTERNAL: '1' });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toContain('63 core slash commands; 4 public shipped TS skills');
+      // Derived from the in-process registry so new core commands or skills do not break this;
+      // the excluded-list assertion below is what proves the poisoned skill stayed invisible.
+      const expected = collectSlash();
+      expect(result.stdout).toContain(`${expected.core.length} core slash commands; ${expected.skills.length} public shipped TS skills`);
       expect(result.stdout).toContain('1 excluded registered skills (/audit-fit)');
     } finally { rmSync(temp, { recursive: true, force: true }); }
   }, 60_000);
