@@ -168,6 +168,12 @@ export interface InsightAggregates {
    * Derived by joining dispatch + outcome rows in routing-decisions.jsonl.
    */
   subagentOutcomes: import('./aggregators/subagent-outcomes.js').SubagentOutcomeAggregates;
+  /**
+   * False-positive rate for the `hook-block-repeat` meta-guard (#3849 Phase 1).
+   * Measures how often the guard fires but the session immediately continues
+   * successfully — the signal needed before any retirement decision.
+   */
+  guardrailFalsePositives: import('./aggregators/guardrail-false-positives.js').GuardrailFalsePositiveAggregates;
 }
 
 // ---------------------------------------------------------------------------
