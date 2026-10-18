@@ -116,7 +116,7 @@ function measureErrors(): number {
   const configLines = detectConfigDiagnosticLines(output);
   if (configLines.length > 0) {
     process.stderr.write(
-      `\u2717 lint:tests:check — option/config diagnostics detected (TS6xxx, TS18002, TS18003).\n` +
+      `\u2717 lint:tests — option/config diagnostics detected (TS6xxx, TS18002, TS18003).\n` +
         `  These errors can prevent semantic type-checking, making the gate blind.\n` +
         `  Fix the tsconfig.test.json configuration first:\n` +
         configLines

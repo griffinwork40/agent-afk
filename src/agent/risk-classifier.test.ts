@@ -342,6 +342,25 @@ describe('classifyRisk — bash safe', () => {
     expect(classifyRisk('bash', { command: 'wget --spider https://example.com/health' }, ctx)).toBe('safe');
   });
 
+  // ── mutation-guard: classifyBashCommand override (#3846) ─────────────────
+  // These commands match a BASH_SAFE prefix at command position but carry a
+  // mutating flag/argument that classifyBashCommand's tokenizer catches. The
+  // safe-table match must NOT win; the mutation guard must escalate to high.
+  it('curl -I … -X "POST" → high (quoted method overrides curl -I safe prefix)', () => {
+    // Golden case from issue #3846 comment: classifyRisk previously returned
+    // 'safe' because 'curl -I' matched the safe table, but classifyBashCommand
+    // correctly flags -X "POST" (quoted method) as mutating. Both must agree.
+    expect(
+      classifyRisk('bash', { command: 'curl -I https://example.com -X "POST"' }, ctx),
+    ).toBe('high');
+  });
+
+  it('curl -sI … -X DELETE → high (silent HEAD prefix + mutating method)', () => {
+    expect(
+      classifyRisk('bash', { command: 'curl -sI https://api.example.com/resource -X DELETE' }, ctx),
+    ).toBe('high');
+  });
+
   // Mutating gh subcommands must NOT be safe-listed
   it('gh pr merge → medium (mutating, not safe-listed)', () => {
     expect(classifyRisk('bash', { command: 'gh pr merge 123 --squash' }, ctx)).toBe('medium');
