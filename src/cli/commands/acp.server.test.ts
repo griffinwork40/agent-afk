@@ -123,6 +123,7 @@ describe('ACP server — initialize', () => {
       id: number;
       result: { serverInfo: { name: string }; agentCapabilities: { streaming: boolean } };
     }>;
+    if (!res) throw new Error('expected response');
     expect(res.id).toBe(1);
     expect(res.result.serverInfo.name).toBe('afk');
     expect(res.result.agentCapabilities.streaming).toBe(true);
@@ -138,6 +139,7 @@ describe('ACP server — initialize', () => {
         serverInfo: { name: string; version: string };
       };
     }>;
+    if (!res) throw new Error('expected response');
     expect(res.result.protocolVersion).toBe('1.0');
     expect(res.result.agentCapabilities.streaming).toBe(true);
     expect(res.result.agentCapabilities.methods).toContain('session/cancel');
@@ -150,6 +152,7 @@ describe('ACP server — session/new', () => {
     const [res] = await runScenario([req(1, 'session/new')]) as Array<{
       id: number; error: { code: number };
     }>;
+    if (!res) throw new Error('expected response');
     expect(res.error.code).toBe(-32600);
   });
 
