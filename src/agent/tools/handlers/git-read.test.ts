@@ -141,6 +141,13 @@ describe('execution hardening', () => {
     }
   });
 
+  it('lowercase reflog placeholders (%gd %gn %ge %gs) are safe', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--format=%gd %gn'] }, CWD).ok).toBe(true);
+    expect(planGitRead({ subcommand: 'log', args: ['--pretty=%gd %ge %gs'] }, CWD).ok).toBe(true);
+    // literal text containing %g is also safe
+    expect(planGitRead({ subcommand: 'log', args: ['--format=100%good'] }, CWD).ok).toBe(true);
+  });
+
   it('signature-free format and sort values are still accepted', () => {
     expect(planGitRead({ subcommand: 'tag', args: ['--format=%(refname:short)', '--sort=-creatordate'] }, CWD).ok).toBe(true);
     expect(planGitRead({ subcommand: 'branch', args: ['--format=%(refname) %(objectname:short)', '--sort=refname'] }, CWD).ok).toBe(true);
