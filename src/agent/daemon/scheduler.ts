@@ -49,7 +49,7 @@ import { errorMessage } from '../../utils/errors.js';
 import { makeCwdErrorRecord, snapshotInFlightTasks, makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { ensureTelemetrySink, probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
-import { evaluateRunAtGate, applyAutoDisable } from './scheduler.runat-gate.js';
+import { evaluateRunAtGate, applyAutoDisable, warnMalformedDate } from './scheduler.runat-gate.js';
 import { overlapKeyOf } from './handoff-resume-context.js';
 
 export interface SchedulerOptions {
@@ -491,6 +491,11 @@ export class CronScheduler {
       }
       if (gateResult.kind === 'not-yet') {
         // Silent skip — no telemetry write; pre-fire polling is noise-free.
+        return gateResult.record;
+      }
+      if (gateResult.kind === 'malformed') {
+        warnMalformedDate(task.taskId, gateResult.field, gateResult.value);
+        this.writeTelemetry(gateResult.record, task);
         return gateResult.record;
       }
 

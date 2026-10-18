@@ -3,14 +3,14 @@
  * into AccountingAccumulator (root per turn, subagents per completion), and
  * the `session_sealed.billing` payload (schema-valid, omitted when empty).
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BillingRollup, sealBillingField } from './billing-rollup.js';
 import { AccountingAccumulator } from './accounting-accumulator.js';
 import { sealTraceWriter } from './closure-emitter.js';
 import { usageToMetadata } from './stream-consumer.js';
 import { InMemoryTraceWriter } from '../trace/writer.js';
 import { SessionSealedPayloadSchema } from '../trace/events.js';
-import { anthropicBilling, openAICompatibleBilling } from '../usage.billing.js';
+import { anthropicBilling, openAICompatibleBilling, sumBillingUsage } from '../usage.billing.js';
 
 const anth = (input: number, read: number, write: number, out = 0) =>
   anthropicBilling({ input_tokens: input, output_tokens: out, cache_read_input_tokens: read, cache_creation_input_tokens: write });
@@ -54,6 +54,20 @@ describe('BillingRollup', () => {
     const snap = r.snapshot()!;
     r.add(anth(5, 0, 0));
     expect(snap.total.uncachedInput).toBe(1);
+  });
+
+  it('provider: mixed — sumBillingUsage mismatch accumulates under mixed bucket', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const r = new BillingRollup();
+    const mixed = sumBillingUsage(anth(10, 200, 50, 5), openAICompatibleBilling(300, 100, 8));
+    expect(mixed?.provider).toBe('mixed');
+    r.add(mixed);
+    r.add(anth(5, 100, 0, 2)); // normal record added alongside
+    const snap = r.snapshot()!;
+    expect(snap.byProvider['mixed']).toEqual({ uncachedInput: 210, cacheRead: 300, cacheWrite: 50, output: 13 });
+    expect(snap.byProvider['anthropic-direct']).toEqual({ uncachedInput: 5, cacheRead: 100, cacheWrite: 0, output: 2 });
+    expect(snap.total).toEqual({ uncachedInput: 215, cacheRead: 400, cacheWrite: 50, output: 15 });
+    warnSpy.mockRestore();
   });
 });
 
