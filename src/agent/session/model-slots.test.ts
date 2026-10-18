@@ -961,3 +961,32 @@ describe('maxOutputTokensOverrideFor', () => {
     expect(maxOutputTokensOverrideFor('other-model')).toBeUndefined();
   });
 });
+
+// ── #4062: maxOutputTokens <= contextWindow cross-check ──────────────────────
+describe('#4062: coerceSlotBindingInput — maxOutputTokens <= contextWindow cross-check', () => {
+  it('rejects maxOutputTokens exceeding contextWindow when both are set', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 32_768, maxOutputTokens: 65_536 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/maxOutputTokens.*must not exceed.*contextWindow/i);
+  });
+
+  it('accepts maxOutputTokens equal to contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 32_768, maxOutputTokens: 32_768 });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts maxOutputTokens less than contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 131_072, maxOutputTokens: 32_768 });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts maxOutputTokens alone (no contextWindow to cross-check)', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', maxOutputTokens: 65_536 });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts contextWindow alone (no maxOutputTokens to cross-check)', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 32_768 });
+    expect(res.ok).toBe(true);
+  });
+});

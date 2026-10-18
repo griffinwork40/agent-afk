@@ -3,7 +3,7 @@ import { contextLimitFor, autoCompactLimitFor } from './model-limits.js';
 import { loadModelsCatalog } from './providers/openai-compatible/models-catalog.js';
 import { contextWindowOverrideFor } from './session/model-slots.js';
 vi.mock('./providers/openai-compatible/models-catalog.js', () => ({ loadModelsCatalog: vi.fn() }));
-vi.mock('./session/model-slots.js', () => ({ resolveModelInput: (s: string) => s, contextWindowOverrideFor: vi.fn() }));
+vi.mock('./session/model-slots.js', () => ({ resolveModelInput: (s: string) => s, contextWindowOverrideFor: vi.fn(), maxOutputTokensOverrideFor: vi.fn() }));
 beforeEach(() => {
   vi.mocked(contextWindowOverrideFor).mockReturnValue(undefined);
   vi.mocked(loadModelsCatalog).mockReturnValue(new Map([['gpt-5.5', { slug: 'gpt-5.5', context_window: 272000, effective_context_window_percent: 95 }]]));

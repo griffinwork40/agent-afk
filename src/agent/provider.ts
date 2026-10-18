@@ -816,4 +816,13 @@ export interface ModelProvider {
    * (`provider.close?.()`).
    */
   close?(): void | Promise<void>;
+  /**
+   * Optional tool-grant query: `false` when a call to `toolName` through this
+   * provider is certain to be refused (permission gate, or a store-backed tool
+   * such as `workspace_publish` with no store). Prompt assemblers use it so
+   * instruction text never names a tool the model cannot call (#4060). Callers
+   * MUST feature-detect and treat an absent method as "unknown", never as
+   * "denied". Implementations: `providers/shared/tool-grant.ts`.
+   */
+  grantsTool?(toolName: string): boolean;
 }

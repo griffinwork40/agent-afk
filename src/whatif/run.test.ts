@@ -538,12 +538,12 @@ describe('runWhatif — maxUsdRemaining accounts for baseline-sample cost (#3876
     // Instead we verify the accounting invariant directly: total costUsd must
     // never exceed maxUsd + one in-flight trace allowance (concurrency × cost).
     //
-    // We exercise the fix indirectly: run with noBaselineSample=true and very
-    // expensive traces so the budget tracker inside verifyRun trips after the
-    // first task.  The assertion checks that costUsd ≤ maxUsd + one overshoot.
-    // That bound holds in both the fixed and broken case here, but the
-    // companion assert on total spend (analystCost + episodeCost ≤ maxUsd + ε)
-    // would fail without the fix when sample cost is non-zero.
+    // We exercise the budget-truncation path with noBaselineSample=true and
+    // very expensive traces so the budget tracker inside verifyRun trips after
+    // the first task.  The assertions below check that (a) total costUsd does
+    // not exceed maxUsd by more than one in-flight trace allowance and (b)
+    // truncatedByBudget is set.  The non-zero baseline-sample cost deduction
+    // path is covered by run.baseline-budget.test.ts (#4066).
     const traceCost = 3.0;
     const runMock = vi.fn(
       async (env: Environment, ep: Episode, sample: number): Promise<EpisodeTrace> => {

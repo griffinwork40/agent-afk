@@ -11,6 +11,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.324.1] - 2026-10-18
+
+### Fixed
+- correct misleading comment in live-frame-margin test (#4091) (5622b70b)
+- stop telling children to call workspace tools they are not granted (#4071) (3374497a)
+- address advisory findings from #4025 per-slot maxOutputTokens (#4100) (f64c0bd0)
+- add regression test for baseline-sample cost deduction from verifyRun budget (#4098) (acfb2e87)
+- move bash_timeout_clamped telemetry after min-1000 guard, add spy assertions and background clamp test (#4096) (7f779581)
+- address advisory findings from #4005 review (#4097) (7efdf98c)
+
+### Changed
+- regenerate env-registry after #4037 + #4044 (unbreak main scan:env:check) (#4113) (b4084131)
+
 ## [5.324.0] - 2026-10-18
 
 ### Added

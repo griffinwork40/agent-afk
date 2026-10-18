@@ -54,7 +54,9 @@ vi.mock('../providers/shared/soft-deadline.js', () => ({
 }));
 
 vi.mock('../workspace/index.js', () => ({
-  injectWorkspacePreamble: vi.fn((cfg: object) => cfg),
+  // Returns a NEW object like the real injector: applyWorkspacePreamble treats
+  // a same-reference return as "nothing injected" (#4060).
+  injectWorkspacePreamble: vi.fn((cfg: object) => ({ ...cfg })),
 }));
 
 // ── subject imports ───────────────────────────────────────────────────────────
