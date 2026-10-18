@@ -184,6 +184,10 @@ describe('bashHandler', () => {
   });
 
   describe('input validation', () => {
+    // Restore any spies created inline within this block (e.g. telemetry spy
+    // in the clamp tests) so a mid-test throw cannot leak them to siblings.
+    afterEach(() => vi.restoreAllMocks());
+
     it('throws on missing command', async () => {
       await expect(
         bashHandler({}, createSignal()),
@@ -209,6 +213,10 @@ describe('bashHandler', () => {
     });
 
     it('clamps timeout_ms above 600000 and warns in result', async () => {
+      // NOTE: appendRoutingDecision is a no-op under VITEST (routing-telemetry.ts:181),
+      // so this spy confirms the call-site is reached but cannot verify a write to
+      // disk. Siblings that need full mock control use vi.mock at module scope;
+      // here a spy is sufficient to assert the call is made with the correct args.
       const telemetrySpy = vi.spyOn(routingTelemetry, 'appendRoutingDecision');
       const result = await bashHandler({ command: 'echo test', timeout_ms: 700000 }, createSignal());
       expect(result.isError).toBeFalsy();
@@ -227,7 +235,6 @@ describe('bashHandler', () => {
       expect(telemetrySpy).toHaveBeenCalledWith(
         expect.objectContaining({ event: 'tool.bash_timeout_clamped', mode: 'foreground' }),
       );
-      telemetrySpy.mockRestore();
     });
 
     it('clamps timeout_ms above MAX_PROCESS_MAX_RUNTIME_MS in background mode and warns', async () => {
@@ -237,6 +244,7 @@ describe('bashHandler', () => {
       // ProcessJobRegistry), so we assert the parseBashInput validation path via the handler
       // throwing before any spawn occurs — confirming the clamp fires at the right ceiling.
       // The foreground clamp path (timeout_ms > 600000) is already covered by the test above.
+      // NOTE: see spy comment in the foreground clamp test above re: VITEST no-op.
       const telemetrySpy = vi.spyOn(routingTelemetry, 'appendRoutingDecision');
       // MAX_PROCESS_MAX_RUNTIME_MS = 86400000; use a value just above it.
       const overMax = 86400000 + 1;
@@ -244,12 +252,24 @@ describe('bashHandler', () => {
       // but parseBashInput (and the telemetry emit) runs before the background launch.
       // The handler rejects because background mode requires a session context — that is
       // expected; what matters is the telemetry was called with mode: 'background'.
+      let bgResult: Awaited<ReturnType<typeof bashHandler>> | undefined;
       await bashHandler({ command: 'echo bg', timeout_ms: overMax, run_in_background: true }, createSignal())
+        .then((r) => { bgResult = r; })
         .catch(() => { /* background launch fails without a registry — expected */ });
       expect(telemetrySpy).toHaveBeenCalledWith(
         expect.objectContaining({ event: 'tool.bash_timeout_clamped', mode: 'background' }),
       );
-      telemetrySpy.mockRestore();
+      // formatClampedWarningResult(bgResult, …, false) path (bash.ts:~302):
+      // when the handler does NOT throw (registry present in integration), the
+      // returned content must carry the [Warning] sentinel and both timeout values.
+      // In this unit context the handler throws before reaching that path, so we
+      // assert the shape only when a result is actually returned.
+      if (bgResult !== undefined) {
+        expect(bgResult.content).toContain('[Warning]');
+        expect(bgResult.content).toContain(String(overMax));
+        expect(bgResult.content).toContain('86400000');
+        expect(bgResult.content).toMatch(/clamped/i);
+      }
     });
 
     it('throws on negative timeout_ms', async () => {
