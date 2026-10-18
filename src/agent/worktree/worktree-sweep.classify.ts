@@ -10,7 +10,7 @@
  */
 
 import { realpathSync } from 'node:fs';
-import { relative, isAbsolute } from 'node:path';
+import { relative, isAbsolute, resolve } from 'node:path';
 
 // Invariant: this constant is defined here (not in worktree-sweep.ts) to avoid
 // a circular import (worktree-sweep.ts imports from this module). The original
@@ -200,7 +200,7 @@ export function parseWorktreeList(stdout: string): ParsedWorktree[] {
     let prunable = false;
     let isBare = false;
     for (const line of lines) {
-      if (line.startsWith('worktree ')) path = line.slice('worktree '.length).trim();
+      if (line.startsWith('worktree ')) path = resolve(line.slice('worktree '.length).trim());
       else if (line.startsWith('HEAD ')) head = line.slice('HEAD '.length).trim();
       else if (line.startsWith('branch ')) branch = line.slice('branch '.length).trim();
       else if (line.trim().startsWith('locked')) { locked = true; lockReason = line.trim().slice('locked'.length).trim() || undefined; }

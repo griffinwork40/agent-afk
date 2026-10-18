@@ -135,7 +135,7 @@ describe('worktree handler — create', () => {
     // where a literal `HEAD` would mean the MAIN checkout's tip.
     const addCall = mock.calls.find((c) => c.args.includes('add'));
     expect(addCall?.args).toEqual([
-      '-C', repoRoot, 'worktree', 'add', '-b', 'afk/my-feature', wtPath, 'base-sha-123',
+      '-C', repoRoot, 'worktree', 'add', '--no-track', '-b', 'afk/my-feature', wtPath, 'base-sha-123',
     ]);
 
     // Meta written with owner 'agent' + pid
