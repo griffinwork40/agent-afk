@@ -125,7 +125,7 @@ describe('scripts/git-hooks/pre-push', () => {
     try {
       expect(result.status).toBe(0);
       expect(result.stderr).toContain('running pnpm check:audits');
-      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits\n');
+      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits --pre-push\n');
     } finally {
       cleanup(result);
     }
@@ -165,7 +165,7 @@ describe('scripts/git-hooks/pre-push', () => {
     const result = runHook('refs/heads/main abcdef refs/heads/main 123456\n', { pnpmExit: 0 });
     try {
       expect(result.status).toBe(0);
-      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits\n');
+      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits --pre-push\n');
     } finally {
       cleanup(result);
     }
@@ -176,7 +176,7 @@ describe('scripts/git-hooks/pre-push', () => {
     try {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('CI will fail these checks');
-      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits\n');
+      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits --pre-push\n');
     } finally {
       cleanup(result);
     }
@@ -187,7 +187,7 @@ describe('scripts/git-hooks/pre-push', () => {
     try {
       expect(result.status).toBe(0);
       expect(result.stderr).toContain('environment may be broken');
-      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits\n');
+      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits --pre-push\n');
     } finally {
       cleanup(result);
     }
@@ -200,7 +200,7 @@ describe('scripts/git-hooks/pre-push', () => {
     try {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('CI will fail these checks');
-      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits\n');
+      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits --pre-push\n');
     } finally {
       cleanup(result);
     }

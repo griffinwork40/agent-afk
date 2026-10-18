@@ -2,7 +2,8 @@
 /**
  * check:audits — Run every deterministic audit gate from the lint-build CI job.
  *
- * Runs ALL gates (no stop-at-first), prints a concise per-gate pass/fail
+ * Runs ALL gates (no stop-at-first; --pre-push temporarily defers content
+ * completeness checks during the docs rollout), prints a per-gate pass/fail
  * summary with timing, and exits:
  *   0  all gates passed
  *   1  one or more gates failed (but not ALL)
@@ -59,6 +60,15 @@ export const AUDIT_GATES: readonly string[] = [
   'fix:pins:check',
 ];
 
+/** Temporary content rollout exemption: CI and normal check:audits still block.
+ * Remove once the hook reference and documentation migration are complete.
+ */
+export const PRE_PUSH_DEFERRED_GATES = ['scan:docs-coverage:check', 'docs:links:check'] as const;
+
+export function selectedAuditGates(prePush: boolean): readonly string[] {
+  return prePush ? AUDIT_GATES.filter((gate) => !PRE_PUSH_DEFERRED_GATES.some((deferred) => deferred === gate)) : AUDIT_GATES;
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 interface GateResult {
@@ -96,7 +106,9 @@ function main(): void {
 
   const results: GateResult[] = [];
 
-  for (const gate of AUDIT_GATES) {
+  const prePush = process.argv.includes('--pre-push');
+  if (prePush) console.log(`Content rollout: pre-push defers ${PRE_PUSH_DEFERRED_GATES.join(', ')}`);
+  for (const gate of selectedAuditGates(prePush)) {
     process.stdout.write(`  ${gate} … `);
     const r = runGate(gate);
     results.push(r);

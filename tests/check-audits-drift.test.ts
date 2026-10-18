@@ -21,7 +21,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { AUDIT_GATES } from '../scripts/check-audits.js';
+import { AUDIT_GATES, PRE_PUSH_DEFERRED_GATES, selectedAuditGates } from '../scripts/check-audits.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ciYml = path.join(repoRoot, '.github', 'workflows', 'ci.yml');
@@ -115,6 +115,15 @@ function pnpmScripts(command: string): string[] {
 }
 
 describe('check:audits drift test', () => {
+  it('keeps documentation completeness checks blocking outside the explicit pre-push rollout mode', () => {
+    expect(selectedAuditGates(false)).toEqual(AUDIT_GATES);
+    expect(PRE_PUSH_DEFERRED_GATES).toEqual(['scan:docs-coverage:check', 'docs:links:check']);
+    expect(selectedAuditGates(true)).not.toContain('scan:docs-coverage:check');
+    expect(selectedAuditGates(true)).not.toContain('docs:links:check');
+    for (const gate of ['scan:cli:check', 'scan:slash:check', 'scan:config:check']) {
+      expect(selectedAuditGates(true)).toContain(gate);
+    }
+  });
   it('parses multiline run blocks, blank lines, chomping markers, dynamic indentation, and compound gates', () => {
     const gates = deriveCIGates(`
 jobs:

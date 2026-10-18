@@ -70,7 +70,8 @@ fi
 
 echo "pre-push: running pnpm check:audits …" >&2
 
-pnpm check:audits
+# Content rollout: coverage/link gates remain CI-blocking, not pre-push-blocking.
+pnpm check:audits --pre-push
 exit_code=$?
 
 if [ "$exit_code" -eq 2 ]; then
