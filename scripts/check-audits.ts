@@ -11,6 +11,8 @@
  * Gates are derived from .github/workflows/ci.yml's lint-build job:
  *   - pnpm audit:env:check
  *   - pnpm scan:env:check
+ *   - pnpm scan:cli:check / scan:slash:check / scan:config:check
+ *   - pnpm scan:docs-coverage:check / docs:links:check
  *   - pnpm audit:sdk:check
  *   - pnpm audit:chalk:check
  *   - pnpm audit:width:check
@@ -41,6 +43,11 @@ import { fileURLToPath } from 'node:url';
 export const AUDIT_GATES: readonly string[] = [
   'audit:env:check',
   'scan:env:check',
+  'scan:cli:check',
+  'scan:slash:check',
+  'scan:config:check',
+  'scan:docs-coverage:check',
+  'docs:links:check',
   'audit:sdk:check',
   'audit:chalk:check',
   'audit:width:check',

@@ -1,0 +1,116 @@
+---
+title: "Control which tools a model can use"
+description: "Hide tools globally or by model slot, and keep selected skills available only when you invoke them."
+---
+
+Tool visibility controls let you give a model a smaller, more relevant tool set. Use a global deny list for capabilities you never want advertised, or a slot deny list to keep a local model focused without restricting a larger model.
+
+## Toggle tools in the REPL
+
+<Steps>
+<Step>
+
+Run `/config` and select **Tools**.
+
+</Step>
+<Step>
+
+Press Space to toggle a row, Enter to save, or Esc to cancel. The checklist includes tool groups, individual noncore tools, and a server row for each configured MCP server.
+
+</Step>
+<Step>
+
+Restart the REPL to apply the saved global visibility settings. The menu writes your user configuration, not the project's configuration.
+
+</Step>
+</Steps>
+
+A row marked `← off in <file>` is disabled by another configuration tier. Edit that file to enable it. The menu cannot override a project or legacy deny list. On Telegram and other noninteractive surfaces, `/config` shows the current settings without an interactive checklist.
+
+## Edit the deny lists directly
+
+Put this in `afk.config.json`:
+
+```json
+{
+  "tools": {
+    "disabled": ["image", "mcp__github__*"],
+    "disabledBySlot": {
+      "local": ["browser", "peer", "schedules", "bash"]
+    }
+  }
+}
+```
+
+`tools.disabled` applies to every model. `tools.disabledBySlot` adds restrictions for the active model slot. It cannot turn a globally disabled tool back on.
+
+These are operator settings. The agent's `config_set`, `/config set`, and `afk config set` cannot change either key. Use the Tools menu for the global list, or edit JSON for either list. There is no per-slot checklist yet.
+
+### Entry vocabulary
+
+| Entry | Meaning |
+| --- | --- |
+| Exact tool name, such as `bash` | Hide that built-in or registered custom tool |
+| `browser` | All five browser control tools |
+| `image` | `image_generate` and `image_edit`, not `view_image` |
+| `clipboard` | `clipboard_read` and `clipboard_write` |
+| `peer` | `list_sessions` and `send_to_session` |
+| `schedules` | Schedule creation, update, listing, history, and cancellation |
+| `mcp__github__*` | Every tool from that MCP server, including tools discovered later |
+| `mcp__github__create_issue` | One exact MCP wire name |
+
+General glob patterns are not supported. Unknown names and invalid entries produce warnings. A bad entry does not invalidate valid entries alongside it.
+
+The locked core tools cannot be hidden this way: `agent`, `skill`, `compose`, `exit_plan_mode`, `get_runtime_state`, `read_file`, `write_file`, `edit_file`, `grep`, `glob`, and `list_directory`. Attempts to deny them are ignored with a warning. Existing read-only subagent restrictions still apply.
+
+### Configuration tiers and model changes
+
+The global lists from project, user, and legacy configuration files are unioned. Removing an entry from one file does not enable it if another file still denies it. Global settings are captured when a provider is constructed, so restart after editing them.
+
+The slot list follows the model resolved for the current query. A slot can be selected by its slot key, its configured display name, or a raw model ID bound to that slot. A fixed alias such as `sonnet` or `opus` is not itself a slot selection. Slot lists are reread when the query dispatcher is built; a `/model` change follows the new slot. Each subagent resolves its own model's slot list, not its parent's.
+
+Both providers remove disabled tools from advertised schemas and refuse attempted calls. A later MCP refresh or custom tool registration does not reenable a denied tool.
+
+## Hide a skill without removing its slash command
+
+To keep a skill out of the model-facing manifest, add its name to the operator-controlled `skills.hidden` setting:
+
+```json
+{
+  "skills": {
+    "hidden": ["my-release", "team:incident-report"]
+  }
+}
+```
+
+Bare names and plugin-qualified names are matched against skill names. You can still invoke the skill explicitly with its slash command.
+
+For a skill you author, put the setting in `SKILL.md` frontmatter instead:
+
+```md
+---
+name: my-release
+description: Prepare a release checklist.
+disable-model-invocation: true
+---
+
+Prepare the release checklist for this repository.
+```
+
+This is a discovery control, not an execution denial. A hidden skill remains registered and slash-invocable; knowing its name is not an authorization boundary.
+
+## Visibility is not permission
+
+<Callout type="warn">
+Tool visibility reduces clutter and token use. It is not a sandbox. In particular, an enabled `bash` tool can often perform the same work as a hidden tool, and core file-writing tools remain available.
+</Callout>
+
+Permission modes, tool allowlists, path grants, and hooks remain independent checks. Bypass permission mode does not reenable a denied tool, and enabling a tool in the menu does not override a read-only fork or a blocking hook. Use those controls, plus operating-system isolation where needed, to enforce security policy.
+
+## Related
+
+<Cards>
+  <Card title="Configure permissions" href="/configuration/permissions" description="Understand approval modes and execution boundaries." />
+  <Card title="Customize afk with hooks" href="/guides/hooks" description="Check or block operations at execution time." />
+  <Card title="Write custom skills" href="/skills/custom" description="Control how your skills are discovered and invoked." />
+</Cards>

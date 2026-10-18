@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.323.0] - 2026-10-18
+
+### Added
+- add jscpd clone gate that blocks only NEW copy-paste clones (#4043) (6666a9d1)
+- add RiskCategory enum to every gate verdict and hook_decision trace event (#4045) (9dce34ea)
+- measure guardrail false-positive rate for hook-block-repeat meta-guard (#4035) (c08d437a)
+
 ## [5.322.19] - 2026-10-18
 
 ### Added

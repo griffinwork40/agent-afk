@@ -73,7 +73,7 @@ function deriveCIGates(ciYmlText: string): string[] {
  * Pattern: starts with `audit:`, `scan:`, or `fix:` and ends with `:check`.
  */
 function isAuditCheckGate(script: string): boolean {
-  const prefixes = ['audit:', 'scan:', 'fix:'];
+  const prefixes = ['audit:', 'scan:', 'fix:', 'docs:'];
   const hasPrefix = prefixes.some((p) => script.startsWith(p));
   if (!hasPrefix) return false;
   // Must end with :check (could be `audit:foo:check` or `fix:pins:check` etc.)

@@ -1,94 +1,127 @@
 ---
-title: "One-Shot Chat"
-description: "afk chat sends a single message and exits — pipe-friendly, scriptable, or a streaming JSON event stream for scripts and CI."
+title: "Run a single prompt"
+description: "Send one message with afk chat, read input from a pipe, and collect text or structured output."
 ---
 
-`afk chat` sends a single message and exits. It's designed for scripting, CI pipelines, and
-any situation where you want a one-shot answer without opening an interactive session.
+`afk chat` sends one message, lets the agent use tools to complete it, prints the response, and exits. Use it for a quick answer, a shell script, or a CI job without opening the interactive REPL. `afk c` is an alias.
 
 ```bash
-afk chat "explain this error"
-afk chat "summarise the last 10 git commits"
+afk chat "Summarize the last 10 git commits. Do not change files."
 ```
 
-Alias: `afk c`
+## Pipe a prompt
 
-## Piping input
-
-Pass `-` as the message to read from stdin, or omit the message entirely when stdin is a pipe:
+<Steps>
+<Step>
+### Put the instruction and input in the same stream
 
 ```bash
-cat error.log | afk chat "what caused this?"
-git diff HEAD~3 | afk chat "summarise these changes"
+{ printf 'Summarize these changes:\n\n'; git diff; } | afk chat -
+```
+
+</Step>
+<Step>
+### Or read a complete prompt from a file
+
+```bash
 afk chat - < prompt.txt
 ```
 
-Stdin is capped at 10 MB.
+You can omit the message argument when stdin is piped: `cat prompt.txt | afk chat`.
+
+</Step>
+</Steps>
+
+<Callout type="warn">
+A positional message other than `-` takes precedence over stdin. For example, `cat error.log | afk chat "Explain this"` sends only `Explain this`, not the file contents. Combine the instruction and data in stdin instead.
+</Callout>
+
+Input is limited to 10 MiB (10,485,760 bytes). Trailing newline characters are removed. Missing input, empty input, and whitespace-only input are errors. Passing `-` without a pipe or redirected stdin is also an error.
 
 ## Common options
 
-```bash
-afk chat "..." --model opus           # pick a model
-afk chat "..." --max-turns 20         # turn limit (default 10)
-afk chat "..." --format json          # machine-readable JSON response
-afk chat "..." --format stream-json   # NDJSON event stream for headless consumers
-afk chat "..." --max-budget-usd 2.00  # hard cost ceiling
-afk chat "..." -w                     # run in an isolated git worktree
-afk chat "..." --resume <id>          # continue a saved session
-afk chat "..." --continue             # continue the most recent session in cwd
-afk chat "..." --post telegram        # publish the final response to Telegram
-afk chat "..." --post github          # publish the final response as a PR comment
-```
+| Option | Use |
+|---|---|
+| `--model opus` | Choose a model or configured alias. |
+| `--max-turns 20` | Set the conversation turn limit. The chat default is `10`. |
+| `--format json` | Print the final response as a JSON object. |
+| `--format stream-json` | Emit newline-delimited events during the run. |
+| `--max-budget-usd 2.00` | Set the session cost ceiling in USD. |
+| `--permission-mode default` | Override the configured permission mode. |
+| `--mcp-config tools.json` | Merge an additional MCP configuration at highest priority. |
+| `--worktree` | Run in a separate git checkout. |
+| `--worktree-base HEAD` | Base that checkout on your current local commit. |
+| `--continue` | Continue the newest saved session. |
+| `--resume <id>` | Continue a particular saved session. |
+| `--session-id <uuid>` | Create a new session with a specific unused UUID. |
+| `--post github,telegram` | Publish the final response to those destinations. |
+| `--post-pr <ref>` | Select the PR for GitHub publishing instead of the current branch's PR. |
 
-## Output formats
+See the [CLI reference](/reference/cli) for provider selection, thinking, effort, output-token limits, and other options. `--stream` is currently reserved and has no effect; use `--format stream-json` for streaming output.
 
-### `--format text` (default)
+<Callout type="warn">
+A one-shot run is not a sandbox. It can execute tools and modify files under the configured [permissions](/configuration/permissions). Publishing with `--post` sends content outside your machine. A publishing failure is reported on stderr but does not by itself fail the completed chat run.
+</Callout>
 
-Renders markdown to the terminal with a cost/duration/token summary line beneath.
+## Choose an output format
 
-### `--format json`
-
-Returns a single JSON object:
-
-```json
-{
-  "success": true,
-  "model": "claude-sonnet-...",
-  "message": "...",
-  "timestamp": "2024-06-01T12:00:01.234Z",
-  "costUsd": 0.003,
-  "durationMs": 812,
-  "inputTokens": 140,
-  "outputTokens": 52
-}
-```
-
-Cost, duration, and token fields appear only when the provider populates them.
-
-### `--format stream-json`
-
-Writes one JSON object per line to stdout ([newline-delimited JSON](https://ndjson.org/)) — no color codes, no spinner. Use this when a script or CI pipeline needs to parse AFK's output. Events include `chunk`, `message`, `done`, `error`, `progress`, `paused`, and `resumed`. The process exits `0` on `done` and `1` on `error`.
-
-For the full event schema, jq recipes, and TypeScript parsing examples, see [Headless & Machine-Readable Output](../guides/headless).
-
-Combine with `tee` to log the raw stream while still processing it:
+| Format | Output |
+|---|---|
+| `text` (default) | Terminal-rendered Markdown, followed by available duration, cost, and token totals. |
+| `json` | One final object with `success`, `model`, and `message`, plus available timestamp, cost, duration, token, and trace identity fields. |
+| `stream-json` | One JSON event per line, including content chunks, completion, progress, and errors. |
 
 ```bash
-afk chat "build the project" --format stream-json | tee run.ndjson
+afk chat "Summarize this repository. Do not change files." --format json > response.json
+afk chat "Run the tests and explain any failures." --format stream-json | tee run.ndjson
 ```
 
-## Session persistence
+JSON metadata is conditional: do not assume that every provider supplies costs, token counts, or a session identifier. `sessionId`, `witnessLabel`, and `tracePath`, when present, let automation locate the matching session and trace without searching for the newest file.
 
-`--resume` and `--continue` work the same as in the REPL. When either flag is set, the session
-is persisted and a resume hint is printed to stderr on exit:
+See [headless output](/guides/headless) for event schemas, parsing recipes, stdout/stderr handling, and pipeline exit handling.
 
+## Save and continue a session
+
+Create a saved conversation with an unused UUID, then continue it:
+
+```bash
+SESSION_ID="$(node -p 'crypto.randomUUID()')"
+afk chat "Inspect the project and summarize its architecture." --session-id "$SESSION_ID"
+afk chat "Which modules would you test first?" --resume "$SESSION_ID"
 ```
-Continue with: afk chat <msg> --resume <id>
+
+After a completed turn, sessions created with `--session-id` or resumed with `--resume` or `--continue` are saved, and a continuation command is printed to stderr. Do not rely on an ordinary one-shot run creating the same saved-session entry.
+
+`--resume`, `--continue`, and `--session-id` are mutually exclusive. An unknown resume target, an invalid UUID, or a UUID already used by a saved session is an error. A resumed session uses its stored model.
+
+<Callout type="info">
+`--continue` currently selects the newest saved session from the shared session store, not a session filtered to your current directory. Use `--resume` when multiple projects or surfaces are active.
+</Callout>
+
+## Isolate file changes in a worktree
+
+```bash
+afk chat "Fix the failing tests and verify the fix." --worktree --worktree-base HEAD
 ```
 
-Assign a specific UUID to a new session with `--session-id <uuid>`.
+`--worktree` accepts an optional branch name; without one, AFK chooses a name. Without a base override, AFK normally uses the remote's default branch, fetched fresh. Use `--worktree-base HEAD` when you want your current local commit instead.
 
-## Worktree isolation
+Cleanup removes a clean checkout and attempts to delete its branch. A checkout with uncommitted changes or protected ignored local state is preserved, with its location printed. A worktree isolates git changes, not tool access or credentials. See [worktrees](/guides/worktrees) for the full lifecycle.
 
-`-w` / `--worktree` creates a git worktree for the one-shot run. On a clean exit, the worktree
-is removed automatically. Mirrors the REPL's worktree behavior.
+## Exit status
+
+| Code | Meaning |
+|---|---|
+| `0` | The command completed without a reported error. |
+| `1` | Input validation, authentication, budget, hook, network, or other general failure. A streamed `error` event also sets this code. |
+| `124` | A thrown timeout classified by the CLI error handler. |
+
+A failure emitted as a stream event uses `1`, even if its underlying cause is a timeout. Do not use exit status alone as evidence that the agent's changes passed verification; inspect the response and relevant test results.
+
+## Related
+
+<Cards>
+<Card title="Headless output" href="/guides/headless" description="Parse JSON and streaming events in scripts and CI." />
+<Card title="GitHub Actions" href="/surfaces/github-action" description="Run one prompt in a workflow with the composite action." />
+<Card title="Sessions and context" href="/concepts/sessions-and-context" description="Understand saved conversations and resuming work." />
+</Cards>

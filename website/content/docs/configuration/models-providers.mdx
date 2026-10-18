@@ -34,34 +34,44 @@ endpoint via `AFK_OPENAI_BASE_URL`). Selected automatically for:
 
 ### xai / xai-oauth
 
-Talks to the xAI inference API. Selected automatically for:
+Grok model ids route to the first-class xAI provider. The `grok` short alias resolves to `grok-4.5`.
 
-- `grok-*` model IDs (e.g. `grok-4.6`, `grok-4.5`)
-- The `grok` short alias (resolves to the current flagship — `grok-4.6`)
+Choose API billing or supported SuperGrok, SuperGrok Heavy, or X Premium+ subscription OAuth:
 
-Two auth modes:
+<Tabs items={['API key', 'Subscription OAuth']}>
+<Tab value="API key">
 
-- **`xai`** — API-key mode. Set `XAI_API_KEY`.
-- **`xai-oauth`** — SuperGrok / SuperGrok Heavy / X Premium+ subscription OAuth
-  via the Grok CLI chat proxy. No API key needed; uses the OAuth credential
-  written by `grok login`. Force this mode by binding a slot with
-  `provider: "xai-oauth"`.
+Set `XAI_API_KEY` through your environment or credential configuration, then explicitly select API-key mode:
 
 ```bash
-export XAI_API_KEY=xai-...
-afk chat "summarise this diff" --model grok-4.6
-# or use the short alias
-afk i --model grok
+afk chat "Summarize this diff" --model grok --provider xai
 ```
 
+</Tab>
+<Tab value="Subscription OAuth">
+
+```bash
+afk provider auth xai login
+afk provider auth diagnose --family xai
+afk chat "Summarize this diff" --model grok --provider xai-oauth
+```
+
+Login uses a device-code flow by default. `afk provider auth xai login --browser` uses a browser PKCE loopback flow instead; `--device-code` explicitly chooses device code and wins if both flags are supplied. AFK stores the OAuth credentials itself and uses the Grok CLI chat proxy. To clear those tokens, run `afk provider auth xai logout`.
+
+</Tab>
+</Tabs>
+
+Without an explicit auth mode, a single available credential source is selected automatically. If both an API key and stored subscription OAuth exist, automatic resolution reports ambiguous authentication. Choose `--provider xai` or `--provider xai-oauth`, or bind the slot explicitly:
+
 ```jsonc
-// afk.config.json — bind a slot to Grok
 {
   "models": {
-    "large": { "id": "grok-4.6", "provider": "xai" }
+    "large": { "id": "grok-4.5", "provider": "xai-oauth" }
   }
 }
 ```
+
+xAI does not use `OPENAI_API_KEY` or `AFK_OPENAI_BASE_URL`. See [authentication troubleshooting](/troubleshooting/auth-and-providers) if the account or endpoint is rejected.
 
 ### chatgpt-oauth (per-slot)
 
@@ -122,7 +132,7 @@ Switch mid-session in the REPL:
 /model sonnet        # next turn routes back to anthropic-direct
 ```
 
-Mid-session model switches work transparently — cost totals and hooks carry over.
+Mid-session model switches keep cost totals and hooks. When a switch rebuilds the provider instance, the router prepends a one-turn notice to the next outbound prompt identifying the previous and new model/provider, so the new model does not assume the old provider is still active. This notice is not stored in the user's carried conversation history. Same-family forwards that do not rebuild the provider add no notice.
 
 **Cross-family history caveat:** Anthropic `thinking` blocks and tool-call ID
 schemas differ between providers. When you switch provider families mid-session,
@@ -153,7 +163,7 @@ router pick automatically per model.
 | `opus-5.5` / `opus-5.5_1m` | Opus 5.5 — faster, cheaper Opus; extended thinking, adaptive by default | anthropic-direct |
 | `sonnet` / `sonnet_1m` | Balanced — the `medium` tier's default model | anthropic-direct |
 | `haiku` | Fast and cheap, best for simple tasks | anthropic-direct |
-| `grok` | Current Grok flagship — resolves to `grok-4.6` | xai |
+| `grok` | Current Grok flagship — resolves to `grok-4.5` | xai |
 
 `sonnet_1m` and `opus_1m` resolve to the same fixed model ID as their base
 alias (`sonnet`/`opus` respectively) — like all identity aliases, they are not
@@ -225,6 +235,27 @@ with exponential backoff (2s → 4s → 8s); both the initial connection and a d
 stream get their own retry budget. Non-transient statuses (`400`, `401`, `403`,
 `404`) are surfaced immediately without retrying.
 
+The short retry tier honors server `retry-after` or `retry-after-ms` hints (capped at 120 seconds) instead of blind backoff. An exhausted ChatGPT subscription window is not retried as a transient error; the outer usage-limit tier handles its pause and resume. A retry budget is bounded; persistent errors still surface.
+
+### Cost estimates for OpenAI-compatible models
+
+AFK estimates per-call USD cost from input, discounted cached input, and output tokens using a static table. Selected standard list rates per **million tokens** are:
+
+| Model | Input | Cached input | Output |
+|---|---:|---:|---:|
+| `gpt-4o` | $2.50 | $1.25 | $10.00 |
+| `gpt-4o-mini` | $0.15 | $0.075 | $0.60 |
+| `gpt-4.1` | $2.00 | $0.50 | $8.00 |
+| `o3` | $2.00 | $0.50 | $8.00 |
+| `gpt-5.6-terra` | $2.00 | $0.20 | $12.00 |
+| `gpt-6-sol` | $2.00 | $0.20 | $10.00 |
+
+Rates are a code-maintained snapshot, not a billing quote. Unrecognized hosted or local shim IDs show **unknown cost**, never a fabricated $0; even slash-form IDs can route to paid hosts. Long-context, batch, and cache-write surcharges are not modeled. Confirm current rates with your provider and use [Usage and cost](/guides/usage-and-cost) for session reporting.
+
+### Availability in `/model`
+
+Bare `/model` opens a picker on the usual compositor REPL, but that picker currently has **no authentication labels**. On a non-compositor surface, the fallback alias listing appends `(needs sign-in)` to aliases without detected credentials. A label is an auth hint, not a guarantee that the provider will accept the account or model.
+
 Output-token caps are threaded into the streaming request body: `AFK_MAX_OUTPUT_TOKENS`
 (or the resolved per-model default) is sent as `max_tokens`, or as `max_completion_tokens`
 for o-series models that require it.
@@ -233,6 +264,13 @@ for o-series models that require it.
 
 ```bash
 afk config              # shows resolved model and provider
-afk config --format json   # machine-readable, includes raw env vars
+afk config --format json   # machine-readable configuration summary
 afk provider auth diagnose  # targeted credential check per provider
 ```
+
+## Related
+
+<Cards>
+<Card title="API keys" href="/configuration/api-keys" description="Set up credentials for each provider." />
+<Card title="Model slots" href="/configuration/model-slots" description="Bind models and endpoints per tier." />
+</Cards>
