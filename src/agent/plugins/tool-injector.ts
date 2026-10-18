@@ -15,6 +15,7 @@ import { splitFrontmatter } from '../../utils/split-frontmatter.js';
 import { join } from 'path';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
+import { WORKSPACE_TOOL_NAMES } from '../workspace/workspace-tools.js';
 import { _registerScanCacheResetHook } from '../plugins-scanner.js';
 import { parseFlagsField, resolveSkillFlags } from '../../utils/skill-md.js';
 
@@ -474,7 +475,9 @@ export function resolveKnownToolNames(
   // intentionally excluded (blast-radius too large for unsupervised writes).
   // 'compose' is excluded from CHILD_ALLOWED_TOOLS (unbounded fan-out) and is
   // not grantable to child sessions — accepting it produces a phantom allowlist entry.
-  return new Set([...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'agent', 'skill']);
+  // workspace_publish / workspace_query ARE in CHILD_ALLOWED_TOOLS (the workspace
+  // is ephemeral per root session), so a skill may declare them (#4073).
+  return new Set([...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, ...WORKSPACE_TOOL_NAMES, 'memory_search', 'agent', 'skill']);
 }
 
 /**

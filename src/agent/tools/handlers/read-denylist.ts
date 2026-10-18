@@ -46,7 +46,12 @@ import { homedir } from 'os';
 import { safeRealpath } from './write-denylist.js';
 import { getAfkHome } from '../../../paths.js';
 import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
-import { gateDerivedCarveOuts, gateStaticCarveOuts } from './read-denylist-carveout.js';
+import {
+  gateDerivedCarveOuts,
+  gateSshPubKeyDir,
+  gateStaticCarveOuts,
+  isSshPubKeyChild,
+} from './read-denylist-carveout.js';
 import { pathIsWithin } from '../fs-case.js';
 import { expandHome } from '../../plugins/source.js';
 
@@ -214,6 +219,17 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
  * environment can re-deny explicitly with
  * `AFK_READ_DENYLIST=~/.ssh/config` (extras outrank the exception).
  *
+ * Read-only, never write: these are READ grants only. The typed write
+ * denylist floors all of `~/.ssh` and `~/.afk/config` unconditionally, and the
+ * bash hook honors a carve-out only for a provably read-only command
+ * (`bash-restriction-hook.readonly-gate.ts`) — `echo … >> ~/.ssh/config`
+ * plants a `ProxyCommand` (code execution on the next ssh), a `known_hosts`
+ * write injects trust, and an `mcp.json` / `schedules.json` write plants a
+ * command the daemon runs.
+ *
+ * SSH PUBLIC KEYS are carved out separately as a PATTERN, not listed here:
+ * see {@link SSH_PUBKEY_SUFFIX}.
+ *
  * Kept home-RELATIVE so the REPL `@`-file injector
  * (`cli/commands/interactive/at-file-inject.ts`), which resolves against an
  * injectable home, shares this one list instead of duplicating it.
@@ -225,7 +241,24 @@ export const READ_ALLOWLIST_REL: readonly string[] = [
   '.ssh/known_hosts',
 ];
 
+/**
+ * SSH public-key pattern carve-out: a DIRECT child of `~/.ssh` whose basename
+ * ends in this suffix (and is not the bare suffix) is readable.
+ *
+ * Contract: matched against the fully symlink-RESOLVED request, which must be
+ * a direct child of the resolved `~/.ssh` — so `~/.ssh/foo.pub -> id_rsa`
+ * stays denied, subdirectories (`~/.ssh/keys/x.pub`) stay denied, and a
+ * `~/.ssh` that resolves under another floor drops the pattern entirely
+ * (`gateSshPubKeyDir`). `AFK_READ_DENYLIST` still outranks it (listing
+ * `~/.ssh` re-denies every key). Residual risk, accepted: the name is the only
+ * signal, so a PRIVATE key an operator misnamed `*.pub` becomes readable.
+ * Shared by the bash hook (lexical spelling scrub) and the `@`-file injector.
+ */
+export const SSH_PUBKEY_SUFFIX = '.pub';
+
 const DEFAULT_AFK_CONFIG = `${HOME}/.afk/config`;
+/** The exact BUILTIN_READ_DENYLIST source the pub-key pattern pierces. */
+const SSH_SOURCE = `${HOME}/.ssh`;
 
 /** {@link READ_ALLOWLIST_REL} resolved against the real home directory. */
 export const BUILTIN_READ_ALLOWLIST: readonly string[] = READ_ALLOWLIST_REL.map(
@@ -270,7 +303,13 @@ export function resolveExceptionEntry(entry: string): string {
 // Threat-model note: a denylist entry's symlink is assumed stable within a
 // process (mirrors the rootRealpathCache assumption in _cwd-utils.ts).
 let cached:
-  | { key: string; builtins: readonly string[]; extras: readonly string[]; allow: readonly string[] }
+  | {
+      key: string;
+      builtins: readonly string[];
+      extras: readonly string[];
+      allow: readonly string[];
+      pubKeyDir: string | undefined;
+    }
   | undefined;
 
 /**
@@ -376,6 +415,7 @@ function resolveLists(): {
   builtins: readonly string[];
   extras: readonly string[];
   allow: readonly string[];
+  pubKeyDir: string | undefined;
 } {
   // Invariant: AFK_HOME is part of the cache key alongside AFK_READ_DENYLIST.
   // The builtins list now depends on it (derivedAfkHomeReadEntry), so a
@@ -430,6 +470,10 @@ function resolveLists(): {
         ...gateDerivedCarveOuts(derivedAfkHomeAllowEntries(), derivedGateRoots),
       ]),
     ],
+    // The SSH public-key PATTERN carve-out goes through the same per-entry
+    // provenance gate (plus every derived AFK_HOME config root), so a
+    // relocated home or a symlinked ~/.ssh can never widen it.
+    pubKeyDir: gateSshPubKeyDir(resolvedBuiltinEntries, derivedCarvedRoots, SSH_SOURCE),
   };
   return cached;
 }
@@ -509,7 +553,7 @@ export function isReadDenied(filePath: string): { denied: boolean; matched?: str
  * prefix checks.
  */
 export function isCanonicalPathReadDenied(real: string): { denied: boolean; matched?: string } {
-  const { builtins, extras, allow } = resolveLists();
+  const { builtins, extras, allow, pubKeyDir } = resolveLists();
 
   // Invariant: operator-supplied `AFK_READ_DENYLIST` extras are matched BEFORE
   // the built-in exception list, and are never weakened by it. The documented
@@ -528,6 +572,17 @@ export function isCanonicalPathReadDenied(real: string): { denied: boolean; matc
   // close. Entries are leaf-un-dereferenced (see `resolveExceptionEntry`), so a
   // symlinked `mcp.json` cannot smuggle a protected target into this set.
   if (allow.includes(real)) return { denied: false };
+  // SSH public keys: a DIRECT `*.pub` child of the resolved ~/.ssh (see
+  // `SSH_PUBKEY_SUFFIX`). `real` is fully dereferenced, so `foo.pub -> id_rsa`
+  // is judged as `id_rsa` and stays denied. Defense in depth: the key must not
+  // also sit under any OTHER builtin root.
+  if (
+    pubKeyDir !== undefined &&
+    isSshPubKeyChild(real, pubKeyDir) &&
+    !builtins.some((b) => b !== pubKeyDir && pathIsWithin(real, b))
+  ) {
+    return { denied: false };
+  }
   for (const blocked of builtins) {
     if (pathIsWithin(real, blocked)) {
       return { denied: true, matched: blocked };

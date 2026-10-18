@@ -165,6 +165,10 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
         opts.setProviderIterator(rebuilt.providerIterator);
       }
 
+      // #4064: read the manager here, after MCP init has settled, so an
+      // SDK-built manager (#4063) gets the failure notice as well as a
+      // caller-supplied one.
+      const mcpManager = opts.getConfig().mcpManager;
       const initializer = new ProviderInitializer(
         opts.getConfig(),
         opts.abortSignal,
@@ -172,6 +176,7 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
         opts.shutdown,
         opts.hookRegistry,
         opts.queueFrameworkContext,
+        mcpManager !== undefined ? () => mcpManager.getServerStates() : undefined,
       );
       return initializer.run(
         opts.getProviderIterator,

@@ -26,6 +26,14 @@ const nextConfig: NextConfig = {
     return [
       { source: '/docs', destination: '/', permanent: true },
       { source: '/docs/:path*', destination: '/:path*', permanent: true },
+      // Legacy /docs URLs first lose their prefix, then resolve these moves.
+      { source: '/guides/cli-reference', destination: '/reference/cli', permanent: true },
+      { source: '/guides/tools-reference', destination: '/reference/tools', permanent: true },
+      {
+        source: '/configuration/environment-variables',
+        destination: '/reference/environment-variables',
+        permanent: true,
+      },
     ];
   },
   async headers() {

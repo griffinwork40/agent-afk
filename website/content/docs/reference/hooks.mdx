@@ -1,0 +1,232 @@
+---
+title: "Look up hook events and payloads"
+description: "Reference all ten harness hook events, their payloads, decision fields, matcher rules, and deadlines."
+---
+
+afk exposes ten lifecycle events through its hook registry. File-based command hooks receive a deliberately smaller JSON payload than in-process handlers, so choose the interface that exposes the data your check needs.
+
+For setup and working examples, see [Customize afk with hooks](/guides/hooks).
+
+## Command configuration
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .afk/hooks/check.cjs",
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Your own commands require user-global `enableShellHooks: true`; project commands additionally require user-global `allowProjectHooks: true`. Plugin `hooks/hooks.json` commands require user-global `enablePluginHooks: true` independently. Only `command` entries are supported.
+
+### Matchers
+
+Matchers filter `PreToolUse`, `PostToolUse`, and `PostToolUseFailure` by tool name. They are ignored for all other events.
+
+| Form | Behavior |
+| --- | --- |
+| Omitted, empty string, or `*` | Match every tool |
+| `bash` | Exact canonical tool name |
+| `Bash` or `Edit|Write|MultiEdit` | Exact names or compatible Claude Code aliases, case-sensitive |
+| `/^browser_/i` | Explicit regular expression against the canonical afk tool name only |
+| `Web.*` | Bare regular expression, anchored to the whole name and tested against canonical names and aliases |
+
+Explicit regex flags `g` and `y` are stripped so matching is not stateful. Invalid patterns warn and fall back to exact equality.
+
+### Timeouts and ordering
+
+Handlers run sequentially in registration order. `decision: "block"` or `continue: false` stops the chain. `approve` does not skip subsequent handlers. Abort takes precedence over a decision.
+
+A command's `timeout_ms` is milliseconds. Claude Code's `timeout` is seconds and is used when a positive `timeout_ms` is absent. The default is `30000` milliseconds, with a maximum of `30000`. Each command's stdout and stderr capture is limited to 64,000 bytes.
+
+The registry also bounds each ordinary handler to 30 seconds. `Stop` uses a shorter five-second registry deadline per handler, so set a Stop command's own timeout to five seconds or less. A command process can otherwise outlive the shorter Stop wait until its command timeout kills it. `SubagentStop` has a 30-second whole-dispatch ceiling as well as the per-handler ceiling.
+
+In-process `longRunning` registration is reserved for handlers that wait for human input and observe cancellation. Code-backed plugins cannot retain that option. `background: true` is legal only for in-process `SessionEnd` handlers; those handlers run on a serialized background chain and their decisions are discarded.
+
+## Command input and output
+
+Every command receives these stdin JSON fields:
+
+| Field | Meaning |
+| --- | --- |
+| `hook_event_name` | One of the ten event names below |
+| `session_id` | Effective session ID when known; omitted if unavailable |
+| `cwd` | Working directory supplied by the hook registration's session |
+| `transcript_path` | Autosaved REPL markdown transcript path, or `null` when unavailable |
+
+Do not assume `transcript_path` contains Claude Code JSONL. Before the first completed REPL turn, and on one-shot surfaces, it can be `null`.
+
+Tool events add `tool_name` and `tool_input`. Other event-specific command fields are listed below. The command payload does not serialize arbitrary in-process context properties such as grant managers, full subagent traces, or assistant history.
+
+### Decision fields
+
+In-process handlers return a `HookDecision`. A successful command returns JSON using the mappings below:
+
+| In-process field | Command stdout field | Semantics |
+| --- | --- | --- |
+| `continue` | `continue` | `false` blocks; absent or true continues. The command parser only retains false |
+| `decision` | `decision` | `"block"` rejects; `"approve"` explicitly accepts this hook, subject to other checks |
+| `reason` | `reason` | Human-readable explanation |
+| `injectContext` | `hookSpecificOutput.additionalContext` | Context delivery depends on event |
+| `updatedInput` | `hookSpecificOutput.updatedInput` | Full input replacement, `PreToolUse` only |
+
+A command must exit `0` for stdout JSON to be parsed. Exit `2` produces a block with the first 500 characters of trimmed stderr as its reason. Other nonzero exits, spawn errors, and command timeouts warn and return an empty decision. Invalid or nonobject stdout JSON also returns an empty decision. These command-executor rules differ from an in-process handler throwing, which the registry turns into a block. Programmatic plugin handlers additionally have error isolation that logs a throw and returns an empty decision.
+
+```json
+{
+  "decision": "approve",
+  "reason": "The request meets project policy.",
+  "hookSpecificOutput": {
+    "additionalContext": "Use the project's existing conventions."
+  }
+}
+```
+
+All events accept the common `continue`, `decision`, and `reason` fields, but a post-operation block cannot undo the operation. The sections below state each event's effective behavior. `updatedInput` is ignored outside `PreToolUse`. Context is ignored outside `SessionStart`, `SubagentStop`, `PreToolUse`, `Stop`, and `UserPromptSubmit`.
+
+Multiple nonblocking context strings are joined with newlines in registration order. Other provided decision fields use the last writer's value. A blocking decision short-circuits before this accumulation, so earlier context is not automatically carried through a later block.
+
+## `SessionStart`
+
+**When:** During session initialization, before the first model turn. Forked subagents also initialize with this event.
+
+**In-process fields:** `event`, optional `sessionId`, optional `parentSessionId`.
+
+**Command fields:** Common fields only. `parentSessionId` is not serialized into command stdin.
+
+**Decisions:** A block or `continue: false` fails initialization. `injectContext` is queued for the top-level session's first outbound user message. Subagent initialization does not prepend this context to every child's prompt.
+
+**Matcher and timeout:** Matcher ignored. Ordinary 30-second handler deadline and command timeout rules apply.
+
+## `SessionEnd`
+
+**When:** The session closes or is reset. This is teardown, not the end of each individual turn.
+
+**In-process fields:** `event`, optional `sessionId`, `reason`, `parentSessionId`, `tracePath`, `cwd`, and `assistantTexts`. `assistantTexts` contains the session's assistant messages for in-process consumers only.
+
+**Command fields:** Common fields only. The teardown reason, trace path, parent ID, and assistant texts are not added to command stdin.
+
+**Decisions:** Blocks and errors are logged or reported but cannot prevent teardown. Context and input rewrites have no delivery effect. An in-process background handler's entire decision is discarded.
+
+**Matcher and timeout:** Matcher ignored. Ordinary 30-second handler deadline and command timeout rules apply. Only this event supports background registration.
+
+## `SubagentStart`
+
+**When:** Before a subagent is created.
+
+**In-process fields:** `event`, required `subagentId`, optional `parentSessionId`.
+
+**Command fields:** Common fields only, using the registration's session ID as fallback. The subagent ID and parent ID are not serialized into stdin.
+
+**Decisions:** A block or `continue: false` prevents creation. Context and input rewrites are ignored.
+
+**Matcher and timeout:** Matcher ignored. Ordinary 30-second handler deadline and command timeout rules apply.
+
+## `SubagentStop`
+
+**When:** A subagent handle is finalized or cancelled, once for that handle's teardown.
+
+**In-process fields:** `event`, required `subagentId` and `status`; optional `reason`, `lastMessage`, `agentType`, `durationMs`, and `trace`. Status is `idle`, `running`, `succeeded`, `failed`, or `cancelled`. `lastMessage` is the most recent successful run's output, if one exists.
+
+**Command fields:** Common fields only. Subagent output, status, trace, and duration are not serialized into command stdin.
+
+**Decisions:** Blocks and errors cannot hold teardown open. Nonblocking `injectContext` supplies supplemental framework context to the parent, distinct from the child's answer. Foreground `agent` and forked skill paths deliver it in their tool result in the same turn. Other supported parent paths queue it for the next real user message. Delivery is suppressed if the parent is aborting; background and compose paths are not a universal context-delivery guarantee.
+
+**Matcher and timeout:** Matcher ignored. Thirty-second per-handler and whole-dispatch ceilings apply.
+
+## `PreToolUse`
+
+**When:** Before a tool handler executes and before later permission and validation gates complete.
+
+**In-process fields:** `event`, required `toolName`; optional `input`, `sessionId`, `subagentId`, `parentSessionId`, `cwd`, `grantManager`, `nonInteractive`, and `toolUseId`. `grantManager` belongs to the session executing the call. `nonInteractive` is true when the caller cannot reach a human.
+
+**Command fields:** Common fields plus `tool_name` and `tool_input`. In-process IDs and grant-manager state are not added to stdin.
+
+**Decisions:** Block or `continue: false` prevents execution. `injectContext` is appended to the final tool result, including the blocking result and later gate denials. On a block, return the context on that blocking decision. A nonblocking context note is delivered only if the call reaches a result-delivery path.
+
+`updatedInput` must be an object, not an array or primitive. It replaces the entire input, then normal validation and permission checks apply. Each hook sees the original input; the last provided rewrite wins. Any block prevents application of the rewrite.
+
+**Matcher and timeout:** Tool matcher applied. Ordinary 30-second handler deadline and command timeout rules apply.
+
+## `PostToolUse`
+
+**When:** After a tool handler returns normally, including a returned error result. Observers see the result before the central output cap is applied.
+
+**In-process fields:** `event`, required `toolName`; optional `toolUseId`, `sessionId`, `subagentId`, `parentSessionId`, `rootSessionId`, `input`, `output`, `isError`, `grantManager`, `incomplete`, and `incompleteReason`.
+
+`isError` marks a returned error result. `incomplete` and `incompleteReason` distinguish a partial subagent answer from a clean completion.
+
+**Command fields:** Common tool fields plus `tool_output` when defined. Output is a string; nonstring output is JSON-serialized. Flags such as `isError` and `incomplete` are not separate command fields.
+
+**Decisions:** Blocks and errors are observed but cannot undo a completed call. Context and rewrites are ignored. Use `PreToolUse` to enforce a policy before execution.
+
+**Matcher and timeout:** Tool matcher applied. Ordinary 30-second handler deadline and command timeout rules apply.
+
+## `PreCompact`
+
+**When:** Before manual compaction from the REPL or Telegram, and before automatic threshold compaction on both providers.
+
+**In-process fields:** `event`, optional `sessionId`, optional `trigger` (`manual` or `auto`).
+
+**Command fields:** Common fields plus `trigger`, or `null` if absent.
+
+**Decisions:** Block or `continue: false` prevents that compaction. A blocked automatic attempt is skipped for that turn; the session continues. Context and rewrites are ignored.
+
+**Matcher and timeout:** Matcher ignored. Ordinary 30-second handler deadline and command timeout rules apply.
+
+## `PostToolUseFailure`
+
+**When:** A tool execution handler throws, rather than returning an ordinary result. This is not the notification for every `isError` tool result or pre-execution denial.
+
+**In-process fields:** `event`, required `toolName` and `error`; optional `toolUseId`, `sessionId`, `subagentId`, `parentSessionId`, and `input`. `error` is the thrown error's message string.
+
+**Command fields:** Common tool fields plus `error`.
+
+**Decisions:** Blocks and hook errors cannot undo the failure or replace the tool result. Context and rewrites are ignored. Use it for diagnostics and failure notifications.
+
+**Matcher and timeout:** Tool matcher applied. Ordinary 30-second handler deadline and command timeout rules apply.
+
+## `Stop`
+
+**When:** A top-level model turn is about to finish, on REPL, Telegram, one-shot chat, and daemon surfaces. Forks use `SubagentStop` instead. This event does not mean the session is closing.
+
+**In-process fields:** `event`; optional `sessionId`, `parentSessionId`, `terminalState`, `doneHasCorroboratingEvidence`, `doneEvidenceClassification`, `stopHookActive`, `continuation`, `assistantText`, and `successfulToolNames`. Availability depends on the dispatch path. Terminal states are `done`, `blocked`, `asking`, or `interrupted`; evidence classifications are `no-code-changes`, `verified`, or `unverified`.
+
+**Command fields:** Common fields plus `stop_hook_active` (boolean) and `continuation` (number, zero initially). Assistant text, terminal state, and evidence classifications are not serialized into stdin.
+
+**Decisions:** During a normal provider completion, block or `continue: false` feeds the reason to another model round in the same turn. `AFK_STOP_HOOK_MAX_CONTINUATIONS` defaults to `2`; `0` disables continuation, not notification. The cap is per turn and shared across all hooks. Runtime-imposed endings, such as abort, token limits, and tool-loop caps, do not trigger this continuation path. Once continuation is unavailable, a block is logged rather than preventing the turn from ending.
+
+Nonblocking `injectContext` goes to the next user prompt on REPL and Telegram. One-shot surfaces drop it and record `stop_inject_dropped`, because no next user prompt exists. A block reason is the same-turn continuation channel; approving `additionalContext` is not.
+
+**Matcher and timeout:** Matcher ignored. Five-second registry deadline per handler. Keep the command's own timeout at five seconds or less.
+
+## `UserPromptSubmit`
+
+**When:** The REPL submits a user prompt, after shell-injection and forwarding preparation, before running the model turn.
+
+**In-process fields:** `event`, required `prompt`, optional `sessionId`.
+
+**Command fields:** Common fields plus `prompt`.
+
+**Decisions:** Block or `continue: false` drops the submitted turn. A registry timeout also prevents that submission. Nonblocking `injectContext` is prepended to the prompt. Include your own trailing newline or separator in the context string because it is concatenated with the prompt directly.
+
+**Matcher and timeout:** Matcher ignored. Ordinary 30-second handler deadline and command timeout rules apply.
+
+## Related
+
+<Cards>
+  <Card title="Write your first hook" href="/guides/hooks" description="Set up a command hook and return decisions." />
+  <Card title="Configuration keys" href="/reference/config-keys" description="Look up hook trust gates and plugin controls." />
+  <Card title="Inspect execution traces" href="/guides/observability" description="Find hook decisions, continuation events, and failures." />
+</Cards>

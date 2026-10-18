@@ -1,12 +1,1 @@
-{
-  "pages": [
-    "index",
-    "quickstart",
-    "how-it-works",
-    "sdk",
-    "surfaces",
-    "configuration",
-    "guides",
-    "skills"
-  ]
-}
+{"pages":["---Get started---","index","quickstart","installation","first-session","---Concepts---","how-it-works","concepts","---Use afk---","surfaces","guides","skills","---Configure---","configuration","---Build on afk---","sdk","---Reference---","reference","---Help---","troubleshooting"]}

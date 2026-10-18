@@ -6,7 +6,7 @@
  * ambient AFK_AT_FILE_INJECT setting.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -479,5 +479,123 @@ describe('expandAtFileTokens — SEC-1 secret-store denylist (PR #688 review)', 
     });
     expect(r.warnings).toEqual([]);
     expect(r.fileBlocks).toHaveLength(3);
+  });
+});
+
+// SSH public-key pattern carve-out — same rule as the typed read surface
+// (direct `*.pub` child of the resolved ~/.ssh, symlink-resolved first).
+describe('expandAtFileTokens — SSH public keys', () => {
+  const inject = (tok: string) =>
+    expandAtFileTokens(tok, { rootDir: '/nonexistent-cwd', homeDir: tmpRoot, ...ON });
+
+  beforeEach(() => {
+    mkdirSync(join(tmpRoot, '.ssh', 'keys'), { recursive: true });
+    writeFileSync(join(tmpRoot, '.ssh', 'id_ed25519.pub'), 'ssh-ed25519 AAAAPUB me@host\n');
+    writeFileSync(join(tmpRoot, '.ssh', 'id_ed25519'), 'PRIVATE KEY\n');
+    writeFileSync(join(tmpRoot, '.ssh', '.pub'), 'bare\n');
+    writeFileSync(join(tmpRoot, '.ssh', 'keys', 'x.pub'), 'nested\n');
+    symlinkSync(join(tmpRoot, '.ssh', 'id_ed25519'), join(tmpRoot, '.ssh', 'foo.pub'));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    _resetReadDenylistCacheForTests();
+  });
+
+  it('injects a direct *.pub child', () => {
+    const r = inject('@~/.ssh/id_ed25519.pub');
+    expect(r.warnings).toEqual([]);
+    expect(r.fileBlocks[0]!.text).toContain('AAAAPUB');
+  });
+
+  it.each(['@~/.ssh/id_ed25519', '@~/.ssh/.pub', '@~/.ssh/keys/x.pub', '@~/.ssh/foo.pub'])(
+    'blocks %s',
+    (tok) => {
+      const r = inject(tok);
+      expect(r.fileBlocks).toEqual([]);
+      expect(r.warnings.some((w) => w.includes('sensitive'))).toBe(true);
+    },
+  );
+
+  it('blocks when ~/.ssh is a symlink into another secret store', () => {
+    rmSync(join(tmpRoot, '.ssh'), { recursive: true, force: true });
+    mkdirSync(join(tmpRoot, '.gnupg'));
+    writeFileSync(join(tmpRoot, '.gnupg', 'k.pub'), 'x\n');
+    symlinkSync(join(tmpRoot, '.gnupg'), join(tmpRoot, '.ssh'), 'dir');
+    expect(inject('@~/.ssh/k.pub').fileBlocks).toEqual([]);
+  });
+
+  it('honors an AFK_READ_DENYLIST re-deny of the key', () => {
+    vi.stubEnv('AFK_READ_DENYLIST', join(tmpRoot, '.ssh', 'id_ed25519.pub'));
+    _resetReadDenylistCacheForTests();
+    expect(inject('@~/.ssh/id_ed25519.pub').fileBlocks).toEqual([]);
+  });
+});
+
+// Advisory: when AFK_HOME is relocated UNDER ~/.ssh, the @-file injector
+// correctly handles pubkeys and nested paths:
+//   - A direct *.pub child of ~/.ssh is still INJECTABLE — the derived AFK
+//     config root (~/.ssh/afk/config) is a CHILD of ~/.ssh, not an ancestor,
+//     so gateSshPubKeyDir returns ~/.ssh unchanged and the pattern remains active.
+//   - A *.pub nested DEEPER (e.g. ~/.ssh/afk/id_ed25519.pub) is BLOCKED —
+//     it is not a direct child of ~/.ssh, so isSshPubKeyChild returns false
+//     and SENSITIVE_RE catches the .ssh path fragment.
+//   - The mcp.json carve-out inside ~/.ssh/afk/config is BLOCKED — it resolves
+//     under ~/.ssh which SENSITIVE_RE flags, and the allowedFiles check is
+//     against the DEFAULT home's mcp.json path, not the relocated one.
+describe('advisory — @-file inject: AFK_HOME relocated under ~/.ssh', () => {
+  beforeEach(() => {
+    mkdirSync(join(tmpRoot, '.ssh', 'afk', 'config'), { recursive: true });
+    writeFileSync(join(tmpRoot, '.ssh', 'id_ed25519.pub'), 'ssh-ed25519 AAAAPUB me@host\n');
+    writeFileSync(join(tmpRoot, '.ssh', 'afk', 'id_ed25519.pub'), 'ssh-ed25519 AAAANESTED nested@host\n');
+    writeFileSync(join(tmpRoot, '.ssh', 'afk', 'config', 'mcp.json'), '{"mcpServers":{}}');
+    vi.stubEnv('AFK_HOME', join(tmpRoot, '.ssh', 'afk'));
+    _resetReadDenylistCacheForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    _resetReadDenylistCacheForTests();
+  });
+
+  it('still allows @~/.ssh/id_ed25519.pub (direct .ssh child; pattern not dropped)', () => {
+    // AFK_HOME=<home>/.ssh/afk → derived root is ~/.ssh/afk/config, which is
+    // a CHILD of ~/.ssh, not an ancestor — gateSshPubKeyDir returns ~/.ssh
+    // unchanged, so a direct *.pub child remains injectable.
+    const r = expandAtFileTokens('@~/.ssh/id_ed25519.pub', {
+      rootDir: '/nonexistent-cwd',
+      homeDir: tmpRoot,
+      ...ON,
+    });
+    expect(r.warnings).toEqual([]);
+    expect(r.fileBlocks).toHaveLength(1);
+    expect(r.fileBlocks[0]!.text).toContain('AAAAPUB');
+  });
+
+  it('blocks @~/.ssh/afk/id_ed25519.pub (nested, not a direct .ssh child)', () => {
+    // The nested pubkey is NOT a direct child of ~/.ssh — isSshPubKeyChild
+    // returns false (dirname is ~/.ssh/afk, not ~/.ssh), and SENSITIVE_RE
+    // catches the .ssh path fragment, so injection is blocked.
+    const r = expandAtFileTokens('@~/.ssh/afk/id_ed25519.pub', {
+      rootDir: '/nonexistent-cwd',
+      homeDir: tmpRoot,
+      ...ON,
+    });
+    expect(r.fileBlocks).toEqual([]);
+    expect(r.warnings.some((w) => w.includes('sensitive'))).toBe(true);
+  });
+
+  it('blocks @~/.ssh/afk/config/mcp.json (relocated mcp.json sits under .ssh)', () => {
+    // Even though mcp.json is normally a READ_ALLOWLIST_REL carve-out, the
+    // allowedFiles list in expandAtFileTokens is resolved against the DEFAULT
+    // home (not the relocated AFK_HOME), so ~/.ssh/afk/config/mcp.json is
+    // NOT in allowedFiles. SENSITIVE_RE then catches the .ssh prefix.
+    const r = expandAtFileTokens('@~/.ssh/afk/config/mcp.json', {
+      rootDir: '/nonexistent-cwd',
+      homeDir: tmpRoot,
+      ...ON,
+    });
+    expect(r.fileBlocks).toEqual([]);
+    expect(r.warnings.some((w) => w.includes('sensitive'))).toBe(true);
   });
 });

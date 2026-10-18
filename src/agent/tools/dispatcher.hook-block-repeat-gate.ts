@@ -79,7 +79,12 @@ export function applyHookBlockRepeatGate(
   if (count === HOOK_BLOCK_REPEAT_THRESHOLD) {
     void emitSessionPhase(deps.traceWriter, {
       phase: 'hook_block_repeat_tripped',
-      metadata: { tool: call.name, count, fork: deps.parentSessionId !== undefined },
+      metadata: {
+        tool: call.name,
+        count,
+        fork: deps.parentSessionId !== undefined,
+        ...(deps.subagentId !== undefined ? { subagentId: deps.subagentId } : {}),
+      },
     });
   }
 

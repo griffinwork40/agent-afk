@@ -1,0 +1,112 @@
+---
+title: "Run your first afk session"
+description: "Start a session, understand approvals, steer work, and resume your conversation."
+---
+
+The interactive REPL is a conversation with an agent that can use tools in your project. Use it when you want to inspect results, ask follow-up questions, and decide what to do before handing over a longer task. Complete [Installation](/installation) and [authentication](/configuration/api-keys) first.
+
+## Start in your project
+
+<Steps>
+<Step>
+### Open the REPL
+
+Change into the directory you want to work in, then run:
+
+```bash
+afk
+```
+
+`afk interactive` and `afk i` open the same REPL. To submit your first message at launch, quote it as an argument:
+
+```bash
+afk "Explain this project's structure. Do not modify files."
+```
+
+The prompt is submitted automatically, not left as an editable draft. The terminal stays interactive after the answer. Use `afk chat` instead when you want a [single response](/surfaces/chat) and then an exit.
+</Step>
+<Step>
+### Choose your permission mode
+
+A new CLI installation starts in `bypassPermissions`, which disables path containment and path approvals. To start with path approvals enabled, use:
+
+```bash
+afk --permission-mode default
+```
+
+To make that choice persistent for future CLI sessions:
+
+```bash
+afk config set permissionMode default
+```
+
+In the REPL, Shift+Tab cycles through `default`, `plan`, and `bypassPermissions`. Check the mode indicator before submitting work. Plan mode refuses writes and mutating shell commands; bypass mode turns path containment off. The `autonomous` mode is separate and is not part of the Shift+Tab cycle.
+
+When a file tool in `default` mode requests access outside the granted roots, you see a **Path access approval** prompt identifying the tool and path. Choose once, for this session, a persistent grant, or deny. Prefer the narrowest grant you need.
+
+<Callout type="warn">
+Path approval is not a confirmation prompt for every action and is not an OS sandbox. Shell access has separate restrictions. Read [Permissions](/configuration/permissions) and [Safety](/concepts/safety) before using sensitive files or unattended workflows.
+</Callout>
+</Step>
+<Step>
+### Give a bounded task
+
+Start with a request that says what to inspect, what result you need, and what not to change:
+
+```text
+Find the main application entry point and the test command. Explain how they fit together. Do not edit files or install dependencies.
+```
+
+Read the tool activity and answer, then ask a follow-up. When you do want changes, name the scope and the verification you expect, such as a focused test or a build. See [Verification](/guides/verification) for a deeper workflow.
+</Step>
+</Steps>
+
+## Learn four slash commands
+
+Type slash commands directly into the REPL and press Enter. They are session controls, not shell commands.
+
+| Command | What it does |
+| --- | --- |
+| `/help` | List available slash commands and their usage. |
+| `/model` | Open the model picker in an interactive terminal. Supply a model or slot after the command to switch directly. |
+| `/compact` | Reclaim context by summarizing older conversation or clearing eligible tool results. Availability depends on the provider. |
+| `/clear` | Clear the conversation history and reset session statistics for a fresh thread. It does not undo files. |
+
+For example, `/model sonnet` switches to Sonnet when you have the required provider access. See [Models and providers](/configuration/models-providers) for choices and [Sessions and context](/concepts/sessions-and-context) for compaction behavior. The [slash command reference](/reference/slash-commands) lists the complete command surface.
+
+## Stop and redirect a running turn
+
+Press **Esc** while the agent is working to request a soft stop. The activity banner changes to `stopping…` while the turn winds down. This keeps completed work; it is not an undo operation.
+
+In the interactive terminal, the first **Ctrl+C** during a turn opens an interrupt picker:
+
+* **Stop** keeps work so far and returns to the prompt.
+* **Cancel** hard-cancels and exits. Pressing Ctrl+C again while the picker is open also cancels immediately.
+
+To steer the agent, choose **Stop**, wait for the prompt, then submit your revised instruction. The current picker has no separate Steer option. Pressing Esc inside that picker dismisses it without stopping the turn.
+
+If you submit messages while a turn runs, they queue for later delivery. The input shows `[queued]` for one message or a count such as `[2 queued]`. Esc does not discard messages you already submitted. See the [REPL guide](/surfaces/repl) for queue controls, streaming behavior, and the full interruption workflow, and [Keyboard shortcuts](/reference/keyboard-shortcuts) for key bindings.
+
+## Revise an earlier message
+
+At an idle prompt, run `/rewind`, or press Esc twice at an empty prompt. Select an earlier user message. afk rewinds the conversation and loads that message into the input so you can edit and resend it. If the provider does not support conversation rewind, afk reports that limitation.
+
+<Callout type="info">
+Conversation rewind does not restore files or reverse commands that already ran. For file restoration and its limits, see [Undo changes](/guides/undo-changes).
+</Callout>
+
+## Leave and resume
+
+Type `/exit` to close the REPL. Sessions autosave each turn.
+
+When you return, start `afk` and type `/resume`. In an interactive terminal, you get a searchable picker with relative timestamps, model, turn count, and cost. Type to filter, choose a session, then review its conversation preview before confirming with Enter. Esc cancels the preview.
+
+The picker shows sessions saved in your current directory when any exist there. If none exist there, it falls back to sessions from all directories. You can also use `/resume` with a known saved session name or ID. See [Sessions and context](/concepts/sessions-and-context) for persistence and [the REPL guide](/surfaces/repl) for more resume options.
+
+## Related
+
+<Cards>
+  <Card title="Interactive REPL" href="/surfaces/repl" description="Explore input, status, queues, keyboard controls, and session management." />
+  <Card title="Undo changes" href="/guides/undo-changes" description="Distinguish conversation rewind from restoring changed files." />
+  <Card title="Run work unattended" href="/guides/unattended-runs" description="Choose permissions and controls before leaving longer work running." />
+</Cards>

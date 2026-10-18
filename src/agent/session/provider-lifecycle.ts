@@ -28,6 +28,8 @@ import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError, ensureError} from '../../utils/errors.js';
+import { buildMcpFailureNotice } from '../mcp/failure-notice.js';
+import type { McpServerStateLike } from '../mcp/failure-notice.js';
 import { transformProviderEvent } from './stream-consumer.js';
 import { buildInitialState } from './session-setup.js';
 import { SessionStateManager } from './session-state.js';
@@ -193,6 +195,14 @@ export class ProviderInitializer {
     private readonly shutdown: SessionShutdown,
     private readonly hookRegistry: HookRegistry | undefined,
     private readonly queueFrameworkContext: (text: string) => void,
+    /**
+     * Live accessor for MCP server states. When one or more servers are in
+     * `error` state, a framework context notice is queued at session init so
+     * the model's FIRST turn already knows which servers are down and why
+     * (#4064). Optional for backwards compat — callers that don't wire an
+     * McpManager leave this undefined and no notice is injected.
+     */
+    private readonly getMcpServerStates?: () => readonly McpServerStateLike[],
   ) {}
 
   /**
@@ -248,6 +258,19 @@ export class ProviderInitializer {
       // unreachable for forks. The guard is kept for clarity and defence-in-depth.
       if (sessionStartInjectContext && !isForkedChild) {
         this.queueFrameworkContext(sessionStartInjectContext);
+      }
+
+      // #4064: MCP failure notice — queued once at session init so the model's
+      // first turn already knows which configured servers are unavailable and
+      // why, preventing hallucinated causes. Emitted after SessionStart context
+      // so hook-injected nudges take precedence. Skipped for forked children
+      // (same guard as SessionStart dispatch above) — failures are a root-session
+      // concern; children see errors through their own unknown-tool messages.
+      if (!isForkedChild && this.getMcpServerStates !== undefined) {
+        const mcpNotice = buildMcpFailureNotice(this.getMcpServerStates());
+        if (mcpNotice !== undefined) {
+          this.queueFrameworkContext(mcpNotice);
+        }
       }
 
       while (true) {

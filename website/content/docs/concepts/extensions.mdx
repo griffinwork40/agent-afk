@@ -1,0 +1,121 @@
+---
+title: "Choose how to extend afk"
+description: "Compare skills, plugins, MCP servers, hooks, named agents, and AFK.md instructions."
+---
+
+AFK has several extension points because reusable instructions, new tools, and enforced policy solve different problems. Start with the smallest mechanism that meets your need. A plugin is a distribution package that can combine several of them, not a replacement for all the others.
+
+## Choose by the job
+
+| Mechanism | What it is | Use it when | How it loads |
+|---|---|---|---|
+| `AFK.md` | Persistent natural-language instructions | Every session should know your conventions or project architecture | User and project files become the operator prompt overlay when that configuration tier is selected |
+| Skill | A reusable task procedure or code-backed workflow | You want a repeatable action such as a review or investigation | Built-in registry, user/project `SKILL.md` files, or plugin contributions; invoked by slash command or the skill tool |
+| Named agent | A reusable subagent definition with prompt, model, and tool constraints | You want a specialist worker with a consistent scope | Built-ins, plugin agents, user/project Markdown definitions, or SDK configuration |
+| Hook | Code that reacts to runtime events | Policy must inspect, block, modify, or annotate an action at a defined boundary | Trusted hook configuration or a plugin's registered handler |
+| MCP server | A process or remote service exposing tools through MCP | You need an external integration or a tool implemented outside AFK | Layered MCP configuration, connected by the surface's MCP manager |
+| Plugin | An installable collection of extensions | You need to share and version skills, agents, hooks, MCP configuration, or startup code together | Installed or local plugin directories with a manifest, discovered at session setup |
+
+For example, put repository test conventions in `AFK.md`, a repeatable test-review procedure in a skill, a restricted reviewer role in a named agent, and a mandatory check before a write in a hook. Use MCP when the missing piece is an external system's tool API.
+
+<Callout type="info">
+Instructions guide the model; they are not mechanical enforcement. If a rule must stop a tool invocation, use an appropriate permission boundary or hook rather than relying only on `AFK.md` or a skill prompt.
+</Callout>
+
+## Instructions, procedures, and workers
+
+### AFK.md
+
+`~/.afk/AFK.md` supplies user-wide conventions; `AFK.md` in the working directory supplies project context. When both are loaded, the project overlay follows the user overlay. An explicitly configured system prompt or `AFK_SYSTEM_PROMPT` takes precedence over this file-based tier, but the framework base prompt remains present. See [AFK.md configuration](/configuration/afk-md).
+
+### Skills
+
+User skills live in `~/.afk/skills/`; project skills live in `.afk/skills/`. A skill's `SKILL.md` contains its metadata and instructions. The default load behavior gives the procedure to the current conversation; `context: fork` asks for a child session instead. Plugins can also contribute Markdown skills, command files, and code-backed workflows.
+
+Use [custom skills](/skills/custom) when you want the agent to follow a reusable procedure. You do not need a JavaScript plugin just to package instructions.
+
+### Named agents and scoped nesting
+
+Named agents are Markdown definitions selected during subagent dispatch. The registry loads built-ins first, then plugin contributions, user definitions, project definitions, and explicit SDK definitions. User files live in `~/.afk/agents/`; native project files live in `.afk/agents/`. Compatible project definitions in `.claude/agents/` are also supported, with native project definitions taking precedence.
+
+Plugin agents are namespaced as `plugin:agent`, so they do not accidentally replace a bare built-in name. An agent definition can restrict its available tools and declare scoped nested dispatch, such as `Agent(git-investigator)`, rather than granting unrestricted delegation. Scope only matters if the worker has the agent tool, and ordinary permission and nesting limits still apply. See [named agents](/guides/named-agents) for definition syntax.
+
+## Hooks and MCP serve different boundaries
+
+Hooks run at lifecycle points such as session startup, before a tool call, after a tool result, or when a turn stops. They can provide context or enforce policy without adding a new tool the model must remember to call. Shell hooks require explicit trust settings; plugin shell hooks have the separate `enablePluginHooks` gate. See [hooks](/guides/hooks) before enabling third-party commands.
+
+MCP servers expose callable tools. Configuration precedence is plugin contribution, user `~/.afk/config/mcp.json`, project `.mcp.json`, then an explicit `--mcp-config` file. The higher layer wins per server name. Connected tools appear as `mcp__<server>__<tool>`, and tool-list change notifications can refresh the available tools without restarting.
+
+The top-level session owns the MCP manager. Forked subagents and compose nodes do not automatically receive MCP tools; they should return an integration request to the parent instead. See [MCP and plugins](/guides/mcp-plugins) for connection and authentication setup.
+
+## Plugin lifecycle
+
+<Steps>
+<Step>
+### Inspect what is installed
+
+```bash
+afk plugin list
+```
+
+Plugins can be installed from supported sources, updated, enabled, disabled, or removed through `afk plugin`. The [CLI reference](/reference/cli) lists the exact arguments. Review the source before installing executable extensions.
+</Step>
+<Step>
+### Understand what startup loads
+
+AFK discovers plugin manifests from configured roots, including user-installed plugins and project `.afk/plugins/` directories. A plugin can contribute skills, agents, MCP configuration, hooks, and an optional JavaScript `main` module. Disabled indexed plugins are excluded from discovery.
+</Step>
+<Step>
+### Reload the right layer
+
+After editing Markdown skill definitions, use:
+
+```text
+/reload-plugins
+```
+
+This rescans plugin skill discovery. Do not treat it as a JavaScript hot reload: each resolved `main` entrypoint is activated at most once per process, including failed activation attempts. Restart AFK after changing entrypoint code or when you need a clean plugin lifecycle.
+</Step>
+</Steps>
+
+### JavaScript main and PluginApi
+
+A manifest's `main` module is imported during setup. Top-level module code runs on import. If the module exports a default function, AFK invokes it with the host's `PluginApi` and awaits it. A failing entrypoint is reported without making the entire session fail to boot.
+
+The injected API includes skill registration and lookup, prompt loading, environment and path helpers, `SubagentManager`, failure-description helpers, and session-facet functions such as `getOrDeriveFacet`, `listSessionIds`, `deriveSessionFacet`, and `loadStoredSession`. It can also expose `registerHook` for declaring handlers installed on session hook registries.
+
+Consume runtime values from the injected API instead of importing a separate runtime copy of `agent-afk`. Otherwise a plugin can register against the wrong module singleton, or fail because its installed directory has no package dependency to resolve. Type-only imports for development are a different matter because they do not execute at runtime.
+
+Activation runs once per entrypoint path per process, not once per session. Hook handlers should therefore use their supplied context for session-specific information. Hook declarations are installed for sessions separately, and thrown plugin-hook errors degrade to a logged no-op. Plugin hooks cannot opt out of handler timeouts through the reserved `longRunning` option.
+
+<Callout type="warn">
+A JavaScript entrypoint is executable code running in the AFK process. The shell-hook environment allowlist below is not a sandbox for that code. Install only plugins you trust.
+</Callout>
+
+### Forward environment variables to one plugin's shell hooks
+
+`pluginHookEnv` maps a plugin's manifest name to environment-variable names allowed into that plugin's hook subprocesses. Only user-global configuration supplies this mapping; project-local configuration cannot use it to obtain your environment secrets. The agent's `config_set` tool cannot expand it.
+
+For a plugin whose manifest name is `team-tools`, this user-global configuration forwards an existing `TEAM_SERVICE_TOKEN` only to that plugin's hooks:
+
+```json
+{
+  "enablePluginHooks": true,
+  "pluginHookEnv": {
+    "team-tools": ["TEAM_SERVICE_TOKEN"]
+  }
+}
+```
+
+This lists a variable name, not its value. Supply the real value through your existing environment setup, never by committing it to a project file. Other plugins do not inherit this plugin's allowlist. Protected primary credentials, including `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and `TELEGRAM_BOT_TOKEN`, remain refused even if listed, as do protected AFK-prefixed credential names.
+
+Non-sensitive plugin `userConfig` options use a separate `CLAUDE_PLUGIN_OPTION_*` mechanism. Sensitive options are not exported through that mechanism. See [editing configuration](/configuration/editing-config) for configuration ownership and human-only keys.
+
+## Related
+
+<Cards>
+<Card title="Write a skill" href="/skills/custom" description="Package a repeatable task without adding runtime code." />
+<Card title="Use named agents" href="/guides/named-agents" description="Define specialist workers and scoped delegation." />
+<Card title="Connect integrations" href="/guides/mcp-plugins" description="Manage plugins and MCP servers." />
+<Card title="Enforce policy with hooks" href="/guides/hooks" description="Choose event boundaries and trust settings." />
+</Cards>

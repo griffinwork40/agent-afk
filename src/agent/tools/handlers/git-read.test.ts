@@ -141,9 +141,24 @@ describe('execution hardening', () => {
     }
   });
 
+  it('lowercase reflog placeholders (%gd %gn %ge %gs) are safe', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--format=%gd %gn'] }, CWD).ok).toBe(true);
+    expect(planGitRead({ subcommand: 'log', args: ['--pretty=%gd %ge %gs'] }, CWD).ok).toBe(true);
+    // literal text containing %g is also safe
+    expect(planGitRead({ subcommand: 'log', args: ['--format=100%good'] }, CWD).ok).toBe(true);
+  });
+
   it('signature-free format and sort values are still accepted', () => {
     expect(planGitRead({ subcommand: 'tag', args: ['--format=%(refname:short)', '--sort=-creatordate'] }, CWD).ok).toBe(true);
     expect(planGitRead({ subcommand: 'branch', args: ['--format=%(refname) %(objectname:short)', '--sort=refname'] }, CWD).ok).toBe(true);
+  });
+
+  it('%(contents:signature) raw-text format is allowed (no gpg invocation)', () => {
+    // %(contents:signature) emits the raw PGP block stored in the tag object —
+    // it does NOT invoke gpg.program. Only %(signature) / %G… run the verifier.
+    // This test confirms the policy does not over-block the raw-text variant.
+    expect(planGitRead({ subcommand: 'tag', args: ['--format=%(contents:signature)'] }, CWD).ok).toBe(true);
+    expect(planGitRead({ subcommand: 'log', args: ['--format=%(contents:signature)'] }, CWD).ok).toBe(true);
   });
 
   it('env pins GIT_PAGER/PAGER/GIT_EDITOR and drops inherited GIT_* overrides', () => {
