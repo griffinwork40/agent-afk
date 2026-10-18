@@ -1,51 +1,17 @@
 ---
-title: "MCP Servers & Plugins"
-description: "Configure MCP servers with layered mcp.json, use mcp__<server>__<tool> naming, and manage plugins with afk plugin."
+title: "Connect MCP tools and install plugins"
+description: "Add external tools, skills, commands, and hooks while keeping their trust boundaries explicit."
 ---
 
-Agent AFK supports MCP for connecting external tools and data sources. Plugins add skills, commands, and agents.
+MCP servers connect afk to external tools and data sources. Plugins add reusable skills, slash commands, named agents, MCP configuration, and optional executable setup code. Install only sources you trust: these extensions can execute programs on your machine.
 
-## MCP servers
+## Connect an MCP server
 
-### Configuration layers
+<Steps>
+<Step>
+### Add a server configuration
 
-MCP server configuration is loaded from four sources, merged in priority order (highest wins per server name):
-
-| Priority | Source | Notes |
-|---|---|---|
-| 4 (highest) | `--mcp-config <path>` flag | Per-run override |
-| 3 | `<cwd>/.mcp.json` | Project-local config — **not loaded by default** (opt-in); set `AFK_ALLOW_PROJECT_MCP=1` to load |
-| 2 | `~/.afk/config/mcp.json` | User-global config |
-| 1 (lowest) | Plugin-contributed `<plugin>/.claude-plugin/mcp.json` | Per-plugin servers |
-
-Source: `docs/architecture.md` (MCP client section).
-
-If two config files define a server with the same name, the higher-priority one wins. The other is logged as a warning — nothing is silently dropped.
-
-Project-local `.mcp.json` is **not loaded by default** — it is opt-in. A project-local config can spawn arbitrary commands on session start, so entering an untrusted repository must never auto-spawn its servers. When a `.mcp.json` is present but the opt-in is absent, AFK skips it and prints a warning listing the skipped server names, their commands, and the exact opt-in instruction. Set `AFK_ALLOW_PROJECT_MCP=1` (or `true`/`yes`/`on`) to load this layer for a directory you trust. A `.mcp.json` whose real path resolves outside the working directory (via a symlink or `..`) is refused outright.
-
-### `mcp.json` schema
-
-The schema matches Claude Code's `mcpServers` block for portability.
-
-#### Field reference
-
-Source: `src/agent/mcp/types.ts` (`McpServerConfig`).
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"stdio"` \| `"streamable-http"` \| `"sse"` | Transport to use. **Inferred when omitted**: `command` present → `stdio`; `url` present → `streamable-http`. Set explicitly to override. |
-| `command` | string | Executable to spawn. Required for `stdio` servers. |
-| `args` | string[] | Arguments passed to the executable. |
-| `env` | object | Environment variables for the spawned process. Values may contain `${VAR}` placeholders expanded from the host environment at connect time (never via shell eval). Unset variables are passed as the empty string and logged as a warning. |
-| `url` | string | Endpoint URL. Required for `streamable-http` and `sse` servers. |
-| `headers` | object | Extra HTTP headers sent with every request. Values support the same `${VAR}` expansion as `env` — use for static bearer tokens: `{ "Authorization": "Bearer ${TOKEN}" }`. |
-| `oauth` | boolean | When `true`, runs the SDK's OAuth consent flow against the endpoint. The authorization URL is surfaced in the REPL or pushed via Telegram when running headless. Tokens are persisted in the macOS keychain. Run `/mcp auth` in the REPL to surface any pending consent URLs. |
-| `disabled` | boolean | Skip this server entirely without removing its config block. |
-| `alwaysLoad` | boolean | When `true`, a connect failure aborts session startup rather than being logged and skipped. |
-| `timeout` | number | Request timeout in milliseconds for `tools/list` and `tools/call` (default `30000`). |
-
-#### stdio example
+Create `~/.afk/config/mcp.json`. This example gives a filesystem server access to a temporary directory on macOS or Linux:
 
 ```json
 {
@@ -53,190 +19,215 @@ Source: `src/agent/mcp/types.ts` (`McpServerConfig`).
     "filesystem": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    },
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-      }
     }
   }
 }
 ```
 
-#### HTTP/SSE example
+Choose a directory appropriate to your platform and the access you intend to grant. `npx` may download and execute the server package; review it before starting the session.
+</Step>
+<Step>
+### Start a new session
+
+AFK connects enabled servers during startup. Their tools are named `mcp__<server>__<tool>`, for example `mcp__filesystem__read_file`.
+</Step>
+<Step>
+### Check status and authentication
+
+In the REPL:
+
+```text
+/mcp
+/tools
+/mcp auth
+```
+
+`/mcp` shows server status, `/tools` includes exposed tools, and `/mcp auth` lists pending authorization URLs. If a server is waiting for OAuth, open its URL and use the completion syntax shown by the command: `/mcp auth complete <serverName> <code>`.
+</Step>
+</Steps>
+
+## Configuration layers
+
+Server definitions merge by name, with higher-priority definitions replacing the whole server entry rather than merging individual fields.
+
+| Priority | Source |
+| --- | --- |
+| Highest | CLI `--mcp-config <path>` |
+| Project | `<cwd>/.mcp.json`, only with `AFK_ALLOW_PROJECT_MCP=1` |
+| User | `~/.afk/config/mcp.json` |
+| Plugin | Plugin `.claude-plugin/mcp.json` contributions |
+| Lowest | Explicitly trusted imported MCP definitions |
+
+A collision produces a warning naming the displaced source. A CLI override is an additional layer, not a clean-room replacement of all other servers. Imported MCP definitions can also be enabled explicitly through [migration](/guides/migrate).
+
+<Callout type="warn">
+Project MCP is opt-in because a repository can declare a subprocess that runs at startup. Enable `AFK_ALLOW_PROJECT_MCP=1` only for a trusted directory. A project config whose real path escapes the working directory is refused. Secret environment expansion for project servers additionally requires an `allowSecretEnv` allowlist in the operator's user-global server configuration; the project cannot authorize itself.
+</Callout>
+
+### Server options
+
+| Field | Purpose |
+| --- | --- |
+| `type` | `stdio`, `streamable-http`, or `sse`; inferred from `command` or `url` when omitted |
+| `command`, `args` | Executable and arguments for a stdio server |
+| `env` | Environment overrides for the subprocess |
+| `url`, `headers` | Endpoint and headers for an HTTP server |
+| `oauth` | Enable the endpoint's OAuth flow |
+| `disabled` | Skip a configured server |
+| `alwaysLoad` | Abort startup if initial connection fails |
+| `timeout` | Tool listing and call timeout in milliseconds, default 30000 |
+
+Values in `env` and `headers` can contain `${VAR}` placeholders. Expansion reads environment variables, not shell expressions. Missing variables become empty strings with a warning. Use environment-backed credentials rather than embedding a token in a checked-in file.
+
+For a remote server, the configuration shape is:
 
 ```json
 {
   "mcpServers": {
     "remote-tools": {
       "type": "streamable-http",
-      "url": "https://mcp.example.com/sse",
-      "headers": {
-        "Authorization": "Bearer ${REMOTE_TOOLS_TOKEN}"
-      }
-    },
-    "oauth-server": {
-      "type": "streamable-http",
-      "url": "https://mcp.example.com/oauth",
-      "oauth": true
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${REMOTE_TOOLS_TOKEN}" }
     }
   }
 }
 ```
 
-`${VAR}` placeholders in `env` and `headers` are expanded from the host environment at connect time (not via shell eval). Run `/mcp auth` in the REPL to view and complete any pending OAuth consent flows (the URL is also pushed via Telegram when running headless).
+This is an illustrative endpoint; use the actual endpoint supplied by your service. An OAuth server uses `oauth: true` instead of a manually managed bearer header when supported. Pending authorization URLs are also surfaced through Telegram when configured. On macOS, MCP OAuth credentials use the platform keychain; the non-macOS implementation uses the existing Claude credentials file backend.
 
-### Tool naming
+## Startup health checks and failures
 
-Every MCP tool is exposed to the agent as `mcp__<server>__<tool>`. For example, a server named `filesystem` with a `read_file` tool becomes:
+Initial connect failures are normally warnings; other servers and the session can continue. `alwaysLoad: true` makes that initial failure fatal.
 
-```
-mcp__filesystem__read_file
-```
+For an additional liveness check after the connect burst:
 
-Tools are read fresh per query. When an MCP server sends a `notifications/tools/list_changed` notification, the tool list updates in-place — no session restart needed.
-
-### Surface coverage
-
-MCP servers load on **all surfaces** — REPL, `afk chat`, daemon, and Telegram. Each surface constructs `McpManager` from the resolved config before the `AgentSession` is created, so MCP tools are available regardless of how AFK is invoked.
-
-### Viewing server status
-
-In the REPL, use the `/mcp` slash commands:
-
-```
-/mcp          # list connected servers and tool counts
-/mcp auth     # surface pending OAuth URLs
+```bash
+AFK_MCP_HEALTHCHECK=1 afk
 ```
 
-`/mcp auth` reads pending OAuth consent URLs from `~/.afk/state/mcp/server-status.json`. When an MCP server requests OAuth consent (e.g., Supabase re-auth), the REPL prints the server name, message, and URL, then prompts `Continue? [y/N]`.
+This opt-in probe repeats `tools/list` on connected servers in parallel with a 5-second timeout per server. It catches servers that handshake successfully but then stop responding. Probe failures are warnings, not startup blockers, even though initial `alwaysLoad` connection failures are blocking. The probe is off by default to avoid an extra startup round trip.
 
-### Interactive server prompts
+Tool-list change notifications refresh available MCP tools without restarting the session. This does not imply that editing `mcp.json` reconnects servers live; start a new session after configuration changes.
 
-Some MCP servers request input mid-session through an elicitation form. On the REPL these render
-inline, and fields with a fixed set of values — `enum` fields and booleans — appear as an
-**arrow-key selector** rather than a free-text prompt (optional fields include a "skip" choice). On
-non-TTY surfaces (daemon, piped input) AFK falls back to a typed prompt. Type `:decline` or
-`:cancel` at any prompt to exit the form.
+### Surfaces and interactive prompts
 
-### Server failures
+MCP is wired into the REPL, `afk chat`, daemon agent tasks, and Telegram sessions. Each uses its resolved configuration and working directory. The manager belongs to the top-level session; forked subagents do not automatically inherit its MCP tools. Ask the coordinator to make MCP calls when a child needs them.
 
-Non-fatal by default: a server that fails to connect is reported as a warning and skipped. Mark a server `alwaysLoad: true` in the config to make its failure abort session startup:
+Servers may request input through elicitation. In the REPL, boolean and enum fields can use a selection menu; other fields accept typed input. Available interaction depends on the surface. Do not design unattended jobs around a server that requires a human response, and do not expect child sessions to answer elicitation prompts.
+
+## Install a plugin or marketplace
+
+<Tabs items={['Plugin', 'Marketplace', 'Local checkout']}>
+<Tab value="Plugin">
+
+Use `afk plugin install` for a repository containing `.claude-plugin/plugin.json`. The source can be GitHub `owner/repository` shorthand or an HTTPS Git URL. Add `--ref` to select a tag, branch, or commit. Without a ref, installation prefers the highest semantic-version tag, then the default branch.
+
+</Tab>
+<Tab value="Marketplace">
+
+A marketplace contains `.claude-plugin/marketplace.json`, a catalog rather than one plugin. For example:
+
+```bash
+afk marketplace install anthropics/claude-plugins-official
+afk marketplace list
+```
+
+Use the canonical marketplace name from the listing with `afk marketplace plugins <name>`. Install a listed entry with `afk plugin install <marketplace>:<plugin>`, or the equivalent `afk marketplace install-plugin <marketplace> <plugin>`.
+
+Catalog installation does not mean that every plugin in the catalog is enabled.
+
+</Tab>
+<Tab value="Local checkout">
+
+For a plugin you are developing at `~/Projects/my-plugin`:
+
+```bash
+afk plugin install ~/Projects/my-plugin
+```
+
+Local installation uses a symlink, so edits affect the installed source. Use `/reload-plugins` for Markdown skill and command changes; restart the process for JavaScript entrypoint changes.
+
+</Tab>
+</Tabs>
+
+### Manage installed extensions
+
+```bash
+afk plugin list
+afk plugin update
+afk marketplace list
+afk marketplace update
+```
+
+For a specific installed plugin, use `afk plugin update <name>`, `disable <name>`, `enable <name>`, or `remove <name>`. Marketplace equivalents include `update <name>` and `remove <name>`. Use the names reported by the listing, not a guessed directory name. See the [CLI reference](/reference/cli) for pinning, replacement, and noninteractive options.
+
+Plugin installation state lives under `~/.afk/plugins/`, with `.index.json` tracking enabled entries and `cache/` holding marketplaces. Discovery understands nested marketplace layouts, but installed/enabled state still matters.
+
+### Object-valued marketplace sources
+
+A marketplace entry's `source` can be a relative path, GitHub shorthand, HTTPS URL, or a supported object. The `git-subdir` object clones a repository and selects a plugin directory within it:
 
 ```json
 {
-  "mcpServers": {
-    "critical-db": {
-      "command": "...",
-      "alwaysLoad": true
-    }
+  "name": "example-tools",
+  "source": {
+    "source": "git-subdir",
+    "url": "https://github.com/example/plugin-collection.git",
+    "path": "plugins/example-tools",
+    "ref": "v1.2.0"
   }
 }
 ```
 
-Source: `docs/architecture.md` (MCP client section).
+The example shows the manifest shape, not a repository you should install. `url` and `path` are required; `ref` and `sha` are optional. Unsupported or malformed object types remain visible with a skip reason, and installation refuses that entry instead of silently dropping the whole catalog.
 
-## Plugins
+## What plugins contribute
 
-Plugins extend AFK with skills, user-defined subagents, and MCP server contributions. All plugin state lives under `~/.afk/plugins/` — separate from Claude Code's `~/.claude/plugins/`.
+| Plugin path or field | Contribution |
+| --- | --- |
+| `skills/<name>/SKILL.md` | Skill instructions and metadata |
+| `commands/<name>.md` | User-invoked slash command |
+| `commands/review/security.md` | Namespaced `/review:security` command |
+| `agents/` | Named agent definitions |
+| `.claude-plugin/mcp.json` | MCP server definitions |
+| `hooks/hooks.json` | Command hooks, behind the plugin-hook trust gate |
+| Manifest `main` | Executable JavaScript setup module |
 
-### Installing plugins
+Legacy Claude Code command files are parsed as prompts and listed by `/skills`. Their names come from the file path, not frontmatter. They remain user-invoked commands rather than automatically expanding the model's skill-routing catalog. Supported metadata such as description, argument hints, allowed tools, and model goes through the shared skill parser.
 
-```bash
-# GitHub shorthand (expands to https://github.com/<owner>/<repo>.git)
-afk plugin install griffinwork40/software-factory
+User skills can also live at `~/.afk/skills/<name>/SKILL.md` without packaging a plugin. See [custom skills](/skills/custom) and [named agents](/guides/named-agents) for those layouts.
 
-# Explicit git URL
-afk plugin install https://github.com/example/my-plugin.git
+### JavaScript entrypoint lifecycle
 
-# Local checkout (symlinked)
-afk plugin install ~/Projects/my-plugin
+When a manifest declares `main`, AFK imports that module during plugin activation before the session's skill manifest is assembled. If it exports a default function, AFK awaits it and passes the host API. Use the supplied API for registration rather than importing a separate runtime copy of `agent-afk`, which could register against the wrong singleton or fail in a cloned plugin without dependencies.
 
-# Pin to a tag, branch, or SHA
-afk plugin install owner/repo --ref v1.2.3
+Activation is once per resolved entrypoint path **per process**, not once per session. A failing import or activation is reported without aborting session startup, and the same path is not retried during that process. Module-level side effects also run at import time. This is executable code, not sandboxed Markdown.
+
+### Plugin hooks
+
+There are two distinct mechanisms:
+
+1. A plugin can ship `hooks/hooks.json`. Command hooks load only after you set `enablePluginHooks: true` in user-global AFK configuration. This is independent of `enableShellHooks`. Unsupported hook types are skipped with a warning.
+2. A JavaScript entrypoint can call the host's `registerHook` API. The declaration is installed on subsequently constructed session hook registries; REPL startup also attaches declarations to its already-created registry. Handlers should derive session-specific state from their context. Exceptions are isolated, and plugins cannot disable handler timeouts with `longRunning`.
+
+Do not assume `/reload-plugins` hot-reloads hook definitions or reruns JavaScript activation. Restart afk after changing hooks or `main`. See [hooks](/guides/hooks) for event behavior, trust settings, and Claude Code matcher compatibility.
+
+## Refresh and inspect
+
+```text
+/reload-plugins
+/skills
+/agents
+/mcp
+/tools
 ```
 
-By default, install picks the highest semver git tag, falling back to the default branch when no tags parse as semver.
+`/reload-plugins` invalidates discovery caches and refreshes skill and agent slash registrations, reporting counts, changed names, and installed versions. It is useful after Markdown edits, not a general process or MCP restart.
 
-Source: `docs/reference.md` (Plugins section).
+## Related
 
-### Managing plugins
-
-```bash
-afk plugin list                           # installed plugins with enabled state
-afk plugin update                         # update all plugins
-afk plugin update <name>                  # update one plugin
-afk plugin disable <name>                 # disable without removing
-afk plugin enable <name>                  # re-enable
-afk plugin remove <name>                  # uninstall
-```
-
-Plugin state is tracked in `~/.afk/plugins/.index.json`. Entries with `enabled: false` are skipped at session startup.
-
-### Plugin discovery
-
-The scanner walks `~/.afk/plugins/<name>/` at session construction, looking for `.claude-plugin/plugin.json` up to 5 directory levels deep. This means Claude Code's marketplace cache layout (`cache/<marketplace>/<plugin>/<version>/`) is also discovered automatically when dropped into `~/.afk/plugins/`.
-
-### What plugins can contribute
-
-A plugin directory can contain:
-
-| Path | What it provides |
-|---|---|
-| `skills/<skill>/SKILL.md` | Slash command skill |
-| `agents/<agent>/` | Subagent definition |
-| `commands/<cmd>/` | Slash command |
-| `.claude-plugin/mcp.json` | MCP server config (lowest priority layer) |
-| `main` field in `plugin.json` | JS entrypoint — a module path loaded via dynamic `import()` before `AgentSession` is constructed. Use it to call `registerSkill()` or other side-effecting setup that must run synchronously before the session's skill manifest is assembled. Non-fatal: a failing entrypoint is caught and reported as a warning, never aborting boot. Idempotent per resolved path across plugin reloads. |
-
-Skills from plugins are auto-registered at session start and appear in `/skills` (alias `/builtin-skills`). Use `/reload-plugins` in the REPL to pick up changes after editing a plugin without restarting.
-
-### Marketplaces
-
-A marketplace repo contains `.claude-plugin/marketplace.json` instead of `plugin.json`. Install it as a marketplace first, then install individual plugins from it with the `<marketplace>:<plugin>` shorthand:
-
-```bash
-# Step 1 — add a marketplace source (GitHub shorthand or full URL)
-afk marketplace install <owner>/<marketplace-repo>
-
-# Step 2 — browse plugins in the marketplace
-afk marketplace plugins <marketplace-name>
-
-# Step 3 — install a plugin from it
-afk plugin install <marketplace-name>:<plugin-name>
-
-# Other operations
-afk marketplace list
-afk marketplace remove <name>
-```
-
-:::note
-A marketplace repo uses `.claude-plugin/marketplace.json`; a plugin repo uses `.claude-plugin/plugin.json`. Use `afk marketplace install` for the former and `afk plugin install` for the latter — they are not interchangeable.
-:::
-
-Marketplace state lives under `~/.afk/plugins/cache/`.
-
-### User-scope skills (no plugin required)
-
-Skills and subagents don't have to live in a plugin. Drop them directly:
-
-```
-~/.afk/skills/<name>/SKILL.md         # user-scope skill
-~/.afk/agents/<name>/                  # user-scope subagent
-~/.afk/commands/<name>/                # user-scope slash command
-```
-
-These are discovered alongside plugin contributions at session start.
-
-## Checking what's loaded
-
-```
-/skills       # all loaded skills (built-in + plugin + user-scope)
-/agents       # all loaded subagent definitions
-/mcp          # connected MCP servers
-/tools        # full tool list including mcp__*
-```
-
-The `afk config` command dumps the resolved configuration including which MCP config files were found.
+<Cards>
+<Card title="Migrate existing extensions" href="/guides/migrate" description="Live-read trusted Claude Code or Codex assets." />
+<Card title="Write a custom skill" href="/skills/custom" description="Define reusable prompts and routing hints." />
+<Card title="Configure hooks" href="/guides/hooks" description="Understand executable hook policy and compatibility." />
+</Cards>

@@ -1,0 +1,971 @@
+---
+title: "Model tool reference"
+description: "Find built-in model tools, their parameters, and the session surfaces that can use them."
+---
+
+Tools let the model read files, run commands, delegate work, and interact with AFK state. Use this reference to understand a proposed call or choose the right capability for a task. These are model tools, not commands you type at the terminal.
+
+For the fastest availability check, ask the agent to call `get_runtime_state` with `view: "tools"`. This page covers the shipped tools, including conditional ones; MCP servers and SDK custom tools can add more names and schemas.
+
+**Required** parameters are marked with ✓. Other fields are optional unless a condition in the description makes them required. Times ending in `_ms` are milliseconds.
+
+## Quick index
+
+**R** means a root session, **S** a standard subagent, and **D** a daemon agent session. Availability below assumes the tool is enabled. Permission mode, operator tool toggles, named-agent allowlists, depth limits, provider support, and supplied executors can narrow it further. Read-only children have a smaller surface. Daemon shell tasks do not run a model and have no model tools.
+
+| Name | Purpose | Where available |
+| --- | --- | --- |
+| **Files and repository queries** | | |
+| `read_file` | Read text with line numbers. | R, S, D |
+| `view_image` | Inspect a local image. | R, S, D |
+| `extract_document` | Extract Office, PDF, and ZIP text. | R, S, D |
+| `write_file` | Create or replace a file. | R, S, D |
+| `edit_file` | Replace exact text in a file. | R, S, D |
+| `patch_apply` | Validate and apply changes across files. | R, S, D |
+| `glob` | Discover paths by glob pattern. | R, S, D |
+| `grep` | Search file contents with bundled ripgrep. | R, S, D |
+| `list_directory` | List directory entries. | R, S, D |
+| `git_read` | Run constrained read-only git queries. | R, S, D, opt-in |
+| `json_query` | Extract bounded results from JSON. | R, S, D |
+| **Shell and waiting** | | |
+| `bash` | Execute a shell command. | R, S, D; background processes only in root REPL |
+| `wait_for` | Wait for a URL, file, PID, or command. | R, S, D |
+| `test_run` | Run a detected test suite. | R, S, D |
+| **Browser and web** | | |
+| `browser_open` | Open a managed browser tab. | R, S, D |
+| `browser_observe` | Read the current page state. | R, S, D |
+| `browser_act` | Interact with a page element. | R, S, D |
+| `browser_screenshot` | Capture the page or an element. | R, S, D |
+| `browser_close` | Release the browser session. | R, S, D |
+| `web_scrape` | Read a web page or search with Exa. | R, S, D |
+| `web_request` | Make a structured HTTP request. | R, S, D |
+| **Image creation** | | |
+| `image_generate` | Generate an image from a prompt. | R, S; D only with explicit opt-in |
+| `image_edit` | Edit local reference images. | R, S; D only with explicit opt-in |
+| **Delegation and collaboration** | | |
+| `agent` | Dispatch a child agent. | R, S within nesting limits, D |
+| `compose` | Execute a dependency graph of children. | R, D; not compose nodes |
+| `skill` | Invoke a registered skill. | R, S, D; not compose nodes |
+| `model_complete` | Ask another model without tools. | R, S, D |
+| `remote_agent` | Run an agent on another computer over SSH. | R, S, D; not remote-dispatched sessions |
+| `cancel_background_job` | Stop an owned background agent or process. | Sessions with a background registry; process jobs only in root REPL |
+| `get_background_job_health` | Inspect an owned background job. | Sessions with a background registry; process jobs only in root REPL |
+| `send_message_to_agent` | Steer an owned background child. | Sessions with a background agent registry |
+| `emit_progress` | Report child progress to its parent. | S with `progress_events: true` |
+| `workspace_publish` | Share a finding within this root session. | R, S, D when workspace store is wired |
+| `workspace_query` | Find shared sibling findings. | R, S, D when workspace store is wired |
+| `workspace_subscribe` | Receive matching findings without polling. | Supported S with a subscription handler; not R or D |
+| **Memory and durable state** | | |
+| `memory_search` | Recall facts and procedures across sessions. | R, S, D |
+| `memory_update` | Store facts or replace hot memory. | R, D; S can write facts, not hot memory |
+| `procedure_write` | Save a reusable procedure. | R, D; not standard S |
+| `state_get` | Retrieve a durable JSON document. | R, S, D |
+| `state_put` | Write a durable JSON document. | R, D; not standard S |
+| `state_cas` | Update a document at an expected version. | R, D; not standard S |
+| `state_delete` | Delete a durable document. | R, D; not standard S |
+| `state_query` | List durable documents by namespace. | R, S, D |
+| **Configuration and scheduling** | | |
+| `config_get` | Read masked AFK configuration. | R, S, D |
+| `config_set` | Change allowed configuration for future sessions. | R, S, D |
+| `terminal_font_size` | Read or change editor terminal font size. | R, S, D |
+| `create_schedule` | Create a daemon task. | R, S, D |
+| `update_schedule` | Change an existing daemon task. | R, S, D |
+| `list_schedules` | List stored tasks. | R, S, D |
+| `get_schedule_history` | Read task execution history. | R, S, D |
+| `cancel_schedule` | Disable, enable, or remove a task. | R, S, D |
+| `worktree` | Manage AFK-owned git worktrees. | R, S, D |
+| **Communication and clipboard** | | |
+| `ask_question` | Ask a human a focused question. | Interactive R; other sessions can decline immediately |
+| `send_telegram` | Notify the operator via Telegram. | R, S, D with Telegram configured; prefer normal replies in the bot |
+| `list_sessions` | Discover live sessions on this computer. | R, D; not S |
+| `send_to_session` | Message a live peer session. | R, D; receiving currently requires a REPL |
+| `clipboard_read` | Read clipboard text after confirmation. | Interactive R; requires a human on every call |
+| `clipboard_write` | Copy text to the system clipboard. | R, S, D where clipboard utilities work |
+| **Session inspection and control** | | |
+| `get_runtime_state` | Inspect identity, tools, jobs, and workspace. | R, S, D |
+| `get_facet` | Read a structured session summary. | R, S, D |
+| `read_witness` | Inspect one session's trace. | R, S, D |
+| `search_witness` | Search trace metadata across sessions. | R, S, D |
+| `exit_plan_mode` | Present a plan for human approval. | Interactive root plan mode with plan-exit controls |
+
+<Callout type="info">
+A tool appearing here does not grant permission to use it. Check [tool access](/guides/tool-access) and [permissions](/configuration/permissions) for controls, and [MCP and plugins](/guides/mcp-plugins) for extension tools.
+</Callout>
+
+## File System
+
+### `read_file`
+
+Read a file from the filesystem with line numbers. Supports partial reads via `offset`/`limit`. Binary files are rejected; use `extract_document` instead.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_path` | string | ✓ | Absolute path to the file to read. |
+| `offset` | number | | Line number to start reading from (1-based). Defaults to 1. |
+| `limit` | number | | Maximum number of lines to read. Defaults to 2000. |
+
+### `write_file`
+
+Write content to a file, creating it or overwriting if it exists. Parent directories are created automatically. Prefer `edit_file` for modifying existing files.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_path` | string | ✓ | Absolute path to the file to write. |
+| `content` | string | ✓ | The full content to write. |
+
+### `edit_file`
+
+Perform an exact string replacement in a file. Fails if `old_string` is not found or matches multiple locations (unless `replace_all` is set). Always read the file first to verify exact content.
+
+In the REPL, a pre-execution diff preview shows the proposed `old_string` to `new_string` change. It is display-only, not an approval prompt or a guarantee that the write will succeed. No-op edits and `replace_all: true` skip the preview, and subagents and non-interactive surfaces have no preview overlay. Use `patch_apply` with `dry_run: true` when the model needs a returned diff without writing.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_path` | string | ✓ | Absolute path to the file to edit. |
+| `old_string` | string | ✓ | The exact string to find and replace. |
+| `new_string` | string | ✓ | The replacement string. |
+| `replace_all` | boolean | | If true, replace all occurrences. Default: fail on multiple matches. |
+| `expected_hash` | string | | Optional `sha256:<hex>` copied verbatim from a prior tool result, such as `patch_apply.after_hash`. Rejects a changed file before writing. Omit or pass an empty string to skip the check; do not compute or guess a hash. |
+
+### `patch_apply`
+
+Validate and atomically apply structured multi-file changes with content-hash verification and dry-run preview. Validation runs on all files before any write; a single failure aborts the entire patch.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `changes` | object[] | ✓ | Each item requires `path` (relative or absolute). Supply `edits` or `content`, plus optional `expected_hash`. See the shape below. |
+| `dry_run` | boolean | | If true, return the unified diff without writing. |
+
+Each `changes` item accepts:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `path` | string | ✓ | File to change. |
+| `expected_hash` | string | | `sha256:<hex>` copied from a prior tool result. A mismatch rejects the whole patch. Empty string skips the check. |
+| `edits` | object[] | | Sequential replacements; each requires string fields `old` and `new`. Each `old` must match exactly once after earlier replacements. |
+| `content` | string or null | | Full replacement, mutually exclusive with `edits`. With `edits`, omit it or use `""` or `null` as a placeholder. Whitespace is real content, not a placeholder. Standalone `null` means no change was supplied and fails validation. |
+
+Writes use atomic replacement per file, with best-effort rollback if a later write fails. This is not a filesystem-wide transaction. Results with status `applied` or `partial_failure` include `_reread_warning`; reread affected files before a later `edit_file`.
+
+File checkpoints for these write tools are an SDK opt-in, not an automatic undo promise for every CLI session. `/rewind` changes conversation history, not files. See [undo changes](/guides/undo-changes).
+
+### `glob`
+
+Find files matching a glob pattern. Returns up to 500 matching paths. Skips `node_modules`, `.git`, `.hg`, `.svn`, and `.afk-worktrees` by default; name a directory literally to search it. Supports `*`, `?`, `**`, and nested comma-list braces. Range braces and malformed braces are literal. Expansion is bounded to 255 alternatives and 65,535 aggregate characters.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `pattern` | string | ✓ | Glob pattern (e.g. `"src/**/*.ts"`, `"*.json"`). |
+| `path` | string | | Base directory to search from. Defaults to cwd. |
+
+### `grep`
+
+Search file contents for lines matching a pattern using the platform-specific ripgrep binary bundled through `@vscode/ripgrep`, not system grep. You do not need a separate `rg` installation. A missing or broken optional binary returns a tool error rather than preventing AFK from starting.
+
+Returns matches as `file:line:content`. Honors `.gitignore`; skips `.git` and binary files, but searches hidden paths such as `.github` and `.env`. Output uses a bounded head-and-tail view, so narrow `pattern`, `include`, or `path` after truncation instead of repeating the same broad search.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `pattern` | string | ✓ | Ripgrep regex. Operators include alternation, `+`, `?`, parentheses, and braces. Escape metacharacters for a literal match, for example `\|` matches a literal pipe. |
+| `path` | string | | Directory or file to search. Defaults to cwd. |
+| `include` | string | | File glob to restrict search (e.g. `"*.ts"`). |
+
+### `list_directory`
+
+List the contents of a directory. Returns filenames annotated with type (directories end with `/`).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | ✓ | Absolute path to the directory to list. |
+
+### `extract_document`
+
+Extract text from binary document formats that `read_file` rejects. Supports `.docx`, `.xlsx`, `.pptx`, `.pdf` (requires `pdftotext`), and `.zip`. Office formats need no external converter. PDF extraction requires `pdftotext` from poppler-utils. Extraction has a 4 MB decompression cap, ZIP path containment, and no shell execution. Output is capped at 512 KB.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_path` | string | ✓ | Absolute path to the document file. |
+
+### `git_read`
+
+Opt-in: advertised only when `AFK_READONLY_GIT_TOOL=1`. Runs a read-only git query in the session working directory with no shell (`execFile`, argv only). With the flag on, read-only children (read-only skills such as `ground-state`, `bash: read-only` named agents such as `git-investigator`, and compose nodes running them) lose generic `bash` and get this tool instead. Write-capable agents keep `bash`; top-level sessions also see `git_read`.
+
+Subcommands: `status`, `log`, `diff`, `show`, `grep`, `tag` (listing), `branch` (listing), `blame`, `ls-files`, `rev-parse`. Each accepts a fixed option allowlist. File-writing and program-executing options are rejected, including config injection, external diff, text conversion, pagers, and editors. Paths must stay inside the working directory and are passed after `--`. Rejected options include `-c`, `--output`, `-o`, `--ext-diff`, `--textconv`, `--exec`, and `-O`; signature placeholders such as `%G` are rejected too. Git runs with `--no-pager`, `core.pager=cat`, an empty `diff.external`, `--no-ext-diff` and `--no-textconv` where applicable, `GIT_PAGER=cat`, and `GIT_EDITOR=:`. Inherited `GIT_*` variables are removed.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `subcommand` | string | ✓ | One of the subcommands above. |
+| `args` | string[] | | Allowlisted options and revisions, one token each (e.g. `["--oneline", "--max-count=20", "main..HEAD"]`). |
+| `paths` | string[] | | Pathspecs relative to the working directory. |
+| `pattern` | string | | Search pattern; required for `grep`, invalid otherwise. |
+| `max_bytes` | number | | Output cap in bytes (default 51200, ceiling 204800). |
+
+### `json_query`
+
+Run a bounded jq-subset query on a JSON file without loading it fully into context. Returns `{ result, type, truncated, source_size }`.
+
+Use this for a large manifest, API response saved to disk, or result list when the model only needs selected fields. It is a jq subset, not arbitrary jq or shell execution.
+
+| Query | Meaning |
+| --- | --- |
+| `.` | Whole document, still subject to output caps. |
+| `.field` or `.field.nested` | Read an object field or nested field. |
+| `.[N]` | Read an array element; negative indices count from the end. |
+| `.[N:M]` | Slice an array from N through M, excluding M. |
+| `.[]` | Iterate array elements. |
+| `.[] \| .field` | Extract one field from each array element. |
+| `keys` | List object keys or array indices. |
+| `length` | Count array elements, object keys, or string characters. |
+
+For example, `query: ".[] | .id"` extracts IDs without returning every object's full payload. `max_results` bounds array element count and `max_bytes` bounds serialized size; hitting either sets `truncated: true`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | string | ✓ | Absolute or relative path to the JSON file. |
+| `query` | string | ✓ | Query expression (e.g. `.name`, `.[0]`, `.[] \| .id`). |
+| `max_results` | number | | Max array elements to return (default 100). |
+| `max_bytes` | number | | Max serialized output size in bytes (default 51200). |
+
+---
+
+## Shell & Process
+
+### `bash`
+
+Execute a shell command and return stdout and stderr. On macOS and Linux, commands run through `/bin/sh`, not your interactive shell. Native Windows uses Git Bash when available, otherwise PowerShell. Use syntax for the active shell rather than assuming bash features.
+
+Output is capped to approximately 100 KB with the start and end preserved; the command still completes and retains its exit code unless it exceeds the extreme-output limit of 8 MB. Filter verbose output or save it to a file for later sliced reads.
+
+The REPL shows a live rolling output tail while a foreground command runs. `AFK_BASH_PREVIEW_TAIL_LINES` defaults to 7, and `AFK_BASH_PREVIEW_HEAD_LINES` defaults to 0. Both accept integers from 0 through 200. These are display preferences, not changes to model-context limits.
+
+Set `run_in_background: true` for a supervised process that must keep running while the agent works. It returns `job_id`, `pid`, and `log_path`; completion arrives as a metadata notice, not proof that the output is correct. Inspect the log with `get_background_job_health`, stop the job with `cancel_background_job`, and do not use `&` or `nohup` as a substitute. Background processes are supported only in the root interactive REPL and end with the session. See [background processes](/guides/background-processes).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `command` | string | ✓ | The shell command to execute. |
+| `timeout_ms` | number | | Foreground timeout: default 120000, maximum 600000. Background maximum runtime: default 7200000 (2 hours), maximum 86400000 (24 hours). Larger values are clamped. |
+| `run_in_background` | boolean | | Start a supervised background process and return immediately. Default false; root interactive REPL only. |
+
+### `wait_for`
+
+Block on an external condition without consuming model turns. The polling loop runs in Node, not through repeated model calls. Returns when the condition is met, the timeout elapses (`status: timed_out`), or the session is cancelled (`status: cancelled`). Timeout is not a tool error.
+
+In an interactive session, typing a message ends the wait early with `status: yielded_to_user`. The agent should end its turn so your message is heard, then reissue the wait only if still needed. Children and unattended sessions have no user-input yield channel.
+
+A process wait accepts only a PID spawned by this session's `bash` tool, including the PID returned by background bash. Other PIDs and grandchildren are refused. URL waits reject private, loopback, link-local, and cloud-metadata targets by default. Background subagent results arrive automatically, so do not wait for them through a proxy file, command, or sleep loop.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `type` | string | ✓ | What to wait for: `url`, `file`, `process`, or `command`. |
+| `url` | string | | Required for `url`: HTTP/HTTPS endpoint to poll. |
+| `method` | string | | (`url` type) HTTP method: `HEAD` or `GET`. Default: `HEAD`. |
+| `expected_status` | number | | (`url` type) Expected HTTP status code. Default: any 2xx. |
+| `body_contains` | string | | (`url` type) Substring required in the response body. Uses GET when `method` is omitted. |
+| `path` | string | | Required for `file`: absolute path or path relative to the session cwd, watched for existence. |
+| `content_contains` | string | | (`file` type) Substring the file content must contain. |
+| `pid` | number | | (`process` type) Required owned bash PID. Met when that process exits. |
+| `command` | string | | Required for `command`: shell command to run repeatedly. Met when it exits 0. |
+| `timeout_ms` | number | | Max wait time in ms (default 120000, max 600000). |
+| `poll_interval_ms` | number | | Delay between polls in ms (default 5000, min 1000). |
+| `backoff` | string | | `none` (default, fixed interval), `linear`, or `exponential`. |
+
+### `test_run`
+
+Discover and run the project test suite. Auto-detects the test runner from project config files. Returns structured results with pass/fail counts, per-failure details, duration, and raw output.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file` | string | | Narrow to a specific test file path (relative to project root). |
+| `name` | string | | Filter tests by name/pattern (runner-specific syntax applied automatically). |
+| `timeout_ms` | number | | Test timeout in ms (default 120000, max 600000). |
+| `coverage` | boolean | | Request a coverage report. |
+
+---
+
+## Browser
+
+Browser tools share the caller's managed browser session. Start a workflow with `browser_open`; later calls operate on the same tab. This browser is separate from your personal Chrome profile and does not inherit its logins. Navigation respects configured browser domain policy. See [browser configuration](/configuration/browser).
+
+### `browser_open`
+
+Open a URL in a managed browser tab and return an observation of the page. The observation lists actionable elements with stable IDs for follow-up `browser_act` calls.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | ✓ | Absolute http(s) URL to navigate to. |
+| `wait_for` | string | | When navigation is complete: `load`, `domcontentloaded`, or `networkidle`. Default: `load`. |
+| `screenshot` | boolean | | Capture a screenshot in the observation. Default: false. |
+| `timeout_ms` | number | | Navigation timeout in ms. Default 30000, max 120000. |
+
+### `browser_observe`
+
+Refresh the observation of the current page. Use after DOM mutations or dynamic content loads. Element IDs are stable only within one observation; always use IDs from the most recent call.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `screenshot` | boolean | | Capture a screenshot. Default: false. |
+| `include_hidden` | boolean | | Include hidden elements. Default: false. |
+| `max_elements` | number | | Cap on the interactive elements array (default 80, max 300). |
+
+### `browser_act`
+
+Perform an action on a target element on the current page. Prefer semantic targets (`{ kind: "semantic", text: "...", role: "button" }`) over selectors for stability across markup changes.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | ✓ | `click`, `fill`, `press`, `select`, `hover`, `scroll_to`, or `wait_for`. |
+| `target` | object | ✓ | Requires `kind`: `semantic`, `element_id`, or `selector`. Semantic targets require `text` and optionally `role`; ID targets require `element_id` from the latest observation (`el_` plus 6 hex characters); selector targets require `selector` (CSS or `xpath=`). |
+| `value` | string | | Text for `fill`, key combo for `press`, option value for `select`. |
+| `timeout_ms` | number | | Per-action timeout in ms. Default 10000. |
+| `screenshot` | boolean | | Capture a screenshot after the action. Default: false. |
+
+### `browser_screenshot`
+
+Capture a PNG screenshot of the current page or a specific element, returning `path`, `bytes`, `width`, and `height` metadata. Also saved under the session's witness screenshots. Anthropic tool results can include viewable pixels; OpenAI-compatible results receive text metadata only.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `target` | object | | Element to screenshot (same shape as `browser_act.target`). Omit to capture the viewport. |
+| `full_page` | boolean | | Capture the entire scrollable page. Default false. Use instead of `target`; if both are supplied, `target` wins. |
+
+### `browser_close`
+
+Close the current browser session, freeing cookies and page state. Subsequent `browser_open` calls create a fresh session. Leaves the underlying browser process alive.
+
+No parameters.
+
+---
+
+## Web
+
+### `web_scrape`
+
+Read a web page or find a URL. `markdown` (default) extracts main content through Readability and Turndown. Thin results trigger a headless Chromium render and another extraction; no API key is needed for reading, but the render fallback needs Playwright's Chromium binary. `raw` returns the decoded response body without extraction, useful for JSON, RSS, text, or inspecting HTML; it is not byte-preserving for binary data.
+
+`search` returns ranked results through Exa using `query`, not `url`. Configure `EXA_API_KEY`; older Brave credentials such as `BRAVE_SEARCH_API_KEY` do not enable this backend. Search requires an API key even though ordinary page reads do not. See [API keys](/configuration/api-keys).
+
+Markdown extraction can succeed while omitting collapsed, tabbed, or accordion content. When a source has at least 2,000 visible-text characters and extraction retains less than half, the result appends an extraction advisory. If an expected section is absent, request the URL once with `mode: "raw"` and inspect the HTML, or use the browser to interact with the page. Repeated markdown requests with a larger byte cap do not restore text Readability discarded.
+
+Output over `max_bytes` is reduced to a head-and-tail view with a truncation marker.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `mode` | string | | `markdown`, `raw`, or `search`. Default: `markdown`. |
+| `url` | string | | Absolute http(s) URL. Required for `markdown` and `raw` modes. |
+| `query` | string | | Search query. Required for `search` mode. |
+| `timeout_ms` | number | | Request timeout in ms (default 30000, max 120000). |
+| `max_bytes` | number | | Max UTF-8 bytes returned (default 100000, max 1000000). |
+
+### `web_request`
+
+Make a structured HTTP request. Returns `status`, filtered `headers`, `body`, and `timing_ms`, plus `truncated: true` when capped. Non-truncated JSON responses are parsed; oversized bodies become a head-and-tail text view.
+
+The SSRF guard checks destinations, DNS results, and every redirect hop. Private networks, loopback, link-local addresses, and cloud-metadata endpoints are blocked by default. `AFK_WEB_ALLOW_PRIVATE_HOSTS=1` is an operator override for trusted environments, not something to enable merely to bypass a refusal. Browser domain allowlists and blocklists apply too.
+
+| Method | Request risk | Automatic network retry |
+| --- | --- | --- |
+| `GET`, `HEAD`, `OPTIONS` | Low | Allowed for transient failures. |
+| `POST`, `PUT`, `PATCH` | Medium | No automatic retry. |
+| `DELETE` | High | No automatic retry. |
+
+Mutating requests can take effect before a response is lost, so do not blindly repeat them. Permission and effect-ledger checks still apply; a low request-risk label is not a claim that every endpoint is harmless.
+
+Objects and arrays are serialized as JSON; strings use `text/plain`. An explicit `Content-Type` overrides inference. Request bodies are ignored for GET, HEAD, and OPTIONS. Pass a credential environment-variable name rather than the secret itself: `credential` injects a Bearer token at runtime without returning or logging its raw value.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | ✓ | Absolute http(s) URL. |
+| `method` | string | ✓ | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, or `OPTIONS`. |
+| `body` | any | | Request body. Objects/arrays are JSON-serialized; strings sent as text/plain. |
+| `headers` | object | | Request headers as a string-keyed object. |
+| `timeout_ms` | number | | Request timeout in ms (default 30000, max 120000). |
+| `max_response_bytes` | number | | Max response body bytes (default 100000, max 1000000). |
+| `credential` | string | | Env var name whose value is injected as a Bearer token. A missing variable is an error. Cannot be combined with an explicit `Authorization` header. |
+
+---
+
+## Images
+
+These tools work with local image files and OpenAI's image services. See [images](/guides/images) for setup and workflows.
+
+<Callout type="warn">
+`image_generate` and `image_edit` make paid image-service calls, separate from the session's text model. They are blocked in daemon or cron runs unless `AFK_IMAGE_ALLOW_DAEMON=1`. `AFK_IMAGE_SESSION_LIMIT` defaults to 10, with separate generation and edit counters. Both record effects for audit.
+</Callout>
+
+### `view_image`
+
+Read a local `.png`, `.jpg`, `.jpeg`, `.gif`, or `.webp` file and attach it for visual inspection. The session's read-root policy applies, and protected credential paths are denied. Images over 8,000 pixels in either dimension or the 2 MiB base64 limit return text metadata with `imageOmitted` instead of pixels. Inline images can consume substantial context; use them for genuine inspection, not in a polling loop. OpenAI-compatible tool results currently return text metadata rather than the image pixels.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `file_path` | string | ✓ | Absolute path to the image. |
+
+### `image_generate`
+
+Generate an image from a text prompt, save it to disk, and return its path. Uses `AFK_IMAGE_API_KEY` when configured, otherwise the available OpenAI authentication chain. By default it does not attach the image inline.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `prompt` | string | ✓ | Description of the image, including style, composition, colors, and details. |
+| `model` | string | | `gpt-image-1` (default), `gpt-image-1-mini`, `gpt-image-1.5`, or `gpt-image-2`. |
+| `size` | string | | `1024x1024` (default), `1024x1536`, `1536x1024`, or `auto`. |
+| `quality` | string | | `low`, `medium`, `high`, or `auto` (default). Higher quality costs more. |
+| `output_format` | string | | `png` (default), `webp`, or `jpeg`. |
+| `output_path` | string | | Destination file. Defaults to `<cwd>/.afk/generated-images/<id>.<format>`. |
+| `inspect` | boolean | | Attach the generated image inline. Default false. Oversized images degrade to a saved file and metadata, even when true. |
+
+### `image_edit`
+
+Edit one or more existing images using a prompt and return the saved result's path. Reference paths must exist, be readable within the session's read roots, and use `.png`, `.jpg`, `.jpeg`, or `.webp`. Each reference can be at most 25 MiB. Authentication uses the configured image key or available OpenAI credentials.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `prompt` | string | ✓ | Describe what to change, add, or remove. |
+| `image_paths` | string[] | ✓ | One through 16 absolute or relative reference-image paths. |
+| `model` | string | | `gpt-image-1` (default), `gpt-image-1-mini`, `gpt-image-1.5`, or `gpt-image-2`. |
+| `size` | string | | `1024x1024` (default), `1024x1536`, `1536x1024`, or `auto`. |
+| `quality` | string | | `low`, `medium`, `high`, or `auto` (default). |
+| `output_format` | string | | `png` (default), `webp`, or `jpeg`. |
+| `output_path` | string | | Destination file. Defaults to `<cwd>/.afk/generated-images/edited-<id>.<format>`. |
+
+## Delegation
+
+See [subagents](/guides/subagents) for choosing between direct dispatch, dependency graphs, and background work.
+
+### `agent`
+
+Dispatch an independent subagent with its own context window and tool access. Foreground mode (default) waits for the result; background mode returns a `jobId` immediately and delivers the result automatically on completion. Background agent mode requires an interactive surface and is unavailable in daemon and one-shot runs. It is distinct from a background bash process.
+
+Named-agent defaults apply when you select a type. An explicit `model`, `max_turns`, or `max_tool_use_iterations` overrides that type's default. The static unnamed-agent budget defaults to zero (unlimited); named types can set finite defaults. One round can contain several parallel tool calls.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `prompt` | string | ✓ | The task for the subagent to perform. |
+| `mode` | string | | `foreground` (default) or `background`. |
+| `model` | string | | Model override; defaults to the parent model. Accepts aliases such as `haiku`, `sonnet`, `opus`, full IDs, and `_1m` variants where supported. |
+| `agent_type` | string | | Named agent from the session registry, advertised when types exist. Supplies prompt, allowlist, and defaults. `subagent_type` is an accepted compatibility alias. |
+| `max_turns` | number | | Max conversation turns (default 0 = unlimited). |
+| `max_tool_use_iterations` | number | | Max tool-use rounds before graceful wind-down (default 0 = unlimited). |
+| `cwd` | string | | Absolute child working directory without `..`. Omit to inherit. Home directories, filesystem roots, and ancestors of home are refused. Mutually exclusive with worktree isolation. |
+| `isolation` | string | | `none` (default) or `worktree`. Creates a managed worktree; dirty or commits-ahead work is preserved and locked at teardown. Ignored for read-only agents. Mutually exclusive with `cwd` and `writeRoots`. |
+| `writeRoots` | string[] | | Extra absolute write roots without `..`, additive to a confined child's cwd. Does not itself request confinement for an unconfined fork. Mutually exclusive with worktree isolation. |
+| `readRoots` | string[] | | Extra absolute files or directories to read, without `..`; roots and home directories are refused. Additive to inherited scope; must be re-granted to grandchildren. Compatible with worktree isolation. |
+| `attachments` | string[] | | Up to 8 inbound image IDs or absolute image paths, not base64. |
+| `progress_events` | boolean | | Grant the child the `emit_progress` tool for live parent updates. |
+| `id_prefix` | string | | Label prefix for log correlation. |
+
+### `compose`
+
+Execute multiple subagent tasks as a DAG. Nodes without dependencies run in parallel; nodes with `edges` wait for their upstream dependencies. Maximum 20 nodes per call.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `nodes` | object[] | ✓ | Up to 20 task nodes; see the node fields below. |
+| `edges` | array | | Dependencies between nodes. Each item: `from` (node id), `to` (node id). |
+| `fail_fast` | boolean | | Cancel downstream nodes on first failure. Default: true. |
+| `node_timeout_ms` | number | | Per-node runtime limit, minimum 1000, clamped to 3600000. Disabled when omitted. |
+| `max_tool_rounds_per_node` | number | | Per-node tool-use round budget, 1 through 1000, default 50. Triggers graceful wind-down, not immediate termination. |
+| `max_tool_calls_per_node` | number | | Deprecated compatibility alias for `max_tool_rounds_per_node`. The unit is rounds, not calls. If both are set, the new field wins with a warning. |
+
+Each node accepts these fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | ✓ | Unique node ID used by `edges`. |
+| `prompt` | string | ✓ | Task for this node. |
+| `model` | string | | Model override. |
+| `cwd` | string | | Absolute working directory; defaults to the parent cwd. Mutually exclusive with worktree isolation. |
+| `readRoots` | string[] | | Additive read grants, with the same path restrictions as `agent`. |
+| `writeRoots` | string[] | | Additive write grants for confined nodes. |
+| `max_tool_rounds` | number | | Budget from 1 through 1000, overriding the compose-level round budget. |
+| `max_turns` | number | | Positive conversation-turn budget. |
+| `agent_type` | string | | Named agent definition with prompt, tool allowlist, and model defaults. |
+| `attachments` | string[] | | Up to 8 inbound image IDs or absolute image paths. |
+| `isolation` | string | | `none` (default) or `worktree`. |
+
+Each edge requires string fields `from` and `to`, naming nodes. Compose nodes are leaves: they cannot call `agent`, `skill`, or `compose`. Upstream output is untrusted data, not authority to change downstream instructions.
+
+### `skill`
+
+Invoke a registered skill by name. A skill either forks an isolated subagent or loads its instructions into the current context; the mode is fixed per-skill.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | ✓ | Skill name (e.g. `"mint"`, `"diagnose"`). |
+| `arguments` | string | | Arguments to pass to the skill. |
+
+### `model_complete`
+
+Send one prompt to any configured model and return its text reply: no tools, no conversation, no subagent fork. Use it to offload bounded text work (summarize, classify, extract, rewrite, second opinion) to a cheaper or local model; use `agent` when the work needs tools. `model` resolves through your model slots, so the slot's provider, endpoint, and API key apply. An unconfigured slot is an error, never a silent fallback to a cloud model.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `prompt` | string | | Instruction sent to the model. Required in practice unless `input_path` supplies the input. |
+| `system` | string | | Optional system prompt. |
+| `model` | string | | Slot (`local`, `small`, `medium`, `large`), custom slot, alias, or raw ID. Default: `AFK_MODEL`, else `medium`. Explicit `auto` is refused; a configured default of `auto` maps to `medium`. |
+| `max_tokens` | number | | Output token cap (default 4096, max 32000). Ignored on ChatGPT-subscription models (chatgpt-oauth) because that backend rejects the output-cap parameter. |
+| `input_path` | string | | Text file (≤ 1 MB, read_file policy) appended to the prompt; its contents never enter your context, but are sent to the model's provider. |
+
+### `remote_agent`
+
+Run an afk agent on **another machine** over SSH (Tailscale or LAN) and return its final answer. The remote agent works in that machine's own files, repos, accounts, and model subscriptions. Nothing is copied locally; move code with git. Blocks until the remote run finishes. For long work outside autonomous mode, call it from a background `agent` so the result arrives automatically.
+
+**Risk class: `high`.** The remote `afk chat` session runs under its own configured `permissionMode`, which defaults to `bypassPermissions`. Because a destructive prompt could therefore bypass the local AFK gate, autonomous mode requires approval before the call executes. `remote_agent` is **refused when `AFK_REMOTE_DEPTH` is set** (when the session itself was launched by a prior `remote_agent`). A remote run cannot dispatch further remote agents or local children. The tool is available in local subagents; plan mode refuses it (use `/plan off` to dispatch).
+
+The result ends with a footer: `[remote_agent: host=… session=<id> run=<id>; pass resume="<id>" to continue there]`. Pass that session id as `resume` to continue the same conversation on the same host in a future call.
+
+**Host registry (`~/.afk/config/hosts.json`).** A host name absent from the file is treated as a literal `ssh` target (so `~/.ssh/config` aliases work with no extra setup). Registered entries accept:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ssh` | string | SSH target, e.g. `"user@host"` or a `~/.ssh/config` alias. |
+| `cwd` | string | Default working directory on the remote (overridden by the per-call `cwd`). |
+| `afkPath` | string | Absolute path to the `afk` binary when auto-discovery fails. |
+| `unlockKeychain` | boolean | Set `true` on macOS hosts: an SSH session sees the login keychain locked. When enabled, store the host's login password once with `security add-generic-password -U -s afk-remote-unlock -a <host-name> -w` (run locally; prompts, never echoes). The tool reads it from the local keychain and unlocks the remote keychain inside the launch connection. |
+| `permissionMode` | string | Permission mode pinned on every run for this host (any `afk chat --permission-mode` value, e.g. `default`, `plan`, `bypassPermissions`, `autonomous`), passed to the remote as `--permission-mode`. When absent the remote resolves its own configured default. |
+
+See [Remote Agent Dispatch](/guides/remote-dispatch) for setup steps, keychain details, and implementation notes.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `host` | string | ✓ | Host name from `~/.afk/config/hosts.json`, or a literal ssh target / `~/.ssh/config` alias. A sleeping or unreachable host fails in ~5 s. |
+| `prompt` | string | ✓ | The task for the remote agent. It has none of the local session's context; make it self-contained. |
+| `cwd` | string | | Working directory **on the remote**. Overrides the host's default `cwd`. |
+| `model` | string | | Model for the remote run (slot, alias, or id as configured on that host). Default: the remote's own default. |
+| `resume` | string | | Remote session id from a previous `remote_agent` result, to continue that conversation on the same host. |
+
+### `cancel_background_job`
+
+Cancel a running background subagent job that this model created with `agent` in `mode="background"`, or stop a background bash process identified by `proc-...`. A process receives SIGTERM for its process group, then SIGKILL after a grace period if necessary. User-backgrounded agent jobs are user-owned and refused; use the user-facing `/bgsub:cancel` command for those. Finished jobs return an informative non-error result.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `jobId` | string | ✓ | Background agent ID or process `job_id` from background bash. |
+| `reason` | string | ✓ | Why the job is now obsolete or should stop (recorded in the trace). |
+
+### `get_background_job_health`
+
+Inspect an owned background agent or process. Agent snapshots include status, elapsed time, `lastActivityAt`, `idleSinceMs` while running, pending steering count, and recent progress events when available. Process snapshots include status, exit code, elapsed time, bytes written, log path, and recent output. Only the creating session can inspect its jobs. Use this for a meaningful health check, not repeated polling for an automatically delivered completion.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `jobId` | string | ✓ | Background agent ID or a `proc-...` ID from background bash. |
+
+### `send_message_to_agent`
+
+Deliver a steering message to a running model-dispatched background subagent at its next tool-call boundary. Injects the message as a user turn so the child can adjust mid-execution. User-backgrounded agent jobs are refused, and this tool does not send input to background processes.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `jobId` | string | ✓ | Background job ID returned by an earlier `agent` call. |
+| `message` | string | ✓ | Steering text to inject into the child at its next tool-call boundary. |
+
+---
+
+## Workspace
+
+The workspace is an ephemeral shared scratchpad scoped to one root session and its children, including compose nodes. Findings are visible to siblings; they are not durable cross-session memory. See [subagents](/guides/subagents) for collaboration and [memory](/guides/memory) for durable recall.
+
+### `workspace_publish`
+
+Publish a structured finding to the shared session workspace. Entries are visible to siblings immediately via `workspace_query` and injected into new siblings' system prompts at fork time.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `type` | string | ✓ | Entry type: `finding`, `evidence`, `hypothesis`, `decision`, `artifact`, or `status`. |
+| `content` | string | ✓ | The full text of the finding, evidence, or decision. |
+| `subject` | string | | Short label for relevance routing (e.g. `"auth refresh"`). |
+| `evidence` | array | | File:line references backing this entry (e.g. `["src/auth.ts:141"]`). |
+| `confidence` | number | | Confidence level 0 through 1 (default 1.0). |
+| `relates_to` | array | | IDs of related workspace entries. |
+| `relation_type` | string | | Relationship to `relates_to` entries: `supports`, `contradicts`, `depends_on`, or `supersedes`. |
+
+### `workspace_query`
+
+Query the shared session workspace for findings published by sibling agents. Returns entries matching the search keywords, ordered by recency.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | ✓ | Keywords to match against entry subjects and content. |
+| `type` | string | | Filter to `finding`, `evidence`, `hypothesis`, `decision`, `artifact`, or `status`. |
+| `limit` | number | | Max entries to return (default 20, max 50). |
+
+### `workspace_subscribe`
+
+Subscribe to matching workspace entries and return a subscription ID. Matching entries published by siblings arrive at the child's next tool-call boundary as a `<workspace-delivery>` envelope. The subscription is cancelled when the child is torn down. Available only in child providers with a subscription handler wired; root REPL, chat, Telegram, and daemon sessions do not offer it. Use `workspace_query` when subscription support is absent.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `subject` | string | | Case-insensitive substring filter on subjects. Omit to match any subject. |
+| `type` | string | | Restrict delivery to `finding`, `evidence`, `hypothesis`, `decision`, `artifact`, or `status`. |
+
+---
+
+## Memory
+
+Cross-session memory persists facts and procedures. Hot memory is injected into future system prompts; facts are stored in a searchable archive. See [memory](/guides/memory) for choosing what to remember. Standard children can search and write facts but cannot replace hot memory or write procedures; read-only recon children only search.
+
+### `memory_search`
+
+Search cross-session memory for facts and procedures. Returns results ranked by relevance. Supports FTS5 syntax: `AND`, `OR`, `NOT`, `"exact phrase"`, `prefix*`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | ✓ | Search query (FTS5 syntax). |
+| `category` | string | | Filter by category: `preference`, `convention`, `decision`, or `learning`. |
+| `since` | string | | ISO date; only return facts created after this date. |
+| `limit` | number | | Max results (default 10). |
+
+### `memory_update`
+
+Store a fact in cross-session memory or update hot memory. Hot memory (`target: "hot"`) persists in the system prompt for all future sessions. Facts (`target: "fact"`) go into the searchable archive. Hot memory supports only `action: "set"`; `supersede` and `remove` apply to facts.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `target` | string | ✓ | `hot` (HOT.md / system prompt) or `fact` (searchable archive). |
+| `action` | string | ✓ | `set` (create/overwrite), `supersede` (replace with history), or `remove` (delete). |
+| `content` | string | | Content to store (required for `set`/`supersede`). |
+| `category` | string | | Fact category: `preference`, `convention`, `decision`, or `learning`. Required for `fact` target. |
+| `evidence` | string | | Provenance citation (file:line, commit SHA, or trace ID). When the evidence gate is enabled, uncited `convention` facts are recalled as unverified. |
+| `supersedes` | number | | Fact ID being replaced (required for `supersede` action). |
+| `id` | number | | Fact ID to delete (required for `remove` action). |
+
+### `procedure_write`
+
+Write a reusable procedure to memory as a markdown file. Procedures persist across sessions and are searchable via `memory_search`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | ✓ | Procedure name in kebab-case (becomes the filename). |
+| `content` | string | ✓ | Procedure content (markdown). |
+
+---
+
+## State Store
+
+A namespaced JSON document store that persists across surfaces and sessions, backed by WAL-mode SQLite at `~/.afk/state/kv/kv.db` by default. Documents have a version counter for optimistic concurrency and optional TTL. Namespace and key each use `[A-Za-z0-9_.-]+` with at most 128 characters. Standard subagents have `state_get` and `state_query`, not mutation tools. See [state store](/guides/state-store) for coordination patterns.
+
+### `state_get`
+
+Retrieve a document from the durable state store. Returns `null` if the document does not exist or has expired.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `namespace` | string | ✓ | Document namespace. Pattern: `[A-Za-z0-9_.-]+`, max 128 chars. |
+| `key` | string | ✓ | Document key. Same pattern/limit as namespace. |
+
+### `state_put`
+
+Write or update a document. Creates on first write (version starts at 1) and increments the version on updates.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `namespace` | string | ✓ | Document namespace. |
+| `key` | string | ✓ | Document key. |
+| `value` | any | ✓ | JSON-serializable value to store. |
+| `ttl_ms` | number | | Time-to-live in milliseconds from the write time. Expired documents are excluded from reads. |
+| `metadata` | any | | Optional JSON-serializable audit metadata, not returned by `state_get`. |
+
+### `state_cas`
+
+Compare-and-swap write. Updates the document only when its current version matches `expected_version`. Returns `{ matched: false }` on version mismatch.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `namespace` | string | ✓ | Document namespace. |
+| `key` | string | ✓ | Document key. |
+| `expected_version` | number | ✓ | Version the document must currently have for the update to succeed. |
+| `value` | any | ✓ | New value to store if the CAS matches. |
+| `ttl_ms` | number | | Optional TTL in milliseconds from the write time. |
+| `metadata` | any | | Optional JSON-serializable audit metadata, not returned by `state_get`. |
+
+### `state_delete`
+
+Delete a document. Returns `{ deleted: true }` if it existed, `{ deleted: false }` if it did not.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `namespace` | string | ✓ | Document namespace. |
+| `key` | string | ✓ | Document key. |
+
+### `state_query`
+
+List documents in a namespace sorted by key. Supports key prefix filtering and pagination. Expired documents are excluded.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `namespace` | string | ✓ | Document namespace. |
+| `key_prefix` | string | | Only return documents whose key starts with this string. |
+| `limit` | number | | Max results (default 20, max 100). |
+
+---
+
+## Configuration
+
+### `config_get`
+
+Read AFK configuration from `~/.afk/config/`. Secret values (API keys, tokens) are always masked.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `target` | string | ✓ | `config` (afk.config.json) or `env` (afk.env). |
+| `key` | string | | Dotted config path or env var name. Omit to list all values for the target. |
+| `all` | boolean | | (`env` only) When true, list every known env var, not just those currently set. |
+
+### `config_set`
+
+Edit allowed AFK configuration. Changes persist for future sessions only; the current session is unchanged. Credentials and human-gated keys (including system prompts, hooks, endpoints, routing allowlists, and state paths) are refused. Use the human-facing `afk config` CLI for those. See [editing configuration](/configuration/editing-config).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `target` | string | ✓ | `config` (afk.config.json) or `env` (afk.env). |
+| `key` | string | ✓ | Dotted config path (e.g. `"model"`) or env var name (e.g. `"AFK_EFFORT"`). |
+| `action` | string | | `set` (default, writes `value`) or `unset` (removes the key). |
+| `value` | any | | Required for `set`. String, number, boolean, or schema-supported array. Model slots also accept an object with `id`, `provider`, and `name`; credentials and endpoint changes remain human-gated. |
+
+### `terminal_font_size`
+
+Get or set the terminal font size in VS Code and Cursor settings. Writes are atomic. Aborts on JSONC settings files to avoid corrupting comments.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | ✓ | `get` (read current size) or `set` (write new size). |
+| `size` | number | | Font size to set (6 through 60). Required when `action` is `set`. |
+| `editor` | string | | Restrict to a specific editor: `cursor`, `vscode`, or `vscodeinsiders`. |
+
+---
+
+## Scheduling
+
+### `create_schedule`
+
+Create a recurring or one-shot task. The tool saves it and attempts to sync with the running daemon. Check `daemonSynced` and `syncDetail`: success saving a task does not guarantee a live daemon picked it up. When sync is false, the change applies at the next daemon start. See [scheduling](/guides/scheduling).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | ✓ | Human-readable label (e.g. `"Nightly cleanup"`). |
+| `command` | string | ✓ | Agent prompt or slash command by default; shell command with `executor: "shell"`. |
+| `cron` | string | | Five-field cron expression, such as `0 2 * * *`. Required unless `runAt` is set. |
+| `runAt` | string | | ISO 8601 one-shot time. Fires once at or after that time, then disables itself. If also supplied, cron is only a stored placeholder. |
+| `expiresAt` | string | | ISO 8601 expiry time, after which the task is disabled. Applies to recurring and one-shot tasks. |
+| `executor` | string | | `agent` (default) starts a model session; `shell` runs the command without a model. |
+| `trigger` | string | | `cron` (default), `sessionstart`, or `both`. |
+| `notifyOn` | string | | When to push Telegram notifications: `failure` (default), `always`, or `never`. |
+| `notifyChat` | string or number | | Notification chat ID or alias. Must resolve to an allowlisted chat; otherwise the daemon uses the default target. |
+| `maxAttempts` | integer | | Total attempts per run for agent tasks (1 through 5). Default 1 = no retry. Only transient failures (429, network blip, provider 5xx) retry. |
+| `retryDelayMs` | integer | | Backoff base in ms between retries (1000 through 300000, doubles per attempt, capped at 5 min). Default 30000. |
+| `enabled` | boolean | | Whether to activate immediately. Default: true. |
+| `cwd` | string | | Existing task working directory, absolute or starting with `~/`. Overrides `AFK_DAEMON_CWD`; tilde expands at save time. |
+
+### `update_schedule`
+
+Change only supplied fields on an existing task, preserving omitted ones. `taskId` is immutable, even when you change `name`. Returns the updated task plus `daemonSynced` and `syncDetail`, with the same sync caveat as creation.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `taskId` | string | ✓ | Existing task slug. |
+| `name` | string | | New human-readable label, not a new slug. |
+| `command` | string | | New agent prompt, slash command, or shell command. |
+| `cron` | string | | New five-field cron expression. |
+| `runAt` | string or null | | New ISO 8601 one-shot time; `null` clears it. |
+| `expiresAt` | string or null | | New ISO 8601 expiry; `null` clears it. |
+| `executor` | string | | `agent` or `shell`. |
+| `trigger` | string | | `cron`, `sessionstart`, or `both`. |
+| `notifyOn` | string | | `failure`, `always`, or `never`. |
+| `notifyChat` | string or number | | Notification chat ID or configured alias. |
+| `maxAttempts` | integer | | Total agent-run attempts, 1 through 5. Only transient failures retry. |
+| `retryDelayMs` | integer | | Retry backoff base from 1000 through 300000 ms. |
+| `enabled` | boolean | | Enable or disable the task. |
+| `cwd` | string or null | | New existing directory, absolute or `~/...`. `null` or `""` clears the task override. |
+
+### `list_schedules`
+
+List all scheduled tasks with their IDs, cron expressions, `runAt`, `expiresAt`, enabled status, and notify settings. Returns a JSON array of task configs.
+
+No parameters.
+
+### `get_schedule_history`
+
+Retrieve recent execution history for a scheduled task. Returns records in chronological order (oldest first).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `taskId` | string | ✓ | The task ID (slug) to look up. |
+| `limit` | number | | Max records to return (default 10, max 50). |
+
+### `cancel_schedule`
+
+Disable, re-enable, or permanently remove a scheduled task. Default (no flags) sets `enabled: false`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `taskId` | string | ✓ | The task ID (slug) to operate on. |
+| `enable` | boolean | | If true, re-enable a disabled task and register it with the daemon. |
+| `permanent` | boolean | | If true, remove from the store entirely (takes precedence over `enable`). |
+
+---
+
+## Git
+
+### `worktree`
+
+Manage AFK-owned git worktrees under `<repoRoot>/.afk-worktrees/`. Prefer this over raw `git worktree` bash commands: it writes the metadata the sweep engine needs. `keep` locks the checkout against sweeping; `release` unlocks it. Removal preserves the branch, but forced removal can destroy uncommitted and ignored files. Never remove the worktree running your current session. See [worktrees](/guides/worktrees).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | ✓ | `create`, `keep`, `release`, `list`, or `remove`. |
+| `name` | string | | (`create`) Worktree slug (kebab-case). Becomes `.afk-worktrees/<name>` and branch `afk/<name>`. |
+| `base` | string | | (`create`) Git ref to base the new branch on. Default: HEAD. |
+| `path` | string | | (`keep`/`release`/`remove`) Worktree slug or repo-relative path. |
+| `reason` | string | | (`keep`) Why this worktree must survive (stored as the git lock reason). |
+| `force` | boolean | | (`remove`) Also remove when dirty, holding non-rebuildable ignored files, or with commits ahead of base. Default false. Release locks first. Branch ref is always preserved. |
+
+---
+
+## Communication
+
+### `ask_question`
+
+Ask the operator a question and wait for their answer. This is a last resort; exhaust tools before calling it. On non-interactive surfaces the call returns `{ action: "decline" }` immediately.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `question` | string | ✓ | The question to ask. |
+| `type` | string | | `text` (default), `confirm`, `choice`, `multi_choice`, or `number`. |
+| `choices` | array | | Options list. Required for `choice` and `multi_choice` types. |
+| `context` | string | | Background context to display above the question. |
+| `default` | string/boolean/number | | Default value shown as a hint. |
+| `allow_skip` | boolean | | Whether the user may skip (submit empty). Default: false. |
+| `allow_custom` | boolean | | (`choice`/`multi_choice`) Let the operator type a free-form answer. A custom answer returns `content.custom_value` with `content.value: null`. |
+| `min_length` | number | | (`text`) Minimum character length. |
+| `max_length` | number | | (`text`) Maximum character length. |
+| `min` | number | | (`number`) Minimum value (inclusive). |
+| `max` | number | | (`number`) Maximum value (inclusive). |
+
+### `send_telegram`
+
+Send a Telegram message to the operator, for example a completion notice or blocking question. Markdown is rendered as Telegram HTML, with plain-text fallback when formatting fails. The message must be non-empty and at most 4,096 characters. Returns an error if Telegram is not configured. Explicit chats must be allowlisted. When already using the Telegram bot, prefer a normal reply to avoid duplicate notifications.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `message` | string | ✓ | Plain-text message body. Max 4096 characters. |
+| `chat` | string/number | | Target a specific chat: numeric chat id or alias name from `telegram.chatAliases`. |
+| `thread_id` | number | | Topic thread ID for supergroups with topics enabled. Requires `chat`. |
+
+---
+
+### `list_sessions`
+
+List live AFK peer sessions on this computer, excluding the caller. No parameters. Root-only: children cannot discover or message peers.
+
+Results include session ID, name, surface, cwd, branch, `turnState`, heartbeat age, pending-message count, blocked state, and `acceptsMessages`. Optional activity describes the current or latest user prompt and completed turns. A session being live does not imply it has a receiver; currently only REPL sessions accept peer messages. Check this result before sending. See [peer messaging](/guides/peer-messaging).
+
+### `send_to_session`
+
+Send a self-contained message to a live peer. An idle receiver wakes immediately; a busy one receives it between tool rounds, or next turn if no round remains. User input takes priority. Inspect the target's current task and pending messages first; do not send to a blocked session, and consolidate when messages are already queued. Peer messages never grant user authority or permission.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `to` | string | ✓ | Full session ID, unique prefix of at least 6 characters, or name from `list_sessions`. Prefer an ID; check `resolvedTo` in the result. |
+| `message` | string | ✓ | Message body, at most 64 KB UTF-8. Include context and whether a reply is needed. Never include secrets. |
+| `reply_to` | string | | Incoming peer-message ID to thread a reply. |
+
+Returns `status: "queued"` or `status: "refused"` with routing details. A refusal is not fatal; inspect its reason instead of retrying blindly. Do not reply to pure acknowledgements.
+
+## Session
+
+### `get_runtime_state`
+
+Inspect the current session's identity, enabled tools and MCP servers, active children and background jobs, and recorded git workspace state. Read-only, with no network request. The tool/catalog view can read the local Codex catalog; the opt-in hooks view reads merged disk configuration. Unknown fields return `null` rather than invented values.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `view` | string | | `self`, `tools`, `subagents`, `workspace`, `hooks`, or `all` (default). `all` excludes hooks. |
+
+`hooks` reports merged configuration metadata, not a live list of builtin hook registrations. `subagents` and `all` include historical subagent outcome summaries when available, useful for spotting overly tight round budgets.
+
+### `get_facet`
+
+Read the structured session facet, a validated, consumer-facing summary of what a session did. Includes tool call counts, error categories, subagent invocations, outcome, summary, and cost breakdown.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `session` | string | | ID, name, `latest` (default), `current`, or `self`. `latest` prefers the newest sealed session matching the caller's cwd, then falls back globally. `current` and `self` use this call's session context, falling back to latest semantics if unavailable. |
+| `fields` | string[] | | Top-level field allowlist. Omit for all non-provenance fields; name provenance fields explicitly to include them. |
+
+Every response also includes `session_cwd`, `is_current_session`, and `cwd_mismatch`, regardless of `fields`. An explicit ID match is not treated as a `current`/`self` lookup. Check `cwd_mismatch` before drawing conclusions about the current project.
+
+### `read_witness`
+
+Read and filter events from a session's witness trace. It records tools fired, timing, bytes, errors, phases, and selected semantic snippets, not full conversation text, complete tool arguments, or raw tool output. Returns matching events in chronological order. See [observability](/guides/observability).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `session` | string | | Session ID or `"latest"` (default). |
+| `kinds` | array | | Filter by event kind(s): `tool_call`, `subagent_lifecycle`, `session_phase`, `closure`, `abort`, `budget`, `hook_decision`, `hook_summary`, `browser_event`, `claim`, `compaction`, `background_agent`, `queued_user_message`, `session_sealed`. |
+| `tool_name` | string | | Filter `tool_call` events to one tool name. |
+| `errors_only` | boolean | | When true, show only error events. Default: false. |
+| `limit` | number | | Most recent matching events to return (default 50, max 200), presented chronologically. |
+| `where` | object | | Exact-match AND filter mapping dotted event paths to scalars, e.g. `{"payload.decision":"block"}`. Own properties only; `__proto__`, `constructor`, `prototype` segments are rejected. |
+
+### `search_witness`
+
+Search across multiple sessions' witness traces for a text pattern. Returns matching trace events grouped by session. Does not contain full conversation text or tool arguments.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | ✓ | Text pattern to search for (case-insensitive substring). |
+| `sessions` | number | | Number of recent sessions to scan (default 20, max 100). |
+| `kinds` | array | | Filter results to specific event kinds. |
+| `since` | string | | ISO date; only search sessions modified after this date. |
+| `tool_name` | string | | Filter `tool_call` events to one tool name. |
+| `where` | object | | Exact-match AND filter mapping dotted event paths to scalars, e.g. `{"kind":"hook_decision","payload.decision":"block"}`. |
+| `include_current_session` | boolean | | Include the calling session's own trace (excluded by default). |
+
+Results are capped at 200 matches; when the cap stops the scan the result carries `matchLimitReached: true` and a `hint`. Plain allow/pass-through hook dispatches are not written as `hook_decision` rows; they are counted in the per-session `hook_summary` event at seal. If a session has no summary, its hook volume is unknown, not zero. `sessionsAvailable` and `sessionsSearched` distinguish a small history from a restrictive date filter.
+
+### `exit_plan_mode`
+
+Signal that an implementation plan is ready for human approval. Available in interactive root plan mode when plan-exit controls are wired. The agent must first write the plan as visible assistant text in the same response; hidden reasoning and collapsed tool output do not count. The picker lets you approve, keep planning, or type revision feedback. Approval schedules a separate implementation turn and does not unlock writes in the current turn. No parameters.
+
+## Clipboard
+
+### `clipboard_read`
+
+Read the current clipboard as text, after explicit operator confirmation on every call. Decline or cancellation prevents the read. Returned text passes through secret redaction before the 100,000-byte cap; this is best-effort protection, not a reason to approve sensitive clipboard contents. Reading uses native clipboard utilities and returns a graceful error when none works or no human can approve.
+
+No parameters.
+
+### `clipboard_write`
+
+Write a string to the system clipboard. Uses `pbcopy` on macOS, `clip` on Windows, `wl-copy`/`xclip`/`xsel` on Linux, with an OSC 52 fallback for SSH sessions.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `text` | string | ✓ | The text to copy to the clipboard. |
+
+## Child progress
+
+### `emit_progress`
+
+Push a structured progress update from a child subagent to the parent session. Only available on subagents dispatched with `progress_events: true`. Events are delivered to the parent's next user turn as a `<child-progress>` XML envelope.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `message` | string | ✓ | Free-text description of current status. Capped at 2048 bytes. |
+| `phase` | string | | Short label for the current stage (e.g. `"scanning"`, `"testing"`). |
+| `metadata` | object | | Arbitrary key/value object for structured data. |
+
+The progress message is delivered as text in the parent envelope; structured metadata is also retained in the child's progress ring for health inspection.
+
+## Related
+
+<Cards>
+  <Card title="Background processes" href="/guides/background-processes" description="Start, inspect, and stop long-running commands." />
+  <Card title="Scheduling" href="/guides/scheduling" description="Create recurring and one-shot daemon tasks." />
+  <Card title="Images" href="/guides/images" description="Generate, edit, and inspect image files." />
+  <Card title="Peer messaging" href="/guides/peer-messaging" description="Coordinate with another live AFK session." />
+  <Card title="Subagents" href="/guides/subagents" description="Delegate work and share findings safely." />
+  <Card title="State store" href="/guides/state-store" description="Coordinate durable JSON state across sessions." />
+  <Card title="Memory" href="/guides/memory" description="Recall facts and reusable procedures." />
+</Cards>

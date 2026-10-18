@@ -39,8 +39,9 @@ export interface SystemPromptWiringArgs {
    * provides `getManifestScope()` for plugin/allowlist scoping.
    */
   skillExecutor?: SkillExecutor;
-  /** Whether a workspace store is present (controls workspace fragment). */
-  hasWorkspaceStore: boolean;
+  /** Whether the `# Shared Workspace` fragment is included: a store is present AND
+   *  both workspace tools are granted (`grantsWorkspacePrompt`, #4060). */
+  workspacePromptEnabled: boolean;
   /** Whether the memory store is read-only. */
   readOnlyMemory: boolean | undefined;
   /** Whether the state store is read-only. */
@@ -92,7 +93,7 @@ export interface SystemPromptWiringResult {
  */
 export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPromptWiringResult {
   const {
-    config, skillExecutor, hasWorkspaceStore, readOnlyMemory, readOnlyState,
+    config, skillExecutor, workspacePromptEnabled, readOnlyMemory, readOnlyState,
     resolvedSessionId, surface, getCurrentCwd, runtimeStateSource,
   } = args;
 
@@ -173,7 +174,7 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
     const parts: string[] = toolBase.length > 0 ? [toolBase] : [];
     if (resolvedBase !== undefined && resolvedBase.length > 0) parts.push(resolvedBase);
     parts.push(memoryPrompt);
-    const workspacePrompt = resolveWorkspaceSystemPrompt(hasWorkspaceStore);
+    const workspacePrompt = resolveWorkspaceSystemPrompt(workspacePromptEnabled);
     if (workspacePrompt) parts.push(workspacePrompt);
     for (const frag of [hotMemory, goalPrompt]) { if (frag.length > 0) parts.push(frag); }
     parts.push(envFragment);

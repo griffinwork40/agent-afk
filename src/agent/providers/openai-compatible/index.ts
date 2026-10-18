@@ -47,6 +47,7 @@ import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspac
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
+import { grantsWorkspacePrompt, providerGrantsTool } from '../shared/tool-grant.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
 import { applyReadOnlyGitPermissions, readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
@@ -313,7 +314,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const spw = buildSystemPromptWiring({
       config,
       skillExecutor: this.providerOpts.skillExecutor ?? undefined,
-      hasWorkspaceStore: this.workspaceStore !== undefined,
+      workspacePromptEnabled: grantsWorkspacePrompt((toolName) => this.grantsTool(toolName)),
       readOnlyMemory: this.providerOpts.readOnlyMemory,
       readOnlyState: this.providerOpts.readOnlyState,
       resolvedSessionId: resolvedSession.id,
@@ -418,6 +419,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // AnthropicDirectProvider; the required key on the dispatcher options
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
+      // #4064: MCP-aware unknown-tool messages. Forward a live accessor so that
+      // when a model calls mcp__<server>__<tool> for a failed server the response
+      // names the server and its error instead of the generic "tool does not exist".
+      // Mirrors AnthropicDirectProvider build-dispatcher.ts:389-391.
+      getMcpServerStates: this.providerOpts.mcpManager
+        ? () => this.providerOpts.mcpManager!.getServerStates()
+        : () => [],
     };
     // MCP + custom-tool unions, then operator denies LAST (shared with
     // AnthropicDirectProvider; invariant in tools/permissions-compose.ts).
@@ -531,6 +539,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
     return this.grantManager.getGrants();
+  }
+
+  /** See {@link ModelProvider.grantsTool}. Same permissions + store the dispatcher uses. */
+  grantsTool(toolName: string): boolean {
+    return providerGrantsTool(toolName, this.providerOpts.permissions, this.workspaceStore !== undefined);
   }
 
   close(): void {

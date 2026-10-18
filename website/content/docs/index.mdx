@@ -1,75 +1,52 @@
 ---
-title: "Introduction"
-description: "Agent AFK documentation — an open-source AI agent runtime: terminal REPL, headless daemon, and Telegram bot sharing one session, memory, and tool surface."
+title: "Agent AFK"
+description: "Use afk to work with an AI agent in your terminal, automate tasks, and supervise work from other surfaces."
 ---
 
-<SignalField>
-
-Built on the Anthropic SDK, Agent AFK runs outside Claude Code as its own process — a full agentic runtime you own completely. Hand it long or multi-step work and check in asynchronously: it delegates the work and leaves the judgment to you.
-
-```bash
-npm install -g agent-afk
-```
-
-<ElevatedField>
-<Cards>
-  <Card title="Get started →" href="/quickstart" description="Install, set your API key, and run your first command in under two minutes." />
-</Cards>
-</ElevatedField>
-
-</SignalField>
+Agent AFK (`afk`) is an open source AI agent runtime that runs as its own process. You can ask it to inspect a project, edit files, run commands, and delegate work, then review the results in an interactive session or an unattended workflow.
 
 ## Who it's for
 
-- **Developers** who want to hand long or multi-step tasks to an AI agent and check in asynchronously, rather than babysitting a terminal.
-- **Engineers** running headless, CI-adjacent workflows that need model reasoning, bash access, and subagent orchestration without a human in the loop.
-- **Anyone** who wants Telegram supervision — a phone ping the moment work lands in a terminal (finished) state — without standing up a server.
+* **Developers** who want help understanding a codebase, making changes, and checking the result.
+* **Engineers automating recurring work** who need scripted runs, scheduled tasks, or a persistent daemon.
+* **People supervising longer tasks** who want to check progress through Telegram or a web interface instead of staying at a terminal.
 
-<Threshold />
+You choose the model provider and configure the tools, permissions, and instructions available to the agent. Start with an interactive session before setting up unattended work.
 
-## Four surfaces, one session manager
+## Start here
 
-Every surface shares the same context, memory, and tools — so work started in one can be picked up in another.
-
-<ExtractField>
 <Cards>
-  <Card title="One-Shot Chat" href="/surfaces/chat" description="afk chat — a single pipe-friendly turn that scripts well." />
-  <Card title="Interactive REPL" href="/surfaces/repl" description="afk i — slash commands, plan mode, and streaming output." />
-  <Card title="Daemon" href="/surfaces/daemon" description="afk daemon — a long-running, cron-friendly headless agent." />
-  <Card title="Telegram Bot" href="/surfaces/telegram" description="afk telegram start — the same tools and memory, on your phone." />
+  <Card title="Get started" href="/quickstart" description="Install afk, authenticate, and ask your first useful question." />
+  <Card title="Concepts" href="/how-it-works" description="Understand the agent loop, sessions, context, and safety controls." />
+  <Card title="Surfaces" href="/surfaces/repl" description="Start in the terminal, then explore chat, daemon, Telegram, and web workflows." />
+  <Card title="Guides" href="/guides/unattended-runs" description="Learn task workflows, from background work to scheduling and delegation." />
+  <Card title="Reference" href="/reference/cli" description="Look up commands, slash commands, tools, and configuration keys." />
+  <Card title="Troubleshooting" href="/troubleshooting" description="Diagnose setup, authentication, and runtime problems." />
 </Cards>
-</ExtractField>
 
-<Threshold />
+## What can I do with it?
 
-## Key capabilities
+* [Work through a task interactively](/first-session), with follow-up questions and streaming tool results.
+* [Run a single prompt from a script](/surfaces/chat) without opening the REPL.
+* [Run independent investigations in parallel](/guides/subagents), or coordinate dependent work.
+* [Keep a long process running while you work](/guides/background-processes).
+* [Schedule recurring tasks](/guides/scheduling) and [run them through a persistent service](/guides/run-as-service).
+* [Supervise sessions from Telegram](/surfaces/telegram) or [use the web interface](/surfaces/web).
+* [Isolate code changes in a git worktree](/guides/worktrees) and [verify the result](/guides/verification).
+* [Add skills](/skills/overview), [connect MCP servers and plugins](/guides/mcp-plugins), or [use local models](/guides/local-models).
+* [Inspect a run's trace](/guides/observability) and [review usage and cost](/guides/usage-and-cost).
+* [Embed the runtime in your own application](/sdk).
 
-<ExtractField>
+## Know what you are granting
+
+The agent can execute commands and change files with your account's access. A new CLI installation starts in `bypassPermissions` mode, which disables path containment and path-approval prompts. Use `--permission-mode default` to enable path approvals, and read [Safety](/concepts/safety) before allowing unattended work.
+
+Configuration, saved sessions, and local runtime artifacts normally live under `~/.afk/`. Model requests go to the provider you configure, and enabled tools or integrations can send data to other services. Review [tool access](/guides/tool-access) and [extensions](/concepts/extensions) when connecting additional capabilities.
+
+## Related
+
 <Cards>
-  <Card title="Subagent orchestration" href="/guides/subagents" description="Run many subagents at once — independent tasks run in parallel, dependent ones wait their turn." />
-  <Card title="Slash skills" href="/skills/overview" description="A registry of built-in slash commands plus auto-discovered SKILL.md plugins, with typo-tolerant command suggestions." />
-  <Card title="Verification workflows" href="/guides/verification" description="Skills like /review and /diagnose fan parallel checks across a change before surfacing a recommendation." />
-  <Card title="Local traces" href="/guides/observability" description="Every run appends an inspectable trace — tool calls, gate decisions, cost — readable with afk trace show." />
-  <Card title="Telegram supervision" href="/surfaces/telegram" description="Get a phone ping when a scheduled task lands, then reply to drive the session from anywhere." />
-  <Card title="Unattended guardrails" href="/guides/unattended-runs" description="Cost ceilings, turn limits, and worktree isolation keep long unattended runs in bounds." />
+  <Card title="Install afk" href="/installation" description="Requirements, platform setup, updates, and shell integration." />
+  <Card title="Run your first session" href="/first-session" description="Learn approvals, slash commands, stopping, and resuming." />
+  <Card title="Configure afk" href="/configuration/overview" description="Choose providers, models, permissions, and project instructions." />
 </Cards>
-</ExtractField>
-
-<Threshold />
-
-## Safety & verification controls
-
-Agent AFK ships blast-radius controls — the guardrails that keep unattended runs safe — out of the box:
-
-- **Cost guardrails** — `AFK_MAX_BUDGET_USD` (or `--max-budget-usd` on `afk chat`) aborts a turn that would breach the cost ceiling.
-- **Turn limits** — `--max-turns` caps total turns (`afk chat` defaults to 10, `afk i` to 100), preventing runaway sessions.
-- **Path-access approval** — there are no per-tool prompts, but in the default mode a file tool reaching outside the working directory asks before it runs. [Bypass mode](/configuration/permissions) turns containment off for fully unattended work.
-- **Worktree isolation** — `--worktree` creates a git worktree for the session; on clean exit it is removed automatically.
-
-## Local-first, no phone-home
-
-Agent AFK keeps all state under `~/.afk/` — sessions, memory, plugins, logs, daemon state. There is no analytics or remote telemetry: it never sends your prompts, code, or usage anywhere except directly to the model provider you configure. What telemetry exists is local JSONL you can read or delete.
-
-<Threshold />
-
-Ready to go deeper? Start with the [Quickstart](/quickstart), then see [How It Works](/how-it-works).

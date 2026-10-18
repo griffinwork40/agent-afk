@@ -1,0 +1,2522 @@
+---
+title: "CLI reference"
+description: "Commands, arguments, and options accepted by afk."
+---
+
+{/* Generated from the Commander command registrars. Do not edit by hand; run `pnpm scan:cli`. */}
+
+Use `afk` for the interactive REPL or choose a command below. Commands follow stable registration order; hidden commands and options are omitted. Run `afk --version` for the installed version.
+
+## `afk`
+
+AI agent CLI. Starts interactive REPL by default; use `afk chat` for one-shot.
+
+Usage: `afk [options] [command]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-V, --version` | output the version number |  |
+| `--no-update-check` | Skip update version check |  |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `chat` | Send a message to the agent |
+| `config` | View or edit AFK configuration (afk.config.json + afk.env) |
+| `daemon` | Run agent-afk as a daemon that fires scheduled tasks (e.g. /forge-friction --auto) |
+| `web` | Serve a local web UI for live agent sessions |
+| `queue` | Manage the pull-trigger task queue (used with `afk daemon --trigger pull`) |
+| `events` | Event ingress producers that write into the pull queue (Part of #3896) |
+| `interactive` | Start interactive chat session |
+| `login` | Save an Anthropic API key or OAuth token for afk to use |
+| `plugin` | Manage AFK plugins (install / update / list / remove / enable / disable) |
+| `marketplace` | Manage AFK plugin marketplaces (install / list / plugins / install-plugin / remove / update) |
+| `status` | Check agent connection status |
+| `usage` | Show API usage per provider/account: per-minute headroom, 429 freezes, 5h/7d windows, data age |
+| `doctor` | Check system health and configuration |
+| `migrate` | Import plugins, skills, and MCP servers from Claude Code / Codex into AFK |
+| `provider` | Provider diagnostics and configuration |
+| `completion` | Emit shell completion script (zsh\|bash\|fish) |
+| `telegram` | Manage the Agent AFK Telegram bot (setup, start, stop, status) |
+| `farm` | Run a task across N speculative git worktree branches in parallel |
+| `worktree` | Manage git worktrees created by afk |
+| `branch` | Manage remote branches created by afk worktrees |
+| `update` | Update agent-afk to the latest published version |
+| `schedule` | Manage scheduled daemon tasks |
+| `bg` | Inspect persisted background subagent job logs. Note: bg jobs are tied to the parent REPL process — if the REPL exits, the job dies. This command reads the persisted log. |
+| `trace` | Inspect the witness-layer trace of a session — the durable record of everything the agent did. Reads ~/.afk/state/witness/&lt;session&gt;/trace.jsonl. |
+| `whatif` | Predict how a proposed change to your AFK environment will affect the agent's behaviour. Optionally run episodes to verify empirically.  Pass a plain-English description, explicit flags, or a --spec file. |
+| `witness` | Search and filter the witness-layer trace history — the durable record of everything agents did across sessions. |
+| `service` | Manage AFK background services (launchd on macOS, systemd --user on Linux, Task Scheduler on Windows) — always-on, auto-restart |
+| `restart` | Restart AFK background services (&lt;telegram\|daemon&gt;); with no name, restarts every installed service |
+| `browser` | Give the agent web hands: connect your real Chrome, or save a login it reuses |
+| `improve` | Self-improvement pipeline: scan traces, triage cards, draft proposals, generate replay eval-cases. |
+| `shell-init` | Emit the optional `afk` shell wrapper that cd's the parent shell into a preserved worktree on exit. Default: auto-detect from $SHELL (falls back to bash). Install: `eval "$(afk shell-init)"` (or pipe to `source` in fish). NOTE: the emitted function overrides any existing `afk` alias or function in your shell. |
+| `transcript` | Search and index session transcripts. Transcripts are autosaved at ~/.afk/state/transcripts/. Run `afk transcript reindex` once before searching. |
+| `insights` | Generate a local usage analytics report from AFK telemetry |
+| `captures` | List bash output captures — full output files written when a command produces more than 100 KB. Captures live under the witness directory and are evicted automatically by the 30-day / 2 GiB retention sweep. |
+| `defects` | Show top recurring pre-existing defects from the session ledger |
+
+## `afk chat`
+
+Send a message to the agent
+
+Usage: `afk chat [options] [message]`
+
+Aliases: `c`
+
+Guide: [chat](/surfaces/chat)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[message]` | Message to send; use `-` or omit to read from stdin |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-m, --model <model>` | Model to use. Short aliases: opus\|opus_1m\|opus-5.5\|opus-5.5_1m\|sonnet\|sonnet_1m\|haiku. Any other value (e.g. `auto` for cursor-api-proxy, or a full `claude-*` ID) passes through to the SDK/proxy untouched. | `"medium"` |
+| `--max-turns <number>` | Maximum conversation turns | `"10"` |
+| `--thinking <mode>` | Thinking mode: 'adaptive' \| 'disabled' \| 'max' \| 'enabled:&lt;N&gt;' | `"enabled:max"` |
+| `--effort <level>` | Effort level: low\|medium\|high\|xhigh\|max |  |
+| `--theme <mode>` | TUI color palette: dark\|light\|umber\|auto. Default dark. umber matches the Umber terminal (dark-only). Also: AFK_THEME env, or theme in afk.config.json. |  |
+| `--max-output-tokens <n\|max>` | Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS |  |
+| `--provider <name>` | Provider to use: anthropic\|anthropic-direct\|openai\|openai-compatible\|xai\|xai-oauth. Default: auto-selected by model |  |
+| `--dump-prompt [path]` | Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-&lt;ISO&gt;.json) or "stderr" |  |
+| `-w, --worktree [branch]` | Create a git worktree for an isolated one-shot. Optional value sets the branch name; otherwise auto-named. On clean exit (no uncommitted changes) the worktree and branch are auto-removed; on dirty exit the worktree is preserved. |  |
+| `--worktree-base <ref>` | Base git ref for the worktree created by --worktree. Default: the remote's default branch (origin/main), fetched fresh. Pass HEAD to base on your local checkout instead. Also: AFK_WORKTREE_BASE. |  |
+| `--mcp-config <path>` | Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json. |  |
+| `--resume <id>` | Resume a persisted session by id |  |
+| `--continue` | Continue the most recent persisted session in cwd |  |
+| `--permission-mode <mode>` | Permission mode: default\|acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto\|autonomous. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
+| `--dangerously-skip-permissions` | Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode default`. Does not affect ask_question. |  |
+| `-s, --stream` | [no-op] reserved; use --format stream-json for headless streaming | `false` |
+| `-f, --format <format>` | Output format (text\|json\|stream-json) | `"text"` |
+| `--max-budget-usd <usd>` | Hard session cost ceiling in USD. Env: AFK_MAX_BUDGET_USD |  |
+| `--task-budget <tokens>` | Soft per-task token budget. Env: AFK_TASK_BUDGET |  |
+| `--session-id <uuid>` | Assign a specific UUID to this session (creates new; errors if already exists) |  |
+| `--post <targets>` | Headless publish of the final assistant message: github, telegram, or github,telegram |  |
+| `--post-pr <ref>` | PR number, URL, or branch for --post github (defaults to the current-branch PR) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk config`
+
+View or edit AFK configuration (afk.config.json + afk.env)
+
+Usage: `afk config [options] [command]`
+
+Guide: [editing-config](/configuration/editing-config)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-f, --format <format>` | Output format (text\|json) | `"text"` |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `get` | Read afk.config.json — a dotted key (e.g. telegram.notify.mode) or the whole file |
+| `set` | Set an afk.config.json key (dotted path; agent + human-tier keys) |
+| `unset` | Remove an afk.config.json key |
+| `env` | View or edit afk.env environment variables |
+
+## `afk config get`
+
+Read afk.config.json — a dotted key (e.g. telegram.notify.mode) or the whole file
+
+Usage: `afk config get [options] [key]`
+
+Guide: [editing-config](/configuration/editing-config)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[key]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--json` | Output JSON |  |
+| `-h, --help` | display help for command |  |
+
+## `afk config set`
+
+Set an afk.config.json key (dotted path; agent + human-tier keys)
+
+Usage: `afk config set [options] <key> <value>`
+
+Guide: [editing-config](/configuration/editing-config)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<key>` |  |  |
+| `<value>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--json` | Output JSON |  |
+| `-h, --help` | display help for command |  |
+
+## `afk config unset`
+
+Remove an afk.config.json key
+
+Usage: `afk config unset [options] <key>`
+
+Guide: [editing-config](/configuration/editing-config)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<key>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--json` | Output JSON |  |
+| `-h, --help` | display help for command |  |
+
+## `afk config env`
+
+View or edit afk.env environment variables
+
+Usage: `afk config env [options] [command]`
+
+Guide: [editing-config](/configuration/editing-config)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `get` | Read afk.env — one var or all present (secrets masked) |
+| `set` | Set an afk.env var. Secret vars are prompted (masked) unless --stdin is given. |
+| `unset` | Remove an afk.env var |
+
+## `afk config env get`
+
+Read afk.env — one var or all present (secrets masked)
+
+Usage: `afk config env get [options] [key]`
+
+Guide: [editing-config](/configuration/editing-config)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[key]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--all` | Include every known var, not just those set |  |
+| `--json` | Output JSON |  |
+| `-h, --help` | display help for command |  |
+
+## `afk config env set`
+
+Set an afk.env var. Secret vars are prompted (masked) unless --stdin is given.
+
+Usage: `afk config env set [options] <key> [value]`
+
+Guide: [editing-config](/configuration/editing-config)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<key>` |  |  |
+| `[value]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--stdin` | Read the value from stdin (for scripted secret entry) |  |
+| `--json` | Output JSON |  |
+| `-h, --help` | display help for command |  |
+
+## `afk config env unset`
+
+Remove an afk.env var
+
+Usage: `afk config env unset [options] <key>`
+
+Guide: [editing-config](/configuration/editing-config)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<key>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--json` | Output JSON |  |
+| `-h, --help` | display help for command |  |
+
+## `afk daemon`
+
+Run agent-afk as a daemon that fires scheduled tasks (e.g. /forge-friction --auto)
+
+Usage: `afk daemon [options]`
+
+Guide: [daemon](/surfaces/daemon)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-p, --port <number>` | Control HTTP port | `"7777"` |
+| `--host <address>` | Bind address for the control HTTP surface. Overrides AFK_DAEMON_HOST. Defaults to 127.0.0.1 (loopback only). The control surface is UNAUTHENTICATED — bind a non-loopback address (e.g. 0.0.0.0) only on a trusted or firewalled network. |  |
+| `-t, --task <command>` | Command to fire on each tick. Required for the cron and both triggers; optional otherwise. |  |
+| `-c, --cron <expression>` | Cron expression (e.g. "0 */6 * * *"). Required when --trigger includes cron. |  |
+| `-i, --task-id <id>` | Task identifier (default: default) |  |
+| `--once` | Fire one tick and exit (for testing) | `false` |
+| `--timeout-ms <ms>` | Per-tick session timeout in ms. Overrides AFK_TIMEOUT_MS. Defaults to no timeout (0 = unlimited) when unset. |  |
+| `--thinking <mode>` | Thinking mode: 'adaptive' \| 'disabled' \| 'max' \| 'enabled:&lt;N&gt;' |  |
+| `--effort <level>` | Effort level: low\|medium\|high\|xhigh\|max |  |
+| `--trigger <mode>` | Trigger mode: cron \| sessionstart \| both \| pull. Defaults to 'cron' when --cron is set, else 'sessionstart'. |  |
+| `--sessionstart-cooldown-ms <ms>` | Cooldown between Phase 6 sessionstart fires. Overrides AFK_SESSIONSTART_COOLDOWN_MS. Defaults to 6h. |  |
+| `--dump-prompt [path]` | Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-&lt;ISO&gt;.json) or "stderr" |  |
+| `-h, --help` | display help for command |  |
+
+## `afk web`
+
+Serve a local web UI for live agent sessions
+
+Usage: `afk web [options]`
+
+Guide: [web](/surfaces/web)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-p, --port <port>` | port to listen on (default 4141, or AFK_WEB_PORT) |  |
+| `-H, --host <host>` | bind address (default 127.0.0.1, or AFK_WEB_HOST) |  |
+| `--token <token>` | bearer token (default: randomly minted per run) |  |
+| `--no-open` | do not open a browser window |  |
+| `-m, --model <model>` | model for sessions started from the browser |  |
+| `--bypass-permissions` | run browser-started sessions without tool approvals (they are approved automatically) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk queue`
+
+Manage the pull-trigger task queue (used with `afk daemon --trigger pull`)
+
+Usage: `afk queue [options] [command]`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `add` | Enqueue a command for the pull-trigger daemon to execute |
+| `list` | List all pending queued tasks in FIFO order |
+| `remove` | Remove a pending task by id |
+| `clear` | Remove all pending tasks from the queue |
+
+## `afk queue add`
+
+Enqueue a command for the pull-trigger daemon to execute
+
+Usage: `afk queue add [options] <command>`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<command>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--notify-on <mode>` | When to send a notification: failure \| always \| never |  |
+| `-h, --help` | display help for command |  |
+
+## `afk queue list`
+
+List all pending queued tasks in FIFO order
+
+Usage: `afk queue list [options]`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk queue remove`
+
+Remove a pending task by id
+
+Usage: `afk queue remove [options] <id>`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<id>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk queue clear`
+
+Remove all pending tasks from the queue
+
+Usage: `afk queue clear [options]`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-y, --yes` | Skip the confirmation prompt (non-interactive / CI) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk events`
+
+Event ingress producers that write into the pull queue (Part of #3896)
+
+Usage: `afk events [options] [command]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `github` | Poll GitHub for events and enqueue tasks into the pull queue. Requires `gh` CLI authenticated (`gh auth status`). Supported event types: pr_comment, check_failure, issue_opened |
+
+## `afk events github`
+
+Poll GitHub for events and enqueue tasks into the pull queue. Requires `gh` CLI authenticated (`gh auth status`). Supported event types: pr_comment, check_failure, issue_opened
+
+Usage: `afk events github [options]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--repo <owner/repo>` | GitHub repository to watch (e.g. owner/repo) |  |
+| `--on <events>` | Comma-separated event types to watch: pr_comment, check_failure, issue_opened |  |
+| `--command <template>` | Command template for enqueued tasks. Placeholders: &#123;&#123;event_type&#125;&#125;, &#123;&#123;repo&#125;&#125;, &#123;&#123;event_id&#125;&#125;. Event payload is appended as untrusted data. | `"A GitHub event occurred in {{repo}}. Event type: {{event_type}}. Event id: {{event_id}}. Review the untrusted payload below and take appropriate action if warranted."` |
+| `--interval <ms>` | Poll interval in milliseconds | `"60000"` |
+| `--once` | Poll once and exit (useful for cron or testing) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk interactive`
+
+Start interactive chat session
+
+Usage: `afk interactive [options] [input...]`
+
+Aliases: `i`
+
+Guide: [repl](/surfaces/repl)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[input...]` | Optional first message — or a /slash-command — auto-submitted as the opening turn. E.g. `afk "what does this project do"` or `afk /review`. A bare `afk` starts an empty REPL. |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-m, --model <model>` | Model to use. Short aliases: opus\|opus_1m\|opus-5.5\|opus-5.5_1m\|sonnet\|sonnet_1m\|haiku. Any other value (e.g. `auto` for cursor-api-proxy, or a full `claude-*` ID) passes through to the SDK/proxy untouched. | `"medium"` |
+| `--max-turns <number>` | Maximum conversation turns | `"100"` |
+| `--thinking <mode>` | Thinking mode: 'adaptive' \| 'disabled' \| 'max' \| 'enabled:&lt;N&gt;' | `"enabled:max"` |
+| `--effort <level>` | Effort level: low\|medium\|high\|xhigh\|max |  |
+| `--theme <mode>` | TUI color palette: dark\|light\|umber\|auto. Default dark. umber matches the Umber terminal (dark-only). Also: AFK_THEME env, or theme in afk.config.json. Toggle live with /theme. |  |
+| `--max-output-tokens <n\|max>` | Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS |  |
+| `--provider <name>` | Provider to use: anthropic\|anthropic-direct\|openai\|openai-compatible\|xai\|xai-oauth. Default: auto-selected by model |  |
+| `--dump-prompt [path]` | Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-&lt;ISO&gt;.json) or "stderr" |  |
+| `-w, --worktree [branch]` | Create a git worktree for an isolated session. Optional value sets the branch name; otherwise auto-named. On clean interactive exit, choose whether to keep or delete it; dirty worktrees are always preserved. |  |
+| `--worktree-base <ref>` | Base git ref for the worktree created by --worktree. Default: the remote's default branch (origin/main), fetched fresh. Pass HEAD to base on your local checkout instead. Also: AFK_WORKTREE_BASE, or interactive.worktreeBase in afk.config.json. |  |
+| `--mcp-config <path>` | Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json. |  |
+| `--resume <id>` | Resume a persisted session by id |  |
+| `--continue` | Continue the most recent persisted session in cwd |  |
+| `--permission-mode <mode>` | Permission mode: default\|acceptEdits\|bypassPermissions\|plan\|dontAsk\|auto\|autonomous. Overrides afk.config.json permissionMode. Does not affect ask_question. |  |
+| `--dangerously-skip-permissions` | Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation. Toggle live with Shift+Tab (permission-mode cycle); disable persistently with `afk config set permissionMode default`. Does not affect ask_question. |  |
+| `--thinking-ui <mode>` | Thinking display mode: summary\|live\|digest\|off. Default live. Also: AFK_THINKING_UI env, or interactive.thinkingUi in afk.config.json. |  |
+| `--debug` | Show SDK init metadata on startup; enables /debug command | `false` |
+| `--worktree-on-exit <ask\|keep\|remove>` | Clean-worktree quit policy. Default: ask on TTY, remove otherwise. Also: AFK_WORKTREE_ON_EXIT, or interactive.worktreeOnExit in afk.config.json. |  |
+| `--no-worktree-autoname` | Disable mid-session rename of auto-named worktrees from the first user message via haiku. Default on. Also: AFK_WORKTREE_AUTONAME=0, or interactive.worktreeAutoname:false in afk.config.json. |  |
+| `--no-shell-passthrough` | Disable the ! shell-passthrough feature. When set, inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Also: AFK_SHELL_PASSTHROUGH set to 0, false, off, or no. |  |
+| `--plain` | Force the session to fully behave like a non-TTY surface for rendering: append-only plain-stdout output instead of the live-overlay renderer, AND the input surface downgrades to the simple line reader — even when stdout/stdin ARE a TTY. Full opt-out escape hatch for tmux/SSH/multiplexer sessions. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default. |  |
+| `-h, --help` | display help for command |  |
+
+## `afk login`
+
+Save an Anthropic API key or OAuth token for afk to use
+
+Usage: `afk login [options] [token]`
+
+Guide: [api-keys](/configuration/api-keys)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[token]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--force` | Override existing credentials even if already authenticated |  |
+| `-h, --help` | display help for command |  |
+
+## `afk plugin`
+
+Manage AFK plugins (install / update / list / remove / enable / disable)
+
+Usage: `afk plugin [options] [command]`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `install` | Install a plugin from a git URL, owner/repo shorthand, local path, or &lt;marketplace&gt;:&lt;plugin&gt; |
+| `update` | Update one plugin, or all if no name is given |
+| `list` | List installed plugins with their source, version, and enabled state |
+| `remove` | Remove a plugin (directory + index entry) |
+| `enable` | Re-enable a previously disabled plugin |
+| `disable` | Keep the plugin on disk but skip it from SDK init |
+| `config` | Get or set userConfig options for a plugin.   afk plugin config &lt;name&gt;           — list current option values   afk plugin config &lt;name&gt; &lt;key&gt;     — show one option value   afk plugin config &lt;name&gt; &lt;key&gt; &lt;value&gt;  — set an option   afk plugin config &lt;name&gt; &lt;key&gt; --unset  — remove a stored value |
+
+## `afk plugin install`
+
+Install a plugin from a git URL, owner/repo shorthand, local path, or &lt;marketplace&gt;:&lt;plugin&gt;
+
+Usage: `afk plugin install [options] <source> [name]`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<source>` |  |  |
+| `[name]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-r, --ref <ref>` | Install a specific tag, branch, or SHA |  |
+| `-f, --force` | Replace an existing plugin with the same name |  |
+| `-y, --yes` | Skip the install warning and countdown (non-interactive / CI) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk plugin update`
+
+Update one plugin, or all if no name is given
+
+Usage: `afk plugin update [options] [name]`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[name]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-r, --ref <ref>` | Pin to a specific ref instead of the latest tag |  |
+| `-h, --help` | display help for command |  |
+
+## `afk plugin list`
+
+List installed plugins with their source, version, and enabled state
+
+Usage: `afk plugin list [options]`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-f, --format <format>` | Output format (text\|json) | `"text"` |
+| `-h, --help` | display help for command |  |
+
+## `afk plugin remove`
+
+Remove a plugin (directory + index entry)
+
+Usage: `afk plugin remove [options] <name>`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<name>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk plugin enable`
+
+Re-enable a previously disabled plugin
+
+Usage: `afk plugin enable [options] <name>`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<name>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk plugin disable`
+
+Keep the plugin on disk but skip it from SDK init
+
+Usage: `afk plugin disable [options] <name>`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<name>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk plugin config`
+
+Get or set userConfig options for a plugin.   afk plugin config &lt;name&gt;           — list current option values   afk plugin config &lt;name&gt; &lt;key&gt;     — show one option value   afk plugin config &lt;name&gt; &lt;key&gt; &lt;value&gt;  — set an option   afk plugin config &lt;name&gt; &lt;key&gt; --unset  — remove a stored value
+
+Usage: `afk plugin config [options] <name> [key] [value]`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<name>` |  |  |
+| `[key]` |  |  |
+| `[value]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--unset` | Remove the stored value for the given key |  |
+| `-h, --help` | display help for command |  |
+
+## `afk marketplace`
+
+Manage AFK plugin marketplaces (install / list / plugins / install-plugin / remove / update)
+
+Usage: `afk marketplace [options] [command]`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `install` | Clone or symlink a marketplace into the local plugin cache |
+| `list` | List installed marketplaces with their source and ref |
+| `plugins` | List plugins inside a marketplace, with [installed] / [available] markers |
+| `install-plugin` | Install a single plugin from a marketplace |
+| `remove` | Remove a marketplace and cascade-delete its installed plugins |
+| `update` | Update one marketplace, or all if no name is given |
+
+## `afk marketplace install`
+
+Clone or symlink a marketplace into the local plugin cache
+
+Usage: `afk marketplace install [options] <source> [name]`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<source>` |  |  |
+| `[name]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-r, --ref <ref>` | Install a specific tag, branch, or SHA |  |
+| `-f, --force` | Replace an existing marketplace with the same name |  |
+| `-h, --help` | display help for command |  |
+
+## `afk marketplace list`
+
+List installed marketplaces with their source and ref
+
+Usage: `afk marketplace list [options]`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-f, --format <format>` | Output format (text\|json) | `"text"` |
+| `-h, --help` | display help for command |  |
+
+## `afk marketplace plugins`
+
+List plugins inside a marketplace, with [installed] / [available] markers
+
+Usage: `afk marketplace plugins [options] <name>`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<name>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-f, --format <format>` | Output format (text\|json) | `"text"` |
+| `-h, --help` | display help for command |  |
+
+## `afk marketplace install-plugin`
+
+Install a single plugin from a marketplace
+
+Usage: `afk marketplace install-plugin [options] <marketplace> <plugin>`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<marketplace>` |  |  |
+| `<plugin>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-r, --ref <ref>` | For git-sourced plugins, pin to a specific tag/branch/SHA |  |
+| `-f, --force` | Replace an existing plugin with the same key |  |
+| `-y, --yes` | Skip the install warning and countdown (non-interactive / CI) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk marketplace remove`
+
+Remove a marketplace and cascade-delete its installed plugins
+
+Usage: `afk marketplace remove [options] <name>`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<name>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk marketplace update`
+
+Update one marketplace, or all if no name is given
+
+Usage: `afk marketplace update [options] [name]`
+
+Guide: [mcp-plugins](/guides/mcp-plugins)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[name]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-r, --ref <ref>` | Pin to a specific ref instead of the latest tag |  |
+| `-h, --help` | display help for command |  |
+
+## `afk status`
+
+Check agent connection status
+
+Usage: `afk status [options]`
+
+Aliases: `s`
+
+Guide: [repl](/surfaces/repl)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-f, --format <format>` | Output format (text\|json) | `"text"` |
+| `-h, --help` | display help for command |  |
+
+## `afk usage`
+
+Show API usage per provider/account: per-minute headroom, 429 freezes, 5h/7d windows, data age
+
+Usage: `afk usage [options]`
+
+Guide: [usage-and-cost](/guides/usage-and-cost)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--json` | Output machine-readable JSON and exit |  |
+| `-h, --help` | display help for command |  |
+
+## `afk doctor`
+
+Check system health and configuration
+
+Usage: `afk doctor [options]`
+
+Guide: [troubleshooting](/troubleshooting)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-f, --format <format>` | Output format (text\|json) | `"text"` |
+| `-h, --help` | display help for command |  |
+
+## `afk migrate`
+
+Import plugins, skills, and MCP servers from Claude Code / Codex into AFK
+
+Usage: `afk migrate [options] [binary]`
+
+Guide: [migrate](/guides/migrate)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[binary]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--from <binary>` | Source binary to import from (claude-code \| codex) |  |
+| `--dry-run` | Show what would be imported without writing config |  |
+| `--mcp` | Also import MCP servers (off by default — discloses each command first) |  |
+| `-y, --yes` | Apply without the interactive confirmation (non-interactive / CI) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk provider`
+
+Provider diagnostics and configuration
+
+Usage: `afk provider [options] [command]`
+
+Guide: [models-providers](/configuration/models-providers)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `auth` | Inspect and manage provider auth state |
+
+## `afk provider auth`
+
+Inspect and manage provider auth state
+
+Usage: `afk provider auth [options] [command]`
+
+Guide: [models-providers](/configuration/models-providers)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `diagnose` | Report OpenAI and xAI auth sources. Never prints raw tokens. |
+| `xai` | SuperGrok / SuperGrok Heavy / X Premium+ OAuth for Grok models |
+
+## `afk provider auth diagnose`
+
+Report OpenAI and xAI auth sources. Never prints raw tokens.
+
+Usage: `afk provider auth diagnose [options]`
+
+Guide: [models-providers](/configuration/models-providers)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-f, --format <format>` | Output format (text\|json) | `"text"` |
+| `--family <family>` | Exit-code family: openai (default, back-compat), xai, or any | `"openai"` |
+| `--slot <name>` | Model slot name (local\|small\|medium\|large or custom name) to resolve auth as that slot |  |
+| `-h, --help` | display help for command |  |
+
+## `afk provider auth xai`
+
+SuperGrok / SuperGrok Heavy / X Premium+ OAuth for Grok models
+
+Usage: `afk provider auth xai [options] [command]`
+
+Guide: [models-providers](/configuration/models-providers)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `login` | Sign in with SuperGrok / SuperGrok Heavy / X Premium+ (device-code by default) |
+| `logout` | Clear stored SuperGrok / SuperGrok Heavy / X Premium+ OAuth tokens |
+
+## `afk provider auth xai login`
+
+Sign in with SuperGrok / SuperGrok Heavy / X Premium+ (device-code by default)
+
+Usage: `afk provider auth xai login [options]`
+
+Guide: [models-providers](/configuration/models-providers)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--device-code` | Use RFC 8628 device-code flow (default) | `false` |
+| `--browser` | Use browser PKCE loopback on 127.0.0.1:56121 | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk provider auth xai logout`
+
+Clear stored SuperGrok / SuperGrok Heavy / X Premium+ OAuth tokens
+
+Usage: `afk provider auth xai logout [options]`
+
+Guide: [models-providers](/configuration/models-providers)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk completion`
+
+Emit shell completion script (zsh\|bash\|fish)
+
+Usage: `afk completion [options] <shell>`
+
+Guide: [installation](/installation)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<shell>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk telegram`
+
+Manage the Agent AFK Telegram bot (setup, start, stop, status)
+
+Usage: `afk telegram [options] [command]`
+
+Guide: [telegram](/surfaces/telegram)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `setup` | Interactive setup: validate bot token, discover chat ID, persist to ~/.afk/config/afk.env |
+| `check-token` | Validate TELEGRAM_BOT_TOKEN via getMe; emit JSON &#123;set, valid, username?, botId?, reason?&#125; |
+| `discover-chat` | Poll getUpdates for chats that have DM'd the bot; emit JSON &#123;found, chats, reason?&#125; |
+| `set-allowed-chat` | Persist AFK_TELEGRAM_ALLOWED_CHAT_IDS=&lt;chatId&gt; to ~/.afk/config/afk.env; emit JSON &#123;ok, path&#125; |
+| `start` | Start the bot as a background daemon |
+| `stop` | Stop the bot (SIGTERM, then SIGKILL after 5s) |
+| `restart` | Stop and restart the bot |
+| `status` | Show running state, uptime, memory, and recent log entries |
+| `logs` | Show or follow the bot log |
+
+## `afk telegram setup`
+
+Interactive setup: validate bot token, discover chat ID, persist to ~/.afk/config/afk.env
+
+Usage: `afk telegram setup [options]`
+
+Guide: [telegram](/surfaces/telegram)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk telegram check-token`
+
+Validate TELEGRAM_BOT_TOKEN via getMe; emit JSON &#123;set, valid, username?, botId?, reason?&#125;
+
+Usage: `afk telegram check-token [options]`
+
+Guide: [telegram](/surfaces/telegram)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk telegram discover-chat`
+
+Poll getUpdates for chats that have DM'd the bot; emit JSON &#123;found, chats, reason?&#125;
+
+Usage: `afk telegram discover-chat [options]`
+
+Guide: [telegram](/surfaces/telegram)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--timeout-sec <n>` | How long to poll before giving up | `"60"` |
+| `-h, --help` | display help for command |  |
+
+## `afk telegram set-allowed-chat`
+
+Persist AFK_TELEGRAM_ALLOWED_CHAT_IDS=&lt;chatId&gt; to ~/.afk/config/afk.env; emit JSON &#123;ok, path&#125;
+
+Usage: `afk telegram set-allowed-chat [options] <chatId>`
+
+Guide: [telegram](/surfaces/telegram)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<chatId>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk telegram start`
+
+Start the bot as a background daemon
+
+Usage: `afk telegram start [options]`
+
+Guide: [telegram](/surfaces/telegram)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk telegram stop`
+
+Stop the bot (SIGTERM, then SIGKILL after 5s)
+
+Usage: `afk telegram stop [options]`
+
+Guide: [telegram](/surfaces/telegram)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk telegram restart`
+
+Stop and restart the bot
+
+Usage: `afk telegram restart [options]`
+
+Guide: [telegram](/surfaces/telegram)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk telegram status`
+
+Show running state, uptime, memory, and recent log entries
+
+Usage: `afk telegram status [options]`
+
+Guide: [telegram](/surfaces/telegram)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk telegram logs`
+
+Show or follow the bot log
+
+Usage: `afk telegram logs [options]`
+
+Guide: [telegram](/surfaces/telegram)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-f, --follow` | Stream new log entries (like tail -f) | `false` |
+| `-n, --lines <count>` | Number of trailing lines to show | `"50"` |
+| `-h, --help` | display help for command |  |
+
+## `afk farm`
+
+Run a task across N speculative git worktree branches in parallel
+
+Usage: `afk farm [options] <task>`
+
+Guide: [farm](/guides/farm)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<task>` | Task description to run on each branch |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-n, --branches <number>` | Number of branches to spawn (1-16) | `"3"` |
+| `--labels <labels>` | Comma-separated branch labels (count must equal --branches) |  |
+| `-m, --model <model>` | Model to use | `"medium"` |
+| `--base-ref <ref>` | Base git ref (default: HEAD) |  |
+| `--cwd <path>` | Source repo root (default: process.cwd()) |  |
+| `--fail-fast` | Abort remaining branches on first failure | `false` |
+| `--task-slug <slug>` | Deterministic task slug override (for tests) |  |
+| `--no-score` | Skip the post-run scorer (tests + lint + LoC) |  |
+| `--score-timeout <ms>` | Per-branch test timeout in ms (default 120000) |  |
+| `--no-memory` | Skip writing the farm-run fact to cross-session memory |  |
+| `--no-digest` | Skip pushing the Telegram digest on completion |  |
+| `-h, --help` | display help for command |  |
+
+## `afk worktree`
+
+Manage git worktrees created by afk
+
+Usage: `afk worktree [options] [command]`
+
+Guide: [worktrees](/guides/worktrees)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `list` | List all afk-managed worktrees and show prune candidates (dry-run only) |
+| `prune` | Remove stale, empty, and orphaned worktrees |
+
+## `afk worktree list`
+
+List all afk-managed worktrees and show prune candidates (dry-run only)
+
+Usage: `afk worktree list [options]`
+
+Guide: [worktrees](/guides/worktrees)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk worktree prune`
+
+Remove stale, empty, and orphaned worktrees
+
+Usage: `afk worktree prune [options]`
+
+Guide: [worktrees](/guides/worktrees)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--apply` | Execute removals (default is dry-run) | `false` |
+| `--max-age-days-clean <n>` | Max age (days) for clean worktrees before removal |  |
+| `--max-age-days-dirty <n>` | Max age (days) for dirty worktrees before warning |  |
+| `--scope <scope>` | Scope: interactive \| diagnose \| all | `"all"` |
+| `-h, --help` | display help for command |  |
+
+## `afk branch`
+
+Manage remote branches created by afk worktrees
+
+Usage: `afk branch [options] [command]`
+
+Guide: [worktrees](/guides/worktrees)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `prune` | List (and optionally delete) stale remote afk/* branches whose PRs are closed/merged |
+
+## `afk branch prune`
+
+List (and optionally delete) stale remote afk/* branches whose PRs are closed/merged
+
+Usage: `afk branch prune [options]`
+
+Guide: [worktrees](/guides/worktrees)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--execute` | Actually delete branches (default is dry-run — prints what would be pruned) | `false` |
+| `--remote <name>` | Remote to operate on | `"origin"` |
+| `--base <branch>` | Base branch for commit-ahead comparison | `"main"` |
+| `--prefix <prefix>` | Branch prefix to filter on | `"afk/"` |
+| `-h, --help` | display help for command |  |
+
+## `afk update`
+
+Update agent-afk to the latest published version
+
+Usage: `afk update [options]`
+
+Aliases: `upgrade`
+
+Guide: [installation](/installation)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--check` | Only check whether an update is available; do not install |  |
+| `--pin <version>` | Install a specific version instead of latest (must be valid semver) |  |
+| `--no-restart` | Skip install lifecycle scripts and forced service restarts (idle version watchdogs remain active) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk schedule`
+
+Manage scheduled daemon tasks
+
+Usage: `afk schedule [options] [command]`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `add` | Add a new scheduled task |
+| `list` | List all scheduled tasks |
+| `remove` | Permanently remove a scheduled task |
+| `enable` | Enable a scheduled task |
+| `disable` | Disable a scheduled task |
+| `logs` | Show recent execution history for a task |
+
+## `afk schedule add`
+
+Add a new scheduled task
+
+Usage: `afk schedule add [options]`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--name <name>` | Human-readable label |  |
+| `--command <cmd>` | Command to run |  |
+| `--cron <expr>` | Cron expression (5-field) |  |
+| `--executor <type>` | agent \| shell (default: agent) | `"agent"` |
+| `--trigger <mode>` | cron \| sessionstart \| both | `"cron"` |
+| `--notify <when>` | failure \| always \| never | `"failure"` |
+| `--cwd <path>` | Per-task working directory (absolute path or ~/…) |  |
+| `--disabled` | Add in disabled state | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk schedule list`
+
+List all scheduled tasks
+
+Usage: `afk schedule list [options]`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk schedule remove`
+
+Permanently remove a scheduled task
+
+Usage: `afk schedule remove [options] <id>`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<id>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk schedule enable`
+
+Enable a scheduled task
+
+Usage: `afk schedule enable [options] <id>`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<id>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk schedule disable`
+
+Disable a scheduled task
+
+Usage: `afk schedule disable [options] <id>`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<id>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk schedule logs`
+
+Show recent execution history for a task
+
+Usage: `afk schedule logs [options] <id>`
+
+Guide: [scheduling](/guides/scheduling)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<id>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-n, --limit <n>` | Number of records to show | `"10"` |
+| `-h, --help` | display help for command |  |
+
+## `afk bg`
+
+Inspect persisted background subagent job logs. Note: bg jobs are tied to the parent REPL process — if the REPL exits, the job dies. This command reads the persisted log.
+
+Usage: `afk bg [options] [command]`
+
+Guide: [background-processes](/guides/background-processes)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `list` | List background jobs from disk (most recent first) |
+| `tail` | Stream events from a background job log. Note: bg jobs are tied to the parent REPL process — if the REPL exits, the job dies. This command reads the persisted log. |
+| `replay` | Replay all persisted events for a background job (alias for tail --from-start --no-follow). Note: bg jobs are tied to the parent REPL process — if the REPL exits, the job dies. This command reads the persisted log. |
+
+## `afk bg list`
+
+List background jobs from disk (most recent first)
+
+Usage: `afk bg list [options]`
+
+Guide: [background-processes](/guides/background-processes)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-n, --max <number>` | Maximum jobs to show | `"20"` |
+| `-h, --help` | display help for command |  |
+
+## `afk bg tail`
+
+Stream events from a background job log. Note: bg jobs are tied to the parent REPL process — if the REPL exits, the job dies. This command reads the persisted log.
+
+Usage: `afk bg tail [options] <jobId>`
+
+Guide: [background-processes](/guides/background-processes)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<jobId>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--from-start` | Replay all history before following new events | `false` |
+| `--no-follow` | Exit after replaying existing events; do not wait for new ones | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk bg replay`
+
+Replay all persisted events for a background job (alias for tail --from-start --no-follow). Note: bg jobs are tied to the parent REPL process — if the REPL exits, the job dies. This command reads the persisted log.
+
+Usage: `afk bg replay [options] <jobId>`
+
+Guide: [background-processes](/guides/background-processes)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<jobId>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk trace`
+
+Inspect the witness-layer trace of a session — the durable record of everything the agent did. Reads ~/.afk/state/witness/&lt;session&gt;/trace.jsonl.
+
+Usage: `afk trace [options] [command]`
+
+Guide: [observability](/guides/observability)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `show` | Pretty-print a session's trace for humans. [session] is a session id or "latest" (the default) — the most recently written trace. |
+| `list` | List sessions that have a trace, most recent first |
+| `export-otlp` | Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest). Emits GenAI semantic convention spans: one session root, one span per subagent fork (gen_ai.agent.invoke), one span per tool call. Output is written to stdout; pipe to a collector or save with -o. [session] is a session id or "latest" (default). |
+
+## `afk trace show`
+
+Pretty-print a session's trace for humans. [session] is a session id or "latest" (the default) — the most recently written trace.
+
+Usage: `afk trace show [options] [session]`
+
+Guide: [observability](/guides/observability)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[session]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--all` | Include low-signal events (latency phases, paired tool starts) | `false` |
+| `--json` | Emit the raw NDJSON record unchanged (for piping to jq) | `false` |
+| `-n, --limit <number>` | Show only the last N events |  |
+| `--results` | Print each tool call's full result (from the message journal) under its row | `false` |
+| `--results-lines <number>` | Max lines per result with --results (0 = no limit, default 40) |  |
+| `--evasion` | Run the block-evasion and lost-work analyzer and print its report | `false` |
+| `--evasion-window <number>` | Tool-call window size for evasion detection (default 10) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk trace list`
+
+List sessions that have a trace, most recent first
+
+Usage: `afk trace list [options]`
+
+Guide: [observability](/guides/observability)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-n, --max <number>` | Maximum sessions to show | `"20"` |
+| `-h, --help` | display help for command |  |
+
+## `afk trace export-otlp`
+
+Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest). Emits GenAI semantic convention spans: one session root, one span per subagent fork (gen_ai.agent.invoke), one span per tool call. Output is written to stdout; pipe to a collector or save with -o. [session] is a session id or "latest" (default).
+
+Usage: `afk trace export-otlp [options] [session]`
+
+Guide: [observability](/guides/observability)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[session]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-o, --out <file>` | Write output to a file instead of stdout |  |
+| `-h, --help` | display help for command |  |
+
+## `afk whatif`
+
+Predict how a proposed change to your AFK environment will affect the agent's behaviour. Optionally run episodes to verify empirically.  Pass a plain-English description, explicit flags, or a --spec file.
+
+Usage: `afk whatif [options] [change...]`
+
+Guide: [whatif](/guides/whatif)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[change...]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--append <text>` | Append text to your AFK.md (user scope) |  |
+| `--append-project <text>` | Append text to project AFK.md |  |
+| `--file <path=localfile>` | Set a file (path: home:&lt;rel&gt; or project:&lt;rel&gt;) |  |
+| `--hot <localfile>` | Replace HOT.md with a local file |  |
+| `--memory-add <text>` | Add a memory fact |  |
+| `--memory-category <cat>` | Category for next --memory-add (default: preference) |  |
+| `--memory-remove <id>` | Remove a memory fact by numeric id |  |
+| `--disable-skill <name>` | Disable a skill by name |  |
+| `--disable-plugin <name>` | Disable a plugin by name |  |
+| `--model <id>` | Test a candidate model change |  |
+| `--effort <level>` | Test a candidate effort level |  |
+| `--env <KEY=VALUE>` | Set an env var in the candidate sandbox |  |
+| `--spec <file>` | Load a ChangeSpec from a JSON file |  |
+| `--agent-model <id>` | Model the agent under test uses |  |
+| `--analyst-model <id>` | Model for compile/predict/judge (default: sonnet) |  |
+| `--verify` | Run episodes and verify predictions empirically |  |
+| `--quick` | Single-turn episodes (sets --max-turns 1) |  |
+| `--turns <n>` | Real turns to replay (default: 12) |  |
+| `--samples <n>` | Samples per episode per environment (default: 3) |  |
+| `--max-usd <n>` | Budget cap in USD (default: 5) |  |
+| `--judge <auto\|jev\|claude>` | Judge to use (default: auto) |  |
+| `--concurrency <n>` | Parallel episodes (default: 4) |  |
+| `--max-turns <n>` | Max turns per episode (default: 3) |  |
+| `--timeout <sec>` | Episode timeout in seconds (default: 180) |  |
+| `--probes <n>` | Synthetic probe episodes per prediction (1–12; default 6) |  |
+| `--max-predictions <n>` | Max predictions to retain (1–8; default 3 when probes&gt;2, else 8) |  |
+| `--keep-sandboxes` | Keep sandbox directories after run |  |
+| `--no-baseline-sample` | Skip the baseline-sample preflight (#2511) |  |
+| `--aa` | A/A calibration: snapshot both arms with zero changes; structural diff only, not with --verify (#2415) |  |
+| `--predict <text>` | Supply a prediction directly (can be repeated; skips analyst model) | `[]` |
+| `--yes` | Skip confirmation of compiled spec |  |
+| `--force` | Bypass the MDE underpowered gate (--verify only) |  |
+| `--json` | Print results as JSON to stdout |  |
+| `-h, --help` | display help for command |  |
+
+## `afk witness`
+
+Search and filter the witness-layer trace history — the durable record of everything agents did across sessions.
+
+Usage: `afk witness [options] [command]`
+
+Guide: [observability](/guides/observability)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `read` | Read and filter events from a session trace (default: latest) |
+| `search` | Text-search across recent sessions' traces |
+
+## `afk witness read`
+
+Read and filter events from a session trace (default: latest)
+
+Usage: `afk witness read [options] [session]`
+
+Guide: [observability](/guides/observability)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[session]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-k, --kinds <kinds>` | Comma-separated event kinds to filter by |  |
+| `-t, --tool <name>` | Filter tool_call events to this tool name |  |
+| `-e, --errors` | Show only error events | `false` |
+| `-n, --limit <number>` | Max events to return (default: 50, max: 200) |  |
+| `--json` | Emit raw JSON (for piping to jq) | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk witness search`
+
+Text-search across recent sessions' traces
+
+Usage: `afk witness search [options] <query>`
+
+Guide: [observability](/guides/observability)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<query>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-n, --sessions <number>` | Number of recent sessions to scan (default: 20) |  |
+| `-k, --kinds <kinds>` | Comma-separated event kinds to filter by |  |
+| `--since <date>` | Only search sessions modified after this ISO date |  |
+| `--json` | Emit raw JSON (for piping to jq) | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk service`
+
+Manage AFK background services (launchd on macOS, systemd --user on Linux, Task Scheduler on Windows) — always-on, auto-restart
+
+Usage: `afk service [options] [command]`
+
+Guide: [run-as-service](/guides/run-as-service)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `install` | Install &lt;telegram\|daemon&gt; as an OS service that starts on login and relaunches on crash |
+| `uninstall` | Stop the service and remove its config (LaunchAgent plist / systemd unit) |
+| `status` | Show running PID, last exit status, and log file for one or all services |
+| `list` | List recognised service names and whether each is installed |
+| `upgrade` | Re-render the service config and atomically replace it if the on-disk file has drifted (e.g. after a version upgrade that adds new plist keys) |
+| `restart` | Restart one service, or every installed service when no name is given (launchctl kickstart -k / systemctl --user restart) |
+
+## `afk service install`
+
+Install &lt;telegram\|daemon&gt; as an OS service that starts on login and relaunches on crash
+
+Usage: `afk service install [options] <name>`
+
+Guide: [run-as-service](/guides/run-as-service)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<name>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--no-watch` | Disable auto-restart-on-rebuild (launchd WatchPaths / systemd .path unit) |  |
+| `--dry-run` | Write the config file but do not register with the supervisor | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk service uninstall`
+
+Stop the service and remove its config (LaunchAgent plist / systemd unit)
+
+Usage: `afk service uninstall [options] <name>`
+
+Guide: [run-as-service](/guides/run-as-service)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<name>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk service status`
+
+Show running PID, last exit status, and log file for one or all services
+
+Usage: `afk service status [options] [name]`
+
+Guide: [run-as-service](/guides/run-as-service)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[name]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk service list`
+
+List recognised service names and whether each is installed
+
+Usage: `afk service list [options]`
+
+Guide: [run-as-service](/guides/run-as-service)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk service upgrade`
+
+Re-render the service config and atomically replace it if the on-disk file has drifted (e.g. after a version upgrade that adds new plist keys)
+
+Usage: `afk service upgrade [options] <name>`
+
+Guide: [run-as-service](/guides/run-as-service)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<name>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--no-watch` | Disable auto-restart-on-rebuild |  |
+| `-h, --help` | display help for command |  |
+
+## `afk service restart`
+
+Restart one service, or every installed service when no name is given (launchctl kickstart -k / systemctl --user restart)
+
+Usage: `afk service restart [options] [name]`
+
+Guide: [run-as-service](/guides/run-as-service)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[name]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk restart`
+
+Restart AFK background services (&lt;telegram\|daemon&gt;); with no name, restarts every installed service
+
+Usage: `afk restart [options] [name]`
+
+Guide: [run-as-service](/guides/run-as-service)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[name]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk browser`
+
+Give the agent web hands: connect your real Chrome, or save a login it reuses
+
+Usage: `afk browser [options] [command]`
+
+Guide: [browser](/configuration/browser)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `connect` | Wire chrome-devtools-mcp (--autoConnect) so the agent can drive your real, logged-in Chrome |
+| `disconnect` | Remove the chrome-devtools server from your MCP config |
+| `login` | Open a headed browser, log in manually, and save the session to a vault profile the agent's native browser tools reuse |
+| `profiles` | List saved browser session-vault profiles |
+
+## `afk browser connect`
+
+Wire chrome-devtools-mcp (--autoConnect) so the agent can drive your real, logged-in Chrome
+
+Usage: `afk browser connect [options]`
+
+Guide: [browser](/configuration/browser)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--channel <channel>` | Chrome channel autoConnect targets (stable\|beta\|canary\|dev) | `"stable"` |
+| `--no-open` | Do not open chrome://inspect or System Settings when a setup step is missing |  |
+| `-h, --help` | display help for command |  |
+
+## `afk browser disconnect`
+
+Remove the chrome-devtools server from your MCP config
+
+Usage: `afk browser disconnect [options]`
+
+Guide: [browser](/configuration/browser)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk browser login`
+
+Open a headed browser, log in manually, and save the session to a vault profile the agent's native browser tools reuse
+
+Usage: `afk browser login [options] <url>`
+
+Guide: [browser](/configuration/browser)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<url>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--profile <name>` | Vault profile name to save the session under | `"default"` |
+| `-h, --help` | display help for command |  |
+
+## `afk browser profiles`
+
+List saved browser session-vault profiles
+
+Usage: `afk browser profiles [options]`
+
+Guide: [browser](/configuration/browser)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk improve`
+
+Self-improvement pipeline: scan traces, triage cards, draft proposals, generate replay eval-cases.
+
+Usage: `afk improve [options] [command]`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `scan` | Run registered detectors against witness traces. Dry-run by default.   Some detectors are disabled by default (pass --include-disabled to enable): subagent-block, subagent-read-denial. |
+| `cards` | Inspect and triage failure cards written by `afk improve scan` |
+| `propose` | Generate a template-mode improvement proposal for a failure card. No LLM calls. |
+| `proposals` | Inspect improvement proposals on disk |
+| `eval-gen` | Generate a replay-mode eval-case from a failure card. Slices a byte-identical fixture from the source witness trace. |
+| `eval-cases` | Inspect replay-mode eval-cases on disk |
+| `eval-run` | Run the smallest deterministic validation contract for an eval-case's pattern.   Validates guardrails (no LLM, no patch/apply). Known contracts: repeat-loop-circuit-breaker, skill-max-depth-recovery-hint, tool-failure-density-enabled, closure-abort-recovery-hint. |
+| `approve` | Mark a proposal or eval-case as approved. Pass the proposal id (from `proposals list`) or eval-case id (from `eval-cases list`). |
+
+## `afk improve scan`
+
+Run registered detectors against witness traces. Dry-run by default.   Some detectors are disabled by default (pass --include-disabled to enable): subagent-block, subagent-read-denial.
+
+Usage: `afk improve scan [options]`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--since <duration>` | Only scan sessions newer than this (e.g. 7d, 24h, all) | `"7d"` |
+| `--write` | Persist failure cards to disk. Without this flag, scan is dry-run. | `false` |
+| `--min-repeats <n>` | repeated-tool-use threshold (default 4) | `"4"` |
+| `--closure-min-occurrences <n>` | closure-anomaly threshold (default 1) | `"1"` |
+| `--block-min-occurrences <n>` | subagent-block threshold (default 2) | `"2"` |
+| `--read-denial-min-occurrences <n>` | subagent-read-denial threshold (default 2) | `"2"` |
+| `--tool-failure-min-failures <n>` | tool-failure-density absolute count threshold (default 3) | `"3"` |
+| `--tool-failure-min-rate <rate>` | tool-failure-density rate threshold, 0–1 (default 0.25) | `"0.25"` |
+| `--only <names>` | Comma-separated detector names to run (any of: repeated-tool-use, closure-anomaly, subagent-block, tool-failure-density, subagent-read-denial) |  |
+| `--include-disabled` | Run detectors marked disabled-by-default (currently: subagent-block, subagent-read-denial) | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk improve cards`
+
+Inspect and triage failure cards written by `afk improve scan`
+
+Usage: `afk improve cards [options] [command]`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `list` | List all failure cards, newest first |
+| `show` | Print a failure card by slug |
+| `triage` | Append a human note and/or change status on a failure card |
+
+## `afk improve cards list`
+
+List all failure cards, newest first
+
+Usage: `afk improve cards list [options]`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--pattern <name>` | Filter by pattern name |  |
+| `--severity <level>` | Filter by severity: low \| medium \| high |  |
+| `--status <state>` | Filter by status: open \| deferred \| resolved |  |
+| `--regressed` | Only show resolved/deferred cards that fired again after their latest triage note | `false` |
+| `--json` | Emit JSON instead of a table | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk improve cards show`
+
+Print a failure card by slug
+
+Usage: `afk improve cards show [options] <slug>`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<slug>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--json` | Emit raw JSON instead of rendered markdown | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk improve cards triage`
+
+Append a human note and/or change status on a failure card
+
+Usage: `afk improve cards triage [options] <slug>`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<slug>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--note <text>` | Note text to append (non-empty) |  |
+| `--status <state>` | New status (one of: open, deferred, resolved) |  |
+| `--json` | Emit the resulting card as JSON | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk improve propose`
+
+Generate a template-mode improvement proposal for a failure card. No LLM calls.
+
+Usage: `afk improve propose [options] <slug>`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<slug>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--id <override>` | Override the auto-generated proposal id |  |
+| `--json` | Emit the proposal JSON to stdout (still writes to disk) | `false` |
+| `--no-write` | Render the proposal without persisting to disk (preview mode) |  |
+| `--force` | Write even if this card already has a proposal (default: refuse) | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk improve proposals`
+
+Inspect improvement proposals on disk
+
+Usage: `afk improve proposals [options] [command]`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `list` | List all proposals, newest first |
+| `show` | Print a proposal by id |
+
+## `afk improve proposals list`
+
+List all proposals, newest first
+
+Usage: `afk improve proposals list [options]`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--card <slug>` | Filter by card slug |  |
+| `--risk <level>` | Filter by risk: low \| medium \| high |  |
+| `--status <state>` | Filter by status: draft \| approved \| rejected \| superseded |  |
+| `--triage` | Show only draft proposals, sorted oldest-first by age (highest-priority first for human review) | `false` |
+| `--json` | Emit JSON instead of a table | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk improve proposals show`
+
+Print a proposal by id
+
+Usage: `afk improve proposals show [options] <id>`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<id>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--json` | Emit raw JSON instead of rendered markdown | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk improve eval-gen`
+
+Generate a replay-mode eval-case from a failure card. Slices a byte-identical fixture from the source witness trace.
+
+Usage: `afk improve eval-gen [options] <cardSlug>`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<cardSlug>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--proposal <id>` | Back-reference to a proposal (validated to exist). Sprint 3 does NOT mutate the proposal artifact. |  |
+| `--evidence-row <index>` | 0-based index into the card's evidence array. Default: the most recent row (length - 1). |  |
+| `--id <override>` | Override the auto-generated eval-case id |  |
+| `--json` | Emit the eval-case JSON to stdout (still writes to disk) | `false` |
+| `--no-write` | Render the eval-case without persisting to disk (preview mode). Still reads the source trace. |  |
+| `--force` | Write even if this card already has an eval-case (default: refuse) | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk improve eval-cases`
+
+Inspect replay-mode eval-cases on disk
+
+Usage: `afk improve eval-cases [options] [command]`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `list` | List all eval-cases, newest first |
+| `show` | Print an eval-case by id |
+
+## `afk improve eval-cases list`
+
+List all eval-cases, newest first
+
+Usage: `afk improve eval-cases list [options]`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--card <slug>` | Filter by card slug |  |
+| `--pattern <name>` | Filter by pattern (one of: repeated-tool-use, subagent-block, closure-anomaly, tool-failure-density, subagent-read-denial) |  |
+| `--status <state>` | Filter by status (one of: draft, approved, rejected, superseded) |  |
+| `--triage` | Show only draft eval-cases, sorted oldest-first by age (highest-priority first for human review) | `false` |
+| `--json` | Emit JSON instead of a table | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk improve eval-cases show`
+
+Print an eval-case by id
+
+Usage: `afk improve eval-cases show [options] <id>`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<id>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--json` | Emit raw JSON instead of rendered markdown | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk improve eval-run`
+
+Run the smallest deterministic validation contract for an eval-case's pattern.   Validates guardrails (no LLM, no patch/apply). Known contracts: repeat-loop-circuit-breaker, skill-max-depth-recovery-hint, tool-failure-density-enabled, closure-abort-recovery-hint.
+
+Usage: `afk improve eval-run [options] <evalCaseIdOrCardSlug>`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<evalCaseIdOrCardSlug>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--id <override>` | Override the auto-generated eval-run id |  |
+| `--json` | Emit the eval-run JSON to stdout (still writes to disk) | `false` |
+| `--no-write` | Run and render without persisting to disk (preview mode) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk improve approve`
+
+Mark a proposal or eval-case as approved. Pass the proposal id (from `proposals list`) or eval-case id (from `eval-cases list`).
+
+Usage: `afk improve approve [options] <slug>`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<slug>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--by <name>` | Approver identity (defaults to $USER env var, then "unknown") |  |
+| `--force` | Allow re-approving an already-approved artifact | `false` |
+| `--json` | Emit outcome as JSON instead of human-readable text | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk shell-init`
+
+Emit the optional `afk` shell wrapper that cd's the parent shell into a preserved worktree on exit. Default: auto-detect from $SHELL (falls back to bash). Install: `eval "$(afk shell-init)"` (or pipe to `source` in fish). NOTE: the emitted function overrides any existing `afk` alias or function in your shell.
+
+Usage: `afk shell-init [options] [shell]`
+
+Guide: [installation](/installation)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[shell]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk transcript`
+
+Search and index session transcripts. Transcripts are autosaved at ~/.afk/state/transcripts/. Run `afk transcript reindex` once before searching.
+
+Usage: `afk transcript [options] [command]`
+
+Guide: [observability](/guides/observability)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `reindex` | Build (or rebuild) the FTS5 full-text index from all transcript files on disk. Safe to run repeatedly — replaces the index atomically. |
+| `search` | Search indexed transcripts via FTS5 full-text search. Supports FTS5 syntax: "exact phrase", term*, AND, OR. Run `afk transcript reindex` first to build the index. |
+
+## `afk transcript reindex`
+
+Build (or rebuild) the FTS5 full-text index from all transcript files on disk. Safe to run repeatedly — replaces the index atomically.
+
+Usage: `afk transcript reindex [options]`
+
+Guide: [observability](/guides/observability)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk transcript search`
+
+Search indexed transcripts via FTS5 full-text search. Supports FTS5 syntax: "exact phrase", term*, AND, OR. Run `afk transcript reindex` first to build the index.
+
+Usage: `afk transcript search [options] <query>`
+
+Guide: [observability](/guides/observability)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `<query>` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-n, --limit <number>` | Maximum results to return (1-1000) | `"10"` |
+| `-h, --help` | display help for command |  |
+
+## `afk insights`
+
+Generate a local usage analytics report from AFK telemetry
+
+Usage: `afk insights [options]`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--days <n>` | Lookback window in days | `"30"` |
+| `--output <path>` | Output file path for the HTML report |  |
+| `--no-open` | Do not open the report in a browser after generation |  |
+| `-h, --help` | display help for command |  |
+
+## `afk captures`
+
+List bash output captures — full output files written when a command produces more than 100 KB. Captures live under the witness directory and are evicted automatically by the 30-day / 2 GiB retention sweep.
+
+Usage: `afk captures [options] [command]`
+
+Guide: [background-processes](/guides/background-processes)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `list` | List recent bash output captures, newest first |
+
+## `afk captures list`
+
+List recent bash output captures, newest first
+
+Usage: `afk captures list [options]`
+
+Guide: [background-processes](/guides/background-processes)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--session <id>` | Filter to a specific session id |  |
+| `-n, --limit <number>` | Maximum entries to show (default: 20) | `"20"` |
+| `--json` | Emit raw JSON (for piping to jq) | `false` |
+| `-h, --help` | display help for command |  |
+
+## `afk defects`
+
+Show top recurring pre-existing defects from the session ledger
+
+Usage: `afk defects [options]`
+
+Guide: [self-improvement](/guides/self-improvement)
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--days <n>` | Lookback window in days | `"90"` |
+| `--top <n>` | Maximum clusters to show | `"10"` |
+| `--json` | Emit raw JSON (for scripting) |  |
+| `-h, --help` | display help for command |  |

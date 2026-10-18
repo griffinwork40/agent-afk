@@ -1,0 +1,49 @@
+/**
+ * Tool-behaviour env vars — post-edit LSP diagnostics (phase 1 of #3904) and
+ * future per-tool opt-ins. A contiguous slice of `ENV_REGISTRY`.
+ *
+ * Extracted as a new sub-module so `env.ts` stays within the 350-code-line
+ * ceiling. `env.ts` spreads this tuple into `ENV_REGISTRY`.
+ *
+ * Contract: this file declares data only. It must never read `process.env`
+ * (the single read-point stays `env.ts`, enforced by `pnpm audit:env:check`),
+ * and it imports `EnvVarMeta` as a type only so there is no runtime cycle.
+ *
+ * @module config/env.tools
+ */
+
+import type { EnvVarMeta } from './env.js';
+
+export const TOOLS_ENV_REGISTRY = [
+  // ── Post-edit LSP diagnostics (#3904 phase 1) ────────────────────────────
+  {
+    name: 'AFK_LSP_DIAGNOSTICS',
+    description:
+      'Enable opt-in post-edit LSP diagnostics (phase 1 of #3904). When set to 1, ' +
+      'after every successful edit_file or write_file call the handler queries ' +
+      'typescript-language-server (must be on PATH) for diagnostics on the touched ' +
+      'file and appends any errors/warnings to the tool result. ' +
+      'Off by default. A missing or slow server never fails or stalls the edit — ' +
+      'the query times out silently. TypeScript only in this phase.',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_LSP_DIAGNOSTICS_TIMEOUT_MS',
+    description:
+      'Hard timeout in milliseconds for the post-edit LSP diagnostics query ' +
+      '(AFK_LSP_DIAGNOSTICS=1). If the language server does not respond within ' +
+      'this window the query is abandoned silently and the edit result is ' +
+      'unchanged. Default 1500 (1.5 s) — intentionally low so a slow server ' +
+      'does not stall every edit; raise when diagnostics are valuable enough ' +
+      'to wait for.',
+    type: 'number',
+    required: false,
+    default: '1500',
+    example: '3000',
+    category: 'misc',
+  },
+] as const satisfies readonly EnvVarMeta[];

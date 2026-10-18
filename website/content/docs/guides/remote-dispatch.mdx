@@ -1,92 +1,154 @@
 ---
-title: "Remote Agent Dispatch"
-description: "Run an afk agent on another machine over SSH (Tailscale or LAN) with the remote_agent tool: setup, keychain unlock, guardrails, and implementation notes."
+title: "Run an agent on another machine"
+description: "Dispatch bounded work over SSH, resume remote sessions, and understand phone-based cancellation."
 ---
 
-Run an afk agent on another machine over SSH (Tailscale or LAN) and get its final answer back as a tool result. The remote agent works in that machine's own files, repos, accounts, and model subscriptions. Nothing is copied: move code with git.
+The `remote_agent` tool runs AFK on another computer and returns its final answer. Use it for a repository, account, model subscription, or compute resource that exists on that machine. Your local conversation and files are not copied, so make the prompt self-contained and move code with git.
 
-## Setup
+## Set up a host
 
-1. The remote needs afk installed and logged in. **On macOS, keychain logins need `"unlockKeychain": true`** (see [Keychain unlock](#keychain-unlock)): an SSH session sees the login keychain locked even while you are logged in at the GUI, so without it the run fails with "No Anthropic credential found" (the tool adds a hint naming the fix). Alternatively put `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` in that machine's `~/.afk/config/afk.env`; both are read before the keychain.
-2. Key-based SSH from this machine to the remote (`ssh user@host true` works with no password prompt).
-3. Optional: name hosts in `~/.afk/config/hosts.json`:
+<Steps>
+<Step>
+### Prepare the remote machine
+
+Install AFK and configure credentials on the remote. The launcher requires a POSIX environment with `/bin/sh`, SSH access, and the remote AFK runtime. This is not a native Windows remote-launch protocol.
+
+Ensure key-based SSH works from the dispatching machine without a password prompt. AFK uses SSH batch mode with a five-second connection timeout; it cannot answer an SSH password or host-key confirmation prompt during a tool call.
+</Step>
+<Step>
+### Name the host
+
+The optional `~/.afk/config/hosts.json` maps friendly names to SSH destinations. For a machine already reachable through an SSH config alias named `studio`, a host entry can be:
 
 ```json
 {
-  "studio": { "ssh": "you@studio.local", "cwd": "~/Projects/my-repo", "unlockKeychain": true },
-  "build":  { "ssh": "you@build-box", "permissionMode": "default" },
-  "mini":   { "ssh": "mini", "afkPath": "/opt/homebrew/bin/afk" }
+  "studio": {
+    "ssh": "studio",
+    "cwd": "~/Projects/my-repo",
+    "permissionMode": "default"
+  }
 }
 ```
 
-A `host` absent from the file is used as a literal ssh target, so `~/.ssh/config` aliases work with no setup. `afkPath` is only needed when auto-discovery fails.
+This example assumes that alias and repository exist; adapt both before using it. If a host is absent from this file, AFK treats it as a literal SSH destination or SSH config alias.
+</Step>
+<Step>
+### Ask for a remote run
 
-### Host fields
+Ask the local agent to call `remote_agent` with the configured host and a precise task. Example tool input:
 
-| Field | Type | Description |
-|---|---|---|
-| `ssh` | string | SSH destination (`user@host`, `~/.ssh/config` alias, or `ssh://host:port`). |
-| `cwd` | string? | Working directory on the remote (absolute or `~/…`). The per-call `cwd` overrides it. |
-| `afkPath` | string? | Absolute path to the `afk` binary on the remote. Only needed when auto-discovery fails. |
-| `unlockKeychain` | bool? | Unlock the remote's macOS login keychain before each run (see [Keychain unlock](#keychain-unlock)). |
-| `permissionMode` | string? | Permission mode pinned on every `afk chat` run for this host (any `afk chat --permission-mode` value, e.g. `default`, `plan`, `bypassPermissions`, `autonomous`). When absent the remote resolves its own configured default. |
+```json
+{
+  "host": "studio",
+  "prompt": "In the configured repository, inspect git status and run the existing test suite. Do not change files or publish anything. Return the command, result, and relevant failures."
+}
+```
 
-## Keychain unlock
+The remote has none of the parent's implicit context. Include the desired artifact, permitted changes, verification, and stopping condition.
+</Step>
+</Steps>
 
-For a host with `"unlockKeychain": true`, store that machine's login password once, on the machine you dispatch FROM (it prompts; nothing is echoed):
+## Host and call settings
+
+| Host field | Meaning |
+| --- | --- |
+| `ssh` | Required SSH destination, such as an SSH config alias, `user@host`, or an SSH URL. |
+| `cwd` | Optional remote working directory, absolute or beginning with `~/`. |
+| `afkPath` | Optional absolute path to the remote AFK executable if discovery fails. |
+| `permissionMode` | Optional explicit permission mode for every run on this host. |
+| `unlockKeychain` | Opt into per-run macOS login-keychain unlock, described below. |
+
+Tool calls accept `host`, `prompt`, optional `cwd`, optional `model`, and optional `resume`. A call's `cwd` overrides the host entry. With neither, the launch starts from the remote home directory. `model` resolves through the remote's model configuration, not your local slots.
+
+The launcher finds AFK using explicit `afkPath`, the non-interactive PATH, the interactive shell's PATH, then common nvm install locations. It prepends the executable's directory to PATH so the Node-based shim can resolve its runtime. A bad working directory and a missing AFK executable are reported as distinct errors.
+
+## Resume a remote session
+
+The result footer includes the remote host, session ID, and run ID. To continue that conversation, ask for another `remote_agent` call on the **same host**, passing the returned session ID as `resume` and a new prompt. Do not pass a local session ID or confuse the run ID with the session ID.
+
+The call normally blocks until a remote answer or error arrives. For long work outside autonomous mode, a local background agent can make the call while the main agent continues. In autonomous mode, a child cannot obtain approval for this high-risk tool, so keep the approval-bearing call in the top-level session.
+
+## Connections, cancellation, and evidence
+
+The launch is detached on the remote. A dropped connection or the dispatching laptop sleeping does not itself kill the run. AFK follows the remote NDJSON output and reconnects from the next unseen line, with a bounded retry sequence. After reconnect attempts are exhausted without progress, the tool reports a lost connection and the remote output location; the work can still be running.
+
+Default remote artifacts live under:
+
+```text
+~/.afk/state/remote-runs/<run-id>/
+  prompt
+  out.ndjson
+  err.log
+  pid
+```
+
+The remote's trace and journal stay on that machine. The local trace records the `remote_agent` tool call, not a copy of the entire remote session. Inspect the returned evidence and remote logs rather than treating a successful transport as proof that the task was done correctly.
+
+Aborting an active `remote_agent` call attempts to terminate the saved remote PID over SSH. This is best effort: an unreachable machine cannot receive the cancellation. The current cancellation path targets the saved PID without a PID-reuse check, so do not treat old run files as permanent safe process handles.
+
+## macOS keychain credentials over SSH
+
+A GUI login does not guarantee the remote login keychain is readable inside an SSH security session. If the tool reports no Anthropic credential over SSH, either provide an appropriate credential through that remote machine's supported [authentication configuration](/configuration/api-keys), or opt into keychain unlock.
+
+The unlock path requires a **macOS dispatching machine** as well as a remote Mac. Set `"unlockKeychain": true` on the host entry, then store the remote login password in the dispatching machine's keychain. For a host named `studio`, the human-only setup command is:
 
 ```bash
 security add-generic-password -U -s afk-remote-unlock -a studio -w
 ```
 
-The account (`-a`) is the host's name in `hosts.json`. Every run then reads it from this machine's keychain, embeds it as a quoted heredoc inside the launch script, and the remote script feeds it to `security -i` through a pipe to unlock `~/Library/Keychains/login.keychain-db`, verifies the unlock, clears it, and starts afk. The password is never on any command line, in a file, or in the trace. Re-run the command with the new password if the remote's login password changes (the tool says so when the unlock fails).
+The account must match the `hosts.json` key. The command prompts for the remote login password without echoing it. Do not put the password in the command, host file, or chat.
 
-Verified on macOS over SSH (2026-10-15):
+Each run reads the stored password locally and sends it through the SSH launch script's stdin to unlock the remote login keychain in the same security session as AFK. It is not placed in command-line arguments, a password file, or the witness trace. A separate earlier SSH unlock does not help a later SSH session. If the login password changes, repeat the storage command.
 
-- An SSH session sees the login keychain locked even while the user is logged in at the GUI (`errSecInteractionNotAllowed`, exit 36).
-- Unlock state is per security session: an unlock in one SSH session is not visible to the next. So the unlock must happen inside the launch itself; a one-off `ssh -t host security unlock-keychain` does not help later runs.
-- The detached afk run stays unlocked after the launch connection closes.
+<Callout type="warn">
+This opt-in stores another machine's login password in your local keychain and transmits it to that machine over SSH. Enable it only for a host you trust and control. A successful keychain unlock is not a substitute for configuring an AFK provider credential on the remote.
+</Callout>
 
-## Tool
+## Safety boundaries
 
-`remote_agent { host, prompt, cwd?, model?, resume? }`
+`remote_agent` is high risk because it starts work under another machine's accounts and permissions. Plan mode refuses it. Autonomous mode requires top-level operator approval.
 
-- Blocks until the remote run finishes. For long work outside autonomous mode, call it from a background `agent`, which is delivered automatically (autonomous mode hard-blocks sub-agent calls).
-- The result ends with `[remote_agent: host=… session=<id> run=<id>; pass resume="<id>" …]`. Pass that session id as `resume` to continue the same conversation on that host.
-- Risk class `high` (remote `bypassPermissions` default): autonomous mode asks for approval in the main session and hard-blocks sub-agents; plan mode refuses it.
+The remote runs under its own resolved configuration unless `hosts.json` pins `permissionMode`; the launcher does not silently substitute your local permission mode. Set a host mode explicitly rather than assuming what a preconfigured remote will permit. In particular, a remote configured with `bypassPermissions` can execute without ordinary permission prompts.
 
-## How it works
+Remote runs cannot dispatch local subagents or further remote agents through the built-in orchestration tools. The launch sets `AFK_MAX_NESTING_DEPTH=0` and `AFK_REMOTE_DEPTH=1`. This is an orchestration guard, not an OS sandbox: shell commands could still reach another host if the remote account allows it.
 
-| File | Role |
-|---|---|
-| `src/remote/hosts.ts` | Loads `hosts.json`; validates the ssh target (no leading `-`, restricted charset). |
-| `src/remote/keychain-unlock.ts` | Reads a host's stored login password locally; escapes it for `security -i`. |
-| `src/remote/remote-script.ts` | Builds the POSIX scripts run as `exec /bin/sh -s` on the remote (script on stdin, payloads as heredocs). |
-| `src/remote/ssh-runner.ts` | Spawns local `ssh` (`BatchMode`, `ConnectTimeout=5`, ServerAlive probes). Injectable. |
-| `src/remote/remote-run.ts` | Launch → follow → result; reconnect; cancel on abort. |
-| `src/remote/remote-events.ts` | Tolerant parser for `afk chat --format stream-json` events. |
+The launcher does not forward a local `--max-budget-usd` value. Configure budgets on the remote and remember that subscription cost accounting may not make a dollar cap enforceable.
 
-1. **Launch.** One ssh call: the prompt is embedded inside the script as a quoted heredoc and written to `~/.afk/state/remote-runs/<runId>/prompt` (never interpreted by any shell). stdin carries only the script itself. afk is located, and `nohup afk chat --format stream-json` starts detached, writing `out.ndjson`, `err.log`, and `pid`. A dropped connection or a sleeping laptop does not kill the run.
-2. **Locate afk.** Explicit `afkPath`, else the non-interactive PATH, else a scan of the interactive shell's PATH (nvm usually loads from `.zshrc`, and `afk` may be a shell function there, so `command -v` inside that shell is not trusted), else nvm's install glob. The afk bin dir is prepended to PATH because npm's shim is `#!/usr/bin/env node`.
-3. **Follow.** `tail -n +<line> -f out.ndjson` until a `done`/`error` event or the process exits. A dropped connection re-follows from the next unseen line, up to 6 consecutive failures without progress; after that the result says the run continues on the remote and where its output lives.
-4. **Cancel.** Aborting the tool call runs `kill <pid>` on the remote.
+## Stop a watched REPL from your phone
 
-## Guardrails
+Phone control is separate from SSH dispatch. The Telegram bot can watch a local REPL that has armed `/afk on`, then send it a signed abort request.
 
-- **No fan-out.** The launch command inlines `AFK_MAX_NESTING_DEPTH=0 AFK_REMOTE_DEPTH=1` (sshd's default `AcceptEnv` drops forwarded env, so it must be inline). The remote cannot use `agent`/`skill`/`compose`, and `remote_agent` refuses when `AFK_REMOTE_DEPTH` is set.
-- **Fail fast.** An unreachable or sleeping host fails in about 5 s with "host unreachable"; a missing afk install and a bad cwd have their own messages.
-- **Permissions.** The remote `afk chat` runs under its own configured `permissionMode`, which defaults to `bypassPermissions`. The launcher injects `--permission-mode <value>` only when the host entry pins `permissionMode`. Because a destructive prompt could therefore bypass the local AFK gate, `remote_agent` is classified **risk class high** and autonomous mode holds it for approval.
+<Steps>
+<Step>
+### Arm the session
 
-## Known limits
+Complete a turn in that REPL so it has a session ID, then run `/afk on`.
+</Step>
+<Step>
+### Watch from Telegram
 
-- Bash on the remote could still run `ssh other-host afk …` by hand; the guard covers the tool path only.
-- `kill <pid>` does not check for pid reuse (runs are short-lived relative to pid wrap).
-- The remote trace and journal stay on the remote machine; the local trace records only the tool call.
-- `--max-budget-usd` is not passed; subscription (OAuth) runs may not enforce it anyway.
+Keep the Telegram bot running against the same AFK state. Its presence scanner automatically discovers AFK CLI sessions and starts watching one per allowed chat. You can also use Telegram `/watch` with a known session ID.
+</Step>
+<Step>
+### Abort the active work
 
-## Alternatives considered
+Send `/abort` **to the Telegram bot** to stop the currently watched REPL's active work.
+</Step>
+</Steps>
 
-- A shell script via `bash`: no recursion guard or cancel, 10-minute bash timeout.
-- A human-only `afk remote run` CLI: safest, but defeats unattended delegation.
-- A `RemoteSubagentHandle` inside `forkSubagent` (so `agent{host}` and compose nodes work): the right end state, but `SubagentHandle.session` is required (`src/agent/subagent/handle.ts`) and DAG/worktree paths assume local disk. Deferred.
-- An `afk serve` HTTP server on the tailnet: a new always-on listener and auth per box.
+The REPL's abort watcher accepts only a request signed for that session. A missing signing key makes remote abort unavailable rather than accepting an unsigned request. `/afk off` clears AFK presence, restores keyboard-only handling, and stops the abort watcher; the bot stops its corresponding watch when presence clears or disappears.
+
+<Callout type="info">
+Presence discovery reads the bot machine's local AFK state. It does not discover arbitrary SSH hosts or make a detached `remote_agent` run appear as a watched interactive REPL. Telegram `/abort` is not a universal remote process killer, and it is not a REPL slash command for choosing any session on another machine.
+</Callout>
+
+For communication between local AFK sessions rather than executing on a different computer, use [peer messaging](/guides/peer-messaging).
+
+## Related
+
+<Cards>
+<Card title="Run without a human" href="/guides/unattended-runs" description="Set up autonomous operation and phone approvals." />
+<Card title="Telegram surface" href="/surfaces/telegram" description="Configure the bot, watch sessions, and respond from your phone." />
+<Card title="Headless chat" href="/guides/headless" description="Understand the structured stream used by remote runs." />
+<Card title="Peer messaging" href="/guides/peer-messaging" description="Coordinate sessions that share a machine." />
+</Cards>

@@ -29,6 +29,52 @@ import { classifyBashCommand } from './tools/readonly-bash.js';
 export type RiskLevel = 'safe' | 'medium' | 'high';
 
 /**
+ * Named category for a gate verdict — the stable, enumerable "why" dimension
+ * that the `hook_decision` trace event records alongside the risk level and the
+ * concrete `reason` diagnostic. One definition shared by the classifier, the
+ * AFK gate, and the trace schema so they can never drift.
+ *
+ * Categories map to the broad rule family that produced the verdict:
+ *   `read-only`          — no side-effects; tool or command is purely observational.
+ *   `bash-destructive`   — bash matched a BASH_HIGH pattern (rm, sudo, force-push, …).
+ *   `bash-mutating`      — bash matched a BASH_MEDIUM pattern (git push, installs, redirects).
+ *   `bash-background`    — a `run_in_background` bash launch raised from safe to medium.
+ *   `workspace-write`    — file write inside the workspace (write_file / edit_file / patch_apply).
+ *   `credential-path`    — write targets the write-denylist (ssh keys, /etc, …).
+ *   `workspace-escape`   — write resolves outside the workspace boundary.
+ *   `network-mutation`   — outbound HTTP write (web_request POST/PUT/PATCH/DELETE).
+ *   `schedule-mutation`  — daemon schedule create/update/cancel.
+ *   `mcp-destructive`    — MCP tool whose sub-name contains a destructive verb.
+ *   `mcp-unknown`        — MCP tool with no destructive verb (unknown side-effects).
+ *   `worktree-mutation`  — worktree lifecycle (create/keep/release/remove).
+ *   `browser-action`     — browser_open / browser_act (stateful browser interaction).
+ *   `remote-exec`        — remote_agent (arbitrary code on another machine over SSH).
+ *   `outbound-message`   — send_telegram or similar outbound-message tool.
+ *   `unknown`            — tool not classified by any rule; defaults to safe.
+ */
+export const RISK_CATEGORIES = [
+  'read-only',
+  'bash-destructive',
+  'bash-mutating',
+  'bash-background',
+  'workspace-write',
+  'credential-path',
+  'workspace-escape',
+  'network-mutation',
+  'schedule-mutation',
+  'mcp-destructive',
+  'mcp-unknown',
+  'worktree-mutation',
+  'browser-action',
+  'remote-exec',
+  'outbound-message',
+  'unknown',
+] as const;
+
+/** Type-level mirror of the RISK_CATEGORIES array. */
+export type RiskCategory = (typeof RISK_CATEGORIES)[number];
+
+/**
  * Contract: `reason` is a short concrete rule diagnostic, not a stable code.
  * Every `high` verdict has a reason, including path rules (write-denylist,
  * .git, workspace escape), bash patterns, destructive MCP verbs, schedule
@@ -40,10 +86,15 @@ export type RiskLevel = 'safe' | 'medium' | 'high';
  * The field remains optional: callers such as the AFK gate must tolerate its
  * absence when building refusal text, rather than assuming every verdict
  * explains its level.
+ *
+ * `category` is always present and names the broad rule family that produced
+ * the verdict. It is stable across patch versions — consumers (trace readers,
+ * `afk trace show`) may key on it safely.
  */
 export interface RiskVerdict {
   level: RiskLevel;
   reason?: string;
+  category: RiskCategory;
 }
 
 /**
@@ -268,9 +319,9 @@ function classifyBash(cmd: string): RiskVerdict {
   // glued to a preceding word character (`platform `, `retrieval `), which
   // can never start a shell word — see risk-classifier.bash-boundary.ts.
   const high = findHighBashPattern(cmd, BASH_HIGH);
-  if (high !== undefined) return { level: 'high', reason: `bash-pattern: matched '${high}'` };
+  if (high !== undefined) return { level: 'high', reason: `bash-pattern: matched '${high}'`, category: 'bash-destructive' };
   for (const p of BASH_MEDIUM) {
-    if (cmd.includes(p)) return { level: 'medium', reason: `bash-pattern: matched '${p}'` };
+    if (cmd.includes(p)) return { level: 'medium', reason: `bash-pattern: matched '${p}'`, category: 'bash-mutating' };
   }
   // SAFE requires every segment to start with a safe-table command — never a
   // substring hit inside an argument (`--head`, `"cat food"`); see
@@ -288,12 +339,12 @@ function classifyBash(cmd: string): RiskVerdict {
   if (isSafeAtCommandPosition(cmd, BASH_SAFE)) {
     const guard = classifyBashCommand(cmd);
     if (guard.mutating) {
-      return { level: 'high', reason: `bash-mutation-guard: ${guard.reason ?? 'mutation detected'}` };
+      return { level: 'high', reason: `bash-mutation-guard: ${guard.reason ?? 'mutation detected'}`, category: 'bash-destructive' };
     }
-    return { level: 'safe' };
+    return { level: 'safe', category: 'read-only' };
   }
   // Default: medium — unknown bash commands are not safe by assumption.
-  return { level: 'medium' };
+  return { level: 'medium', category: 'bash-mutating' };
 }
 
 // ---------------------------------------------------------------------------
@@ -447,7 +498,7 @@ export function classifyRiskDetailed(
     // so a "safe" substring match (e.g. `cat ` or `pnpm test` anywhere in the
     // string) must never auto-approve it.
     return isBackgroundBashLaunch(tool, input) && verdict.level === 'safe'
-      ? { level: 'medium', reason: 'bash-background' }
+      ? { level: 'medium', reason: 'bash-background', category: 'bash-background' }
       : verdict;
   }
 
@@ -467,19 +518,19 @@ export function classifyRiskDetailed(
   // (notably missing memory_search). Now any tool that categorizeTool returns
   // 'read' for is safe by default; new read tools automatically get the right
   // risk level without a secondary edit here.
-  if (categorizeTool(toolName) === 'read') return { level: 'safe' };
+  if (categorizeTool(toolName) === 'read') return { level: 'safe', category: 'read-only' };
 
   // ---- outbound communication --------------------------------------------
   if (tool === 'send_telegram') {
     // Can't be unsent — medium risk.
-    return { level: 'medium' };
+    return { level: 'medium', category: 'outbound-message' };
   }
   // remote_agent executes arbitrary code on another machine over SSH. The
   // remote afk process runs in headless/bypassPermissions mode by default
   // (no --permission-mode flag is injected by the launcher), so a destructive
   // prompt could bypass the local AFK gate by routing through the remote.
   // High risk ensures autonomous mode (AFK gate) holds this tool for approval.
-  if (tool === 'remote_agent') return { level: 'high' };
+  if (tool === 'remote_agent') return { level: 'high', reason: 'remote-exec', category: 'remote-exec' };
 
   // ---- MCP tools ----------------------------------------------------------
   // Any `mcp__*` tool is an externally-contributed function from a third-party
@@ -500,15 +551,17 @@ export function classifyRiskDetailed(
   // are classified too, not silently dropped to the 'safe' default below.
   if (tool.startsWith('mcp__')) {
     const verb = mcpSubNameTokens(tool).find((t) => DESTRUCTIVE_VERBS.has(t));
-    if (verb !== undefined) return { level: 'high', reason: `mcp-destructive-verb: ${verb}` };
-    return { level: 'medium' };
+    if (verb !== undefined) return { level: 'high', reason: `mcp-destructive-verb: ${verb}`, category: 'mcp-destructive' };
+    return { level: 'medium', category: 'mcp-unknown' };
   }
 
   // ---- schedule mutations --------------------------------------------------
   // See classifyScheduleMutation for the full rule set and self-disable carve-out.
   if (tool === 'create_schedule' || tool === 'cancel_schedule' || tool === 'update_schedule') {
     const level = classifyScheduleMutation(tool, input, ctx);
-    return level === 'high' ? { level, reason: `schedule-mutation: ${tool}` } : { level };
+    return level === 'high'
+      ? { level, reason: `schedule-mutation: ${tool}`, category: 'schedule-mutation' }
+      : { level, category: 'schedule-mutation' };
   }
 
   // ---- worktree lifecycle --------------------------------------------------
@@ -528,11 +581,11 @@ export function classifyRiskDetailed(
         ? (input as Record<string, unknown>)
         : {};
     const action = typeof obj['action'] === 'string' ? obj['action'] : '';
-    if (action === 'list') return { level: 'safe' };
+    if (action === 'list') return { level: 'safe', category: 'read-only' };
     if (action === 'remove' && obj['force'] === true) {
-      return { level: 'high', reason: 'worktree-force-remove' };
+      return { level: 'high', reason: 'worktree-force-remove', category: 'worktree-mutation' };
     }
-    return { level: 'medium' };
+    return { level: 'medium', category: 'worktree-mutation' };
   }
 
   // ---- browser actions -----------------------------------------------------
@@ -543,14 +596,17 @@ export function classifyRiskDetailed(
   // generally recoverable (navigate away, close the tab) and the AFK posture
   // allows medium ops unattended. browser_screenshot and browser_observe are
   // read-only; browser_close is a cleanup op — all safe.
-  if (tool === 'browser_act' || tool === 'browser_open') return { level: 'medium' };
+  if (tool === 'browser_act' || tool === 'browser_open') return { level: 'medium', category: 'browser-action' };
+  if (tool === 'browser_observe' || tool === 'browser_screenshot' || tool === 'browser_close') {
+    return { level: 'safe', category: 'read-only' };
+  }
 
   // ---- web_scrape ----------------------------------------------------------
   // web_scrape issues outbound HTTP requests (and optionally headless-browser
   // renders for JS-heavy pages). It may hit rate-limited, metered, or
   // auth-gated endpoints. 'medium' — notable network side-effect but recoverable
   // and broadly necessary for autonomous research work in AFK mode.
-  if (tool === 'web_scrape') return { level: 'medium' };
+  if (tool === 'web_scrape') return { level: 'medium', category: 'network-mutation' };
 
   // ---- web_request ---------------------------------------------------------
   // web_request supports all HTTP methods, so risk is method-dependent:
@@ -567,9 +623,9 @@ export function classifyRiskDetailed(
         ? (input as Record<string, unknown>)
         : {};
     const rawMethod = typeof obj['method'] === 'string' ? obj['method'].toUpperCase() : '';
-    if (rawMethod === 'DELETE') return { level: 'high', reason: 'web-request: DELETE' };
-    if (rawMethod === 'GET' || rawMethod === 'HEAD' || rawMethod === 'OPTIONS') return { level: 'safe' };
-    return { level: 'medium' };
+    if (rawMethod === 'DELETE') return { level: 'high', reason: 'web-request: DELETE', category: 'network-mutation' };
+    if (rawMethod === 'GET' || rawMethod === 'HEAD' || rawMethod === 'OPTIONS') return { level: 'safe', category: 'read-only' };
+    return { level: 'medium', category: 'network-mutation' };
   }
 
   // ---- wait_for ------------------------------------------------------------
@@ -597,13 +653,13 @@ export function classifyRiskDetailed(
         typeof obj['command'] === 'string' ? obj['command'] : '';
       return classifyBash(cmd);
     }
-    if (condType === 'file' || condType === 'process') return { level: 'safe' };
+    if (condType === 'file' || condType === 'process') return { level: 'safe', category: 'read-only' };
     // url or unknown: treat as medium (outbound network).
-    return { level: 'medium' };
+    return { level: 'medium', category: 'network-mutation' };
   }
 
   // ---- unknown tool -------------------------------------------------------
   // Don't gate things we haven't classified — default to safe so the
   // classifier never blocks novel tools without an explicit rule.
-  return { level: 'safe' };
+  return { level: 'safe', category: 'unknown' };
 }

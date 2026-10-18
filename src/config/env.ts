@@ -64,6 +64,7 @@ import { WHATIF_ENV_REGISTRY } from './env.whatif.js';
 import { SESSION_STORAGE_ENV_REGISTRY } from './env.session-storage.js';
 import { MEMORY_GC_ENV_REGISTRY } from './env.memory-gc.js';
 import { VITALS_ENV_REGISTRY } from './env.vitals.js';
+import { TOOLS_ENV_REGISTRY } from './env.tools.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -177,6 +178,9 @@ export const ENV_REGISTRY = [
 
   // ── Per-round vitals harness note (env.vitals.ts) ────────────────────────
   ...VITALS_ENV_REGISTRY,
+
+  // ── Per-tool opt-in features (#3904 and future, env.tools.ts) ────────────
+  ...TOOLS_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];
 
 /**
