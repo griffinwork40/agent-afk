@@ -191,19 +191,20 @@ describe('resolveMaxConcurrentSubagentCallsForProvider', () => {
   it('falls back to global when the per-provider value is invalid', async () => {
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC', 'bad');
+    // Set a distinct global cap so we confirm fallback reaches it rather
+    // than accidentally matching the hardcoded default (8).
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS', '3');
     const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
-    expect(resolveMaxConcurrentSubagentCallsForProvider('anthropic-direct')).toBe(
-      DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
-    );
+    expect(resolveMaxConcurrentSubagentCallsForProvider('anthropic-direct')).toBe(3);
   });
 
   it('falls back to global when per-provider value is above the ceiling', async () => {
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC', String(MAX_CONCURRENT_SUBAGENT_CALLS_CEILING + 1));
+    // Distinct global cap to verify fallback targets it.
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS', '4');
     const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
-    expect(resolveMaxConcurrentSubagentCallsForProvider('anthropic-direct')).toBe(
-      DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
-    );
+    expect(resolveMaxConcurrentSubagentCallsForProvider('anthropic-direct')).toBe(4);
   });
 
   it('per-provider overrides global when both are set', async () => {

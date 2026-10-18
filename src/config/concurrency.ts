@@ -238,7 +238,14 @@ export function resolveMaxConcurrentSubagentCallsForProvider(
         // stays at `DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS` without the
         // operator having to mirror the global in two places.
         if (rawValue !== undefined) {
-          return getConcurrencyStatus(providerDef, warn).effectiveValue;
+          const status = getConcurrencyStatus(providerDef, warn);
+          // Only use the per-provider value when it parsed successfully.
+          // When invalid, fall through to the global resolver so a
+          // configured global cap (e.g. AFK_MAX_CONCURRENT_SUBAGENT_CALLS=2)
+          // is respected instead of silently returning the hardcoded default.
+          if (status.valid) {
+            return status.effectiveValue;
+          }
         }
       }
     }

@@ -363,6 +363,47 @@ describe('runWave', () => {
     }
   });
 
+  it('explicit maxConcurrency beats provider in RunWaveOptions', async () => {
+    // When both maxConcurrency and provider are supplied, the explicit numeric
+    // cap must win — the per-provider env lookup is skipped entirely because
+    // the destructuring default is never evaluated.
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC', '1');
+    try {
+      const mgr = new SubagentManager();
+      shared.sessions.length = 0;
+      const handles = await Promise.all(
+        [0, 1, 2].map(() =>
+          mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }),
+        ),
+      );
+
+      let live = 0;
+      let peak = 0;
+      for (const s of shared.sessions) {
+        s.sendMessage.mockImplementation(async (content: string): Promise<Message> => {
+          live++;
+          peak = Math.max(peak, live);
+          await new Promise((r) => setTimeout(r, 20));
+          live--;
+          return { role: 'assistant', content: `ok:${content}`, timestamp: new Date() };
+        });
+      }
+
+      // maxConcurrency: 3 should override the per-provider cap of 1.
+      const results = await runWave(
+        handles.map((handle, i) => ({ handle, prompt: `p${i}` })),
+        { maxConcurrency: 3, provider: 'anthropic-direct' },
+      );
+
+      expect(results).toHaveLength(3);
+      expect(results.every((r) => r?.status === 'succeeded')).toBe(true);
+      // All three ran concurrently — the provider cap of 1 was NOT used.
+      expect(peak).toBe(3);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('fail-fast skips still-QUEUED peers behind maxConcurrency — no wasted provider call', async () => {
     const mgr = new SubagentManager();
     shared.sessions.length = 0;
