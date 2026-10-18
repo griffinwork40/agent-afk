@@ -164,6 +164,10 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
    *
    * Throws on `error` / `lost` / `aborted` outcomes. Use `runToResult()` for
    * a non-throwing interface.
+   *
+   * Note: the `prompt` parameter is ignored — the handle uses the prompt from
+   * the {@link RemoteRunRequest} supplied at construction time. This is
+   * single-shot semantics: one handle, one remote run, one prompt.
    */
   async run(_prompt: string | ContentBlockParam[]): Promise<Message> {
     if (this._status === 'running') throw new Error(`RemoteSubagentHandle ${this.id} is already running`);
@@ -194,6 +198,13 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
     }
   }
 
+  /**
+   * Non-throwing variant of {@link run}.
+   *
+   * Note: the `prompt` parameter is ignored — the handle uses the prompt from
+   * the {@link RemoteRunRequest} supplied at construction time (single-shot
+   * semantics).
+   */
   async runToResult(_prompt: string | ContentBlockParam[]): Promise<SubagentResult<string>> {
     if (this._status === 'running') {
       return buildResultFromError<string>(this.id, 'failed', new Error(`RemoteSubagentHandle ${this.id} is already running`), createEmptyTrace());
@@ -214,7 +225,9 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
       }
       if (outcome.kind === 'error' || outcome.kind === 'lost') {
         this._status = 'failed';
-        const err = new Error(outcome.reason);
+        // Include remoteDetail in the error message (mirrors remote-agent.ts handler)
+        const detail = outcome.remoteDetail ? `: ${outcome.remoteDetail}` : '';
+        const err = new Error(`${outcome.reason}${detail}`);
         const partial = outcome.partial;
         const result = buildResultFromError<string>(this.id, 'failed', err, createEmptyTrace());
         if (partial !== undefined && partial !== '') result.partialOutput = partial;
@@ -231,12 +244,19 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
     }
   }
 
+  // R1: .catch() is required — if onResult throws, or if a bug allows an
+  // error to escape runToResult's own try/catch, the unhandled rejection
+  // would leak into the daemon and leave the handle stuck in 'running'.
+  // External constraint: Node process-level 'unhandledRejection' — any
+  // naked void promise that rejects terminates the process in strict mode.
   runInBackground(
     prompt: string,
     onResult?: (result: SubagentResult<string>) => void,
   ): void {
     void this.runToResult(prompt).then((result) => {
       onResult?.(result);
+    }).catch((err: unknown) => {
+      console.error('RemoteSubagentHandle.runInBackground: unexpected rejection:', err);
     });
   }
 

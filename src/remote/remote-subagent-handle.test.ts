@@ -163,6 +163,15 @@ describe('RemoteSubagentHandle', () => {
       expect(r.partialOutput).toBe('partial');
     });
 
+    it('includes remoteDetail in error message when present', async () => {
+      const h = makeHandle(fakeRunner({ streams: [[ERR_EV('oops')]] }));
+      const r = await h.runToResult('x');
+      expect(r.status).toBe('failed');
+      // remoteDetail comes from the error event's message field
+      expect(r.error?.message).toContain('remote agent error');
+      expect(r.error?.message).toContain('oops');
+    });
+
     it('returns failed result when process exits without a result', async () => {
       const h = makeHandle(fakeRunner({
         streams: [[EXIT_MARKER]],
@@ -218,6 +227,19 @@ describe('RemoteSubagentHandle', () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
       expect(onResult).toHaveBeenCalledOnce();
       expect(onResult.mock.calls[0]?.[0]).toMatchObject({ status: 'succeeded' });
+    });
+
+    it('catches when onResult throws (R1 — no unhandled rejection)', async () => {
+      const h = makeHandle(fakeRunner({ streams: [[MSG('bg reply'), DONE]] }));
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const throwingCb = (): void => { throw new Error('callback boom'); };
+      h.runInBackground('x', throwingCb);
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      expect(spy).toHaveBeenCalledWith(
+        expect.stringContaining('runInBackground'),
+        expect.any(Error),
+      );
+      spy.mockRestore();
     });
   });
 
