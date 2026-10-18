@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeReflowShift,
   historyRows,
+  wholeRowsInHistory,
   type ReflowLine,
 } from './terminal-compositor.reflow-shift.js';
 
@@ -51,6 +52,12 @@ describe('computeReflowShift', () => {
     expect(computeReflowShift([hard(5, 229), { row: 6, width: 0, hard: false }], 230, 115)).toBe(1);
   });
 
+  it('non-positive column counts make N unknown (null → caller falls back)', () => {
+    expect(computeReflowShift([hard(5, 229)], 230, 0)).toBeNull();
+    expect(computeReflowShift([hard(5, 229)], 0, 115)).toBeNull();
+    expect(computeReflowShift([hard(5, 229)], -1, -1)).toBeNull();
+  });
+
   it('clamps a line width to the old column count (DECAWM-off rows clip there)', () => {
     expect(computeReflowShift([hard(5, 500)], 230, 115)).toBe(1);
   });
@@ -76,11 +83,43 @@ describe('historyRows', () => {
     expect(historyRows(1, 10, 2)).toBe(0);
   });
 
+  it('a positive delta partially cancels N', () => {
+    // max(0, 1 - (1 + 1 - 3)) = 2; max(0, 1 - (2 + 1 - 3)) = 1.
+    expect(historyRows(1, 1, 3)).toBe(2);
+    expect(historyRows(2, 1, 3)).toBe(1);
+  });
+
   it('a top-pinned terminal (delta = N) pushes nothing', () => {
     expect(historyRows(1, 3, 3)).toBe(0);
   });
 
   it('unknown band position (0) pushes nothing', () => {
     expect(historyRows(0, 0, 5)).toBe(0);
+  });
+});
+
+describe('wholeRowsInHistory (margin-inclusive, tmux units)', () => {
+  const echo99 = 'x'.repeat(99);
+
+  it('centered 99-col echo (65 margin → 164 painted) straddles the boundary at hist 1: unknown', () => {
+    expect(wholeRowsInHistory([echo99, 'AFTER'], 65, 230, 115, 1)).toBeNull();
+  });
+
+  it('both tmux fragments in history: the whole row is evictable', () => {
+    expect(wholeRowsInHistory([echo99, 'AFTER'], 65, 230, 115, 2)).toBe(1);
+    expect(wholeRowsInHistory([echo99, 'AFTER'], 65, 230, 115, 3)).toBe(2);
+  });
+
+  it('no history rows evicts nothing; blank and short rows are one fragment each', () => {
+    expect(wholeRowsInHistory([echo99], 65, 230, 115, 0)).toBe(0);
+    expect(wholeRowsInHistory(['', 'ab', echo99], 65, 230, 115, 2)).toBe(2);
+  });
+
+  it('without a margin, a 99-col row fits at 115 (one fragment)', () => {
+    expect(wholeRowsInHistory([echo99, 'AFTER'], 0, 230, 115, 1)).toBe(1);
+  });
+
+  it('non-positive column counts are unknown', () => {
+    expect(wholeRowsInHistory([echo99], 65, 0, 115, 1)).toBeNull();
   });
 });

@@ -46,7 +46,7 @@ export interface ReflowLine {
  * line is not known to be hard (caller falls back to no shift).
  */
 export function computeReflowShift(lines: readonly ReflowLine[], oldCols: number, newCols: number): number | null {
-  if (newCols <= 0 || oldCols <= 0) return 0;
+  if (newCols <= 0 || oldCols <= 0) return null;
   let n = 0;
   for (const line of lines) {
     const w = Math.min(Math.max(0, line.width), oldCols);
@@ -88,9 +88,22 @@ export interface ReflowHost {
 export type SnapshotHost = Omit<ReflowHost, 'bandReflowCache'>;
 
 interface FrameRecord { text: string; bottom: number; cols: number }
-interface BurstState { lines: ReflowLine[] | null; origCols: number; newCols: number; n: number | null }
+/**
+ * The committed band's painted rows as tmux saw them at snapshot time: the
+ * content strings (painted suffix of `committedBand`) and the OLD centering
+ * margin tmux rewrapped them with (painted width = marginCols + content).
+ */
+export interface BandSnapshot { rows: readonly string[]; marginCols: number }
+interface BurstState { lines: ReflowLine[] | null; band: BandSnapshot; origCols: number; newCols: number; n: number | null }
 /** A resolved burst prediction: N plus the lines it was computed from. */
-export interface ReflowPrediction { n: number; lines: readonly ReflowLine[]; oldCols: number; newCols: number }
+export interface ReflowPrediction {
+  n: number;
+  lines: readonly ReflowLine[];
+  oldCols: number;
+  newCols: number;
+  /** Band rows at snapshot time; absent = pre-centering callers (no margin check). */
+  band?: BandSnapshot;
+}
 
 const frameRecords = new WeakMap<object, FrameRecord>();
 const reflowBursts = new WeakMap<object, BurstState>();
@@ -98,6 +111,16 @@ const reflowBursts = new WeakMap<object, BurstState>();
 /** Record the frame just rendered (called by repaint after logUpdate.render). */
 export function recordRenderedFrame(self: object, text: string, bottom: number, cols: number): void {
   frameRecords.set(self, { text, bottom, cols });
+}
+
+/** Painted display width tmux sees for a band row (blank rows paint nothing). */
+function paintedWidth(raw: string, marginCols: number): number {
+  return raw === '' ? 0 : marginCols + displayWidth(stripAnsi(raw));
+}
+
+function paintedBandRows(self: Pick<SnapshotHost, 'committedBand' | 'committedBandPaintedRows'>): string[] {
+  const painted = Math.max(0, Math.min(self.committedBandPaintedRows, self.committedBand.length));
+  return self.committedBand.slice(self.committedBand.length - painted);
 }
 
 /** Lines owned by the compositor between the floor and the cursor, or null if unknown. */
@@ -110,8 +133,7 @@ function snapshotLines(self: SnapshotHost): ReflowLine[] | null {
     const marginCols = compositorBand({ columns: self.lastKnownCols }).marginCols;
     const rows = self.committedBand.slice(self.committedBand.length - painted);
     rows.forEach((raw, i) => {
-      const w = raw === '' ? 0 : marginCols + displayWidth(stripAnsi(raw));
-      lines.push({ row: bottom - painted + 1 + i, width: w, hard: true });
+      lines.push({ row: bottom - painted + 1 + i, width: paintedWidth(raw, marginCols), hard: true });
     });
   }
   const frame = frameRecords.get(self);
@@ -145,7 +167,8 @@ export function noteResizeForReflow(self: SnapshotHost, newCols: number, freshBu
   let state = reflowBursts.get(self);
   if (!state) {
     if (!(newCols < self.lastKnownCols) || rowShrink) return;
-    state = { lines: snapshotLines(self), origCols: self.lastKnownCols, newCols, n: 0 };
+    const band = { rows: paintedBandRows(self), marginCols: compositorBand({ columns: self.lastKnownCols }).marginCols };
+    state = { lines: snapshotLines(self), band, origCols: self.lastKnownCols, newCols, n: 0 };
     reflowBursts.set(self, state);
   }
   state.newCols = newCols;
@@ -158,7 +181,7 @@ export function takeReflowPrediction(self: object): ReflowPrediction | null {
   const state = reflowBursts.get(self);
   reflowBursts.delete(self);
   if (!state || state.n === null || state.n <= 0 || state.lines === null) return null;
-  return { n: state.n, lines: state.lines, oldCols: state.origCols, newCols: state.newCols };
+  return { n: state.n, lines: state.lines, oldCols: state.origCols, newCols: state.newCols, band: state.band };
 }
 
 /**
@@ -172,6 +195,68 @@ export function historyRows(bandTop: number, delta: number, n: number): number {
 }
 
 /**
+ * Invariant (margin-inclusive eviction): with AFK_CENTER_CONTENT active the
+ * model wraps band rows at the content width (margin excluded) while tmux
+ * rewraps the margin-INCLUSIVE painted row, so the model's fragments do not
+ * match tmux's and must not be used to count history rows. This counts the
+ * `hist` tmux fragments pushed into history in tmux's own units — each OLD
+ * painted row splits into max(1, ceil(min(w, oldCols) / newCols)) — and
+ * returns how many WHOLE leading rows are entirely in history. Returns null
+ * when a row straddles the history boundary (its visible remainder cannot be
+ * represented without re-deriving tmux's split) or the band changed since the
+ * snapshot; the caller then falls back to the pre-shift behaviour.
+ */
+export function wholeRowsInHistory(
+  rows: readonly string[],
+  marginCols: number,
+  oldCols: number,
+  newCols: number,
+  hist: number,
+): number | null {
+  if (newCols <= 0 || oldCols <= 0) return null;
+  let cum = 0;
+  let k = 0;
+  for (; k < rows.length && cum < hist; k++) {
+    const w = Math.min(paintedWidth(rows[k] ?? '', marginCols), oldCols);
+    const frags = Math.max(1, Math.ceil(w / newCols));
+    if (cum + frags > hist) return null;
+    cum += frags;
+  }
+  return k;
+}
+
+function sameRows(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((r, i) => r === b[i]);
+}
+
+/** Drop `evict` leading painted rows (and the unpainted prefix); false if pending rows would be lost. */
+function evictPaintedRows(self: ReflowHost, evict: number): boolean {
+  if (evict <= 0) return true;
+  const painted = Math.max(0, Math.min(self.committedBandPaintedRows, self.committedBand.length));
+  const unpainted = self.committedBand.length - painted;
+  if (unpainted > self.committedBandArchivedPrefix) return false;
+  const removed = unpainted + evict;
+  self.committedBand = self.committedBand.slice(removed);
+  self.committedBandMeta = self.committedBandMeta.slice(removed);
+  self.committedBandPaintedRows = painted - evict;
+  self.committedBandArchivedPrefix = Math.max(0, self.committedBandArchivedPrefix - removed);
+  self.bandReflowCache = null;
+  return true;
+}
+
+/**
+ * Rows to evict when centering is active at either width (see
+ * {@link wholeRowsInHistory}); null = fall back (no shift, no eviction). The
+ * band is NOT re-wrapped here: the next repaint reflows the survivors.
+ */
+function centeredEvictCount(self: ReflowHost, pred: ReflowPrediction, hist: number): number | null {
+  if (hist <= 0) return 0;
+  const band = pred.band;
+  if (!band || !sameRows(paintedBandRows(self), band.rows)) return null;
+  return wholeRowsInHistory(band.rows, band.marginCols, pred.oldCols, pred.newCols, hist);
+}
+
+/**
  * Apply the predicted shift (-N) to the rows above the cursor after a
  * narrowing reflow. Runs AFTER applyScrollDelta(delta), so the net shift is
  * delta - N; `preBandTop` is the band top before that delta. The band is first
@@ -182,20 +267,18 @@ export function historyRows(bandTop: number, delta: number, n: number): number {
  */
 export function applyReflowShift(self: ReflowHost, pred: ReflowPrediction, delta: number, preBandTop: number): boolean {
   if (pred.n <= 0) return false;
-  let evict = 0;
   if (self.committedBandPaintedRows > 0) {
-    reflowCommittedBandToWidth(self, compositorBand(self.stdout).width);
-    const painted = Math.max(0, Math.min(self.committedBandPaintedRows, self.committedBand.length));
-    evict = Math.min(painted, historyRows(preBandTop, delta, pred.n));
-    const unpainted = self.committedBand.length - painted;
-    if (evict > 0 && unpainted > self.committedBandArchivedPrefix) return false;
-    if (evict > 0) {
-      const removed = unpainted + evict;
-      self.committedBand = self.committedBand.slice(removed);
-      self.committedBandMeta = self.committedBandMeta.slice(removed);
-      self.committedBandPaintedRows = painted - evict;
-      self.committedBandArchivedPrefix = Math.max(0, self.committedBandArchivedPrefix - removed);
-      self.bandReflowCache = null;
+    const newBand = compositorBand(self.stdout);
+    const hist = historyRows(preBandTop, delta, pred.n);
+    if ((pred.band?.marginCols ?? 0) > 0 || newBand.marginCols > 0) {
+      const evict = centeredEvictCount(self, pred, hist);
+      if (evict === null || !evictPaintedRows(self, evict)) return false;
+    } else {
+      // Centering off: band width === cols, so the model's re-wrapped
+      // fragments are exactly tmux's and can be evicted fragment-wise.
+      reflowCommittedBandToWidth(self, newBand.width);
+      const painted = Math.max(0, Math.min(self.committedBandPaintedRows, self.committedBand.length));
+      if (!evictPaintedRows(self, Math.min(painted, hist))) return false;
     }
   }
   const move = (r: number): number => (r > 0 ? Math.max(1, r - pred.n) : r);

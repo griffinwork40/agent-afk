@@ -106,6 +106,45 @@ describe('tmux narrowing-reflow shift (compositor)', () => {
     s.c.disarm();
   });
 
+  it('AFK_CENTER_CONTENT 230→115 at anchorRow 1: the echo is never silently dropped', async () => {
+    // 65-col margin + 99-col echo = 164 painted cols: tmux splits it into 2
+    // rows at 115 and pushes only the first into history, while the model
+    // (band width 108, margin excluded) keeps it as 1 row. Evicting that row
+    // would lose its visible remainder; the shift must fall back instead.
+    const prev = process.env['AFK_CENTER_CONTENT'];
+    process.env['AFK_CENTER_CONTENT'] = '1';
+    try {
+      setReflowShiftGateForTests(() => true);
+      const s = await setup(1, 0);
+      expect(s.internals.committedBand.some((r) => r.includes('DUPCHECK hello'))).toBe(true);
+      splitPane(s);
+      expect(s.internals.committedBand.some((r) => r.includes('DUPCHECK hello'))).toBe(true);
+      expect(s.internals.committedBand.some((r) => r.includes('AFTER_LINE'))).toBe(true);
+      s.c.disarm();
+    } finally {
+      if (prev === undefined) delete process.env['AFK_CENTER_CONTENT'];
+      else process.env['AFK_CENTER_CONTENT'] = prev;
+    }
+  });
+
+  it('AFK_CENTER_CONTENT, banner case (band on screen): shift still applies, nothing evicted', async () => {
+    const prev = process.env['AFK_CENTER_CONTENT'];
+    process.env['AFK_CENTER_CONTENT'] = '1';
+    try {
+      setReflowShiftGateForTests(() => true);
+      const s = await setup(11, 0);
+      const before = s.internals.committedBand.length;
+      splitPane(s);
+      expect(s.internals.anchorRow).toBe(10);
+      expect(s.internals.committedBand.some((r) => r.includes('DUPCHECK hello'))).toBe(true);
+      expect(s.internals.committedBand.length).toBeGreaterThanOrEqual(before);
+      s.c.disarm();
+    } finally {
+      if (prev === undefined) delete process.env['AFK_CENTER_CONTENT'];
+      else process.env['AFK_CENTER_CONTENT'] = prev;
+    }
+  });
+
   it('top-pinned terminal (cursor moved down N) under the gate: no shift', async () => {
     setReflowShiftGateForTests(() => true);
     const s = await setup(11, 0);
