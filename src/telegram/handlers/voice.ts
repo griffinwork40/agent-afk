@@ -27,9 +27,6 @@ import type { Context } from 'telegraf';
 import type { Message } from 'telegraf/types';
 import { downloadTelegramFile } from '../media-download.js';
 import type { AudioTranscriber } from '../audio-transcriber.js';
-import { senderPrefix } from '../sender-attribution.js';
-import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
-import { forwardProvenancePrefix } from '../forward-provenance.js';
 import { errorMessage } from '../../utils/errors.js';
 
 /** 20 MB — mirrors Telegram's own bot API upload ceiling for voice/audio. */
@@ -59,7 +56,8 @@ function audioFileName(
     const fileName = msg?.audio?.file_name;
     if (fileName) return fileName;
     const mime = msg?.audio?.mime_type ?? '';
-    const ext = mime.includes('mp3') ? 'mp3'
+    const ext = mime.includes('mpeg') ? 'mp3'
+      : mime.includes('mp3') ? 'mp3'
       : mime.includes('mp4') || mime.includes('m4a') ? 'm4a'
       : mime.includes('ogg') ? 'ogg'
       : mime.includes('wav') ? 'wav'
@@ -228,13 +226,8 @@ export async function handleVoiceOrAudio(
       ctx.reply(`🎙️ Transcript: ${transcript}`).catch(() => {}),
     );
 
-  // Build the attributed message text (mirrors handle() in message.ts).
-  const replyCtx = replyContextPrefix({
-    replyToMessage: msg.reply_to_message as RepliedMessage | undefined,
-    botId: ctx.botInfo?.id,
-  });
-  const fwdPrefix = forwardProvenancePrefix(msg);
-  const attribution = replyCtx + fwdPrefix + senderPrefix(msg.from, ctx.chat?.type);
-
-  return `${attribution}${transcript}`;
+  // Return only the raw transcript — handle() in message.ts adds its own
+  // attribution (senderPrefix, replyContext, forwardProvenance) from the
+  // synthesised context.  Returning attribution here would duplicate it.
+  return transcript;
 }

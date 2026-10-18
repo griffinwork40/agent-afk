@@ -270,6 +270,7 @@ export class TelegramBot {
       this.messageHandler,
       runDetached,
       this.log.bind(this),
+      this.options.tagOnlyChats ?? new Set(),
     );
 
 

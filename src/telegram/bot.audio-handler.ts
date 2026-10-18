@@ -10,6 +10,8 @@
  */
 
 import type { Telegraf, Context } from 'telegraf';
+import type { Message, MessageEntity } from 'telegraf/types';
+import { addressedToBot } from './handlers/message.js';
 import type { MessageHandler } from './handlers/message.js';
 import type { AudioTranscriber } from './audio-transcriber.js';
 import { handleVoiceOrAudio } from './handlers/voice.js';
@@ -33,21 +35,44 @@ export function registerAudioHandlers(
   messageHandler: MessageHandler,
   runDetached: (work: Promise<void>) => void,
   log: LogFn,
+  tagOnlyChats: Set<number> = new Set(),
 ): void {
   const handleAudio = (type: 'voice' | 'audio') => (ctx: Context) =>
     runDetached(
       (async () => {
+        // Tag-only gate: in tag-only chats, voice/audio must be addressed to
+        // the bot (reply or @mention in caption) BEFORE we spend money on
+        // transcription.  Mirrors the text-message gate in message.ts.
+        const chatId = ctx.chat?.id;
+        if (chatId !== undefined && tagOnlyChats.has(chatId)) {
+          const msg = ctx.message as Message.AudioMessage | Message.VoiceMessage | undefined;
+          const caption = (msg as Record<string, unknown> | undefined)?.['caption'] as string | undefined;
+          const captionEntities = (msg as Record<string, unknown> | undefined)?.['caption_entities'] as MessageEntity[] | undefined;
+          const botId = ctx.botInfo?.id ?? 0;
+          if (!addressedToBot(caption, captionEntities, msg?.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
+            log(`Voice/audio ignored in tag-only chat ${chatId} (not addressed to bot)`);
+            return;
+          }
+        }
+
         const transcript = await handleVoiceOrAudio(ctx, type, transcriber, log);
         if (transcript === null) return; // handler already replied with error/refusal
         // Synthesise a text-message context so MessageHandler.handle() can
         // process the transcript through the normal turn pipeline (queue,
-        // claim, streamResponse).  Object.create preserves the Telegraf
-        // prototype chain so instanceof checks inside handle() still work.
-        await messageHandler.handle(
-          Object.assign(Object.create(Object.getPrototypeOf(ctx)), ctx, {
-            message: Object.assign({}, ctx.message, { text: transcript, entities: [] }),
-          }),
-        );
+        // claim, streamResponse).  We build a shallow clone of the context
+        // with an own `message` property carrying the transcript as `text`.
+        // Object.create preserves the Telegraf prototype chain so instanceof
+        // checks inside handle() still work; the own `message` property
+        // shadows the prototype getter without triggering a TypeError.
+        const synthCtx = Object.create(Object.getPrototypeOf(ctx)) as Context;
+        Object.assign(synthCtx, ctx);
+        Object.defineProperty(synthCtx, 'message', {
+          value: Object.assign({}, ctx.message, { text: transcript, entities: [] }),
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+        await messageHandler.handle(synthCtx);
       })(),
     );
 
