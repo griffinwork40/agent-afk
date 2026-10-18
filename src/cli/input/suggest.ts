@@ -37,6 +37,7 @@ import type {
   SuggestContext,
   SuggestEngine,
   SuggestEngineOptions,
+  SuggestionRecord,
 } from './suggest-types.js';
 
 export type {
@@ -45,6 +46,8 @@ export type {
   SuggestContext,
   SuggestEngine,
   SuggestEngineOptions,
+  SuggestionRecord,
+  SuggestionRecorder,
 } from './suggest-types.js';
 export { stripGhostControlChars } from './suggest-sanitize.js';
 export { pickModel } from './suggest-provider.js';
@@ -57,6 +60,19 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
   const providers = createProviderPool(opts.resolveProviderFn);
   const credentials = createSuggestCredentialResolver(opts.resolveCredentialFn);
+
+  /**
+   * The one call site for the injected record sink. Invariant: recording is
+   * observability only, so a throwing sink is swallowed here rather than
+   * propagating into a provider reply handler or the keystroke path.
+   */
+  function record(rec: SuggestionRecord): void {
+    try {
+      opts.onRecord?.(rec);
+    } catch {
+      /* never disturb suggestions over a record failure */
+    }
+  }
 
   /**
    * Resolve the completion function both producers share: the injected
@@ -86,6 +102,7 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     debounceMs: opts.debounceMs ?? DEBOUNCE_MS,
     timeoutMs,
     ...(opts.onError ? { onError: opts.onError } : {}),
+    onRecord: record,
   });
 
   const promptState = createPromptSuggestionState({
@@ -94,6 +111,7 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     timeoutMs,
     scrub: stripGhostControlChars,
     ...(opts.onError ? { onError: opts.onError } : {}),
+    onRecord: record,
   });
 
   async function getGhost(buffer: string, ctx: SuggestContext): Promise<string | null> {
@@ -123,6 +141,7 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     primePromptSuggestion: (ctx) => promptState.prime(ctx),
     peekPromptSuggestion: () => promptState.peek(),
     clearPromptSuggestion: () => promptState.clear(),
+    recordOutcome: record,
     dispose,
   };
 }

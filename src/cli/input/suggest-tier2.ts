@@ -13,7 +13,7 @@
 import { basename } from 'node:path';
 import { redactSecrets } from '../../agent/redact-secrets.js';
 import { stripGhostControlChars } from './suggest-sanitize.js';
-import type { CompleteFn } from './suggest-types.js';
+import type { CompleteFn, SuggestionRecorder } from './suggest-types.js';
 import type { SuggestContext } from './suggest.js';
 
 /** Minimum buffer length before Tier 2 fires. */
@@ -93,6 +93,11 @@ export interface Tier2Deps {
   timeoutMs: number;
   /** Diagnostic sink for a thrown completion (NOT called on abort/timeout). */
   onError?: (err: unknown) => void;
+  /**
+   * Record sink, called once per usable model reply (never for a cache hit,
+   * a rejected reply, an abort, or an error). Must not throw.
+   */
+  onRecord?: SuggestionRecorder;
 }
 
 export interface Tier2Runner {
@@ -201,6 +206,9 @@ export function createTier2Runner(deps: Tier2Deps): Tier2Runner {
       const cleaned = stripGhostControlChars(raced.raw).trim();
       const result = isValidContinuation(buffer, cleaned) ? cleaned : null;
       cacheSet(cacheKey, result);
+      if (result !== null) {
+        deps.onRecord?.({ event: 'generated', source: 'completion', text: result, buffer, model });
+      }
       resolve(result);
     } catch (err) {
       // Never-throws: any provider/network/abort error resolves null. Surface
