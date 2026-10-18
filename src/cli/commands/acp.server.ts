@@ -15,6 +15,8 @@
 
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
+import path from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import type { AgentModelInput } from '../../agent/types.js';
 import {
@@ -54,6 +56,40 @@ export interface AcpServerOptions {
   output: Writable;
   /** When true, sessions run in bypassPermissions mode (fix #1). */
   dangerouslySkipPermissions?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Invariant: cwd must be an absolute path that (a) exists as a directory and
+ * (b) is rooted at process.cwd() — prevents path-traversal from a malicious
+ * client supplying e.g. '/etc' or '../../..'.
+ *
+ * Returns the resolved absolute path on success, or a string error message
+ * on failure (caller converts to INVALID_PARAMS).
+ */
+function validateCwd(raw: string): string | Error {
+  const resolved = path.resolve(raw);
+  if (!existsSync(resolved)) {
+    return new Error(`cwd does not exist: ${resolved}`);
+  }
+  let stat;
+  try {
+    stat = statSync(resolved);
+  } catch {
+    return new Error(`cwd is not accessible: ${resolved}`);
+  }
+  if (!stat.isDirectory()) {
+    return new Error(`cwd is not a directory: ${resolved}`);
+  }
+  const serverCwd = process.cwd();
+  // Allow exactly process.cwd() or any strict subdirectory.
+  if (resolved !== serverCwd && !resolved.startsWith(serverCwd + path.sep)) {
+    return new Error(`cwd is outside server working directory: ${resolved}`);
+  }
+  return resolved;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,11 +137,19 @@ async function handleSessionNew(
   // Fix non-blocking extra: use crypto.randomUUID()
   const sessionId = randomUUID();
   const params = req.params as { cwd?: string } | undefined;
+  let validatedCwd: string | undefined;
+  if (params?.cwd !== undefined) {
+    const cwdResult = validateCwd(params.cwd);
+    if (cwdResult instanceof Error) {
+      return errorResponse(req.id, INVALID_PARAMS, cwdResult.message);
+    }
+    validatedCwd = cwdResult;
+  }
   const handle = await buildAcpSession({
     model: state.opts.model,
     maxTurns: state.opts.maxTurns,
     dangerouslySkipPermissions: state.opts.dangerouslySkipPermissions,
-    cwd: params?.cwd,
+    cwd: validatedCwd,
   });
   const abort = new AbortController();
   state.sessions.set(sessionId, { handle, abort });
@@ -270,6 +314,7 @@ async function handleSessionCancel(
     return errorResponse(req.id, INVALID_PARAMS, `Unknown sessionId: ${sessionId}`);
   }
   entry.abort.abort();
+  entry.handle.session.abort('acp-cancel');
   return successResponse(req.id, { cancelled: true });
 }
 

@@ -26,6 +26,7 @@ vi.mock('./acp.session.js', () => ({
     session: {
       sendMessageStream: vi.fn(),
       close: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn(),
     },
     memoryStore: { close: vi.fn() },
     stateStore: { close: vi.fn() },
@@ -111,6 +112,7 @@ beforeEach(() => {
     session: {
       sendMessageStream: mockSendMessageStream,
       close: mockSessionClose,
+      abort: vi.fn(),
     },
     memoryStore: { close: mockMemoryClose },
     stateStore: { close: mockStateClose },
@@ -550,6 +552,110 @@ describe('ACP server — protocol errors', () => {
     }>;
     expect(results[0]?.error?.code).toBe(-32700);
     expect(results[0]?.error?.message).toMatch(/too large/i);
+  });
+});
+
+describe('ACP server — cwd validation', () => {
+  it('rejects cwd outside process.cwd()', async () => {
+    const results = await runScenario([
+      req(1, 'initialize'),
+      req(2, 'session/new', { cwd: '/etc' }),
+    ]) as Array<{ id: number; error?: { code: number; message: string } }>;
+
+    const res = results.find((r) => r.id === 2);
+    expect(res?.error?.code).toBe(-32602);
+    expect(res?.error?.message).toMatch(/outside server working directory/i);
+  });
+
+  it('rejects non-existent cwd', async () => {
+    const results = await runScenario([
+      req(1, 'initialize'),
+      req(2, 'session/new', { cwd: '/this/path/does/not/exist/afk-test-xyz' }),
+    ]) as Array<{ id: number; error?: { code: number; message: string } }>;
+
+    const res = results.find((r) => r.id === 2);
+    expect(res?.error?.code).toBe(-32602);
+    expect(res?.error?.message).toMatch(/does not exist/i);
+  });
+
+  it('accepts valid cwd under process.cwd()', async () => {
+    const results = await runScenario([
+      req(1, 'initialize'),
+      req(2, 'session/new', { cwd: process.cwd() }),
+    ]) as Array<{ id: number; result?: { sessionId?: string }; error?: unknown }>;
+
+    const res = results.find((r) => r.id === 2);
+    expect(res?.error).toBeUndefined();
+    expect(typeof res?.result?.sessionId).toBe('string');
+  });
+
+  it('passes validated cwd to buildAcpSession', async () => {
+    await runScenario([
+      req(1, 'initialize'),
+      req(2, 'session/new', { cwd: process.cwd() }),
+    ]);
+
+    expect(mockBuildAcpSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: process.cwd() }),
+    );
+  });
+});
+
+describe('ACP server — session/cancel', () => {
+  it('cancel calls session.abort to interrupt the stream', async () => {
+    const mockAbort = vi.fn();
+    let resolveStream!: () => void;
+    const blockedStream = async function* () {
+      await new Promise<void>((r) => { resolveStream = r; });
+      yield { type: 'done', metadata: {} } as OutputEvent;
+    };
+    mockSendMessageStream.mockImplementation(blockedStream);
+    mockBuildAcpSession.mockResolvedValue({
+      session: {
+        sendMessageStream: mockSendMessageStream,
+        close: mockSessionClose,
+        abort: mockAbort,
+      },
+      memoryStore: { close: mockMemoryClose },
+      stateStore: { close: mockStateClose },
+    });
+
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const rl = (await import('node:readline')).createInterface({ input: output, crlfDelay: Infinity });
+    const lineQueue: string[] = [];
+    const waiters: Array<(line: string) => void> = [];
+    rl.on('line', (line) => {
+      if (waiters.length > 0) waiters.shift()!(line);
+      else lineQueue.push(line);
+    });
+    const nextLine = (): Promise<string> =>
+      lineQueue.length > 0
+        ? Promise.resolve(lineQueue.shift()!)
+        : new Promise((resolve) => waiters.push(resolve));
+
+    const serverDone = runAcpServer({ model: 'sonnet', maxTurns: 10, input, output });
+
+    input.write(req(1, 'initialize') + '\n');
+    await nextLine();
+
+    input.write(req(2, 'session/new') + '\n');
+    const newRes = JSON.parse(await nextLine()) as { result: { sessionId: string } };
+    const sessionId = newRes.result.sessionId;
+
+    input.write(req(3, 'session/prompt', { sessionId, prompt: 'block me' }) + '\n');
+    await new Promise<void>((r) => setImmediate(r));
+
+    input.write(req(4, 'session/cancel', { sessionId }) + '\n');
+    const cancelLine = await nextLine();
+    const cancelRes = JSON.parse(cancelLine) as { id: number; result: { cancelled: boolean } };
+    expect(cancelRes.id).toBe(4);
+    expect(cancelRes.result.cancelled).toBe(true);
+    expect(mockAbort).toHaveBeenCalledWith('acp-cancel');
+
+    resolveStream();
+    input.end();
+    await serverDone;
   });
 });
 
