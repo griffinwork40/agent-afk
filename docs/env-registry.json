@@ -452,6 +452,24 @@
       "category": "model"
     },
     {
+      "name": "AFK_LSP_DIAGNOSTICS",
+      "description": "Enable opt-in post-edit LSP diagnostics (phase 1 of #3904). When set to 1, after every successful edit_file or write_file call the handler queries typescript-language-server (must be on PATH) for diagnostics on the touched file and appends any errors/warnings to the tool result. Off by default. A missing or slow server never fails or stalls the edit — the query times out silently. TypeScript only in this phase.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_LSP_DIAGNOSTICS_TIMEOUT_MS",
+      "description": "Hard timeout in milliseconds for the post-edit LSP diagnostics query (AFK_LSP_DIAGNOSTICS=1). If the language server does not respond within this window the query is abandoned silently and the edit result is unchanged. Default 5000 (5 seconds).",
+      "type": "number",
+      "required": false,
+      "default": "5000",
+      "example": "3000",
+      "category": "misc"
+    },
+    {
       "name": "AFK_MAX_BUDGET_USD",
       "description": "Opt-in cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this. Unset by default (no cap applied).",
       "type": "number",

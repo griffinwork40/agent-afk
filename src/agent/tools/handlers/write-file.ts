@@ -18,6 +18,7 @@ import { computeLineDiff, type DiffPayload } from '../../../utils/diff.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { commitFileWrite, WriteAbortedUntouchedError } from './write-file.atomic.js';
 import { validatedWriteTarget } from '../../file-checkpoint/write-policy.js';
+import { appendLspDiagnostics } from './lsp-diagnostics.js';
 
 /**
  * Input shape for the write_file tool (validated at runtime).
@@ -197,9 +198,10 @@ const writeFileImpl = async (
     }
 
     const byteCount = Buffer.byteLength(content, 'utf8');
+    const lspSuffix = await appendLspDiagnostics(writeTarget);
     const successMsg = snapshotWarning
-      ? `Wrote ${byteCount} bytes to ${file_path}\nWARNING: ${snapshotWarning}`
-      : `Wrote ${byteCount} bytes to ${file_path}`;
+      ? `Wrote ${byteCount} bytes to ${file_path}\nWARNING: ${snapshotWarning}${lspSuffix}`
+      : `Wrote ${byteCount} bytes to ${file_path}${lspSuffix}`;
     return {
       content: successMsg,
       ...(diff ? { render: { diff } } : {}),
