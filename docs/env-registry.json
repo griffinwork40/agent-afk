@@ -503,6 +503,22 @@
       "category": "process"
     },
     {
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC",
+      "description": "Per-provider override for AFK_MAX_CONCURRENT_SUBAGENT_CALLS applied to fan-out waves whose tasks run on the Anthropic provider (anthropic-direct). When set, takes precedence over the global AFK_MAX_CONCURRENT_SUBAGENT_CALLS for those waves. Unset = use the global value. Accepted range 1-32; out-of-range or unparseable input falls back to the global. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "3",
+      "category": "process"
+    },
+    {
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI",
+      "description": "Per-provider override for AFK_MAX_CONCURRENT_SUBAGENT_CALLS applied to fan-out waves whose tasks run on the OpenAI-compatible provider (openai-compatible). When set, takes precedence over the global AFK_MAX_CONCURRENT_SUBAGENT_CALLS for those waves. Unset = use the global value. Accepted range 1-32; out-of-range or unparseable input falls back to the global. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "5",
+      "category": "process"
+    },
+    {
       "name": "AFK_MAX_NESTING_DEPTH",
       "description": "Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, skill, AND compose tools all refuse). A top-level session is depth 0, so the default 3 permits three generations of forked descendants (depth 1 → 2 → 3) and refuses the agent and skill tools at depth 3. Resolved once at the root of each session and propagated down through child AgentConfig, so descendants inherit the root value rather than re-reading the environment. Raise with care: depth is a fan-out exponent (a width-N wave at depth D reaches ~N^D concurrent children), so values above 4 invite provider rate-limit (429) cascades. Accepted range 0-6; unset, empty, unparseable, negative, or out-of-range input falls back to the default. An explicit programmatic maxDepth (SubagentExecutorContext / SkillExecutorContext) still wins.",
       "type": "number",
