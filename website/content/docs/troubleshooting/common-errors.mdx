@@ -1,0 +1,132 @@
+---
+title: "Resolve common errors"
+description: "Match runtime symptoms to their causes and recover without discarding work or bypassing safeguards."
+---
+
+Use the error text to identify the failed layer before retrying. A provider timeout, a path denial, and a locked worktree need different remedies; repeatedly changing a command does not resolve a stable block.
+
+## Start with evidence
+
+<Steps>
+<Step>
+### Capture the exact symptom
+
+Keep the error message and session id. Run `afk doctor` for installation or endpoint problems, and `afk trace show --all` for what happened during a session.
+</Step>
+<Step>
+### Preserve partial work
+
+Inspect changed files and any completed child results before restarting. A failed model turn does not imply its earlier tool calls were rolled back.
+</Step>
+<Step>
+### Apply the matching remedy
+
+Use the sections below. If the same failure returns, change the diagnosis rather than repeating the action unchanged.
+</Step>
+</Steps>
+
+## Missing or rejected credentials
+
+**Symptom:** HTTP `401` or `403`, `provider requires config.apiKey`, or `ChatGPT subscription token from ~/.codex/auth.json is EXPIRED`.
+
+**Cause:** A credential is absent, expired, rejected, or selected from a different source than you intended. A permission or entitlement failure can also return `403`; a stored key does not prove access to a model.
+
+**Fix:** Run `afk doctor` and `afk provider auth diagnose`. For xAI, use `afk provider auth diagnose --family xai`. Check the selected credential source before replacing anything, and restart persistent processes after changing their environment. Follow [authentication troubleshooting](/troubleshooting/auth-and-providers) for the correct provider's login and refresh path. Never paste a token into a bug report.
+
+## Rate limits and usage pauses
+
+**Symptom:** HTTP `429`, a rate-limit notice, or `Usage limit reached.` with an auto-resume time.
+
+**Cause:** The provider has throttled requests or the current account has exhausted a subscription usage window. A normal transient rate limit and a subscription pause are different states.
+
+**Fix:** Let bounded retries or the displayed reset window finish. In the interactive pause picker, choose **Keep waiting**, **Switch model / provider**, or **Stop waiting** with the arrow keys and Enter. Switching stops the wait so you can use `/model`; it does not silently move the task to a new provider. Inspect `/usage` or `afk usage`, and reduce concurrent requests if your account is repeatedly throttled. Do not rotate credentials merely to silence a `429`.
+
+## Context-window overflow
+
+**Symptom:** `[afk] Context-window overflow`, or a provider error such as `input length and max_tokens exceed context limit`.
+
+**Cause:** Conversation input plus the requested output ceiling exceeds the model's context window. Large tool output, a long session, or switching to a smaller-context model can trigger it.
+
+**Fix:** Run `/compact` to summarize history, or start a new session with a concise handoff and relevant file paths. Narrow future searches and tool output. If compaction itself cannot complete, start a fresh session rather than repeatedly resending the overflowing turn. See [sessions and context](/concepts/sessions-and-context).
+
+## Provider connection or first-token failure
+
+**Symptom:** `ECONNREFUSED`, DNS failure, `model_ttfb_timeout`, or repeated connection retries.
+
+**Cause:** The endpoint is unreachable, the model is not ready, or the provider stopped producing progress. First-token timeouts are distinct from a stream that stalls after content begins.
+
+**Fix:** Check the intended provider and custom endpoint with `afk doctor`, inspect connection and `ttfb_timeout` trace events, and use the [authentication and provider troubleshooting page](/troubleshooting/auth-and-providers) before raising timeout values.
+
+## MCP server does not connect
+
+**Symptom:** `MCP server "…" is not connected`, `connect timed out after …ms`, or a server marked `alwaysLoad` fails to connect and prevents startup.
+
+**Cause:** An unavailable executable, incorrect command arguments, failed transport handshake, missing server credentials, or an OAuth authorization step. Optional server failures normally leave the rest of AFK usable; `alwaysLoad: true` deliberately changes that contract for connection failures. A server waiting for OAuth is reported as `oauth_pending` rather than hard-failing startup, even when `alwaysLoad` is set.
+
+**Fix:** Inspect `/mcp` for server status and `/mcp auth` for pending OAuth URLs. Check the effective server configuration, including a project `.mcp.json` overriding the same server name in user configuration. Verify the executable or endpoint and its credentials, then restart the affected surface to reconnect. Do not remove `alwaysLoad` just to hide a required integration failure. See [MCP and plugins](/guides/mcp-plugins).
+
+## Worktree removal is refused
+
+**Symptom:** A `Refused:` message says the checkout `is locked`, `has uncommitted changes`, holds `non-rebuildable ignored files`, or has commits ahead of its base.
+
+**Cause:** Removal would discard local state, or the worktree has an explicit keep lock. A clean `git status` does not show ignored files such as `.env`.
+
+**Fix:** Inspect the checkout and preserve its work first. Commit or stash tracked/untracked changes as appropriate; separately copy any needed ignored state. A kept worktree must be explicitly released through the `worktree` tool before removal. A branch containing commits is preserved by checkout removal, but the local ignored and untracked files are not.
+
+<Callout type="warn">
+Do not use `force: true` as a routine fix. It confirms discarding local state. Never remove the worktree containing the active session's working directory, and do not expect removing a checkout to back up its `.env` file.
+</Callout>
+
+## A hook blocks a tool
+
+**Symptom:** `hook handler blocked PreToolUse`, `hook handler threw during …`, or `Hook-block repeat circuit breaker`.
+
+**Cause:** A configured hook deliberately denied the call, a hook failed, or the same stable hook block was repeated. Repeating the tool with cosmetic variations does not change the block condition.
+
+**Fix:** Read the hook's reason and inspect the matching hook configuration or hook command failure. Satisfy the required condition, use an allowed approach, or ask the operator to change policy if the task truly requires it. Do not bypass a block by moving the same action into another tool. Forked agents can be aborted by the repeat breaker; their parent should correct the task or permissions before dispatching again.
+
+## A path is outside the allowed roots
+
+**Symptom:** `Path … is outside the allowed read roots`, a path approval denial, or `Denial circuit breaker: this forked sub-agent hit … consecutive path-approval read denials`.
+
+**Cause:** The requested path is outside the session's granted read or write roots. Forked agents cannot approve their own reads, and a deliberately confined worker may correctly lack access to another checkout.
+
+**Fix:** Check `/allow-dir` in the parent REPL. Grant only the intended directory if you trust the access. For an existing sibling directory named `shared-library`:
+
+```text
+/allow-dir ../shared-library
+```
+
+This grants reads. `--rw` additionally grants writes; `--revoke` removes a grant. A child may need to be dispatched again with the correct working directory, worktree, or explicit read roots. Prefer this scoped fix to disabling containment for the entire session. See [permissions](/configuration/permissions).
+
+## A subagent stops without finishing
+
+**Symptom:** `idle-watchdog fired: no observable progress`, a timeout, or a partial answer after a tool-round cap.
+
+**Cause:** These are separate limits. The idle watchdog detects silence, normally after eight minutes; wall-clock limits bound total runtime; tool-round caps bound the amount of tool work. An active tool call suspends the idle timer, and known provider pause windows can extend it.
+
+**Fix:** Read the child's partial output and trace before retrying. For background jobs, ask AFK to inspect `get_background_job_health` and the job's recent progress. Correct provider connectivity, narrow an oversized task, or explicitly give a legitimate long task a larger budget. Retrying without understanding whether it stopped for silence, elapsed time, or tool rounds can duplicate completed work. See [subagents](/guides/subagents) and [background processes](/guides/background-processes).
+
+## SDK skills are discovered but cannot run
+
+**Symptom:** `the "skill", "agent", and "compose" tools are NOT registered`, even though skills are listed by `supportedCommands()`.
+
+**Cause:** A bare SDK session does not automatically wire the dispatch executors. Discovery and executable tool registration are separate.
+
+**Fix:** Build a fresh `createWiredExecutors` bundle for the session and pass its `executors` field to `AgentSession` or a one-shot query. Choose the `agent`, `skill`, and `compose` toggles explicitly, and provide a hook registry or explicitly opt out with `unattended: true`. See the [SDK guide](/sdk).
+
+## Windows shell and installation problems
+
+**Symptom:** A POSIX command is not recognized, an executable cannot be spawned, or doctor says npm's binary directory is not on `PATH`.
+
+**Cause:** On native Windows, AFK prefers Git Bash and falls back to PowerShell. A command written for one shell may not work in the other. npm's global binaries live in the npm prefix itself on Windows, not its `bin` subdirectory.
+
+**Fix:** Install Git for Windows when you want POSIX shell commands, and restart the terminal after a `PATH` change. If using PowerShell, use PowerShell syntax instead of assuming `export`, POSIX pipelines, or shell utilities are available. Check `npm config get prefix` and add that directory through Windows environment settings. Doctor's generic shell-profile hint is not a PowerShell command. Native Windows services use Task Scheduler; WSL is an alternative environment, not a prerequisite. See [installation](/installation).
+
+## Related
+
+<Cards>
+  <Card title="Run diagnostics" href="/troubleshooting" description="Read doctor results and collect a useful bug report." />
+  <Card title="Hook policies" href="/guides/hooks" description="Understand what blocks execution and why." />
+  <Card title="Manage worktrees" href="/guides/worktrees" description="Keep, release, and remove isolated checkouts safely." />
+</Cards>

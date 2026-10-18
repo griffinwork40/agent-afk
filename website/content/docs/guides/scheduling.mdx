@@ -1,0 +1,153 @@
+---
+title: "Schedule recurring and one-shot tasks"
+description: "Create daemon schedules, control retries and notifications, and manage a pull queue."
+---
+
+Schedules tell the daemon what to run and when. Use a recurring schedule for routine checks, a one-shot for a specific deadline, or the pull queue for work submitted by another terminal or script.
+
+## Create a recurring task
+
+<Steps>
+<Step>
+### Save the task
+
+From the project you want checked, run:
+
+```bash
+afk schedule add \
+  --name "nightly tests" \
+  --command "Run the test suite and report failures with evidence. Do not publish changes." \
+  --cron "0 2 * * *" \
+  --cwd "$PWD" \
+  --notify always
+```
+
+The command prints the task ID. `--cron` uses five fields: minute, hour, day of month, month, day of week. Cron uses the daemon machine's local timezone.
+</Step>
+<Step>
+### Start the daemon
+
+```bash
+afk daemon
+```
+
+Saved, enabled schedules are loaded at startup. Schedule mutations also attempt live sync with a running daemon. A saved task is not proof that a daemon is running: inspect any sync warning. For operation across terminal exits, [install the daemon as a service](/guides/run-as-service).
+</Step>
+<Step>
+### Inspect the result
+
+```bash
+afk schedule list
+```
+
+Use `afk schedule logs` with the ID printed when you created the task. It shows the latest 10 execution records by default; `--limit` accepts up to 50.
+</Step>
+</Steps>
+
+## Choose when to fire
+
+| Field or mode | Behavior |
+| --- | --- |
+| `cron` | Recurring five-field cron expression. |
+| `runAt` | ISO 8601 datetime for one execution at or after that instant, then automatic disable. Include a timezone, such as `Z`. |
+| `expiresAt` | ISO 8601 cutoff for either kind of task. At expiry the scheduler records a skipped, expired run and disables it. |
+| `trigger: "cron"` | Run on clock ticks (default for saved schedules). |
+| `trigger: "sessionstart"` | Eligible when the daemon starts, not when each interactive REPL starts. |
+| `trigger: "both"` | Eligible at daemon startup and on cron ticks. |
+
+Startup tasks are subject to a cooldown, six hours by default. The daemon flag `--sessionstart-cooldown-ms` or `AFK_SESSIONSTART_COOLDOWN_MS` changes it; `0` disables the cooldown.
+
+<Callout type="info">
+The CLI's `schedule add` requires `--cron`, including with `--trigger sessionstart`. It does not expose flags for `runAt`, `expiresAt`, retries, or `notifyChat`. Use the scheduling tools for those fields. A one-shot without a cron expression is checked every minute, so `runAt` is not a second-precision alarm.
+</Callout>
+
+## Create and edit schedules from a session
+
+Ask the agent to use `create_schedule`. For example, this tool input creates a one-shot report:
+
+```json
+{
+  "name": "Release readiness report",
+  "command": "Check the repository and write a readiness report without publishing anything.",
+  "runAt": "2026-11-01T09:00:00Z",
+  "expiresAt": "2026-11-01T12:00:00Z",
+  "notifyOn": "always",
+  "maxAttempts": 3,
+  "retryDelayMs": 30000
+}
+```
+
+Use a future date appropriate to your task. If you supply both `runAt` and `cron`, `runAt` governs the one-shot; cron is a stored polling placeholder.
+
+| Tool | Use |
+| --- | --- |
+| `create_schedule` | Save a task and return its ID plus `daemonSynced` and `syncDetail`. |
+| `update_schedule` | Change supplied fields only. Omitted fields stay unchanged; the task ID never changes. |
+| `list_schedules` | Inspect saved tasks, including timestamps, enabled state, and notification policy. |
+| `get_schedule_history` | Read recent execution records for `taskId`, oldest first within the selected records. Default `limit` is 10, maximum 50. |
+| `cancel_schedule` | Disable by default, re-enable with `enable: true`, or remove permanently with `permanent: true`. Permanent removal takes precedence. |
+
+With `update_schedule`, pass `null` to clear `runAt` or `expiresAt`. To clear a pinned `cwd`, pass `null` or an empty string. Renaming a task changes its label, not its ID.
+
+A result with `daemonSynced: false` means the change is saved but was not applied live. It takes effect on the daemon's next start. Schedule mutations are approval-gated in an autonomous interactive session; unattended daemon tasks cannot freely create or change other tasks.
+
+## Execution, retries, and routing
+
+| Setting | Meaning |
+| --- | --- |
+| `executor: "agent"` | Default. Start an agent session with a prompt or slash command. |
+| `executor: "shell"` | Execute a shell command directly, without a model session. Useful for a deterministic check or backup. |
+| `maxAttempts` | Total attempts for one scheduled agent run, including the first. Integer 1 to 5; default 1 disables retries. |
+| `retryDelayMs` | Retry base delay, 1,000 to 300,000 milliseconds; default 30,000. Exponential backoff doubles it per retry, capped at five minutes. |
+| `notifyOn` | `failure` (default), `always`, or `never` for Telegram completion notifications. The CLI equivalent is `--notify`. |
+| `notifyChat` | Numeric chat ID or configured chat alias. It must resolve to an allowed chat; an invalid override falls back to default routing with a warning. |
+| `cwd` | Existing directory, absolute or beginning with `~/`. Expanded at save time. |
+
+Retries apply to classified transient agent failures, such as network errors, provider 5xx errors, and eligible 429s. They do not retry every failed task or shell exit. A server retry delay of five minutes or more ends the run rather than parking it inside the retry loop. The task remains protected against overlapping runs throughout retries and waits.
+
+Working directory precedence is `task.cwd`, then `AFK_DAEMON_CWD`, then the daemon's current directory. Pin `cwd` before installing a service, whose launch directory may be your home directory rather than your repository.
+
+To run a deterministic shell task from the current project:
+
+```bash
+afk schedule add \
+  --name "daily git status" \
+  --command "git status --short" \
+  --executor shell \
+  --cron "0 9 * * *" \
+  --cwd "$PWD" \
+  --notify always
+```
+
+## Pause, resume, or remove a schedule
+
+Use the ID from `afk schedule list` with `afk schedule disable`, `afk schedule enable`, or `afk schedule remove`. Disabling preserves the configuration and history. Removing deletes the saved configuration. See the [CLI reference](/reference/cli) for command arguments.
+
+Schedules are stored in `~/.afk/config/schedules.json` by default. Use the CLI or tools instead of editing a live daemon's file by hand.
+
+## Submit work through the pull queue
+
+Start a daemon that drains queued prompts:
+
+```bash
+afk daemon --trigger pull
+```
+
+From another terminal:
+
+```bash
+afk queue add "Inspect the current test failures and write a local report" --notify-on always
+afk queue list
+```
+
+The default poll interval is 30 seconds. Tasks are considered in FIFO order when eligible and the daemon is idle. Use `afk queue remove` with a pending task ID to remove one item. `afk queue clear` asks for confirmation; non-interactive callers must explicitly pass `--yes`.
+
+The queue uses durable leases rather than treating dequeue as successful completion. Successful records are archived under `completed/`; exhausted failures go to `dead-letter/`. A recovered or retryable task with attempts remaining can be re-enqueued with an eligibility delay. This queue backoff is separate from a schedule's in-process retries: its policy can be fixed or exponential, defaults to a 30-second base, and caps delays at five minutes. The simple `queue add` CLI exposes a command and notification policy, not retry-policy flags; newly queued tasks default to one attempt.
+
+## Related
+
+<Cards>
+<Card title="Run without a human" href="/guides/unattended-runs" description="Choose a surface and set safe unattended boundaries." />
+<Card title="Keep afk running as a service" href="/guides/run-as-service" description="Keep the daemon supervised by your operating system." />
+<Card title="Daemon surface" href="/surfaces/daemon" description="Configure daemon triggers, gates, and operation." />
+</Cards>

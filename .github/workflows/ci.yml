@@ -74,6 +74,21 @@ jobs:
       - name: Audit env-registry docs (docs/env-registry.{json,md} in sync with src/config/env.ts)
         run: pnpm scan:env:check
 
+      - name: Audit CLI reference drift
+        run: pnpm scan:cli:check
+
+      - name: Audit slash command reference drift
+        run: pnpm scan:slash:check
+
+      - name: Audit configuration key reference drift
+        run: pnpm scan:config:check
+
+      - name: Audit tool and hook documentation coverage
+        run: pnpm scan:docs-coverage:check
+
+      - name: Validate documentation links and navigation
+        run: pnpm docs:links:check
+
       - name: Audit SDK dependency surface (no unlocked @anthropic-ai/sdk imports)
         run: pnpm audit:sdk:check
 
