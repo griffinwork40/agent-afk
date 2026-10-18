@@ -23,6 +23,10 @@ import {
   aggregateSubagentOutcomes,
   zeroSubagentOutcomeAggregates,
 } from './subagent-outcomes.js';
+import {
+  aggregateGuardrailFalsePositives,
+  zeroGuardrailFalsePositiveAggregates,
+} from './guardrail-false-positives.js';
 import type { InsightsOptions, InsightAggregates } from '../types.js';
 import { errorMessage } from '../../utils/errors.js';
 
@@ -34,6 +38,7 @@ export {
   aggregateOutcomes,
   aggregatePreexistingDefects,
   aggregateSubagentOutcomes,
+  aggregateGuardrailFalsePositives,
 };
 
 /**
@@ -79,6 +84,11 @@ export async function aggregateAll(options: InsightsOptions): Promise<InsightAgg
       'subagent-outcomes',
       () => aggregateSubagentOutcomes(options),
       zeroSubagentOutcomeAggregates,
+    ),
+    guardrailFalsePositives: safeAggregate(
+      'guardrail-false-positives',
+      () => aggregateGuardrailFalsePositives(options),
+      zeroGuardrailFalsePositiveAggregates,
     ),
   };
 }

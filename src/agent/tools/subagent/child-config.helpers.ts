@@ -308,6 +308,7 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
       childConfig.model,
       effectiveReadOnlyBash,
       args.defaultConfig.openaiBaseUrl,
+      args.workspaceStore,
     );
   }
 

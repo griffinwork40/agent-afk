@@ -1,0 +1,50 @@
+---
+title: "Configuration keys"
+description: "Settable configuration keys, types, validation, and sensitivity tiers."
+---
+
+{/* Generated from CONFIG_KEY_SPECS in src/config/settable-keys.ts. Do not edit by hand; run `pnpm scan:config`. */}
+
+These keys are accepted by the configuration mutation API. Agent tier keys are nonsecret behavioural settings that the agent may change. Human tier keys control identity, trust, routing, or safety and require the human CLI; the agent configuration tool refuses them. Keys are sorted by dotted path.
+
+See [editing configuration](/configuration/editing-config) for file locations and precedence.
+
+| Path | Type | Values or clamp | Tier | Description |
+| --- | --- | --- | --- | --- |
+| `autoResumeOnUsageLimit` | boolean |  | agent | Auto-resume after a usage-limit pause. |
+| `autoRouting.chat` | boolean |  | agent | Auto-route model for chat. |
+| `autoRouting.interactive` | boolean |  | agent | Auto-route model in the REPL. |
+| `autoRouting.telegram` | boolean |  | agent | Auto-route model for Telegram. |
+| `bgSummaries` | boolean |  | agent | Background summarisation. |
+| `daemon.task` | string |  | human | Daemon task prompt. |
+| `daemon.taskId` | string |  | human | Daemon task id. |
+| `daemon.verifyDone` | boolean |  | human | Daemon-surface "Done" verification gate (default: true): a cron-tick completion push whose response self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) is relabelled "⚠️ Done (unverified)" with a caveat line. Set to false to disable. The daemon analog of telegram.verifyDone (which is REPL-only); the daemon is single-turn-per-tick, so the only honest enforcement is relabelling the outgoing push rather than bouncing a next turn. Human-tier: a self-honesty check on the agent's own completion reporting — the agent must not be able to disable it on its own config, same rationale as telegram.verifyDone. |
+| `disabledPluginHooks` | object |  | human | Per-plugin hook disable list: maps plugin name (from plugin.json) → array of "&lt;Event&gt;" or "&lt;Event&gt;:&lt;matcher&gt;" specifiers to suppress. Human-tier: disabling a hook is an operator decision the agent must not reverse. |
+| `enablePluginHooks` | boolean |  | human | Enable Claude Code plugin-contributed hooks (trust gate for third-party plugin hooks.json; independent of enableShellHooks). |
+| `enableShellHooks` | boolean |  | human | Enable shell hooks (trust gate). |
+| `enforceDoneEvidence` | boolean |  | human | Opt-in AFK terminal-state enforcement gate: in autonomous mode a turn that self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) gets a framework correction injected into the next turn, which must substantiate or downgrade the claim (issue #237). Human-tier: a self-honesty check the agent must not be able to disable on its own config, same rationale as telegram.verifyDone. Sibling of telegram.verifyDone (which only relabels the Telegram push; this one bounces the turn). |
+| `interactive.suggestGhost` | boolean |  | agent | Ghost-text suggestions in the REPL. |
+| `interactive.thinkingUi` | enum | `summary`, `live`, `digest`, `off` | agent | Default REPL thinking-display mode. |
+| `interactive.worktreeAutoname` | boolean |  | agent | Auto-name worktrees. |
+| `interactive.worktreeBase` | string |  | human | Worktree base ref (git-flag sensitive). |
+| `interactive.worktreeBranchPrefix` | string |  | human | Worktree branch prefix (git-flag sensitive). |
+| `interactive.worktreeOnExit` | enum | `ask`, `keep`, `remove` | human | Clean-worktree quit policy (ask \| keep \| remove). |
+| `maxSummaryCallsPerSession` | number | 1 to 500; integer | agent | Cap on summary calls per session. |
+| `maxTokens` | number | 1 to 1000000; integer | agent | Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS or --max-output-tokens to cap per-response output. |
+| `model` | string |  | agent | Default model id / alias. |
+| `models.large` | model-slot |  | agent | Large-tier model id. Accepts a bare id string or a &#123; id, provider, name &#125; object (provider: anthropic \| openai \| chatgpt-oauth \| xai \| xai-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_&lt;TIER&gt;_BASE_URL / _API_KEY env vars, not here). |
+| `models.local` | model-slot |  | agent | Local-tier model id (OpenAI-compatible shim: Ollama, LM Studio, vLLM, MLX). Accepts a bare id string or a &#123; id, provider, name &#125; object (provider: anthropic \| openai \| chatgpt-oauth \| xai \| xai-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_&lt;TIER&gt;_BASE_URL / _API_KEY env vars, not here). |
+| `models.medium` | model-slot |  | agent | Medium-tier model id. Accepts a bare id string or a &#123; id, provider, name &#125; object (provider: anthropic \| openai \| chatgpt-oauth \| xai \| xai-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_&lt;TIER&gt;_BASE_URL / _API_KEY env vars, not here). |
+| `models.small` | model-slot |  | agent | Small-tier model id. Accepts a bare id string or a &#123; id, provider, name &#125; object (provider: anthropic \| openai \| chatgpt-oauth \| xai \| xai-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_&lt;TIER&gt;_BASE_URL / _API_KEY env vars, not here). |
+| `permissionMode` | enum | `default`, `plan`, `autonomous`, `bypassPermissions` | human | Session permission mode for afk chat/interactive (human-tier: privilege-escalation vector). Unset → bypassPermissions (new-install default); set `default` to re-enable path containment + the approval prompt. |
+| `pluginHookEnv` | object |  | human | Per-plugin hook env allowlist: maps plugin name → array of env-var names forwarded to that plugin's hook subprocesses. Human-tier: only the user controls which secrets reach plugin hooks. |
+| `skills.hidden` | string-array |  | human | Skill names to hide from the model-facing manifest while keeping them slash-invocable (human-tier: an operator configuration the agent must not reverse). Accepts bare names (e.g. "forge") and plugin-qualified names (e.g. "awa-dev:qualify"). Matches both exact name and any "&lt;plugin&gt;:&lt;name&gt;" suffix. |
+| `systemPrompt` | string |  | human | Operator system-prompt overlay. |
+| `telegram.notify.mode` | enum | `primary`, `broadcast`, `custom` | human | Telegram notify routing mode (human-tier: notification-redirect vector). |
+| `telegram.notify.primaryChatId` | number | -1000000000000000 to 1000000000000000; integer | human | Primary Telegram chat id (human-tier: notification-redirect vector). |
+| `telegram.notify.targets` | number-array |  | human | Custom Telegram target chat ids (human-tier: notification-redirect vector). |
+| `telegram.tagOnlyChats` | number-array |  | human | Chat ids where the bot answers only when addressed (reply to the bot, @mention, or text_mention resolving to the bot). Human-tier: it governs which chats the bot will respond in — a message-routing / who-can-drive-the-bot control, same class as the allowlist and telegram.notify.*. Requires Telegram privacy mode OFF for the bot to matter in groups. |
+| `telegram.verifyDone` | boolean |  | human | Opt-in AFK "Done" verification gate (human-tier: a self-honesty check on the agent's own completion reporting — the agent must not be able to disable it on its own config, same rationale as enableShellHooks/permissionMode). |
+| `temperature` | number | 0 to 2 | agent | Sampling temperature. |
+| `theme` | enum | `dark`, `light`, `umber`, `auto` | agent | TUI color palette (dark \| light \| umber \| auto). Display-only; auto detects a light/dark background from the terminal and falls back to dark. umber matches the Umber terminal and is dark-only, so auto never selects it. |
+| `updatePolicy` | enum | `notify`, `auto`, `off` | human | Self-update policy (human-tier: auto self-update is scope-widening). |

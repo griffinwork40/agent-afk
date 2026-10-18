@@ -58,10 +58,10 @@ import path from 'path';
 import type { GrantManager } from '../grant-manager.js';
 import { wouldBeRestricted } from '../handlers/_cwd-utils.js';
 import {
-  isReadDenied,
   READ_DENYLIST_ENTRY_MARKER,
   PROTECTED_CREDENTIAL_PATH_MARKER,
 } from '../handlers/read-denylist.js';
+import { decidePathAccess } from '../handlers/path-policy.js';
 import { buildForkPathDenialReason } from './fork-denial-remedy.js';
 import type { HookContext, HookDecision, HookHandler } from '../../hooks.js';
 import {
@@ -240,21 +240,23 @@ async function preToolUseImpl(
   // resolveAndContain (_cwd-utils.ts) so the hook blocks cleanly instead of
   // prompting-then-letting-the-handler-throw. `~/.afk/state` is intentionally
   // NOT denied (forks legitimately read skill-preflight/todos/transcripts).
-  if (mode === 'read') {
-    const denied = isReadDenied(resolvedAbs);
-    if (denied.denied) {
-      // eslint-disable-next-line no-console
-      console.error(
-        `[path-approval] surface=${opts.surface} tool=${context.toolName} path=${resolvedAbs} outcome=read-denylist`,
-      );
-      return {
-        decision: 'block',
-        reason:
-          `Access denied: ${resolvedAbs} ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
-          `(${READ_DENYLIST_ENTRY_MARKER} ${denied.matched}). This path is never readable — ` +
-          `it holds credentials, not task data; do not retry.`,
-      };
-    }
+  //
+  // Routed through `decidePathAccess` (#3847 first slice) so this hook and
+  // `resolveAndContain` share one canonicalization rather than each calling
+  // `isReadDenied` independently with their own `path.resolve()` anchors.
+  const decision = decidePathAccess(resolvedAbs, mode);
+  if (decision.kind === 'deny') {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[path-approval] surface=${opts.surface} tool=${context.toolName} path=${resolvedAbs} outcome=read-denylist`,
+    );
+    return {
+      decision: 'block',
+      reason:
+        `Access denied: ${resolvedAbs} ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
+        `(${READ_DENYLIST_ENTRY_MARKER} ${decision.matched}). This path is never readable — ` +
+        `it holds credentials, not task data; do not retry.`,
+    };
   }
 
   // (2) Bypass mode (bypassPermissions): no containment prompt.

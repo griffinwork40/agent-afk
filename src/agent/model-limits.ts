@@ -123,15 +123,21 @@ const DEFAULT_MAX_OUTPUT = 64_000;
  */
 export function maxOutputTokensForKnown(model: ClaudeModel | string): number | undefined {
   const lowered = String(model).trim().toLowerCase();
-  // Preserve explicit *_1m aliases (a context-window choice) before resolution.
-  const oneM = MODEL_MAX_OUTPUT_TOKENS[lowered];
-  if (lowered.endsWith('_1m') && oneM !== undefined) return oneM;
   // Resolve slot alias → bound id so a rebound tier gets the correct cap.
+  // Must run before the per-slot override lookup (keyed on the concrete id)
+  // and before the _1m table lookup — a per-slot maxOutputTokens on a _1m id
+  // would otherwise be silently skipped (mirrors contextLimitFor behaviour).
   const id = resolveModelInput(model) ?? String(model);
   // Per-slot override wins over the built-in table — same precedence as
   // contextWindowOverrideFor in contextLimitFor.
   const slotOverride = maxOutputTokensOverrideFor(id);
   if (slotOverride !== undefined) return slotOverride;
+  // Preserve explicit *_1m aliases (a context-window choice) after the slot
+  // override check so per-slot caps can still narrow a _1m model's output.
+  if (lowered.endsWith('_1m')) {
+    const oneM = MODEL_MAX_OUTPUT_TOKENS[lowered];
+    if (oneM !== undefined) return oneM;
+  }
   return MODEL_MAX_OUTPUT_TOKENS[id] ?? MODEL_MAX_OUTPUT_TOKENS[id.toLowerCase()];
 }
 
@@ -151,15 +157,20 @@ export function maxOutputTokensForKnown(model: ClaudeModel | string): number | u
  * Anthropic-routed and listed models are unaffected.
  */
 export function maxOutputTokensFor(model: ClaudeModel | string): number {
+  // Resolve once and reuse — maxOutputTokensForKnown already calls
+  // resolveModelInput internally; we resolve again here only to pass the
+  // concrete id to the openai-compat derived-default path without a second
+  // alias lookup.
+  const id = resolveModelInput(model) ?? String(model);
   const known = maxOutputTokensForKnown(model);
   if (known !== undefined) return known;
   // For unlisted openai-compatible ids with a per-slot contextWindow, derive
   // a sensible default instead of the flat 64k guess.
-  const id = resolveModelInput(model) ?? String(model);
   if (routesToOpenAICompatible(id)) {
     const slotWindow = contextWindowOverrideFor(id);
     if (slotWindow !== undefined) {
-      return Math.min(DEFAULT_MAX_OUTPUT, Math.floor(slotWindow / 4));
+      // Math.max(1, ...) ensures contextWindow < 4 never returns 0.
+      return Math.min(DEFAULT_MAX_OUTPUT, Math.max(1, Math.floor(slotWindow / 4)));
     }
   }
   return DEFAULT_MAX_OUTPUT;

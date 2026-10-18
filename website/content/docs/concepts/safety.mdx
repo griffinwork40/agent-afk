@@ -1,0 +1,115 @@
+---
+title: "Understand how afk protects your work"
+description: "Learn how permission modes, approvals, guardrails, and checkpoints control actions."
+---
+
+AFK combines permission policy, tool-specific checks, hooks, retry guards, and recorded evidence. Use these layers to control unattended work and recover from mistakes, but do not treat them as a sandbox for an adversarial model or untrusted executable code.
+
+## Choose the boundary before starting
+
+| Mode | What it changes |
+|---|---|
+| `default` | Keeps typed-file path containment and can ask for access outside granted roots |
+| `plan` | Adds a planning gate that restricts mutating work |
+| `autonomous` | Avoids ordinary path prompts but gates classified high-risk operations |
+| `bypassPermissions` | Disables typed-file path containment and its approval prompt |
+
+New CLI installations with no configured permission mode start in `bypassPermissions`, not `default`. Bypass does not mean every other hook or guard is disabled. See [permissions](/configuration/permissions) for mode selection, bash restrictions, and the exact boundaries.
+
+<Callout type="warn">
+A git worktree isolates repository changes, not network access, credentials, or the rest of the machine. For stronger containment, use an OS-level isolation boundary and narrowly scoped credentials. Shell-command classification is best effort, not proof that an arbitrary script is harmless.
+</Callout>
+
+## Approve a high-risk action from your phone
+
+The autonomous-mode gate uses the tool risk classifier before execution. Examples of high-risk work include destructive shell commands, writes escaping the workspace, and schedule mutations. Routine reversible work can continue without asking about every tool call.
+
+<Steps>
+<Step>
+### Connect the operator channel
+
+Configure [Telegram](/surfaces/telegram), then enable AFK mode in the interactive session:
+
+```text
+/afk on
+```
+
+See [unattended runs](/guides/unattended-runs) for the complete setup.
+</Step>
+<Step>
+### Review the approval request
+
+A classified high-risk call in the main session can produce an approve/deny prompt on the configured operator channel, including a reason and an input preview. The Telegram inline keyboard lets you answer from your phone.
+</Step>
+<Step>
+### Approve only the intended call
+
+Approve permits that single call. Deny, cancellation, an unavailable operator, or no response within the default five-minute approval window refuses it. The timer starts when the prompt is shown, not while it is queued. Subagents do not prompt: they receive a block and must return the requirement to the parent.
+</Step>
+</Steps>
+
+Approval is not a blanket authorization for future operations. A blocked agent should report the missing condition, not retry through another tool to reach the same effect.
+
+## Path approval is a separate layer
+
+In a contained mode, a typed file tool targeting an ungranted path can ask you to allow it once, for the session, persistently, or not at all. Read and write grants are distinct. Forked children cannot approve their own out-of-root access, and a surface without an approval handler refuses the request.
+
+Protected credential paths have additional denial rules. Neither a request to widen ordinary roots nor a different spelling of the operation should be treated as authorization to expose secrets. Autonomous mode bypasses the ordinary path prompt but retains its separate high-risk gate for writes outside the workspace.
+
+## External effects need reconciliation
+
+The effect ledger records an intent before dispatching a classified external action, such as sending a message or making a mutating HTTP request. It then records the observed outcome.
+
+| State | Meaning |
+|---|---|
+| `pending` | Intent recorded before dispatch; an abandoned intent needs reconciliation |
+| `executed` | A response was observed, not independent proof of the remote effect |
+| `confirmed` | Reserved for independent reconciliation |
+| `failed` | Evidence establishes that the action did not apply |
+| `unknown` | Dispatch happened but the result does not establish what occurred remotely |
+
+If a connection fails after a remote service accepts a request, blindly repeating it can create a second message, issue, or other resource. For identical arguments in the same session, the first retry after an unknown outcome or abandoned pending intent is blocked with a verification instruction. After checking remote state, reissuing the call can proceed as a new intent linked to the prior record. Previous observed successes warn on repetition rather than prohibiting intentional repeats.
+
+<Callout type="warn">
+This is not exactly-once delivery. The retry acknowledgment means the warning was delivered, not that remote state was actually checked. Different arguments or sessions are independent, and ledger storage failures fail open. Verify the remote system before retrying an uncertain action.
+</Callout>
+
+## Recover file edits with checkpoints
+
+File checkpointing is opt-in through `AgentConfig.enableFileCheckpointing`, defaulting to false. When enabled, `write_file`, `edit_file`, and applied `patch_apply` changes capture prior file state. Bash changes are not captured.
+
+A checkpoint covers paths touched in a particular turn, not the entire workspace. Restore rechecks current permissions, and an error can leave a partially restored set of files. It cannot undo a sent message, an API mutation, or unrelated shell changes. See [undo changes](/guides/undo-changes) for available rewind controls and limitations.
+
+## Detect risky retries and bypass attempts
+
+| Layer | What it does | Important limit |
+|---|---|---|
+| Outbound shell-write detection | Recognizes common `curl` write methods and payload flags, plus `wget` POST flags | The safe-destruct observer logs these; the autonomous risk classifier separately treats recognized writes as high risk |
+| Hook-block circuit breaker | Escalates three consecutive `PreToolUse` blocks on the same tool without successful progress | The root session receives a stop-retrying instruction; a forked child fails loudly |
+| Block-evasion analysis | Finds blocks followed by different tools in the same broad effect class, and possible unrecovered work | Read-only heuristics for review, not proof that the same target was reached |
+| Shadow git detector | Records `git commit` or `git push` hook bypasses and selected explicit author-email overrides | Currently observe-only: it does not block the command |
+| Placeholder detector | Scans runnable fenced shell output for unresolved values and requests correction | REPL correction path, bounded to two corrections per session |
+
+Inspect block-evasion candidates with:
+
+```bash
+afk trace show --evasion
+```
+
+The analyzer sees tool names and trace metadata, not complete command arguments or file paths. Investigate the journal and resulting state before concluding that a candidate is an actual bypass.
+
+The placeholder layer also primes top-level sessions to resolve known values or clearly flag missing ones before presenting runnable commands. Detection is a backstop, not a guarantee that every copied command is ready to run.
+
+## Know which controls enforce and which observe
+
+A policy hook returning a block prevents that tool invocation. A warning, trace row, model instruction, or heuristic report does not. Keep this distinction when evaluating safety: the shadow detector and evasion report provide evidence, while permission gates and pre-execution blocks govern execution.
+
+Use [hooks](/guides/hooks) for project policy, [verification](/guides/verification) to check actual outcomes, and separate backups or version control for recovery that must survive a failed session.
+
+## Related
+
+<Cards>
+<Card title="Configure permissions" href="/configuration/permissions" description="Select modes and understand path and shell boundaries." />
+<Card title="Undo changes" href="/guides/undo-changes" description="Understand conversation rewind and file checkpoints." />
+<Card title="Inspect evidence" href="/guides/observability" description="Review traces and recorded tool results." />
+</Cards>

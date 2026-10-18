@@ -1,0 +1,87 @@
+---
+title: "Preview a change with what-if"
+description: "Compare an isolated candidate environment with your current setup, then optionally test predictions with episodes."
+---
+
+Use `afk whatif` or `/whatif` before changing prompts, memory, skills, plugins, model settings, or environment variables. It previews a candidate in a sandbox and reports what may change. Predictions are guesses until you explicitly run verification episodes.
+
+## Run a preview
+
+<Steps>
+<Step>
+
+Describe one proposed change or give an explicit change flag:
+
+```bash
+afk whatif --append "Ask a clarifying question before changing files."
+afk whatif --model claude-haiku-4-5
+```
+
+You can also write `afk whatif "prefer concise answers"`. Plain-English input is compiled into a change spec and confirmed in an interactive terminal. Pass `--yes` to confirm it in a non-interactive script. In the REPL, `/whatif "prefer concise answers"` prints the compiled spec and asks you to rerun with `--yes` instead of opening a terminal confirmation prompt.
+
+</Step>
+<Step>
+
+Review the structural diff and the predictions before paying for verification. A normal preview captures a baseline and candidate request snapshot, compares the system prompt, first user message, available tools, estimated token count and per-turn cost, then uses an analyst model to suggest behavior shifts. The report labels predictions as guesses and reports whether your question is observable at the episode boundary.
+
+</Step>
+<Step>
+
+If the decision matters enough to measure, run episodes with a budget:
+
+```bash
+afk whatif --append "Ask a clarifying question before changing files." --verify --max-usd 5
+```
+
+The engine estimates costs and checks statistical power before episodes. A preflight can refuse an underpowered or over-budget run. `--force` bypasses the minimum-detectable-effect gate, not the cost cap. If the report says a prediction is downstream or unobservable, rephrase it as a choice the agent can make before attempting verification.
+
+</Step>
+</Steps>
+
+## What is a change spec?
+
+A `ChangeSpec` is a title and an ordered list of candidate-only changes, optionally with operator-supplied predictions. Changes can append to your user or project AFK.md, set a scoped file, add or remove a memory fact, disable a skill or plugin, or change model, effort, or environment settings. For a reusable experiment, save a JSON spec and use `afk whatif --spec change.json`; `--spec` cannot be combined with plain-English input or change flags.
+
+```json
+{
+  "title": "Ask before editing files",
+  "changes": [
+    { "kind": "append", "target": "project-afk-md", "text": "Ask before editing files." }
+  ]
+}
+```
+
+For one-off experiments, `--append-project`, `--memory-add`, `--disable-skill`, and `--model` avoid writing a spec file. See the [CLI reference](/reference/cli) for all change operators and run settings.
+
+## Predict, calibrate, or verify
+
+| Mode | Example | What it tells you |
+|---|---|---|
+| Preview | `afk whatif --append "Prefer short replies"` | Structural diff plus analyst-generated predictions, without verification episodes. The analyst call can cost money. |
+| Your hypothesis | `afk whatif --append "Ask first" --predict "agent asks a clarifying question"` | Uses your prediction instead of calling the analyst predictor. Repeat `--predict` for multiple hypotheses. A spec can also carry a `predictions` array. |
+| A/A structural check | `afk whatif --aa` | Snapshots two identical, unchanged arms to expose harness asymmetry. No predictions or episodes. It cannot be combined with `--verify`, a spec, or changes. |
+| Empirical check | `afk whatif --append "Ask first" --verify --max-usd 5` | Runs baseline and candidate episodes in isolated sandboxes and compares measured behavior on each prediction's own probes. |
+
+The `--predict` flag belongs to **whatif**, not to `afk daemon`. The `--aa` flag is a structural A/A check, not a paid A/A episode calibration run. Both require an Anthropic API key for the command's current startup path; use `afk login` or configured credentials.
+
+During verification, read-only actions can run; the first side-effecting tool request is recorded as **intent**, not executed. This can measure whether the agent *chooses* to write a file, but not whether that write succeeds or the resulting file is correct. Decision-observable predictions receive Confirmed, Refuted, or Unclear verdicts. A prediction needing an intercepted action to complete is Unobservable and excluded from accuracy. Failed or arm-imbalanced episodes appear as caveats, not as evidence of an improvement.
+
+<Callout type="warn">
+
+Episodes and analyst or judge calls can incur model costs. `--max-usd` defaults to 5, but choose your own cap before `--verify`. More samples of the same probe do not replace independent probes: the uncertainty calculation counts episodes, not every sample as a separate observation. Small shifts can remain Unclear even if candidate rates appear higher.
+
+</Callout>
+
+## Read the report
+
+The terminal summary shows a headline, structural diff, predicted shifts, question fit, and, if verified, baseline and candidate rates plus verdicts. The Markdown report is stored under `$AFK_STATE_DIR/whatif/<run-id>/report.md`, with detailed `results.json`. Verification adds `traces.jsonl` for episode records and `grades.jsonl` for judge scores. Look at the number of scored probes and failed episodes before trusting a headline. The per-probe sign-flip result is a secondary diagnostic and does **not** change the main verdict; a small probe count can be underpowered even when the observed difference looks large. The calibration ledger records eligible verified prediction outcomes for future review under `$AFK_STATE_DIR/whatif/ledger.jsonl`.
+
+`--quick` limits an episode to one turn; `--probes` and `--samples` control different quantities. If your question depends on the result of a file edit, test execution, or a subagent's completed task, use a real controlled test instead of treating a whatif verdict as proof. See [verification](/guides/verification) for that workflow.
+
+## Related
+
+<Cards>
+<Card title="Improve recurring failures" href="/guides/self-improvement" description="Turn observed failures into reviewable eval cases." />
+<Card title="Understand safety boundaries" href="/concepts/safety" description="Learn what may run and what needs approval." />
+<Card title="Configure models" href="/configuration/models-providers" description="Choose the agent and analyst models deliberately." />
+</Cards>
