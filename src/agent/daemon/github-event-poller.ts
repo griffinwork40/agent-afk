@@ -25,12 +25,13 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { getAfkStateDir } from '../../paths.js';
 import { enqueue } from './queue-store.js';
 import { errorMessage } from '../../utils/errors.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -104,6 +105,7 @@ interface RawIssue {
   html_url: string;
   body: string | null;
   created_at: string;
+  pull_request?: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +130,7 @@ function loadSeen(stateDir: string): Set<string> {
 
 function saveSeen(stateDir: string, seen: Set<string>): void {
   mkdirSync(stateDir, { recursive: true });
-  writeFileSync(getDedupPath(stateDir), JSON.stringify([...seen]));
+  atomicWriteFile(getDedupPath(stateDir), JSON.stringify([...seen]));
 }
 
 // Prevent the dedup set from growing unbounded across long-running pollers.
@@ -185,9 +187,15 @@ async function defaultGhRunner(
   path: string,
   extraArgs: string[] = [],
 ): Promise<unknown> {
-  const args = ['api', path, '--paginate', ...extraArgs];
+  const args = ['api', path, '--paginate', '--slurp', ...extraArgs];
   const { stdout } = await execFileAsync('gh', args, { maxBuffer: 10 * 1024 * 1024 });
-  return JSON.parse(stdout) as unknown;
+  // --slurp wraps all pages into a single top-level JSON array.
+  const parsed = JSON.parse(stdout) as unknown;
+  // --slurp produces [[page1items],[page2items]]; flatten one level.
+  if (Array.isArray(parsed) && parsed.length > 0 && Array.isArray(parsed[0])) {
+    return (parsed as unknown[][]).flat() as unknown;
+  }
+  return parsed;
 }
 
 // ---------------------------------------------------------------------------
@@ -223,9 +231,14 @@ async function fetchCheckFailures(
   let raw: unknown;
   try {
     raw = await run(path);
-  } catch {
-    // HEAD may not resolve for repos with no commits; skip gracefully.
-    return [];
+  } catch (err: unknown) {
+    // 404 (no commits) and 422 (unprocessable ref) are expected; skip.
+    // Other errors (401/403/network) propagate to _poll()'s logger.
+    const msg = errorMessage(err);
+    if (msg.includes('404') || msg.includes('422')) {
+      return [];
+    }
+    throw err;
   }
   const envelope = raw as { check_runs?: RawCheckRun[] } | RawCheckRun[];
   const items: RawCheckRun[] = Array.isArray(envelope)
@@ -251,7 +264,8 @@ async function fetchIssueOpened(
   const path = `repos/${repo}/issues?per_page=30&state=open&sort=created&direction=desc`;
   const raw = (await run(path)) as RawIssue | RawIssue[];
   const items = Array.isArray(raw) ? raw : [raw];
-  return items.map((iss) => ({
+  // GitHub's /issues endpoint includes PRs; filter them out.
+  return items.filter((iss) => !iss.pull_request).map((iss) => ({
     id: `issue_opened:${iss.id}`,
     summary: [
       `type: issue_opened`,

@@ -73,6 +73,7 @@ vi.mock('./commands/worktree.js', () => ({ registerWorktreeCommand: vi.fn() }));
 vi.mock('./commands/farm.js', () => ({ registerFarmCommand: vi.fn() }));
 vi.mock('./commands/update.js', () => ({ registerUpdateCommand: vi.fn() }));
 vi.mock('./commands/schedule.js', () => ({ registerScheduleCommand: vi.fn() }));
+vi.mock('./commands/events.js', () => ({ registerEventsCommand: vi.fn() }));
 vi.mock('./config.js', () => ({
   loadConfig: vi.fn().mockReturnValue({ updatePolicy: 'notify' }),
   loadCredential: vi.fn().mockReturnValue(undefined),

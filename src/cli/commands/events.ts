@@ -41,8 +41,8 @@ export function registerEventsCommand(program: Command): void {
   // afk events github
   // --------------------------------------------------------------------------
 
-  eventsCmd
-    .command('github')
+  const githubCmd = eventsCmd.command('github');
+  githubCmd
     .description(
       'Poll GitHub for events and enqueue tasks into the pull queue.\n' +
       'Requires `gh` CLI authenticated (`gh auth status`).\n' +
@@ -116,8 +116,19 @@ export function registerEventsCommand(program: Command): void {
 
           // Read poll interval from env as an override (AFK_EVENTS_GITHUB_POLL_MS)
           const envInterval = env.AFK_EVENTS_GITHUB_POLL_MS;
-          const resolvedInterval =
-            envInterval !== undefined ? parseInt(envInterval, 10) : intervalMs;
+          let resolvedInterval = intervalMs;
+          if (envInterval !== undefined) {
+            const parsed = parseInt(envInterval, 10);
+            if (!Number.isFinite(parsed) || parsed < 5_000) {
+              console.error(
+                palette.error(
+                  `AFK_EVENTS_GITHUB_POLL_MS must be >= 5000 ms, got: ${envInterval}`,
+                ),
+              );
+              process.exit(1);
+            }
+            resolvedInterval = parsed;
+          }
 
           const poller = new GithubEventPoller({
             repo: opts.repo,

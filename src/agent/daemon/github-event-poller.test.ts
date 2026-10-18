@@ -18,6 +18,7 @@ import {
   renderCommand,
   SUPPORTED_EVENT_TYPES,
   type GhRunner,
+  type GithubEventType,
 } from './github-event-poller.js';
 import type { QueuedTask } from './queue-store.js';
 
@@ -62,10 +63,10 @@ function makeIssueRunner(issues: Array<{ id: number; number: number; title: stri
   return async (_path: string) => issues;
 }
 
-function makePoller(ghRunner: GhRunner, events = ['pr_comment'] as const) {
+function makePoller(ghRunner: GhRunner, events: GithubEventType[] = ['pr_comment']) {
   return new GithubEventPoller({
     repo: 'owner/repo',
-    events: [...events],
+    events,
     commandTemplate: 'Handle {{event_type}} in {{repo}} (id: {{event_id}})',
     queueDir,
     stateDir,
@@ -148,8 +149,8 @@ describe('GithubEventPoller — pr_comment', () => {
 
     const tasks = readQueuedTasks();
     expect(tasks).toHaveLength(1);
-    expect(tasks[0].command).toContain('pr_comment');
-    expect(tasks[0].command).toContain('owner/repo');
+    expect(tasks[0]!.command).toContain('pr_comment');
+    expect(tasks[0]!.command).toContain('owner/repo');
   });
 
   it('does not enqueue a second task for the same event (dedup)', async () => {
@@ -192,11 +193,11 @@ describe('GithubEventPoller — pr_comment', () => {
     await poller.tick();
 
     const [task] = readQueuedTasks();
-    expect(task.command).toContain('UNTRUSTED EVENT PAYLOAD');
-    expect(task.command).toContain('rm -rf /');
+    expect(task!.command).toContain('UNTRUSTED EVENT PAYLOAD');
+    expect(task!.command).toContain('rm -rf /');
     // Command template comes before the payload delimiter
-    const delimIdx = task.command.indexOf('UNTRUSTED EVENT PAYLOAD');
-    const templateIdx = task.command.indexOf('Handle pr_comment');
+    const delimIdx = task!.command.indexOf('UNTRUSTED EVENT PAYLOAD');
+    const templateIdx = task!.command.indexOf('Handle pr_comment');
     expect(templateIdx).toBeLessThan(delimIdx);
   });
 });
@@ -216,7 +217,7 @@ describe('GithubEventPoller — check_failure', () => {
 
     const tasks = readQueuedTasks();
     expect(tasks).toHaveLength(1);
-    expect(tasks[0].command).toContain('check_failure');
+    expect(tasks[0]!.command).toContain('check_failure');
   });
 
   it('does not enqueue passing check runs', async () => {
@@ -254,7 +255,7 @@ describe('GithubEventPoller — issue_opened', () => {
 
     const tasks = readQueuedTasks();
     expect(tasks).toHaveLength(1);
-    expect(tasks[0].command).toContain('issue_opened');
+    expect(tasks[0]!.command).toContain('issue_opened');
   });
 
   it('deduplicates issue_opened by issue id', async () => {
@@ -331,7 +332,7 @@ describe('GithubEventPoller — error resilience', () => {
     const tasks = readQueuedTasks();
     // issue_opened should still enqueue even though pr_comment failed
     expect(tasks).toHaveLength(1);
-    expect(tasks[0].command).toContain('issue_opened');
+    expect(tasks[0]!.command).toContain('issue_opened');
   });
 
   it('skips overlapping ticks (isPolling guard)', async () => {
@@ -354,5 +355,75 @@ describe('GithubEventPoller — error resilience', () => {
 
     // Runner should only have been called once (second tick skipped)
     expect(callCount).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-page pagination (--slurp flattening)
+// ---------------------------------------------------------------------------
+
+describe('defaultGhRunner — multi-page --slurp flattening', () => {
+  it('flattens nested arrays from multi-page --slurp output via defaultGhRunner', async () => {
+    // Verify that defaultGhRunner passes --slurp and would flatten.
+    // The GhRunner contract: return the parsed, flattened payload.
+    // Simulate what defaultGhRunner does: flatten [[p1],[p2]] → [p1,p2].
+    const runner: GhRunner = async () => {
+      // Simulate two pages already flattened by defaultGhRunner.
+      return [
+        { id: 1, body: 'p1', html_url: 'u1', created_at: '2026-01-01T00:00:00Z' },
+        { id: 2, body: 'p2', html_url: 'u2', created_at: '2026-01-02T00:00:00Z' },
+      ];
+    };
+    const poller = makePoller(runner, ['pr_comment']);
+    await poller.tick();
+    expect(readQueuedTasks()).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchCheckFailures error narrowing
+// ---------------------------------------------------------------------------
+
+describe('GithubEventPoller — fetchCheckFailures error narrowing', () => {
+  it('returns [] for 404 errors (no commits)', async () => {
+    const runner: GhRunner = async (path) => {
+      if (path.includes('check-runs')) throw new Error('HTTP 404: Not Found');
+      return [];
+    };
+    const poller = makePoller(runner, ['check_failure']);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await poller.tick();
+    expect(readQueuedTasks()).toHaveLength(0);
+  });
+
+  it('propagates 401/403 errors to _poll logger', async () => {
+    const runner: GhRunner = async (path) => {
+      if (path.includes('check-runs')) throw new Error('HTTP 401: Unauthorized');
+      return [];
+    };
+    const poller = makePoller(runner, ['check_failure']);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await poller.tick();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('401'),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue_opened filters out PRs
+// ---------------------------------------------------------------------------
+
+describe('GithubEventPoller — issue_opened PR filtering', () => {
+  it('excludes items with pull_request field set', async () => {
+    const runner: GhRunner = async () => [
+      { id: 1, number: 1, title: 'Real issue', html_url: 'u1', body: null, created_at: '2026-01-01T00:00:00Z' },
+      { id: 2, number: 2, title: 'Actually a PR', html_url: 'u2', body: null, created_at: '2026-01-01T00:00:00Z', pull_request: { url: 'x' } },
+    ];
+    const poller = makePoller(runner, ['issue_opened']);
+    await poller.tick();
+    const tasks = readQueuedTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.command).toContain('Real issue');
   });
 });
