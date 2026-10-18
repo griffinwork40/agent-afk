@@ -108,6 +108,10 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
             // #3442: opt-in executors ride along on every provider the router
             // builds, including ones rebuilt by a cross-family model swap.
             ...(config.executors !== undefined ? { executors: config.executors } : {}),
+            // #4063: forward the resolved MCP manager (caller-supplied or
+            // SDK-built from config.mcpServers) so MCP tools are bridged and
+            // mcpServerStatus() returns the live server states.
+            ...(config.mcpManager !== undefined ? { mcpManager: config.mcpManager } : {}),
           });
     providerQuery = new ProviderRouter(
       { prompt: promptIterable, config },
