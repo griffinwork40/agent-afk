@@ -19,7 +19,7 @@ import type { RegisteredAgent } from '../agents/index.js';
 import type { ToolResult } from './types.js';
 
 /**
- * Strip clearly-delimited quoted content from a prompt before intent
+ * Contract: Strip clearly-delimited quoted content from a prompt before intent
  * classification (#4057). Write verbs that appear inside quoted or attributed
  * content should not trigger the implementation-intent gate.
  *
@@ -30,20 +30,21 @@ import type { ToolResult } from './types.js';
  *   3. Markdown blockquote lines: lines beginning with > (one or more)
  *   4. Double-quoted strings: "..."  (single-line only, balanced — an
  *      unclosed double-quote on the same line is left in place, failing closed)
- *   5. Attributed list items: a bullet (`-`, `*`, `•`) followed by a label
- *      and a colon, e.g. `- pragmatist (medium): edit git-investigator.md`.
- *      The label pattern is narrow: word chars / spaces / parens up to the
- *      first `: ` — this covers the exact repro shape from #4057 and
- *      `/devils-advocate` synthesis output without being so broad that it
- *      swallows genuine imperative bullets like `- edit src/foo.ts`.
+ *   5. Attributed critic items: a bullet (`-`, `*`, `•`) followed by a
+ *      critic name and a REQUIRED parenthesised severity keyword
+ *      (low|medium|high|critical), e.g. `- pragmatist (medium): edit …`.
+ *      The severity paren is mandatory so that plain labelled steps such as
+ *      `- Step 1: edit src/a.ts`, `- Fix: rewrite …`, or `- Task: implement …`
+ *      are NOT stripped — they are genuine directives addressed to the agent.
+ *      Only horizontal whitespace ([ \t]) is used; \s is excluded to prevent
+ *      the pattern from matching across a newline (#4101).
  *
- * Safety invariants:
- *   - Only COMPLETE delimiters are stripped; an unclosed fence/quote/span
- *     leaves the content in place so a real instruction cannot hide behind it.
- *   - The raw prompt (not the stripped version) is used for RECON_EXEMPTION_RE
- *     so negation phrases inside quotes still exempt the whole prompt.
- *   - The stripped text may be shorter but is never replaced with content that
- *     introduces new verbs — replacements are empty string or a single space.
+ * Invariant: Only COMPLETE delimiters are stripped; an unclosed fence/quote/span
+ *   leaves the content in place so a real instruction cannot hide behind it.
+ *   The raw prompt (not the stripped version) is used for RECON_EXEMPTION_RE
+ *   so negation phrases inside quotes still exempt the whole prompt.
+ *   The stripped text may be shorter but is never replaced with content that
+ *   introduces new verbs — replacements are empty string or a single space.
  *
  * Exported for tests; not part of the public API.
  */
@@ -67,13 +68,20 @@ export function stripQuotedContent(prompt: string): string {
   //    Allows escaped quotes inside: \"  (simple backslash escape only).
   s = s.replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
 
-  // 5. Attributed list items: `- Label (detail): rest of line`
-  //    Matches a bullet followed by a label (word chars, spaces, parens, hyphens)
-  //    up to a `: ` separator, then the rest of the line — the entire line is
-  //    replaced with just the bullet so the list structure is preserved but the
-  //    attributed content (which names another agent's proposed action) is gone.
-  //    Narrow pattern: label ≤60 chars, no newlines, must end with `: `.
-  s = s.replace(/^([ \t]*[-*•][ \t]+)[\w][\w\s()/-]{0,58}:[ \t]+[^\n]+$/gm, '$1');
+  // 5. Attributed critic items: `- CriticName (severity): rest of line`
+  //    Matches a bullet followed by a critic name (letters/digits/spaces/hyphens)
+  //    and a REQUIRED parenthesised severity keyword (low|medium|high|critical),
+  //    then `: ` and the rest of the line. The entire line is replaced with just
+  //    the bullet so list structure is preserved but the attributed content is gone.
+  //
+  //    Invariant: only horizontal whitespace ([ \t]) is used throughout — \s is
+  //    excluded to prevent the label from spanning a newline and silently hiding
+  //    a directive on the following line (#4101). The severity paren is mandatory
+  //    so plain steps like `- Step 1: …`, `- Fix: …`, `- Task: …` are not stripped.
+  s = s.replace(
+    /^([ \t]*[-*•][ \t]+)[A-Za-z][\w -]{0,40}[ \t]*\((?:low|medium|high|critical)\)[ \t]*:[ \t]+[^\n]+$/gm,
+    '$1',
+  );
 
   return s;
 }
@@ -93,7 +101,7 @@ export function stripQuotedContent(prompt: string): string {
 const CLAUSE_LEAD =
   String.raw`(?:^\s*|[.!?;:]\s+|\n\s*|\b(?:please|then|and|also|now|first,?|next,?|finally,?|(?:task|job|goal)\s+is\s+to|you\s+(?:must|should|will|need\s+to))\s+)(?:[-*•]\s+|\d+[.)]\s+)?`;
 
-const EDIT_VERB = String.raw`(?:edit|apply|implement|fix|refactor|update|modify|change|patch|write)`;
+const EDIT_VERB = String.raw`(?:edit|apply|implement|fix|refactor|update|modify|change|patch|write|rewrite)`;
 
 /**
  * Ordered implementation-intent patterns. Capture group 1 is the phrase
@@ -109,7 +117,7 @@ const IMPL_INTENT_PATTERNS: readonly RegExp[] = [
   new RegExp(CLAUSE_LEAD + String.raw`(${EDIT_VERB}\s+[^\s.]\S*\.\w{1,6}\b)`, 'i'),
   new RegExp(
     CLAUSE_LEAD +
-      String.raw`(${EDIT_VERB}\s+(?:(?:the|a|an|your)\s+)?(?:code|file|files|patch|diff|changes?|commit|implementation|feature|bug|fix|function|module|class|method|src|test|tests)\b)`,
+      String.raw`(${EDIT_VERB}\s+(?:(?:the|a|an|your)\s+)?(?:code|file|files|patch|diff|changes?|commit|implementation|feature|bug|fix|function|module|class|method|src|test|tests|handler|parser)\b)`,
     'i',
   ),
   new RegExp(

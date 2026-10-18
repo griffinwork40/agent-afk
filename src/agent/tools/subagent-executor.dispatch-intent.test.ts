@@ -264,6 +264,41 @@ describe('stripQuotedContent (#4057)', () => {
     const s = stripQuotedContent('- edit src/foo.ts');
     expect(s).toContain('edit src/foo.ts');
   });
+
+  // --- #4101 regression: overly-broad label pattern must not strip labelled imperatives ---
+
+  it('does NOT strip a numbered-step bullet (- Step 1: ...)', () => {
+    // "Step 1" is a procedural label, not a critic-name+severity — must stay.
+    const s = stripQuotedContent('- Step 1: edit src/a.ts');
+    expect(s).toContain('edit src/a.ts');
+  });
+
+  it('does NOT strip a bare capitalised-word label with no severity (- Fix: ...)', () => {
+    // "Fix" has no parenthesised severity — the label pattern must not match it.
+    const s = stripQuotedContent('- Fix: rewrite the handler');
+    expect(s).toContain('rewrite the handler');
+  });
+
+  it('does NOT strip a bare task label with no severity (- Task: ...)', () => {
+    const s = stripQuotedContent('- Task: implement the parser');
+    expect(s).toContain('implement the parser');
+  });
+
+  it('does NOT strip a cross-line sequence where \\s spanning newline caused a false match', () => {
+    // The old [\w\s] label matched across the newline in
+    // "- inspect the context\nTask: edit src/foo.ts", swallowing both lines.
+    // With [ \t] the match cannot cross the newline, so the second line survives.
+    const s = stripQuotedContent('- inspect the context\nTask: edit src/foo.ts');
+    expect(s).toContain('edit src/foo.ts');
+  });
+
+  it('still strips attributed critic items that have the severity paren (pragmatist/paranoid/etc.)', () => {
+    // Positive-control: the narrowed pattern must still strip the exact #4057 shapes.
+    expect(stripQuotedContent('- pragmatist (medium): edit git-investigator.md')).not.toContain('edit git-investigator.md');
+    expect(stripQuotedContent('- paranoid (high): patch the config')).not.toContain('patch the config');
+    expect(stripQuotedContent('- architect (low): refactor the module')).not.toContain('refactor the module');
+    expect(stripQuotedContent('- steelman (critical): rewrite the handler')).not.toContain('rewrite the handler');
+  });
 });
 
 describe('classifyDispatchIntent — #4057 quoted-verb exemptions', () => {
@@ -351,5 +386,31 @@ describe('classifyDispatchIntent — #4057 quoted-verb exemptions', () => {
     // The verb sits on its own line so CLAUSE_LEAD fires via the \n branch.
     const prompt = 'Review this:\n```\nedit src/foo.ts\ndo the work';
     expect(classifyDispatchIntent(prompt)).toBeDefined();
+  });
+
+  // --- #4101 regression: labelled-step/fix/task bullets must not bypass the gate ---
+
+  it('still refuses: numbered-step bullet (- Step 1: edit src/a.ts)', () => {
+    // "Step 1:" is a procedural step label. The imperative edit verb must still
+    // be detected after the narrowed strip no longer swallows this line.
+    expect(classifyDispatchIntent('- Step 1: edit src/a.ts')).toBeDefined();
+  });
+
+  it('still refuses: bare Fix label (- Fix: rewrite the handler)', () => {
+    // "Fix:" has no parenthesised severity, so the attributed-label strip must
+    // not remove this line. The write verb must be detected by the classifier.
+    expect(classifyDispatchIntent('- Fix: rewrite the handler')).toBeDefined();
+  });
+
+  it('still refuses: bare Task label (- Task: implement the parser)', () => {
+    expect(classifyDispatchIntent('- Task: implement the parser')).toBeDefined();
+  });
+
+  it('still refuses: cross-line shape (- inspect the context\\nTask: edit src/foo.ts)', () => {
+    // Exact example from spec: the old regex matched across the newline via \s,
+    // stripping both lines and hiding the real directive on the second line.
+    // With [ \t] the cross-line match is impossible; the second line is retained
+    // and the classifier detects the edit verb via the colon branch of CLAUSE_LEAD.
+    expect(classifyDispatchIntent('- inspect the context\nTask: edit src/foo.ts')).toBeDefined();
   });
 });
