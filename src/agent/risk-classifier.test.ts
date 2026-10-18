@@ -342,6 +342,25 @@ describe('classifyRisk — bash safe', () => {
     expect(classifyRisk('bash', { command: 'wget --spider https://example.com/health' }, ctx)).toBe('safe');
   });
 
+  // ── mutation-guard: classifyBashCommand override (#3846) ─────────────────
+  // These commands match a BASH_SAFE prefix at command position but carry a
+  // mutating flag/argument that classifyBashCommand's tokenizer catches. The
+  // safe-table match must NOT win; the mutation guard must escalate to high.
+  it('curl -I … -X "POST" → high (quoted method overrides curl -I safe prefix)', () => {
+    // Golden case from issue #3846 comment: classifyRisk previously returned
+    // 'safe' because 'curl -I' matched the safe table, but classifyBashCommand
+    // correctly flags -X "POST" (quoted method) as mutating. Both must agree.
+    expect(
+      classifyRisk('bash', { command: 'curl -I https://example.com -X "POST"' }, ctx),
+    ).toBe('high');
+  });
+
+  it('curl -sI … -X DELETE → high (silent HEAD prefix + mutating method)', () => {
+    expect(
+      classifyRisk('bash', { command: 'curl -sI https://api.example.com/resource -X DELETE' }, ctx),
+    ).toBe('high');
+  });
+
   // Mutating gh subcommands must NOT be safe-listed
   it('gh pr merge → medium (mutating, not safe-listed)', () => {
     expect(classifyRisk('bash', { command: 'gh pr merge 123 --squash' }, ctx)).toBe('medium');
@@ -1543,6 +1562,28 @@ describe('classifyRiskDetailed — category field (#3900)', () => {
     expect(classifyRiskDetailed('browser_open', {}, ctx).category).toBe('browser-action');
   });
 
+  it('browser_observe → read-only', () => {
+    expect(classifyRiskDetailed('browser_observe', {}, ctx).category).toBe('read-only');
+  });
+
+  it('browser_screenshot → read-only', () => {
+    expect(classifyRiskDetailed('browser_screenshot', {}, ctx).category).toBe('read-only');
+  });
+
+  it('browser_close → read-only', () => {
+    expect(classifyRiskDetailed('browser_close', {}, ctx).category).toBe('read-only');
+  });
+
+  it('edit_file → workspace-write', () => {
+    const v = classifyRiskDetailed('edit_file', { file_path: '/workspace/foo.ts' }, ctx);
+    expect(v.category).toBe('workspace-write');
+  });
+
+  it('patch_apply → workspace-write', () => {
+    const v = classifyRiskDetailed('patch_apply', { changes: [{ path: '/workspace/foo.ts' }] }, ctx);
+    expect(v.category).toBe('workspace-write');
+  });
+
   it('web_scrape → network-mutation', () => {
     expect(classifyRiskDetailed('web_scrape', {}, ctx).category).toBe('network-mutation');
   });
@@ -1580,5 +1621,17 @@ describe('classifyRiskDetailed — category field (#3900)', () => {
     const v = classifyRiskDetailed('some_future_tool', {}, ctx);
     expect(v.level).toBe('safe');
     expect(v.category).toBe('unknown');
+  });
+});
+
+// ---- RISK_CATEGORIES ↔ trace schema sync -----------------------------------
+describe('RISK_CATEGORIES ↔ trace schema sync', () => {
+  it('every RiskCategory is accepted by the trace Zod schema', async () => {
+    const { RISK_CATEGORIES } = await import('./risk-classifier.js');
+    const { z } = await import('zod');
+    const schema = z.enum(RISK_CATEGORIES);
+    for (const cat of RISK_CATEGORIES) {
+      expect(schema.safeParse(cat).success).toBe(true);
+    }
   });
 });
