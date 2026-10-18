@@ -44,6 +44,9 @@ export interface ReflowLine {
  * Each line occupies one row at `oldCols` (DECAWM-off band rows are clipped
  * there, so at most `oldCols` cells exist). Returns null when any non-blank
  * line is not known to be hard (caller falls back to no shift).
+ * @returns The total count of extra rows N, or null when the shift is unknown
+ *   (non-positive width, or a non-hard line is present). A null return causes
+ *   the caller to fall back to the pre-shift behaviour (no row adjustment).
  */
 export function computeReflowShift(lines: readonly ReflowLine[], oldCols: number, newCols: number): number | null {
   if (newCols <= 0 || oldCols <= 0) return null;
@@ -248,6 +251,13 @@ function evictPaintedRows(self: ReflowHost, evict: number): boolean {
  * Rows to evict when centering is active at either width (see
  * {@link wholeRowsInHistory}); null = fall back (no shift, no eviction). The
  * band is NOT re-wrapped here: the next repaint reflows the survivors.
+ *
+ * Returns null (and falls back to pre-#4114 behaviour) when either:
+ *   - `pred.band` is absent (pre-centering caller path), or
+ *   - `sameRows` fails, meaning a `commitAbove` landed between the resize
+ *     snapshot and the CPR-driven apply. In that burst the duplicate echo may
+ *     briefly show in scrollback, but no committed content is lost — this is
+ *     intentional and safe.
  */
 function centeredEvictCount(self: ReflowHost, pred: ReflowPrediction, hist: number): number | null {
   if (hist <= 0) return 0;
