@@ -16,7 +16,7 @@ import { appendFileSync } from 'node:fs';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
 import { recoverDaemonQueues } from './pull-recovery.js';
-import { startHandoffMaintenance, type HandoffMaintenanceHandle } from './handoff-maintenance.js';
+import { startHandoffMaintenance, type HandoffMaintenanceHandle, type HandoffMaintenanceOpts } from './handoff-maintenance.js';
 import { getQueueDir, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import type { TraceWriter } from '../trace/index.js';
@@ -421,15 +421,16 @@ export class CronScheduler {
    */
   startHandoffMaintenance(intervalMs?: number): void {
     if (this.handoffMaintenance !== undefined) return;
-    this.handoffMaintenance = startHandoffMaintenance({
+    const maintenanceOpts: HandoffMaintenanceOpts = {
       queueDir: this.queueDir,
       ...(this.options.handoffsDir !== undefined ? { handoffsDir: this.options.handoffsDir } : {}),
       ...(this.options.bot !== undefined ? { bot: this.options.bot } : {}),
       ...(intervalMs !== undefined ? { intervalMs } : {}),
-      drainResumeQueue: (resumeDir) => this.pullTick(resumeDir),
+      drainResumeQueue: (resumeDir: string) => this.pullTick(resumeDir),
       ...((this.options.pullPollIntervalMs ?? 0) > 0 ? { recoverMainQueue: () => recoverDaemonQueues(this.queueDir) } : {}),
-      isInFlight: (id) => this.inFlightTasks.has(id),
-    });
+      isInFlight: (id: string) => this.inFlightTasks.has(id),
+    };
+    this.handoffMaintenance = startHandoffMaintenance(maintenanceOpts);
   }
 
   /** One dequeue-and-run tick against `queueDir` (pull queue or resume queue). */

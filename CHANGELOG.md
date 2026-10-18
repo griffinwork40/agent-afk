@@ -11,6 +11,64 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.322.12] - 2026-10-17
+
+### Fixed
+- publish remote-dispatch guide and fix broken link in tools-reference (#4018) (938dd63c)
+
+## [5.322.11] - 2026-10-17
+
+### Fixed
+- append `wait` in stdin-isolation test to drain background job before cleanup (#4017) (08bc05c9)
+
+## [5.322.10] - 2026-10-17
+
+### Fixed
+- add boundary test, document permissionMode host field, restore blank line (#3982) (ef9d5ec6)
+
+## [5.322.9] - 2026-10-17
+
+### Fixed
+- fix stale comments, add JSDoc note, extract named opts objects (#3999) (b5d2c97f)
+- advisory findings from PR triage batch (#3780, #3798, #3800, #3801) (#4000) (5ac5e6f2)
+
+## [5.322.8] - 2026-10-17
+
+### Fixed
+- forward operator-explicit permissionMode only; extract ResolvedSessionManagerOptions alias (#3994) (77110792)
+
+## [5.322.7] - 2026-10-17
+
+### Fixed
+- per-entry _schemaVersion guard in write path; shape error for primitives (#3993) (4ec15faf)
+- add missing tests for scalar-JSON guard and inflight dedup (#3991) (a2a587a9)
+- JSDoc invariants and compose exemption tests for dispatch-intent gate (#3990) (ce5822c8)
+- address advisory findings from 2026-10-15 PR triage batch (#4001) (9457323a)
+
+## [5.322.6] - 2026-10-17
+
+### Fixed
+- clear 2 test-typecheck errors that turned main's ratchet red (#4015) (a78bcb2a)
+
+## [5.322.5] - 2026-10-17
+
+### Fixed
+- tighten registry drift-catcher to reject 'inherit' model pins (#3995) (b8e10f09)
+- add hasWorkspacePreamble test and drop `true as const` nit (#3992) (5a08681b)
+- tighten recovery tests, add reply hint, fix readonly cast, harden rmSync (#3998) (6ae521cc)
+- tighten isStdoutOnlyCat regex and fix threat-model citation (#3996) (330ad864)
+- fix Bearer stopword lookahead \b→\s; add 8-char boundary and hyphenated-token tests (#3997) (be00c1db)
+
+## [5.322.4] - 2026-10-17
+
+### Fixed
+- add pinning tests for unconfined-parent writeRoots/readRoots no-op behaviour (#3797) (e88363d6)
+
+## [5.322.3] - 2026-10-17
+
+### Fixed
+- safe filename encoding for Telegram topic sessions; deterministic tailLedger test (#3814) (afb59aeb)
+
 ## [5.322.2] - 2026-10-17
 
 ### Added

@@ -22,6 +22,7 @@ import { join } from 'path';
 import type { SessionData } from './session-manager.js';
 import type { TelegramRoute } from './route.js';
 import { routeKey } from './route.js';
+import { routeFileStem, legacyRouteStem } from './session-manager.disk-io.js';
 
 /**
  * Attempt to load a route's SessionData from its on-disk sidecar, populating
@@ -29,9 +30,10 @@ import { routeKey } from './route.js';
  * or unparseable — callers fall through to their existing defaults.
  *
  * Invariant: the sidecar filename follows the same convention as
- * `SessionManager.sidecarFileName` — General routes use `<chatId>.json`,
- * topic routes use `<chatId>:<threadId>.json`. This function recomputes the
- * same path so it does not depend on a live SessionManager instance.
+ * `sidecarFileName` in session-manager.disk-io — General routes use
+ * `<chatId>.json`, topic routes use `<chatId>~<threadId>.json` (tilde, not
+ * colon). This function delegates to `routeFileStem` / `legacyRouteStem` so
+ * the encoding is never duplicated.
  *
  * @param dataDir - The bot's session-data directory (same as SessionManager.options.dataDir)
  * @param sessionData - The live in-memory map to populate when a sidecar is found
@@ -47,14 +49,25 @@ export function demandLoadSidecar(
   // Already in memory — nothing to do.
   if (sessionData.has(key)) return sessionData.get(key);
 
-  const filePath = join(dataDir, `${key}.json`);
-  try {
-    const raw = readFileSync(filePath, 'utf-8');
-    const data = JSON.parse(raw) as SessionData;
-    sessionData.set(key, data);
-    return data;
-  } catch {
-    // ENOENT (never messaged) or parse error — return undefined; callers use defaults.
-    return undefined;
+  // Invariant: try the canonical encoded filename (tilde form) first.
+  // Fall back to the legacy colon-named file only on platforms where such
+  // files can exist (POSIX); on Windows the OS rejects colon filenames at
+  // the syscall level so readFileSync would throw EINVAL, not ENOENT, but
+  // the catch below swallows both — no Windows-specific branch needed.
+  const stems = [routeFileStem(route)];
+  const legacyStem = legacyRouteStem(route);
+  if (legacyStem !== stems[0]) stems.push(legacyStem);
+
+  for (const stem of stems) {
+    const filePath = join(dataDir, `${stem}.json`);
+    try {
+      const raw = readFileSync(filePath, 'utf-8');
+      const data = JSON.parse(raw) as SessionData;
+      sessionData.set(key, data);
+      return data;
+    } catch {
+      // ENOENT / EINVAL / parse error — try next stem or return undefined.
+    }
   }
+  return undefined;
 }
