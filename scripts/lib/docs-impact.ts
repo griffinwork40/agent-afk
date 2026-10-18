@@ -66,8 +66,10 @@ export function impactMarkdown(base: string, current: Surface, pages: readonly P
   const changed = new Set(diff.files.filter((file) => file.startsWith('src/')));
   const affected = current.symbols.filter((symbol) => symbol.source && changed.has(symbol.source));
   const delta = surfaceChanges(current, old.surface);
-  const lines = ['## Docs impact (advisory)', '', `Base: \`${base}\``, ''];
-  for (const note of [diff.note, old.note]) if (note) lines.push(`Note: ${note}`, '');
+  // Encode punctuation before Markdown parsing, including fallback notes containing the ref.
+  const safeBase = base.replace(/[^a-zA-Z0-9/._-]/gu, (char) => `&#${char.codePointAt(0)!};`);
+  const lines = ['## Docs impact (advisory)', '', `Base: <code>${safeBase}</code>`, ''];
+  for (const note of [diff.note, old.note]) if (note) lines.push(`Note: ${note.replaceAll(base, safeBase)}`, '');
   lines.push(`### Changed source files (${changed.size})`);
   if (!changed.size) lines.push('- None');
   for (const file of [...changed].sort()) {

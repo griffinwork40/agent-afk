@@ -123,3 +123,85 @@ describe('docs refs: known-symbol sources', () => {
     expect(real.slash.has('/mem')).toBe(true);
   });
 });
+
+describe('docs refs: fenced slash command refs (spec #6)', () => {
+  it('flags stale slash refs inside shell fences', () => {
+    expect(check('```bash\n/modle sonnet\n```')).toEqual(['guides/x.mdx:2: slash /modle not found (did you mean /model?)']);
+    expect(check('```sh\n/modle\n```')).toEqual(['guides/x.mdx:2: slash /modle not found (did you mean /model?)']);
+    expect(check('```bash\nafk chat\n/modle\n```')).toHaveLength(1);
+  });
+  it('accepts valid slash refs inside shell fences', () => {
+    expect(check('```bash\n/model sonnet\n/model\n```')).toEqual([]);
+  });
+  it('does not false-positive on filesystem paths inside shell fences', () => {
+    expect(check('```bash\ncat /tmp/out.txt\nls /usr/bin\n```')).toEqual([]);
+  });
+  it('does not flag slash refs inside non-shell fences (e.g. json)', () => {
+    expect(check('```json\n{"cmd": "/modle"}\n```')).toEqual([]);
+  });
+  it('does not flag filesystem paths that look like slash commands in prose', () => {
+    expect(check('Copy to `/tmp/out.txt` or `/usr/local/bin`.')).toEqual([]);
+  });
+});
+
+describe('docs refs: slash refs in unlabeled and non-shell fences (spec #8)', () => {
+  const bare = (text: string): string[] => check(text).map((f) => f.replace(/ \(did you mean .*\)$/, ''));
+  it('flags stale slash refs in backtick spans inside unlabeled fences on afk-first lines', () => {
+    // unlabeled fence, afk-first line with inline backtick span containing stale slash
+    expect(bare('```\nafk chat `/modle`\n```')).toEqual(['guides/x.mdx:2: slash /modle not found']);
+  });
+  it('checks standalone slash invocations in unlabeled and tilde fences', () => {
+    expect(bare('```\n/modle arg\n```')).toEqual(['guides/x.mdx:2: slash /modle not found']);
+    expect(bare('~~~\n/modle arg\n~~~')).toEqual(['guides/x.mdx:2: slash /modle not found']);
+    expect(bare('```text\n/modle arg\n```')).toEqual(['guides/x.mdx:2: slash /modle not found']);
+  });
+  it('does not flag stale slash refs in bare words on non-afk unlabeled fence lines', () => {
+    // unlabeled fence, non-afk line — /modle is not checked
+    expect(bare('```\necho /modle\n```')).toEqual([]);
+  });
+  it('flags stale slash refs in backtick spans inside text fences on afk-first lines', () => {
+    expect(bare('```text\nafk chat `/modle`\n```')).toEqual(['guides/x.mdx:2: slash /modle not found']);
+  });
+  it('flags stale slash refs in backtick spans inside tilde fences on afk-first lines', () => {
+    expect(bare('~~~\nafk chat `/modle`\n~~~')).toEqual(['guides/x.mdx:2: slash /modle not found']);
+  });
+  it('does not false-positive on bare /word path args in shell fences', () => {
+    // cat /tmp/out.txt — /tmp is an FS root, not a slash command
+    expect(bare('```bash\ncat /tmp/out.txt\n```')).toEqual([]);
+    // ls /usr/bin — /usr is an FS root
+    expect(bare('```bash\nls /usr/bin\n```')).toEqual([]);
+    // a non-FS /word preceded by a shell command word is a path arg, not a slash ref
+    expect(bare('```bash\ncat /model\n```')).toEqual([]);
+  });
+  it('flags bare /word slash ref at line start in shell fence after a separator', () => {
+    // After a pipe separator, /modle at line start is a slash ref, not a path arg
+    expect(bare('```bash\ntrue; /modle\n```')).toEqual(['guides/x.mdx:2: slash /modle not found']);
+  });
+  it('continuation line slash check works in shell fences', () => {
+    // Multi-line continuation: inline span slash check fires at the line where the span appears (line 3)
+    expect(bare('```bash\nafk chat \\\n  `/modle`\n```')).toEqual(['guides/x.mdx:3: slash /modle not found']);
+  });
+  it('retains known FS roots as non-slash in shell fences', () => {
+    for (const root of ['/tmp', '/usr', '/etc', '/var', '/bin', '/opt', '/dev', '/home', '/proc', '/mnt', '/sbin']) {
+      expect(bare(`\`\`\`bash\nls ${root}\n\`\`\``)).toEqual([]);
+    }
+  });
+});
+
+describe('docs refs: unknown nested subcommand without suggestion (spec #7)', () => {
+  it('emits a finding for an unknown subcommand even when no near suggestion exists', () => {
+    // 'afk schedule zzz' — 'zzz' is too distant from 'add' for a near match, but schedule has children
+    const findings = check('```bash\nafk schedule zzz\n```');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatch(/^guides\/x\.mdx:2: command afk schedule zzz not found/);
+  });
+  it('still emits a near-match suggestion when one exists', () => {
+    expect(check('`afk schedule aad`')).toEqual(['guides/x.mdx:1: command afk schedule aad not found (did you mean afk schedule add?)']);
+  });
+  it('does not emit a finding for a valid positional prompt at root', () => {
+    expect(check('```bash\nafk fix the bug\n```')).toEqual([]);
+  });
+  it('does not emit a finding for a quoted word at a subcommand', () => {
+    expect(check('```bash\nafk schedule "my task"\n```')).toEqual([]);
+  });
+});

@@ -97,10 +97,12 @@ export function namingContexts(text: string): { inline: string[]; shell: string[
 
 /** Commands are code-span or shell-line prefixes with a whitespace/end boundary.
  * Other kinds require an entire inline-code token (no prose or fenced matches).
- * Slash invocations with arguments must separately name the canonical /token.
+ * Slash inline invocations accept arguments after the canonical /token.
  */
 export function namesSymbol(symbol: Pick<SurfaceSymbol, 'kind' | 'name'>, text: string): boolean {
   const { inline, shell } = namingContexts(text);
+  if (symbol.kind === 'slash') return inline.some((token) => token === symbol.name
+    || (symbol.name.startsWith('/') && token.startsWith(symbol.name) && /^\s/.test(token.slice(symbol.name.length))));
   if (symbol.kind !== 'command') return inline.includes(symbol.name);
   return [...inline, ...shell].some((token) => token === symbol.name
     || (token.startsWith(symbol.name) && /^\s/.test(token.slice(symbol.name.length))));

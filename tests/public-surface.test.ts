@@ -123,6 +123,19 @@ describe('handwritten naming rules', () => {
     expect(named('command', 'afk chat', '```bash\necho afk chat\n```')).toBe(false);
     expect(named('command', 'afk chat', '~~~~sh\nafk chat\n~~~~')).toBe(true);
   });
+  it('slash namesSymbol: accepts slash with arguments but rejects non-slash prefix matches', () => {
+    // /model with an argument IS a valid slash invocation
+    expect(named('slash', '/model', '`/model sonnet`')).toBe(true);
+    // token (no leading /) must not match via the prefix+space branch — only exact
+    expect(named('slash', 'token', '`token more`')).toBe(false);
+    // exact match with no trailing content
+    expect(named('slash', '/model', '`/model`')).toBe(true);
+    // prefix boundary: /mod must not match /model
+    expect(named('slash', '/mod', '`/model`')).toBe(false);
+    // /model in prose (no backticks) is not a mention
+    expect(named('slash', '/model', 'use /model for this')).toBe(false);
+  });
+
   it('does not turn fenced backticks into inline mentions, even with longer closing fences', () => {
     expect(namingContexts('````json\n`read_file`\n`````\n`real`').inline).toEqual(['real']);
   });

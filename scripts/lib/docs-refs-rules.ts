@@ -121,6 +121,15 @@ export function pageFindings(page: string, text: string, ignored: ReadonlySet<nu
       continued += line.replace(/\\\s*$/, ' ');
       if (/\\\s*$/.test(line)) return;
       if (fence.shell || startsWithAfk(continued)) for (const segment of afkSegments(continued)) add(checkCommand(segment, known), continuedAt);
+      if (fence.shell || startsWithAfk(continued)) {
+        // Check inline spans (backtick content) for slash refs.
+        for (const span of inlineSpans(continued)) add([slashFinding(span, known)]);
+      }
+      // A standalone slash invocation is a reference in any fence language,
+      // including unlabeled examples. Shell arguments and JSON strings are not.
+      for (const m of continued.matchAll(/(?:^\s*(?:\$\s+)?|[;|&]\s*)(\/[A-Za-z][\w:-]*)(?=\s|$)/g)) {
+        add([slashFinding(m[1]!, known)], continuedAt);
+      }
       continued = '';
       return;
     }

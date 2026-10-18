@@ -123,14 +123,6 @@ The failure-geometry pattern is a way to make failure earlier, smaller, louder, 
 
 Use four questions when writing a custom skill:
 
-These are conservative heuristics over observed tool events and command shapes, not a proof of correctness. A command can look like a test while covering the wrong behavior. Delegated work also has its own evidence stream. Ask for concrete artifacts and inspect the final state rather than relying only on a status label.
-
-## Design for a better failure mode
-
-The failure-geometry pattern is a way to make failure earlier, smaller, louder, cheaper, more local, more informative, or easier to recover from. It is not a separate `/failure-geometry` command or a runtime guarantee.
-
-Use four questions when writing a custom skill:
-
 1. **Name the default failure.** What happens without hardening? For example, malformed output gets accepted or a blocked action retries forever.
 2. **Choose the preferred failure.** Should the workflow reject, pause in a named state, or ask for a decision?
 3. **Add structure.** Use a parser, gate, bounded retry, rubric, or explicit output contract. A comment promising care is not enforcement.

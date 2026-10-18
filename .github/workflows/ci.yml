@@ -511,7 +511,9 @@ jobs:
       - name: Docs impact summary (advisory)
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        run: pnpm docs:impact --base origin/${{ github.base_ref }}
+        env:
+          AFK_BASE_REF: ${{ github.base_ref }}
+        run: pnpm docs:impact --base "origin/${AFK_BASE_REF}"
 
       - name: Install dependencies
         run: cd website && npm ci

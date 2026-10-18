@@ -208,16 +208,6 @@ User skills can also live at `~/.afk/skills/<name>/SKILL.md` without packaging a
 
 When a manifest declares `main`, AFK imports that module during plugin activation before the session's skill manifest is assembled. If it exports a default function, AFK awaits it and passes the host API. Use the supplied API for registration rather than importing a separate runtime copy of `agent-afk`, which could register against the wrong singleton or fail in a cloned plugin without dependencies.
 
-| Plugin path or field | Contribution |
-| --- | --- |
-| `skills/<name>/SKILL.md` | Skill instructions and metadata |
-| `commands/<name>.md` | User-invoked slash command |
-| `commands/review/security.md` | Namespaced `/review:security` command |
-| `agents/` | Named agent definitions |
-| `.claude-plugin/mcp.json` | MCP server definitions |
-| `hooks/hooks.json` | Command hooks, behind the plugin-hook trust gate |
-| Manifest `main` | Executable JavaScript setup module |
-
 Legacy Claude Code command files are parsed as prompts and listed by `/skills`. Their names come from the file path, not frontmatter. They remain user-invoked commands rather than automatically expanding the model's skill-routing catalog. Supported metadata such as description, argument hints, allowed tools, and model goes through the shared skill parser.
 
 User skills can also live at `~/.afk/skills/<name>/SKILL.md` without packaging a plugin. See [custom skills](/skills/custom) and [named agents](/guides/named-agents) for those layouts.

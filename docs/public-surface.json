@@ -138,6 +138,16 @@
     },
     {
       "kind": "command",
+      "name": "afk events",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk events github",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "command",
       "name": "afk farm",
       "source": "src/cli/commands/farm.ts"
     },
@@ -509,6 +519,11 @@
     {
       "kind": "command",
       "name": "afk trace",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk trace export-otlp",
       "source": "src/cli/commands/trace.ts"
     },
     {
@@ -978,6 +993,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_EVENTS_GITHUB_POLL_MS",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
       "source": "src/config/env.model.ts"
     },
@@ -1043,6 +1063,16 @@
     },
     {
       "kind": "env",
+      "name": "AFK_LSP_DIAGNOSTICS",
+      "source": "src/config/env.tools.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LSP_DIAGNOSTICS_TIMEOUT_MS",
+      "source": "src/config/env.tools.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_MAX_BUDGET_USD",
       "source": "src/config/env.model.ts"
     },
@@ -1069,6 +1099,16 @@
     {
       "kind": "env",
       "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI",
       "source": "src/config/env.model.ts"
     },
     {
@@ -1225,6 +1265,11 @@
       "kind": "env",
       "name": "AFK_OPENAI_USE_RESPONSES",
       "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_OTLP_ENDPOINT",
+      "source": "src/config/env.misc.ts"
     },
     {
       "kind": "env",
@@ -2348,6 +2393,41 @@
     },
     {
       "kind": "flag",
+      "name": "afk events --help",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --command",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --help",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --interval",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --on",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --once",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --repo",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk farm --base-ref",
       "source": "src/cli/commands/farm.ts"
     },
@@ -3339,6 +3419,16 @@
     {
       "kind": "flag",
       "name": "afk trace --help",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace export-otlp --help",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace export-otlp --out",
       "source": "src/cli/commands/trace.ts"
     },
     {

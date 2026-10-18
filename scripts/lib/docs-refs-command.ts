@@ -83,6 +83,7 @@ export function checkCommand(tokens: readonly ShellToken[], known: KnownRefs): R
     const near = text.length >= 3 ? nearest(text, [...command.children].filter((c) => c.length >= 3), 2) : undefined;
     if (removed) findings.push({ kind: 'command', token: `${command.path} ${text}`, suggestion: removed });
     else if (near && command.children.size) findings.push({ kind: 'command', token: `${command.path} ${text}`, suggestion: `${command.path} ${near}` });
+    else if (!near && command.children.size && command.path !== 'afk') findings.push({ kind: 'command', token: `${command.path} ${text}` });
   }
   return findings;
 }

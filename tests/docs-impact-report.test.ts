@@ -62,6 +62,50 @@ describe('docs impact', () => {
   });
 });
 
+describe('impactMarkdown: safe base rendering', () => {
+  it('HTML-escapes special chars in base so a malicious ref cannot create links or break code', () => {
+    // Backtick in base: must not close a CommonMark code span
+    const backtickBase = impactMarkdown('main`evil', current, pages, fakeGit());
+    expect(backtickBase).not.toMatch(/`evil/);       // no raw backtick → no code-span break
+    expect(backtickBase).toContain('&#96;evil');     // HTML-entity escaped
+    // The Base: line itself must not contain a raw backtick (checks only that line)
+    const baseLine = backtickBase.split('\n').find((l) => l.startsWith('Base:')) ?? '';
+    expect(baseLine).not.toMatch(/`/);
+
+    // Angle brackets: must not create HTML links
+    const ltGtBase = impactMarkdown('<script>alert(1)</script>', current, pages, fakeGit());
+    expect(ltGtBase).not.toContain('<script>');
+    expect(ltGtBase).toContain('&#60;script&#62;');
+
+    // Ampersand entity injection
+    const ampBase = impactMarkdown('a&b', current, pages, fakeGit());
+    expect(ampBase).not.toMatch(/a&b/);
+    expect(ampBase).toContain('a&#38;b');
+
+    // Encode link punctuation as entities before Markdown parsing.
+    const linkBase = impactMarkdown('](http://evil.example.com)', current, pages, fakeGit());
+    const linkBaseLine = linkBase.split('\n').find((l) => l.startsWith('Base:')) ?? '';
+    expect(linkBaseLine).toMatch(/^Base: <code>.*<\/code>$/);   // always wrapped in <code>
+
+    const newlineBase = impactMarkdown('main\n# evil', current, pages, fakeGit());
+    expect(newlineBase).toContain('<code>main&#10;&#35;&#32;evil</code>');
+    const unavailable = impactMarkdown('main[click](https://evil)', current, pages, () => { throw new Error('missing'); });
+    expect(unavailable).not.toContain('[click]');
+    expect(unavailable).toContain('Note: Base main&#91;click&#93;&#40;https&#58;//evil&#41; unavailable');
+
+    // Combination: base with backtick AND angle brackets
+    const comboBase = impactMarkdown('`<b>xss</b>`', current, pages, fakeGit());
+    expect(comboBase).not.toContain('`<b>');
+    expect(comboBase).toContain('&#96;&#60;b&#62;xss&#60;/b&#62;&#96;');
+  });
+
+  it('wraps safe base in <code> tags (HTML rendering, not markdown code span)', () => {
+    const md = impactMarkdown('origin/main', current, pages, fakeGit());
+    expect(md).toContain('<code>origin/main</code>');
+    expect(md).not.toMatch(/Base: `[^`]/);   // must NOT use backtick code span
+  });
+});
+
 describe('docs report', () => {
   it('renders backlog, generated-only kinds and safe feat subjects', () => {
     const backlog: Backlog = { version: 1, entries: [{ kind: 'slash', name: '/new', reason: 'Pending guide', added: '2026-10-18' }] };
