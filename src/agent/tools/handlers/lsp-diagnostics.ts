@@ -8,7 +8,7 @@
  * an empty array.
  *
  * Design constraints:
- *   - Hard timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS, default 5000 ms).
+ *   - Hard timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS, default 1500 ms).
  *   - Silent degradation: any error → empty result, never an exception.
  *   - TypeScript only in this phase; Python (pyright) is a follow-up.
  *   - LSP server binary: `typescript-language-server --stdio` on PATH.
@@ -29,14 +29,15 @@
  * @module agent/tools/handlers/lsp-diagnostics
  */
 
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { env } from '../../../config/env.js';
 
 /** A single LSP diagnostic item (subset of the full LSP spec). */
 export interface LspDiagnostic {
-  /** 0=Error 1=Warning 2=Information 3=Hint */
+  /** LSP severity: 1=Error, 2=Warning, 3=Information, 4=Hint. */
   severity: number;
   /** Human-readable message. */
   message: string;
@@ -46,13 +47,27 @@ export interface LspDiagnostic {
   col: number;
 }
 
-/** Severity labels matching LSP spec values 0-3. */
+/** Severity labels matching LSP spec values 1–4. */
 const SEVERITY_LABEL: Record<number, string> = {
   1: 'error',
   2: 'warning',
   3: 'info',
   4: 'hint',
 };
+
+/**
+ * Map file extension to LSP languageId.
+ * Returns undefined for unsupported extensions (caller should skip LSP).
+ */
+function languageIdForExt(ext: string): string | undefined {
+  switch (ext) {
+    case '.ts': return 'typescript';
+    case '.tsx': return 'typescriptreact';
+    case '.js': return 'javascript';
+    case '.jsx': return 'javascriptreact';
+    default: return undefined;
+  }
+}
 
 /**
  * Return true when the LSP diagnostics feature is enabled.
@@ -67,13 +82,19 @@ export function isLspDiagnosticsEnabled(): boolean {
 
 /**
  * Return the configured timeout in milliseconds.
- * Reads AFK_LSP_DIAGNOSTICS_TIMEOUT_MS; defaults to 5000.
+ * Reads AFK_LSP_DIAGNOSTICS_TIMEOUT_MS; defaults to 1500.
+ *
+ * Tradeoff: the default is intentionally low (1500 ms) because this runs
+ * inline inside edit_file / write_file tool responses. A slow language server
+ * adds perceived latency to every edit. The env var lets operators raise the
+ * ceiling when their server is slow but the diagnostics are valuable enough
+ * to wait for.
  */
 function getTimeoutMs(): number {
   const raw = env.AFK_LSP_DIAGNOSTICS_TIMEOUT_MS;
-  if (!raw) return 5000;
+  if (!raw) return 1500;
   const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : 5000;
+  return Number.isFinite(n) && n > 0 ? n : 1500;
 }
 
 /** Encode a JSON-RPC message with the LSP Content-Length framing. */
@@ -81,6 +102,12 @@ function encodeMessage(obj: unknown): Buffer {
   const body = JSON.stringify(obj);
   const header = `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n`;
   return Buffer.concat([Buffer.from(header, 'utf8'), Buffer.from(body, 'utf8')]);
+}
+
+/** Kill a child process and close its stdin, ignoring errors. */
+function killProc(proc: ChildProcess): void {
+  try { proc.stdin?.end(); } catch { /* ignore */ }
+  try { proc.kill(); } catch { /* ignore */ }
 }
 
 /**
@@ -96,7 +123,7 @@ function parseMessages(buf: Buffer): { messages: unknown[]; remaining: Buffer } 
     const headerEnd = buf.indexOf('\r\n\r\n', offset);
     if (headerEnd === -1) break;
 
-    const headerSection = buf.slice(offset, headerEnd).toString('utf8');
+    const headerSection = buf.subarray(offset, headerEnd).toString('utf8');
     const clMatch = headerSection.match(/Content-Length:\s*(\d+)/i);
     if (!clMatch || clMatch[1] === undefined) break;
 
@@ -106,7 +133,7 @@ function parseMessages(buf: Buffer): { messages: unknown[]; remaining: Buffer } 
 
     if (bodyEnd > buf.length) break; // incomplete — wait for more data
 
-    const body = buf.slice(bodyStart, bodyEnd).toString('utf8');
+    const body = buf.subarray(bodyStart, bodyEnd).toString('utf8');
     try {
       messages.push(JSON.parse(body));
     } catch {
@@ -115,7 +142,7 @@ function parseMessages(buf: Buffer): { messages: unknown[]; remaining: Buffer } 
     offset = bodyEnd;
   }
 
-  return { messages, remaining: buf.slice(offset) };
+  return { messages, remaining: buf.subarray(offset) };
 }
 
 /**
@@ -132,6 +159,13 @@ export async function queryLspDiagnostics(
   serverCmd: readonly string[] = ['typescript-language-server', '--stdio'],
 ): Promise<LspDiagnostic[]> {
   const timeoutMs = getTimeoutMs();
+  const langId = languageIdForExt(path.extname(filePath));
+  if (!langId) return []; // unsupported extension — skip
+
+  // Invariant: `proc` is hoisted so that `done()` can kill it on every exit
+  // path (timeout, error, close, diagnostics received). Without this, a
+  // timed-out or errored query leaves an orphaned typescript-language-server.
+  let proc: ChildProcess | null = null;
 
   return new Promise<LspDiagnostic[]>((resolve) => {
     let settled = false;
@@ -139,11 +173,13 @@ export async function queryLspDiagnostics(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (proc) killProc(proc);
       resolve(result);
     };
 
     // Hard timeout — never stall the edit.
     const timer = setTimeout(() => done([]), timeoutMs);
+    timer.unref();
 
     let fileContent = '';
 
@@ -154,7 +190,6 @@ export async function queryLspDiagnostics(
         if (settled) return;
 
         const [cmd, ...args] = serverCmd as [string, ...string[]];
-        let proc: ReturnType<typeof spawn>;
         try {
           proc = spawn(cmd, args, {
             stdio: ['pipe', 'pipe', 'ignore'],
@@ -172,7 +207,7 @@ export async function queryLspDiagnostics(
 
         const send = (msg: unknown) => {
           try {
-            proc.stdin!.write(encodeMessage(msg));
+            proc!.stdin!.write(encodeMessage(msg));
           } catch {
             // stdin closed — ignore
           }
@@ -201,7 +236,7 @@ export async function queryLspDiagnostics(
           params: {
             textDocument: {
               uri,
-              languageId: 'typescript',
+              languageId: langId,
               version: 1,
               text: fileContent,
             },
@@ -243,10 +278,10 @@ export async function queryLspDiagnostics(
                 });
               }
 
-              // Graceful shutdown
+              // Graceful shutdown — proc is killed by done() regardless,
+              // but try a clean exit first.
               send({ jsonrpc: '2.0', id: ++reqId, method: 'shutdown', params: null });
               send({ jsonrpc: '2.0', method: 'exit', params: null });
-              try { proc.stdin!.end(); } catch { /* ignore */ }
 
               done(diags);
               return;

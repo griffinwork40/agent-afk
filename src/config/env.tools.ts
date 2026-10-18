@@ -37,10 +37,12 @@ export const TOOLS_ENV_REGISTRY = [
       'Hard timeout in milliseconds for the post-edit LSP diagnostics query ' +
       '(AFK_LSP_DIAGNOSTICS=1). If the language server does not respond within ' +
       'this window the query is abandoned silently and the edit result is ' +
-      'unchanged. Default 5000 (5 seconds).',
+      'unchanged. Default 1500 (1.5 s) — intentionally low so a slow server ' +
+      'does not stall every edit; raise when diagnostics are valuable enough ' +
+      'to wait for.',
     type: 'number',
     required: false,
-    default: '5000',
+    default: '1500',
     example: '3000',
     category: 'misc',
   },

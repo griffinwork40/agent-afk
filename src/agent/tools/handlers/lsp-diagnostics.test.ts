@@ -186,10 +186,11 @@ describe('queryLspDiagnostics', () => {
 
     const diags = await queryLspDiagnostics(filePath, nodeCmd(scriptPath));
     expect(diags).toHaveLength(1);
-    expect(diags[0].severity).toBe(1);
-    expect(diags[0].message).toContain("Type 'string'");
-    expect(diags[0].line).toBe(3); // 0-based → 1-based
-    expect(diags[0].col).toBe(7);
+    const d0 = diags[0]!;
+    expect(d0.severity).toBe(1);
+    expect(d0.message).toContain("Type 'string'");
+    expect(d0.line).toBe(3); // 0-based → 1-based
+    expect(d0.col).toBe(7);
   }, 10_000);
 
   it('returns empty array when server emits no diagnostics', async () => {
@@ -211,6 +212,35 @@ describe('queryLspDiagnostics', () => {
 
       const diags = await queryLspDiagnostics(filePath, nodeCmd(scriptPath));
       expect(diags).toEqual([]);
+    } finally {
+      if (origTimeout === undefined) delete process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'];
+      else process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'] = origTimeout;
+    }
+  }, 5_000);
+
+  it('kills the child process on timeout', async () => {
+    const origTimeout = process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'];
+    process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'] = '300';
+    try {
+      const filePath = await makeTsFile('kill-test.ts');
+      const scriptPath = path.join(tempDir, 'fake-pid-server.js');
+      // Server that writes its PID to a file then hangs
+      const pidFile = path.join(tempDir, 'server.pid');
+      writeFileSync(
+        scriptPath,
+        `require('fs').writeFileSync(${JSON.stringify(pidFile)}, '' + process.pid);\nprocess.stdin.resume();\n`,
+        'utf8',
+      );
+
+      await queryLspDiagnostics(filePath, nodeCmd(scriptPath));
+
+      // Give the OS a moment to reap the process
+      await new Promise((r) => setTimeout(r, 200));
+
+      const pid = parseInt(await import('fs').then(fs => fs.promises.readFile(pidFile, 'utf8')), 10);
+      let alive = false;
+      try { process.kill(pid, 0); alive = true; } catch { /* expected */ }
+      expect(alive).toBe(false);
     } finally {
       if (origTimeout === undefined) delete process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'];
       else process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'] = origTimeout;
