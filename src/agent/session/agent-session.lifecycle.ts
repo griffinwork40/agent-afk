@@ -113,6 +113,8 @@ export interface BuildInitPromiseOptions {
   getProviderIterator: () => AsyncIterator<ProviderEvent>;
   /** Returns the Phase-1 `QueryInputStream` so Phase 2 can reuse its iterable. */
   getInputStream: () => QueryInputStream;
+  /** Returns the current (Phase-1) provider query so Phase 2 can close it before rebuilding. */
+  getProviderQuery: () => ProviderQuery;
   /** Returns true when the session has been closed (to abort Phase 2). */
   isClosed: () => boolean;
   abortSignal: AbortSignal;
@@ -149,7 +151,7 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
   // doing so ran `provider.query()` twice per session (land round 3, #4069).
   const phase1Manager = opts.getConfig().mcpManager;
   return opts.mcpInitPromise.then(
-    () => {
+    async () => {
       // Item 3: skip Phase-2 provider rebuild if session was closed while MCP
       // init was in flight. The owned manager is disconnected by the
       // `startMcpInit` callback on the calling side.
@@ -157,6 +159,13 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
 
       const phase2Manager = opts.getConfig().mcpManager;
       if (phase2Manager !== undefined && phase2Manager !== phase1Manager) {
+        // #4074 item 2: close the Phase-1 provider query before installing the
+        // rebuilt one. The Phase-1 ProviderRouter iterator is a lazy async
+        // generator that has never been driven, and QueryInputStream's single
+        // pendingResolve slot is last-writer-wins — both are harmless today.
+        // An injected config.provider that holds resources from query() would
+        // leak them without this close(), so we close defensively.
+        await opts.getProviderQuery().close();
         // Item 1: reuse the Phase-1 inputStream's iterable so sendMessage
         // pushes into the stream the rebuilt provider actually reads.
         const promptIterable = opts.getInputStream().createIterable();

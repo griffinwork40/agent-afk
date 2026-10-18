@@ -432,4 +432,69 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
 
     await callerManager.disconnectAll();
   });
+
+  // (e) #4074 item 2: Phase-1 provider query is closed before Phase 2 installs
+  // the rebuilt one. Uses an injected provider so close() is observable via spy.
+  it('(e) #4074: Phase-1 provider query is closed before Phase-2 rebuild installs new one', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    const closeCalls: string[] = [];
+
+    const makeQuery = (label: string): ProviderQuery => {
+      let closed = false;
+      return {
+        async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
+          yield {
+            type: 'session.init',
+            info: {
+              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'default',
+              cwd: process.cwd(), tools: [], slashCommands: [], skills: [], plugins: [],
+              mcpServers: [], apiKeySource: 'api-key', version: 'test',
+            },
+          };
+          while (!closed) await new Promise((r) => setTimeout(r, 5));
+        },
+        async interrupt() {}, async setModel() {}, async setPermissionMode() {},
+        async supportedCommands() { return []; }, async supportedModels() { return []; },
+        async supportedAgents() { return []; },
+        async getContextUsage() { return { tools: [], isAutoCompactEnabled: false, apiUsage: null }; },
+        async mcpServerStatus() { return []; },
+        async accountInfo() { return { subscriptionType: 'api-key' }; },
+        async rewindFiles() { return { canRewind: false }; },
+        close() { closed = true; closeCalls.push(label); },
+      } as unknown as ProviderQuery;
+    };
+
+    let callCount = 0;
+    const provider: ModelProvider = {
+      name: 'close-tracking-provider',
+      query(_args: ProviderQueryArgs): ProviderQuery {
+        callCount += 1;
+        return makeQuery(callCount === 1 ? 'phase-1' : 'phase-2');
+      },
+    } as unknown as ModelProvider;
+
+    // Use mcpServers so Phase 2 triggers a rebuild (SDK-built manager path).
+    const sdkManager = await McpManagerCls.fromConfig({});
+    const spy = vi.spyOn(McpManagerCls, 'fromConfig').mockResolvedValueOnce(sdkManager);
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      persistSession: false,
+      cwd: process.cwd(),
+      provider,
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+
+    await session.waitForInitialization();
+
+    // Phase-1 query must have been closed before Phase-2 query was installed.
+    expect(closeCalls).toContain('phase-1');
+    // Two queries were built: one for Phase 1, one for Phase 2.
+    expect(callCount).toBe(2);
+
+    await session.close();
+    spy.mockRestore();
+    await sdkManager.disconnectAll();
+  });
 });
