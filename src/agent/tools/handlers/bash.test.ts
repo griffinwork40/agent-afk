@@ -210,10 +210,15 @@ describe('bashHandler', () => {
     it('clamps timeout_ms above 600000 and warns in result', async () => {
       const result = await bashHandler({ command: 'echo test', timeout_ms: 700000 }, createSignal());
       expect(result.isError).toBeFalsy();
+      // Clamp-warning contract: result must open with the [Warning] sentinel,
+      // name both the requested and the clamped value, and use 'clamped'
+      // vocabulary — not the subprocess stdout.
       expect(result.content).toContain('[Warning]');
       expect(result.content).toContain('700000');
       expect(result.content).toContain('600000');
-      expect(result.content).toContain('test');
+      expect(result.content).toMatch(/clamped/i);
+      // The warning must appear before any command output so the model sees it.
+      expect(result.content.indexOf('[Warning]')).toBeLessThan(result.content.indexOf('test'));
     });
 
     it('throws on negative timeout_ms', async () => {

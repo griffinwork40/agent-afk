@@ -28,6 +28,8 @@ import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError, ensureError} from '../../utils/errors.js';
+import { buildMcpFailureNotice } from '../mcp/failure-notice.js';
+import type { McpServerStateLike } from '../mcp/failure-notice.js';
 import { transformProviderEvent } from './stream-consumer.js';
 import { buildInitialState } from './session-setup.js';
 import { SessionStateManager } from './session-state.js';
@@ -38,7 +40,7 @@ import { QueryInputStream } from './input-iterable.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { SessionShutdown } from './session-shutdown.js';
 import type { AgentConfig } from '../types.js';
-import type { ProviderQuery, ProviderEvent } from '../provider.js';
+import type { ProviderQuery, ProviderEvent, ProviderUserTurn } from '../provider.js';
 import type { HookRegistry } from '../hooks.js';
 import type { TransformDeps } from './stream-consumer.js';
 
@@ -48,6 +50,51 @@ export interface ProviderLifecycleResult {
   inputStream: QueryInputStream;
   providerQuery: ProviderQuery;
   providerIterator: AsyncIterator<ProviderEvent>;
+}
+
+/** Objects returned by {@link rebuildProviderQuery}. */
+export interface ProviderQueryResult {
+  providerQuery: ProviderQuery;
+  providerIterator: AsyncIterator<ProviderEvent>;
+}
+
+/**
+ * Rebuild only the provider query + iterator for a new config, reusing an
+ * existing `promptIterable` from the live `QueryInputStream`.
+ *
+ * Used by Phase 2 of `buildSessionInitPromise` (#4063) so the rebuilt
+ * provider reads from the same input stream that `sendMessage` pushes to.
+ * Creating a fresh `QueryInputStream` here would discard the Phase-1 stream
+ * and leave `AgentSession.inputStream` feeding a provider that is never read.
+ */
+export function rebuildProviderQuery(
+  config: AgentConfig,
+  promptIterable: AsyncIterable<ProviderUserTurn>,
+): ProviderQueryResult {
+  let providerQuery: ProviderQuery;
+  if (config.provider) {
+    providerQuery = config.provider.query({ prompt: promptIterable, config });
+  } else {
+    const resolveProviderFn = config.providerFactory
+      ? config.providerFactory
+      : (m: string | undefined) =>
+          resolveProvider(m, undefined, {
+            customTools: config.customTools,
+            canUseTool: config.canUseTool,
+            ...(config.executors !== undefined ? { executors: config.executors } : {}),
+            ...(config.mcpManager !== undefined ? { mcpManager: config.mcpManager } : {}),
+          });
+    providerQuery = new ProviderRouter(
+      { prompt: promptIterable, config },
+      {
+        resolveProvider: resolveProviderFn,
+        providerNameForModel: (m) => providerForModel(m),
+        resolveApiKey: (m) => resolveCredentialForModel(m),
+      },
+    );
+  }
+  const iterable = providerQuery as AsyncIterable<ProviderEvent>;
+  return { providerQuery, providerIterator: iterable[Symbol.asyncIterator]() };
 }
 
 /**
@@ -108,6 +155,10 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
             // #3442: opt-in executors ride along on every provider the router
             // builds, including ones rebuilt by a cross-family model swap.
             ...(config.executors !== undefined ? { executors: config.executors } : {}),
+            // #4063: forward the resolved MCP manager (caller-supplied or
+            // SDK-built from config.mcpServers) so MCP tools are bridged and
+            // mcpServerStatus() returns the live server states.
+            ...(config.mcpManager !== undefined ? { mcpManager: config.mcpManager } : {}),
           });
     providerQuery = new ProviderRouter(
       { prompt: promptIterable, config },
@@ -144,6 +195,14 @@ export class ProviderInitializer {
     private readonly shutdown: SessionShutdown,
     private readonly hookRegistry: HookRegistry | undefined,
     private readonly queueFrameworkContext: (text: string) => void,
+    /**
+     * Live accessor for MCP server states. When one or more servers are in
+     * `error` state, a framework context notice is queued at session init so
+     * the model's FIRST turn already knows which servers are down and why
+     * (#4064). Optional for backwards compat — callers that don't wire an
+     * McpManager leave this undefined and no notice is injected.
+     */
+    private readonly getMcpServerStates?: () => readonly McpServerStateLike[],
   ) {}
 
   /**
@@ -199,6 +258,19 @@ export class ProviderInitializer {
       // unreachable for forks. The guard is kept for clarity and defence-in-depth.
       if (sessionStartInjectContext && !isForkedChild) {
         this.queueFrameworkContext(sessionStartInjectContext);
+      }
+
+      // #4064: MCP failure notice — queued once at session init so the model's
+      // first turn already knows which configured servers are unavailable and
+      // why, preventing hallucinated causes. Emitted after SessionStart context
+      // so hook-injected nudges take precedence. Skipped for forked children
+      // (same guard as SessionStart dispatch above) — failures are a root-session
+      // concern; children see errors through their own unknown-tool messages.
+      if (!isForkedChild && this.getMcpServerStates !== undefined) {
+        const mcpNotice = buildMcpFailureNotice(this.getMcpServerStates());
+        if (mcpNotice !== undefined) {
+          this.queueFrameworkContext(mcpNotice);
+        }
       }
 
       while (true) {

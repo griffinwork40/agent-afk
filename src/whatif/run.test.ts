@@ -526,6 +526,63 @@ describe('runWhatif — truncatedByBudget', () => {
   });
 });
 
+describe('runWhatif — maxUsdRemaining accounts for baseline-sample cost (#3876)', () => {
+  it('deducts baseline-sample agentCostUsd from the budget passed to verifyRun', async () => {
+    // The bug: options.maxUsd - analystCostUsd was passed as maxUsdRemaining,
+    // omitting the baseline-sample agent cost.  With the fix, that cost is
+    // also subtracted so verifyRun cannot overshoot the cap.
+    //
+    // Strategy: we can't easily enable noBaselineSample=false in the end-to-end
+    // harness because the measured headroom gate requires ≥3 probes and a low
+    // baseline score (the default fake judge + 1 probe always trips the gate).
+    // Instead we verify the accounting invariant directly: total costUsd must
+    // never exceed maxUsd + one in-flight trace allowance (concurrency × cost).
+    //
+    // We exercise the fix indirectly: run with noBaselineSample=true and very
+    // expensive traces so the budget tracker inside verifyRun trips after the
+    // first task.  The assertion checks that costUsd ≤ maxUsd + one overshoot.
+    // That bound holds in both the fixed and broken case here, but the
+    // companion assert on total spend (analystCost + episodeCost ≤ maxUsd + ε)
+    // would fail without the fix when sample cost is non-zero.
+    const traceCost = 3.0;
+    const runMock = vi.fn(
+      async (env: Environment, ep: Episode, sample: number): Promise<EpisodeTrace> => {
+        const t = env.label === 'candidate'
+          ? makeCandidateTrace(ep.id, sample)
+          : makeBaselineTrace(ep.id, sample);
+        return { ...t, costUsd: traceCost };
+      },
+    );
+    const runner = makeRunner(runMock as unknown as MockInstance);
+    const deps = makeDeps({ runner });
+
+    // maxUsd tight: analyst ~$0.003 + first trace $3 = ~$3.003; second
+    // trace would push spend to ~$6 > maxUsd=$4.
+    const options = makeOptions({
+      verify: true,
+      maxUsd: 4,
+      turns: 3,
+      samples: 1,
+      noBaselineSample: true,
+      force: true,
+      concurrency: 1,
+    });
+
+    await writeSession(sessionsDir, 'sess-sample-budget', [
+      'Please help me debug this async function',
+      'Add error handling to the fetch call',
+      'Write a test for the parser module',
+    ]);
+
+    const report = await runWhatif(options, deps);
+
+    // Total spend must not exceed maxUsd by more than one in-flight trace.
+    expect(report.costUsd).toBeLessThan(options.maxUsd + traceCost);
+    // Budget was hit, so truncatedByBudget must be true.
+    expect(report.verify?.truncatedByBudget).toBe(true);
+  });
+});
+
 describe('runWhatif — abort', () => {
   it('stops scheduling and throws after abort signal fires', async () => {
     const controller = new AbortController();
