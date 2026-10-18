@@ -17,7 +17,8 @@
  *     `interrupt()` aborts it — see shared/abort-coordinator.ts
  *   - `runTurn` iterates model→tools→model until the model stops calling tools
  *     (or the tool-round cap fires — see shared/tool-loop-cap.ts — after which
- *     one tools-stripped wind-down round runs, matching anthropic-direct/loop.ts)
+ *     one wind-down round runs; it keeps the tools array for prefix-cache
+ *     stability but never dispatches — see query/wind-down-final.ts)
  *
  * History compaction is supported via {@link OpenAICompatibleQuery.compact},
  * which reuses this session's client to summarize the older transcript through

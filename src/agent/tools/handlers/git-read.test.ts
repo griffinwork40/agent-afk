@@ -103,6 +103,25 @@ describe('path confinement', () => {
     expect(plan.ok && plan.argv.slice(-4)).toEqual(['--', 'src/a.ts', 'b.ts', '.']);
   });
 
+  it('treats a literal -- in args as the revision/path separator', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['--oneline', 'main', '--', 'src/a.ts'], paths: ['b.ts'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['log', '--no-ext-diff', '--no-textconv', '--oneline', 'main', '--', 'b.ts', 'src/a.ts']);
+  });
+
+  it('confines paths given after -- in args', () => {
+    expect(rejected({ subcommand: 'log', args: ['--', '../etc/passwd'] })).toContain('outside the session working directory');
+    expect(rejected({ subcommand: 'log', args: ['--', ':(top)x'] })).toContain('pathspec magic');
+  });
+
+  it('keeps revisions containing / as revisions', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['origin/main..HEAD'] }, CWD);
+    expect(plan.ok && plan.argv.slice(-2)).toEqual(['origin/main..HEAD', '--']);
+  });
+
+  it('caps paths merged from args at the entry limit', () => {
+    expect(rejected({ subcommand: 'log', args: ['--', 'a'], paths: Array(40).fill('b') })).toContain('at most');
+  });
+
   it.each(['../etc/passwd', '/etc/passwd', 'src/../../x', ':(top)x', ':/x'])('rejects %s', (p) => {
     expect(typeof confinePathspec(CWD, p)).not.toBe('string');
     expect(planGitRead({ subcommand: 'diff', paths: [p] }, CWD).ok).toBe(false);

@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.322.16] - 2026-10-18
+
+### Fixed
+- SDK builds and owns McpManager from config.mcpServers (#4069) (7fecda4d)
+
 ## [5.322.15] - 2026-10-18
 
 ### Fixed

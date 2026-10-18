@@ -162,13 +162,20 @@ export async function* runIteration(
     }
   }
 
-  // Wind-down round: strip tools and append budget note to THIS request only.
+  // Wind-down round: append the budget note to THIS request only.
   if (windDown !== null) {
     const note = windDown === TOOL_USE_LOOP_CAPPED ? WIND_DOWN_NOTE
       : windDown === CONTEXT_PRESSURE_WIND_DOWN ? CONTEXT_PRESSURE_NOTE : SOFT_DEADLINE_NOTE;
     messages.push({ role: 'user', content: note });
   }
-  const activeTools = windDown !== null ? undefined : ctx.activeOpenAITools();
+  // Invariant: wind-down rounds send the SAME tools array (and no tool_choice
+  // override) as a normal round. Chat templates such as Qwen's render tool
+  // schemas before the system prompt, and hosted prompt caches key on tools, so
+  // stripping them re-prefills the whole conversation. `tool_choice: "none"` is
+  // not used either: some servers (oMLX) drop the tools from the template for
+  // it. Safety lives in the turn driver: a wind-down round never dispatches
+  // (see wind-down-final.ts).
+  const activeTools = ctx.activeOpenAITools();
 
   // Shared context for the retry/stream-drive skeleton (query/stream-drive.ts).
   const driveCtx = {

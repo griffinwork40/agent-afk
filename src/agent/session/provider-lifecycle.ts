@@ -40,7 +40,7 @@ import { QueryInputStream } from './input-iterable.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { SessionShutdown } from './session-shutdown.js';
 import type { AgentConfig } from '../types.js';
-import type { ProviderQuery, ProviderEvent } from '../provider.js';
+import type { ProviderQuery, ProviderEvent, ProviderUserTurn } from '../provider.js';
 import type { HookRegistry } from '../hooks.js';
 import type { TransformDeps } from './stream-consumer.js';
 
@@ -50,6 +50,51 @@ export interface ProviderLifecycleResult {
   inputStream: QueryInputStream;
   providerQuery: ProviderQuery;
   providerIterator: AsyncIterator<ProviderEvent>;
+}
+
+/** Objects returned by {@link rebuildProviderQuery}. */
+export interface ProviderQueryResult {
+  providerQuery: ProviderQuery;
+  providerIterator: AsyncIterator<ProviderEvent>;
+}
+
+/**
+ * Rebuild only the provider query + iterator for a new config, reusing an
+ * existing `promptIterable` from the live `QueryInputStream`.
+ *
+ * Used by Phase 2 of `buildSessionInitPromise` (#4063) so the rebuilt
+ * provider reads from the same input stream that `sendMessage` pushes to.
+ * Creating a fresh `QueryInputStream` here would discard the Phase-1 stream
+ * and leave `AgentSession.inputStream` feeding a provider that is never read.
+ */
+export function rebuildProviderQuery(
+  config: AgentConfig,
+  promptIterable: AsyncIterable<ProviderUserTurn>,
+): ProviderQueryResult {
+  let providerQuery: ProviderQuery;
+  if (config.provider) {
+    providerQuery = config.provider.query({ prompt: promptIterable, config });
+  } else {
+    const resolveProviderFn = config.providerFactory
+      ? config.providerFactory
+      : (m: string | undefined) =>
+          resolveProvider(m, undefined, {
+            customTools: config.customTools,
+            canUseTool: config.canUseTool,
+            ...(config.executors !== undefined ? { executors: config.executors } : {}),
+            ...(config.mcpManager !== undefined ? { mcpManager: config.mcpManager } : {}),
+          });
+    providerQuery = new ProviderRouter(
+      { prompt: promptIterable, config },
+      {
+        resolveProvider: resolveProviderFn,
+        providerNameForModel: (m) => providerForModel(m),
+        resolveApiKey: (m) => resolveCredentialForModel(m),
+      },
+    );
+  }
+  const iterable = providerQuery as AsyncIterable<ProviderEvent>;
+  return { providerQuery, providerIterator: iterable[Symbol.asyncIterator]() };
 }
 
 /**
@@ -110,6 +155,10 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
             // #3442: opt-in executors ride along on every provider the router
             // builds, including ones rebuilt by a cross-family model swap.
             ...(config.executors !== undefined ? { executors: config.executors } : {}),
+            // #4063: forward the resolved MCP manager (caller-supplied or
+            // SDK-built from config.mcpServers) so MCP tools are bridged and
+            // mcpServerStatus() returns the live server states.
+            ...(config.mcpManager !== undefined ? { mcpManager: config.mcpManager } : {}),
           });
     providerQuery = new ProviderRouter(
       { prompt: promptIterable, config },
