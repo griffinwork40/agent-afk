@@ -28,7 +28,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { listPendingHandoffs, readHandoff } from '../agent/daemon/handoff-store.js';
-import { answerHandoff } from '../agent/daemon/handoff-wiring.js';
+import { answerHandoff, MAX_ANSWER_BYTES } from '../agent/daemon/handoff-wiring.js';
 import { getHandoffsDir } from '../paths.js';
 import { isRecord } from '../utils/type-guards.js';
 import { sendJson } from './routes.js';
@@ -170,9 +170,37 @@ export async function handleAnswerHandoff(
   }
 
   const answer = body['answer'];
+
+  // Validate answer size before attempting the CAS write — answers over
+  // MAX_ANSWER_BYTES would throw inside answerHandoff, surfacing as a 500.
+  const serialized = JSON.stringify(answer);
+  if (Buffer.byteLength(serialized, 'utf-8') > MAX_ANSWER_BYTES) {
+    sendJson(res, 400, {
+      error: 'bad_request',
+      message: `answer exceeds maximum size of ${MAX_ANSWER_BYTES} bytes`,
+    });
+    return;
+  }
+
   const identity = webIdentity(req);
 
-  const won = await answerHandoff(taskId, answer, 'web', dir, identity);
+  // Invariant: readHandoff above is a pre-check for a clean 404, but the
+  // record can be answered, expired, or deleted between that read and the
+  // CAS write below. answerHandoff returns false when the CAS lock is lost,
+  // but throws when the record no longer exists. Catch that race and map it
+  // to 409 rather than letting it propagate as a 500.
+  let won: boolean;
+  try {
+    won = await answerHandoff(taskId, answer, 'web', dir, identity);
+  } catch {
+    // Record vanished between the pre-check read and the CAS write —
+    // semantically equivalent to "no longer active".
+    sendJson(res, 409, {
+      error: 'no_longer_active',
+      message: `handoff for task ${taskId} is no longer active (already answered or expired)`,
+    });
+    return;
+  }
 
   if (!won) {
     sendJson(res, 409, {

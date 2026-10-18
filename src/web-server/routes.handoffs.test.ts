@@ -27,15 +27,19 @@ vi.mock('../agent/daemon/handoff-store.js', () => ({
   readHandoff: (taskId: string, dir: string) => mockReadHandoff(taskId, dir),
 }));
 
-vi.mock('../agent/daemon/handoff-wiring.js', () => ({
-  answerHandoff: (
-    taskId: string,
-    answer: unknown,
-    source: string,
-    dir: string | undefined,
-    identity: string,
-  ) => mockAnswerHandoff(taskId, answer, source, dir, identity),
-}));
+vi.mock('../agent/daemon/handoff-wiring.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agent/daemon/handoff-wiring.js')>();
+  return {
+    MAX_ANSWER_BYTES: actual.MAX_ANSWER_BYTES,
+    answerHandoff: (
+      taskId: string,
+      answer: unknown,
+      source: string,
+      dir: string | undefined,
+      identity: string,
+    ) => mockAnswerHandoff(taskId, answer, source, dir, identity),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -354,6 +358,29 @@ describe('routes.handoffs — handleAnswerHandoff', () => {
     const { status, body } = json();
     expect(status).toBe(409);
     expect((body as { error: string }).error).toBe('no_longer_active');
+  });
+
+  it('returns 409 when record vanishes between readHandoff and answerHandoff (race)', async () => {
+    mockReadHandoff.mockResolvedValue(makeRecord());
+    mockAnswerHandoff.mockRejectedValue(new Error('handoff-store: no record found for taskId q-race'));
+    const { res, json } = makeRes();
+    await handleAnswerHandoff(makeReq(), res, 'q-race', { answer: 'yes' }, { handoffsDir: DIR });
+    const { status, body } = json();
+    expect(status).toBe(409);
+    expect((body as { error: string }).error).toBe('no_longer_active');
+  });
+
+  it('returns 400 when answer exceeds MAX_ANSWER_BYTES', async () => {
+    mockReadHandoff.mockResolvedValue(makeRecord());
+    const { res, json } = makeRes();
+    // 64 KB = 65536 bytes; a string of 65537 chars exceeds the limit.
+    const oversized = 'x'.repeat(65_537);
+    await handleAnswerHandoff(makeReq(), res, 'q-big', { answer: oversized }, { handoffsDir: DIR });
+    const { status, body } = json();
+    expect(status).toBe(400);
+    expect((body as { error: string }).error).toBe('bad_request');
+    expect((body as { message: string }).message).toContain('maximum size');
+    expect(mockAnswerHandoff).not.toHaveBeenCalled();
   });
 
   it('passes answer value through verbatim (object)', async () => {
