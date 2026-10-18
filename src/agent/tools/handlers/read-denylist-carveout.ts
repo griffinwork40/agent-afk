@@ -32,7 +32,7 @@
  * Platform-aware prefix-or-equal containment. `relative` avoids hard-coding
  * `/`, which would silently disable nested-root checks on Windows.
  */
-import { isAbsolute, relative, sep } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { safeRealpath } from './write-denylist.js';
 
@@ -79,13 +79,32 @@ export function gateDerivedCarveOuts(
  * `piercedSource` of `undefined` (no mapping for this carve-out) excludes
  * nothing, so an unmapped entry is gated by every root — fails CLOSED rather
  * than silently going ungated.
+ *
+ * Invariant: on win32, BUILTIN_READ_DENYLIST contains BOTH a forward-slash
+ * `${HOME}/.ssh` entry and a backslash `${USERPROFILE}\\.ssh` entry. Their
+ * source strings differ but they resolve to the SAME root. A source-only
+ * filter would retain the USERPROFILE duplicate as a gate root and silently
+ * drop the carve-out it is meant to pierce. Deduplicating by resolved root
+ * closes the hole while preserving the per-entry provenance contract: two
+ * genuinely INDEPENDENT roots that happen to resolve identically (via a
+ * symlink) would also be excluded, but that is the fail-OPEN direction for
+ * carve-outs and the module contract already accepts it — the sibling test
+ * file catches any regression via the "every READ_ALLOWLIST_REL entry stays
+ * allowed" invariant.
  */
 function gateRootsExcludingSource(
   resolvedBuiltinEntries: readonly { source: string; root: string }[],
   piercedSource: string | undefined,
 ): string[] {
+  // Invariant: resolve the pierced source the same way resolveLists() resolves
+  // each BUILTIN_READ_DENYLIST entry (safeRealpath(resolve(source))), so the
+  // root comparison is symmetric regardless of separator or casing differences
+  // in the source string.
+  const piercedRoot = piercedSource !== undefined
+    ? safeRealpath(resolve(piercedSource))
+    : undefined;
   return resolvedBuiltinEntries
-    .filter(({ source }) => source !== piercedSource)
+    .filter(({ source, root }) => source !== piercedSource && root !== piercedRoot)
     .map(({ root }) => root);
 }
 
