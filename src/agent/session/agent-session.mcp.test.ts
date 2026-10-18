@@ -25,6 +25,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import type { McpManager } from '../mcp/manager.js';
+import type { ModelProvider, ProviderEvent, ProviderQuery, ProviderQueryArgs } from '../provider.js';
+import type { AgentConfig } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -372,6 +374,62 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
     expect(callerDisconnectSpy).not.toHaveBeenCalled();
 
     fromConfigSpy.mockRestore();
+    await callerManager.disconnectAll();
+  });
+
+  // (d) Phase 2 rebuilds the provider ONLY when the SDK built the manager.
+  // A caller-supplied manager (daemon, CLI, Telegram) is already wired into
+  // the Phase-1 provider; rebuilding for it ran provider.query() twice and
+  // broke scheduler.test.ts "MCP fixture wiring" (land round 3, #4069).
+  it('(d) caller-supplied mcpManager → provider.query() runs once; SDK-built → rebuilt with the manager', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    const run = async (extra: Pick<AgentConfig, 'mcpManager'> | Pick<AgentConfig, 'mcpServers'>) => {
+      const seen: Array<McpManager | undefined> = [];
+      const provider: ModelProvider = {
+        name: 'query-counting-provider',
+        query(args: ProviderQueryArgs): ProviderQuery {
+          seen.push(args.config.mcpManager);
+          let closed = false;
+          return {
+            async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
+              yield {
+                type: 'session.init',
+                info: {
+                  sessionId: 'query-counting-session', model: 'sonnet', permissionMode: 'default',
+                  cwd: args.config.cwd, tools: [], slashCommands: [], skills: [], plugins: [],
+                  mcpServers: [], apiKeySource: 'api-key', version: 'test',
+                },
+              };
+              while (!closed) await new Promise((r) => setTimeout(r, 5));
+            },
+            async interrupt() {}, async setModel() {}, async setPermissionMode() {},
+            async supportedCommands() { return []; }, async supportedModels() { return []; },
+            async supportedAgents() { return []; },
+            async getContextUsage() { return { tools: [], isAutoCompactEnabled: false, apiUsage: null }; },
+            async mcpServerStatus() { return []; },
+            async accountInfo() { return { subscriptionType: 'api-key' }; },
+            async rewindFiles() { return { canRewind: false }; },
+            close() { closed = true; },
+          } as unknown as ProviderQuery;
+        },
+      } as unknown as ModelProvider;
+      const session = new AgentSession({ model: 'claude-haiku-4-5', persistSession: false, cwd: process.cwd(), provider, ...extra });
+      await session.waitForInitialization();
+      await session.close();
+      return seen;
+    };
+
+    const callerManager = await McpManagerCls.fromConfig({});
+    const callerSeen = await run({ mcpManager: callerManager });
+    expect(callerSeen).toEqual([callerManager]);
+
+    const sdkManager = await McpManagerCls.fromConfig({});
+    const spy = vi.spyOn(McpManagerCls, 'fromConfig').mockResolvedValueOnce(sdkManager);
+    const sdkSeen = await run({ mcpServers: BOGUS_SERVER_SPEC });
+    expect(sdkSeen).toEqual([undefined, sdkManager]);
+    spy.mockRestore();
+
     await callerManager.disconnectAll();
   });
 });

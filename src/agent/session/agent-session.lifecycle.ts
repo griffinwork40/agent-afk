@@ -141,6 +141,13 @@ export interface BuildInitPromiseOptions {
  *     and shutdown is dispatched — mirroring `ProviderInitializer.run`'s catch.
  */
 export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<void> {
+  // Invariant: this snapshot is the manager Phase 1 built its provider with.
+  // `initSdkLifecycle` calls this synchronously right after Phase 1, and the
+  // `startMcpInit` patch lands in a later microtask, so the patched manager is
+  // never visible here. A caller-supplied `mcpManager` (daemon, CLI, Telegram)
+  // is already in the Phase-1 provider, so Phase 2 must not rebuild for it:
+  // doing so ran `provider.query()` twice per session (land round 3, #4069).
+  const phase1Manager = opts.getConfig().mcpManager;
   return opts.mcpInitPromise.then(
     () => {
       // Item 3: skip Phase-2 provider rebuild if session was closed while MCP
@@ -148,7 +155,8 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
       // `startMcpInit` callback on the calling side.
       if (opts.isClosed()) return;
 
-      if (opts.getConfig().mcpManager !== undefined) {
+      const phase2Manager = opts.getConfig().mcpManager;
+      if (phase2Manager !== undefined && phase2Manager !== phase1Manager) {
         // Item 1: reuse the Phase-1 inputStream's iterable so sendMessage
         // pushes into the stream the rebuilt provider actually reads.
         const promptIterable = opts.getInputStream().createIterable();
