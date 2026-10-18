@@ -88,7 +88,7 @@ export async function abortAllAndDrainImpl(
     console.warn(
       `[SubagentManager] abortAllAndDrain: ${inFlight.length} child(ren) ` +
         `(${[...active.keys()].join(', ')}) did not settle within ${timeoutMs}ms — ` +
-        `sealing anyway; seal() waits a further bounded interval for their terminal rows`,
+        `sealing anyway; seal() waits a further bounded interval (SUBAGENT_DRAIN_TIMEOUT_MS=${SUBAGENT_DRAIN_TIMEOUT_MS}ms) for their terminal rows`,
     );
   } else if (Array.isArray(settled)) {
     const rejected = settled.filter(

@@ -23,6 +23,7 @@ import { assembleQueryPrompt } from './query/prompt-assembly.js';
 import { dumpIfEnabled } from '../../session/prompt-dump.js';
 import type { ProviderQueryContext } from './provider-context.js';
 import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
+import { grantsWorkspacePrompt } from '../shared/tool-grant.js';
 
 /** Everything the second half of `query()` needs from this one. */
 export interface QuerySetupResult {
@@ -181,7 +182,10 @@ export function setUpQuerySession(
     surface: ctx.surface,
     readOnlyMemory: ctx.readOnlyMemory,
     readOnlyState: ctx.readOnlyState,
-    workspaceEnabled: ctx.workspaceStore !== undefined,
+    // #4060: the section tells the model to call workspace_publish/query, so it
+    // also needs both tools granted, not just a store.
+    workspaceEnabled: ctx.workspaceStore !== undefined
+      && grantsWorkspacePrompt((toolName) => ctx.grantsTool?.(toolName) ?? true),
     // Pass the executor (not just a boolean) so assembleQueryPrompt can call
     // getManifestScope() for plugin/allowlist scoping. The truthiness gate is
     // preserved: manifest is built iff skillExecutor is truthy (same invariant

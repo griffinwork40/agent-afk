@@ -11,6 +11,7 @@ export { evaluateRecommendations } from './recommendations.js';
 export { generateHtml, htmlEscape } from './html.js';
 export { openInBrowser } from './open.js';
 export { aggregatePreexistingDefects } from './aggregators/index.js';
+export { aggregateGuardrailFalsePositives } from './aggregators/index.js';
 
 export type {
   InsightAggregates,
@@ -26,3 +27,4 @@ export type {
 } from './types.js';
 export type { PreexistingDefectAggregates } from './aggregators/preexisting-defects.js';
 export type { DefectCluster } from '../agent/preexisting-ledger/reader.js';
+export type { GuardrailFalsePositiveAggregates } from './aggregators/guardrail-false-positives.js';

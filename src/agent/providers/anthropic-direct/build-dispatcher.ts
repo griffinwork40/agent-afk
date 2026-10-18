@@ -383,5 +383,11 @@ export function buildDispatcher(
       ? { detachRegistry: opts.detachRegistry }
       : {}),
     ...(opts?.processJobs !== undefined ? { processJobs: opts.processJobs } : {}),
+    // #4064: MCP-aware unknown-tool messages. Forward a live accessor so that
+    // when a model calls mcp__<server>__<tool> for a failed server the response
+    // names the server and its error instead of the generic "tool does not exist".
+    getMcpServerStates: deps.mcpManager
+      ? () => deps.mcpManager!.getServerStates()
+      : () => [],
   });
 }

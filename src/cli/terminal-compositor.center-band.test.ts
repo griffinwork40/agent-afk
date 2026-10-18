@@ -271,13 +271,17 @@ describe('issue #3763 — WIDTH-ONLY narrowing resize: pendingResizeErase covers
     c.disarm();
   });
 
-  it('#3763: no inflation when centering off (200→120 cols) — bottom equals pre-fix logical bottom', async () => {
+  it('#3763: widen-guard — no inflation when terminal widens (120→200 cols)', async () => {
+    // reflowedPhysicalRows must return logicalRows unchanged when newCols >= oldCols.
+    // Set up at 120 cols so lastKnownCols=120, then fire a width-only SIGWINCH
+    // that widens to 200 cols. bottom must equal the plain logical bottom
+    // (lastKnownRows - 1 - extraRows), not an inflated value.
     vi.unstubAllEnvs();
-    vi.stubEnv('AFK_CENTER_CONTENT', '');
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
     vi.stubEnv('AFK_TEXT_MEASURE', '100');
-    setProcCols(COLS);
+    setProcCols(120);
 
-    const stdout = makeStdout(COLS, ROWS);
+    const stdout = makeStdout(120, ROWS); // start at 120 cols
     const stdin = makeStdin();
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), anchorRow: 1 });
     await c.arm();
@@ -288,31 +292,72 @@ describe('issue #3763 — WIDTH-ONLY narrowing resize: pendingResizeErase covers
       lastKnownCols: number;
       pendingResizeErase: { top: number; bottom: number; origin?: string } | null;
     };
+    expect(internals.lastKnownCols, 'lastKnownCols must be 120 after first repaint').toBe(120);
+
     c.commitAbove('ROW_A\nROW_B\nROW_C\n');
     vi.advanceTimersByTime(20);
 
     const rowsBefore = internals.lastKnownRows;
 
+    // Width-only WIDEN: 120→200 cols, same 24 rows.
+    stdout.columns = 200;
+    setProcCols(200);
+    process.stdout.emit('resize');
+
+    const erase = internals.pendingResizeErase;
+    expect(erase, 'pendingResizeErase set on width-only SIGWINCH').not.toBeNull();
+    if (!erase) return;
+
+    // Widen never reflows: bottom must equal logicalBottom = rowsBefore - 1.
+    // reflowedPhysicalRows returns logicalRows unchanged when newCols >= oldCols.
+    const logicalBottom = rowsBefore - 1;
+    expect(erase.bottom, '#3763 widen-guard: bottom must equal logicalBottom, not inflated').toBe(logicalBottom);
+
+    vi.advanceTimersByTime(200);
+    c.disarm();
+  });
+
+  it('#3763: EXPAND narrowing inflates bottom — same family as WIDTH-ONLY', async () => {
+    // EXPAND branch: rows grow AND cols narrow simultaneously.
+    // Confirm EXPAND also applies reflowedPhysicalRows (issue #4010 fix).
+    setProcCols(COLS); // 200
+
+    const stdout = makeStdout(COLS, ROWS); // 200 cols, 24 rows
+    const stdin = makeStdin();
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), anchorRow: 1 });
+    await c.arm();
+    vi.advanceTimersByTime(20);
+
+    const internals = c as unknown as {
+      lastKnownRows: number;
+      lastKnownCols: number;
+      pendingResizeErase: { top: number; bottom: number; origin?: string } | null;
+    };
+    expect(internals.lastKnownCols, 'lastKnownCols must be 200').toBe(200);
+
+    c.commitAbove('ROW_A\nROW_B\nROW_C\n');
+    vi.advanceTimersByTime(20);
+
+    const rowsBefore = internals.lastKnownRows;
+
+    // EXPAND + narrow: rows grow 24→28, cols shrink 200→120.
+    stdout.rows = ROWS + 4;
     stdout.columns = 120;
     setProcCols(120);
     process.stdout.emit('resize');
 
     const erase = internals.pendingResizeErase;
-    expect(erase, 'pendingResizeErase set even without centering').not.toBeNull();
+    expect(erase, 'pendingResizeErase set on EXPAND SIGWINCH').not.toBeNull();
     if (!erase) return;
+    expect(erase.origin, 'origin must be expand').toBe('expand');
 
-    // Without centering: rows are at most 200 cols wide, which at 120 cols
-    // gives ceil(200/120)=2 physical rows per old row.  BUT when centering is
-    // OFF the same inflation logic STILL applies (oldCols=200 > newCols=120),
-    // since the compositor writes full-width content (not margin-narrowed).
-    // This test just verifies the value is sensible (>= top, <= maxInflated).
-    // The primary non-regression is that the existing non-centered tests pass.
-    const expectedLogicalBottom = rowsBefore - 1;
-    // With centering off, content rows can also be up to 200 cols wide.
-    // The inflation factor is the same ceiling.  The important assertion is
-    // that the erase bottom is at least the old logical bottom.
-    expect(erase.bottom).toBeGreaterThanOrEqual(erase.top);
-    expect(typeof expectedLogicalBottom).toBe('number'); // sanity
+    // bottom must exceed the pre-fix logicalBottom = rowsBefore - 1.
+    // ceil(200/120) = 2 physical rows per old row → same inflation as WIDTH-ONLY.
+    const logicalBottom = rowsBefore - 1;
+    expect(erase.bottom, '#4010: EXPAND bottom must exceed pre-fix logical bottom').toBeGreaterThan(logicalBottom);
+    const logicalRows = logicalBottom - erase.top + 1;
+    const inflatedBottom = erase.top + 2 * logicalRows - 1;
+    expect(erase.bottom, '#4010: EXPAND bottom must cover 2x inflated footprint').toBeGreaterThanOrEqual(inflatedBottom);
 
     vi.advanceTimersByTime(200);
     c.disarm();

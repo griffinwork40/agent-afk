@@ -342,9 +342,16 @@ export class NdjsonTraceWriter implements TraceWriter {
    * `session_sealed` record at all. `sealRecordPersisted` only flips once
    * a record has actually been written, so an interrupted `seal()` still
    * falls through to this backstop.
+   *
+   * When `this.sealing` is true, a normal `seal()` is already in flight
+   * (its async append is queued but not yet persisted). This guard makes
+   * `sealOnProcessExit` a no-op in that case — accepting a small orphan
+   * window where the process dies after `seal()` sets `sealing` but
+   * before the append lands. That window is bounded by the write-queue
+   * drain time (typically <10 ms on local disk).
    */
   sealOnProcessExit(): void {
-    if (this.sealRecordPersisted || this.seq === 0) return;
+    if (this.sealRecordPersisted || this.sealing || this.seq === 0) return;
     this.sealed = true;
     liveTraceWriters.delete(this);
     try {

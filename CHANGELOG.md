@@ -11,6 +11,104 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.324.0] - 2026-10-18
+
+### Added
+- post-edit LSP diagnostics (phase 1, opt-in, off by default) (#4044) (8573cfa3)
+- per-provider subagent concurrency caps for fan-out waves (#4037) (c6cf83d9)
+
+### Changed
+- complete docs overhaul: new navigation, every feature documented, generated references with CI drift gates (#4070) (ff5c18b2)
+
+## [5.323.0] - 2026-10-18
+
+### Added
+- add jscpd clone gate that blocks only NEW copy-paste clones (#4043) (6666a9d1)
+- add RiskCategory enum to every gate verdict and hook_decision trace event (#4045) (9dce34ea)
+- measure guardrail false-positive rate for hook-block-repeat meta-guard (#4035) (c08d437a)
+
+## [5.322.19] - 2026-10-18
+
+### Added
+- RemoteSubagentHandle implementing SubagentHandle over SSH transport (#4038) (b29df7f8)
+- GitHub event polling producer for the pull queue (#4039) (77838847)
+
+### Fixed
+- replace Array.prototype.push.apply with concat in maskHookCommandData (#4031) (ad950330)
+- advisory findings from PR triage batch (#3831, #3812, #3810) (#4029) (6d0465c3)
+- gate bash read carve-outs on read-only commands; grant SSH public keys (#4030) (964679ff)
+
+### Changed
+- introduce decidePathAccess — single resolve-then-decide credential floor (#4036) (61bb3f8e)
+- bump react-dom from 19.3.0 to 19.3.1 in /website (#4083) (5a9a225e)
+- bump the dashboard-dev-minor-patch group across 1 directory with 3 updates (#4089) (b61d201e)
+- bump @vitejs/plugin-react in /dashboard (#4087) (09c90e17)
+- bump next from 16.4.0 to 16.4.1 in /website (#4080) (863aae3a)
+- bump pnpm/action-setup from 4 to 6 (#4077) (9bd433d4)
+- bump the dev-minor-patch group across 1 directory with 3 updates (#4088) (23a52b97)
+
+## [5.322.18] - 2026-10-18
+
+### Fixed
+- MCP-aware unknown-tool messages and session-init failure notice (#4068) (ad38d39a)
+
+### Changed
+- bump @types/node from 26.6.4 to 26.6.5 in /website (#4082) (6aeac344)
+- bump the fumadocs group in /website with 3 updates (#4079) (46697ce8)
+- bump actions/setup-node from 4 to 7 (#4078) (4b475ed7)
+- bump the prod-minor-patch group with 7 updates (#4086) (e093c5ec)
+- bump the dashboard-prod-minor-patch group (#4084) (55c38a76)
+- bump react from 19.3.0 to 19.3.1 in /website (#4081) (862168d2)
+- bump actions/checkout from 4 to 7 (#4076) (9d149f55)
+
+## [5.322.17] - 2026-10-18
+
+### Added
+- offline OTLP/JSON export of witness traces with GenAI semantic conventions (#4046) (1fbf2426)
+
+### Fixed
+- strip git commit -F - heredoc body from restricted-path scan (#4034) (b5e17a20)
+- keep tools on wind-down rounds so prefix caches survive (#4048) (a139de71)
+- tell read-only git agents about the git_read swap (#4056) (d689813c)
+
+### Changed
+- guard safe-table verdict with classifyBashCommand mutation check (#4032) (305b5f3c)
+
+## [5.322.16] - 2026-10-18
+
+### Fixed
+- SDK builds and owns McpManager from config.mcpServers (#4069) (7fecda4d)
+
+## [5.322.15] - 2026-10-18
+
+### Fixed
+- deduct baseline-sample cost from maxUsdRemaining in verifyRun (#4004) (5a9f1b8f)
+- address remaining advisory findings from 2026-10-14 PR triage batch (#4003) (64c0ba92)
+- accumulate costUsd across all turns in RunBillingContext (#4005) (c3db1d1a)
+
+## [5.322.14] - 2026-10-18
+
+### Added
+- add per-slot maxOutputTokens; derive smarter default for unlisted openai-compat ids (#4025) (386a9b36)
+
+### Fixed
+- restore telemetry for clamped bash timeout_ms and tighten warning test (#4022) (1aaf5cbf)
+
+### Changed
+- cross-path dispatch-policy parity matrix (#4049) (5870700b)
+
+## [5.322.13] - 2026-10-18
+
+### Fixed
+- apply reflow inflation to EXPAND branch; fix tautological center-band test; add widen-guard and EXPAND tests (#4019) (c02c55c2)
+- isSuperseded cleared/paused goal, escapeXml notice, cleared-goal tests (#3987) (d9f31330)
+- warn and skip on malformed stored runAt/expiresAt (#4024) (4bbf1200)
+- document mixed provider on BillingUsage and add rollup test (#3986) (2a320c75)
+- correct billing_settled JSDoc to say cumulative totals, not delta (#4020) (a7b7a68d)
+
+### Changed
+- verify closure provenance stamping through real emitClosureEvent path (#4021) (71460dc5)
+
 ## [5.322.12] - 2026-10-17
 
 ### Fixed
