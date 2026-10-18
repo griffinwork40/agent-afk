@@ -9,6 +9,7 @@ import {
   GENERATED_PATHS, parseBaseline, unionBaselines, unionPosix, unionTypecheck,
 } from '../scripts/lib/regen-generated-union.js';
 import { serializeBaseline, updateBaseline } from '../scripts/lib/size-ratchet.js';
+import { computeNewBaseline } from '../scripts/check-test-typecheck.js';
 
 const script = fileURLToPath(new URL('../scripts/regen-generated.ts', import.meta.url));
 const baselineName = '.filesize-baseline.json';
@@ -54,6 +55,34 @@ describe('baseline union', () => {
     expect(unionTypecheck({ errors: 5 }, { errors: 9, reason: 'approved' }))
       .toEqual({ errors: 9, reason: 'approved' });
     expect(unionTypecheck(null, { errors: 8 })).toEqual({ errors: 8 });
+  });
+
+  it('unionTypecheck: takes reason from the max-count side', () => {
+    // ours has lower count — theirs holds the max and its reason should win
+    expect(unionTypecheck({ errors: 5, reason: 'A' }, { errors: 9, reason: 'B' }))
+      .toEqual({ errors: 9, reason: 'B' });
+    // ours holds the max
+    expect(unionTypecheck({ errors: 9, reason: 'A' }, { errors: 5, reason: 'B' }))
+      .toEqual({ errors: 9, reason: 'A' });
+    // equal counts: ours reason wins (ours >= theirs branch)
+    expect(unionTypecheck({ errors: 9, reason: 'A' }, { errors: 9, reason: 'B' }))
+      .toEqual({ errors: 9, reason: 'A' });
+    // max side has whitespace-only reason: falls back to other side
+    expect(unionTypecheck({ errors: 5, reason: '  ' }, { errors: 9, reason: 'B' }))
+      .toEqual({ errors: 9, reason: 'B' });
+  });
+
+  it('computeNewBaseline: allowGrowth+reason only stamps when count grew', () => {
+    const prev = { errors: 9, reason: 'approved', fileExisted: true };
+    // count unchanged with allowGrowth+reason → carries previous reason, not the new one
+    expect(computeNewBaseline(prev, 9, true, 'other')).toEqual({ errors: 9, reason: 'approved' });
+    // count grew → new reason stamped
+    expect(computeNewBaseline(prev, 10, true, 'other')).toEqual({ errors: 10, reason: 'other' });
+    // count shrank → reason dropped
+    expect(computeNewBaseline(prev, 8, false, '')).toEqual({ errors: 8 });
+    // whitespace-only previous reason is not carried
+    expect(computeNewBaseline({ errors: 9, reason: '   ', fileExisted: true }, 9, false, ''))
+      .toEqual({ errors: 9 });
   });
 
   it('includes all derivable ratchets but not the human-reviewed SDK lock', () => {
@@ -129,7 +158,7 @@ describe('regen-generated CLI', () => {
     ['.posix-guard-baseline.json', { entries: {} },
       { entries: { 'src/a.ts': { R1: 2 } } }, { entries: { 'src/a.ts': { R2: 3 } } },
       { entries: { 'src/a.ts': { R1: 2, R2: 3 } } }],
-    ['.test-typecheck-baseline.json', { errors: 0 }, { errors: 5 }, { errors: 9 }, { errors: 9 }],
+    ['.test-typecheck-baseline.json', { errors: 0 }, { errors: 5, reason: 'approved' }, { errors: 9, reason: 'merged' }, { errors: 9, reason: 'merged' }],
   ])('resolves additional derivable ratchet %s', (file, base, ours, theirs, expected) => {
     write(file, JSON.stringify(base)); commit('base ratchet');
     conflict(file, JSON.stringify(ours), JSON.stringify(theirs));

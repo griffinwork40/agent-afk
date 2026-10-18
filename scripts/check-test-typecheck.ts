@@ -222,9 +222,9 @@ export function computeNewBaseline(
   reason: string,
 ): Baseline {
   const newBaseline: Baseline = { errors: current };
-  if (allowGrowth && reason) {
+  if (allowGrowth && reason && current > previous.errors) {
     newBaseline.reason = reason;
-  } else if (!allowGrowth && current === previous.errors && previous.reason) {
+  } else if (current === previous.errors && previous.reason?.trim()) {
     newBaseline.reason = previous.reason;
   }
   return newBaseline;
