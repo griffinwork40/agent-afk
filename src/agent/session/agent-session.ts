@@ -227,6 +227,7 @@ export class AgentSession implements IAgentSession {
       this.config,
       (m) => { this.ownedMcpManager = m; },
       (m) => { this.config = { ...this.config, mcpManager: m }; },
+      () => this.currentState === 'closed',
     );
 
     this.initSdkLifecycle();
@@ -242,27 +243,6 @@ export class AgentSession implements IAgentSession {
     }
   }
 
-  /**
-   * Build (or rebuild) the SDK-side plumbing: provider query, input stream,
-   * state manager, and the provider iterator. Pulls `session.init` eagerly
-   * so `waitForInitialization` resolves without a user turn.
-   *
-   * The internal `abortController` and `hookRegistry` are NOT touched — they
-   * live for the entire session-object lifetime so that an externally-supplied
-   * `config.abortSignal` keeps propagating across resets and registered
-   * SessionStart/SessionEnd hooks fire on each cycle.
-   *
-   * #4063: `initPromise` is a two-phase chain:
-   *   Phase 1 (sync): `buildProviderLifecycle` runs immediately with the
-   *     current config, giving `stateManager` + `inputStream` (which do NOT
-   *     need mcpManager). `waitForInitialization()` and `sessionId` are usable
-   *     right away.
-   *   Phase 2 (async): await `mcpInitPromise`, re-patch `providerQuery` /
-   *     `providerIterator` with the mcpManager-aware config, then hand off to
-   *     `ProviderInitializer.run` as before.
-   * This avoids deferring stateManager creation while still guaranteeing the
-   * provider sees the resolved manager before it emits `session.init`.
-   */
   /**
    * Build (or rebuild) the SDK-side plumbing: provider query, input stream,
    * state manager, and the provider iterator. Pulls `session.init` eagerly
@@ -316,10 +296,9 @@ export class AgentSession implements IAgentSession {
     this.initPromise = buildSessionInitPromise({
       mcpInitPromise: this.mcpInitPromise, stateManager: this.stateManager,
       getConfig: () => this.config, getRunner: () => this.runner,
-      setProviderQuery: (q) => { this.providerQuery = q; },
-      setProviderIterator: (i) => { this.providerIterator = i; },
-      getProviderIterator: () => this.providerIterator,
-      abortSignal: this.abortController.signal,
+      setProviderQuery: (q) => { this.providerQuery = q; }, setProviderIterator: (i) => { this.providerIterator = i; },
+      getProviderIterator: () => this.providerIterator, getInputStream: () => this.inputStream,
+      isClosed: () => this.currentState === 'closed', abortSignal: this.abortController.signal,
       accounting: this.accounting, shutdown: this.shutdown,
       hookRegistry: this._hookRegistry,
       queueFrameworkContext: (text) => this.queueFrameworkContext(text),

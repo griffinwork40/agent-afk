@@ -9,14 +9,16 @@
  */
 
 import { TurnStreamRunner, type TurnRunnerDeps } from './turn-stream-runner.js';
-import { buildProviderLifecycle } from './provider-lifecycle.js';
+import { buildProviderLifecycle, rebuildProviderQuery } from './provider-lifecycle.js';
 import { ProviderInitializer } from './provider-lifecycle.js';
+import { ensureError } from '../../utils/errors.js';
 import type { AgentConfig } from '../types.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { SessionShutdown } from './session-shutdown.js';
 import type { SessionStateManager } from './session-state.js';
 import type { HookRegistry } from '../hooks.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
+import type { QueryInputStream } from './input-iterable.js';
 
 /** Mutable slots on AgentSession that `buildSessionRunner` reads and writes. */
 export interface SessionRunnerSlots {
@@ -109,6 +111,10 @@ export interface BuildInitPromiseOptions {
   setProviderQuery: (q: ProviderQuery) => void;
   setProviderIterator: (i: AsyncIterator<ProviderEvent>) => void;
   getProviderIterator: () => AsyncIterator<ProviderEvent>;
+  /** Returns the Phase-1 `QueryInputStream` so Phase 2 can reuse its iterable. */
+  getInputStream: () => QueryInputStream;
+  /** Returns true when the session has been closed (to abort Phase 2). */
+  isClosed: () => boolean;
   abortSignal: AbortSignal;
   accounting: AccountingAccumulator;
   shutdown: SessionShutdown;
@@ -121,30 +127,58 @@ export interface BuildInitPromiseOptions {
 /**
  * Build the two-phase `initPromise` for `initSdkLifecycle`.
  *
- * Phase 2 runs after `mcpInitPromise` settles: if `config.mcpManager` is now
- * set, it rebuilds the provider query/iterator so the provider sees the
- * manager. Then it runs `ProviderInitializer` to pull `session.init`.
+ * Phase 2 runs after `mcpInitPromise` settles:
+ *   - If the session was closed while MCP init was in flight, disconnect is
+ *     handled by the `startMcpInit` callback; Phase 2 is skipped entirely so
+ *     a rebuilt provider is never started after close.
+ *   - If `config.mcpManager` is now set, the provider query/iterator are
+ *     rebuilt using the EXISTING Phase-1 `inputStream`'s iterable, so
+ *     `AgentSession.inputStream` (used by `sendMessage`) feeds the active
+ *     provider. Creating a fresh `QueryInputStream` here would discard the
+ *     Phase-1 stream and stall every subsequent `sendMessage`.
+ *   - If `mcpInitPromise` rejects (e.g. an `alwaysLoad` server fails or a
+ *     tool-name conflict is detected), `waitForInitialization()` is rejected
+ *     and shutdown is dispatched — mirroring `ProviderInitializer.run`'s catch.
  */
 export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<void> {
-  return opts.mcpInitPromise.then(() => {
-    if (opts.getConfig().mcpManager !== undefined) {
-      const updated = buildProviderLifecycle(opts.getConfig());
-      opts.setProviderQuery(updated.providerQuery);
-      opts.setProviderIterator(updated.providerIterator);
-    }
+  return opts.mcpInitPromise.then(
+    () => {
+      // Item 3: skip Phase-2 provider rebuild if session was closed while MCP
+      // init was in flight. The owned manager is disconnected by the
+      // `startMcpInit` callback on the calling side.
+      if (opts.isClosed()) return;
 
-    const initializer = new ProviderInitializer(
-      opts.getConfig(),
-      opts.abortSignal,
-      opts.accounting,
-      opts.shutdown,
-      opts.hookRegistry,
-      opts.queueFrameworkContext,
-    );
-    return initializer.run(
-      opts.getProviderIterator,
-      () => opts.getRunner().buildTransformDeps(),
-      opts.stateManager,
-    );
-  });
+      if (opts.getConfig().mcpManager !== undefined) {
+        // Item 1: reuse the Phase-1 inputStream's iterable so sendMessage
+        // pushes into the stream the rebuilt provider actually reads.
+        const promptIterable = opts.getInputStream().createIterable();
+        const rebuilt = rebuildProviderQuery(opts.getConfig(), promptIterable);
+        opts.setProviderQuery(rebuilt.providerQuery);
+        opts.setProviderIterator(rebuilt.providerIterator);
+      }
+
+      const initializer = new ProviderInitializer(
+        opts.getConfig(),
+        opts.abortSignal,
+        opts.accounting,
+        opts.shutdown,
+        opts.hookRegistry,
+        opts.queueFrameworkContext,
+      );
+      return initializer.run(
+        opts.getProviderIterator,
+        () => opts.getRunner().buildTransformDeps(),
+        opts.stateManager,
+      );
+    },
+    // Item 2: MCP init rejected — settle waitForInitialization() and dispatch
+    // shutdown, mirroring ProviderInitializer.run's catch block exactly.
+    async (err: unknown) => {
+      const error = ensureError(err);
+      if (!opts.stateManager.isInitializationSettled()) {
+        opts.stateManager.rejectInitializationOnce(error);
+      }
+      await opts.shutdown.dispatchOnce('error').catch(() => {});
+    },
+  );
 }

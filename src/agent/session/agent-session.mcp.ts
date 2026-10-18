@@ -53,13 +53,31 @@ export async function disconnectOwnedManager(manager: McpManager | undefined): P
  * @param config           - Current `AgentConfig`.
  * @param setOwnedManager  - Stores the SDK-built manager for later disconnect.
  * @param patchConfig      - Patches `config.mcpManager` with the resolved manager.
+ * @param isClosed         - Returns true when `AgentSession.close()` has run.
+ *
+ * Close-before-resolve (item 3): if the session is closed while `fromConfig`
+ * is in flight, `setOwnedManager` / `patchConfig` are skipped and the
+ * newly-built manager is disconnected immediately. The caller's
+ * `disconnectOwnedManager(this.ownedMcpManager)` in `close()` is a no-op
+ * because `this.ownedMcpManager` was never set. Caller-supplied managers
+ * are never disconnected here (they have no `ownedManager`).
  */
 export function startMcpInit(
   config: AgentConfig,
   setOwnedManager: (m: McpManager) => void,
   patchConfig: (m: McpManager) => void,
+  isClosed: () => boolean,
 ): Promise<void> {
   return initSdkOwnedMcpManager(config).then(({ ownedManager, resolvedManager }) => {
+    if (isClosed()) {
+      // Session closed while MCP init was in flight: disconnect the freshly-
+      // built owned manager immediately instead of registering it for later.
+      // Caller-supplied managers (ownedManager === undefined) are never touched.
+      if (ownedManager !== undefined) {
+        void ownedManager.disconnectAll().catch(() => {});
+      }
+      return;
+    }
     if (ownedManager !== undefined) setOwnedManager(ownedManager);
     if (resolvedManager !== undefined) patchConfig(resolvedManager);
   });
