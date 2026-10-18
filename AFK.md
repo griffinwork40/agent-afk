@@ -25,6 +25,12 @@ pnpm audit:sdk:check                               # CI gate: fail on unlocked S
 pnpm audit:sdk:update-lock                         # add new symbols → .sdk-dependency.lock.json (edit `reason` before commit)
 pnpm audit:env:check                               # CI gate: no raw process.env reads outside src/config/env.ts
 pnpm scan:env:check                                # CI gate: docs/env-registry.{json,md} in sync with src/config/env.ts
+pnpm scan:surface                                  # regenerate docs/public-surface.json from public registries
+pnpm scan:surface:check                            # CI gate: committed public surface matches registries
+pnpm docs:surface:check                            # CI gate: handwritten coverage or dated backlog reason
+pnpm docs:refs:check                               # CI gate: no stale references to public symbols
+pnpm docs:impact --base origin/main                 # advisory change-to-docs summary
+pnpm docs:report                                   # backlog, generated-only symbols, recent feat commits
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color> outside src/cli/palette.ts (--list to find sites)
 pnpm audit:filesize:check                          # 350-code-line ceiling (comments/blanks excluded), ratcheted against .filesize-baseline.json — CI runs it but NON-blocking (`|| true`) until #2206 lands; treat a failure as yours to fix
 pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values; add --allow-growth --reason "<text>" to record a deliberate increase)
@@ -40,6 +46,10 @@ pnpm release                                       # release pipeline (scripts/r
 ```
 
 Every gate above plus `pnpm lint` and `pnpm build` runs on each PR (`.github/workflows/ci.yml`) — run them locally before pushing, not after CI reddens.
+
+## Keeping the docs site current
+
+The docs gates run in `.github/workflows/ci.yml` and `pnpm check:audits`: `scan:surface:check` catches drift between registries and the committed snapshot, `docs:surface:check` catches public symbols missing from handwritten pages or `website/docs-backlog.json`, and `docs:refs:check` catches stale symbol references. For snapshot drift, run `pnpm scan:surface` and commit `docs/public-surface.json`. For a coverage failure, document the symbol in a handwritten page or add a dated, reasoned backlog entry; remove stale or resolved entries. For a stale reference, verify the actual current symbol before updating the page. Run `pnpm docs:report` for a read-only authoring brief and `pnpm docs:impact --base origin/main` for a PR advisory. Generated reference pages must be regenerated with `pnpm scan:cli`, `pnpm scan:slash`, `pnpm scan:config`, and `pnpm scan:env`, never hand-edited.
 
 ### Running
 

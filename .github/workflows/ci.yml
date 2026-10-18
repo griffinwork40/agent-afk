@@ -83,6 +83,15 @@ jobs:
       - name: Audit configuration key reference drift
         run: pnpm scan:config:check
 
+      - name: Audit public-surface snapshot drift
+        run: pnpm scan:surface:check
+
+      - name: Audit handwritten public-surface coverage and backlog
+        run: pnpm docs:surface:check
+
+      - name: Audit stale documentation references
+        run: pnpm docs:refs:check
+
       - name: Audit tool and hook documentation coverage
         run: pnpm scan:docs-coverage:check
 
@@ -489,7 +498,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -497,6 +513,15 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: website/package-lock.json
+
+      - name: Install root dependencies
+        if: github.event_name == 'pull_request'
+        run: pnpm install --frozen-lockfile
+
+      - name: Docs impact summary (advisory)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: pnpm docs:impact --base origin/${{ github.base_ref }}
 
       - name: Install dependencies
         run: cd website && npm ci
