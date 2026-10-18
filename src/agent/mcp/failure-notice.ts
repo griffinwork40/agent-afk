@@ -17,6 +17,20 @@
  */
 
 import { redactSecrets } from '../redact-secrets.js';
+import { serverWirePrefixes } from './naming.js';
+
+/**
+ * Sanitise untrusted server error text before splicing it into a framework
+ * instruction sentence.  Collapses CR/LF and other control characters to
+ * spaces and neutralises embedded double-quotes so the text can be presented
+ * as a quoted datum without breaking the surrounding instruction prose.
+ */
+function sanitiseErrorText(raw: string): string {
+  // Collapse all control characters (including CR/LF) to a single space.
+  const oneLine = raw.replace(/[\x00-\x1F\x7F]/g, ' ').trim();
+  // Neutralise embedded double-quotes so the text stays inside its quotes.
+  return oneLine.replace(/"/g, "'");
+}
 
 /** Minimal shape consumed from `McpManager.getServerStates()`. */
 export interface McpServerStateLike {
@@ -57,12 +71,17 @@ export function buildMcpFailureNotice(
   const failed = failedMcpServers(states);
   if (failed.length === 0) return undefined;
 
-  const lines = failed.map(
-    ({ name, reason }) =>
-      `[MCP] Server "${name}" failed to start: ${reason}. ` +
-      `Tools mcp__${name}__* cannot be used this session. ` +
-      `Tell the user plainly; do not speculate about other causes.`,
-  );
+  const lines = failed.map(({ name, reason }) => {
+    // Use the sanitized wire prefix so the glob matches actual tool names.
+    const prefix = serverWirePrefixes(name)[0] ?? `mcp__${name}__`;
+    const safeReason = sanitiseErrorText(reason);
+    return (
+      `[MCP] Server "${name}" failed to start. ` +
+      `Error reported by the server (untrusted): "${safeReason}". ` +
+      `Tools ${prefix}* cannot be used this session. ` +
+      `Tell the user plainly; do not speculate about other causes.`
+    );
+  });
   return lines.join('\n');
 }
 
@@ -77,18 +96,31 @@ export function mcpUnknownToolMessage(
   states: readonly McpServerStateLike[],
 ): string | undefined {
   if (!toolName.startsWith('mcp__')) return undefined;
-  const parts = toolName.split('__');
-  if (parts.length < 3) return undefined;
-  const serverName = parts[1];
-  if (!serverName) return undefined;
 
-  const match = states.find((s) => s.serverName === serverName && s.status === 'error');
-  if (!match) return undefined;
+  // Find the failed server whose wire prefix best matches this tool name.
+  // Prefer the longest prefix to resolve ambiguity when two servers share a
+  // hash prefix (edge case but required by spec).
+  let bestMatch: { server: McpServerStateLike; prefix: string } | undefined;
+  for (const s of states) {
+    if (s.status !== 'error') continue;
+    for (const prefix of serverWirePrefixes(s.serverName)) {
+      if (
+        toolName.startsWith(prefix) &&
+        (bestMatch === undefined || prefix.length > bestMatch.prefix.length)
+      ) {
+        bestMatch = { server: s, prefix };
+      }
+    }
+  }
+  if (!bestMatch) return undefined;
 
-  const reason = redactSecrets(match.error ?? 'unknown error');
+  const { server, prefix } = bestMatch;
+  const reason = redactSecrets(server.error ?? 'unknown error');
+  const safeReason = sanitiseErrorText(reason);
   return (
-    `MCP server "${serverName}" is configured but failed to connect: ${reason}. ` +
+    `MCP server "${server.serverName}" is configured but failed to connect. ` +
+    `Error reported by the server (untrusted): "${safeReason}". ` +
     `Tool "${toolName}" is unavailable this session. ` +
-    `Do NOT retry this tool or any mcp__${serverName}__* variant.`
+    `Do NOT retry this tool or any ${prefix}* variant.`
   );
 }

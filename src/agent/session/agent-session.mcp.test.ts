@@ -432,4 +432,91 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
 
     await callerManager.disconnectAll();
   });
+
+  // -------------------------------------------------------------------------
+  // (e) Session-level failure notice wiring (#4064) — item 4
+  // The MCP failure notice must reach the first user-turn content the provider
+  // receives for BOTH (a) a caller-supplied mcpManager and (b) an SDK-built
+  // manager from mcpServers. Asserts [MCP] + server name appear exactly once.
+  // -------------------------------------------------------------------------
+
+  it('(e) failure notice reaches first turn for a caller-supplied mcpManager', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    // Build a real manager whose server is in error state (bogus exits immediately).
+    const callerManager = await McpManagerCls.fromConfig(BOGUS_SERVER_SPEC);
+    // Verify it recorded an error state before proceeding.
+    const states = callerManager.getServerStates();
+    expect(states.length).toBeGreaterThan(0);
+    expect(states[0]?.status).toBe('error');
+
+    messagesCreateMock.mockImplementation(() => fromArray(makeTextStream('ok')));
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpManager: callerManager,
+    });
+
+    await session.waitForInitialization();
+    await session.sendMessage('hello');
+
+    // Inspect what messages.create received — framework context prepended to first user message.
+    const calls = messagesCreateMock.mock.calls as Array<[{ messages: Array<{ role: string; content: unknown }> }]>;
+    const allContent = calls
+      .flatMap(([args]) => args.messages)
+      .filter((m) => m.role === 'user')
+      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+      .join('\n');
+
+    expect(allContent).toContain('[MCP]');
+    expect(allContent).toContain('bogus');
+
+    // Appears exactly once (not duplicated across turns).
+    const mcpCount = (allContent.match(/\[MCP\]/g) ?? []).length;
+    expect(mcpCount).toBe(1);
+
+    await session.close();
+    await callerManager.disconnectAll();
+  });
+
+  it('(e) failure notice reaches first turn for an SDK-built manager from mcpServers', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    // Spy: let fromConfig run for real so the server actually errors.
+    const fromConfigSpy = vi.spyOn(McpManagerCls, 'fromConfig');
+
+    messagesCreateMock.mockImplementation(() => fromArray(makeTextStream('ok')));
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+
+    await session.waitForInitialization();
+    await session.sendMessage('hello');
+
+    // Inspect what messages.create received.
+    const calls = messagesCreateMock.mock.calls as Array<[{ messages: Array<{ role: string; content: unknown }> }]>;
+    const allContent = calls
+      .flatMap(([args]) => args.messages)
+      .filter((m) => m.role === 'user')
+      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+      .join('\n');
+
+    expect(allContent).toContain('[MCP]');
+    expect(allContent).toContain('bogus');
+
+    // Appears exactly once.
+    const mcpCount = (allContent.match(/\[MCP\]/g) ?? []).length;
+    expect(mcpCount).toBe(1);
+
+    fromConfigSpy.mockRestore();
+    await session.close();
+  });
 });
