@@ -150,6 +150,30 @@ export const HookDecisionPayloadSchema = z.object({
   approvalOutcome: z
     .enum(['carve-out', 'approved', 'denied', 'unrecognised', 'timeout', 'decline', 'cancel', 'hard-block'])
     .optional(),
+  /**
+   * Named risk category from the classifier (#3900). Set by the AFK mode gate
+   * on every PreToolUse verdict. Absent on other hook events and pre-#3900 traces.
+   */
+  riskCategory: z
+    .enum([
+      'read-only',
+      'bash-destructive',
+      'bash-mutating',
+      'bash-background',
+      'workspace-write',
+      'credential-path',
+      'workspace-escape',
+      'network-mutation',
+      'schedule-mutation',
+      'mcp-destructive',
+      'mcp-unknown',
+      'worktree-mutation',
+      'browser-action',
+      'remote-exec',
+      'outbound-message',
+      'unknown',
+    ])
+    .optional(),
 });
 
 /** Mirrors `HookSummaryPayload` in ./types (see ./hook-tally.ts). */

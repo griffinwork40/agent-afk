@@ -338,6 +338,18 @@ export interface HookDecisionPayload {
   durationMs?: number;
   /** Set only by the AFK high-risk approval gate. Fine-grained approval outcome. */
   approvalOutcome?: AfkApprovalOutcome;
+  /**
+   * Named risk category from the classifier — the stable "why" dimension for
+   * this gate verdict. Set by the AFK mode gate on every PreToolUse decision
+   * that the classifier produced a verdict for (hard-block, carve-out, and
+   * approval-path outcomes). Absent on other hook events and pre-#3900 traces.
+   *
+   * The vocabulary is the {@link import('../risk-classifier.js').RiskCategory}
+   * enum; values are stable across patch versions so trace consumers may key
+   * on them. Example: `'bash-destructive'`, `'workspace-escape'`,
+   * `'credential-path'`, `'network-mutation'`.
+   */
+  riskCategory?: import('../risk-classifier.js').RiskCategory;
 }
 
 // ---------------------------------------------------------------------------
