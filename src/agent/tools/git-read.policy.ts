@@ -108,8 +108,8 @@ const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
   // `forced` prepends `-v` and revs are disabled.
   'remote': { flags: [], valued: [], forced: ['-v'], revs: false },
 
-  // stash: forced to `list` (read-only). `push`/`pop`/`drop`/`clear`/`apply`/`show`
-  // with side effects are blocked structurally.
+  // stash: forced to `list` (read-only). `push`/`pop`/`drop`/`clear`/`apply`/`show --index`
+  // and other write subcommands are blocked structurally.
   'stash': { flags: [], valued: ['--format=', '--pretty=', '--date='], forced: ['list'], revs: false },
 
   // worktree: forced to `list` (read-only). `add`/`remove`/`prune`/`move`/`lock`/

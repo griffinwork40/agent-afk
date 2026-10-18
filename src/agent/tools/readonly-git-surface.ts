@@ -89,7 +89,7 @@ export function withGitReadSubstitution(body: string): string {
 
 Bash is NOT available. This runtime replaces it with the structured \`git_read\` tool, superseding any earlier statement that you have Bash or may pipe output. Read, Grep, and Glob are unchanged.
 
-- \`subcommand\`: one of ${GIT_READ_SUBCOMMANDS.join(', ')}. Anything else (reflog, rev-list, merge-base, for-each-ref, cat-file, shortlog, describe, remote, stash, worktree) is unavailable: say so in \`caveats\` instead of retrying.
+- \`subcommand\`: one of ${GIT_READ_SUBCOMMANDS.join(', ')}.
 - \`args\`: allowlisted flags and revisions only. \`paths\`: file paths (git_read inserts \`--\` itself).
 - Example: \`git log -n 5 --oneline -- src/x.ts\` becomes \`{"subcommand":"log","args":["--max-count=5","--oneline"],"paths":["src/x.ts"]}\`.
 - Example: \`git grep -n foo HEAD -- src/\` becomes \`{"subcommand":"grep","pattern":"foo","args":["-n","HEAD"],"paths":["src/"]}\`.

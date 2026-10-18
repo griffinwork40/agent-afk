@@ -5,7 +5,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { planGitRead, confinePathspec, GIT_READ_SUBCOMMANDS } from '../git-read.policy.js';
@@ -510,7 +510,14 @@ describe('git_read handler (#4058 live repo)', () => {
     const h = createGitReadHandler(repo);
     const r = await h({ subcommand: 'worktree' }, signal);
     expect(r.isError).toBeFalsy();
-    expect(String(r.content)).toContain(repo);
+    // On Windows, mkdtempSync may return an 8.3 short path (C:\Users\RUNNER~1\...)
+    // while `git worktree list` prints the real long forward-slash path.
+    // Resolve `repo` to its canonical long path and normalise to forward slashes;
+    // compare case-insensitively so win32 drive-letter casing is irrelevant.
+    // Never skip on win32 — posix-guard forbids platform-gated tests.
+    const canonicalRepo = realpathSync.native(repo).replace(/\\/g, '/');
+    const output = String(r.content).replace(/\\/g, '/');
+    expect(output.toLowerCase()).toContain(canonicalRepo.toLowerCase());
   });
 
   it('log --diff-filter=M is accepted (regression)', async () => {
