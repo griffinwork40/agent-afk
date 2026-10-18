@@ -97,7 +97,8 @@
     "experiment:workspace": "tsx scripts/run-workspace-ab-test.ts",
     "backfill:preexisting": "tsx scripts/backfill-preexisting-ledger.ts",
     "check:audits": "tsx scripts/check-audits.ts",
-    "prepare": "node scripts/install-pre-push-hook.mjs || true"
+    "prepare": "node scripts/install-pre-push-hook.mjs || true",
+    "regen:generated": "tsx scripts/regen-generated.ts"
   },
   "keywords": [
     "ai-agent",
