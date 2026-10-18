@@ -31,6 +31,7 @@ pnpm audit:filesize:update                         # regenerate the baseline aft
 pnpm audit:funcsize:check                          # CI gate: 200-line function ceiling (AST-measured), ratcheted against .funcsize-baseline.json
 pnpm audit:funcsize:update                         # regenerate the function baseline after an extraction (add --allow-growth --reason "<text>" to record a deliberate increase)
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
+pnpm audit:clones:check                            # CI gate: no NEW copy-paste clones vs origin/main (jscpd, .jscpd.json; needs the origin/main ref; `pnpm audit:clones` lists all; opt out with // jscpd:ignore-start/-end + reason)
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
 pnpm audit:deps                                    # CI gate: pnpm audit --audit-level=critical --prod
 pnpm check:audits                                  # run all deterministic CI audit gates locally (full-scan; exit 0=pass, 1=some failed, 2=all failed→broken env)

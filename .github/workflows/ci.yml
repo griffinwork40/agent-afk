@@ -130,6 +130,23 @@ jobs:
         # sealer directly, so the existing suite would not catch the fork.
         run: pnpm audit:module-state:check
 
+      - name: Audit new copy-paste clones (jscpd, ratchet against origin/main)
+        # Fails only on clones that are NEW relative to the base branch: jscpd
+        # scans origin/main's tree with the same .jscpd.json and reports clones
+        # absent from it. No committed baseline file, so parallel PRs never
+        # merge-race on one. Fingerprints are content-keyed: a pure file move or
+        # rename (e.g. a 350-line-ceiling split) is not a new clone.
+        # The default checkout is shallow and has no origin/main ref, so fetch
+        # just its tip here. This runs AFTER the filesize/funcsize --changed-vs
+        # steps on purpose: fetching earlier would silently activate their
+        # TOUCHED check, which is a separate policy call (see that step).
+        # Intentional duplication: wrap it in `// jscpd:ignore-start` /
+        # `// jscpd:ignore-end` with a reason comment. List all clones with
+        # `pnpm audit:clones`.
+        run: |
+          git fetch --no-tags --depth=1 origin +main:refs/remotes/origin/main
+          pnpm audit:clones:check
+
       - name: Audit vendored/bundled hash pins are unstale (#775)
         # `fix:pins:check` (scripts/update-hash-pins.ts --check) re-hashes the
         # vendored/bundled files on disk and independently re-derives, via its
