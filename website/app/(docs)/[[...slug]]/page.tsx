@@ -3,6 +3,8 @@ import { notFound } from 'next/navigation';
 import { DocsPage, DocsBody, DocsDescription, DocsTitle } from 'fumadocs-ui/page';
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 import { getBreadcrumbItems } from 'fumadocs-core/breadcrumb';
 import { source } from '@/lib/source';
 import {
@@ -115,6 +117,10 @@ export default async function Page({ params }: Props) {
             ...defaultMdxComponents,
             Card,
             Cards,
+            Step,
+            Steps,
+            Tab,
+            Tabs,
             // Signature wrappers, available to any MDX page.
             SignalField,
             ExtractField,
