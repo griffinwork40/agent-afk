@@ -203,7 +203,7 @@ describe('RemoteSubagentHandle', () => {
         },
         async stream(_t, _script, o) {
           await new Promise<void>((resolve) => {
-            o.signal.addEventListener('abort', resolve, { once: true });
+            o.signal.addEventListener('abort', () => resolve(), { once: true });
           });
           return { code: 255, stdout: '', stderr: '' };
         },
@@ -258,7 +258,7 @@ describe('RemoteSubagentHandle', () => {
         },
         async stream(_t, _script, o) {
           await new Promise<void>((resolve) => {
-            o.signal.addEventListener('abort', resolve, { once: true });
+            o.signal.addEventListener('abort', () => resolve(), { once: true });
           });
           return { code: 255, stdout: '', stderr: '' };
         },
