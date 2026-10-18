@@ -45,6 +45,15 @@ describe('docs impact', () => {
     expect(baseSurface('missing', () => { throw new Error('missing'); }).surface).toBeUndefined();
   });
 
+  it('includes uncommitted working-tree edits alongside committed changes', () => {
+    const result = changedFiles('main', (args) => {
+      if (args[2] === 'main...HEAD') return 'src/agent/committed.ts\n';
+      if (args[2] === 'HEAD') return 'src/cli/slash/commands/copy.ts\nsrc/agent/committed.ts\n';
+      throw new Error(`unexpected git ${args.join(' ')}`);
+    });
+    expect(result).toEqual({ files: ['src/agent/committed.ts', 'src/cli/slash/commands/copy.ts'] });
+  });
+
   it('ignores non-source changes and tolerates absent base snapshot', () => {
     const git: GitRead = (args) => { if (args[0] === 'show') throw new Error('no snapshot'); return 'website/foo.mdx\n'; };
     const summary = impactMarkdown('main', current, pages, git);
