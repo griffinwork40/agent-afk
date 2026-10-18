@@ -21,6 +21,7 @@ The setting takes effect in new sessions. For a single run, use `afk i --permiss
 | `plan` | Read-only investigation, with write-class tools blocked until the plan is approved. |
 | `autonomous` | `/afk` posture with a risk gate that refuses high-risk actions, including for children. |
 
+{/* docs-refs-ignore-next-line */}
 In an interactive session, **Shift+Tab** cycles `default → plan → bypassPermissions → default`. From autonomous mode it exits to `default`. The old `/bypass` slash command is **retired**; use Shift+Tab to enter bypass during a session. `/plan` and `/afk` control their respective modes. The `--dangerously-skip-permissions` flag does not make irreversible actions safe.
 
 ## What path approval covers

@@ -46,7 +46,7 @@ Read `afk improve cards show` with that slug to inspect evidence before changing
 | Evaluate | `afk improve eval-gen card-slug` | Slices a byte-identical fixture from the card's witness evidence and writes an eval-case contract. `--no-write` previews it. |
 | Run | `afk improve eval-run card-slug` | Runs the latest eval case's smallest available deterministic validation contract against the current codebase. |
 
-Replace `card-slug` with the actual value shown by `cards list`. `afk improve proposals list` and `afk improve eval-cases list` let you inspect generated artifacts; both groups have a `show` command. `afk improve approve <slug>` marks a **proposal or eval case** approved and records who approved it. Approval is an artifact state change, not an automatic patch or deployment.
+Replace `card-slug` with the actual value shown by `cards list`. `afk improve proposals list` and `afk improve eval-cases list` let you inspect generated artifacts; use `afk improve proposals show` or `afk improve eval-cases show` with the artifact's slug for its details. `afk improve approve <slug>` marks a **proposal or eval case** approved and records who approved it. Approval is an artifact state change, not an automatic patch or deployment.
 
 The registered scan patterns include `repeated-tool-use`, `closure-anomaly`, and `tool-failure-density` by default. `subagent-block` and `subagent-read-denial` are opt-in because legitimate work can trigger them; select one with `--only subagent-read-denial` or use `--include-disabled`. The read-denial pattern checks repeated forked-child path approval refusals. `scan --since all` includes all retained traces. See the [witness guide](/guides/observability) for inspecting individual events.
 
@@ -67,6 +67,7 @@ The default window is 90 days and the default limit is ten clusters. Set `AFK_PR
 
 ## Test a proposed behavior change
 
+{/* docs-refs-ignore-next-line */}
 If you already have a candidate rule, model, or memory change, [what-if](/guides/whatif) compares an isolated candidate with your current setup. `afk whatif --append "Ask before editing" --predict "agent asks before editing"` supplies your hypothesis directly and skips the analyst prediction call; add `--verify` only when you intend to pay for sandbox episodes. This is a separate experimental workflow, not a stage in `afk improve`. There is no `afk daemon --predict` flag.
 
 ## Related
