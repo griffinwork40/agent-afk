@@ -430,11 +430,47 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
       const srv = statuses.find((s) => s.name === 'testsrv');
       expect(srv).toBeDefined();
       expect(srv?.status).toMatch(/connected/);
+      // toolCount must be forwarded through the provider boundary (#4122).
+      expect(srv?.toolCount).toBe(3);
 
       await session.close();
     } finally {
       await manager.disconnectAll();
     }
+  });
+
+  // (e2e-mcpServers) auto-build path: AgentSession configured with mcpServers
+  // (no pre-built mcpManager) connects to the stdio fixture and surfaces its
+  // tools through mcpServerStatus().
+  //
+  // This exercises the acceptance criterion from #4092: "an SDK session
+  // configured with mcpServers can call its tools" (the auto-build path with a
+  // working server). The beforeEach Anthropic mock resolves
+  // waitForInitialization() via the end-turn stream it returns; this coupling
+  // is intentional — the mock stands in for a real Anthropic provider so the
+  // test stays self-contained without network access.
+  it('(e2e-mcpServers) mcpServers auto-build path: session connects fixture and reports toolCount', async () => {
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpServers: {
+        testsrv: { type: 'stdio', command: process.execPath, args: [MCP_FIXTURE] },
+      },
+    });
+
+    await session.waitForInitialization();
+
+    const statuses = await session.mcpServerStatus();
+    expect(statuses.length).toBeGreaterThan(0);
+    const srv = statuses.find((s) => s.name === 'testsrv');
+    expect(srv).toBeDefined();
+    expect(srv?.status).toMatch(/connected/);
+    // toolCount forwarded through the provider boundary (#4122).
+    expect(srv?.toolCount).toBe(3);
+
+    await session.close();
   });
 
   // (d) Phase 2 rebuilds the provider ONLY when the SDK built the manager.

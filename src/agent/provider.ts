@@ -666,6 +666,8 @@ export interface ProviderContextUsage {
 export interface ProviderMcpServerStatus {
   name: string;
   status: string;
+  /** Number of tools exposed by this server; undefined when not yet known. */
+  toolCount?: number;
 }
 
 /** Loose structural shape for account info. */
