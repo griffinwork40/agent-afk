@@ -458,7 +458,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     // telemetry-only (emitSubagentLifecycle). The mutual-exclusion check in
     // validatePhaseRole ensures we don't clobber a caller's explicit provider.
     ...(options.phaseRole === 'read-only'
-      ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel) }
+      ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel, args.workspaceStore) }
       : {}),
   }, args.nestedAgentAllowlist);
 
