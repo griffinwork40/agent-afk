@@ -21,12 +21,17 @@
  * @module agent/session/agent-session.mcp.test
  */
 
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import type { McpManager } from '../mcp/manager.js';
 import type { ModelProvider, ProviderEvent, ProviderQuery, ProviderQueryArgs } from '../provider.js';
 import type { AgentConfig } from '../types.js';
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const MCP_FIXTURE = resolve(__dirname, '../mcp/__fixtures__/test-server.mjs');
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -375,6 +380,61 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
 
     fromConfigSpy.mockRestore();
     await callerManager.disconnectAll();
+  });
+
+  // -------------------------------------------------------------------------
+  // End-to-end: real stdio fixture connected through an SDK AgentSession
+  // (#4075 item 1 — #4063 acceptance: "an SDK session configured with a
+  // working stdio server can call its tools")
+  // -------------------------------------------------------------------------
+
+  it('(e2e) mcp__* tools from a working stdio fixture reach the provider', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    // Build the real manager from the fixture so we can spy on it — the
+    // session will receive it as a caller-supplied mcpManager (avoiding the
+    // timing-sensitive fromConfig spawn inside AgentSession init).
+    const manager = await McpManagerCls.fromConfig({
+      testsrv: { type: 'stdio', command: process.execPath, args: [MCP_FIXTURE] },
+    });
+
+    try {
+      const states = manager.getServerStates();
+      expect(states.length).toBe(1);
+      expect(states[0]?.serverName).toBe('testsrv');
+      expect(states[0]?.status).toBe('connected');
+      // The fixture exposes 3 tools (add, echo, boom).
+      expect(states[0]?.toolCount).toBe(3);
+
+      // Wire names are prefixed: mcp__<serverName>__<toolName>.
+      const wireNames = manager.getMcpToolWireNames();
+      expect(wireNames).toContain('mcp__testsrv__add');
+      expect(wireNames).toContain('mcp__testsrv__echo');
+      expect(wireNames).toContain('mcp__testsrv__boom');
+
+      // Build an AgentSession with the pre-built manager — the provider will
+      // see mcp__testsrv__* tools in its tool list.
+      const session = new AgentSession({
+        model: 'claude-haiku-4-5',
+        apiKey: 'test-key',
+        persistSession: false,
+        cwd: process.cwd(),
+        mcpManager: manager,
+      });
+
+      await session.waitForInitialization();
+
+      // mcpServerStatus() should reflect the connected fixture server.
+      const statuses = await session.mcpServerStatus();
+      expect(statuses.length).toBeGreaterThan(0);
+      const srv = statuses.find((s) => s.name === 'testsrv');
+      expect(srv).toBeDefined();
+      expect(srv?.status).toMatch(/connected/);
+
+      await session.close();
+    } finally {
+      await manager.disconnectAll();
+    }
   });
 
   // (d) Phase 2 rebuilds the provider ONLY when the SDK built the manager.

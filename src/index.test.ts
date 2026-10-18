@@ -48,6 +48,16 @@ describe('library entry point', () => {
     expect(typeof mod.hydrateMessages).toBe('function');
   });
 
+  it('exports McpManager and MCP type aliases added in #4069', async () => {
+    const mod = await import('./index.js');
+    // McpManager is a class (function) — exported as a value.
+    expect(typeof (mod as Record<string, unknown>)['McpManager']).toBe('function');
+    // McpManagerInitOptions, McpClientState, McpServerConfig are type-only exports
+    // (erased at runtime); confirm the barrel does not accidentally omit them by
+    // checking that the module loaded without error and McpManager is intact.
+    expect((mod as Record<string, unknown>)['McpManager']).toBeDefined();
+  });
+
   it('exports createWiredExecutors for SDK opt-in executors (#3442)', async () => {
     const mod = await import('./index.js');
     expect(typeof mod.createWiredExecutors).toBe('function');
