@@ -1546,6 +1546,7 @@ Guide: [observability](/guides/observability)
 | --- | --- |
 | `show` | Pretty-print a session's trace for humans. [session] is a session id or "latest" (the default) — the most recently written trace. |
 | `list` | List sessions that have a trace, most recent first |
+| `export-otlp` | Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest). Emits GenAI semantic convention spans: one session root, one span per subagent fork (gen_ai.agent.invoke), one span per tool call. Output is written to stdout; pipe to a collector or save with -o. [session] is a session id or "latest" (default). |
 
 ## `afk trace show`
 
@@ -1587,6 +1588,27 @@ Guide: [observability](/guides/observability)
 | Flags | Description | Default |
 | --- | --- | --- |
 | `-n, --max <number>` | Maximum sessions to show | `"20"` |
+| `-h, --help` | display help for command |  |
+
+## `afk trace export-otlp`
+
+Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest). Emits GenAI semantic convention spans: one session root, one span per subagent fork (gen_ai.agent.invoke), one span per tool call. Output is written to stdout; pipe to a collector or save with -o. [session] is a session id or "latest" (default).
+
+Usage: `afk trace export-otlp [options] [session]`
+
+Guide: [observability](/guides/observability)
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[session]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-o, --out <file>` | Write output to a file instead of stdout |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk whatif`
