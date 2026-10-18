@@ -277,6 +277,11 @@ export class AgentSession implements IAgentSession {
       this.shutdown,
       this._hookRegistry,
       (text) => this.queueFrameworkContext(text),
+      // #4064: forward MCP server states so the initializer can queue a
+      // failure notice before the first model turn.
+      this.config.mcpManager !== undefined
+        ? () => this.config.mcpManager!.getServerStates()
+        : undefined,
     );
     this.initPromise = initializer.run(
       () => this.providerIterator,
