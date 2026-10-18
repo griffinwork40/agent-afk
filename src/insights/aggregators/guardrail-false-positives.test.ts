@@ -298,6 +298,41 @@ describe('aggregateGuardrailFalsePositives — actor scoping', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests: emitter metadata shape (item 2 — end-to-end wiring)
+// ---------------------------------------------------------------------------
+
+describe('aggregateGuardrailFalsePositives — emitter metadata shape', () => {
+  it('trip event with subagentId in metadata is attributed to the correct actor', () => {
+    writeSession('sess-emitter-shape');
+    // Simulate what the REAL emitter writes: metadata includes subagentId when
+    // deps.subagentId is defined (dispatcher.hook-block-repeat-gate.ts:82).
+    writeTrace('sess-emitter-shape', [
+      tripEvent(1, 'child-xyz'),
+      toolCallCompleted(2, 'read_file', false, 'child-xyz'), // same actor → FP
+      toolCallCompleted(3, 'bash', false), // root actor — different
+    ]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.totalTrips).toBe(1);
+    expect(result.falsePositiveTrips).toBe(1); // child-xyz success counts
+  });
+
+  it('trip event WITHOUT subagentId in metadata is attributed to root actor', () => {
+    writeSession('sess-emitter-root');
+    // When deps.subagentId is undefined the emitter omits the field entirely —
+    // the aggregator must treat this as the root actor.
+    writeTrace('sess-emitter-root', [
+      tripEvent(1), // no subagentId → root
+      toolCallCompleted(2, 'read_file', false, 'child-abc'), // child success — wrong actor
+    ]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.totalTrips).toBe(1);
+    expect(result.falsePositiveTrips).toBe(0); // child success doesn't count for root trip
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: hook_summary block counts
 // ---------------------------------------------------------------------------
 
