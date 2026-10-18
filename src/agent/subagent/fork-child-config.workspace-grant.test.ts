@@ -74,7 +74,10 @@ describe('assembleChildConfig workspace preamble follows the child grant (#4060)
     expect(cfg.hasWorkspacePreamble).toBe(true);
   });
 
-  it('gives a phaseRole read-only child (store-less phase provider) no workspace instructions', () => {
+  // #4073: the phase provider now carries the fork store, and
+  // READ_ONLY_PHASE_TOOLS grants both workspace tools on purpose, so the child
+  // both holds the tools and is told to use them.
+  it('tells a phaseRole read-only child to use the workspace tools its phase grants', () => {
     const cfg = assembleChildConfig(makeArgs(undefined, new WorkspaceStore(), {
       options: {
         parent: { sessionId: 'parent-sess' },
@@ -83,6 +86,23 @@ describe('assembleChildConfig workspace preamble follows the child grant (#4060)
         phaseRole: 'read-only',
       },
     }));
+    expect(cfg.provider?.grantsTool?.('workspace_publish')).toBe(true);
+    expect(cfg.provider?.grantsTool?.('workspace_query')).toBe(true);
+    expect(systemPromptOf(cfg)).toContain('Call `workspace_publish` when you:');
+    expect(cfg.hasWorkspacePreamble).toBe(true);
+  });
+
+  it('gives a phaseRole read-only child no workspace tools when workspace is disabled (no store)', () => {
+    const args = makeArgs(undefined, new WorkspaceStore(), {
+      options: {
+        parent: { sessionId: 'parent-sess' },
+        config: { model: 'local', systemPrompt: 'Investigate.' },
+        agentType: 'recon',
+        phaseRole: 'read-only',
+      },
+    });
+    const cfg = assembleChildConfig({ ...args, workspaceStore: undefined });
+    expect(cfg.provider?.grantsTool?.('workspace_publish')).toBe(false);
     expect(systemPromptOf(cfg)).not.toContain('workspace_publish');
   });
 
