@@ -15,7 +15,7 @@
  */
 
 import type { ClaudeModel } from './types.js';
-import { resolveModelInput, contextWindowOverrideFor } from './session/model-slots.js';
+import { resolveModelInput, contextWindowOverrideFor, maxOutputTokensOverrideFor } from './session/model-slots.js';
 import { isOSeriesModel, OPENAI_COMPAT_THIRD_PARTY_PREFIXES } from './model-capabilities.js';
 import { catalogContextWindow } from './providers/openai-compatible/models-catalog.capabilities.js';
 import { loadModelsCatalog } from './providers/openai-compatible/models-catalog.js';
@@ -128,15 +128,41 @@ export function maxOutputTokensForKnown(model: ClaudeModel | string): number | u
   if (lowered.endsWith('_1m') && oneM !== undefined) return oneM;
   // Resolve slot alias → bound id so a rebound tier gets the correct cap.
   const id = resolveModelInput(model) ?? String(model);
+  // Per-slot override wins over the built-in table — same precedence as
+  // contextWindowOverrideFor in contextLimitFor.
+  const slotOverride = maxOutputTokensOverrideFor(id);
+  if (slotOverride !== undefined) return slotOverride;
   return MODEL_MAX_OUTPUT_TOKENS[id] ?? MODEL_MAX_OUTPUT_TOKENS[id.toLowerCase()];
 }
 
 /**
  * Look up the max-output-tokens cap for a given model identifier.
- * Accepts short aliases and full IDs; unknown models fall back to 64k.
+ * Accepts short aliases and full IDs.
+ *
+ * For models listed in {@link MODEL_MAX_OUTPUT_TOKENS} or carrying a per-slot
+ * `maxOutputTokens` override, returns that value directly.
+ *
+ * For unlisted openai-compatible ids (HF-style `org/model`, or gpt/o/codex/
+ * grok/third-party prefixes) that have a configured `contextWindow`, derives a
+ * smarter default: `min(64_000, floor(contextWindow / 4))`. This prevents the
+ * flat 64k guess from reserving half the window for output that never arrives
+ * on a self-hosted model with e.g. a 128k or 32k context window.
+ *
+ * Anthropic-routed and listed models are unaffected.
  */
 export function maxOutputTokensFor(model: ClaudeModel | string): number {
-  return maxOutputTokensForKnown(model) ?? DEFAULT_MAX_OUTPUT;
+  const known = maxOutputTokensForKnown(model);
+  if (known !== undefined) return known;
+  // For unlisted openai-compatible ids with a per-slot contextWindow, derive
+  // a sensible default instead of the flat 64k guess.
+  const id = resolveModelInput(model) ?? String(model);
+  if (routesToOpenAICompatible(id)) {
+    const slotWindow = contextWindowOverrideFor(id);
+    if (slotWindow !== undefined) {
+      return Math.min(DEFAULT_MAX_OUTPUT, Math.floor(slotWindow / 4));
+    }
+  }
+  return DEFAULT_MAX_OUTPUT;
 }
 
 /**
