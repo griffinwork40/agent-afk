@@ -289,6 +289,7 @@ describe('SessionToolDispatcher', () => {
         handlers: new Map([['echo', echoHandler()]]),
         schemas: [...builtinToolSchemas],
         permissions: { allowedTools: ['echo'] },
+        hookRegistry: undefined,
         getMcpServerStates: () => mcpStates,
       });
     }
@@ -319,6 +320,7 @@ describe('SessionToolDispatcher', () => {
         handlers: new Map([['echo', echoHandler()]]),
         schemas: [...builtinToolSchemas],
         permissions: { allowedTools: ['echo'] },
+        hookRegistry: undefined,
         // no getMcpServerStates
       });
       const result = await dispatcher.execute(makeCall({ name: 'mcp__any-server__tool' }));
