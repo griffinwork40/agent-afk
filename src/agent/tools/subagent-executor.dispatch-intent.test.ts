@@ -8,6 +8,7 @@ import {
   classifyDispatchIntent,
   checkReadOnlyDispatchIntent,
   checkComposeReadOnlyDispatchIntent,
+  stripQuotedContent,
 } from './subagent-executor.dispatch-intent.js';
 import type { RegisteredAgent } from '../agents/types.js';
 
@@ -200,5 +201,155 @@ describe('checkComposeReadOnlyDispatchIntent (#3754)', () => {
       [{ id: 'e', prompt: 'do not edit files, only report findings', agent_type: 'research-agent' }],
       [{ readOnly: true }],
     )).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4057 — stripQuotedContent + quoted-verb exemption
+// ---------------------------------------------------------------------------
+
+describe('stripQuotedContent (#4057)', () => {
+  it('strips fenced code blocks (backtick fence)', () => {
+    const s = stripQuotedContent('before\n```\nedit src/foo.ts\n```\nafter');
+    expect(s).not.toContain('edit src/foo.ts');
+    expect(s).toContain('before');
+    expect(s).toContain('after');
+  });
+
+  it('strips fenced code blocks (tilde fence)', () => {
+    const s = stripQuotedContent('before\n~~~\nfix the bug\n~~~\nafter');
+    expect(s).not.toContain('fix the bug');
+  });
+
+  it('strips inline code spans', () => {
+    const s = stripQuotedContent('run `edit src/foo.ts` to see');
+    expect(s).not.toContain('edit src/foo.ts');
+    expect(s).toContain('run');
+    expect(s).toContain('to see');
+  });
+
+  it('strips markdown blockquote lines', () => {
+    const s = stripQuotedContent('context:\n> edit git-investigator.md\nrank these');
+    expect(s).not.toContain('edit git-investigator.md');
+    expect(s).toContain('context');
+    expect(s).toContain('rank these');
+  });
+
+  it('strips double-quoted strings (balanced)', () => {
+    const s = stripQuotedContent('the proposal was "edit git-investigator.md directly" — rank it');
+    expect(s).not.toContain('edit git-investigator.md directly');
+    expect(s).toContain('rank it');
+  });
+
+  it('strips attributed list items (the #4057 exact repro shape)', () => {
+    const s = stripQuotedContent('- pragmatist (medium): edit git-investigator.md directly');
+    expect(s).not.toContain('edit git-investigator.md');
+  });
+
+  it('does NOT strip an unbalanced backtick (fails closed)', () => {
+    // A prompt that opens a code span but never closes it must leave the
+    // content in place so a real instruction cannot hide behind it.
+    const s = stripQuotedContent('please `edit src/foo.ts and keep going');
+    expect(s).toContain('edit src/foo.ts');
+  });
+
+  it('does NOT strip an unbalanced double-quote (fails closed)', () => {
+    const s = stripQuotedContent('the plan is "edit src/foo.ts and keep going');
+    expect(s).toContain('edit src/foo.ts');
+  });
+
+  it('does NOT strip a plain bullet with no label: colon pattern', () => {
+    // A genuine imperative bullet like "- edit src/foo.ts" must NOT be stripped
+    // because it IS addressed to the dispatched agent.
+    const s = stripQuotedContent('- edit src/foo.ts');
+    expect(s).toContain('edit src/foo.ts');
+  });
+});
+
+describe('classifyDispatchIntent — #4057 quoted-verb exemptions', () => {
+  // --- Exact repro from the issue ---
+  it('passes: attributed list item with edit verb (exact #4057 repro)', () => {
+    const prompt =
+      'Here are the critic proposals:\n' +
+      '- pragmatist (medium): edit git-investigator.md directly to add context\n' +
+      '- contrarian (high): rewrite the approach entirely\n\n' +
+      'Please rank these options by feasibility.';
+    expect(classifyDispatchIntent(prompt)).toBeUndefined();
+  });
+
+  // --- Fenced code block ---
+  it('passes: write verb inside a fenced code block', () => {
+    const prompt =
+      'Review the following patch:\n' +
+      '```diff\n' +
+      '- edit src/auth.ts to add the guard\n' +
+      '```\n' +
+      'Tell me if it looks correct.';
+    expect(classifyDispatchIntent(prompt)).toBeUndefined();
+  });
+
+  // --- Inline code span ---
+  it('passes: write verb inside an inline code span', () => {
+    expect(classifyDispatchIntent('The critic suggested `edit git-investigator.md` — rank the options.')).toBeUndefined();
+  });
+
+  // --- Blockquote line ---
+  it('passes: write verb on a markdown blockquote line', () => {
+    const prompt = 'Previous agent said:\n> edit git-investigator.md directly\nPlease rank the options.';
+    expect(classifyDispatchIntent(prompt)).toBeUndefined();
+  });
+
+  // --- Double-quoted string ---
+  it('passes: write verb inside a double-quoted string', () => {
+    expect(classifyDispatchIntent('Critic A proposed "edit git-investigator.md" — synthesise and rank.')).toBeUndefined();
+  });
+
+  // --- /devils-advocate synthesis shape ---
+  it('passes: devils-advocate synthesis prompt with attributed critic lines', () => {
+    const prompt =
+      'Three critics evaluated the approach:\n' +
+      '- pragmatist (medium): edit git-investigator.md directly\n' +
+      '- paranoid (high): patch the config to add a guard\n' +
+      '- architect (low): refactor the module entirely\n\n' +
+      'Rank these by safety and feasibility. Return findings only.';
+    expect(classifyDispatchIntent(prompt)).toBeUndefined();
+  });
+
+  // --- Genuine imperatives outside quotes must still be refused ---
+  it('still refuses: genuine imperative edit verb outside any quoted region', () => {
+    expect(classifyDispatchIntent('edit git-investigator.md directly')).toBeDefined();
+  });
+
+  it('still refuses: edit verb after bullet with no label:colon', () => {
+    // Plain bullet "- edit src/a.ts" is a genuine directive, not attributed.
+    expect(classifyDispatchIntent('Steps:\n- edit src/a.ts\n- run the tests')).toBeDefined();
+  });
+
+  it('still refuses: genuine imperative after attributed list items', () => {
+    // The attributed lines are stripped but the plain imperative at the end is not.
+    const prompt =
+      '- pragmatist (medium): edit git-investigator.md\n' +
+      '- contrarian (high): patch the config\n\n' +
+      'Now implement the feature described above.';
+    expect(classifyDispatchIntent(prompt)).toBeDefined();
+  });
+
+  // --- Adversarial: unbalanced delimiters must NOT hide real instructions ---
+  //
+  // Inline code spans (`...`) and double-quoted strings ("...") are only
+  // stripped when the closing delimiter is present on the same line.  A quote
+  // character that sits BETWEEN the clause-lead position and the write verb
+  // naturally breaks CLAUSE_LEAD matching regardless of balance, so those
+  // shapes are protected by the pattern structure rather than by the stripper.
+  // The stripQuotedContent unit tests above verify the "fails closed" invariant
+  // for the stripping logic directly.
+  //
+  // Fenced code blocks DO permit CLAUSE_LEAD to fire via the `\n` anchor inside
+  // the block, so an unclosed fence is the meaningful adversarial case:
+  it('still refuses: unclosed fenced block does not hide a real instruction', () => {
+    // No closing ``` — stripQuotedContent leaves the block in place.
+    // The verb sits on its own line so CLAUSE_LEAD fires via the \n branch.
+    const prompt = 'Review this:\n```\nedit src/foo.ts\ndo the work';
+    expect(classifyDispatchIntent(prompt)).toBeDefined();
   });
 });
