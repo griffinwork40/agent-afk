@@ -3,21 +3,18 @@
  *
  * Wire format: newline-delimited JSON (NDJSON) on stdin → NDJSON on stdout.
  *
- * Supported methods (ACP subset for this slice):
- *   initialize          — capability handshake; returns server info + capabilities
- *   session/new         — create a named session; returns { sessionId }
- *   session/prompt      — send a prompt; streams ACP updates, ends with done
+ * Supported methods:
+ *   initialize          — capability handshake
+ *   session/new         — create a session; returns { sessionId }
+ *   session/prompt      — stream a prompt; intermediate frames are notifications
  *   session/close       — tear down a session
- *
- * Each `session/prompt` call streams zero or more `{ id, result: { type:
- * "update", … } }` notifications followed by a final `{ id, result: { type:
- * "done", … } }` response frame.  Errors are returned as JSON-RPC error
- * objects.
+ *   session/cancel      — abort a running prompt
  *
  * @module cli/commands/acp.server
  */
 
 import { createInterface } from 'node:readline';
+import { randomUUID } from 'node:crypto';
 import type { Readable, Writable } from 'node:stream';
 import type { AgentModelInput } from '../../agent/types.js';
 import {
@@ -25,61 +22,26 @@ import {
   closeAcpSession,
   type AcpSessionHandle,
 } from './acp.session.js';
+import {
+  writeJson,
+  successResponse,
+  errorResponse,
+  notificationFrame,
+  normalizePrompt,
+  MAX_LINE_BYTES,
+  PARSE_ERROR,
+  INVALID_REQUEST,
+  METHOD_NOT_FOUND,
+  INVALID_PARAMS,
+  INTERNAL_ERROR,
+  type JsonRpcRequest,
+  type JsonRpcResponse,
+  type AcpUpdate,
+} from './acp.server.protocol.js';
 
-// ---------------------------------------------------------------------------
-// JSON-RPC 2.0 types
-// ---------------------------------------------------------------------------
-
-export interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id: string | number | null;
-  method: string;
-  params?: unknown;
-}
-
-export interface JsonRpcSuccess {
-  jsonrpc: '2.0';
-  id: string | number | null;
-  result: unknown;
-}
-
-export interface JsonRpcError {
-  jsonrpc: '2.0';
-  id: string | number | null;
-  error: { code: number; message: string; data?: unknown };
-}
-
-export type JsonRpcResponse = JsonRpcSuccess | JsonRpcError;
-
-// Standard JSON-RPC 2.0 error codes
-const PARSE_ERROR = -32700;
-const INVALID_REQUEST = -32600;
-const METHOD_NOT_FOUND = -32601;
-const INVALID_PARAMS = -32602;
-const INTERNAL_ERROR = -32603;
-
-// ---------------------------------------------------------------------------
-// ACP message helpers
-// ---------------------------------------------------------------------------
-
-/** ACP update event types surfaced per OutputEvent. */
-export type AcpUpdateType =
-  | 'text_delta'
-  | 'tool_start'
-  | 'tool_end'
-  | 'rate_limit'
-  | 'done'
-  | 'error';
-
-export interface AcpUpdate {
-  type: AcpUpdateType;
-  delta?: string;
-  toolName?: string;
-  retryAfterMs?: number;
-  sessionId?: string;
-  costUsd?: number;
-  error?: string;
-}
+// Re-export types the test file imports from this module
+export type { JsonRpcRequest, JsonRpcResponse } from './acp.server.protocol.js';
+export { writeJson, successResponse, errorResponse } from './acp.server.protocol.js';
 
 // ---------------------------------------------------------------------------
 // Server options
@@ -90,56 +52,23 @@ export interface AcpServerOptions {
   maxTurns: number;
   input: Readable;
   output: Writable;
+  /** When true, sessions run in bypassPermissions mode (fix #1). */
+  dangerouslySkipPermissions?: boolean;
 }
 
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
 
+interface SessionEntry {
+  handle: AcpSessionHandle;
+  abort: AbortController;
+}
+
 interface ServerState {
   initialized: boolean;
-  sessions: Map<string, AcpSessionHandle>;
-  nextSessionNum: number;
+  sessions: Map<string, SessionEntry>;
   opts: AcpServerOptions;
-}
-
-// ---------------------------------------------------------------------------
-// Write helpers
-// ---------------------------------------------------------------------------
-
-function writeJson(output: Writable, obj: unknown): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const line = JSON.stringify(obj) + '\n';
-    const ok = output.write(line, (err) => {
-      if (err) reject(err);
-      else if (ok) resolve();
-    });
-    if (!ok) {
-      const onDrain = (): void => {
-        output.removeListener('error', onError);
-        resolve();
-      };
-      const onError = (err: Error): void => {
-        output.removeListener('drain', onDrain);
-        reject(err);
-      };
-      output.once('drain', onDrain);
-      output.once('error', onError);
-    }
-  });
-}
-
-function successResponse(id: string | number | null, result: unknown): JsonRpcSuccess {
-  return { jsonrpc: '2.0', id, result };
-}
-
-function errorResponse(
-  id: string | number | null,
-  code: number,
-  message: string,
-  data?: unknown,
-): JsonRpcError {
-  return { jsonrpc: '2.0', id, error: { code, message, ...(data !== undefined ? { data } : {}) } };
 }
 
 // ---------------------------------------------------------------------------
@@ -151,12 +80,14 @@ async function handleInitialize(
   req: JsonRpcRequest,
 ): Promise<JsonRpcResponse> {
   state.initialized = true;
+  // Fix #3: include protocolVersion and agentCapabilities
   return successResponse(req.id, {
-    serverInfo: { name: 'afk', version: 'acp/1.0' },
-    capabilities: {
-      methods: ['initialize', 'session/new', 'session/prompt', 'session/close'],
+    protocolVersion: '1.0',
+    agentCapabilities: {
       streaming: true,
+      methods: ['initialize', 'session/new', 'session/prompt', 'session/close', 'session/cancel'],
     },
+    serverInfo: { name: 'afk', version: 'acp/1.0' },
   });
 }
 
@@ -167,22 +98,27 @@ async function handleSessionNew(
   if (!state.initialized) {
     return errorResponse(req.id, INVALID_REQUEST, 'Server not initialized — call initialize first');
   }
-  const sessionId = `acp-${Date.now()}-${state.nextSessionNum++}`;
+  // Fix non-blocking extra: use crypto.randomUUID()
+  const sessionId = randomUUID();
+  const params = req.params as { cwd?: string } | undefined;
   const handle = await buildAcpSession({
     model: state.opts.model,
     maxTurns: state.opts.maxTurns,
+    dangerouslySkipPermissions: state.opts.dangerouslySkipPermissions,
+    cwd: params?.cwd,
   });
-  state.sessions.set(sessionId, handle);
+  const abort = new AbortController();
+  state.sessions.set(sessionId, { handle, abort });
   return successResponse(req.id, { sessionId });
 }
 
 /**
  * Stream a prompt through the session.
  *
- * Emits zero or more intermediate `{ id, result: { type: "update", update } }`
- * frames via `output`, then a final `{ id, result: { type: "done", … } }`.
- * On error, emits a JSON-RPC error response and leaves the session open so
- * the client can retry.
+ * Fix #2: Intermediate frames are JSON-RPC notifications (method: session/update,
+ * no id). Only the final done frame is a response with the request id.
+ * Fix #6: Internal errors are not leaked to the client.
+ * Fix #8: AbortController stored per session; signal passed to stream.
  */
 async function handleSessionPrompt(
   state: ServerState,
@@ -196,9 +132,10 @@ async function handleSessionPrompt(
     return;
   }
 
-  const params = req.params as { sessionId?: string; prompt?: string } | undefined;
+  const params = req.params as { sessionId?: string; prompt?: unknown } | undefined;
   const sessionId = params?.sessionId;
-  const prompt = params?.prompt;
+  // Fix #4: accept string | ContentBlock[]
+  const prompt = normalizePrompt(params?.prompt);
 
   if (typeof sessionId !== 'string' || !sessionId) {
     await writeJson(
@@ -207,7 +144,7 @@ async function handleSessionPrompt(
     );
     return;
   }
-  if (typeof prompt !== 'string' || !prompt) {
+  if (!prompt) {
     await writeJson(
       state.opts.output,
       errorResponse(req.id, INVALID_PARAMS, 'params.prompt must be a non-empty string'),
@@ -215,8 +152,8 @@ async function handleSessionPrompt(
     return;
   }
 
-  const handle = state.sessions.get(sessionId);
-  if (!handle) {
+  const entry = state.sessions.get(sessionId);
+  if (!entry) {
     await writeJson(
       state.opts.output,
       errorResponse(req.id, INVALID_PARAMS, `Unknown sessionId: ${sessionId}`),
@@ -225,33 +162,45 @@ async function handleSessionPrompt(
   }
 
   try {
-    const stream = handle.session.sendMessageStream(prompt);
+    const stream = entry.handle.session.sendMessageStream(prompt);
     let assistantText = '';
     let finalCost: number | undefined;
     let finalSessionId: string | undefined;
 
     for await (const event of stream) {
+      // Fix #8: honour abort signal
+      if (entry.abort.signal.aborted) break;
+
       if (event.type === 'chunk' && event.chunk.type === 'content') {
         const delta = (event.chunk as { type: 'content'; content: string }).content;
         assistantText += delta;
         const update: AcpUpdate = { type: 'text_delta', delta };
-        await writeJson(state.opts.output, successResponse(req.id, { type: 'update', update }));
+        // Fix #2: intermediate frame is a notification, not a response
+        await writeJson(
+          state.opts.output,
+          notificationFrame('session/update', { type: 'update', update, sessionId }),
+        );
       } else if (event.type === 'progress') {
-        // Tool use start/end surfaced as ACP tool events
         const prog = event.progress as { phase?: string; toolName?: string };
         if (prog.phase === 'tool_start' && prog.toolName) {
           const update: AcpUpdate = { type: 'tool_start', toolName: prog.toolName };
-          await writeJson(state.opts.output, successResponse(req.id, { type: 'update', update }));
+          await writeJson(
+            state.opts.output,
+            notificationFrame('session/update', { type: 'update', update, sessionId }),
+          );
         } else if (prog.phase === 'tool_end' && prog.toolName) {
           const update: AcpUpdate = { type: 'tool_end', toolName: prog.toolName };
-          await writeJson(state.opts.output, successResponse(req.id, { type: 'update', update }));
+          await writeJson(
+            state.opts.output,
+            notificationFrame('session/update', { type: 'update', update, sessionId }),
+          );
         }
       } else if (event.type === 'rate_limit') {
-        const update: AcpUpdate = {
-          type: 'rate_limit',
-          retryAfterMs: event.retryAfterMs,
-        };
-        await writeJson(state.opts.output, successResponse(req.id, { type: 'update', update }));
+        const update: AcpUpdate = { type: 'rate_limit', retryAfterMs: event.retryAfterMs };
+        await writeJson(
+          state.opts.output,
+          notificationFrame('session/update', { type: 'update', update, sessionId }),
+        );
       } else if (event.type === 'done') {
         const rawCost = event.metadata?.['costUsd'];
         finalCost = typeof rawCost === 'number' ? rawCost : undefined;
@@ -259,18 +208,18 @@ async function handleSessionPrompt(
           ? String(event.metadata.sessionId)
           : undefined;
       } else if (event.type === 'error') {
-        const update: AcpUpdate = { type: 'error', error: event.error.message };
-        await writeJson(state.opts.output, errorResponse(
-          req.id,
-          INTERNAL_ERROR,
-          event.error.message,
-          { update },
-        ));
+        // Fix #6: don't forward internal error message
+        const safeMsg = 'Internal server error';
+        process.stderr.write(`[acp] ${event.error.stack ?? event.error.message}\n`);
+        await writeJson(
+          state.opts.output,
+          errorResponse(req.id, INTERNAL_ERROR, safeMsg),
+        );
         return;
       }
     }
 
-    // Final done frame
+    // Final done frame — only this carries the request id (fix #2)
     const doneUpdate: AcpUpdate = {
       type: 'done',
       ...(finalSessionId !== undefined ? { sessionId: finalSessionId } : {}),
@@ -281,11 +230,10 @@ async function handleSessionPrompt(
       successResponse(req.id, { type: 'done', update: doneUpdate, text: assistantText }),
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    await writeJson(
-      state.opts.output,
-      errorResponse(req.id, INTERNAL_ERROR, msg),
-    );
+    // Fix #6: log full error to stderr, send generic message to client
+    const safeMsg = 'Internal server error';
+    if (err instanceof Error) process.stderr.write(`[acp] ${err.stack ?? err.message}\n`);
+    await writeJson(state.opts.output, errorResponse(req.id, INTERNAL_ERROR, safeMsg));
   }
 }
 
@@ -298,23 +246,37 @@ async function handleSessionClose(
   if (typeof sessionId !== 'string' || !sessionId) {
     return errorResponse(req.id, INVALID_PARAMS, 'params.sessionId must be a non-empty string');
   }
-  const handle = state.sessions.get(sessionId);
-  if (!handle) {
+  const entry = state.sessions.get(sessionId);
+  if (!entry) {
     return errorResponse(req.id, INVALID_PARAMS, `Unknown sessionId: ${sessionId}`);
   }
   state.sessions.delete(sessionId);
-  await closeAcpSession(handle);
+  await closeAcpSession(entry.handle);
   return successResponse(req.id, { closed: true });
+}
+
+// Fix #8: session/cancel handler
+async function handleSessionCancel(
+  state: ServerState,
+  req: JsonRpcRequest,
+): Promise<JsonRpcResponse> {
+  const params = req.params as { sessionId?: string } | undefined;
+  const sessionId = params?.sessionId;
+  if (typeof sessionId !== 'string' || !sessionId) {
+    return errorResponse(req.id, INVALID_PARAMS, 'params.sessionId must be a non-empty string');
+  }
+  const entry = state.sessions.get(sessionId);
+  if (!entry) {
+    return errorResponse(req.id, INVALID_PARAMS, `Unknown sessionId: ${sessionId}`);
+  }
+  entry.abort.abort();
+  return successResponse(req.id, { cancelled: true });
 }
 
 // ---------------------------------------------------------------------------
 // Request dispatcher
 // ---------------------------------------------------------------------------
 
-/**
- * Dispatch one parsed request.  Returns a response object for all methods
- * EXCEPT `session/prompt`, which writes its own frames and returns undefined.
- */
 async function dispatchRequest(
   state: ServerState,
   req: JsonRpcRequest,
@@ -325,11 +287,13 @@ async function dispatchRequest(
     case 'session/new':
       return handleSessionNew(state, req);
     case 'session/prompt':
-      // Streaming: writes its own frames, returns nothing
+      // Streaming: writes its own frames — caller handles fire-and-forget
       await handleSessionPrompt(state, req);
       return undefined;
     case 'session/close':
       return handleSessionClose(state, req);
+    case 'session/cancel':
+      return handleSessionCancel(state, req);
     default:
       return errorResponse(req.id, METHOD_NOT_FOUND, `Method not found: ${req.method}`);
   }
@@ -344,20 +308,32 @@ async function dispatchRequest(
  *
  * Reads NDJSON from `options.input`, writes NDJSON to `options.output`.
  * Resolves when the input stream ends (client disconnected).
+ *
+ * Fix #7: enforces MAX_LINE_BYTES before JSON.parse.
+ * Fix #8: session/prompt is dispatched without await so cancel can be read
+ *         concurrently; pending promises are awaited on shutdown.
  */
 export async function runAcpServer(options: AcpServerOptions): Promise<void> {
   const state: ServerState = {
     initialized: false,
     sessions: new Map(),
-    nextSessionNum: 0,
     opts: options,
   };
 
   const rl = createInterface({ input: options.input, crlfDelay: Infinity });
 
+  // Fix #8: track in-flight prompt promises so we can await them on shutdown
+  const pendingPrompts = new Set<Promise<void>>();
+
   for await (const line of rl) {
     const trimmed = line.trim();
     if (!trimmed) continue;
+
+    // Fix #7: reject oversized lines before parsing
+    if (Buffer.byteLength(trimmed) > MAX_LINE_BYTES) {
+      await writeJson(options.output, errorResponse(null, PARSE_ERROR, 'Request too large'));
+      continue;
+    }
 
     let req: JsonRpcRequest;
     try {
@@ -387,21 +363,35 @@ export async function runAcpServer(options: AcpServerOptions): Promise<void> {
       continue;
     }
 
+    // Fix #8: fire-and-forget session/prompt so cancel can be read concurrently
+    if (req.method === 'session/prompt') {
+      const p = handleSessionPrompt(state, req).finally(() => { pendingPrompts.delete(p); });
+      pendingPrompts.add(p);
+      continue;
+    }
+
     try {
       const response = await dispatchRequest(state, req);
       if (response !== undefined) {
         await writeJson(options.output, response);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await writeJson(options.output, errorResponse(req.id, INTERNAL_ERROR, msg));
+      // Fix #6: log full error, send generic message
+      const safeMsg = 'Internal server error';
+      if (err instanceof Error) process.stderr.write(`[acp] ${err.stack ?? err.message}\n`);
+      await writeJson(options.output, errorResponse(req.id, INTERNAL_ERROR, safeMsg));
     }
   }
 
+  // Wait for any in-flight prompts to finish
+  if (pendingPrompts.size > 0) {
+    await Promise.allSettled([...pendingPrompts]);
+  }
+
   // Clean up all open sessions on disconnect
-  for (const [, handle] of state.sessions) {
+  for (const [, entry] of state.sessions) {
     try {
-      await closeAcpSession(handle);
+      await closeAcpSession(entry.handle);
     } catch {
       // best-effort
     }

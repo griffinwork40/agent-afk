@@ -6,8 +6,8 @@
  *
  * Protocol: newline-delimited JSON (NDJSON) on stdin → NDJSON on stdout.
  * The server speaks the ACP subset: initialize, session/new, session/prompt,
- * and session/close.  Each session/prompt streams ProviderEvents translated
- * to ACP update objects until done.
+ * session/close, and session/cancel.  Each session/prompt streams intermediate
+ * notifications (no id) followed by a final done response with the request id.
  *
  * @module cli/commands/acp
  */
@@ -31,14 +31,24 @@ export function registerAcpCommand(program: Command): void {
       'maximum agent turns per prompt (default: 10)',
       '10',
     )
+    // Fix #1: add --dangerously-skip-permissions flag
+    .option(
+      '--dangerously-skip-permissions',
+      'Force bypass mode: skip path-approval prompts',
+    )
     .action(
-      async (options: { model?: AgentModelInput; maxTurns: string }) => {
+      async (options: {
+        model?: AgentModelInput;
+        maxTurns: string;
+        dangerouslySkipPermissions?: boolean;
+      }) => {
         try {
           await runAcpServer({
             model: options.model ?? getModel(),
             maxTurns: parseInt(options.maxTurns, 10),
             input: process.stdin,
             output: process.stdout,
+            dangerouslySkipPermissions: options.dangerouslySkipPermissions,
           });
         } catch (err) {
           handleCommandError(err);

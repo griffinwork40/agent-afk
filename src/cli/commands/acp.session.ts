@@ -28,6 +28,10 @@ import type { AgentModelInput } from '../../agent/types.js';
 export interface AcpSessionOptions {
   model: AgentModelInput;
   maxTurns: number;
+  /** When true, sessions run in bypassPermissions mode (fix #1). */
+  dangerouslySkipPermissions?: boolean;
+  /** Optional working directory for the session (non-blocking extra). */
+  cwd?: string;
 }
 
 /** Opaque handle returned by buildAcpSession and accepted by closeAcpSession. */
@@ -44,11 +48,14 @@ export interface AcpSessionHandle {
 /**
  * Construct an AgentSession for the ACP server.
  *
- * Uses bypassPermissions (the ACP surface has no interactive approval flow)
- * and the CLI surface label so existing tool-allowlist logic applies.
+ * Fix #1: Default permissionMode is 'default'. Only 'bypassPermissions' when
+ * dangerouslySkipPermissions is explicitly true.
  */
 export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessionHandle> {
   const { model, maxTurns } = opts;
+  // Fix #1: use 'default' unless the flag is explicitly set
+  const permissionMode = opts.dangerouslySkipPermissions ? 'bypassPermissions' : 'default';
+
   const memoryStore = new MemoryStore();
   const stateStore = new StateStore(getStateDatabasePath());
 
@@ -96,16 +103,17 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
       ...managerShutdownConfig(rootManager, composeExecutor),
       maxTurns,
       isNonInteractive: true,
-      permissionMode: 'bypassPermissions',
+      permissionMode,
       hookRegistry: createDefaultHookRegistry(
         () => {},
         'cli',
         memoryStore,
-        () => 'bypassPermissions',
+        () => permissionMode,
         loadHooksConfig({}),
         {},
       ).registry,
       provider,
+      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
     }),
     undefined,
   );
