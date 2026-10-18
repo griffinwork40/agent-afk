@@ -204,12 +204,12 @@ function hardBlock(resolved: string): RiskVerdict | undefined {
   for (const blocked of getWriteDenylist()) {
     const blockedNorm = toSlash(blocked);
     if (resolvedNorm === blockedNorm || resolvedNorm.startsWith(blockedNorm + '/')) {
-      return { level: 'high', reason: `write-denylist: ${resolved} is under ${blocked}` };
+      return { level: 'high', reason: `write-denylist: ${resolved} is under ${blocked}`, category: 'credential-path' };
     }
   }
   // .git/ directory — writes to the git object store are almost always wrong.
   if (resolvedNorm.includes('/.git/')) {
-    return { level: 'high', reason: `git-dir: ${resolved} is inside .git/` };
+    return { level: 'high', reason: `git-dir: ${resolved} is inside .git/`, category: 'credential-path' };
   }
   return undefined;
 }
@@ -284,7 +284,7 @@ function isSafeTempWrite(abs: string, resolved: string): boolean {
 
 /** Classify one write target path. */
 export function classifyFilePath(filePath: string, ctx: RiskContext): RiskVerdict {
-  if (!filePath) return { level: 'safe' };
+  if (!filePath) return { level: 'safe', category: 'workspace-write' };
 
   const abs = path.resolve(ctx.cwd, filePath);
   const resolved = safeRealpath(abs);
@@ -303,16 +303,16 @@ export function classifyFilePath(filePath: string, ctx: RiskContext): RiskVerdic
     // on the writer's final target (finalWriteTarget), so a temp symlink cannot
     // carry the bytes outside tmp.
     if (isOutsideRoot(realRoot, resolved) && !isSafeTempWrite(abs, resolved)) {
-      return { level: 'high', reason: `workspace-escape: ${resolved} is outside ${realRoot}` };
+      return { level: 'high', reason: `workspace-escape: ${resolved} is outside ${realRoot}`, category: 'workspace-escape' };
     }
   }
 
   // node_modules — usually unintentional; not catastrophic.
   if (toSlash(resolved).includes('/node_modules/')) {
-    return { level: 'medium', reason: `node-modules: ${resolved}` };
+    return { level: 'medium', reason: `node-modules: ${resolved}`, category: 'workspace-write' };
   }
 
-  return { level: 'safe' };
+  return { level: 'safe', category: 'workspace-write' };
 }
 
 /**
@@ -322,7 +322,7 @@ export function classifyFilePath(filePath: string, ctx: RiskContext): RiskVerdic
 export function classifyPatchApply(input: unknown, ctx: RiskContext): RiskVerdict {
   const obj = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
   const changes = Array.isArray(obj['changes']) ? obj['changes'] : [];
-  let highest: RiskVerdict = { level: 'safe' };
+  let highest: RiskVerdict = { level: 'safe', category: 'workspace-write' };
   for (const change of changes) {
     if (typeof change !== 'object' || change === null) continue;
     const p = (change as Record<string, unknown>)['path'];

@@ -106,9 +106,11 @@ function collectRunCommand(lines: string[], start: number): { command: string; e
 }
 
 function pnpmScripts(command: string): string[] {
+  // Match `pnpm <script>` even when preceded by env-var assignments
+  // (e.g. `CLONE_GATE_BASE_REF=origin/main pnpm audit:clones:check`).
   return command
     .split(/\s*(?:&&|;)\s*/)
-    .map((part) => /^pnpm\s+(\S+)/.exec(part.trim())?.[1])
+    .map((part) => /(?:^|\s)pnpm\s+(\S+)/.exec(part.trim())?.[1])
     .filter((script): script is string => script !== undefined);
 }
 

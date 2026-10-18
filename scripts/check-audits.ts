@@ -17,6 +17,7 @@
  *   - pnpm audit:filesize:check      (full-scan; no --changed-vs)
  *   - pnpm audit:funcsize:check      (full-scan; deduped: CI runs it twice)
  *   - pnpm audit:module-state:check
+ *   - pnpm audit:clones:check        (needs the origin/main ref; local, no network)
  *   - pnpm fix:pins:check
  *
  * Excluded (per spec):
@@ -46,6 +47,7 @@ export const AUDIT_GATES: readonly string[] = [
   'audit:filesize:check',
   'audit:funcsize:check',
   'audit:module-state:check',
+  'audit:clones:check',
   'fix:pins:check',
 ];
 

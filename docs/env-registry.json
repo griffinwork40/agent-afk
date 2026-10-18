@@ -347,6 +347,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_EVENTS_GITHUB_POLL_MS",
+      "description": "Poll interval in milliseconds for `afk events github`. Overrides the --interval flag. Must be >= 5000. Default 60000 (1 minute). Part of #3896 (event-triggered runs).",
+      "type": "number",
+      "required": false,
+      "default": "60000",
+      "example": "30000",
+      "category": "daemon"
+    },
+    {
       "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
       "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even to tool calls whose context carries no grant manager. Every production provider wires itself as the grant manager on every surface (REPL, Telegram, afk chat, daemon, subagents), so there the denylist is already active; without one it fails open. Set to 1 to force it on for those contexts too. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off.",
       "type": "boolean",
@@ -874,7 +883,7 @@
     },
     {
       "name": "AFK_READ_DENYLIST",
-      "description": "Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read, and that the bash-restriction hook refuses to let a shell command reference on interactive surfaces (REPL, Telegram) — on headless surfaces (afk chat, daemon) bash fails open regardless of this list. A leading ~/ is expanded (~user/ is not — spell those absolutely). Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed. One built-in exception exists: ~/.afk/config/mcp.json (the MCP registry) IS readable — paths listed here outrank that carve-out, so set this to ~/.afk/config/mcp.json if your registry holds inline secrets rather than ${VAR} placeholders.",
+      "description": "Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read, and that the bash-restriction hook refuses to let a shell command reference on interactive surfaces (REPL, Telegram) — on headless surfaces (afk chat, daemon) bash fails open regardless of this list. A leading ~/ is expanded (~user/ is not — spell those absolutely). Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed. Built-in READ-only exceptions: ~/.afk/config/mcp.json (the MCP registry), ~/.afk/config/schedules.json, ~/.ssh/config, ~/.ssh/known_hosts, and SSH public keys (direct *.pub children of ~/.ssh, symlink-resolved). Paths listed here outrank every exception — e.g. set this to ~/.afk/config/mcp.json if your registry holds inline secrets rather than ${VAR} placeholders, or to ~/.ssh to re-deny all of ~/.ssh. Bash honors the exceptions only for provably read-only commands (cat/grep/head/… pipelines with no redirection); writes stay blocked on every surface.",
       "type": "string",
       "required": false,
       "example": "/Users/me/project/.env:/Users/me/secrets",
