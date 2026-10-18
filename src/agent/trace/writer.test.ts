@@ -194,19 +194,20 @@ describe('NdjsonTraceWriter', () => {
     expect(seal.seq).toBe(1); // continues the monotonic seq after the phase event
   });
 
-  it('#171: exit backstop still seals when it fires between seal()\'s optimistic flag flip and its queued durable append', async () => {
+  it('#171: exit backstop defers to seal() once sealing is in progress (no duplicate record)', async () => {
+    // Updated for the `sealing` guard (#3834): previously the backstop gated
+    // only on `sealRecordPersisted`, which meant a process-exit signal arriving
+    // during seal()'s async pending-writes wait (sealing=true, sealed=false,
+    // sealRecordPersisted=false) produced a spurious failed/incomplete record.
+    // The `sealing` guard closes that window: once seal() has started, the
+    // backstop is a no-op and seal() completes normally.
     const writer = new NdjsonTraceWriter({ traceDir });
     await writer.write({
       kind: 'session_phase',
       payload: { phase: 'session_init_done', durationMs: 10 },
     });
 
-    // Start seal() but deliberately do NOT await it yet. `seal()` sets
-    // `sealed = true` synchronously, then enqueues its durable append as a
-    // microtask on the write queue — it has not run by the time this line
-    // returns control to us. This reproduces the exact #171 race window:
-    // the optimistic flag is flipped, but no session_sealed record has
-    // reached disk yet.
+    // Start seal() — this synchronously sets sealing=true before any await.
     const sealPromise = writer.seal({
       status: 'succeeded',
       finalCostUsd: 0.02,
@@ -214,27 +215,21 @@ describe('NdjsonTraceWriter', () => {
       closedAt: new Date().toISOString(),
     });
 
-    // Fire the synchronous process-exit path *before* the queued append
-    // gets a turn on the microtask queue. Pre-fix, this gated on `sealed`
-    // (already true) and returned early, orphaning the trace. Post-fix, it
-    // gates on `sealRecordPersisted` (still false) and writes the backstop
-    // record.
+    // Fire the synchronous process-exit path while sealing=true.
+    // With the sealing guard, this is now a no-op: seal() wins the race.
     writer.sealOnProcessExit();
 
-    // Let the queued seal() append run its course — it must see the
-    // now-true `sealRecordPersisted` and skip rather than appending a
-    // second terminal record.
     await sealPromise;
 
     const events = await readTrace(writer.getTracePath());
     const seals = events.filter((e) => e.kind === 'session_sealed');
+    // Exactly one seal record — no spurious duplicate from the backstop.
     expect(seals).toHaveLength(1);
     const seal = seals[0];
     if (seal?.kind !== 'session_sealed') throw new Error('unreachable');
-    // The exit handler won the race, so the backstop's failed/incomplete
-    // semantics apply — NOT seal()'s intended succeeded payload.
-    expect(seal.payload.status).toBe('failed');
-    expect(seal.payload.incomplete).toBe(true);
+    // seal() won — the intended succeeded payload is preserved.
+    expect(seal.payload.status).toBe('succeeded');
+    expect(seal.payload.incomplete).toBeUndefined();
   });
 
   it('sealOnProcessExit() is a no-op after a normal seal() (no double seal)', async () => {
@@ -265,6 +260,31 @@ describe('NdjsonTraceWriter', () => {
     // Never opened the file — must neither throw nor create a trace.
     expect(() => writer.sealOnProcessExit()).not.toThrow();
     await expect(readFile(writer.getTracePath(), 'utf8')).rejects.toThrow();
+  });
+
+  it('sealOnProcessExit() is a no-op while seal() is in progress (sealing=true)', async () => {
+    // Simulates the window where seal() has started its async work but has not
+    // yet flipped sealRecordPersisted. Without the `sealing` guard, a concurrent
+    // process-exit signal would write a duplicate session_sealed with status:
+    // 'failed', producing a false crash marker in the trace.
+    const writer = new NdjsonTraceWriter({ traceDir });
+    await writer.write({
+      kind: 'session_phase',
+      payload: { phase: 'session_init_done', durationMs: 10 },
+    });
+    // Reach into the private state to replicate mid-seal conditions:
+    // sealing=true means seal() is in progress; sealed=false / sealRecordPersisted=false
+    // means it has not yet finished. This is the exact window the bug covered.
+    (writer as unknown as Record<string, unknown>)['sealing'] = true;
+    (writer as unknown as Record<string, unknown>)['sealed'] = false;
+    (writer as unknown as Record<string, unknown>)['sealRecordPersisted'] = false;
+
+    writer.sealOnProcessExit(); // must be a no-op — seal() is already in flight
+
+    // File has only the one event written above; no second session_sealed appended.
+    const events = await readTrace(writer.getTracePath());
+    const seals = events.filter((e) => e.kind === 'session_sealed');
+    expect(seals).toHaveLength(0);
   });
 
   it('process-exit backstop seals a real crashed subprocess (end-to-end wiring)', async () => {

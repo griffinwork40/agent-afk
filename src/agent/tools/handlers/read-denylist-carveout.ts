@@ -32,8 +32,9 @@
  * Platform-aware prefix-or-equal containment. `relative` avoids hard-coding
  * `/`, which would silently disable nested-root checks on Windows.
  */
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
+import { isCaseInsensitiveFs } from '../fs-case.js';
 import { safeRealpath } from './write-denylist.js';
 
 function isUnderRoot(candidate: string, root: string): boolean {
@@ -158,4 +159,64 @@ export function gateStaticCarveOuts(
       gateRootsExcludingSource(resolvedBuiltinEntries, CARVEOUT_PIERCED_SOURCE[rel]),
     ),
   );
+}
+
+/**
+ * Gate the SSH public-key PATTERN carve-out (read-denylist.ts) and return the
+ * resolved directory whose direct `*.pub` children it opens, or `undefined`
+ * when the carve-out must not apply.
+ *
+ * `piercedSource` is the exact BUILTIN_READ_DENYLIST source string for
+ * `~/.ssh` (provenance, never a resolved path — see the module contract).
+ * Invariant: same per-entry provenance rule as {@link gateStaticCarveOuts} —
+ * every builtin root except that source itself (plus every derived
+ * AFK_HOME config root) gates the pattern. If the resolved ssh dir sits at or
+ * under any of those (a `~/.ssh` symlinked into `~/.gnupg`, an AFK config dir
+ * that canonicalizes to `~/.ssh`), the pattern is dropped entirely: it fails
+ * CLOSED rather than opening `.pub` names inside some other floor. A missing
+ * `~/.ssh` source (unmapped) excludes nothing, so it also fails closed.
+ */
+export function gateSshPubKeyDir(
+  resolvedBuiltinEntries: readonly { source: string; root: string }[],
+  derivedRoots: readonly string[],
+  piercedSource: string,
+): string | undefined {
+  const ssh = resolvedBuiltinEntries.find(({ source }) => source === piercedSource);
+  if (ssh === undefined) return undefined;
+  const gateRoots = [
+    ...gateRootsExcludingSource(resolvedBuiltinEntries, piercedSource),
+    ...derivedRoots,
+  ];
+  return gateDerivedCarveOuts([ssh.root], gateRoots).length === 1 ? ssh.root : undefined;
+}
+
+/**
+ * Whether `real` (ALREADY symlink-resolved) is an SSH public key the pattern
+ * carve-out opens: a DIRECT child of `sshDir` whose basename ends in `.pub`
+ * and is not the bare `.pub`.
+ *
+ * Contract: callers MUST pass the fully dereferenced path. That is what makes
+ * the pattern symlink-safe — `~/.ssh/foo.pub -> id_rsa` resolves to
+ * `~/.ssh/id_rsa`, which fails the suffix test and stays denied.
+ *
+ * Win32 portability: NTFS is case-insensitive, so `safeRealpath` on a
+ * non-existent leaf (the file exists as `foo.pub` but the resolved dirname may
+ * carry OS-canonical casing) can differ from the `sshDir` the caller built
+ * with `path.join`. The strict `===` then silently returns false on Windows CI
+ * even when the paths name the same directory. We fall back to a
+ * case-insensitive comparison when the filesystem under `sshDir` is
+ * case-insensitive (`isCaseInsensitiveFs`), which is the common NTFS case.
+ * Over-blocking (false) is safe; under-blocking (false positive allow) is not
+ * — so the default for indeterminate probes stays case-sensitive.
+ */
+export function isSshPubKeyChild(real: string, sshDir: string): boolean {
+  const name = basename(real);
+  if (name.length <= '.pub'.length || !name.endsWith('.pub')) return false;
+  const parent = dirname(real);
+  if (parent === sshDir) return true;
+  // Case-insensitive fallback for win32 / NTFS: equality via lowercasing only
+  // when the filesystem is confirmed case-insensitive. We need EQUALITY (not
+  // containment), so we check both directions explicitly rather than calling
+  // pathIsWithin (which is an ancestor-or-equal check, not pure equality).
+  return isCaseInsensitiveFs(sshDir) && parent.toLowerCase() === sshDir.toLowerCase();
 }

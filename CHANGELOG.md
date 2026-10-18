@@ -11,6 +11,26 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.322.19] - 2026-10-18
+
+### Added
+- RemoteSubagentHandle implementing SubagentHandle over SSH transport (#4038) (b29df7f8)
+- GitHub event polling producer for the pull queue (#4039) (77838847)
+
+### Fixed
+- replace Array.prototype.push.apply with concat in maskHookCommandData (#4031) (ad950330)
+- advisory findings from PR triage batch (#3831, #3812, #3810) (#4029) (6d0465c3)
+- gate bash read carve-outs on read-only commands; grant SSH public keys (#4030) (964679ff)
+
+### Changed
+- introduce decidePathAccess — single resolve-then-decide credential floor (#4036) (61bb3f8e)
+- bump react-dom from 19.3.0 to 19.3.1 in /website (#4083) (5a9a225e)
+- bump the dashboard-dev-minor-patch group across 1 directory with 3 updates (#4089) (b61d201e)
+- bump @vitejs/plugin-react in /dashboard (#4087) (09c90e17)
+- bump next from 16.4.0 to 16.4.1 in /website (#4080) (863aae3a)
+- bump pnpm/action-setup from 4 to 6 (#4077) (9bd433d4)
+- bump the dev-minor-patch group across 1 directory with 3 updates (#4088) (23a52b97)
+
 ## [5.322.18] - 2026-10-18
 
 ### Fixed

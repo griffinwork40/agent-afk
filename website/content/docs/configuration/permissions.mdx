@@ -29,6 +29,14 @@ In an interactive session, **Shift+Tab** cycles `default → plan → bypassPerm
 
 A separate protected credential-path floor still refuses typed read tools even in bypass mode. On interactive surfaces a bash restriction hook also detects certain credential-path references and interpreter one-liners; it is not an OS security boundary, and headless bash has different restrictions. Do not treat `default` mode as a shell sandbox. See [Safety](/concepts/safety) and [Tool access](/guides/tool-access).
 
+### Read-only exceptions to the credential floor
+
+A few files inside protected directories are readable as exact exceptions: `~/.afk/config/mcp.json` (the MCP registry holds `${VAR}` placeholders, not literal secrets), `~/.afk/config/schedules.json`, `~/.ssh/config`, and `~/.ssh/known_hosts`. SSH **public** keys are readable by pattern: any direct child of `~/.ssh` whose name ends in `.pub`, resolved through symlinks first, so `foo.pub -> id_rsa` stays blocked. Subdirectories and private keys stay blocked. A private key misnamed `*.pub` would be readable, because the name is the only signal.
+
+Every exception is **read-only**. Writes to `~/.ssh` and `~/.afk/config` are blocked on every surface, because a `ProxyCommand` in `~/.ssh/config` or a server in `mcp.json` is code execution. In bash, an exception applies only to a provably read-only command: a pipeline of plain readers (`cat`, `grep`, `head`, `tail`, `wc`, `ls`, `diff`, and similar) with no redirection, chaining, or substitution. `ssh -i ~/.ssh/<key>` stays blocked; use a host alias with `IdentityFile` in `~/.ssh/config`.
+
+Add your own protected paths with `AFK_READ_DENYLIST` (colon-separated absolute paths; a leading `~/` is expanded). Operator entries are matched before the exceptions, so `AFK_READ_DENYLIST=~/.afk/config/mcp.json` re-protects the registry if yours holds inline secrets, and `AFK_READ_DENYLIST=~/.ssh` re-denies every `~/.ssh` exception. Built-in entries always apply and cannot be removed.
+
 <Callout type="warn">
 Bypass grants broad file access. For work on untrusted code, use a disposable environment or isolated worktree, and set `permissionMode` to `default` if you need path prompts. Built-in credential protections do not replace an OS sandbox.
 </Callout>
