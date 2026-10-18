@@ -192,21 +192,21 @@ function maskArguments(line: string): string {
 export function maskHookCommandData(command: string, stripLiterals = false): string {
   const masked = maskMultilineQuotedArgs(command);
   const lines = masked.split('\n');
-  let output: string[] = [];
+  const output: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.includes('<<')) {
       const match = /<<(-?)[ \t]*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|([A-Za-z_]\w*))/.exec(line);
       // Without a recognizable delimiter, scan the remainder unchanged.
       if (!match || line.indexOf('<<', match.index + 2) >= 0) {
-        output = output.concat(lines.slice(i));
+        for (let j = i; j < lines.length; j++) output.push(lines[j]!);
         break;
       }
       const delimiter = match[2] ?? match[3] ?? match[4]!;
       let end = i + 1;
       while (end < lines.length &&
         (match[1] ? lines[end]!.replace(/^\t+/, '') : lines[end]) !== delimiter) end++;
-      if (end === lines.length) { output = output.concat(lines.slice(i)); break; }
+      if (end === lines.length) { for (let j = i; j < lines.length; j++) output.push(lines[j]!); break; }
       const header = line.slice(0, match.index) + line.slice(match.index + match[0].length);
       const parsed = words(header);
       const segments = tokenizeSegments(header);
@@ -226,7 +226,7 @@ export function maskHookCommandData(command: string, stripLiterals = false): str
       const boundary = line[match.index + match[0].length];
       const exempt = Boolean((match[2] || match[3]) && stdin && kind && operatorWord &&
         (boundary === undefined || /\s/.test(boundary)));
-      if (!exempt) { output = output.concat(lines.slice(i)); break; }
+      if (!exempt) { for (let j = i; j < lines.length; j++) output.push(lines[j]!); break; }
       output.push(maskArguments(line));
       // Limitation: the heredoc body window (i+1..end-1) is blanked per-line
       // but there is a cross-call write-then-execute gap: a `cat >file` or `tee`
@@ -234,7 +234,7 @@ export function maskHookCommandData(command: string, stripLiterals = false): str
       // file written in one tool call may be executed by a later call. This
       // exemption only prevents false positives on clearly non-executable sinks;
       // the cross-call gap is an accepted limitation of static single-call analysis.
-      output = output.concat(lines.slice(i + 1, end).map(() => ''));
+      for (let j = i + 1; j < end; j++) output.push('');
       output.push(lines[end]!);
       i = end;
       continue;
@@ -244,7 +244,7 @@ export function maskHookCommandData(command: string, stripLiterals = false): str
     const decommented = stripShellComment(line);
     // Unsupported syntax can continue across newlines (quotes, substitutions,
     // backslashes). Do not mistake a later line in that payload for a command.
-    if (!words(decommented)) { output = output.concat(lines.slice(i)); break; }
+    if (!words(decommented)) { for (let j = i; j < lines.length; j++) output.push(lines[j]!); break; }
     const masked2 = maskArguments(decommented);
     // Preserve the existing literal-search exemption only for non-executing
     // text commands, not shell/interpreter payloads or command substitutions.
