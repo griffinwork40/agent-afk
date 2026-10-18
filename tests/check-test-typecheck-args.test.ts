@@ -18,7 +18,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { detectConfigDiagnosticLines } from '../scripts/check-test-typecheck.js';
+import { computeNewBaseline, detectConfigDiagnosticLines } from '../scripts/check-test-typecheck.js';
 import { parseGrowthArgs } from '../scripts/lib/growth-args.js';
 
 // ── Mirror of KNOWN_FLAGS from scripts/check-test-typecheck.ts ───────────────
@@ -160,5 +160,52 @@ describe('check-test-typecheck option/config guard', () => {
 
   it('handles empty tsc output without throwing', () => {
     expect(detectConfigDiagnosticLines('')).toHaveLength(0);
+  });
+});
+
+// ── computeNewBaseline — reason-carry contract ────────────────────────────────
+//
+// Exercises the pure helper extracted from runUpdate without invoking tsc.
+// The four cases match the JSDoc contract on computeNewBaseline.
+
+const prev = (errors: number, reason?: string) =>
+  ({ errors, reason, fileExisted: true });
+
+describe('computeNewBaseline — reason-carry contract', () => {
+  it('stamps the new reason when allowGrowth is true and a reason is provided', () => {
+    const result = computeNewBaseline(prev(5, 'old reason'), 8, true, 'intentional growth');
+    expect(result).toEqual({ errors: 8, reason: 'intentional growth' });
+  });
+
+  it('does not stamp reason when allowGrowth is true but reason is empty', () => {
+    const result = computeNewBaseline(prev(5), 8, true, '');
+    expect(result).toEqual({ errors: 8 });
+  });
+
+  it('carries previous.reason forward when count is unchanged and growth is not allowed', () => {
+    // This is the merge path: unionTypecheck wrote {errors:9, reason:"approved"},
+    // then lint:tests:update runs without --allow-growth and measures the same 9.
+    const result = computeNewBaseline(prev(9, 'approved'), 9, false, '');
+    expect(result).toEqual({ errors: 9, reason: 'approved' });
+  });
+
+  it('drops reason when count shrinks (growth it justified is gone)', () => {
+    const result = computeNewBaseline(prev(9, 'approved'), 7, false, '');
+    expect(result).toEqual({ errors: 7 });
+  });
+
+  it('drops reason when count shrinks even if previous had a reason', () => {
+    const result = computeNewBaseline(prev(20, 'big approved backlog'), 1, false, '');
+    expect(result).toEqual({ errors: 1 });
+  });
+
+  it('does not carry reason when previous has none and count is unchanged', () => {
+    const result = computeNewBaseline(prev(5), 5, false, '');
+    expect(result).toEqual({ errors: 5 });
+  });
+
+  it('works when fileExisted is false (first-time write)', () => {
+    const result = computeNewBaseline({ errors: 0, fileExisted: false }, 3, false, '');
+    expect(result).toEqual({ errors: 3 });
   });
 });

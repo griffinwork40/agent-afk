@@ -203,6 +203,33 @@ function runCheck(): void {
 
 // ── Mode: update ──────────────────────────────────────────────────────────────
 
+/**
+ * Pure helper: given the previous baseline, the current measured error count,
+ * and the growth flags, compute the new baseline to write.
+ *
+ * Exported for unit testing without running tsc.
+ *
+ * Reason-carry contract:
+ *   - allowGrowth + reason         → new reason stamped (growth explicitly approved)
+ *   - !allowGrowth, count shrinks  → reason dropped (growth it justified is gone)
+ *   - !allowGrowth, count unchanged → previous.reason carried forward (approval still valid)
+ *   - !allowGrowth, count grows    → caller rejects before reaching here
+ */
+export function computeNewBaseline(
+  previous: Baseline & { fileExisted: boolean },
+  current: number,
+  allowGrowth: boolean,
+  reason: string,
+): Baseline {
+  const newBaseline: Baseline = { errors: current };
+  if (allowGrowth && reason) {
+    newBaseline.reason = reason;
+  } else if (!allowGrowth && current === previous.errors && previous.reason) {
+    newBaseline.reason = previous.reason;
+  }
+  return newBaseline;
+}
+
 function runUpdate(allowGrowth: boolean, reason: string): void {
   const previous = readBaseline();
   const current = measureErrors();
@@ -216,10 +243,7 @@ function runUpdate(allowGrowth: boolean, reason: string): void {
     process.exit(1);
   }
 
-  const newBaseline: Baseline = { errors: current };
-  if (allowGrowth && reason) newBaseline.reason = reason;
-
-  writeBaseline(newBaseline);
+  writeBaseline(computeNewBaseline(previous, current, allowGrowth, reason));
 
   const delta = current - previous.errors;
   const sign = delta > 0 ? '+' : '';

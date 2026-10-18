@@ -7,7 +7,13 @@ export type { Baseline, BaselineEntry } from './size-ratchet.js';
 /**
  * Invariant: either side's prior approval is sufficient. The subsequent update
  * compares measured sizes against max(ours, theirs), then tightens the baseline.
- * Human-authored reasons and permanent exemptions survive that update by key.
+ * Human-authored reasons and permanent exemptions survive that update by key
+ * (see size-ratchet.ts updateBaseline).
+ *
+ * Note: the test-typecheck ratchet (unionTypecheck below) uses a different
+ * update path (check-test-typecheck.ts runUpdate / computeNewBaseline). Its
+ * reason survives only when the error count is unchanged after regeneration;
+ * it is dropped when the count shrinks (the growth it justified is gone).
  */
 export function unionBaselines(ours: Baseline | null, theirs: Baseline | null): Baseline {
   const entries: Record<string, BaselineEntry> = {};
