@@ -1,0 +1,435 @@
+/**
+ * #4063 — AgentSession builds and owns an McpManager from config.mcpServers.
+ *
+ * Reproduction: construct an AgentSession with `mcpServers` set (no
+ * `mcpManager`). Before this fix, `mcpServerStatus()` returned `[]`.
+ * After the fix it returns one entry per configured server (connected or error).
+ *
+ * Strategy:
+ *   - Unit tests: exercise `initSdkOwnedMcpManager` directly.
+ *   - Integration test: stub the Anthropic client (same pattern as
+ *     agent-session.test.ts) so the real `resolveProvider` → `AnthropicDirectProvider`
+ *     path is exercised with a bogus stdio server. The bogus server exits
+ *     immediately so the manager records `status: 'error'` — the acceptance
+ *     criterion for a failed server. `mcpServerStatus()` is a pure metadata
+ *     query; no model call is needed.
+ *
+ * Ownership invariants verified:
+ *   - SDK-built manager IS disconnected on session.close().
+ *   - Caller-supplied mcpManager is NOT disconnected on session.close().
+ *
+ * @module agent/session/agent-session.mcp.test
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type Anthropic from '@anthropic-ai/sdk';
+import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
+import type { McpManager } from '../mcp/manager.js';
+import type { ModelProvider, ProviderEvent, ProviderQuery, ProviderQueryArgs } from '../provider.js';
+import type { AgentConfig } from '../types.js';
+
+// ---------------------------------------------------------------------------
+// Module mocks
+// ---------------------------------------------------------------------------
+
+vi.mock('../../utils/debug.js', () => ({ debugLog: vi.fn() }));
+
+vi.mock('../awareness/presence.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../awareness/presence.js')>();
+  return { ...actual, updatePresenceCwd: vi.fn(), removePresence: vi.fn() };
+});
+
+vi.mock('../awareness/housekeeping.js', () => ({
+  scheduleTopLevelHousekeeping: vi.fn(),
+}));
+
+// ---------------------------------------------------------------------------
+// Anthropic client stub (same pattern as agent-session.test.ts)
+// ---------------------------------------------------------------------------
+
+const messagesCreateMock = vi.fn();
+
+class MockAnthropic {
+  public messages: { create: typeof messagesCreateMock };
+  constructor() { this.messages = { create: messagesCreateMock }; }
+}
+
+async function* fromArray<T>(arr: T[]): AsyncIterable<T> {
+  for (const x of arr) yield x;
+}
+
+/** Minimal stream with text content: used for sendMessage turns. */
+function makeTextStream(text: string): RawMessageStreamEvent[] {
+  return [
+    {
+      type: 'message_start',
+      message: {
+        id: 'msg_mcp_test',
+        type: 'message',
+        role: 'assistant',
+        content: [],
+        model: 'claude-haiku-4-5',
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    } as unknown as RawMessageStreamEvent,
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } as unknown as RawMessageStreamEvent,
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } as unknown as RawMessageStreamEvent,
+    { type: 'content_block_stop', index: 0 } as unknown as RawMessageStreamEvent,
+    {
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: 1 },
+    } as unknown as RawMessageStreamEvent,
+    { type: 'message_stop' } as unknown as RawMessageStreamEvent,
+  ];
+}
+
+/** Minimal end-turn stream (no content): sufficient for waitForInitialization in tests that don't sendMessage. */
+function makeEndTurnStream(): RawMessageStreamEvent[] {
+  return [
+    {
+      type: 'message_start',
+      message: {
+        id: 'msg_mcp_test',
+        type: 'message',
+        role: 'assistant',
+        content: [],
+        model: 'claude-haiku-4-5',
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    } as unknown as RawMessageStreamEvent,
+    {
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: 1 },
+    } as unknown as RawMessageStreamEvent,
+    { type: 'message_stop' } as unknown as RawMessageStreamEvent,
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Bogus MCP server: exits immediately → status 'error'
+// ---------------------------------------------------------------------------
+
+const BOGUS_SERVER_SPEC = {
+  bogus: {
+    type: 'stdio' as const,
+    command: process.execPath,
+    args: ['-e', 'process.exit(1)'],
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('#4063 — AgentSession SDK-owned MCP manager', () => {
+  // Import lazily so vi.mock() is applied first.
+  let AgentSession: (typeof import('./agent-session.js'))['AgentSession'];
+  let __setAnthropicClientFactory: (typeof import('../providers/anthropic-direct/index.js'))['__setAnthropicClientFactory'];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    ({ AgentSession } = await import('./agent-session.js'));
+    ({ __setAnthropicClientFactory } = await import('../providers/anthropic-direct/index.js'));
+    __setAnthropicClientFactory(() => new MockAnthropic() as unknown as Anthropic);
+
+    // Default mock: returns an end_turn stream so waitForInitialization resolves.
+    messagesCreateMock.mockImplementation(() => fromArray(makeEndTurnStream()));
+  });
+
+  afterEach(() => {
+    __setAnthropicClientFactory(null);
+  });
+
+  // -------------------------------------------------------------------------
+  // Key integration test (was the probe in the issue)
+  // -------------------------------------------------------------------------
+
+  it('mcpServerStatus() is non-empty when mcpServers is configured (bug repro)', async () => {
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+
+    // waitForInitialization resolves once session.init fires from the provider.
+    await session.waitForInitialization();
+
+    const statuses = await session.mcpServerStatus();
+
+    // Before the fix: statuses === []. After: one entry for 'bogus'.
+    expect(statuses.length).toBeGreaterThan(0);
+    // Public McpServerStatus uses `name` (mapped from McpClientState.serverName).
+    expect(statuses[0]?.name).toBe('bogus');
+    // Bogus server exits immediately → connect error → status: 'failed'.
+    // (ProviderMcpServerStatus.status is typed as string; the mapper passes through.)
+    expect(statuses[0]?.status).toMatch(/error|failed/);
+
+    await session.close();
+  });
+
+  it('mcpServerStatus() returns [] when no mcpServers configured', async () => {
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+    });
+
+    await session.waitForInitialization();
+    const statuses = await session.mcpServerStatus();
+    expect(statuses).toEqual([]);
+    await session.close();
+  });
+
+  // -------------------------------------------------------------------------
+  // Unit tests for initSdkOwnedMcpManager
+  // -------------------------------------------------------------------------
+
+  it('initSdkOwnedMcpManager: builds owned manager from mcpServers', async () => {
+    const { initSdkOwnedMcpManager } = await import('./agent-session.mcp.js');
+
+    const result = await initSdkOwnedMcpManager({
+      model: 'claude-haiku-4-5',
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+
+    expect(result.ownedManager).toBeDefined();
+    expect(result.resolvedManager).toBe(result.ownedManager);
+
+    const states = result.ownedManager!.getServerStates();
+    expect(states.length).toBe(1);
+    expect(states[0]?.serverName).toBe('bogus');
+    expect(states[0]?.status).toBe('error');
+
+    await result.ownedManager!.disconnectAll();
+  });
+
+  it('initSdkOwnedMcpManager: caller-supplied mcpManager is not owned', async () => {
+    const { initSdkOwnedMcpManager } = await import('./agent-session.mcp.js');
+
+    const { resolvedManager: callerManager } = await initSdkOwnedMcpManager({
+      model: 'claude-haiku-4-5',
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+    const disconnectSpy = vi.spyOn(callerManager!, 'disconnectAll');
+
+    const result = await initSdkOwnedMcpManager({
+      model: 'claude-haiku-4-5',
+      mcpManager: callerManager,
+    });
+
+    expect(result.ownedManager).toBeUndefined();
+    expect(result.resolvedManager).toBe(callerManager);
+    expect(disconnectSpy).not.toHaveBeenCalled();
+
+    await callerManager!.disconnectAll();
+  });
+
+  it('initSdkOwnedMcpManager: returns undefined pair when nothing configured', async () => {
+    const { initSdkOwnedMcpManager } = await import('./agent-session.mcp.js');
+
+    const result = await initSdkOwnedMcpManager({ model: 'claude-haiku-4-5' });
+    expect(result.ownedManager).toBeUndefined();
+    expect(result.resolvedManager).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Public export check
+  // -------------------------------------------------------------------------
+
+  it('exports McpManager from the public entry point', async () => {
+    const mod = await import('../../index.js');
+    // TS4111: index signature access must use bracket notation.
+    expect(typeof (mod as Record<string, unknown>)['McpManager']).toBe('function');
+  });
+
+  // -------------------------------------------------------------------------
+  // Required regression tests (spec items a, b, c)
+  // -------------------------------------------------------------------------
+
+  // (a) sendMessage reaches the provider on an MCP-configured session.
+  // Confirms the Phase-2 rebuilt provider reads from the same inputStream
+  // that sendMessage pushes to (item 1 fix). Fails without the fix because
+  // buildProviderLifecycle creates a fresh QueryInputStream whose iterable
+  // the rebuilt provider reads, while sendMessage pushes to the Phase-1
+  // inputStream — causing sendMessage to stall indefinitely.
+  it('(a) sendMessage reaches provider after MCP init (stream not discarded)', async () => {
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+
+    await session.waitForInitialization();
+
+    // Queue a text response for the sendMessage turn.
+    messagesCreateMock.mockImplementationOnce(() => fromArray(makeTextStream('hello back')));
+
+    // sendMessage must complete (not stall). Race against a timeout so the
+    // test fails fast instead of hanging on the unfixed code.
+    const result = await Promise.race([
+      session.sendMessage('hello'),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('sendMessage stalled — Phase-1 stream discarded')), 5000),
+      ),
+    ]);
+
+    expect(result).toBeDefined();
+    await session.close();
+  });
+
+  // (b) waitForInitialization() rejects when McpManager.fromConfig rejects.
+  // Without the item-2 fix the rejection path is never wired, so
+  // waitForInitialization() hangs forever.
+  it('(b) waitForInitialization() rejects when McpManager.fromConfig throws', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+    const fromConfigSpy = vi.spyOn(McpManagerCls, 'fromConfig').mockRejectedValueOnce(
+      new Error('alwaysLoad server failed'),
+    );
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+
+    // Must reject with the MCP error, not hang. The hang sentinel also rejects,
+    // so the assertion pins the message: a bare `.rejects.toThrow()` would
+    // pass on the hang it is meant to catch.
+    await expect(
+      Promise.race([
+        session.waitForInitialization(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('waitForInitialization hung — rejection not wired')), 5000),
+        ),
+      ]),
+    ).rejects.toThrow('alwaysLoad server failed');
+
+    fromConfigSpy.mockRestore();
+    // close() is best-effort after a rejection; swallow errors.
+    await session.close().catch(() => {});
+  });
+
+  // (c) close() before fromConfig resolves: owned manager disconnected, caller
+  // manager untouched. Without the item-3 fix the owned manager's disconnectAll
+  // is never called (ownedMcpManager is undefined at close() time), leaving
+  // stdio children alive after the session ends.
+  it('(c) close() before fromConfig resolves → owned manager disconnected; caller manager untouched', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    // Build a real manager to use as the "caller-supplied" reference.
+    const callerManager = await McpManagerCls.fromConfig(BOGUS_SERVER_SPEC);
+    const callerDisconnectSpy = vi.spyOn(callerManager, 'disconnectAll');
+
+    // Delay fromConfig by a controlled promise so we can close() first.
+    let resolveFromConfig!: () => void;
+    let capturedOwnedManager: import('../mcp/manager.js').McpManager | undefined;
+    const fromConfigDeferred = new Promise<import('../mcp/manager.js').McpManager>(
+      (resolve) => {
+        resolveFromConfig = () => {
+          // Create a minimal stub owned manager so we can spy on its disconnect.
+          const stub = {
+            disconnectAll: vi.fn().mockResolvedValue(undefined),
+            getServerStates: vi.fn().mockReturnValue([]),
+          } as unknown as import('../mcp/manager.js').McpManager;
+          capturedOwnedManager = stub;
+          resolve(stub);
+        };
+      },
+    );
+    const fromConfigSpy = vi.spyOn(McpManagerCls, 'fromConfig').mockReturnValueOnce(fromConfigDeferred);
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+
+    // Close immediately before fromConfig resolves.
+    await session.close();
+
+    // Now resolve fromConfig — the owned manager should be disconnected inline.
+    resolveFromConfig();
+    // Flush microtasks so the .then() in startMcpInit runs.
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(capturedOwnedManager).toBeDefined();
+    expect(
+      (capturedOwnedManager as unknown as { disconnectAll: ReturnType<typeof vi.fn> }).disconnectAll,
+    ).toHaveBeenCalledOnce();
+    expect(callerDisconnectSpy).not.toHaveBeenCalled();
+
+    fromConfigSpy.mockRestore();
+    await callerManager.disconnectAll();
+  });
+
+  // (d) Phase 2 rebuilds the provider ONLY when the SDK built the manager.
+  // A caller-supplied manager (daemon, CLI, Telegram) is already wired into
+  // the Phase-1 provider; rebuilding for it ran provider.query() twice and
+  // broke scheduler.test.ts "MCP fixture wiring" (land round 3, #4069).
+  it('(d) caller-supplied mcpManager → provider.query() runs once; SDK-built → rebuilt with the manager', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    const run = async (extra: Pick<AgentConfig, 'mcpManager'> | Pick<AgentConfig, 'mcpServers'>) => {
+      const seen: Array<McpManager | undefined> = [];
+      const provider: ModelProvider = {
+        name: 'query-counting-provider',
+        query(args: ProviderQueryArgs): ProviderQuery {
+          seen.push(args.config.mcpManager);
+          let closed = false;
+          return {
+            async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
+              yield {
+                type: 'session.init',
+                info: {
+                  sessionId: 'query-counting-session', model: 'sonnet', permissionMode: 'default',
+                  cwd: args.config.cwd, tools: [], slashCommands: [], skills: [], plugins: [],
+                  mcpServers: [], apiKeySource: 'api-key', version: 'test',
+                },
+              };
+              while (!closed) await new Promise((r) => setTimeout(r, 5));
+            },
+            async interrupt() {}, async setModel() {}, async setPermissionMode() {},
+            async supportedCommands() { return []; }, async supportedModels() { return []; },
+            async supportedAgents() { return []; },
+            async getContextUsage() { return { tools: [], isAutoCompactEnabled: false, apiUsage: null }; },
+            async mcpServerStatus() { return []; },
+            async accountInfo() { return { subscriptionType: 'api-key' }; },
+            async rewindFiles() { return { canRewind: false }; },
+            close() { closed = true; },
+          } as unknown as ProviderQuery;
+        },
+      } as unknown as ModelProvider;
+      const session = new AgentSession({ model: 'claude-haiku-4-5', persistSession: false, cwd: process.cwd(), provider, ...extra });
+      await session.waitForInitialization();
+      await session.close();
+      return seen;
+    };
+
+    const callerManager = await McpManagerCls.fromConfig({});
+    const callerSeen = await run({ mcpManager: callerManager });
+    expect(callerSeen).toEqual([callerManager]);
+
+    const sdkManager = await McpManagerCls.fromConfig({});
+    const spy = vi.spyOn(McpManagerCls, 'fromConfig').mockResolvedValueOnce(sdkManager);
+    const sdkSeen = await run({ mcpServers: BOGUS_SERVER_SPEC });
+    expect(sdkSeen).toEqual([undefined, sdkManager]);
+    spy.mockRestore();
+
+    await callerManager.disconnectAll();
+  });
+});

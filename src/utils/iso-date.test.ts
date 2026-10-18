@@ -170,3 +170,32 @@ describe('isValidIsoDate — non-string inputs rejected', () => {
     expect(isValidIsoDate({})).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// UTC offset boundary tests (#4011 nit — the prior ?? '0' fallbacks were dead
+// code since both capture groups are required by the regex; these cases
+// exercise the max valid offset (+14:00) and the first invalid one (+15:00).
+// ---------------------------------------------------------------------------
+
+describe('isValidIsoDate — UTC offset boundaries', () => {
+  it('accepts +14:00 (maximum valid UTC offset)', () => {
+    expect(isValidIsoDate('2026-06-01T12:00:00+14:00')).toBe(true);
+  });
+
+  it('rejects +15:00 (exceeds max UTC offset allowed by regex)', () => {
+    // The regex gate rejects hour component > 14, so this is structurally invalid.
+    expect(isValidIsoDate('2026-06-01T12:00:00+15:00')).toBe(false);
+  });
+
+  it('accepts -12:00 (minimum valid UTC offset)', () => {
+    expect(isValidIsoDate('2026-06-01T12:00:00-12:00')).toBe(true);
+  });
+
+  it('accepts +05:30 (common offset with non-zero minutes)', () => {
+    expect(isValidIsoDate('2026-06-01T12:00:00+05:30')).toBe(true);
+  });
+
+  it('accepts +00:00 (explicitly zero offset)', () => {
+    expect(isValidIsoDate('2026-06-01T12:00:00+00:00')).toBe(true);
+  });
+});
