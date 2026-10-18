@@ -1,5 +1,6 @@
 /** `afk ...` command-line resolution for check-docs-refs. Pure functions. */
-import type { KnownRefs } from './docs-refs-known.js';
+import type { CommandInfo, KnownRefs } from './docs-refs-known.js';
+import type { ShellToken } from './docs-refs-shell.js';
 
 export interface RefFinding { kind: string; token: string; suggestion?: string }
 
@@ -9,8 +10,6 @@ export const REMOVED_COMMANDS: Readonly<Record<string, string>> = {
   grok: 'afk provider auth xai',
   skill: 'a /skill-name in the REPL (there is no afk skill subcommand)',
 };
-
-const SEPARATORS = new Set(['|', '||', '&&', ';', '&']);
 
 export function levenshtein(a: string, b: string): number {
   let row = Array.from({ length: b.length + 1 }, (_, i) => i);
@@ -32,73 +31,52 @@ export function nearest(token: string, candidates: Iterable<string>, max = Infin
   return distance <= max ? best : undefined;
 }
 
-export interface ShellToken { text: string; quoted: boolean }
+export { afkSegments, startsWithAfk, tokenize, type ShellToken } from './docs-refs-shell.js';
 
-/** Shell-ish tokenizer: quotes group, separators and redirections split,
- * `#` (at a word start) ends the line. Values are returned unquoted. */
-export function tokenize(line: string): ShellToken[] {
-  const out: ShellToken[] = [];
-  let i = 0;
-  while (i < line.length) {
-    const char = line[i]!;
-    if (/\s/.test(char)) { i++; continue; }
-    if (char === '#') break;
-    const op = /^(\|\||&&|[|;&]|\d?>>?|<)/.exec(line.slice(i));
-    if (op) { out.push({ text: /[<>]/.test(op[1]!) ? '>' : op[1]!, quoted: false }); i += op[1]!.length; continue; }
-    let text = '';
-    let quoted = false;
-    while (i < line.length && !/[\s|;&<>]/.test(line[i]!)) {
-      const c = line[i]!;
-      if (c === '"' || c === "'") {
-        const end = line.indexOf(c, i + 1);
-        text += line.slice(i + 1, end === -1 ? line.length : end);
-        quoted = true;
-        i = end === -1 ? line.length : end + 1;
-      } else if (c === '\\' && i + 1 < line.length) { text += line[i + 1]; i += 2; } else { text += c; i++; }
-    }
-    out.push({ text, quoted });
-  }
-  return out;
+const PLACEHOLDER = /[<>[\]{}]|^\.\.\.|\$/;
+/** Option-shaped words only: `--x`, `-x`, `--x=v`. Prose like `--x?` or `-->` is a value. */
+const OPTION = /^--?[A-Za-z0-9][\w-]*(?:=|$)/;
+
+/** Options visible at `command`: its own, the root's, and (at the root) the
+ * default `interactive` command's, which `afk --model x` reaches. */
+function optionScope(command: CommandInfo, known: KnownRefs): CommandInfo[] {
+  const root = known.commands.get('afk')!;
+  const scopes = [command, root];
+  const interactive = known.commands.get('afk interactive');
+  if (command.path === 'afk' && interactive) scopes.push(interactive);
+  return scopes;
 }
 
-/** Segments of a command line that start with `afk` (after `$ `, `VAR=x`, `sudo`). */
-export function afkSegments(line: string): ShellToken[][] {
-  const tokens = tokenize(line.replace(/^\s*\$\s+/, ''));
-  const segments: ShellToken[][] = [[]];
-  for (const token of tokens) {
-    if (!token.quoted && SEPARATORS.has(token.text)) segments.push([]);
-    else segments.at(-1)!.push(token);
-  }
-  return segments.map((segment) => {
-    let start = 0;
-    while (start < segment.length && (/^[A-Z_][A-Z0-9_]*=/.test(segment[start]!.text) || ['sudo', 'env', 'exec'].includes(segment[start]!.text))) start++;
-    return segment.slice(start);
-  }).filter((segment) => segment[0]?.text === 'afk' && !segment[0].quoted);
-}
-
-/** Resolve the longest command path, then check every option token. */
+/** Resolve the longest command path, then check every option token. Option
+ * arguments are consumed by arity (`<v>` required, `[v]` optional when the
+ * next word is not an option), so `--name "--x"` and `--model x sub` work.
+ * An unquoted placeholder in a positional slot stops resolution; later options
+ * are still checked unless the slot could have been a subcommand. */
 export function checkCommand(tokens: readonly ShellToken[], known: KnownRefs): RefFinding[] {
   const findings: RefFinding[] = [];
   let command = known.commands.get('afk');
   if (!command) return [{ kind: 'command', token: 'afk' }];
-  let index = 1;
   let resolving = true;
   let verifiable = true;
-  for (; index < tokens.length; index++) {
+  for (let index = 1; index < tokens.length; index++) {
     const { text, quoted } = tokens[index]!;
-    if (text === '>') { index++; continue; }
+    if (text === '>' && !quoted) { index++; continue; }
     if (text === '--') break;
-    if (text.startsWith('-') && text.length > 1) {
-      if (!verifiable) continue;
+    if (OPTION.test(text) && !quoted) {
       const flag = text.replace(/=.*$/, '');
-      const root = known.commands.get('afk')!;
-      const allowed = new Set([...command.flags, ...root.flags, ...(command.path === 'afk' ? known.commands.get('afk interactive')?.flags ?? [] : [])]);
+      const scopes = optionScope(command, known);
+      const arity = scopes.map((scope) => scope.args.get(flag)).find(Boolean);
+      const next = tokens[index + 1];
+      if (!text.includes('=') && next && (arity === 'required' || (arity === 'optional' && !next.text.startsWith('-')))) index++;
+      if (!verifiable) continue;
+      const allowed = new Set(scopes.flatMap((scope) => [...scope.flags]));
       if (!allowed.has(flag)) findings.push({ kind: 'flag', token: `${command.path} ${flag}`, suggestion: nearest(flag, allowed) });
       continue;
     }
     if (!resolving) continue;
     resolving = false;
-    if (quoted || /[<>[\]{}]|^\.\.\.|\$/.test(text)) { verifiable = verifiable && quoted; continue; }
+    if (quoted) continue;
+    if (PLACEHOLDER.test(text)) { if (command.children.size && command.path !== 'afk') verifiable = false; continue; }
     const child = known.commands.get(`${command.path} ${text}`);
     if (child) { command = child; resolving = true; continue; }
     const removed = command.path === 'afk' ? REMOVED_COMMANDS[text] : undefined;

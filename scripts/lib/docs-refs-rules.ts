@@ -1,11 +1,13 @@
 /** Per-line reference rules for check-docs-refs. Pure functions over text. */
-import { afkSegments, checkCommand, nearest, type RefFinding } from './docs-refs-command.js';
+import { afkSegments, checkCommand, nearest, startsWithAfk, type RefFinding } from './docs-refs-command.js';
 import type { KnownRefs } from './docs-refs-known.js';
 
 export type { RefFinding } from './docs-refs-command.js';
 export interface LineFinding extends RefFinding { line: number }
 
-const SHELL_FENCES = /^(?:bash|sh|shell|zsh|fish|powershell|console|text)$/;
+/** Fences whose every line is a command. Any other fence (including unlabeled)
+ * is checked only on lines whose leading command is `afk`. */
+const SHELL_FENCES = /^(?:bash|sh|shell|zsh|fish|ksh|powershell|ps1|pwsh|console|terminal|shellsession|shell-session|cmd|bat|batch|text)$/i;
 /** HTTP path segments that read like slash commands (`/v1`, `GET .../models`). */
 const HTTP_PATH = /^\/(?:v\d+|models|completions|health)$/;
 const FS_ROOTS = new Set(['/tmp', '/usr', '/etc', '/var', '/bin', '/opt', '/dev', '/home', '/Users', '/proc', '/mnt', '/sbin', '/lib', '/private', '/Volumes']);
@@ -115,11 +117,10 @@ export function pageFindings(page: string, text: string, ignored: ReadonlySet<nu
     add(envFindings(line, known));
     if (fence) {
       if (new RegExp(`^\\s*${fence.marker[0] === '`' ? '`' : '~'}{${fence.marker.length},}\\s*$`).test(line)) { fence = undefined; return; }
-      if (!fence.shell) return;
       if (!continued) continuedAt = n;
       continued += line.replace(/\\\s*$/, ' ');
       if (/\\\s*$/.test(line)) return;
-      for (const segment of afkSegments(continued)) add(checkCommand(segment, known), continuedAt);
+      if (fence.shell || startsWithAfk(continued)) for (const segment of afkSegments(continued)) add(checkCommand(segment, known), continuedAt);
       continued = '';
       return;
     }
@@ -127,7 +128,7 @@ export function pageFindings(page: string, text: string, ignored: ReadonlySet<nu
     if (opening) { fence = { marker: opening[1]!, shell: SHELL_FENCES.test(opening[2]!) }; continued = ''; return; }
     add([headingFinding(page, line, known), ...phraseFindings(line, known)]);
     for (const span of inlineSpans(line)) {
-      if (/^(?:\$\s+)?afk(?:\s|$)/.test(span)) for (const segment of afkSegments(span)) add(checkCommand(segment, known));
+      if (/\bafk\b/.test(span)) for (const segment of afkSegments(span)) add(checkCommand(segment, known));
       add([slashFinding(span, known), configFinding(span, known)]);
     }
   });
