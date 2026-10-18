@@ -19,7 +19,7 @@ import { requestCprOrMarkDirty } from './terminal-compositor.lifecycle.cpr.js';
 
 /**
  * Compute the inflated physical-row count of the pre-resize painted footprint
- * after a NARROWING resize (width-only or SHRINK).
+ * after a NARROWING resize (EXPAND or WIDTH-ONLY). SHRINK never calls this.
  *
  * With AFK_CENTER_CONTENT the compositor paints each row as `margin + content`,
  * where `margin` = `floor((oldCols - measure) / 2)` spaces. The painted width
@@ -92,7 +92,19 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const bandTop = self.committedBand.length > 0 ? self.committedBandTopRow : 0;
     const tops = [frameTop, bandTop].filter((r) => r > 0);
     const top = tops.length > 0 ? Math.min(...tops) : 0;
-    const bottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
+    const logicalBottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
+    // With AFK_CENTER_CONTENT the compositor paints `margin + content` per row,
+    // where the painted width equals `lastKnownCols` in the worst case.
+    // On an EXPAND that also narrows (e.g. tmux adding rows while reducing cols),
+    // DECAWM autowrap reflows each old row wider than the new terminal width into
+    // ceil(oldCols / newCols) physical rows — the same ghost-row erase undercount
+    // that WIDTH-ONLY fixed for issue #3763. Without inflation the erase range
+    // covers only logical rows, leaving extra physical rows as duplicates.
+    const newCols = self.stdout.columns ?? 80;
+    const logicalRows = Math.max(0, logicalBottom - top + 1);
+    const physicalRows = reflowedPhysicalRows(logicalRows, self.lastKnownCols, newCols);
+    // bottom may exceed newRows after inflation; flushResizeGhostErase clamps it.
+    const bottom = top > 0 ? top + physicalRows - 1 : logicalBottom;
     if (top > 0 && top <= bottom) {
       self.pendingResizeErase = { top, bottom, origin: 'expand' };
     }
@@ -185,7 +197,9 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const logicalRows = Math.max(0, logicalBottom - top + 1);
     const physicalRows = reflowedPhysicalRows(logicalRows, self.lastKnownCols, newCols);
     // bottom may exceed newRows after inflation; flushResizeGhostErase clamps it.
-    const bottom = top > 0 ? top + physicalRows - 1 : logicalBottom;
+    // Note: the `top > 0` guard on the if-branch below already blocks the
+    // top===0 case, so `logicalBottom` as a fallback here is unreachable.
+    const bottom = top + physicalRows - 1;
     if (top > 0 && top <= bottom) {
       self.pendingResizeErase = { top, bottom, origin: 'width-only' };
     }

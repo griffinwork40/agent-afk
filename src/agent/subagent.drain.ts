@@ -20,7 +20,7 @@ export interface DrainHandle {
    * fully reached the writer. Awaited inside the drain bound so the
    * `cancelled` lifecycle row is guaranteed to precede the seal (#3714).
    */
-  readonly _pendingCancellationWrite: Promise<void>;
+  readonly _pendingCancellationWrite?: Promise<void>;
 }
 
 /**
@@ -76,7 +76,11 @@ export async function abortAllAndDrainImpl(
   );
   const settled = await Promise.race([
     Promise.allSettled(
-      inFlight.flatMap((h) => [h.cancel(), h._pendingCancellationWrite]),
+      inFlight.flatMap((h) =>
+        h._pendingCancellationWrite
+          ? [h.cancel(), h._pendingCancellationWrite]
+          : [h.cancel()],
+      ),
     ),
     bound,
   ]);

@@ -19,14 +19,24 @@ repos, accounts, and model subscriptions. Nothing is copied: move code with git.
 
 ```json
 {
-  "cm":   { "ssh": "griffincapmisc@griffin-cm", "cwd": "~/Projects/agent-afk", "unlockKeychain": true },
-  "m6":   { "ssh": "griffinlong@100.126.251.79" },
-  "mini": { "ssh": "mini", "afkPath": "/opt/homebrew/bin/afk" }
+  "studio": { "ssh": "you@studio.local", "cwd": "~/Projects/my-repo", "unlockKeychain": true },
+  "build":  { "ssh": "you@build-box", "permissionMode": "default" },
+  "mini":   { "ssh": "mini", "afkPath": "/opt/homebrew/bin/afk" }
 }
 ```
 
 A `host` absent from the file is used as a literal ssh target, so `~/.ssh/config`
 aliases work with no setup. `afkPath` is only needed when auto-discovery fails.
+
+### Host fields
+
+| Field | Type | Description |
+|---|---|---|
+| `ssh` | string | SSH destination (`user@host`, `~/.ssh/config` alias, or `ssh://host:port`). |
+| `cwd` | string? | Working directory on the remote (absolute or `~/…`). |
+| `afkPath` | string? | Absolute path to the `afk` binary on the remote. Only needed when auto-discovery fails. |
+| `unlockKeychain` | bool? | Unlock the remote's macOS login keychain before each run (see [Keychain unlock](#keychain-unlock)). |
+| `permissionMode` | string? | Permission mode pinned on every `afk chat` run for this host (any `afk chat --permission-mode` value, e.g. `default`, `plan`, `bypassPermissions`, `autonomous`). When absent the remote resolves its own configured default. |
 
 ## Keychain unlock
 
@@ -34,7 +44,7 @@ For a host with `"unlockKeychain": true`, store that machine's login password on
 on the machine you dispatch FROM (it prompts; nothing is echoed):
 
 ```bash
-security add-generic-password -U -s afk-remote-unlock -a cm -w
+security add-generic-password -U -s afk-remote-unlock -a studio -w
 ```
 
 The account (`-a`) is the host's name in hosts.json. Every run then reads it from
@@ -100,10 +110,11 @@ Verified on macOS over SSH (2026-10-15), which is why it works this way:
 - **Fail fast.** An unreachable or sleeping host fails in about 5 s with
   "host unreachable"; a missing afk install and a bad cwd have their own messages.
 - **Permissions.** The remote `afk chat` runs under its own configured
-  `permissionMode`, which defaults to `bypassPermissions` (no `--permission-mode`
-  flag is injected by the launcher). Because a destructive prompt could therefore
-  bypass the local AFK gate, `remote_agent` is classified **risk class high** and
-  autonomous mode holds it for approval.
+  `permissionMode`, which defaults to `bypassPermissions`. The launcher injects
+  `--permission-mode <value>` only when the host entry pins `permissionMode`.
+  Because a destructive prompt could therefore bypass the local AFK gate,
+  `remote_agent` is classified **risk class high** and autonomous mode holds it
+  for approval.
 
 ## Known limits
 

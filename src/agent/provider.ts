@@ -107,8 +107,18 @@ export interface ProviderUsage {
  * Contract: billing-semantics token counts for one or more model calls.
  * `uncachedInput + cacheRead + cacheWrite` is the full prompt across the summed
  * calls; hit rate = `cacheRead / (uncachedInput + cacheRead + cacheWrite)`.
- * `provider` is the bundled provider family that produced the counts
- * (`anthropic-direct` | `openai-compatible`), so rollups can split by it.
+ *
+ * `provider` is one of:
+ *   - `'anthropic-direct'` — Anthropic Messages API adapter.
+ *   - `'openai-compatible'` — OpenAI-compatible adapter.
+ *   - `'mixed'` — sentinel emitted by `sumBillingUsage` when two records from
+ *     different providers are summed (e.g. a multi-provider child session).
+ *     Per-provider cache-hit metrics are not meaningful for a `mixed` bucket;
+ *     only the `total` counters should be used. `BillingRollup.snapshot().byProvider`
+ *     will surface a `'mixed'` key when this occurs.
+ *
+ * Rollups split by `provider` via `BillingRollup`; analytics consumers must
+ * treat `byProvider` as an open map and handle unexpected keys gracefully.
  */
 export interface BillingUsage {
   provider: string;

@@ -11,6 +11,93 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.322.17] - 2026-10-18
+
+### Added
+- offline OTLP/JSON export of witness traces with GenAI semantic conventions (#4046) (1fbf2426)
+
+### Fixed
+- strip git commit -F - heredoc body from restricted-path scan (#4034) (b5e17a20)
+- keep tools on wind-down rounds so prefix caches survive (#4048) (a139de71)
+- tell read-only git agents about the git_read swap (#4056) (d689813c)
+
+### Changed
+- guard safe-table verdict with classifyBashCommand mutation check (#4032) (305b5f3c)
+
+## [5.322.16] - 2026-10-18
+
+### Fixed
+- SDK builds and owns McpManager from config.mcpServers (#4069) (7fecda4d)
+
+## [5.322.15] - 2026-10-18
+
+### Fixed
+- deduct baseline-sample cost from maxUsdRemaining in verifyRun (#4004) (5a9f1b8f)
+- address remaining advisory findings from 2026-10-14 PR triage batch (#4003) (64c0ba92)
+- accumulate costUsd across all turns in RunBillingContext (#4005) (c3db1d1a)
+
+## [5.322.14] - 2026-10-18
+
+### Added
+- add per-slot maxOutputTokens; derive smarter default for unlisted openai-compat ids (#4025) (386a9b36)
+
+### Fixed
+- restore telemetry for clamped bash timeout_ms and tighten warning test (#4022) (1aaf5cbf)
+
+### Changed
+- cross-path dispatch-policy parity matrix (#4049) (5870700b)
+
+## [5.322.13] - 2026-10-18
+
+### Fixed
+- apply reflow inflation to EXPAND branch; fix tautological center-band test; add widen-guard and EXPAND tests (#4019) (c02c55c2)
+- isSuperseded cleared/paused goal, escapeXml notice, cleared-goal tests (#3987) (d9f31330)
+- warn and skip on malformed stored runAt/expiresAt (#4024) (4bbf1200)
+- document mixed provider on BillingUsage and add rollup test (#3986) (2a320c75)
+- correct billing_settled JSDoc to say cumulative totals, not delta (#4020) (a7b7a68d)
+
+### Changed
+- verify closure provenance stamping through real emitClosureEvent path (#4021) (71460dc5)
+
+## [5.322.12] - 2026-10-17
+
+### Fixed
+- publish remote-dispatch guide and fix broken link in tools-reference (#4018) (938dd63c)
+
+## [5.322.11] - 2026-10-17
+
+### Fixed
+- append `wait` in stdin-isolation test to drain background job before cleanup (#4017) (08bc05c9)
+
+## [5.322.10] - 2026-10-17
+
+### Fixed
+- add boundary test, document permissionMode host field, restore blank line (#3982) (ef9d5ec6)
+
+## [5.322.9] - 2026-10-17
+
+### Fixed
+- fix stale comments, add JSDoc note, extract named opts objects (#3999) (b5d2c97f)
+- advisory findings from PR triage batch (#3780, #3798, #3800, #3801) (#4000) (5ac5e6f2)
+
+## [5.322.8] - 2026-10-17
+
+### Fixed
+- forward operator-explicit permissionMode only; extract ResolvedSessionManagerOptions alias (#3994) (77110792)
+
+## [5.322.7] - 2026-10-17
+
+### Fixed
+- per-entry _schemaVersion guard in write path; shape error for primitives (#3993) (4ec15faf)
+- add missing tests for scalar-JSON guard and inflight dedup (#3991) (a2a587a9)
+- JSDoc invariants and compose exemption tests for dispatch-intent gate (#3990) (ce5822c8)
+- address advisory findings from 2026-10-15 PR triage batch (#4001) (9457323a)
+
+## [5.322.6] - 2026-10-17
+
+### Fixed
+- clear 2 test-typecheck errors that turned main's ratchet red (#4015) (a78bcb2a)
+
 ## [5.322.5] - 2026-10-17
 
 ### Fixed

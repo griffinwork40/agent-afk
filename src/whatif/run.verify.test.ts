@@ -630,3 +630,68 @@ describe('verifyRun: truncatedByBudget (#3876)', () => {
     expect(runCalls).toBeLessThanOrEqual(4); // concurrency=4, so up to 4 may start
   });
 });
+
+// ---------------------------------------------------------------------------
+// maxUsdRemaining: sample cost deduction (#3876)
+// ---------------------------------------------------------------------------
+
+describe('verifyRun: maxUsdRemaining must account for baseline-sample cost (#3876)', () => {
+  /**
+   * Verifies that when the caller passes a maxUsdRemaining that already has
+   * the baseline-sample cost deducted, the verify phase respects the tighter
+   * cap. This is the contract the fix in run.ts enforces: it passes
+   *   options.maxUsd - analystCostUsd - (baselineSampleResult?.agentCostUsd ?? 0)
+   * so the BudgetTracker inside runEpisodes sees the correct remaining budget.
+   */
+  it('enforces the cap when maxUsdRemaining is reduced by sample cost', async () => {
+    // 4 episodes × 2 envs × 1 sample = 8 tasks at $3 each = $24 total.
+    // Suppose baseline-sample spent $3; the caller deducts it and passes
+    // maxUsdRemaining = $6.  With the fix only 2 tasks run ($6 total) before
+    // budget.exceeded flips.  Without the fix (sample cost not deducted) the
+    // caller would pass maxUsdRemaining = $9 and 3 tasks would run.
+    const costPerTrace = 3;
+    const episodes: Episode[] = [
+      { id: 'e1', source: 'synthetic', prompt: 'p1', targets: 'pr1' },
+      { id: 'e2', source: 'synthetic', prompt: 'p2', targets: 'pr1' },
+      { id: 'e3', source: 'real',      prompt: 'p3' },
+      { id: 'e4', source: 'real',      prompt: 'p4' },
+    ];
+    const prediction = pred('pr1', { probes: ['p1', 'p2'] });
+
+    let runCalls = 0;
+    const runner: AgentRunner = {
+      name: 'cost-fake',
+      run: vi.fn(async (en: Environment, ep: Episode, s: number) => {
+        runCalls++;
+        return { ...trace(ep.id, en.label as 'baseline' | 'candidate', s, 'ok'), costUsd: costPerTrace };
+      }),
+      snapshot: vi.fn(),
+    } as unknown as AgentRunner;
+
+    // maxUsdRemaining=$5.99 simulates: maxUsd=$9, analystCost=$0.01, sampleCost=$3.
+    // With the fix the caller subtracts sampleCost before calling verifyRun.
+    // Cap is set just below $6 so that after 2 tasks ($6) budget.exceeded
+    // flips (spent > cap) and the 3rd task is skipped.
+    const cap = 5.99;
+    const { verifyResult, allTraces } = await verifyRun(input(episodes, [prediction], {
+      runner,
+      options: {
+        samples: 1,
+        concurrency: 1,
+        maxTurns: 1,
+        episodeTimeoutMs: 1000,
+        maxUsdRemaining: cap, // already reduced by the $3 sample cost
+        changeKinds: ['append'],
+        calibrationFile: path.join(os.tmpdir(), 'noop-ledger.jsonl'),
+      },
+    }));
+
+    // 2 tasks at $3 each = $6 > cap ($5.99) → 3rd task is skipped.
+    expect(allTraces.length).toBe(2);
+    expect(verifyResult.truncatedByBudget).toBe(true);
+    expect(verifyResult.skippedByBudget).toBeGreaterThan(0);
+    // Total trace cost ≤ cap + one in-flight task (concurrency=1, so ≤ 1).
+    const traceCostTotal = allTraces.reduce((s, t) => s + t.costUsd, 0);
+    expect(traceCostTotal).toBeLessThanOrEqual(cap + costPerTrace);
+  });
+});
