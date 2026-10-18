@@ -90,6 +90,13 @@ function parseBashInput(input: unknown): {
       // than hard-failing the call with a validation error.
       clampedTimeoutWarning = `timeout_ms ${bashInput.timeout_ms} exceeds the maximum (${maxTimeout}); clamped to ${maxTimeout}.`;
       timeout_ms = maxTimeout;
+      // Structured telemetry so we can track how often models request
+      // over-max timeouts (replaces the pre-#3820 hard-rejection signal).
+      void appendRoutingDecision({
+        event: 'tool.bash_timeout_clamped',
+        tool: 'bash',
+        mode: background ? 'background' : 'foreground',
+      });
     } else {
       timeout_ms = bashInput.timeout_ms;
     }

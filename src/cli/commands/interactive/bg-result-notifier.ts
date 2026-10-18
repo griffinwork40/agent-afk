@@ -127,20 +127,20 @@ export function formatBgResultBody(job: BackgroundJob): string {
 
 /**
  * Detect whether a job's result is superseded — i.e. the operator changed
- * the active goal after the job was dispatched.
+ * or cleared the active goal after the job was dispatched.
  *
- * Returns `true` only when all three conditions hold:
- *   1. A goal text was captured at dispatch time (`goalTextAtDispatch`).
- *   2. A goal is currently active at delivery time.
- *   3. The two goal texts differ (goal actually changed).
+ * Returns `true` when a goal was captured at dispatch time AND either:
+ *   a. No goal is currently active (goal was cleared or paused), or
+ *   b. The current active goal text differs from the dispatch-time text.
  *
- * When no goal was set at dispatch, or no goal is active now, we cannot
- * determine supersession — the safe default is `false` (no annotation).
+ * When no goal was set at dispatch we cannot determine supersession —
+ * the safe default is `false` (no annotation).
  */
 function isSuperseded(job: BackgroundJob): boolean {
   if (job.goalTextAtDispatch === undefined) return false;
   const current = getGoal();
-  if (!current || current.status !== 'active') return false;
+  // Goal cleared or paused after dispatch → result is superseded.
+  if (!current || current.status !== 'active') return true;
   return current.text !== job.goalTextAtDispatch;
 }
 
@@ -170,7 +170,7 @@ export function buildBgResultInjection(job: BackgroundJob): string {
   );
   if (superseded) {
     lines.push(
-      `<notice>This result was produced under a previous goal and may not be relevant to the current objective.</notice>`,
+      `<notice>${escapeXml('This result was produced under a previous goal and may not be relevant to the current objective.')}</notice>`,
     );
   }
   lines.push(`<task>${escapeXml(job.label)}</task>`);
