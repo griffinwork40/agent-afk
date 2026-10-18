@@ -45,7 +45,7 @@ const answer = (text: string) => async function* (): AsyncGenerator<OutputEvent>
 beforeEach(() => { constructed.length = 0; scripts.length = 0; });
 
 async function fork(modelFallback: { model: string } | undefined, trace = new InMemoryTraceWriter()) {
-  const manager = new SubagentManager({ traceWriter: trace, apiKey: 'sk-ant-parent', model: 'claude-opus-4-1' });
+  const manager = new SubagentManager({ traceWriter: trace, apiKey: 'sk-ant-parent' });
   const handle = await manager.forkSubagent({
     parent: { sessionId: 'p' },
     config: { model: 'q36-hf', systemPrompt: 'x' },
