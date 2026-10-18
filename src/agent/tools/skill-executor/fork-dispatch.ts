@@ -21,8 +21,8 @@ import type { ToolCall, ToolResult } from '../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import { DEFAULT_READ_ONLY_SKILLS } from '../nesting.js';
 import { applyParentCredentialFallback } from '../child-credential.js';
-import { resolveChildModel, type ChildModelSource } from '../../subagent/resolve-child-model.js';
-import { attemptModelFallback } from '../../subagent/model-fallback.js';
+import { resolveChildModel, defaultTierModelFallback } from '../../subagent/resolve-child-model.js';
+import type { ForkSubagentOptions } from '../../subagent/fork-types.js';
 import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
 import { getCurrentSink } from '../../_lib/skill-sink-channel.js';
 import { loadSkillPrompts } from '../../../skills/_lib/prompt-loader.js';
@@ -142,14 +142,12 @@ export async function executeForkedRegistrySkill(
   // directly from the agent layer (resolveCredentialForModel), so no
   // injection is required. `ctx.resolveApiKeyForModel` acts as an
   // optional override for callers that need a custom strategy (e.g. tests).
-  const { model: skillChildModel, source: skillModelSource } = resolveChildModel(
-    {
-      callSiteModel: skill.model,
-      defaultSubagentModel: ctx.defaultSubagentModel,
-      defaultModel: ctx.defaultModel,
-    },
-    { withSource: true },
-  );
+  const skillChildResolved = resolveChildModel({
+    callSiteModel: skill.model,
+    defaultSubagentModel: ctx.defaultSubagentModel,
+    defaultModel: ctx.defaultModel,
+  }, { withSource: true });
+  const skillChildModel = skillChildResolved.model;
   const skillChildApiKey = applyParentCredentialFallback({
     childModel: skillChildModel,
     resolved: ctx.resolveApiKeyForModel
@@ -174,9 +172,7 @@ export async function executeForkedRegistrySkill(
   // SubagentManager.forkSubagent's emitSubagentLifecycle no-ops (it reads
   // options.config.traceWriter, not the manager's).
   const journalView: JournalParentHolder = {};
-  const { childConfig, childManager } = buildForkedChildConfig(
-    internals,
-    {
+  const skillBaseConfig = {
       model: skillChildModel,
       systemPrompt,
       // Invariant: skill-dispatch sub-agents must not inherit the
@@ -194,7 +190,10 @@ export async function executeForkedRegistrySkill(
       // so a bare excludeName catches all namespaced aliases and vice-versa.
       skillDispatchName: skill.name,
       ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
-    } as AgentConfig,
+    } as AgentConfig;
+  const { childConfig, childManager } = buildForkedChildConfig(
+    internals,
+    skillBaseConfig,
     call.signal,
     readOnly,
     undefined,
@@ -213,7 +212,10 @@ export async function executeForkedRegistrySkill(
     idPrefix: `skill-fork-${skill.name}`,
     parentId: call.id,
     args,
-    childModelSource: skillModelSource,
+    modelFallback: skillForkModelFallback(
+      defaultTierModelFallback(skillChildResolved, ctx.defaultModel),
+      (m) => buildForkedChildConfig(internals, { ...skillBaseConfig, model: m }, call.signal, readOnly, undefined, journalView).childConfig.provider,
+    ),
     noOutputError: 'Forked skill failed with no output',
     errorPrefix: 'Forked skill execution error',
   });
@@ -250,14 +252,12 @@ export async function executePluginSkill(
   // `skill.model ?? ...`). Without the leading `model ??` term a plugin skill
   // pinned to e.g. `model: opus` was silently downgraded to the session
   // default subagent model.
-  const { model: pluginChildModel, source: pluginModelSource } = resolveChildModel(
-    {
-      callSiteModel: model,
-      defaultSubagentModel: ctx.defaultSubagentModel,
-      defaultModel: ctx.defaultModel,
-    },
-    { withSource: true },
-  );
+  const pluginChildResolved = resolveChildModel({
+    callSiteModel: model,
+    defaultSubagentModel: ctx.defaultSubagentModel,
+    defaultModel: ctx.defaultModel,
+  }, { withSource: true });
+  const pluginChildModel = pluginChildResolved.model;
   const pluginChildApiKey = applyParentCredentialFallback({
     childModel: pluginChildModel,
     resolved: ctx.resolveApiKeyForModel
@@ -335,7 +335,10 @@ export async function executePluginSkill(
     idPrefix: `skill-${skillName}`,
     parentId: call.id,
     args,
-    childModelSource: pluginModelSource,
+    modelFallback: skillForkModelFallback(
+      defaultTierModelFallback(pluginChildResolved, ctx.defaultModel),
+      (m) => buildForkedChildConfig(internals, { ...baseAgentConfig, model: m }, call.signal, readOnly, allowedTools, journalView).childConfig.provider,
+    ),
     noOutputError: 'Plugin skill failed with no output',
     errorPrefix: 'Plugin skill execution error',
   });
@@ -376,8 +379,8 @@ export async function runForkedSkillToResult(
     idPrefix: string;
     parentId: string;
     args: string | undefined;
-    /** Provenance tier that chose childConfig.model — for default-tier fallback. */
-    childModelSource?: ChildModelSource;
+    /** Default-tier model fallback (see subagent/handle.model-fallback.ts). */
+    modelFallback?: ForkSubagentOptions['modelFallback'];
     noOutputError: string;
     errorPrefix: string;
   },
@@ -391,7 +394,7 @@ export async function runForkedSkillToResult(
     idPrefix,
     parentId,
     args,
-    childModelSource,
+    modelFallback,
     noOutputError,
     errorPrefix,
   } = params;
@@ -431,6 +434,7 @@ export async function runForkedSkillToResult(
       idPrefix,
       parentId,
       agentType: label,
+      ...(modelFallback !== undefined ? { modelFallback } : {}),
     });
     // Nested forks of this skill child journal via ITS journal (forSubagent),
     // and carry ITS id as their parentSessionId (#2442 child-attribution).
@@ -457,41 +461,7 @@ export async function runForkedSkillToResult(
     // SubagentStop injectContext after teardown. Outcome triage — including
     // preserving partial output off a non-clean terminal status — lives in
     // `fork-result.ts` as a pure function.
-    const firstOutcome = renderForkOutcome(result, noOutputError);
-
-    // Default-tier fallback: if the fork failed because this specific model
-    // was rejected, and it was chosen by the default tier, retry once on the
-    // parent model. The fallback uses a fresh fork of the same manager so the
-    // teardown/finally cleanup path is unchanged.
-    toolResult = firstOutcome.isError === true && childModelSource !== undefined
-      ? await attemptModelFallback({
-          firstResult: firstOutcome,
-          failedModel: childConfig.model,
-          source: childModelSource,
-          parentModel: internals.ctx.defaultModel,
-          traceWriter: internals.ctx.traceWriter,
-          rerun: async (fallbackModel) => {
-            const fallbackConfig = { ...childConfig, model: fallbackModel };
-            const fallbackHandle = await manager.forkSubagent({
-              parent: internals.ctx.parentSession,
-              config: fallbackConfig,
-              idPrefix: `${idPrefix}-fallback`,
-              parentId,
-              agentType: label,
-            });
-            try {
-              const fallbackRun = await fallbackHandle.runToResult(
-                args && args.length > 0
-                  ? `Run the ${label} skill now, following the instructions in your system prompt.\n\nSkill arguments:\n${args}`
-                  : `Run the ${label} skill now, following the instructions in your system prompt.`,
-              );
-              return renderForkOutcome(fallbackRun, noOutputError);
-            } finally {
-              await fallbackHandle.teardown().catch(debugLog);
-            }
-          },
-        })
-      : firstOutcome;
+    toolResult = renderForkOutcome(result, noOutputError);
     return toolResult;
   } catch (err) {
     const message = errorMessage(err);
@@ -522,4 +492,26 @@ export async function runForkedSkillToResult(
     // where skillBudgetReceipt was cleared, so this is a no-op there.
     skillBudgetReceipt?.release();
   }
+}
+
+/**
+ * Attach a provider rebuild to a skill fork's default-tier fallback. The
+ * skill child's provider is built for its default model's family by
+ * `buildForkedChildConfig`; the fallback model may be another family, so the
+ * retry re-runs that SAME builder (same permissions, executors, bash gate,
+ * journal view) keyed to the fallback model and takes its provider.
+ */
+function skillForkModelFallback(
+  fallback: { model: string } | undefined,
+  rebuild: (model: string) => AgentConfig['provider'],
+): ForkSubagentOptions['modelFallback'] {
+  if (fallback === undefined) return undefined;
+  return {
+    ...fallback,
+    buildProvider: (model) => {
+      const provider = rebuild(model);
+      if (provider === undefined) throw new Error(`model-fallback: no provider rebuilt for "${model}"`);
+      return provider;
+    },
+  };
 }

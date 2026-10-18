@@ -7,6 +7,7 @@
  */
 
 import { providerForModel } from '../../providers/index.js';
+import type { ModelProvider } from '../../provider.js';
 import { resolveChildModel, type ChildModelSource } from '../../subagent/resolve-child-model.js';
 import { applyParentCredentialFallback } from '../child-credential.js';
 import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
@@ -229,6 +230,8 @@ export function buildBaseChildConfig(
 export interface WireChildNestingResult {
   childParentSession: ChildParentSession | undefined;
   childManager: SubagentManager | undefined;
+  /** Rebuild the same provider for a different model (default-tier model fallback). */
+  rebuildProvider?: (model: string) => ModelProvider;
 }
 
 interface WireChildNestingArgs {
@@ -293,28 +296,32 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
         )
       : undefined;
 
-    childConfig.provider = args.childProviderFactory({
+    const factory = args.childProviderFactory;
+    const rebuildProvider = (model: string): ModelProvider => factory({
       childExecutor,
       ...(childSkillExecutor !== undefined ? { childSkillExecutor } : {}),
-      ...(childConfig.model !== undefined ? { model: childConfig.model } : {}),
+      model,
       ...(effectiveAllowedTools !== undefined ? { allowedTools: effectiveAllowedTools } : {}),
       ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}),
       ...(childConfig.customTools !== undefined && childConfig.customTools.length > 0
         ? { customTools: childConfig.customTools }
         : {}),
     });
+    childConfig.provider = rebuildProvider(String(childConfig.model));
 
-    return { childParentSession, childManager };
+    return { childParentSession, childManager, rebuildProvider };
   }
 
   if (effectiveAllowedTools !== undefined || effectiveReadOnlyBash) {
-    childConfig.provider = buildSkillRestrictedProvider(
+    const rebuildProvider = (model: string): ModelProvider => buildSkillRestrictedProvider(
       effectiveAllowedTools ?? [...CHILD_ALLOWED_TOOLS],
-      childConfig.model,
+      model,
       effectiveReadOnlyBash,
       args.defaultConfig.openaiBaseUrl,
       args.workspaceStore,
     );
+    childConfig.provider = rebuildProvider(String(childConfig.model));
+    return { childParentSession: undefined, childManager: undefined, rebuildProvider };
   }
 
   return { childParentSession: undefined, childManager: undefined };

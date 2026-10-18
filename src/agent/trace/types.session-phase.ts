@@ -303,15 +303,13 @@ export type SessionPhaseName =
   // the post-cancel delta by subtracting the `cancelled` row's watermark.
   // At most one per run; only emitted when the delta is non-zero.
   | 'billing_settled'
-  // Default-tier subagent model was rejected by the backend (HTTP 400/404
-  // or a known model-rejection pattern) and the dispatch was automatically
-  // retried on the parent session model. Emitted once per retry attempt,
-  // before the fallback run starts. `metadata` carries `fromModel` (the
-  // rejected slot), `toModel` (the parent model used for the retry), and
-  // `reason` (a ≤120-char excerpt of the rejection error). Only fires when
-  // source is 'default' or 'floor' — explicit callSite/namedAgent models
-  // fail loudly. PURE OBSERVABILITY: the retry already happened when this
-  // fires; the event makes the substitution visible in `afk trace show`.
+  // Default-tier subagent model was rejected by the backend (a typed
+  // ModelRejectedError, classified from structured provider error fields)
+  // before the child made any progress, and the handle re-ran it once on the
+  // parent session model (subagent/handle.model-fallback.ts). Emitted once,
+  // before the retry starts. `metadata`: `subagentId`, `fromModel`, `toModel`,
+  // `reason` (≤200 chars of the provider error). Only forks whose model came
+  // from the default tier are eligible; explicit models fail loudly.
   | 'subagent_model_fallback';
 
 export interface SessionPhasePayload {

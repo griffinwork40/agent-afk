@@ -176,6 +176,7 @@ export async function dispatchDagNode(
       // not supply an explicit display label.
       agentType: spec.agentType ?? spec.idPrefix ?? `dag-${spec.id}`,
       ...(spec.parentId !== undefined ? { parentId: spec.parentId } : {}),
+      ...(spec.modelFallback !== undefined ? { modelFallback: spec.modelFallback } : {}),
     });
   } catch (forkErr) {
     // Item 2: rollback ALL budget counters on fork failure — the child

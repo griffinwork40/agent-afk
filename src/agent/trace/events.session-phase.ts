@@ -132,6 +132,10 @@ export const SessionPhaseNameSchema = z.enum([
   // parity enforces it.
   'context_pressure_wind_down',
   'catalog_model_upgrade',
+  // Default-tier subagent model rejected → one re-run on the parent model
+  // (subagent/handle.model-fallback.ts). metadata: { subagentId, fromModel,
+  // toModel, reason }. Must mirror types.session-phase.ts.
+  'subagent_model_fallback',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

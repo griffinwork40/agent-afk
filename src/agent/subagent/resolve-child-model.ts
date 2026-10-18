@@ -85,3 +85,21 @@ export function resolveChildModel(
 
   return extra?.withSource ? { model, source } : model;
 }
+
+/**
+ * Derive `ForkSubagentOptions.modelFallback` from a resolved child model.
+ *
+ * Contract: returns a fallback ONLY when the model came from the default tier
+ * (`'default'` = AFK_DEFAULT_SUBAGENT_MODEL / defaultSubagentModel, or the
+ * `'floor'` literal) and the parent model is known and different. Explicit
+ * call-site, SKILL.md, named-agent, or parent-inherited choices never fall
+ * back: the operator asked for that model, so a rejection must fail loudly.
+ */
+export function defaultTierModelFallback(
+  resolved: ResolvedChildModel,
+  parentModel: string | undefined,
+): { model: string } | undefined {
+  if (resolved.source !== 'default' && resolved.source !== 'floor') return undefined;
+  if (parentModel === undefined || parentModel === '' || parentModel === resolved.model) return undefined;
+  return { model: parentModel };
+}

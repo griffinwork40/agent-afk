@@ -16,7 +16,8 @@ import type { RegisteredAgent } from '../agents/index.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { parseAgentInput, type AgentInput } from './subagent/input-parse.js';
 import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
-import type { PromotionTrigger } from './subagent/foreground-promotion.js';
+import { backgroundTarget } from './subagent/background-delivery.js';
+import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import type { StreamCutProbe } from '../subagent/stream-cut-retry.js';
 import { addForegroundNotices } from './subagent-executor.notices.js';
 import { classifyDispatchIntent, checkReadOnlyDispatchIntent } from './subagent-executor.dispatch-intent.js';
@@ -26,7 +27,6 @@ import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budge
 import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
 import { errorMessage } from '../../utils/errors.js';
-import { runForegroundWithFallback } from './subagent-executor.execute-once.fallback.js';
 import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
 import { prependSetupNotice } from '../worktree/worktree-setup.js';
@@ -146,7 +146,7 @@ export async function executeOnce(
     childCwd: parsed.cwd ?? currentCwd,
   });
 
-  const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist, childModelSource } = buildChildConfig({
+  const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist, modelFallback } = buildChildConfig({
     parsed,
     namedAgent,
     depth,
@@ -190,7 +190,7 @@ export async function executeOnce(
     nestedAgentAllowlist: nestedAgentAllowlist as string[] | undefined,
     isolationTeardown, getCancelGeneration, retryCancelGeneration,
     budgetReceipt, childManager, identity, depth,
-    updateCurrentWaveUnit, callId: call.id,
+    updateCurrentWaveUnit, callId: call.id, modelFallback,
   });
   if ('forkError' in forkResult) { budgetReceipt = undefined; return forkResult.result; }
   if (forkResult.cancelled) { budgetReceipt = undefined; return forkResult.result; }
@@ -226,34 +226,34 @@ export async function executeOnce(
     return promptResult.error!;
   }
 
-  // Run foreground promotion then, if it fails with a default-tier model
-  // rejection, retry once on the parent session model (see model-fallback.ts).
-  const finalResult = await runForegroundWithFallback({
+  const budgetRelease = budgetReceipt?.release;
+  const promotionTookBudget = { value: false };
+  const result = await runForegroundWithPromotion({
     handle,
-    childModelSource,
-    budgetRelease: budgetReceipt?.release,
-    ctx,
-    call,
-    childConfig,
-    childManager,
-    childParentSession,
-    namedAgent,
+    signal: call.signal,
     prompt: promptResult.prompt,
     backgroundPrompt: parsed.prompt,
     idPrefix: parsed.id_prefix,
-    depth,
+    model: childConfig.model,
+    ...(ctx.parentModel !== undefined ? { parentModel: ctx.parentModel } : {}),
+    childManager,
     identity,
+    ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+    depth,
+    parentSessionId: ctx.parentSession.sessionId,
+    ...backgroundTarget(ctx),
     promotionTriggers,
     activeForegroundHandles,
-    isolationTeardown,
+    ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
+    ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
   });
-
-  addForegroundNotices(finalResult, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, ctx.traceWriter);
-  prependSetupNotice(setupNotice, finalResult);
-  if (finalResult.isError === true) {
-    updateCurrentWaveUnit(call.id, 'failed', typeof finalResult.content === 'string' ? finalResult.content.slice(0, 500) : undefined);
+  if (!promotionTookBudget.value) budgetRelease?.();
+  addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, ctx.traceWriter);
+  prependSetupNotice(setupNotice, result);
+  if (result.isError === true) {
+    updateCurrentWaveUnit(call.id, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
   } else {
     updateCurrentWaveUnit(call.id, 'done');
   }
-  return finalResult;
+  return result;
 }

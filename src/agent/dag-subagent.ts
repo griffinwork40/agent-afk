@@ -133,6 +133,12 @@ export interface SubagentDAGNode {
    */
   provider?: ModelProvider;
   /**
+   * Default-tier model fallback forwarded verbatim to `forkSubagent` (see
+   * subagent/handle.model-fallback.ts). Set by the compose executor only for
+   * nodes whose model came from the default tier.
+   */
+  modelFallback?: import('./subagent/fork-types.js').ForkSubagentOptions['modelFallback'];
+  /**
    * This node's resolved nesting depth (`parent depth + 1`). When set,
    * forwarded into the fork config so the identity preamble
    * (`identity-preamble.ts`) can emit the correct at-cap / may-delegate line.
