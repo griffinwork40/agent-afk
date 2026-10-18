@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**236 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**237 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -102,6 +102,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_TRANSCRIBE_API_KEY` | string |  |  |  | Bearer token for the AFK_TRANSCRIBE_API_URL transcription endpoint. Leave unset for unauthenticated local servers. |
 | `AFK_TRANSCRIBE_API_URL` | string |  |  | `https://api.openai.com/v1/audio/transcriptions` | OpenAI-compatible /audio/transcriptions endpoint URL used to transcribe inbound Telegram voice and audio messages. When unset, voice/audio messages receive a refusal reply naming this variable. Supports any OpenAI-compatible server including local Whisper deployments. |
 | `AFK_TRANSCRIBE_MODEL` | string |  | `whisper-1` | `whisper-large-v3` | Model name forwarded to the AFK_TRANSCRIBE_API_URL endpoint (default: whisper-1). Change when using an endpoint that expects a different model identifier. |
+| `AFK_TRANSCRIBE_TIMEOUT_MS` | number |  | `60000` | `120000` | Timeout in milliseconds for the transcription API POST request (default: 60000). Increase for slow local Whisper servers or large audio files. |
 | `TELEGRAM_BOT_TOKEN` | string |  |  |  | Telegram bot token from @BotFather. Required to run the Telegram bot surface. |
 | `TELEGRAM_DATA_DIR` | string |  |  |  | Override the directory where Telegram bot state is stored. Defaults to ~/.afk/state/telegram/. |
 | `TELEGRAM_VERBOSE` | boolean |  |  | `true` | Set to a truthy value ('1'/'true'/'yes'/'on', case-insensitive) to log per-message details from the Telegram bot — chat IDs, message text, latency. |

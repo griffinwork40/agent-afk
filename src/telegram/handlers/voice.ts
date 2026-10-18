@@ -219,10 +219,16 @@ export async function handleVoiceOrAudio(
   const transcript = trResult.text;
 
   // Echo the transcript so the operator can verify what was heard.
+  // Use HTML (not legacy Markdown v1) so asterisks in transcripts are not
+  // rendered as bold — matches the HTML parse_mode used elsewhere in the bot.
+  const safeTranscript = transcript
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
   await ctx
-    .reply(`🎙️ *Transcript:* ${transcript}`, { parse_mode: 'Markdown' })
+    .reply(`🎙️ <b>Transcript:</b> ${safeTranscript}`, { parse_mode: 'HTML' })
     .catch(() =>
-      // Fallback: plain text if Markdown parse fails.
+      // Fallback: plain text if HTML parse fails.
       ctx.reply(`🎙️ Transcript: ${transcript}`).catch(() => {}),
     );
 

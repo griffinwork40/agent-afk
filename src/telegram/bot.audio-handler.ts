@@ -43,11 +43,14 @@ export function registerAudioHandlers(
         // Tag-only gate: in tag-only chats, voice/audio must be addressed to
         // the bot (reply or @mention in caption) BEFORE we spend money on
         // transcription.  Mirrors the text-message gate in message.ts.
+        // captionEntities is hoisted so it can be forwarded as `entities` on
+        // the synthesised context below (fixes the silent-drop of caption
+        // @-mentioned audio in tag-only chats).
+        const msg = ctx.message as Message.AudioMessage | Message.VoiceMessage | undefined;
+        const captionEntities = (msg as Record<string, unknown> | undefined)?.['caption_entities'] as MessageEntity[] | undefined;
         const chatId = ctx.chat?.id;
         if (chatId !== undefined && tagOnlyChats.has(chatId)) {
-          const msg = ctx.message as Message.AudioMessage | Message.VoiceMessage | undefined;
           const caption = (msg as Record<string, unknown> | undefined)?.['caption'] as string | undefined;
-          const captionEntities = (msg as Record<string, unknown> | undefined)?.['caption_entities'] as MessageEntity[] | undefined;
           const botId = ctx.botInfo?.id ?? 0;
           if (!addressedToBot(caption, captionEntities, msg?.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
             log(`Voice/audio ignored in tag-only chat ${chatId} (not addressed to bot)`);
@@ -67,7 +70,11 @@ export function registerAudioHandlers(
         const synthCtx = Object.create(Object.getPrototypeOf(ctx)) as Context;
         Object.assign(synthCtx, ctx);
         Object.defineProperty(synthCtx, 'message', {
-          value: Object.assign({}, ctx.message, { text: transcript, entities: [] }),
+          // Carry caption_entities as entities so the tag-only gate in
+          // MessageHandler.handle() sees the @mention that addressed the bot.
+          // Without this, audio files addressed by caption @mention pass the
+          // pre-transcription gate but are silently dropped by the second gate.
+          value: Object.assign({}, ctx.message, { text: transcript, entities: captionEntities ?? [] }),
           writable: true,
           enumerable: true,
           configurable: true,

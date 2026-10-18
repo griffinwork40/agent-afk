@@ -59,6 +59,7 @@ export class OpenAIAudioTranscriber implements AudioTranscriber {
     private readonly apiUrl: string,
     private readonly apiKey: string | undefined,
     private readonly model: string,
+    private readonly timeoutMs: number = 60_000,
   ) {}
 
   async transcribe(bytes: Buffer, fileName: string, maxBytes: number): Promise<TranscribeResult> {
@@ -82,7 +83,7 @@ export class OpenAIAudioTranscriber implements AudioTranscriber {
         method: 'POST',
         headers,
         body: form,
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(this.timeoutMs),
         redirect: 'error',
       });
     } catch (err) {
@@ -132,12 +133,34 @@ export function createTranscriber(env: {
   AFK_TRANSCRIBE_API_URL?: string;
   AFK_TRANSCRIBE_API_KEY?: string;
   AFK_TRANSCRIBE_MODEL?: string;
+  AFK_TRANSCRIBE_TIMEOUT_MS?: string;
 }): AudioTranscriber | null {
   const url = env.AFK_TRANSCRIBE_API_URL?.trim();
   if (!url) return null;
+
+  // Reject non-http(s) schemes — the download path has an SSRF guard;
+  // this POST to the transcription endpoint must not be looser.
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`AFK_TRANSCRIBE_API_URL is not a valid URL: ${url}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `AFK_TRANSCRIBE_API_URL must use http or https (got ${parsed.protocol}): ${url}`,
+    );
+  }
+
+  const rawTimeout = env.AFK_TRANSCRIBE_TIMEOUT_MS?.trim();
+  const timeoutMs = rawTimeout ? parseInt(rawTimeout, 10) : 60_000;
+  const resolvedTimeout =
+    Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;
+
   return new OpenAIAudioTranscriber(
     url,
     env.AFK_TRANSCRIBE_API_KEY?.trim() || undefined,
     env.AFK_TRANSCRIBE_MODEL?.trim() || DEFAULT_WHISPER_MODEL,
+    resolvedTimeout,
   );
 }

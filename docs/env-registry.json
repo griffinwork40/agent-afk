@@ -1337,6 +1337,15 @@
       "category": "telegram"
     },
     {
+      "name": "AFK_TRANSCRIBE_TIMEOUT_MS",
+      "description": "Timeout in milliseconds for the transcription API POST request (default: 60000). Increase for slow local Whisper servers or large audio files.",
+      "type": "number",
+      "required": false,
+      "default": "60000",
+      "example": "120000",
+      "category": "telegram"
+    },
+    {
       "name": "AFK_TURN_SEPARATOR",
       "description": "Render a dim horizontal rule between conversation turns in the REPL. 0 = off, unset/1 = on (default). TTY-only: piped/one-shot output (afk chat) never emits the rule.",
       "type": "boolean",

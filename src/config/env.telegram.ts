@@ -126,4 +126,13 @@ export const TELEGRAM_ENV_REGISTRY = [
     example: 'whisper-large-v3',
     category: 'telegram',
   },
+  {
+    name: 'AFK_TRANSCRIBE_TIMEOUT_MS',
+    description: 'Timeout in milliseconds for the transcription API POST request (default: 60000). Increase for slow local Whisper servers or large audio files.',
+    type: 'number',
+    required: false,
+    default: '60000',
+    example: '120000',
+    category: 'telegram',
+  },
 ] as const satisfies readonly EnvVarMeta[];
