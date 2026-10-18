@@ -420,7 +420,7 @@ Unlike CLI executor wiring, this factory does not scan `~/.afk/plugins` or impor
 Two `AgentConfig` fields are ignored when building a bundle. Supply `opts.warn` to receive their warnings; its default is a no-op:
 
 - `config.agents`: named agents come from the built-in/user/project registry and `pluginConfigs`. Pass agent definitions through `pluginConfigs`, not through the session config.
-- `config.mcpServers`: the factory does not construct or connect an MCP manager from this list. MCP integration requires caller-owned provider/manager wiring; supplying this field alone does not expose connected MCP tools.
+- `config.mcpServers`: on the **executor path** (SDK bundles), MCP tools require a caller-owned `config.mcpManager` — pass a pre-built manager instance. The executor path does not construct one from the server list. On a **root `AgentSession`** (direct use without executors), `mcpServers` is honoured: the session builds, connects, and owns the manager automatically. A caller-supplied `mcpManager` is never disconnected by the SDK on session close. Failures surface in `mcpServerStatus()` / `waitForInitialization()`. SDK-built servers default to the trusted user-global layer (no project env-containment).
 
 ### Budget: tree-wide, checked at child completion
 

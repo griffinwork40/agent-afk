@@ -1051,6 +1051,15 @@
       "category": "paths"
     },
     {
+      "name": "AFK_STEER_MODE",
+      "description": "Controls when a typed-ahead REPL message is delivered to the model during a multi-round turn. \"boundary\" (opt-in): drain the compositor queue at every tool-round boundary, so a correction typed during tool execution reaches the model on the NEXT tool round rather than waiting for the whole turn to end. \"turn-end\" (default): existing behaviour — the message is delivered as its own turn once the current turn finishes. The \"boundary\" mode is gated behind this env var during soak (issue #3897). Note: the user-yield contract (wait_for / exit_plan_mode) relies on \"turn-end\" semantics; those tools tell the model \"end your turn so the message is delivered first\", which is only accurate in \"turn-end\" mode. In \"boundary\" mode the message arrives mid-turn and the yield notice is redundant but harmless — the tool still returns early, the model still sees the message.",
+      "type": "string",
+      "required": false,
+      "default": "turn-end",
+      "example": "boundary",
+      "category": "misc"
+    },
+    {
       "name": "AFK_STOP_HOOK_MAX_CONTINUATIONS",
       "description": "Maximum number of same-turn continuation rounds a blocking Stop hook may trigger before the turn ends normally (issue #2714). Each continuation re-enters the model loop with the block reason as a framework user message, giving the agent another chance to address the hook. 0 disables continuation entirely (the turn ends on first block). Default: 2.",
       "type": "number",

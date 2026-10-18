@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.324.3] - 2026-10-18
+
+### Added
+- drain REPL queue at tool-round boundary (AFK_STEER_MODE=boundary) (#4041) (2b84cf58)
+
+### Fixed
+- add e2e MCP fixture test, assert public exports, fix stale sdk.mdx MCP text (#4092) (b26f111a)
+
 ## [5.324.2] - 2026-10-18
 
 ### Fixed
