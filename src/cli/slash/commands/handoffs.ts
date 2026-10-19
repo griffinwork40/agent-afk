@@ -130,10 +130,16 @@ export const handoffsAnswerCmd: SlashCommand = {
       return 'continue';
     }
 
-    // Exact match first, then prefix.
-    const match =
-      pending.find(r => r.taskId === rawId) ??
-      pending.find(r => r.taskId.startsWith(rawId));
+    // Exact match first, then prefix — error on ambiguous prefix.
+    const exactMatch = pending.find(r => r.taskId === rawId);
+    const prefixMatches = exactMatch ? [] : pending.filter(r => r.taskId.startsWith(rawId));
+    if (!exactMatch && prefixMatches.length > 1) {
+      ctx.out.error(
+        `Ambiguous id prefix "${rawId}" matches ${prefixMatches.length} handoffs. Provide a longer prefix or the full id.`,
+      );
+      return 'continue';
+    }
+    const match = exactMatch ?? prefixMatches[0];
 
     if (!match) {
       ctx.out.error(
@@ -173,7 +179,7 @@ export const handoffsAnswerCmd: SlashCommand = {
     let answer: unknown;
 
     if (inlineAnswer) {
-      answer = resolveAnswer(qType, inlineAnswer, choices, ctx);
+      answer = resolveAnswer(qType, inlineAnswer, choices, record.question, ctx);
       if (answer === null) return 'continue'; // resolveAnswer already emitted error
     } else {
       // No inline answer supplied — instruct the operator to re-invoke with a value.
@@ -224,6 +230,7 @@ function resolveAnswer(
   qType: string,
   raw: string,
   choices: string[],
+  question: Record<string, unknown>,
   ctx: Parameters<SlashCommand['handler']>[0],
 ): unknown | null {
   const trimmed = raw.trim();
@@ -246,17 +253,30 @@ function resolveAnswer(
       ctx.out.error(`Expected a number but got "${trimmed}".`);
       return null;
     }
+    const min = question['min'] as number | undefined;
+    const max = question['max'] as number | undefined;
+    if (min !== undefined && n < min) {
+      ctx.out.error(`Answer must be >= ${min} (got ${n}).`);
+      return null;
+    }
+    if (max !== undefined && n > max) {
+      ctx.out.error(`Answer must be <= ${max} (got ${n}).`);
+      return null;
+    }
     return { value: n };
   }
 
   if (qType === 'choice' && choices.length > 0) {
-    // Accept choice by index (1-based) or by value substring match.
+    const allowCustom = Boolean(question['allowCustom']);
+    // Accept choice by index (1-based) — validate strictly so "2oops" isn't treated as 2.
     const idx = parseInt(trimmed, 10);
-    if (Number.isInteger(idx) && idx >= 1 && idx <= choices.length) {
+    if (Number.isInteger(idx) && String(idx) === trimmed && idx >= 1 && idx <= choices.length) {
       return { value: choices[idx - 1] };
     }
     const matched = choices.find(c => c.toLowerCase() === trimmed.toLowerCase());
     if (matched) return { value: matched };
+    // allowCustom: store as a free-form custom value (mirrors Telegram surface).
+    if (allowCustom) return { value: null, custom_value: trimmed };
     ctx.out.error(
       `"${trimmed}" does not match any choice. Options:\n${choices.map((c, i) => `  ${i + 1}. ${c}`).join('\n')}`,
     );
