@@ -107,6 +107,19 @@ export function resolveCliPermissionMode(): PermissionMode {
 }
 
 /**
+ * Return the permissionMode **only when the operator has explicitly set it** in
+ * afk.config.json — `undefined` when absent. Use this instead of
+ * `loadConfig().permissionMode` (which always fills in `DEFAULT_CLI_PERMISSION_MODE`)
+ * when the caller must distinguish "operator set a value" from "default applied".
+ *
+ * Telegram entry uses this so it does not forward the bypass default into every
+ * session's metadata when the operator never touched the key (#3969 / #3942).
+ */
+export function getOperatorPermissionMode(): PermissionMode | undefined {
+  return loadJsonConfig().config.permissionMode;
+}
+
+/**
  * Whether a usage-limit pause will auto-resume, for display surfaces that
  * *describe* that behaviour to the user (the quota footer, `quota-footer.ts`).
  *

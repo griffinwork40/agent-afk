@@ -11,6 +11,225 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.327.0] - 2026-10-19
+
+### Added
+- add /handoffs and /handoffs:answer REPL slash commands (#4027) (e9dba5f2)
+- POST /api/handoffs/:taskId/answer with CSRF + responder identity (#4033) (2c328d93)
+- fall back to parent model when the default subagent model is rejected (#4117) (bc465c2f)
+
+### Fixed
+- stop LLM ghost-text suggestions from truncating mid-word (#4142) (c663ec63)
+
+## [5.326.3] - 2026-10-19
+
+### Added
+- journal AI ghost-text suggestions and their outcomes (#4128) (f15358df)
+
+### Changed
+- stage 2 — shared root validation + reuse setupIsolationWorktree in DAG dispatch (#4138) (c6fffd6a)
+
+## [5.326.2] - 2026-10-19
+
+### Fixed
+- address advisory findings from voice/audio transcription review (#4132) (a27acb0f)
+- harden regen:generated marker scan and conflicted-stage parsing (#4131) (c5a8db4b)
+- forward toolCount through provider boundary; add mcpServers e2e variant (#4137) (acc498b6)
+
+## [5.326.1] - 2026-10-19
+
+### Fixed
+- add centered reflow-shift eviction test and document fallback contracts (#4133) (96a9b94d)
+- mark full-width frame rows as hard for tmux reflow-shift (#4129) (d66bc7b0)
+- typecheck baseline reason edge cases in regen:generated merges (#4130) (4c9c9b59)
+- complete prediction fixture in baseline-budget test (#4134) (c6c48cf7)
+- address advisory findings from bash_timeout_clamped review (#4136) (bdff2e4b)
+- delegate grantsTool in XaiProvider, note tool-grant.ts gap, fix nit comment (#4135) (4a30545a)
+
+## [5.326.0] - 2026-10-18
+
+### Added
+- resolve generated-file conflicts with pnpm regen:generated (#4116) (a50df293)
+
+## [5.325.0] - 2026-10-18
+
+### Added
+- transcribe inbound Telegram voice and audio messages (#4047) (9a5169e8)
+
+### Fixed
+- erase tmux-reflowed echo duplicate on pane split (#4114) (97eaa72f)
+
+## [5.324.4] - 2026-10-18
+
+### Fixed
+- strip quoted content before dispatch-intent classification (#4101) (9c9f6bdf)
+- tidy two-phase MCP provider rebuild from #4069 (#4093) (7cadc910)
+- add missing read-only subcommands to git_read (#4099) (4b595a2f)
+- keep tools on anthropic-direct wind-down rounds for prefix-cache preservation (#4094) (b2ee0b22)
+
+## [5.324.3] - 2026-10-18
+
+### Added
+- drain REPL queue at tool-round boundary (AFK_STEER_MODE=boundary) (#4041) (2b84cf58)
+
+### Fixed
+- add e2e MCP fixture test, assert public exports, fix stale sdk.mdx MCP text (#4092) (b26f111a)
+
+## [5.324.2] - 2026-10-18
+
+### Fixed
+- clone gate falls back to two-dot diff when shallow checkout has no merge base (#4115) (0bd621db)
+
+## [5.324.1] - 2026-10-18
+
+### Fixed
+- correct misleading comment in live-frame-margin test (#4091) (5622b70b)
+- stop telling children to call workspace tools they are not granted (#4071) (3374497a)
+- address advisory findings from #4025 per-slot maxOutputTokens (#4100) (f64c0bd0)
+- add regression test for baseline-sample cost deduction from verifyRun budget (#4098) (acfb2e87)
+- move bash_timeout_clamped telemetry after min-1000 guard, add spy assertions and background clamp test (#4096) (7f779581)
+- address advisory findings from #4005 review (#4097) (7efdf98c)
+
+### Changed
+- regenerate env-registry after #4037 + #4044 (unbreak main scan:env:check) (#4113) (b4084131)
+
+## [5.324.0] - 2026-10-18
+
+### Added
+- post-edit LSP diagnostics (phase 1, opt-in, off by default) (#4044) (8573cfa3)
+- per-provider subagent concurrency caps for fan-out waves (#4037) (c6cf83d9)
+
+### Changed
+- complete docs overhaul: new navigation, every feature documented, generated references with CI drift gates (#4070) (ff5c18b2)
+
+## [5.323.0] - 2026-10-18
+
+### Added
+- add jscpd clone gate that blocks only NEW copy-paste clones (#4043) (6666a9d1)
+- add RiskCategory enum to every gate verdict and hook_decision trace event (#4045) (9dce34ea)
+- measure guardrail false-positive rate for hook-block-repeat meta-guard (#4035) (c08d437a)
+
+## [5.322.19] - 2026-10-18
+
+### Added
+- RemoteSubagentHandle implementing SubagentHandle over SSH transport (#4038) (b29df7f8)
+- GitHub event polling producer for the pull queue (#4039) (77838847)
+
+### Fixed
+- replace Array.prototype.push.apply with concat in maskHookCommandData (#4031) (ad950330)
+- advisory findings from PR triage batch (#3831, #3812, #3810) (#4029) (6d0465c3)
+- gate bash read carve-outs on read-only commands; grant SSH public keys (#4030) (964679ff)
+
+### Changed
+- introduce decidePathAccess — single resolve-then-decide credential floor (#4036) (61bb3f8e)
+- bump react-dom from 19.3.0 to 19.3.1 in /website (#4083) (5a9a225e)
+- bump the dashboard-dev-minor-patch group across 1 directory with 3 updates (#4089) (b61d201e)
+- bump @vitejs/plugin-react in /dashboard (#4087) (09c90e17)
+- bump next from 16.4.0 to 16.4.1 in /website (#4080) (863aae3a)
+- bump pnpm/action-setup from 4 to 6 (#4077) (9bd433d4)
+- bump the dev-minor-patch group across 1 directory with 3 updates (#4088) (23a52b97)
+
+## [5.322.18] - 2026-10-18
+
+### Fixed
+- MCP-aware unknown-tool messages and session-init failure notice (#4068) (ad38d39a)
+
+### Changed
+- bump @types/node from 26.6.4 to 26.6.5 in /website (#4082) (6aeac344)
+- bump the fumadocs group in /website with 3 updates (#4079) (46697ce8)
+- bump actions/setup-node from 4 to 7 (#4078) (4b475ed7)
+- bump the prod-minor-patch group with 7 updates (#4086) (e093c5ec)
+- bump the dashboard-prod-minor-patch group (#4084) (55c38a76)
+- bump react from 19.3.0 to 19.3.1 in /website (#4081) (862168d2)
+- bump actions/checkout from 4 to 7 (#4076) (9d149f55)
+
+## [5.322.17] - 2026-10-18
+
+### Added
+- offline OTLP/JSON export of witness traces with GenAI semantic conventions (#4046) (1fbf2426)
+
+### Fixed
+- strip git commit -F - heredoc body from restricted-path scan (#4034) (b5e17a20)
+- keep tools on wind-down rounds so prefix caches survive (#4048) (a139de71)
+- tell read-only git agents about the git_read swap (#4056) (d689813c)
+
+### Changed
+- guard safe-table verdict with classifyBashCommand mutation check (#4032) (305b5f3c)
+
+## [5.322.16] - 2026-10-18
+
+### Fixed
+- SDK builds and owns McpManager from config.mcpServers (#4069) (7fecda4d)
+
+## [5.322.15] - 2026-10-18
+
+### Fixed
+- deduct baseline-sample cost from maxUsdRemaining in verifyRun (#4004) (5a9f1b8f)
+- address remaining advisory findings from 2026-10-14 PR triage batch (#4003) (64c0ba92)
+- accumulate costUsd across all turns in RunBillingContext (#4005) (c3db1d1a)
+
+## [5.322.14] - 2026-10-18
+
+### Added
+- add per-slot maxOutputTokens; derive smarter default for unlisted openai-compat ids (#4025) (386a9b36)
+
+### Fixed
+- restore telemetry for clamped bash timeout_ms and tighten warning test (#4022) (1aaf5cbf)
+
+### Changed
+- cross-path dispatch-policy parity matrix (#4049) (5870700b)
+
+## [5.322.13] - 2026-10-18
+
+### Fixed
+- apply reflow inflation to EXPAND branch; fix tautological center-band test; add widen-guard and EXPAND tests (#4019) (c02c55c2)
+- isSuperseded cleared/paused goal, escapeXml notice, cleared-goal tests (#3987) (d9f31330)
+- warn and skip on malformed stored runAt/expiresAt (#4024) (4bbf1200)
+- document mixed provider on BillingUsage and add rollup test (#3986) (2a320c75)
+- correct billing_settled JSDoc to say cumulative totals, not delta (#4020) (a7b7a68d)
+
+### Changed
+- verify closure provenance stamping through real emitClosureEvent path (#4021) (71460dc5)
+
+## [5.322.12] - 2026-10-17
+
+### Fixed
+- publish remote-dispatch guide and fix broken link in tools-reference (#4018) (938dd63c)
+
+## [5.322.11] - 2026-10-17
+
+### Fixed
+- append `wait` in stdin-isolation test to drain background job before cleanup (#4017) (08bc05c9)
+
+## [5.322.10] - 2026-10-17
+
+### Fixed
+- add boundary test, document permissionMode host field, restore blank line (#3982) (ef9d5ec6)
+
+## [5.322.9] - 2026-10-17
+
+### Fixed
+- fix stale comments, add JSDoc note, extract named opts objects (#3999) (b5d2c97f)
+- advisory findings from PR triage batch (#3780, #3798, #3800, #3801) (#4000) (5ac5e6f2)
+
+## [5.322.8] - 2026-10-17
+
+### Fixed
+- forward operator-explicit permissionMode only; extract ResolvedSessionManagerOptions alias (#3994) (77110792)
+
+## [5.322.7] - 2026-10-17
+
+### Fixed
+- per-entry _schemaVersion guard in write path; shape error for primitives (#3993) (4ec15faf)
+- add missing tests for scalar-JSON guard and inflight dedup (#3991) (a2a587a9)
+- JSDoc invariants and compose exemption tests for dispatch-intent gate (#3990) (ce5822c8)
+- address advisory findings from 2026-10-15 PR triage batch (#4001) (9457323a)
+
+## [5.322.6] - 2026-10-17
+
+### Fixed
+- clear 2 test-typecheck errors that turned main's ratchet red (#4015) (a78bcb2a)
+
 ## [5.322.5] - 2026-10-17
 
 ### Fixed

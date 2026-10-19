@@ -324,7 +324,7 @@ export async function recoverPendingHandoffs(
  * Answers larger than this are rejected to avoid writing unbounded data to disk.
  * Deeper schema validation is deferred to PR 3 when the answer is consumed.
  */
-const MAX_ANSWER_BYTES = 64 * 1024; // 64 KB
+export const MAX_ANSWER_BYTES = 64 * 1024; // 64 KB
 
 /**
  * Record a human answer for a pending handoff and clean up.

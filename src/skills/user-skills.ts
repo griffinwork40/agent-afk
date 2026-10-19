@@ -43,7 +43,7 @@ import {
 } from './index.js';
 import { harvestFlagsFromSkillMd, parseSkillMd } from '../utils/skill-md.js';
 import { SubagentManager } from '../agent/subagent.js';
-import { resolveChildModel } from '../agent/subagent/resolve-child-model.js';
+import { resolveChildModel, defaultTierModelFallback } from '../agent/subagent/resolve-child-model.js';
 import { substituteSkillArgs } from '../agent/tools/skill-executor/arg-substitution.js';
 import type { IAgentSession } from '../agent/types.js';
 
@@ -166,10 +166,12 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
     parentSession?: IAgentSession,
     ctx?: SkillExecutionContext,
   ) => {
-    const subagentModel = resolveChildModel({
+    const resolvedSubagentModel = resolveChildModel({
       defaultSubagentModel: ctx?.defaultSubagentModel,
       defaultModel: ctx?.defaultModel,
-    });
+    }, { withSource: true });
+    const subagentModel = resolvedSubagentModel.model;
+    const modelFallback = defaultTierModelFallback(resolvedSubagentModel, ctx?.defaultModel);
 
     // Invariant: the anchor is ALWAYS sent, args or not — mirrors
     // fork-dispatch.ts's runForkedSkillToResult. Naming the skill removes the
@@ -253,6 +255,7 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
       idPrefix: `user-skill-${parsed.name}`,
       agentType: `user-skill-${parsed.name}`,
       ...(skillCallId ? { parentId: skillCallId } : {}),
+      ...(modelFallback !== undefined ? { modelFallback } : {}),
     });
 
     const result = await handle.runToResult(userMessage);

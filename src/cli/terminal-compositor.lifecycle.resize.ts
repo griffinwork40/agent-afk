@@ -16,10 +16,11 @@
 import { resetArchivedReveal } from './terminal-compositor.archived-reveal.js';
 import type { LifecycleHost } from './terminal-compositor.lifecycle.js';
 import { requestCprOrMarkDirty } from './terminal-compositor.lifecycle.cpr.js';
+import { noteResizeForReflow } from './terminal-compositor.reflow-shift.js';
 
 /**
  * Compute the inflated physical-row count of the pre-resize painted footprint
- * after a NARROWING resize (width-only or SHRINK).
+ * after a NARROWING resize (EXPAND or WIDTH-ONLY). SHRINK never calls this.
  *
  * With AFK_CENTER_CONTENT the compositor paints each row as `margin + content`,
  * where `margin` = `floor((oldCols - measure) / 2)` spaces. The painted width
@@ -92,7 +93,19 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const bandTop = self.committedBand.length > 0 ? self.committedBandTopRow : 0;
     const tops = [frameTop, bandTop].filter((r) => r > 0);
     const top = tops.length > 0 ? Math.min(...tops) : 0;
-    const bottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
+    const logicalBottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
+    // With AFK_CENTER_CONTENT the compositor paints `margin + content` per row,
+    // where the painted width equals `lastKnownCols` in the worst case.
+    // On an EXPAND that also narrows (e.g. tmux adding rows while reducing cols),
+    // DECAWM autowrap reflows each old row wider than the new terminal width into
+    // ceil(oldCols / newCols) physical rows — the same ghost-row erase undercount
+    // that WIDTH-ONLY fixed for issue #3763. Without inflation the erase range
+    // covers only logical rows, leaving extra physical rows as duplicates.
+    const newCols = self.stdout.columns ?? 80;
+    const logicalRows = Math.max(0, logicalBottom - top + 1);
+    const physicalRows = reflowedPhysicalRows(logicalRows, self.lastKnownCols, newCols);
+    // bottom may exceed newRows after inflation; flushResizeGhostErase clamps it.
+    const bottom = top > 0 ? top + physicalRows - 1 : logicalBottom;
     if (top > 0 && top <= bottom) {
       self.pendingResizeErase = { top, bottom, origin: 'expand' };
     }
@@ -112,6 +125,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     // until the terminal is quiescent, then the cumulative delta is applied once.
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
+      noteResizeForReflow(self, newCols, !self.cprPending);
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
     }
   } else if (newRows < self.lastKnownRows) {
@@ -148,6 +162,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     // CPR repaint can erase the ghost spinner row left by the soft-wrap reflow.
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
+      noteResizeForReflow(self, self.stdout.columns ?? 80, !self.cprPending, /* rowShrink= */ true);
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
     }
   } else {
@@ -164,9 +179,9 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     //      which is the only repaint path that runs while cprPending suppresses
     //      the debounced SIGWINCH repaint. Without the CPR, the debounced repaint
     //      fires immediately (no suppression) but BEFORE the erase snapshot is
-    //      consumed, so the ghost can survive.  The plausibility range is [0, 0];
-    //      a non-zero measured delta is discarded and the repaint still proceeds,
-    //      which is safe: the worst case is a frame that did not shift at all.
+    //      consumed, so the ghost can survive.  The plausibility range is [0, N]
+    //      where N is the predicted tmux reflow (0 outside tmux); an implausible
+    //      delta is discarded and the repaint still proceeds.
     const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
     const frameTop = self.logUpdate?.topRow ?? 0;
     const bandTop = self.committedBand.length > 0 ? self.committedBandTopRow : 0;
@@ -185,13 +200,17 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const logicalRows = Math.max(0, logicalBottom - top + 1);
     const physicalRows = reflowedPhysicalRows(logicalRows, self.lastKnownCols, newCols);
     // bottom may exceed newRows after inflation; flushResizeGhostErase clamps it.
-    const bottom = top > 0 ? top + physicalRows - 1 : logicalBottom;
+    // Note: the `top > 0` guard on the if-branch below already blocks the
+    // top===0 case, so `logicalBottom` as a fallback here is unreachable.
+    const bottom = top + physicalRows - 1;
     if (top > 0 && top <= bottom) {
       self.pendingResizeErase = { top, bottom, origin: 'width-only' };
     }
 
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
+      // Predict tmux's cursor-pinned reflow shift (terminal-compositor.reflow-shift.ts).
+      noteResizeForReflow(self, newCols, !self.cprPending);
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ 0);
     }
   }

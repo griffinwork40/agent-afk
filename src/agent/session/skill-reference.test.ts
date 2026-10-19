@@ -84,6 +84,19 @@ describe('invokedSkillName', () => {
     expect(invokedSkillName(skillCall('research', true))).toBeUndefined();
     expect(invokedSkillName({ type: 'done' })).toBeUndefined();
   });
+
+  it('returns undefined when toolInput is a scalar JSON value', () => {
+    const event: OutputEvent = {
+      type: 'chunk',
+      chunk: {
+        type: 'tool_use_detail',
+        toolUseId: 't2',
+        toolName: 'skill',
+        toolInput: '"scalar"',
+      },
+    };
+    expect(invokedSkillName(event)).toBeUndefined();
+  });
 });
 
 async function* events(list: OutputEvent[]): AsyncIterableIterator<OutputEvent> {

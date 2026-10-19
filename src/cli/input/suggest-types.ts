@@ -11,7 +11,8 @@
  * @module cli/input/suggest-types
  */
 
-import type { ModelProvider } from '../../agent/provider.js';
+import type { JournalSuggestionDetail } from '../../agent/journal/types.js';
+import type { ModelProvider, ProviderCompleteResult } from '../../agent/provider.js';
 import type { ProviderRouteHints } from '../../agent/providers/index.js';
 
 /**
@@ -92,8 +93,15 @@ export interface CompleteRequest {
   baseUrl?: string;
 }
 
-/** Minimal completion call shape shared by both suggestion producers. */
-export type CompleteFn = (req: CompleteRequest) => Promise<string>;
+/**
+ * Minimal completion call shape shared by both suggestion producers.
+ *
+ * Contract: resolves either the bare reply text (providers without
+ * `completeWithStop`, and test doubles) or the text plus its stop reason. A bare
+ * string carries no stop reason, so it is never treated as truncated. Normalize
+ * with `normalizeReply` (./suggest-reply) before reading it.
+ */
+export type CompleteFn = (req: CompleteRequest) => Promise<string | ProviderCompleteResult>;
 
 /**
  * Options accepted by `createSuggestEngine`. All optional; defaults apply.
@@ -140,7 +148,22 @@ export interface SuggestEngineOptions {
    * silently swallowed. NOT called for the expected abort/timeout path.
    */
   onError?: (err: unknown) => void;
+
+  /**
+   * Sink for AI-suggestion records: every usable LLM proposal (`generated`)
+   * and the user's response to one (`accepted` / `word_accepted` /
+   * `dismissed`, reported via {@link SuggestEngine.recordOutcome}). The REPL
+   * writes these to the session journal. Default: no-op. The engine swallows
+   * anything it throws, so a broken sink can never disturb the input path.
+   */
+  onRecord?: SuggestionRecorder;
 }
+
+/** One AI-suggestion event, before redaction (same shape as the journal detail). */
+export type SuggestionRecord = JournalSuggestionDetail;
+
+/** Consumer of {@link SuggestionRecord}s. */
+export type SuggestionRecorder = (record: SuggestionRecord) => void;
 
 export interface SuggestEngine {
   /**
@@ -173,6 +196,13 @@ export interface SuggestEngine {
 
   /** Drop any primed suggestion (accepted, dismissed, or superseded). */
   clearPromptSuggestion(): void;
+
+  /**
+   * Report the user's response to an AI suggestion to the engine's
+   * `onRecord` sink. Never throws. Optional so hand-rolled test doubles that
+   * predate it stay valid; callers optional-call it.
+   */
+  recordOutcome?(record: SuggestionRecord): void;
 
   /** Cancel any pending debounce timer. Call on REPL cleanup. */
   dispose(): void;

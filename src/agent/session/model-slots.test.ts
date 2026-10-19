@@ -28,6 +28,7 @@ import {
   slotForInput,
   SLOT_NAMES,
   unconfiguredSlotError,
+  maxOutputTokensOverrideFor,
   type ModelSlots,
 } from './model-slots.js';
 import { autoCompactLimitFor, contextLimitFor, maxOutputTokensFor } from '../model-limits.js';
@@ -861,5 +862,131 @@ describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow overri
       large: DEFAULT_SLOT_BINDINGS.large,
     });
     expect(maxOutputTokensFor('qwen-3.8-27b')).toBe(without);
+  });
+});
+
+// ── #3964: per-slot maxOutputTokens ───────────────────────────────────────────
+describe('parseModelsConfig: maxOutputTokens field', () => {
+  it('parses a valid maxOutputTokens on an object binding', () => {
+    const out = parseModelsConfig({ local: { id: 'my-model', maxOutputTokens: 32_768 } });
+    expect(out.local).toEqual({ id: 'my-model', maxOutputTokens: 32_768 });
+  });
+
+  it('silently ignores a non-integer maxOutputTokens', () => {
+    const out = parseModelsConfig({ local: { id: 'my-model', maxOutputTokens: 1.5 } });
+    expect(out.local).toEqual({ id: 'my-model' });
+  });
+
+  it('silently ignores a zero or negative maxOutputTokens', () => {
+    expect(parseModelsConfig({ local: { id: 'x', maxOutputTokens: 0 } }).local).toEqual({ id: 'x' });
+    expect(parseModelsConfig({ local: { id: 'x', maxOutputTokens: -1 } }).local).toEqual({ id: 'x' });
+  });
+
+  it('silently ignores an absurdly large maxOutputTokens (> MAX_CONTEXT_WINDOW_OVERRIDE)', () => {
+    const tooLarge = MAX_CONTEXT_WINDOW_OVERRIDE + 1;
+    expect(parseModelsConfig({ local: { id: 'x', maxOutputTokens: tooLarge } }).local).toEqual({ id: 'x' });
+  });
+
+  it('accepts maxOutputTokens equal to MAX_CONTEXT_WINDOW_OVERRIDE', () => {
+    const out = parseModelsConfig({ local: { id: 'x', maxOutputTokens: MAX_CONTEXT_WINDOW_OVERRIDE } });
+    expect(out.local?.maxOutputTokens).toBe(MAX_CONTEXT_WINDOW_OVERRIDE);
+  });
+});
+
+describe('computeSlotBindings: maxOutputTokens propagation', () => {
+  it('carries maxOutputTokens from file override into resolved bindings', () => {
+    const out = computeSlotBindings({ local: { id: 'my-model', maxOutputTokens: 32_768 } });
+    expect(out.local.maxOutputTokens).toBe(32_768);
+  });
+
+  it('omits maxOutputTokens when not set in file override', () => {
+    const out = computeSlotBindings({ local: { id: 'my-model' } });
+    expect(out.local.maxOutputTokens).toBeUndefined();
+  });
+});
+
+describe('coerceSlotBindingInput: maxOutputTokens validation', () => {
+  it('accepts a valid positive integer maxOutputTokens', () => {
+    const res = coerceSlotBindingInput({ id: 'my-model', maxOutputTokens: 32_768 });
+    expect(res).toEqual({ ok: true, value: { id: 'my-model', maxOutputTokens: 32_768 } });
+  });
+
+  it('accepts maxOutputTokens as a numeric string (coerced)', () => {
+    const res = coerceSlotBindingInput({ id: 'my-model', maxOutputTokens: '16384' });
+    expect(res).toEqual({ ok: true, value: { id: 'my-model', maxOutputTokens: 16_384 } });
+  });
+
+  it('rejects a non-integer maxOutputTokens', () => {
+    const res = coerceSlotBindingInput({ id: 'x', maxOutputTokens: 1.5 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/maxOutputTokens/);
+  });
+
+  it('rejects a zero maxOutputTokens', () => {
+    const res = coerceSlotBindingInput({ id: 'x', maxOutputTokens: 0 });
+    expect(res.ok).toBe(false);
+  });
+
+  it('rejects maxOutputTokens exceeding MAX_CONTEXT_WINDOW_OVERRIDE', () => {
+    const res = coerceSlotBindingInput({ id: 'x', maxOutputTokens: MAX_CONTEXT_WINDOW_OVERRIDE + 1 });
+    expect(res.ok).toBe(false);
+  });
+});
+
+describe('maxOutputTokensOverrideFor', () => {
+  afterEach(() => { resetSlotBindings(); });
+
+  it('returns undefined when no slot carries maxOutputTokens', () => {
+    resetSlotBindings();
+    expect(maxOutputTokensOverrideFor('any-id')).toBeUndefined();
+  });
+
+  it('returns the override for the matching concrete id', () => {
+    setSlotBindings({
+      local: { id: 'my-model', maxOutputTokens: 32_768 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(maxOutputTokensOverrideFor('my-model')).toBe(32_768);
+  });
+
+  it('returns undefined for a different id even when another slot has an override', () => {
+    setSlotBindings({
+      local: { id: 'my-model', maxOutputTokens: 32_768 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(maxOutputTokensOverrideFor('other-model')).toBeUndefined();
+  });
+});
+
+// ── #4062: maxOutputTokens <= contextWindow cross-check ──────────────────────
+describe('#4062: coerceSlotBindingInput — maxOutputTokens <= contextWindow cross-check', () => {
+  it('rejects maxOutputTokens exceeding contextWindow when both are set', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 32_768, maxOutputTokens: 65_536 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/maxOutputTokens.*must not exceed.*contextWindow/i);
+  });
+
+  it('accepts maxOutputTokens equal to contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 32_768, maxOutputTokens: 32_768 });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts maxOutputTokens less than contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 131_072, maxOutputTokens: 32_768 });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts maxOutputTokens alone (no contextWindow to cross-check)', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', maxOutputTokens: 65_536 });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts contextWindow alone (no maxOutputTokens to cross-check)', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 32_768 });
+    expect(res.ok).toBe(true);
   });
 });

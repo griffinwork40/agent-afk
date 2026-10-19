@@ -193,6 +193,16 @@ export interface SessionManagerOptions {
  * `RouteTarget` (a full `TelegramRoute`, or a bare `number` treated as that chat's
  * General topic) and compute the routeKey internally.
  */
+/**
+ * Resolved options shape stored by {@link SessionManager}. Optional fields that
+ * are passed through unchanged stay as `Pick` (no `Required` wrapper) so callers
+ * that leave them undefined do not have to supply a placeholder. `idleSessionMs`
+ * lives in the `Required` half because the constructor always fills it in.
+ */
+type ResolvedSessionManagerOptions = Required<
+  Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'permissionMode' | 'registry' | 'onResumptionOffer' | 'onInjectableForRoute'>
+> & Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'permissionMode' | 'registry' | 'onResumptionOffer' | 'onInjectableForRoute'>;
+
 export class SessionManager {
   private sessions = new Map<string, IAgentSession>();
   /** In-flight creation promises — prevent duplicate session spawns on concurrent messages (per route). */
@@ -223,7 +233,7 @@ export class SessionManager {
    * resuming a stale target.
    */
   private pendingResume = new Map<string, string>();
-  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'permissionMode' | 'registry' | 'onResumptionOffer' | 'onInjectableForRoute'>> & Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'permissionMode' | 'registry' | 'onResumptionOffer' | 'onInjectableForRoute'>; // idleSessionMs is in the Required half
+  private options: ResolvedSessionManagerOptions; // idleSessionMs is in the Required half
   /** Timer handle for periodic sessionData eviction. Unref'd so it never prevents process exit. */
   private _evictionTimer: ReturnType<typeof setInterval> | undefined;
 

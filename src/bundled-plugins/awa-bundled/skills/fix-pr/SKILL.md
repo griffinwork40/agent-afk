@@ -153,7 +153,7 @@ Run the project's full test/lint gates in the worktree yourself — do not trust
   1. `gh pr view <pr> --json state,mergedAt,mergeCommit` — if `state === "MERGED"`: STOP. Report "PR #N was merged during fix work (merged at `<mergedAt>`, commit `<mergeCommit.oid>`). Fix commits are on branch `<head_branch>` in worktree `<path>` — cherry-pick to a fresh branch if the fixes are still needed." Keep the worktree, emit Done (no push).
   2. If `state === "CLOSED"` (no `mergedAt`): STOP. Report "PR #N was closed without merge during fix work." Keep the worktree, emit Done (no push).
   3. If `state === "OPEN"`: proceed with push.
-- `git push origin <head_branch>` from the worktree. **Plain push only -- never `--force`, never `--force-with-lease`, never any other ref.** If push is rejected (non-fast-forward because the PR moved), fetch + rebase the fix commits onto the new head, re-run Phase 4 gates, push again. If still rejected → Blocked.
+- `git push origin <head_branch>` from the worktree. **Plain push only -- never `--force`, never `--force-with-lease`, never any other ref.** If push is rejected (non-fast-forward because the PR moved), fetch + rebase the fix commits onto the new head; after resolving any code conflicts, check whether the project provides a generated-file regenerate command (e.g. `pnpm regen:generated` in agent-afk — look for it in AFK.md or `.gitattributes` comments) and run it instead of hand-editing generated or baseline files; then re-run Phase 4 gates, push again. If still rejected → Blocked.
 
 ---
 

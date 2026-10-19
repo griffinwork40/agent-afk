@@ -18,6 +18,7 @@ import {
   loadSchedules,
   removeSchedule,
   toggleScheduleEnabled,
+  UnreadableSchedulesError,
   updateSchedule,
 } from './schedule-store.js';
 
@@ -112,5 +113,81 @@ describe('read-modify-write on an unreadable schedules.json', () => {
   it('loadSchedules (read-only) stays lenient: invalid JSON still returns []', () => {
     writeFileSync(storePath, INVALID_JSON);
     expect(loadSchedules(storePath)).toEqual([]);
+  });
+
+  it('loadSchedules returns [] and does not throw SchedulesVersionError for a primitive top-level JSON value', () => {
+    writeFileSync(storePath, '42');
+    expect(() => loadSchedules(storePath)).not.toThrow();
+    expect(loadSchedules(storePath)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-entry _schemaVersion guard in loadSchedulesForWrite (#3970)
+// ---------------------------------------------------------------------------
+
+describe('read-modify-write rejects entries with future _schemaVersion', () => {
+  it('addSchedule throws UnreadableSchedulesError when any entry has a future _schemaVersion', () => {
+    const futureEntry = {
+      id: 'future-task',
+      name: 'Future Task',
+      command: '/future',
+      cron: '0 2 * * *',
+      enabled: true,
+      _schemaVersion: 999,
+      createdAt: '2099-01-01T00:00:00.000Z',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    };
+    writeFileSync(storePath, JSON.stringify([futureEntry]));
+    expect(() => addSchedule({ ...BASE }, storePath)).toThrow(UnreadableSchedulesError);
+    expect(() => addSchedule({ ...BASE }, storePath)).toThrow(/schema/i);
+  });
+
+  it('addSchedule leaves the file byte-for-byte intact when refusing a future-schema entry', () => {
+    const futureEntry = {
+      id: 'future-task', name: 'Future Task', command: '/future',
+      cron: '0 2 * * *', enabled: true, _schemaVersion: 999,
+      createdAt: '2099-01-01T00:00:00.000Z', updatedAt: '2099-01-01T00:00:00.000Z',
+    };
+    const original = JSON.stringify([futureEntry]);
+    writeFileSync(storePath, original);
+    expect(() => addSchedule({ ...BASE }, storePath)).toThrow(UnreadableSchedulesError);
+    expect(readFileSync(storePath, 'utf-8')).toBe(original);
+  });
+
+  it.each([
+    ['updateSchedule', (p: string) => updateSchedule('future-task', { name: 'Renamed' }, p)],
+    ['removeSchedule', (p: string) => removeSchedule('future-task', p)],
+    ['toggleScheduleEnabled', (p: string) => toggleScheduleEnabled('future-task', false, p)],
+  ])('%s throws UnreadableSchedulesError for future-schema entries', (_name, run) => {
+    const futureEntry = {
+      id: 'future-task', name: 'Future Task', command: '/future',
+      cron: '0 2 * * *', enabled: true, _schemaVersion: 999,
+      createdAt: '2099-01-01T00:00:00.000Z', updatedAt: '2099-01-01T00:00:00.000Z',
+    };
+    writeFileSync(storePath, JSON.stringify([futureEntry]));
+    expect(() => run(storePath)).toThrow(UnreadableSchedulesError);
+  });
+
+  it('accepts entries with current _schemaVersion (= 1) in write path', () => {
+    const currentEntry = {
+      id: 'current-task', name: 'Current Task', command: '/current',
+      cron: '0 3 * * *', enabled: true, _schemaVersion: 1,
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    writeFileSync(storePath, JSON.stringify([currentEntry]));
+    // removeSchedule should succeed (returns false — ID not matching BASE name slug)
+    expect(() => removeSchedule('current-task', storePath)).not.toThrow();
+  });
+
+  it('releases the lock after refusing a future-schema file', () => {
+    const futureEntry = {
+      id: 'future-task', name: 'Future Task', command: '/future',
+      cron: '0 2 * * *', enabled: true, _schemaVersion: 999,
+      createdAt: '2099-01-01T00:00:00.000Z', updatedAt: '2099-01-01T00:00:00.000Z',
+    };
+    writeFileSync(storePath, JSON.stringify([futureEntry]));
+    expect(() => addSchedule({ ...BASE }, storePath)).toThrow(UnreadableSchedulesError);
+    expect(existsSync(`${storePath}.lock`)).toBe(false);
   });
 });

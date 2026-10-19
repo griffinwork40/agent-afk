@@ -17,7 +17,9 @@ function makeArgs(overrides: {
     permissionMode: overrides.optionPermissionMode,
   };
   const cliConfig = {
-    permissionMode: overrides.configPermissionMode ?? 'bypassPermissions',
+    permissionMode: 'configPermissionMode' in overrides
+      ? overrides.configPermissionMode
+      : 'bypassPermissions',
   } as CliConfig;
   return {
     options,
@@ -61,5 +63,12 @@ describe('createReplSurface — initialPermissionMode precedence', () => {
       configPermissionMode: 'default',
     }));
     expect(result.initialPermissionMode).toBe('autonomous');
+  });
+
+  it('leaves initialPermissionMode undefined when neither flag nor config is set', () => {
+    const result = createReplSurface(makeArgs({
+      configPermissionMode: undefined,
+    }));
+    expect(result.initialPermissionMode).toBeUndefined();
   });
 });

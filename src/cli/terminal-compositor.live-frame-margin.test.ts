@@ -158,6 +158,26 @@ describe('live frame margin under AFK_CENTER_CONTENT (compositor owns the margin
     expect(leadingSpaces(head!.text)).toBe(leadingSpaces(prompt!.text));
   });
 
+  it('centered picker: a label wider than the band does not wrap or land at col 0', async () => {
+    // A label wider than the content band (100 cols) but within the terminal
+    // (200 cols). withMargin (frame.lines.ts) prepends the margin without
+    // truncation; the row fits because 120 + margin + prefix stays under the
+    // 200-col terminal width, so no autowrap occurs. Band-width truncation
+    // itself is deferred — see #3765.
+    const wideLabel = 'W'.repeat(120); // 120 > band (100), < terminal (200)
+    const { rows } = await scenario(true, (c) => {
+      const state: PickerState = { cursor: 0, scrollOffset: 0, filterQuery: '', filteredResults: [], selected: new Set() };
+      c.enterPickerMode({
+        renderRows: () => [...renderPickerRows(state, ['? WIDE question'], [wideLabel], false, false, () => ROWS)],
+        onKey: vi.fn(),
+      });
+    });
+    const wideRow = rows.find((r) => r.text.includes('W'.repeat(10)));
+    expect(wideRow, 'wide label row must be painted').toBeDefined();
+    expect(wideRow!.wrapped, 'wide label row must not autowrap').toBe(false);
+    expect(leadingSpaces(wideRow!.text), 'wide label row must start at margin').toBeGreaterThanOrEqual(MARGIN);
+  });
+
   it('centering off: no live row gains a leading margin', async () => {
     for (const { marks, drive } of Object.values(SCENARIOS)) {
       const { rows } = await scenario(false, drive);

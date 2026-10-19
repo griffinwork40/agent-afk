@@ -19,6 +19,8 @@
  * @module agent/tools/subagent/child-config
  */
 
+import { defaultTierModelFallback, type ChildModelSource } from '../../subagent/resolve-child-model.js';
+import type { ForkSubagentOptions } from '../../subagent/fork-types.js';
 import { SubagentManager } from '../../subagent.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
@@ -182,6 +184,10 @@ export interface BuildChildConfigResult {
    * resolved value.
    */
   nestedAgentAllowlist: readonly string[] | undefined;
+  /** Provenance tier that chose childConfig.model — for default-tier fallback. */
+  childModelSource: ChildModelSource;
+  /** `forkSubagent({ modelFallback })` value: set only for a default-tier child (see handle.model-fallback.ts). */
+  modelFallback: ForkSubagentOptions['modelFallback'];
 }
 
 /**
@@ -193,7 +199,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   const { parsed, namedAgent, depth, maxDepth, currentCwd, signal, defaultConfig, createChildExecutor } = args;
 
   // 1. Model + provider family
-  const { childModel, childIsOpenAI } = resolveChildModelAndProvider(
+  const { childModel, childIsOpenAI, childModelSource } = resolveChildModelAndProvider(
     parsed, namedAgent, args.defaultSubagentModel, args.parentModel,
   );
 
@@ -216,10 +222,15 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   );
 
   // 6. Nesting wiring: child manager + executor + provider (or restricted fallback)
-  const { childParentSession, childManager } = wireChildNesting({
+  const { childParentSession, childManager, rebuildProvider } = wireChildNesting({
     args, childConfig, effectiveAllowedTools, effectiveReadOnlyBash,
     resolvedAccess, depth, maxDepth, signal, currentCwd, createChildExecutor,
   });
 
-  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist: resolvedAccess?.nestedAgentTypes };
+  const fallback = defaultTierModelFallback({ model: childModel, source: childModelSource }, args.parentModel);
+  const modelFallback = fallback === undefined
+    ? undefined
+    : { ...fallback, ...(rebuildProvider !== undefined ? { buildProvider: rebuildProvider } : {}) };
+
+  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist: resolvedAccess?.nestedAgentTypes, childModelSource, modelFallback };
 }

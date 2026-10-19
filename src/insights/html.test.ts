@@ -77,6 +77,19 @@ function makeZeroAgg(): InsightAggregates {
       topClusters: [],
       ledgerTruncated: false,
     },
+    subagentOutcomes: {
+      dispatchedCount: 0,
+      outcomeCount: 0,
+      byModelTypeDepth: {},
+    },
+    guardrailFalsePositives: {
+      totalTrips: 0,
+      falsePositiveTrips: 0,
+      falsePositiveRate: null,
+      totalPreToolUseBlocks: 0,
+      sessionsWithTrips: 0,
+      sessionsScanned: 0,
+    },
   };
 }
 
@@ -174,6 +187,19 @@ function makeNonZeroAgg(): InsightAggregates {
       ],
       ledgerTruncated: false,
     },
+    subagentOutcomes: {
+      dispatchedCount: 10,
+      outcomeCount: 8,
+      byModelTypeDepth: {},
+    },
+    guardrailFalsePositives: {
+      totalTrips: 5,
+      falsePositiveTrips: 2,
+      falsePositiveRate: 0.4,
+      totalPreToolUseBlocks: 20,
+      sessionsWithTrips: 3,
+      sessionsScanned: 15,
+    },
   };
 }
 
@@ -255,6 +281,18 @@ describe('generateHtml', () => {
     const html = generateHtml(makeNonZeroAgg(), NO_RECS, OPTS);
     expect(html).toContain('<h2>Most-Acknowledged Pre-existing Defects</h2>');
     expect(html).toContain('src/agent/session.test.ts'); // fixture locus
+  });
+
+  it('10th section heading (Guardrail False Positives) appears when data is non-zero', () => {
+    const html = generateHtml(makeNonZeroAgg(), NO_RECS, OPTS);
+    expect(html).toContain('<h2>Guardrail False Positives</h2>');
+    expect(html).toContain('FP Rate');
+    expect(html).toContain('40.0%'); // 0.4 → 40.0%
+  });
+
+  it('guardrail FP section does not appear with zero trips', () => {
+    const html = generateHtml(makeZeroAgg(), NO_RECS, OPTS);
+    expect(html).not.toContain('Guardrail False Positives');
   });
 
   it('zero aggregates: each section renders a no-data placeholder', () => {

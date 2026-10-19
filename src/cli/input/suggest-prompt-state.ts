@@ -19,7 +19,7 @@
  */
 
 import { generatePromptSuggestion } from './suggest-prompt.js';
-import type { CompleteFn, SuggestContext } from './suggest-types.js';
+import type { CompleteFn, SuggestContext, SuggestionRecorder } from './suggest-types.js';
 
 /** Collaborators supplied by the engine that composes this state. */
 export interface PromptSuggestionStateDeps {
@@ -33,6 +33,8 @@ export interface PromptSuggestionStateDeps {
   scrub(s: string): string;
   /** Diagnostic sink for a thrown completion. NOT called on abort/timeout. */
   onError?: (err: unknown) => void;
+  /** Record sink, called once per proposal that is actually published. Must not throw. */
+  onRecord?: SuggestionRecorder;
 }
 
 export interface PromptSuggestionState {
@@ -85,8 +87,9 @@ export function createPromptSuggestionState(
       // beyond) the new reply.
       suggestion = null;
 
+      const model = deps.pickModel(ctx);
       const result = await generatePromptSuggestion(ctx, {
-        model: deps.pickModel(ctx),
+        model,
         timeoutMs: deps.timeoutMs,
         scrub: deps.scrub,
         ...(deps.onError ? { onError: deps.onError } : {}),
@@ -106,6 +109,9 @@ export function createPromptSuggestionState(
       // publish over the newer proposal (or over an explicit clear()).
       if (id !== currentId) return;
       suggestion = result;
+      if (result !== null) {
+        deps.onRecord?.({ event: 'generated', source: 'prompt', text: result, model });
+      }
     },
 
     peek() {

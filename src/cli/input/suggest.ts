@@ -37,6 +37,7 @@ import type {
   SuggestContext,
   SuggestEngine,
   SuggestEngineOptions,
+  SuggestionRecord,
 } from './suggest-types.js';
 
 export type {
@@ -45,6 +46,8 @@ export type {
   SuggestContext,
   SuggestEngine,
   SuggestEngineOptions,
+  SuggestionRecord,
+  SuggestionRecorder,
 } from './suggest-types.js';
 export { stripGhostControlChars } from './suggest-sanitize.js';
 export { pickModel } from './suggest-provider.js';
@@ -59,6 +62,19 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
   const credentials = createSuggestCredentialResolver(opts.resolveCredentialFn);
 
   /**
+   * The one call site for the injected record sink. Invariant: recording is
+   * observability only, so a throwing sink is swallowed here rather than
+   * propagating into a provider reply handler or the keystroke path.
+   */
+  function record(rec: SuggestionRecord): void {
+    try {
+      opts.onRecord?.(rec);
+    } catch {
+      /* never disturb suggestions over a record failure */
+    }
+  }
+
+  /**
    * Resolve the completion function both producers share: the injected
    * completer in tests, otherwise a memoized real provider (null when that
    * provider cannot complete at all).
@@ -69,8 +85,12 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
       ? { openaiBaseUrl: ctx.baseUrl }
       : undefined;
     const provider = providers.resolve(model, hints);
-    if (typeof provider.complete !== 'function') return null;
-    const complete = provider.complete.bind(provider);
+    // Prefer the stop-reason variant so a reply cut at maxTokens is detectable
+    // (see ./suggest-reply); fall back to the text-only complete().
+    const complete = typeof provider.completeWithStop === 'function'
+      ? provider.completeWithStop.bind(provider)
+      : typeof provider.complete === 'function' ? provider.complete.bind(provider) : null;
+    if (complete === null) return null;
     // Invariant: the credential is resolved for the SUGGESTION model's
     // provider, never borrowed from the session (see ./suggest-credential).
     // Attached here, the single chokepoint both producers call through.
@@ -86,6 +106,7 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     debounceMs: opts.debounceMs ?? DEBOUNCE_MS,
     timeoutMs,
     ...(opts.onError ? { onError: opts.onError } : {}),
+    onRecord: record,
   });
 
   const promptState = createPromptSuggestionState({
@@ -94,6 +115,7 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     timeoutMs,
     scrub: stripGhostControlChars,
     ...(opts.onError ? { onError: opts.onError } : {}),
+    onRecord: record,
   });
 
   async function getGhost(buffer: string, ctx: SuggestContext): Promise<string | null> {
@@ -123,6 +145,7 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     primePromptSuggestion: (ctx) => promptState.prime(ctx),
     peekPromptSuggestion: () => promptState.peek(),
     clearPromptSuggestion: () => promptState.clear(),
+    recordOutcome: record,
     dispose,
   };
 }

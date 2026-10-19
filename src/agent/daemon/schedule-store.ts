@@ -36,7 +36,7 @@ import type { ScheduledTask, TaskExecutor } from './triggers.js';
 import { errorMessage, isErrnoCode } from '../../utils/errors.js';
 import { sleepSync } from '../../utils/sleep-sync.js';
 import { writeJsonFile } from '../../utils/json-file.js';
-import { loadSchedulesForWrite } from './schedule-store.strict-load.js';
+import { checkEntrySchemaVersions, loadSchedulesForWrite } from './schedule-store.strict-load.js';
 import { isValidIsoDate } from '../../utils/iso-date.js';
 
 export { UnreadableSchedulesError, loadSchedulesForWrite } from './schedule-store.strict-load.js';
@@ -350,29 +350,29 @@ export function loadSchedules(path?: string): ScheduledTaskConfig[] {
     }
 
     if (!Array.isArray(parsed)) {
-      throw new SchedulesVersionError(
-        storePath,
-        `[schedule-store] ${storePath} is not a JSON array (found ${parsed === null ? 'null' : typeof parsed}).`,
+      // A primitive value (string, number, boolean, null) is a malformed file,
+      // not a version mismatch — use a plain Error rather than SchedulesVersionError
+      // so callers that catch SchedulesVersionError for "upgrade required" logic
+      // do not misinterpret a corrupt file as a schema incompatibility.
+      const kind = parsed === null ? 'null' : typeof parsed;
+      throw new Error(
+        `[schedule-store] ${storePath} is not a JSON array (found ${kind}). ` +
+          'The file appears malformed; repair or remove it and retry.',
       );
     }
 
     // Per-entry _schemaVersion guard: an individual entry written by a future
     // build may carry _schemaVersion > current.  Refuse the whole file so no
-    // entry is silently misinterpreted.
-    for (const entry of parsed as unknown[]) {
-      if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
-        const entryVersion = (entry as Record<string, unknown>)['_schemaVersion'];
-        if (typeof entryVersion === 'number' && entryVersion > SCHEDULES_SCHEMA_VERSION) {
-          throw new SchedulesVersionError(
-            storePath,
-            `[schedule-store] ${storePath} contains an entry with _schemaVersion ${entryVersion} ` +
-              `but this build only understands schema version ${SCHEDULES_SCHEMA_VERSION}. ` +
-              'Upgrade afk to load this file.',
-            entryVersion,
-          );
-        }
-      }
-    }
+    // entry is silently misinterpreted.  Shared with loadSchedulesForWrite via
+    // checkEntrySchemaVersions to keep the logic in one place.
+    checkEntrySchemaVersions(
+      storePath,
+      parsed,
+      SCHEDULES_SCHEMA_VERSION,
+      (path, message, entryVersion) => {
+        throw new SchedulesVersionError(path, message, entryVersion);
+      },
+    );
 
     return parsed as ScheduledTaskConfig[];
   } catch (err) {
@@ -423,7 +423,7 @@ export function addSchedule(
   }
   const storePath = path ?? getSchedulesPath();
   return withFileLock(storePath, () => {
-    const schedules = loadSchedulesForWrite(storePath);
+    const schedules = loadSchedulesForWrite(storePath, SCHEDULES_SCHEMA_VERSION);
     const existing = schedules.map((s) => s.id);
     const base = slugify(config.name);
     const id = resolveSlugCollision(base, existing);
@@ -450,7 +450,7 @@ export function addSchedule(
 export function removeSchedule(id: string, path?: string): boolean {
   const storePath = path ?? getSchedulesPath();
   return withFileLock(storePath, () => {
-    const schedules = loadSchedulesForWrite(storePath);
+    const schedules = loadSchedulesForWrite(storePath, SCHEDULES_SCHEMA_VERSION);
     const before = schedules.length;
     const filtered = schedules.filter((s) => s.id !== id);
     if (filtered.length === before) return false;
@@ -506,7 +506,7 @@ export function updateSchedule(
   }
   const storePath = path ?? getSchedulesPath();
   return withFileLock(storePath, () => {
-    const schedules = loadSchedulesForWrite(storePath);
+    const schedules = loadSchedulesForWrite(storePath, SCHEDULES_SCHEMA_VERSION);
     const idx = schedules.findIndex((s) => s.id === id);
     if (idx === -1) return undefined;
     const existing = schedules[idx]!;

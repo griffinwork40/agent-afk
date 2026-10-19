@@ -30,12 +30,12 @@ import {
   type SubagentTrace,
 } from './result.js';
 import {
-  streamToFinalMessage,
   runToResult as runToResultImpl,
   runInBackground as runInBackgroundImpl,
   dispatchStopAndRelease,
 } from './handle.streaming.js';
 import { drainAndEmitSuccess } from './handle.run-success.js';
+import { streamWithModelFallback, type HandleModelFallback } from './handle.model-fallback.js';
 import { settleUnreportedBilling, type RunBillingContext } from './handle.billing.js';
 
 // Re-export so external callers importing debugLog-depending path still work.
@@ -216,13 +216,18 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   get _runBilling(): BillingUsage | undefined { return this._billingContext.total; }
   set _runBilling(value: BillingUsage | undefined) { this._billingContext.total = value; }
 
+  /** @internal — one-shot default-tier model fallback; set by SubagentManager, cleared once used. */
+  _modelFallback?: HandleModelFallback;
+
   /** @internal — per-subagent conversation log writer. Set by SubagentManager after construction. */
   _logWriter?: { write(event: OutputEvent): void; close(): Promise<void> };
 
   /** @internal — positional argument order is not part of any public contract. */
   constructor(
     public readonly id: string,
-    public readonly session: IAgentSession,
+    // Mutable only so the default-tier model fallback can swap in a session
+    // on the parent model (see handle.model-fallback.ts). Public surface is readonly.
+    public session: IAgentSession,
     /** @internal */ public readonly _controller: AbortController,
     private readonly abortGraph: AbortGraph,
     /** @internal */ public readonly _outputSchema: ZodType<T> | undefined,
@@ -326,7 +331,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       // locked with runInProgress=true (#3931 item 2).
       this.runInProgress = true;
       this._currentStatus = 'running';
-      const p = withTimeout(streamToFinalMessage(this, prompt, sinkOverride, billingContext), this.timeoutMs, {
+      const p = withTimeout(streamWithModelFallback(this, prompt, sinkOverride, billingContext), this.timeoutMs, {
         controller: this._controller,
         label: this.id,
         ...(pauseCeiling !== undefined && { extender: pauseCeiling }),

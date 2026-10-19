@@ -1,113 +1,138 @@
 ---
-title: "Verification Workflows"
-description: "How to verify agent work before it ships: /review, /shadow-verify, /ship --verify, and the failure-geometry pattern."
+title: "Verify agent work before accepting it"
+description: "Combine real tests, read-only review, and independent claim checks before you trust or ship a result."
 ---
 
-Agent AFK ships several verification tools.
+A confident completion message is not evidence that a change works. Verify the resulting state with the project's checks, review the actual diff, and independently rederive claims that will drive important decisions.
 
-## Failure Geometry
+## Start with observable evidence
 
-All of Agent AFK's verification tools are built around a single pattern called **Failure Geometry**.
+<Steps>
+<Step>
 
-The core insight: good workflows do not eliminate failure. They make failure **earlier, smaller, louder, cheaper, more local, more informative, or more recoverable**.
+Ask afk to name the acceptance condition before making changes. For a bug, request a reproduction or regression test; for a refactor, request behavior-preserving checks.
 
-The pattern has four steps:
-
-1. **Name the default failure.** What does the workflow do when it breaks without intervention? (e.g., silently approve malformed output, narrate instead of act, declare done while blockers remain)
-2. **Choose the preferred failure.** What should breaking look like instead? (e.g., reject by default, pause in a named state, surface uncertainty)
-3. **Add structure that transforms one into the other.** A gate, a parser fallback, a rubric dimension, a contract field, an abort cascade rule.
-4. **Verify the signal.** Confirm the new failure mode is observable — if it fires and no one sees it, the geometry didn't change.
-
-Source: `docs/failure-geometry.md`.
-
-### Examples in the codebase
-
-| Default failure | Preferred failure | Mechanism |
-|---|---|---|
-| Trust all subagent output | Re-verify when uncertain | confidence gate (`src/skills/_lib/confidence-gate.ts`) |
-| Fail silently at iteration cap | Pause in named state with next-step | `heal-failed` exit path (`src/skills/mint/index.ts`) |
-| Child abort kills parent | Child notifies parent without auto-abort | `AbortGraph` cascade rule (`src/agent/abort-graph.ts`) |
-
-Understanding this pattern helps you reason about why verification tools are structured the way they are — and how to add the same structure to your own skills.
-
-## `/review` — pre-merge diff review
-
-`/review` dispatches parallel dimension agents across a diff, PR, commit SHA, branch, staged changes, or patch file. Each agent focuses on one concern:
-
-- Security
-- Correctness
-- API compatibility
-- Test coverage
-- Performance and observability
-
-The agents run in parallel and their findings are synthesized by severity. The output is a merge recommendation with specific, citable findings — not a general summary.
-
-```
-/review                        # staged changes in the current repo
-/review https://github.com/...  # PR URL
-/review 3a1b2c4                 # commit SHA
-/review main..feature           # branch range
+```text
+Fix the failing parser case. Show the regression test, run the targeted tests and typecheck after the final edit, and report any checks you could not run.
 ```
 
-`/review` is **read-only**: it analyzes and reports only. It never edits files, commits, pushes, comments on a PR, or modifies a PR description.
+</Step>
+<Step>
 
-## `/shadow-verify` — adversarial claim verification
+Inspect what actually changed. Ask for the relevant test command, exit result, and any remaining limitations. A test that ran before the last edit is not verification of the final state.
 
-After any high-stakes subagent investigation — code reviews, audits, findings reports, large refactors — use `/shadow-verify` to independently re-derive key claims.
+```sh
+git status --short
+git diff
+git diff --staged
+```
 
-Shadow verifiers are parallel adversarial agents that each re-derive 2–3 claims from scratch using tool calls only. They return a verdict per claim:
+</Step>
+<Step>
+
+Use a review or independent verifier when a claim goes beyond what those checks establish. Keep human approval for public posting, pushing, merging, or other consequential actions separate from a read-only inspection.
+
+</Step>
+</Steps>
+
+## Choose the right workflow
+
+The following skills are contributed by the bundled skill collection. Check `/help` or [bundled skills](/skills/bundled) if one is unavailable in your session.
+
+| Situation | Workflow |
+| --- | --- |
+| Review a diff or pull request | `/review` |
+| Recheck investigation findings before acting | `/shadow-verify` |
+| Commit, push, and open a PR for completed work with an extra verifier | `/ship --verify` |
+| Harden a custom workflow's failure behavior | The failure-geometry checklist below |
+
+Review and verification consume model time and quota, especially when they dispatch several agents. Scope the target and the claims that matter rather than asking for unlimited review.
+
+## Review a diff with `/review`
+
+```text
+/review
+/review --staged
+/review --head
+```
+
+No argument reviews working-tree changes relative to `HEAD`, not just staged changes. `--staged` narrows the target to the index. You can also provide a PR number or URL, commit SHA, branch, or patch path. Give the intended behavior with `--brief` or `--spec` when the diff does not explain it:
+
+```text
+/review --staged --brief "Keep existing parser behavior, but reject duplicate keys."
+```
+
+The review covers security, correctness, API compatibility, test coverage, performance, observability, and compliance with stated intent. Smaller changes can use a lighter reviewer; larger changes use parallel dimension agents and a synthesis step. Findings should identify specific evidence and a severity, not merely say the code looks good.
+
+`/review` is read-only: it does not fix files, commit, push, comment on a PR, or edit its description. Its narrowly defined merge offer still requires your explicit confirmation. It can skip unsuitable targets such as generated or pure-documentation diffs.
+
+Treat a recommendation as review evidence, not a test result. A static review cannot prove an unexecuted test passed or an external deployment succeeded.
+
+## Independently check claims with `/shadow-verify`
+
+Use this after an investigation or review when its conclusions will drive edits or other high-stakes actions:
+
+```text
+/shadow-verify
+/shadow-verify --findings-list findings.md
+```
+
+The default mode selects two or three high-stakes, concrete claims from the preceding findings. `--findings-list` asks for an explicit checklist across a supplied findings document rather than sampling a few claims.
+
+A verifier should derive the answer from primary evidence without inheriting the original agent's reasoning. It needs the relevant search surface, but not a conclusion it is expected to confirm.
 
 | Verdict | Meaning |
-|---|---|
-| `CONFIRMED` | The claim was independently verified against source files |
-| `REFUTED` | The claim contradicts what the verifier found in the files |
-| `UNVERIFIABLE` | The claim could not be checked with available tools |
+| --- | --- |
+| `CONFIRMED` | The evidence supports the claim |
+| `REFUTED` | The evidence contradicts the claim |
+| `STALE` | The claim was true previously but is no longer current |
+| `UNVERIFIABLE` | The claim cannot be grounded with the available evidence |
 
-Any disagreement is flagged before you act on the result. The skill fires automatically when a subagent uses high-confidence language ("confident", "certain", "clearly", ≥80%) — confidence is a trigger, not a verdict.
+The workflow also flags unchecked composition boundaries or verification that only reread the same artifact without independent evidence. A verifier that runs out of budget is not a successful confirmation.
 
-**When to reach for it explicitly:**
-- After a security audit run from memory rather than file reads
-- After a subagent reports a complex refactor is safe
-- Before acting on any finding that would drive file changes, commits, or external side-effects
+Confidence is a reason to check a claim, not a verdict. Some orchestrators use a separate confidence gate: low confidence, declared coverage gaps, or a boundary flag request verification. Do not assume every confident sentence is mechanically intercepted everywhere.
 
-Source: `AGENTS.md` (shadow-verify skill description).
+## Ship completed work with `/ship --verify`
 
-## `/ship --verify`
-
-`/ship` handles the release pipeline for already-done local work: it dispatches a pre-flight check, runs the test suite, drafts a commit message, pushes, and opens a PR.
-
-Passing `--verify` triggers an adversarial verifier wave on the diff **before a human reads the PR**:
-
-```bash
+```text
 /ship --verify
 ```
 
-The verifier applies the same parallel-dimension analysis as `/review` to the outgoing diff and gates the PR open on the result. If the verifier finds a severity-critical issue, the PR is not opened until it's resolved.
+This is a release workflow, not a read-only check. It runs preflight and project checks, drafts and creates a commit, pushes the feature branch, and opens a pull request. Use it only when the local work is ready for that external handoff.
 
-Use `--verify` whenever changes are non-trivial, touch security-sensitive code, or change public API surfaces.
+`--verify` forces the optional adversarial wave even for a small diff. The skill also requests that wave automatically for a cumulative diff over 100 changed lines. A contradictory verifier result is surfaced before opening the PR so you can decide whether to proceed, revise, or abort.
 
-## The confidence gate
+<Callout type="warn">
+The verifier phase occurs after the push phase in the bundled shipping workflow. It is not a guarantee that nothing reaches the remote before verification. Run project tests and any required independent review before shipping when the push itself is consequential.
+</Callout>
 
-Internally, AFK checks each subagent result for uncertainty signals — a low confidence score, a detected gap, or a claim at the edge of what the subagent could verify. When any fires, the output goes to re-verification.
+The shipping skill aborts on failed test, typecheck, or lint gates, records skipped checks separately, and refuses to push to the default branch. It is not a replacement for your repository's CI or branch-protection rules.
 
-This is the Failure Geometry pattern applied to subagent trust: the default failure mode would be to pass all output through unchecked. The preferred failure is to surface uncertainty loudly. The structure that transforms one into the other is the confidence gate.
+## Understand afk's evidence signals
 
-## Checklist for new skills
+The runtime can distinguish a turn with no code changes, a turn with post-change verification, and one with changes but no recognized verification afterward. Stop hooks can use this evidence to ask for a correction, and surfaces can indicate that a completion lacks corroboration.
 
-When you write a new skill, answer these before shipping:
+These are conservative heuristics over observed tool events and command shapes, not a proof of correctness. A command can look like a test while covering the wrong behavior. Delegated work also has its own evidence stream. Ask for concrete artifacts and inspect the final state rather than relying only on a status label.
 
-- What is the default failure mode if the skill breaks with no hardening?
-- What is the preferred failure mode — what should breaking look like?
-- What structure transforms one into the other? (A gate, fallback, contract field, exit state, or rubric check — not a comment.)
-- Is the preferred failure observable without reading source? (Logged, surfaced in output, or gated.)
+## Design for a better failure mode
 
-Source: `docs/failure-geometry.md` (Checklist section).
+The failure-geometry pattern is a way to make failure earlier, smaller, louder, cheaper, more local, more informative, or easier to recover from. It is not a separate `/failure-geometry` command or a runtime guarantee.
 
-## Choosing the right tool
+Use four questions when writing a custom skill:
 
-| Situation | Tool |
-|---|---|
-| Reviewing a PR or diff before merging | `/review` |
-| Verifying a subagent's findings before acting | `/shadow-verify` |
-| Pushing local work with pre-ship verification | `/ship --verify` |
-| Writing a new skill and hardening its failure modes | Failure Geometry checklist |
+1. **Name the default failure.** What happens without hardening? For example, malformed output gets accepted or a blocked action retries forever.
+2. **Choose the preferred failure.** Should the workflow reject, pause in a named state, or ask for a decision?
+3. **Add structure.** Use a parser, gate, bounded retry, rubric, or explicit output contract. A comment promising care is not enforcement.
+4. **Verify the signal.** Exercise the failure path and check that the user or caller can see it.
+
+Examples in afk include confidence-gated rechecking, explicit coverage and boundary fields, and abort propagation where a parent can cancel children without a child automatically cancelling its parent. When a skill reaches its own iteration limit, report a partial or blocked result with a resumption path rather than disguising it as success.
+
+Before relying on a new skill, record its expected breakage patterns and test both the happy path and the intended failure path.
+
+## Related
+
+<Cards>
+  <Card title="Bundled skills" href="/skills/bundled" description="Find review, verification, and shipping workflows." />
+  <Card title="Inspect sessions and traces" href="/guides/observability" description="Compare a completion claim with recorded actions." />
+  <Card title="Undo changes" href="/guides/undo-changes" description="Keep recovery separate from conversation rewind." />
+</Cards>
