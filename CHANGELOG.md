@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.327.5] - 2026-10-19
+
+### Fixed
+- correct web_request schema and header to match retry implementation (#4151) (dba2b24e)
+- correct root span status, best-effort completed-only spans, omit errorHead by default, index background_agent (#4153) (7a589b4a)
+
+### Changed
+- mark Task Scheduler service backend as shipped in windows-setup.md (#4150) (f5ed0866)
+- update evidence-gate header and test description to "on by default" (#4149) (6e170733)
+
 ## [5.327.4] - 2026-10-19
 
 ### Fixed
