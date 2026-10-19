@@ -26,6 +26,7 @@ import { validateScheduleCwd } from './daemon/cwd-validator.js';
 import { getSchedule, toScheduledTask } from './daemon/schedule-store.js';
 import { parseTaskRetryFields, type TaskRetryFields } from './daemon/task-retry.js';
 import { parseTaskRequestTime } from './daemon/task-request-time.js';
+import { registerTasksWithQuarantine } from './daemon.startup-register.js';
 
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
@@ -186,9 +187,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   // (#1416), not only pull. Off for transient instances (`--once`).
   if (options.handoffMaintenance !== false) scheduler.startHandoffMaintenance();
 
-  for (const task of options.tasks ?? []) {
-    scheduler.register(task);
-  }
+  registerTasksWithQuarantine(scheduler, options.tasks ?? []);
 
   // Port file path — written on listen, deleted on stop.
   // STALE-FILE NOTE: SIGKILL cannot be intercepted — a stale port file may

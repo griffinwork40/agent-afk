@@ -193,6 +193,11 @@ describe('CronScheduler — malformed runAt/expiresAt integration', () => {
       expiresAt: 'not-a-date',
     };
     // Bypass register() validation by inserting directly into the registry.
+    // NOTE: this unsafe cast intentionally models post-startup corruption —
+    // a task that was valid at register time but whose persisted store entry
+    // was subsequently hand-edited to an invalid ISO 8601 value. The startup
+    // path (daemon.ts) now also quarantines tasks that fail validateScheduledTask
+    // on the way in, so both entry points are covered. (#4052)
     (scheduler as unknown as { registry: Map<string, { task: ScheduledTask }> })
       .registry.set('bad-expiry', { task });
 
