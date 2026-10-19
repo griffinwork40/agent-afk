@@ -204,6 +204,12 @@ export class AccountingAccumulator {
   ): void {
     if (usage?.outcome !== undefined) {
       this.subagentBilling.add(usage.billing);
+      // #3882 cause 1: failed/cancelled children also contribute their USD cost
+      // to `subagentRunningCostUsd` so `session_sealed.subagentCostUsd` reflects
+      // total spend across ALL terminal outcomes, not just succeeded ones.
+      if (typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0) {
+        this.subagentRunningCostUsd += costUsd;
+      }
       return;
     }
     this.subagentCompletedCount++;
