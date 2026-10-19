@@ -138,6 +138,11 @@ export class XaiProvider implements ModelProvider {
     this.lastXaiBaseUrl = xaiBaseUrl;
   }
 
+  /** See {@link ModelProvider.grantsTool}. Delegates to the composed inner provider. */
+  grantsTool(toolName: string): boolean {
+    return this.inner.grantsTool(toolName);
+  }
+
   // Grant-manager surface — forward so slash commands work on Grok sessions.
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
     this.inner.addReadRoot(absPath, source, sessionId);

@@ -28,6 +28,7 @@ pnpm scan:env:check                                # CI gate: docs/env-registry.
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color> outside src/cli/palette.ts (--list to find sites)
 pnpm audit:filesize:check                          # 350-code-line ceiling (comments/blanks excluded), ratcheted against .filesize-baseline.json — CI runs it but NON-blocking (`|| true`) until #2206 lands; treat a failure as yours to fix
 pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values; add --allow-growth --reason "<text>" to record a deliberate increase)
+pnpm regen:generated                               # resolve all generated-file merge conflicts in one step (union baselines, re-run all regenerators, git-add results)
 pnpm audit:funcsize:check                          # CI gate: 200-line function ceiling (AST-measured), ratcheted against .funcsize-baseline.json
 pnpm audit:funcsize:update                         # regenerate the function baseline after an extraction (add --allow-growth --reason "<text>" to record a deliberate increase)
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
@@ -212,7 +213,9 @@ it), and when a baselined path disappears. Regenerate it with
 you pass `--allow-growth --reason "<why>"` — shrinks and removals are always
 allowed. It carries
 `-merge` in `.gitattributes`, so resolve conflicts by regenerating, never
-by editing conflict markers.
+by editing conflict markers. **Run `pnpm regen:generated` after resolving any
+code conflicts** — it unions both sides of all conflicted baselines, re-runs
+every regenerator, and stages the results in one step.
 
 A split is only behaviour-preserving if state stays singular:
 `pnpm audit:module-state:check` fails when the same module-scope singleton or

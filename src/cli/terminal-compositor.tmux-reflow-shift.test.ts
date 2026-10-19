@@ -127,6 +127,31 @@ describe('tmux narrowing-reflow shift (compositor)', () => {
     }
   });
 
+  it('AFK_CENTER_CONTENT 230→115 at anchorRow 1 with one committed row above echo: leading row evicted, echo survives', async () => {
+    // One extra committed row (FILLER_0) sits above the echo in the band.
+    // At 230 cols: marginCols=65, FILLER painted=73, echo painted≈164.
+    // tmux at 115: FILLER→1 fragment (hist=1), echo→2 fragments.
+    // hist=1 == FILLER's fragment count → wholeRowsInHistory returns evict=1.
+    // FILLER_0 is dropped from the model; echo (and its content) survives.
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    try {
+      setReflowShiftGateForTests(() => true);
+      const s = await setup(1, 1);
+      expect(s.internals.committedBand.some((r) => r.includes('FILLER_0'))).toBe(true);
+      expect(s.internals.committedBand.some((r) => r.includes('DUPCHECK hello'))).toBe(true);
+      splitPane(s);
+      // Leading row evicted into tmux history — gone from the model.
+      expect(s.internals.committedBand.some((r) => r.includes('FILLER_0'))).toBe(false);
+      // Echo row straddles the history boundary — its visible tail survives.
+      expect(s.internals.committedBand.some((r) => r.includes('DUPCHECK hello'))).toBe(true);
+      // anchorRow clamps to 1 (max(1, 1-1)=1).
+      expect(s.internals.anchorRow).toBe(1);
+      s.c.disarm();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('AFK_CENTER_CONTENT, banner case (band on screen): shift still applies, nothing evicted', async () => {
     const prev = process.env['AFK_CENTER_CONTENT'];
     process.env['AFK_CENTER_CONTENT'] = '1';

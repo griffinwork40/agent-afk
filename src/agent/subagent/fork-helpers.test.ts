@@ -54,8 +54,11 @@ vi.mock('../providers/shared/soft-deadline.js', () => ({
 }));
 
 vi.mock('../workspace/index.js', () => ({
-  // Returns a NEW object like the real injector: applyWorkspacePreamble treats
-  // a same-reference return as "nothing injected" (#4060).
+  // Returns a new object (spread) so the mock never satisfies the real
+  // injector's same-reference "nothing injected" contract (#4060). The real
+  // injectWorkspacePreamble CAN return the same reference when the child cannot
+  // publish; this mock always returns a new object to keep assembled-config
+  // tests readable.
   injectWorkspacePreamble: vi.fn((cfg: object) => ({ ...cfg })),
 }));
 

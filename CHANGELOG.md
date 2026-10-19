@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.326.1] - 2026-10-19
+
+### Fixed
+- add centered reflow-shift eviction test and document fallback contracts (#4133) (96a9b94d)
+- mark full-width frame rows as hard for tmux reflow-shift (#4129) (d66bc7b0)
+- typecheck baseline reason edge cases in regen:generated merges (#4130) (4c9c9b59)
+- complete prediction fixture in baseline-budget test (#4134) (c6c48cf7)
+- address advisory findings from bash_timeout_clamped review (#4136) (bdff2e4b)
+- delegate grantsTool in XaiProvider, note tool-grant.ts gap, fix nit comment (#4135) (4a30545a)
+
+## [5.326.0] - 2026-10-18
+
+### Added
+- resolve generated-file conflicts with pnpm regen:generated (#4116) (a50df293)
+
 ## [5.325.0] - 2026-10-18
 
 ### Added

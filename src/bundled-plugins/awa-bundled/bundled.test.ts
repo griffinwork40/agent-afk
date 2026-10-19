@@ -82,7 +82,7 @@ const PINNED_HASHES = {
   //   recommends the `agent` fan-out (simpler rate-limit control, no DAG needed), but now
   //   correctly notes compose is a valid alternative when DAG tracking is wanted.
   'fix-pr':
-    '0414de3e4b1ef45e3f5824fa93228087ae764b45dc090e22e590db5eab070515',
+    '5f1591c9d921919c9c73ba47a455753d7a9eea8f52e08c3187be082c77821acd',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
