@@ -51,10 +51,12 @@ export interface IsolationWorktreeResult {
 }
 
 export interface SetupIsolationWorktreeArgs {
-  parsed: AgentInput;
+  parsed: Pick<AgentInput, 'prompt' | 'mode' | 'agent_type' | 'id_prefix'>;
   currentCwd: string | undefined;
   isolationCounterRef: { value: number };
-  childConfig: AgentConfig;
+  childConfig: Pick<AgentConfig, 'cwd'>;
+  /** DAG keeps its node-specific failure text; agent dispatch returns a ToolResult. */
+  dagNodeId?: string;
   childWriteCapable: boolean;
   probe: StreamCutProbe | undefined;
   budgetReceipt: SpawnReceipt | undefined;
@@ -66,8 +68,15 @@ export interface SetupIsolationWorktreeArgs {
  * Creates an isolated worktree for `isolation:"worktree"` dispatches and
  * mutates `childConfig.cwd` to point at it.  Returns the teardown descriptor
  * on success, `{ skipped: true }` when the agent is read-only, or
- * `{ error }` that the caller should return immediately.
+ * `{ error }` that the caller should return immediately. DAG callers always
+ * create a foreground tree and throw their historical node-specific error.
  */
+export function setupIsolationWorktree(
+  args: SetupIsolationWorktreeArgs & { dagNodeId: string; childWriteCapable: true },
+): Promise<IsolationWorktreeResult>;
+export function setupIsolationWorktree(
+  args: SetupIsolationWorktreeArgs,
+): Promise<IsolationWorktreeResult | { skipped: true } | { error: ToolResult }>;
 export async function setupIsolationWorktree(
   args: SetupIsolationWorktreeArgs,
 ): Promise<IsolationWorktreeResult | { skipped: true } | { error: ToolResult }> {
@@ -110,6 +119,12 @@ export async function setupIsolationWorktree(
   } catch (err) {
     const message = errorMessage(err);
     budgetReceipt?.rollback();
+    if (args.dagNodeId !== undefined) {
+      throw new Error(
+        `Failed to create isolated worktree for DAG node "${args.dagNodeId}": ${message}. ` +
+        `isolation:"worktree" requires the session to run inside a git repository.`,
+      );
+    }
     return {
       error: {
         content:
