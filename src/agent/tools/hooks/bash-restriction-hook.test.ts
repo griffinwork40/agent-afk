@@ -434,9 +434,11 @@ describe('createBashRestrictionHook — quoted heredoc data (#3850)', () => {
 
   // git commit -F - <<'EOF': commit message body is plain text, never executed.
   // Covers the AFK-canonical form: git -c user.name=X -c user.email=Y commit -F -
+  // Single-quoted -c values are tokenized identically to double-quoted ones.
   it.each([
     `git commit -F - <<'EOF'\n${mention}\nEOF`,
     `git -c user.name="AFK Agent" -c user.email=agent@agentafk.com commit -F - <<'EOF'\n${mention}\nEOF`,
+    `git -c 'user.name=AFK Agent' -c 'user.email=agent@agentafk.com' commit -F - <<'EOF'\n${mention}\nEOF`,
     `git commit -F - <<'MSG'\nfix(#3850): heredoc body mentions ${mention}\nMSG`,
     `git commit -F - <<\\EOF\n${mention}\nEOF`,
   ])('allows git commit -F - body mentioning a restricted path: %s', (command) => {

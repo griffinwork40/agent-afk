@@ -437,6 +437,11 @@ function isStdoutOnlyCat(tokens: readonly string[]): boolean {
  * other arguments — an unknown flag or a file operand other than `-` is
  * rejected (fails closed). `--` is intentionally not permitted here because
  * the tokenizer would split the command at it anyway.
+ *
+ * Deliberately unsupported: `-C <dir>` and `--git-dir=<path>` global flags are
+ * not matched and fall through to the full restricted-path scan (fail-closed).
+ * Supporting them would require resolving the directory argument against the
+ * grant roots, which is out of scope for this narrow exemption.
  */
 function isGitCommitStdin(tokens: readonly string[]): boolean {
   if (tokens[0] !== 'git') return false;
