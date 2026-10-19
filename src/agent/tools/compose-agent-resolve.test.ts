@@ -95,9 +95,12 @@ describe('resolveComposeNodeAgent — executor-backed tool stripping', () => {
   it('does not discourage workspace_query when the named agent grants it', () => {
     const resolved = resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'workspace_query']));
     const prompt = resolveComposeAgentPrompt(resolved, 'base');
+    // workspace_query must appear in the allowed-tools list.
+    expect(resolved.namedAgentAllowedTools).toContain('workspace_query');
     expect(prompt).toContain('workspace_query');
-    // #4012: workspace_query must not appear in the forbidden-tools clause.
-    expect(prompt).not.toMatch(/Do not call workspace_query/);
+    // #4012: workspace_query must not appear in the forbidden-tools clause
+    // (e.g. 'Do not call bash, workspace_query, ...').
+    expect(prompt).not.toMatch(/Do not call[^.]*workspace_query/);
   });
 
   it('names both bash and workspace_query as forbidden when neither is granted', () => {
