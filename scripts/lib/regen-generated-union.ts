@@ -65,9 +65,13 @@ export function unionTypecheck(
   ours: TypecheckBaseline | null,
   theirs: TypecheckBaseline | null,
 ): TypecheckBaseline {
-  const reason = ours?.reason?.trim() ? ours.reason : theirs?.reason;
+  const oursErrors = ours?.errors ?? 0;
+  const theirsErrors = theirs?.errors ?? 0;
+  const maxSide = oursErrors >= theirsErrors ? ours : theirs;
+  const otherSide = oursErrors >= theirsErrors ? theirs : ours;
+  const reason = maxSide?.reason?.trim() ? maxSide.reason : otherSide?.reason?.trim() ? otherSide.reason : undefined;
   return {
-    errors: Math.max(ours?.errors ?? 0, theirs?.errors ?? 0),
+    errors: Math.max(oursErrors, theirsErrors),
     ...(reason ? { reason } : {}),
   };
 }
