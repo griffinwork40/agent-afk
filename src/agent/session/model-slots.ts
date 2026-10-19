@@ -429,21 +429,8 @@ export function parseModelsConfig(raw: unknown): Partial<Record<SlotName, ModelS
 
 // Re-exported from sibling (350-line ceiling — see model-slots.coerce.ts).
 export { coerceSlotBindingInput } from './model-slots.coerce.js';
-
-function normalizeSlotProvider(value: unknown): SlotProvider | undefined {
-  if (typeof value !== 'string') return undefined;
-  const lowered = value.trim().toLowerCase();
-  if (lowered === 'anthropic' || lowered === 'anthropic-direct') return 'anthropic';
-  if (lowered === 'openai' || lowered === 'openai-compatible') return 'openai';
-  if (lowered === 'chatgpt-oauth' || lowered === 'chatgpt') return 'chatgpt-oauth';
-  if (lowered === 'xai') return 'xai';
-  if (lowered === 'xai-oauth' || lowered === 'xai_oauth') return 'xai-oauth';
-  return undefined;
-}
-
-function parseStringField(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
+// Shared low-level helpers (moved from inline copies — see #4120).
+import { normalizeSlotProvider, parseStringField } from './model-slots.utils.js';
 
 /** Max accepted contextWindow override (10M tokens). Values above are ignored at load / rejected at write. */
 export const MAX_CONTEXT_WINDOW_OVERRIDE = 10_000_000;
