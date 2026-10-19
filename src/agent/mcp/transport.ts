@@ -67,6 +67,9 @@ function inheritedDefaultEnv(): Record<string, string> {
     'PATH', 'HOME', 'USER', 'USERNAME', 'LOGNAME', 'SHELL', 'TERM',
     'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'SYSTEMROOT',
     'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'NODE_PATH',
+    // Linux Chrome profile-dir overrides: forwarded so the chrome-devtools-mcp
+    // child locates DevToolsActivePort in the same directory as the probe.
+    'CHROME_CONFIG_HOME', 'XDG_CONFIG_HOME',
   ];
   const out: Record<string, string> = {};
   for (const k of keys) {

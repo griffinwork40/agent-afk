@@ -44,6 +44,12 @@ describe('validateScheduledTask — runAt ISO validation', () => {
       validateScheduledTask({ ...baseTask, cronExpression: undefined, runAt: 'not-a-date' }),
     ).toThrow(/runAt must be a valid ISO 8601/);
   });
+
+  it('includes the offending value in the runAt error message', () => {
+    expect(() =>
+      validateScheduledTask({ ...baseTask, cronExpression: undefined, runAt: 'not-a-date' }),
+    ).toThrow(/\(got: not-a-date\)/);
+  });
 });
 
 describe('validateScheduledTask — expiresAt ISO validation', () => {
@@ -75,5 +81,11 @@ describe('validateScheduledTask — expiresAt ISO validation', () => {
     expect(() =>
       validateScheduledTask({ ...baseTask, expiresAt: 'bad' }),
     ).toThrow(/expiresAt must be a valid ISO 8601/);
+  });
+
+  it('includes the offending value in the expiresAt error message', () => {
+    expect(() =>
+      validateScheduledTask({ ...baseTask, expiresAt: 'bad' }),
+    ).toThrow(/\(got: bad\)/);
   });
 });

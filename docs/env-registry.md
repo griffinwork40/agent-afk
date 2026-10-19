@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**237 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**239 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -227,6 +227,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AGENT_SURFACE` | string |  | `afk` | `afk` | Process-level surface identity propagated to subprocesses (e.g. Python plugin scripts) that cannot read the in-memory AgentConfig.surface field. The CLI entrypoint defaults it to 'afk' via ??=; no surface overrides it at runtime today, so the env var is effectively a static 'afk' constant. Per-surface discrimination ('cli', 'telegram', 'daemon') lives on AgentConfig.surface instead. The browser headless-routing check in src/browser/config.ts reads this as a secondary fallback after AFK_BROWSER_HEADLESS. |
 | `APPDATA` | string |  |  |  | Windows %APPDATA% (Roaming). Used for VS Code/Cursor settings discovery and credential denylist paths. |
 | `ASCIINEMA_REC` | boolean |  |  | `1` | Set to 1 by asciinema rec while a session is being recorded. Triggers capture-mode. |
+| `CHROME_CONFIG_HOME` | string |  |  |  | Linux only. When set, Chrome stores its profile under $CHROME_CONFIG_HOME/<channel-dir> instead of $XDG_CONFIG_HOME/<channel-dir>. Mirrors the override that chrome-devtools-mcp/Puppeteer apply when locating DevToolsActivePort so the real-Chrome probe checks the same path. |
 | `CI` | string |  |  | `true` | Standard CI-detection convention. Auto-set by GitHub Actions, CircleCI, etc. Used to switch off TTY-only UX. |
 | `COLORFGBG` | string |  |  | `15;0` | Terminal-set "foreground;background" color hint (e.g. "15;0"), read only for AFK_THEME=auto detection. The trailing field is the background color index; >= 7 is treated as a light background, otherwise dark. Not set by AFK — emitted by some terminals (rxvt, Konsole, iTerm2). Absent or unparseable => dark. |
 | `COLORTERM` | string |  |  | `truecolor` | OS-level terminal color-depth hint. Accepted values: truecolor or 24bit (24-bit color), 256color (256-color). Set by the outer terminal emulator, not by AFK. Read by chalk's supports-color to set its initial color level; also read by configureColor() to recommend FORCE_COLOR=3 for tmux truecolor users on Node ≤ 24. |
@@ -250,6 +251,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `USERPROFILE` | string |  |  |  | Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32. |
 | `VISUAL` | string |  |  | `nvim` | Standard POSIX env var naming the user's preferred full-screen editor (with optional flags). Consulted FIRST by the /editor slash command (and its key chord) to compose a long prompt externally; takes precedence over EDITOR. No fallback editor is assumed — if neither VISUAL nor EDITOR is set, /editor prints a hint instead of guessing. |
 | `VITEST` | string |  |  |  | Set automatically by Vitest. Used at runtime to short-circuit code paths that should not fire in tests. |
+| `XDG_CONFIG_HOME` | string |  |  |  | Linux XDG base-dir spec override for per-user config files. When set (and CHROME_CONFIG_HOME is not), Chrome stores its profile under $XDG_CONFIG_HOME/<channel-dir>. Mirrors the override that chrome-devtools-mcp/Puppeteer apply when locating DevToolsActivePort. |
 
 ## Misc
 

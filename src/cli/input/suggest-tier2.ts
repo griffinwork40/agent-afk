@@ -13,6 +13,7 @@
 import { basename } from 'node:path';
 import { redactSecrets } from '../../agent/redact-secrets.js';
 import { stripGhostControlChars } from './suggest-sanitize.js';
+import { joinContinuation, normalizeReply, trailingWord, trimTruncatedLine } from './suggest-reply.js';
 import type { CompleteFn, SuggestionRecorder } from './suggest-types.js';
 import type { SuggestContext } from './suggest.js';
 
@@ -31,13 +32,27 @@ export const DEBOUNCE_MS = 250;
  */
 export const TIMEOUT_MS = 1500;
 
+/**
+ * Output-token cap for one Tier-2 reply. The reply carries only the buffer's
+ * trailing word plus the continuation (see {@link buildSystem}), so this budget
+ * no longer shrinks as the user types. History: the prompt used to ask for the
+ * whole completed line under a 24-token cap, so the echoed buffer consumed the
+ * budget — long inputs got completions cut mid-word, and inputs over ~24 tokens
+ * got no ghost at all.
+ */
+export const LLM_MAX_TOKENS = 32;
+
 /** Upper bound on cached suggestion results; FIFO eviction beyond this. */
 const MAX_CACHE_ENTRIES = 500;
 
 export function buildSystem(): string {
   return (
-    'Predict the single most likely completion of the user\'s in-progress REPL input. ' +
-    'Return ONLY the completed line — no explanation, no preamble, no trailing newline.'
+    'Predict the single most likely way the user will finish their in-progress REPL input. ' +
+    'Reply with the input\'s final word exactly as typed (it may be partial), followed by the rest of the line. ' +
+    'If the input ends with a space, reply with only the text that comes next. ' +
+    'Never repeat the earlier part of the input. ' +
+    'Example: input "run the tes" -> reply "tests for the parser". ' +
+    'Return ONE line only: no explanation, no preamble, no surrounding quotes, no trailing newline.'
   );
 }
 
@@ -53,6 +68,8 @@ export function buildUser(buffer: string, ctx: SuggestContext): string {
   if (transcript.length > 0) {
     parts.push(`context: ${transcript.slice(0, 200)}`);
   }
+  const word = trailingWord(buffer);
+  parts.push(word.length > 0 ? `final word: ${word}` : 'final word: (none, input ends with a space)');
   parts.push(`input: ${buffer}`);
   // DATA-EGRESS CONTRACT: this assembled prompt is the only content sent to the
   // Tier-2 suggestion model, which may be a cheaper model at a DIFFERENT endpoint
@@ -62,20 +79,10 @@ export function buildUser(buffer: string, ctx: SuggestContext): string {
   // the single chokepoint covering BOTH the completeFn (test) and real-provider
   // dispatch paths, since both build their `user` field here.
   // Invariant: redact the RETURNED prompt only — never the raw `buffer`, which is
-  // the result-cache key and the isValidContinuation(buffer, reply) guard input.
+  // the result-cache key and the joinContinuation(buffer, reply) guard input.
   // Redacting `buffer` would collapse distinct prefixes onto one poisoned cache
   // key and make every real completion fail the prefix guard (silent no-ghost).
   return redactSecrets(parts.join('\n'));
-}
-
-/**
- * Verify the LLM reply is a valid continuation of `buffer`.
- * The reply must start with `buffer` exactly (case-sensitive) and be strictly
- * longer, or equal to `buffer` (which we then reject as not a completion).
- */
-function isValidContinuation(buffer: string, reply: string): boolean {
-  const trimmed = reply.trim();
-  return trimmed.startsWith(buffer) && trimmed.length > buffer.length;
 }
 
 /** Collaborators the tier needs from the engine. */
@@ -188,7 +195,7 @@ export function createTier2Runner(deps: Tier2Deps): Tier2Runner {
           system: buildSystem(),
           user: buildUser(buffer, ctx),
           model,
-          maxTokens: 24,
+          maxTokens: LLM_MAX_TOKENS,
           signal: controller.signal,
           baseUrl: ctx.baseUrl,
         }).then((raw) => ({ ok: true as const, raw })),
@@ -203,9 +210,15 @@ export function createTier2Runner(deps: Tier2Deps): Tier2Runner {
         resolve(null);
         return;
       }
-      const cleaned = stripGhostControlChars(raced.raw).trim();
-      const result = isValidContinuation(buffer, cleaned) ? cleaned : null;
-      cacheSet(cacheKey, result);
+      const reply = normalizeReply(raced.raw);
+      const cleaned = stripGhostControlChars(reply.text).trim();
+      const joined = joinContinuation(buffer, cleaned);
+      // Invariant: a reply cut at the token cap ends in a possibly partial
+      // word. Drop that word, and never cache a truncated outcome: the cache
+      // would otherwise pin a cut-off (or null) ghost to this buffer for the
+      // whole session, while a fresh request may well finish cleanly.
+      const result = joined !== null && reply.truncated ? trimTruncatedLine(buffer, joined) : joined;
+      if (!reply.truncated) cacheSet(cacheKey, result);
       if (result !== null) {
         deps.onRecord?.({ event: 'generated', source: 'completion', text: result, buffer, model });
       }

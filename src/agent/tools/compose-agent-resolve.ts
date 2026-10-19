@@ -253,9 +253,17 @@ export function resolveComposeAgentPrompt(agent: ResolvedComposeAgent, basePromp
   // here so the prompt suffix never names a tool the provider withholds.
   const leafTools = CHILD_ALLOWED_TOOLS.filter((t) => !COMPOSE_LEAF_STRIPPED_TOOLS.has(t));
   const effectiveTools = leafTools.filter((t) => agent.namedAgentAllowedTools!.includes(t));
+  // Name tools that are NOT in the effective list as examples of forbidden
+  // tools — only if they are absent, so we never discourage a tool that is
+  // actually allowed (#4012: previously hardcoded bash/workspace_query here
+  // even when the named agent grants them).
+  const exampleForbidden = ['bash', 'workspace_query'].filter((t) => !effectiveTools.includes(t));
+  const forbiddenClause =
+    exampleForbidden.length > 0
+      ? `Do not call ${exampleForbidden.join(', ')}, or other tools unless they appear in this list; `
+      : 'Do not call tools that do not appear in this list; ';
   return `${withLeafNotice}\n\nThis compose node can use only these tools: ${effectiveTools.join(', ') || '(none)'}. ` +
-    'Do not call bash, workspace_query, or other tools unless they appear in this list; ' +
-    'use available read tools or return the missing capability to the parent.';
+    `${forbiddenClause}use available read tools or return the missing capability to the parent.`;
 }
 
 /**

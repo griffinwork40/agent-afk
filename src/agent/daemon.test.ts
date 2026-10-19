@@ -652,6 +652,77 @@ describe('startDaemon', () => {
     handle = null; // prevent afterEach double-stop
     await expect(fetch(`http://localhost:${port}/health`)).rejects.toThrow();
   });
+
+  // Regression test for #4052: a hand-edited schedules.json with a malformed
+  // runAt/expiresAt used to crash the daemon at startup because register()
+  // called validateScheduledTask() which threw with no surrounding try/catch.
+  // The fix quarantines the invalid task (warn + skip) so the daemon starts
+  // and valid tasks remain operational.
+  it('startDaemon quarantines a task with malformed runAt instead of crashing (#4052)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const good: ScheduledTask = {
+        taskId: 'good-task',
+        command: '/ok',
+        trigger: 'cron',
+        cronExpression: '* * * * *',
+      };
+      // A task with a hand-edited invalid runAt — validateScheduledTask throws on this.
+      const bad = {
+        taskId: 'bad-runat',
+        command: '/bad',
+        trigger: 'cron' as const,
+        // runAt is intentionally malformed — bypasses store validation to reach the
+        // startup registration loop. Cast needed: ScheduledTask type disallows
+        // non-ISO strings, mirroring what a hand-edited schedules.json would produce.
+        runAt: 'not-a-date',
+      } as unknown as ScheduledTask;
+
+      // Must not throw — daemon should start despite the bad task.
+      handle = await startDaemon({
+        port: 0,
+        telemetryPath,
+        writePortFile: false,
+        handoffMaintenance: false,
+        tasks: [bad, good],
+      });
+
+      // The good task must still be registered.
+      expect(handle.scheduler.list().map((t) => t.taskId)).toContain('good-task');
+      // The bad task must have been skipped.
+      expect(handle.scheduler.list().map((t) => t.taskId)).not.toContain('bad-runat');
+      // A console.warn must have been emitted for the operator.
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('bad-runat'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('startDaemon quarantines a task with malformed expiresAt instead of crashing (#4052)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const bad = {
+        taskId: 'bad-expiry',
+        command: '/bad',
+        trigger: 'cron' as const,
+        cronExpression: '* * * * *',
+        expiresAt: '01/02/2027', // locale-style — not valid ISO 8601
+      } as unknown as ScheduledTask;
+
+      handle = await startDaemon({
+        port: 0,
+        telemetryPath,
+        writePortFile: false,
+        handoffMaintenance: false,
+        tasks: [bad],
+      });
+
+      expect(handle.scheduler.list().map((t) => t.taskId)).not.toContain('bad-expiry');
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('bad-expiry'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe('end-to-end: Gap-B closure', () => {

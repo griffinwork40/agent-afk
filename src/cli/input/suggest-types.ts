@@ -12,7 +12,7 @@
  */
 
 import type { JournalSuggestionDetail } from '../../agent/journal/types.js';
-import type { ModelProvider } from '../../agent/provider.js';
+import type { ModelProvider, ProviderCompleteResult } from '../../agent/provider.js';
 import type { ProviderRouteHints } from '../../agent/providers/index.js';
 
 /**
@@ -93,8 +93,15 @@ export interface CompleteRequest {
   baseUrl?: string;
 }
 
-/** Minimal completion call shape shared by both suggestion producers. */
-export type CompleteFn = (req: CompleteRequest) => Promise<string>;
+/**
+ * Minimal completion call shape shared by both suggestion producers.
+ *
+ * Contract: resolves either the bare reply text (providers without
+ * `completeWithStop`, and test doubles) or the text plus its stop reason. A bare
+ * string carries no stop reason, so it is never treated as truncated. Normalize
+ * with `normalizeReply` (./suggest-reply) before reading it.
+ */
+export type CompleteFn = (req: CompleteRequest) => Promise<string | ProviderCompleteResult>;
 
 /**
  * Options accepted by `createSuggestEngine`. All optional; defaults apply.

@@ -7,7 +7,8 @@
  */
 
 import { providerForModel } from '../../providers/index.js';
-import { resolveChildModel } from '../../subagent/resolve-child-model.js';
+import type { ModelProvider } from '../../provider.js';
+import { resolveChildModel, type ChildModelSource } from '../../subagent/resolve-child-model.js';
 import { applyParentCredentialFallback } from '../child-credential.js';
 import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
 import { CHILD_ALLOWED_TOOLS, buildSkillRestrictedProvider, createStubParentSession } from '../nesting.js';
@@ -29,6 +30,8 @@ import type { BuildChildConfigArgs, ChildParentSession } from './child-config.js
 export interface ResolvedChildModel {
   childModel: string;
   childIsOpenAI: boolean;
+  /** Provenance tier that chose childModel — used by the default-tier fallback. */
+  childModelSource: ChildModelSource;
 }
 
 /**
@@ -50,13 +53,16 @@ export function resolveChildModelAndProvider(
     const defModel = namedAgent.definition.model;
     namedDefaultModel = defModel === 'inherit' ? parentModel : defModel;
   }
-  const childModel: string = resolveChildModel({
-    callSiteModel: parsed.model,
-    namedAgentModel: namedDefaultModel,
-    defaultSubagentModel,
-  });
+  const { model: childModel, source: childModelSource } = resolveChildModel(
+    {
+      callSiteModel: parsed.model,
+      namedAgentModel: namedDefaultModel,
+      defaultSubagentModel,
+    },
+    { withSource: true },
+  );
   const childIsOpenAI = providerForModel(childModel) === 'openai-compatible';
-  return { childModel, childIsOpenAI };
+  return { childModel, childIsOpenAI, childModelSource };
 }
 
 // ─── Tool access ─────────────────────────────────────────────────────────────
@@ -224,6 +230,8 @@ export function buildBaseChildConfig(
 export interface WireChildNestingResult {
   childParentSession: ChildParentSession | undefined;
   childManager: SubagentManager | undefined;
+  /** Rebuild the same provider for a different model (default-tier model fallback). */
+  rebuildProvider?: (model: string) => ModelProvider;
 }
 
 interface WireChildNestingArgs {
@@ -288,28 +296,32 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
         )
       : undefined;
 
-    childConfig.provider = args.childProviderFactory({
+    const factory = args.childProviderFactory;
+    const rebuildProvider = (model: string): ModelProvider => factory({
       childExecutor,
       ...(childSkillExecutor !== undefined ? { childSkillExecutor } : {}),
-      ...(childConfig.model !== undefined ? { model: childConfig.model } : {}),
+      model,
       ...(effectiveAllowedTools !== undefined ? { allowedTools: effectiveAllowedTools } : {}),
       ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}),
       ...(childConfig.customTools !== undefined && childConfig.customTools.length > 0
         ? { customTools: childConfig.customTools }
         : {}),
     });
+    childConfig.provider = rebuildProvider(String(childConfig.model));
 
-    return { childParentSession, childManager };
+    return { childParentSession, childManager, rebuildProvider };
   }
 
   if (effectiveAllowedTools !== undefined || effectiveReadOnlyBash) {
-    childConfig.provider = buildSkillRestrictedProvider(
+    const rebuildProvider = (model: string): ModelProvider => buildSkillRestrictedProvider(
       effectiveAllowedTools ?? [...CHILD_ALLOWED_TOOLS],
-      childConfig.model,
+      model,
       effectiveReadOnlyBash,
       args.defaultConfig.openaiBaseUrl,
       args.workspaceStore,
     );
+    childConfig.provider = rebuildProvider(String(childConfig.model));
+    return { childParentSession: undefined, childManager: undefined, rebuildProvider };
   }
 
   return { childParentSession: undefined, childManager: undefined };

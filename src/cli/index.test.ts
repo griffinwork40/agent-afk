@@ -22,6 +22,9 @@ vi.mock('dotenv', () => ({
 vi.mock('../paths.js', () => ({
   getEnvConfigPath: () => '/tmp/afk-test.env',
   getAgentFrameworkDir: () => '/tmp/afk-agent-framework',
+  getJsonConfigPath: () => '/tmp/afk-config.json',
+  getStateDatabasePath: () => '/tmp/afk-state.db',
+  getLegacyJsonConfigPath: () => '/tmp/afk-legacy.json',
 }));
 
 // Stub everything else index.ts imports so we avoid real I/O or missing deps.

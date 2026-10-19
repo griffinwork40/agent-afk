@@ -13,6 +13,7 @@ import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
 import type { DelegationBudget } from '../../../agent/tools/delegation-budget.js';
 import { emitCard } from '../../_lib/emit-card.js';
+import { mintModelFallback } from './model-fallback.js';
 
 const BuildOutputSchema = z.object({
   status: z.enum(['PASS', 'FAIL']),
@@ -83,6 +84,7 @@ export async function runBuildPhase(
     },
     idPrefix: 'mint-build',
     agentType: 'mint-build',
+    ...mintModelFallback(parentSessionId),
     outputSchema: BuildOutputSchema,
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });

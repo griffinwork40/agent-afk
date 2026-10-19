@@ -94,6 +94,7 @@ import { registerTranscriptCommand } from './commands/transcript.js';
 import { registerInsightsCommand } from './commands/insights.js';
 import { registerCapturesCommand } from './commands/captures.js';
 import { registerDefectsCommand } from './commands/defects.js';
+import { registerAcpCommand } from './commands/acp.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
 import { loadConfig } from './config.js';
 import { installCredentialGate } from './first-run.js';
@@ -162,6 +163,7 @@ registerTranscriptCommand(program);
 registerInsightsCommand(program);
 registerCapturesCommand(program);
 registerDefectsCommand(program);
+registerAcpCommand(program);
 
 // Add aliases
 program.commands.find((c) => c.name() === 'chat')?.alias('c');

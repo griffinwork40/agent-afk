@@ -15,6 +15,7 @@ import {
   teardownBackgroundWorktree,
 } from './handlers/worktree-managed.background.js';
 import type { StreamCutProbe } from '../subagent/stream-cut-retry.js';
+import type { ForkSubagentOptions } from '../subagent/fork-types.js';
 import { debugLog } from '../../utils/debug.js';
 import { appendImageBlocks } from '../content/image-blocks.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
@@ -162,6 +163,8 @@ export interface ForkAndCheckCancelArgs {
     cwd?: string,
   ) => void;
   callId: string;
+  /** Default-tier model fallback from buildChildConfig (undefined = not eligible). */
+  modelFallback?: ForkSubagentOptions['modelFallback'];
 }
 
 export type ForkResult =
@@ -220,6 +223,7 @@ export async function forkAndCheckCancel(
       denyElicitations: true,
       progressEvents: parsed.progress_events,
       ...(nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist } : {}),
+      ...(args.modelFallback !== undefined ? { modelFallback: args.modelFallback } : {}),
     });
   } catch (err) {
     const message = errorMessage(err);

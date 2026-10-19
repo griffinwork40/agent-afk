@@ -11,6 +11,52 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.327.4] - 2026-10-19
+
+### Fixed
+- sanitise toolName in mcpUnknownToolMessage + make dedup test reach collision branch (#4157 follow-up) (#4173) (61baa1b3)
+- include offending value in startup quarantine warning (#4161 follow-up) (#4171) (5695f9b7)
+
+## [5.327.3] - 2026-10-19
+
+### Fixed
+- harden MCP failure-notice sanitiser and wire-prefix glob (#4157) (64df554b)
+
+## [5.327.2] - 2026-10-19
+
+### Fixed
+- cross-reference mirror guard comment + document per-call allocation nit (#4163) (aa0596dd)
+- apply reflowedPhysicalRows inflation to disarmed EXPAND path (#4162) (4fc3100c)
+- quarantine malformed runAt/expiresAt tasks at daemon startup (#4161) (7791f0f4)
+- advisory findings from #3986 — mixed provider on BillingUsage (#4160) (a6dac97b)
+- advisory closure-provenance test improvements from #4021 review (#4159) (5676dfcb)
+- add explicit test for pause→resume→same-text not superseded (#4158) (4b54ee4f)
+- add Known residual test for FS_MUTATING over-gate in risk-classifier (#4156) (c0b2dd37)
+- doc, test, comment, and regex-safety fixes for wind-down-final (#4155) (fec0d50e)
+- add single-quoted -c test case and document -C/--git-dir omission (#4154) (0b00bc7f)
+
+## [5.327.1] - 2026-10-19
+
+### Added
+- /export md|html — self-contained session export (#4026) (23c7c271)
+- afk acp — Agent Client Protocol JSON-RPC 2.0 stdio server (#4040) (b1f8b8c8)
+
+### Fixed
+- Linux CHROME_CONFIG_HOME/XDG_CONFIG_HOME ignored by real-Chrome probe; surface silent catch in error-hints (#4023) (c46be820)
+- bash write-shaped verification command also advances lastMutationIndex (#4028) (ca6edc96)
+- stop hardcoding bash/workspace_query as forbidden in compose prompt suffix (#4016) (f116f20d)
+- regenerate slash-command reference after /handoffs landed (#4164) (875c97e5)
+
+## [5.327.0] - 2026-10-19
+
+### Added
+- add /handoffs and /handoffs:answer REPL slash commands (#4027) (e9dba5f2)
+- POST /api/handoffs/:taskId/answer with CSRF + responder identity (#4033) (2c328d93)
+- fall back to parent model when the default subagent model is rejected (#4117) (bc465c2f)
+
+### Fixed
+- stop LLM ghost-text suggestions from truncating mid-word (#4142) (c663ec63)
+
 ## [5.326.3] - 2026-10-19
 
 ### Added

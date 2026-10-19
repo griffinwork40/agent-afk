@@ -302,7 +302,15 @@ export type SessionPhaseName =
   // `uncachedInput`, `cacheRead`, `cacheWrite`, `output`); consumers derive
   // the post-cancel delta by subtracting the `cancelled` row's watermark.
   // At most one per run; only emitted when the delta is non-zero.
-  | 'billing_settled';
+  | 'billing_settled'
+  // Default-tier subagent model was rejected by the backend (a typed
+  // ModelRejectedError, classified from structured provider error fields)
+  // before the child made any progress, and the handle re-ran it once on the
+  // parent session model (subagent/handle.model-fallback.ts). Emitted once,
+  // before the retry starts. `metadata`: `subagentId`, `fromModel`, `toModel`,
+  // `reason` (≤200 chars of the provider error). Only forks whose model came
+  // from the default tier are eligible; explicit models fail loudly.
+  | 'subagent_model_fallback';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

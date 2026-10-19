@@ -68,6 +68,11 @@ export const READONLY_BASH_DISABLED_REASON =
  * {@link READONLY_BASH_DISABLED_REASON}. Returns that reason in exactly that
  * case so the model learns about git_read on its first denied call;
  * `undefined` (keep the generic reason) otherwise.
+ *
+ * Mirror: `checkReadOnlyBash` in `dispatcher.pre-dispatch-gates.ts` carries an
+ * identical guard (`toolName === 'bash' && readOnlyBash && isReadOnlyGitToolEnabled()`)
+ * as a backstop for any path that reaches the dispatcher with bash still
+ * admitted. If this predicate changes, update that function too (and vice versa).
  */
 export function readOnlyBashDenialOverride(toolName: string, readOnlyBash: boolean): string | undefined {
   return toolName === 'bash' && readOnlyBash && isReadOnlyGitToolEnabled() ? READONLY_BASH_DISABLED_REASON : undefined;

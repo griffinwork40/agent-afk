@@ -24,6 +24,7 @@ import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
 import type { DelegationBudget } from '../../../agent/tools/delegation-budget.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { mintModelFallback } from './model-fallback.js';
 
 export type ParallelizeDispatchResult =
   | { kind: 'skipped'; reason: 'too-few-files' | 'skill-body-missing' }
@@ -170,6 +171,7 @@ export async function runParallelizeDispatch(
         },
         idPrefix: 'mint-parallelize',
         agentType: 'mint-parallelize',
+        ...mintModelFallback(parentSession.sessionId),
         ...(skillCallId ? { parentId: skillCallId } : {}),
       });
       const result = await handle.runToResult(JSON.stringify({ plan }));

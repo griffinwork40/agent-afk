@@ -130,4 +130,24 @@ export const PATHS_ENV_REGISTRY = [
     required: false,
     category: 'process',
   },
+  {
+    name: 'CHROME_CONFIG_HOME',
+    description:
+      'Linux only. When set, Chrome stores its profile under $CHROME_CONFIG_HOME/<channel-dir> instead of ' +
+      '$XDG_CONFIG_HOME/<channel-dir>. Mirrors the override that chrome-devtools-mcp/Puppeteer apply when ' +
+      'locating DevToolsActivePort so the real-Chrome probe checks the same path.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'XDG_CONFIG_HOME',
+    description:
+      'Linux XDG base-dir spec override for per-user config files. When set (and CHROME_CONFIG_HOME is not), ' +
+      'Chrome stores its profile under $XDG_CONFIG_HOME/<channel-dir>. Mirrors the override that ' +
+      'chrome-devtools-mcp/Puppeteer apply when locating DevToolsActivePort.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
 ] as const satisfies readonly EnvVarMeta[];

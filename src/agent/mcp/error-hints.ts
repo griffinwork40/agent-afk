@@ -74,8 +74,16 @@ export function applyMcpErrorHints(
       if (!rule.appliesTo(serverName, config)) continue;
       const extra = rule.hint(result.content, config);
       if (extra !== undefined) return { ...result, content: `${result.content}\n\n${extra}` };
-    } catch {
+    } catch (err) {
       // A hint is best-effort decoration; never let it break a tool result.
+      // Log so the failure is visible in stderr rather than silently swallowed.
+      // The write itself is guarded: stderr may be destroyed (closed fd, daemon
+      // redirect) and process.stderr.write() can throw ERR_STREAM_DESTROYED.
+      try {
+        process.stderr.write(`[afk] mcp error-hint rule "${rule.id}" threw: ${String(err)}\n`);
+      } catch {
+        // ignore — best-effort logging must never surface to callers
+      }
     }
   }
   return result;
