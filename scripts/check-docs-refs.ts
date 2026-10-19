@@ -20,7 +20,11 @@ export function formatFinding(path: string, finding: LineFinding): string {
 }
 
 export function checkDocsRefs(pages: readonly DocsPage[], known: KnownRefs): string[] {
-  return pages.flatMap((page) => pageFindings(page.path, stripComments(page.text), ignoredLines(stripComments(page.text)), known)
+  // Contract: ignoredLines reads raw text so it detects ignore markers written as MDX comments
+  // ({/* docs-refs-ignore-* */}), which stripComments blanks. pageFindings receives stripped text
+  // so comment bodies never produce spurious findings. Both use the same line count because
+  // stripComments is line-preserving (replaces non-newline chars with spaces only).
+  return pages.flatMap((page) => pageFindings(page.path, stripComments(page.text), ignoredLines(page.text), known)
     .map((finding) => formatFinding(page.path, finding)));
 }
 

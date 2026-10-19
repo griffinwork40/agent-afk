@@ -108,12 +108,15 @@ describe('docs refs: slash, config, tools, hooks', () => {
 describe('docs refs: comments and opt-outs', () => {
   it('ignores comments, ignore-next-line, and ignore blocks without shifting line numbers', () => {
     expect(check('{/* AFK_NOPE */}\n<!-- `/nope` -->')).toEqual([]);
-    expect(check('{/* docs-refs-ignore-next-line */}\nThe old `/bypass` command.\n`/bypass`')).toEqual(['guides/x.mdx:2: slash /bypass not found', 'guides/x.mdx:3: slash /bypass not found']);
-    expect(check('{/* docs-refs-ignore-start */}\n`/a1`\n`/b2`\n{/* docs-refs-ignore-end */}\n`/zq9x`')).toEqual(['guides/x.mdx:2: slash /a1 not found (did you mean /cp?)', 'guides/x.mdx:3: slash /b2 not found (did you mean /cp?)', 'guides/x.mdx:5: slash /zq9x not found']);
+    expect(check('{/* docs-refs-ignore-next-line */}\nThe old `/bypass` command.\n`/bypass`')).toEqual(['guides/x.mdx:3: slash /bypass not found']);
+    expect(check('{/* docs-refs-ignore-start */}\n`/a1`\n`/b2`\n{/* docs-refs-ignore-end */}\n`/zq9x`')).toEqual(['guides/x.mdx:5: slash /zq9x not found']);
   });
-  it('ignore markers inside MDX comments do NOT suppress findings', () => {
-    // The ignore marker is inside a comment — stripComments blanks it — so it should NOT suppress
-    expect(check('{/* docs-refs-ignore-next-line\n*/}\nThe old `/bypass` command.')).toContain('guides/x.mdx:3: slash /bypass not found');
+  it('ignore markers written as MDX comments suppress findings (convention: markers live in {/* */})', () => {
+    // Contract: ignoredLines reads raw text so {/* docs-refs-ignore-* */} markers work as intended.
+    // stripComments is line-preserving so line numbers stay aligned between findings and ignored set.
+    expect(check('{/* docs-refs-ignore-next-line */}\nThe old `/bypass` command.\n`/bypass`')).toEqual(['guides/x.mdx:3: slash /bypass not found']);
+    // Marker on line 1 suppresses line 2 only; line 3 is still reported.
+    expect(check('{/* docs-refs-ignore-start */}\n`/a1`\n{/* docs-refs-ignore-end */}\n`/zq9x`')).toEqual(['guides/x.mdx:4: slash /zq9x not found']);
   });
 });
 
