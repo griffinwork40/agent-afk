@@ -415,3 +415,84 @@ describe('serverWirePrefixes — self-hash edge case (item 4, #4095)', () => {
     expect(new Set(prefixes).size).toBe(prefixes.length);
   });
 });
+
+// ---------------------------------------------------------------------------
+// F5 — hostile server name sanitisation (backtick, U+2028/2029, controls, overlong)
+// ---------------------------------------------------------------------------
+
+describe('sanitiseServerName — hostile server names (#4157)', () => {
+  it('replaces backticks with single-quotes', () => {
+    const notice = buildMcpFailureNotice([
+      { serverName: '`injected`', status: 'error', error: 'err' },
+    ]);
+    expect(notice).toBeDefined();
+    // Backticks must not survive into the quoted server-name span.
+    expect(notice).not.toContain('`');
+    expect(notice).toContain("'injected'");
+  });
+
+  it('collapses U+2028 (LINE SEPARATOR) in server name', () => {
+    const notice = buildMcpFailureNotice([
+      { serverName: 'before\u2028after', status: 'error', error: 'err' },
+    ]);
+    expect(notice).toBeDefined();
+    expect(notice).not.toContain('\u2028');
+    expect(notice).toContain('before');
+    expect(notice).toContain('after');
+  });
+
+  it('collapses U+2029 (PARAGRAPH SEPARATOR) in server name', () => {
+    const notice = buildMcpFailureNotice([
+      { serverName: 'before\u2029after', status: 'error', error: 'err' },
+    ]);
+    expect(notice).toBeDefined();
+    expect(notice).not.toContain('\u2029');
+  });
+
+  it('collapses ASCII control characters in server name', () => {
+    const notice = buildMcpFailureNotice([
+      { serverName: 'ctrl\x00null\x1Funit\x7Fdel', status: 'error', error: 'err' },
+    ]);
+    expect(notice).toBeDefined();
+    expect(notice).not.toMatch(/[\x00-\x1F\x7F]/);
+    expect(notice).toContain('ctrl');
+    expect(notice).toContain('null');
+  });
+
+  it('caps an overlong server name at 128 code points', () => {
+    const longName = 'x'.repeat(300);
+    const notice = buildMcpFailureNotice([
+      { serverName: longName, status: 'error', error: 'err' },
+    ]);
+    expect(notice).toBeDefined();
+    // Extract the server name from the quoted span: Server "<name>" failed
+    const nameMatch = notice!.match(/Server "([^"]*)"/);
+    expect(nameMatch).not.toBeNull();
+    expect(Array.from(nameMatch![1]!).length).toBeLessThanOrEqual(128);
+  });
+
+  it('mcpUnknownToolMessage also sanitises hostile server names', () => {
+    const states = [
+      { serverName: '`bad\u2028srv`', status: 'error', error: 'err' },
+    ];
+    const wireName = buildMcpToolName('`bad\u2028srv`', 'tool');
+    const msg = mcpUnknownToolMessage(wireName, states);
+    expect(msg).toBeDefined();
+    expect(msg).not.toContain('`');
+    expect(msg).not.toContain('\u2028');
+  });
+
+  it('handles surrogate pairs at the truncation boundary without splitting', () => {
+    // 127 ASCII chars + one emoji (2 UTF-16 code units, 1 code point) = 128 code points
+    const name = 'a'.repeat(127) + '😀';
+    const notice = buildMcpFailureNotice([
+      { serverName: name, status: 'error', error: 'err' },
+    ]);
+    expect(notice).toBeDefined();
+    const nameMatch = notice!.match(/Server "([^"]*)"/);
+    expect(nameMatch).not.toBeNull();
+    // The emoji must survive intact (not be split into lone surrogates).
+    expect(nameMatch![1]).toContain('😀');
+    expect(Array.from(nameMatch![1]!).length).toBeLessThanOrEqual(128);
+  });
+});

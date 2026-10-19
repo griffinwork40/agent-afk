@@ -20,7 +20,7 @@ import { redactSecrets } from '../redact-secrets.js';
 import { serverWirePrefixes } from './naming.js';
 
 /**
- * Maximum length (in characters) of the sanitised error snippet embedded in
+ * Maximum length (in code points) of the sanitised error snippet embedded in
  * model-visible text.  Keeps the notice bounded regardless of how the caller
  * obtained the raw error string (e.g. the `getMcpServerStates` dispatcher
  * option accepts any accessor, not just the 200-char-capped `McpManager`
@@ -28,9 +28,11 @@ import { serverWirePrefixes } from './naming.js';
  */
 const SANITISED_ERROR_MAX_LEN = 300;
 
+/** Maximum length (in code points) for a sanitised server name. */
+const SANITISED_NAME_MAX_LEN = 128;
+
 /**
- * Sanitise untrusted server error text before splicing it into a framework
- * instruction sentence.
+ * Shared normaliser for untrusted text before it enters model-visible prose.
  *
  * - Collapses ASCII control characters (U+0000–U+001F, U+007F) and the
  *   Unicode line-terminator characters U+2028 / U+2029 to spaces, so the
@@ -40,30 +42,43 @@ const SANITISED_ERROR_MAX_LEN = 300;
  *   markdown code span inside a model instruction.
  * - Neutralises embedded double-quotes so the text stays inside its
  *   surrounding quoted datum without breaking the instruction prose.
- * - Caps the result at {@link SANITISED_ERROR_MAX_LEN} characters so the
- *   notice length is bounded independently of the raw error source.
+ * - Caps the result at `maxLen` code points (not UTF-16 code units) so
+ *   surrogate pairs are never split.
  */
-function sanitiseErrorText(raw: string): string {
+function normaliseUntrustedText(raw: string, maxLen: number): string {
   // Collapse ASCII controls + Unicode line terminators to a single space.
   const oneLine = raw.replace(/[\x00-\x1F\x7F\u2028\u2029]/g, ' ').trim();
   // Replace backticks (markdown code-span openers) with single-quotes.
   const noTicks = oneLine.replace(/`/g, "'");
   // Neutralise embedded double-quotes so the text stays inside its quotes.
   const noQuotes = noTicks.replace(/"/g, "'");
-  // Enforce length cap.
-  return noQuotes.length <= SANITISED_ERROR_MAX_LEN
+  // Enforce length cap (code-point-safe via Array.from to avoid splitting
+  // surrogate pairs at the boundary).
+  const codePoints = Array.from(noQuotes);
+  return codePoints.length <= maxLen
     ? noQuotes
-    : noQuotes.slice(0, SANITISED_ERROR_MAX_LEN);
+    : codePoints.slice(0, maxLen).join('');
+}
+
+/**
+ * Sanitise untrusted server error text before splicing it into a framework
+ * instruction sentence.
+ *
+ * Delegates to {@link normaliseUntrustedText} with the error-text length cap.
+ */
+function sanitiseErrorText(raw: string): string {
+  return normaliseUntrustedText(raw, SANITISED_ERROR_MAX_LEN);
 }
 
 /**
  * Sanitise an operator-authored server name before embedding it in
  * model-visible text.  Config keys are trusted (project `.mcp.json` requires
- * `AFK_ALLOW_PROJECT_MCP`), but we apply the same quote-neutralisation used
- * for error text and run `redactSecrets` for redaction consistency.
+ * `AFK_ALLOW_PROJECT_MCP`), but we apply the full shared normaliser (control
+ * chars, backticks, quotes, length cap) and run `redactSecrets` for
+ * redaction consistency.
  */
 function sanitiseServerName(raw: string): string {
-  return redactSecrets(raw).replace(/"/g, "'");
+  return normaliseUntrustedText(redactSecrets(raw), SANITISED_NAME_MAX_LEN);
 }
 
 /** Minimal shape consumed from `McpManager.getServerStates()`. */
@@ -115,10 +130,7 @@ export function buildMcpFailureNotice(
     // When two prefixes exist the server has both a sanitized and a
     // hash-based prefix (overflow tools).  Name both globs so the model
     // knows the full set of unavailable tool-name patterns.
-    const globClause =
-      prefixes.length > 1
-        ? `Tools ${prefixes[0]}* and ${prefixes[1]}* cannot be used this session.`
-        : `Tools ${prefixes[0] ?? `mcp__${name}__`}* cannot be used this session.`;
+    const globClause = `Tools ${prefixes.map((p) => `${p}*`).join(' and ')} cannot be used this session.`;
     const safeName = sanitiseServerName(name);
     const safeReason = sanitiseErrorText(reason);
     return (
