@@ -252,6 +252,8 @@ async function handleSessionPrompt(
           ? String(event.metadata.sessionId)
           : undefined;
       } else if (event.type === 'error') {
+        // H2: remove errored session so subsequent prompts don't hit a dead handle
+        state.sessions.delete(sessionId);
         // Fix #6: don't forward internal error message
         const safeMsg = 'Internal server error';
         process.stderr.write(`[acp] ${event.error.stack ?? event.error.message}\n`);
@@ -261,6 +263,15 @@ async function handleSessionPrompt(
         );
         return;
       }
+    }
+
+    // H1: if the loop exited due to abort, send a cancellation error instead of done
+    if (entry.abort.signal.aborted) {
+      await writeJson(
+        state.opts.output,
+        errorResponse(req.id, -32001, 'Cancelled'),
+      );
+      return;
     }
 
     // Final done frame — only this carries the request id (fix #2)
@@ -274,10 +285,16 @@ async function handleSessionPrompt(
       successResponse(req.id, { type: 'done', update: doneUpdate, text: assistantText }),
     );
   } catch (err) {
-    // Fix #6: log full error to stderr, send generic message to client
-    const safeMsg = 'Internal server error';
+    // H2: remove session on unexpected error so the handle isn't reused
+    state.sessions.delete(sessionId);
+    // H3: guard writeJson against a broken pipe so the throw doesn't escape
+    // Fix #6: log full error, send generic message to client
     if (err instanceof Error) process.stderr.write(`[acp] ${err.stack ?? err.message}\n`);
-    await writeJson(state.opts.output, errorResponse(req.id, INTERNAL_ERROR, safeMsg));
+    try {
+      await writeJson(state.opts.output, errorResponse(req.id, INTERNAL_ERROR, 'Internal server error'));
+    } catch {
+      // output is closed; nothing more to do
+    }
   }
 }
 

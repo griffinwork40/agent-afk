@@ -8,6 +8,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PassThrough } from 'node:stream';
+import os from 'node:os';
+import { realpathSync } from 'node:fs';
 import type { OutputEvent } from '../../agent/types/session-types.js';
 
 // ---------------------------------------------------------------------------
@@ -557,9 +559,12 @@ describe('ACP server — protocol errors', () => {
 
 describe('ACP server — cwd validation', () => {
   it('rejects cwd outside process.cwd()', async () => {
+    // H4: use os.tmpdir() realpath — guaranteed to exist on all platforms
+    // (including Windows) and guaranteed to be outside process.cwd() in CI.
+    const outsideCwd = realpathSync(os.tmpdir());
     const results = await runScenario([
       req(1, 'initialize'),
-      req(2, 'session/new', { cwd: '/etc' }),
+      req(2, 'session/new', { cwd: outsideCwd }),
     ]) as Array<{ id: number; error?: { code: number; message: string } }>;
 
     const res = results.find((r) => r.id === 2);
