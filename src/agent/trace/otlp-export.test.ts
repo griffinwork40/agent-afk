@@ -11,6 +11,10 @@
  *   - Non-tool/subagent events attach as span events on the root.
  *   - Malformed count surfaces as afk.trace.malformed attribute.
  *   - Orphaned started event (no completed) does not crash.
+ *   - Unsealed trace root status is UNSET (not OK) — fix #4106 item 1.
+ *   - completed-only tool records emit a best-effort span — fix #4106 item 2.
+ *   - errorHead omitted by default; included with includeErrorDetails — fix #4106 item 3.
+ *   - background_agent events produce agent.invoke spans — fix #4106 item 4.
  *
  * @module agent/trace/otlp-export.test
  */
@@ -286,5 +290,177 @@ describe('traceToOtlp', () => {
     const r1 = traceToOtlp([], { sessionId: SESSION_ID });
     const r2 = traceToOtlp([], { sessionId: SESSION_ID });
     expect(allSpans(r1)[0]!.spanId).toBe(allSpans(r2)[0]!.spanId);
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix #4106 item 1: root span status UNSET for unsealed traces
+  // -------------------------------------------------------------------------
+
+  it('unsealed trace (no session_sealed) has root status UNSET (code 0)', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'started', toolUseId: 'tu1', name: 'bash', inputBytes: 5 } }),
+    ];
+    const result = traceToOtlp(events, { sessionId: SESSION_ID });
+    const [root] = allSpans(result);
+    // Must be UNSET, not OK — an unsealed trace is not successful.
+    expect(root!.status.code).toBe(0);
+  });
+
+  it('succeeded session_sealed promotes root status to OK (code 1)', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:01.000Z', seq: 0, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-01-01T00:00:01.000Z' } }),
+    ];
+    const result = traceToOtlp(events, { sessionId: SESSION_ID });
+    const [root] = allSpans(result);
+    expect(root!.status.code).toBe(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix #4106 item 2: completed-only tool records emit best-effort spans
+  // -------------------------------------------------------------------------
+
+  it('completed-only tool record (no started) emits a best-effort span', () => {
+    const events: TraceEvent[] = [
+      // Only a completed event — no matching started (e.g. circuit-breaker synthetic result).
+      ev({ ts: '2026-01-01T00:00:01.000Z', seq: 0, kind: 'tool_call', payload: {
+        phase: 'completed', toolUseId: 'orphan-complete', name: 'bash',
+        resultBytes: 100, isError: false, truncated: false, durationMs: 200,
+      }}),
+    ];
+    const result = traceToOtlp(events, { sessionId: SESSION_ID });
+    const spans = allSpans(result);
+    expect(spans).toHaveLength(2); // root + best-effort tool span
+    const tool = findSpan(spans, 'bash')!;
+    expect(tool).toBeDefined();
+    expect(tool.name).toBe('tool.invoke/bash');
+    expect(attr(tool, 'afk.tool.best_effort')).toBe(true);
+    expect(attr(tool, 'afk.tool.result_bytes')).toBe('100');
+    expect(tool.status.code).toBe(1); // completed without error → OK
+  });
+
+  it('completed-only failed tool record emits best-effort span with ERROR status', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:01.000Z', seq: 0, kind: 'tool_call', payload: {
+        phase: 'completed', toolUseId: 'orphan-err', name: 'write_file',
+        resultBytes: 0, isError: true, truncated: false, durationMs: 10,
+        failureClass: 'permission-denied',
+      }}),
+    ];
+    const result = traceToOtlp(events, { sessionId: SESSION_ID });
+    const spans = allSpans(result);
+    const tool = findSpan(spans, 'write_file')!;
+    expect(tool).toBeDefined();
+    expect(tool.status.code).toBe(2);
+    expect(attr(tool, 'afk.tool.best_effort')).toBe(true);
+    expect(attr(tool, 'afk.tool.failure_class')).toBe('permission-denied');
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix #4106 item 3: errorHead omitted by default; opt-in via includeErrorDetails
+  // -------------------------------------------------------------------------
+
+  it('errorHead is omitted by default', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'started', toolUseId: 'tu-err', name: 'bash', inputBytes: 5 } }),
+      ev({ ts: '2026-01-01T00:00:01.000Z', seq: 1, kind: 'tool_call', payload: {
+        phase: 'completed', toolUseId: 'tu-err', name: 'bash',
+        resultBytes: 0, isError: true, truncated: false, durationMs: 10,
+        failureClass: 'exec-error', errorHead: 'Error: secret-token=abc123',
+      }}),
+    ];
+    const result = traceToOtlp(events, { sessionId: SESSION_ID });
+    const spans = allSpans(result);
+    const tool = findSpan(spans, 'bash')!;
+    expect(attr(tool, 'afk.tool.error_head')).toBeUndefined();
+  });
+
+  it('errorHead is included when includeErrorDetails is true', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'started', toolUseId: 'tu-err2', name: 'bash', inputBytes: 5 } }),
+      ev({ ts: '2026-01-01T00:00:01.000Z', seq: 1, kind: 'tool_call', payload: {
+        phase: 'completed', toolUseId: 'tu-err2', name: 'bash',
+        resultBytes: 0, isError: true, truncated: false, durationMs: 10,
+        failureClass: 'exec-error', errorHead: 'Error: command not found',
+      }}),
+    ];
+    const result = traceToOtlp(events, { sessionId: SESSION_ID, includeErrorDetails: true });
+    const spans = allSpans(result);
+    const tool = findSpan(spans, 'bash')!;
+    expect(attr(tool, 'afk.tool.error_head')).toBe('Error: command not found');
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix #4106 item 4: background_agent events produce agent.invoke spans
+  // -------------------------------------------------------------------------
+
+  it('background_agent started/completed produces an agent.invoke span', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:00.000Z', seq: 0, kind: 'background_agent', payload: {
+        transition: 'started', jobId: 'job1', subagentId: 'bg-sub1',
+        label: 'nightly-sweep', model: 'claude-haiku',
+      }}),
+      ev({ ts: '2026-01-01T00:01:00.000Z', seq: 1, kind: 'background_agent', payload: {
+        transition: 'completed', jobId: 'job1', subagentId: 'bg-sub1',
+        durationMs: 60000, outputBytes: 500,
+      }}),
+    ];
+    const result = traceToOtlp(events, { sessionId: SESSION_ID });
+    const spans = allSpans(result);
+    expect(spans).toHaveLength(2); // root + bg agent span
+    const bgSpan = spans.find((s) => s.name.startsWith('agent.invoke'))!;
+    expect(bgSpan).toBeDefined();
+    expect(bgSpan.name).toBe('agent.invoke/background/nightly-sweep');
+    expect(attr(bgSpan, 'gen_ai.operation.name')).toBe('agent.invoke');
+    expect(attr(bgSpan, 'gen_ai.request.model')).toBe('claude-haiku');
+    expect(attr(bgSpan, 'afk.subagent.id')).toBe('bg-sub1');
+    expect(bgSpan.status.code).toBe(1); // completed → OK
+  });
+
+  it('background_agent failed sets ERROR status on the agent.invoke span', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:00.000Z', seq: 0, kind: 'background_agent', payload: {
+        transition: 'started', jobId: 'job2', subagentId: 'bg-sub2',
+        label: 'scan', model: 'claude-haiku',
+      }}),
+      ev({ ts: '2026-01-01T00:00:10.000Z', seq: 1, kind: 'background_agent', payload: {
+        transition: 'failed', jobId: 'job2', subagentId: 'bg-sub2',
+        durationMs: 10000, errorClass: 'TimeoutError', errorMessage: 'timed out',
+      }}),
+    ];
+    const result = traceToOtlp(events, { sessionId: SESSION_ID });
+    const spans = allSpans(result);
+    const bgSpan = spans.find((s) => s.name.startsWith('agent.invoke'))!;
+    expect(bgSpan.status.code).toBe(2);
+  });
+
+  it('tool calls attributed to a background_agent subagentId become grandchildren', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:00.000Z', seq: 0, kind: 'background_agent', payload: {
+        transition: 'started', jobId: 'job3', subagentId: 'bg-sub3',
+        label: 'indexer', model: 'claude-haiku',
+      }}),
+      ev({ ts: '2026-01-01T00:00:01.000Z', seq: 1, kind: 'tool_call', payload: {
+        phase: 'started', toolUseId: 'tu-bg', name: 'glob', inputBytes: 8, subagentId: 'bg-sub3',
+      }}),
+      ev({ ts: '2026-01-01T00:00:02.000Z', seq: 2, kind: 'tool_call', payload: {
+        phase: 'completed', toolUseId: 'tu-bg', name: 'glob', resultBytes: 200,
+        isError: false, truncated: false, durationMs: 50, subagentId: 'bg-sub3',
+      }}),
+      ev({ ts: '2026-01-01T00:01:00.000Z', seq: 3, kind: 'background_agent', payload: {
+        transition: 'completed', jobId: 'job3', subagentId: 'bg-sub3',
+        durationMs: 60000, outputBytes: 300,
+      }}),
+    ];
+    const result = traceToOtlp(events, { sessionId: SESSION_ID });
+    const spans = allSpans(result);
+    expect(spans).toHaveLength(3); // root + bg agent + tool
+
+    const root = findSpan(spans, 'afk.session')!;
+    const bgSpan = spans.find((s) => s.name.startsWith('agent.invoke'))!;
+    const tool = findSpan(spans, 'glob')!;
+
+    expect(bgSpan.parentSpanId).toBe(root.spanId);
+    expect(tool.parentSpanId).toBe(bgSpan.spanId);
+    expect(attr(tool, 'afk.subagent.id')).toBe('bg-sub3');
   });
 });
