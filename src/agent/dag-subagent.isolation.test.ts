@@ -55,6 +55,8 @@ vi.mock('./tools/handlers/worktree-managed.background.js', () => ({
   lockWorktreeForBackground,
 }));
 
+
+
 import { runSubagentDAG, type SubagentDAGNode } from './dag-subagent.js';
 import { dispatchDagNode } from './dag-subagent.dispatch.js';
 
@@ -131,7 +133,14 @@ describe('runSubagentDAG — isolation:"worktree" wiring', () => {
   // (1) Happy path: worktree created, fork config cwd === worktree path.
   // -------------------------------------------------------------------------
   describe('shared setup preserves DAG-specific semantics', () => {
-    it('still isolates read-only nodes without a background lock and keeps the supplied counter', async () => {
+    // Contract: setupDagIsolation hard-codes childWriteCapable:true (#4139).
+    // DAG nodes always use the write-capable worktree path; canUseTool
+    // restrictions are enforced at the fork level, not the worktree level.
+    // The read-only skip branch in setupIsolationWorktree is only reached
+    // via the agent-tool path. createIsolatedWorktree being called here
+    // (not skipped) confirms childWriteCapable:true was wired — if it were
+    // false the worktree creation call would be short-circuited.
+    it('creates an isolation worktree even for deny-everything canUseTool nodes (childWriteCapable:true, #4139)', async () => {
       createIsolatedWorktree.mockResolvedValue(ISO_RESULT);
       const handle = makeFakeHandle('ok');
       const manager = { forkSubagent: vi.fn(async () => handle) } as unknown as SubagentManager;
@@ -140,6 +149,8 @@ describe('runSubagentDAG — isolation:"worktree" wiring', () => {
         { ...makeIsoNode(), canUseTool: async () => ({ behavior: 'deny' as const, message: 'read only' }) },
         {}, signal, { manager, parentSession: makeParent(), nodes: [], edges: [], anchorCwd: '/repo' }, 0, 42,
       );
+      // createIsolatedWorktree must be called: proves childWriteCapable:true
+      // reached setupIsolationWorktree (false would have skipped it).
       expect(createIsolatedWorktree).toHaveBeenCalledWith({
         cwd: '/repo', slugHint: expect.stringMatching(/^iso-compose-A-42-[a-z0-9]+$/), signal,
       });

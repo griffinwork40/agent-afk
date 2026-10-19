@@ -601,6 +601,21 @@ describe('parseAgentInput', () => {
         /must not be at or above a credential root/,
       );
     });
+
+    // --- Exact message pin (#4139) ---
+    // The remedy text in these messages is what child agents act on; wording
+    // drift in the concatenated/ternary fragments would go unnoticed by a
+    // prefix-regex match alone.
+    it('pins the full cwd sensitive-root error string so remedy text cannot drift (#4139)', () => {
+      const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
+      const quoted = JSON.stringify(appSupport);
+      expect(() => parseAgentInput({ prompt: 'p', cwd: appSupport })).toThrow(
+        `Agent tool cwd must not be at or above a credential root the bash ` +
+        `restriction protects (${appSupport}) — anchoring the child there would ` +
+        `silently drop that whole tree out of its bash gate. Pass a directory ` +
+        `outside it. Got: ${quoted}`,
+      );
+    });
   });
 
   describe('writeRoots', () => {
@@ -724,6 +739,28 @@ describe('parseAgentInput', () => {
       const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
       expect(() => parseAgentInput({ prompt: 'p', writeRoots: [appSupport] })).toThrow(
         /must not be at or above a credential root/,
+      );
+    });
+
+    // --- Exact message pin (#4139) ---
+    it('pins the full writeRoots breadth error string so remedy text cannot drift (#4139)', () => {
+      const home = os.homedir();
+      const quoted = JSON.stringify(home);
+      expect(() => parseAgentInput({ prompt: 'p', writeRoots: [home] })).toThrow(
+        `Agent tool writeRoots entries must not be a filesystem root, your home ` +
+        `directory, or an ancestor of it (checked after resolving symlinks) — ` +
+        `grant a specific subdirectory instead, got: ${quoted}`,
+      );
+    });
+
+    it('pins the full writeRoots sensitive-root error string so remedy text cannot drift (#4139)', () => {
+      const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
+      const quoted = JSON.stringify(appSupport);
+      expect(() => parseAgentInput({ prompt: 'p', writeRoots: [appSupport] })).toThrow(
+        `Agent tool writeRoots entries must not be at or above a credential root ` +
+        `the bash restriction protects (${appSupport}) — granting it would silently ` +
+        `drop that whole tree out of the child's bash gate. Grant a narrower ` +
+        `subdirectory instead. Got: ${quoted}`,
       );
     });
 
@@ -924,6 +961,32 @@ describe('parseAgentInput', () => {
       const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
       expect(() => parseAgentInput({ prompt: 'p', readRoots: [appSupport] })).toThrow(
         /must not be at or above a credential root/,
+      );
+    });
+
+    // --- Exact message pins (#4139) ---
+    it('pins the full readRoots breadth error string so remedy text cannot drift (#4139)', () => {
+      const home = os.homedir();
+      const quoted = JSON.stringify(home);
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [home] })).toThrow(
+        `Agent tool readRoots entries must not be a filesystem root, your home directory, ` +
+        `or an ancestor of it (checked after resolving symlinks) — grant specific ` +
+        `subdirectories, or the individual FILES you need: a single file is a valid ` +
+        `read root and grants exactly that file, which is how to reach home-root ` +
+        `dotfiles (e.g. "<home>/.zshrc", "<home>/.gitconfig") without granting the ` +
+        `home directory. Got: ${quoted}`,
+      );
+    });
+
+    it('pins the full readRoots sensitive-root error string so remedy text cannot drift (#4139)', () => {
+      const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
+      const quoted = JSON.stringify(appSupport);
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [appSupport] })).toThrow(
+        `Agent tool readRoots entries must not be at or above a credential root ` +
+        `the bash restriction protects (${appSupport}) — granting it would silently ` +
+        `drop that whole tree out of the child's bash gate. Grant a narrower ` +
+        `subdirectory, or the individual FILES you need: a single file is a valid ` +
+        `read root and grants exactly that file. Got: ${quoted}`,
       );
     });
 

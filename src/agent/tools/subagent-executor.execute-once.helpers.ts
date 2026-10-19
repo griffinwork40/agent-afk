@@ -43,9 +43,10 @@ export interface IsolationWorktreeResult {
   /** Paths needed to tear down the worktree on completion. */
   teardown: { repoRoot: string; worktreePath: string };
   /**
-   * Set when the repo-declared worktree setup (#3601) did not succeed. Already
-   * prepended to `parsed.prompt` for the child; the caller also surfaces it to
-   * the parent in the tool result.
+   * Set when the repo-declared worktree setup (#3601) did not succeed. For
+   * agent-tool callers it is prepended to `parsed.prompt` for the child; DAG
+   * callers wrap `promptBuilder` themselves (dag-subagent.dispatch.ts). The
+   * caller also surfaces it to the parent in the tool result.
    */
   setupNotice?: string;
 }
