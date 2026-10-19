@@ -20,7 +20,7 @@ export function formatFinding(path: string, finding: LineFinding): string {
 }
 
 export function checkDocsRefs(pages: readonly DocsPage[], known: KnownRefs): string[] {
-  return pages.flatMap((page) => pageFindings(page.path, stripComments(page.text), ignoredLines(page.text), known)
+  return pages.flatMap((page) => pageFindings(page.path, stripComments(page.text), ignoredLines(stripComments(page.text)), known)
     .map((finding) => formatFinding(page.path, finding)));
 }
 

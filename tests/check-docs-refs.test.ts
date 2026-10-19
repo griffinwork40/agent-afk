@@ -25,6 +25,13 @@ describe('docs refs: environment variables', () => {
     expect(check('Use AFK_MODLE.')).toEqual(['guides/x.mdx:1: env AFK_MODLE not found (did you mean AFK_MODEL?)']);
     expect(check('Use `AFK_GONE_*`.')).toEqual(['guides/x.mdx:1: env-pattern AFK_GONE_* not found']);
   });
+  it('ReDoS: pathological consecutive wildcards finish in <100ms', () => {
+    const start = Date.now();
+    // AFK_*<A>*<B>*<C> produces consecutive wildcards — must not backtrack catastrophically
+    check('AFK_*<A>*<B>*<C>_GONE');
+    check('AFK_<X><Y><Z><W>_SUFFIX_GONE');
+    expect(Date.now() - start).toBeLessThan(100);
+  });
 });
 
 describe('docs refs: afk command lines', () => {
@@ -101,8 +108,12 @@ describe('docs refs: slash, config, tools, hooks', () => {
 describe('docs refs: comments and opt-outs', () => {
   it('ignores comments, ignore-next-line, and ignore blocks without shifting line numbers', () => {
     expect(check('{/* AFK_NOPE */}\n<!-- `/nope` -->')).toEqual([]);
-    expect(check('{/* docs-refs-ignore-next-line */}\nThe old `/bypass` command.\n`/bypass`')).toEqual(['guides/x.mdx:3: slash /bypass not found']);
-    expect(check('{/* docs-refs-ignore-start */}\n`/a1`\n`/b2`\n{/* docs-refs-ignore-end */}\n`/zq9x`')).toEqual(['guides/x.mdx:5: slash /zq9x not found']);
+    expect(check('{/* docs-refs-ignore-next-line */}\nThe old `/bypass` command.\n`/bypass`')).toEqual(['guides/x.mdx:2: slash /bypass not found', 'guides/x.mdx:3: slash /bypass not found']);
+    expect(check('{/* docs-refs-ignore-start */}\n`/a1`\n`/b2`\n{/* docs-refs-ignore-end */}\n`/zq9x`')).toEqual(['guides/x.mdx:2: slash /a1 not found (did you mean /cp?)', 'guides/x.mdx:3: slash /b2 not found (did you mean /cp?)', 'guides/x.mdx:5: slash /zq9x not found']);
+  });
+  it('ignore markers inside MDX comments do NOT suppress findings', () => {
+    // The ignore marker is inside a comment — stripComments blanks it — so it should NOT suppress
+    expect(check('{/* docs-refs-ignore-next-line\n*/}\nThe old `/bypass` command.')).toContain('guides/x.mdx:3: slash /bypass not found');
   });
 });
 

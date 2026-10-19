@@ -41,7 +41,7 @@ export function envFindings(line: string, known: KnownRefs): RefFinding[] {
       if (part.startsWith('<') || part === '*') return '[A-Z0-9_]+';
       if (part.startsWith('{')) return `(?:${part.slice(1, -1).split(/[,|]/).map(escape).join('|')})`;
       return escape(part);
-    }).join('');
+    }).join('').replace(/(?:\[A-Z0-9_\]\+)+/g, '[A-Z0-9_]+');
     const regex = new RegExp(`^${source}${token.endsWith('_') && !/[<{*]/.test(token) ? '[A-Z0-9_]+' : ''}$`);
     if (![...known.env].some((name) => regex.test(name))) findings.push({ kind: 'env-pattern', token });
   }
