@@ -64,6 +64,8 @@ export interface ResetStateHost {
   resizeUnsub: (() => void) | null;
   resizeImmediateUnsub: (() => void) | null;
   disarmRows: number;
+  /** Snapshot of `stdout.columns` at disarm time — mirrors `disarmRows`. */
+  disarmCols: number;
   /** Queue-and-replay buffer for commitAbove calls deferred while suspended. */
   suspendCommitQueue: string[];
   /** Write observer installed by suspendInput; nulled by resetState on disarm. */
@@ -135,6 +137,7 @@ export function resetState(self: ResetStateHost): void {
   // Drop the between-turn resize snapshot — a fresh arm cycle has no
   // geometry yet (same as the bandGeometryStale reset above).
   self.disarmRows = 0;
+  self.disarmCols = 0; // mirrors disarmRows reset
   // Drop any active picker — a disarm during a picker would leave
   // the controller's resolve callback orphaned. The runPicker abort
   // path normally exits the picker first; this is defence-in-depth
