@@ -20,16 +20,50 @@ import { redactSecrets } from '../redact-secrets.js';
 import { serverWirePrefixes } from './naming.js';
 
 /**
+ * Maximum length (in characters) of the sanitised error snippet embedded in
+ * model-visible text.  Keeps the notice bounded regardless of how the caller
+ * obtained the raw error string (e.g. the `getMcpServerStates` dispatcher
+ * option accepts any accessor, not just the 200-char-capped `McpManager`
+ * field).
+ */
+const SANITISED_ERROR_MAX_LEN = 300;
+
+/**
  * Sanitise untrusted server error text before splicing it into a framework
- * instruction sentence.  Collapses CR/LF and other control characters to
- * spaces and neutralises embedded double-quotes so the text can be presented
- * as a quoted datum without breaking the surrounding instruction prose.
+ * instruction sentence.
+ *
+ * - Collapses ASCII control characters (U+0000–U+001F, U+007F) and the
+ *   Unicode line-terminator characters U+2028 / U+2029 to spaces, so the
+ *   text stays on a single logical line even for tokenisers and renderers
+ *   that treat those codepoints as newlines.
+ * - Replaces backticks with single-quotes so the snippet cannot open a
+ *   markdown code span inside a model instruction.
+ * - Neutralises embedded double-quotes so the text stays inside its
+ *   surrounding quoted datum without breaking the instruction prose.
+ * - Caps the result at {@link SANITISED_ERROR_MAX_LEN} characters so the
+ *   notice length is bounded independently of the raw error source.
  */
 function sanitiseErrorText(raw: string): string {
-  // Collapse all control characters (including CR/LF) to a single space.
-  const oneLine = raw.replace(/[\x00-\x1F\x7F]/g, ' ').trim();
+  // Collapse ASCII controls + Unicode line terminators to a single space.
+  const oneLine = raw.replace(/[\x00-\x1F\x7F\u2028\u2029]/g, ' ').trim();
+  // Replace backticks (markdown code-span openers) with single-quotes.
+  const noTicks = oneLine.replace(/`/g, "'");
   // Neutralise embedded double-quotes so the text stays inside its quotes.
-  return oneLine.replace(/"/g, "'");
+  const noQuotes = noTicks.replace(/"/g, "'");
+  // Enforce length cap.
+  return noQuotes.length <= SANITISED_ERROR_MAX_LEN
+    ? noQuotes
+    : noQuotes.slice(0, SANITISED_ERROR_MAX_LEN);
+}
+
+/**
+ * Sanitise an operator-authored server name before embedding it in
+ * model-visible text.  Config keys are trusted (project `.mcp.json` requires
+ * `AFK_ALLOW_PROJECT_MCP`), but we apply the same quote-neutralisation used
+ * for error text and run `redactSecrets` for redaction consistency.
+ */
+function sanitiseServerName(raw: string): string {
+  return redactSecrets(raw).replace(/"/g, "'");
 }
 
 /** Minimal shape consumed from `McpManager.getServerStates()`. */
@@ -64,6 +98,11 @@ export function failedMcpServers(
  *
  * The notice is prefixed with `[MCP]` so hook-layer parsers and log
  * scanners can identify it without substring-matching the prose.
+ *
+ * **Wire-prefix glob:** `serverWirePrefixes` returns two entries when a
+ * server name is long enough that some tools overflow into the hash-prefix
+ * path (see `naming.ts`).  Both globs are included in the notice so the
+ * model knows about all tool-name patterns it cannot use.
  */
 export function buildMcpFailureNotice(
   states: readonly McpServerStateLike[],
@@ -72,13 +111,20 @@ export function buildMcpFailureNotice(
   if (failed.length === 0) return undefined;
 
   const lines = failed.map(({ name, reason }) => {
-    // Use the sanitized wire prefix so the glob matches actual tool names.
-    const prefix = serverWirePrefixes(name)[0] ?? `mcp__${name}__`;
+    const prefixes = serverWirePrefixes(name);
+    // When two prefixes exist the server has both a sanitized and a
+    // hash-based prefix (overflow tools).  Name both globs so the model
+    // knows the full set of unavailable tool-name patterns.
+    const globClause =
+      prefixes.length > 1
+        ? `Tools ${prefixes[0]}* and ${prefixes[1]}* cannot be used this session.`
+        : `Tools ${prefixes[0] ?? `mcp__${name}__`}* cannot be used this session.`;
+    const safeName = sanitiseServerName(name);
     const safeReason = sanitiseErrorText(reason);
     return (
-      `[MCP] Server "${name}" failed to start. ` +
+      `[MCP] Server "${safeName}" failed to start. ` +
       `Error reported by the server (untrusted): "${safeReason}". ` +
-      `Tools ${prefix}* cannot be used this session. ` +
+      `${globClause} ` +
       `Tell the user plainly; do not speculate about other causes.`
     );
   });
@@ -116,9 +162,10 @@ export function mcpUnknownToolMessage(
 
   const { server, prefix } = bestMatch;
   const reason = redactSecrets(server.error ?? 'unknown error');
+  const safeName = sanitiseServerName(server.serverName);
   const safeReason = sanitiseErrorText(reason);
   return (
-    `MCP server "${server.serverName}" is configured but failed to connect. ` +
+    `MCP server "${safeName}" is configured but failed to connect. ` +
     `Error reported by the server (untrusted): "${safeReason}". ` +
     `Tool "${toolName}" is unavailable this session. ` +
     `Do NOT retry this tool or any ${prefix}* variant.`
