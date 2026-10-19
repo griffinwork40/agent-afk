@@ -158,6 +158,57 @@ describe('TerminalCompositor — resize while disarmed', () => {
     }
   });
 
+  it('EXPAND while disarmed with simultaneous column narrowing inflates pendingResizeErase', async () => {
+    // Regression for #4054 item 1: handleDisarmWindowResize was computing
+    // `bottom` as `disarmRows - 1 - extraRows` (logical rows only), without
+    // applying reflowedPhysicalRows inflation. When the EXPAND also narrowed
+    // columns, DECAWM autowrap reflows old rows wider than newCols into
+    // ceil(oldCols/newCols) physical rows, so the un-inflated erase range
+    // under-erases ghost rows above the logical top.
+    //
+    // Scenario: 24 rows × 200 cols → 40 rows × 80 cols while disarmed.
+    // Old rows painted at 200 cols reflow to ceil(200/80)=3 physical rows each
+    // on the 80-col terminal. logicalRows = disarmRows-1 = 23 (top=1..23),
+    // so physicalRows = 23×3 = 69 — bottom should be 69, clamped by
+    // flushResizeGhostErase to the new viewport (40).
+    stdout.rows = 24;
+    stdout.columns = 200;
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    type Internals = {
+      pendingResizeErase: { top: number; bottom: number; origin?: string } | null;
+      lastKnownCols: number;
+    };
+    try {
+      await c.arm();
+      c.repaint();
+      // After repaint, lastKnownCols should be 200.
+      expect((c as unknown as Internals).lastKnownCols).toBe(200);
+
+      c.disarm();
+
+      // Expand rows AND narrow columns while disarmed.
+      stdout.rows = 40;
+      stdout.columns = 80;
+
+      writes.clear();
+      await c.arm();
+
+      // pendingResizeErase.bottom must be inflated: logicalRows=23,
+      // rowsPerOldRow=ceil(200/80)=3, physicalRows=69, bottom=1+69-1=69.
+      const internals = c as unknown as Internals;
+      // The snapshot was consumed by arm()'s repaint, so read it from the
+      // emitted ghost-erase escapes instead.
+      const out = writes.all();
+      // With inflation the erase must reach above row 23 (the un-inflated
+      // logical bottom). Row 24 must be erased (first row beyond logical top).
+      expect(out, 'inflated ghost-erase must erase rows beyond logical bottom').toContain(
+        `\x1b[24;1H\x1b[2K`,
+      );
+    } finally {
+      c.disarm();
+    }
+  });
+
   it('double disarm does not leak listeners or throw', async () => {
     stdout.rows = 24;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });

@@ -105,7 +105,9 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const logicalRows = Math.max(0, logicalBottom - top + 1);
     const physicalRows = reflowedPhysicalRows(logicalRows, self.lastKnownCols, newCols);
     // bottom may exceed newRows after inflation; flushResizeGhostErase clamps it.
-    const bottom = top > 0 ? top + physicalRows - 1 : logicalBottom;
+    // Symmetric with the WIDTH-ONLY branch: no top===0 fallback needed because
+    // the if-guard below already blocks the top===0 case.
+    const bottom = top + physicalRows - 1;
     if (top > 0 && top <= bottom) {
       self.pendingResizeErase = { top, bottom, origin: 'expand' };
     }
@@ -244,8 +246,20 @@ export function handleDisarmWindowResize(self: LifecycleHost): void {
     // disarm); use row 1 as the conservative top so the erase covers the
     // full old footprint.
     const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
-    const bottom = Math.max(1, self.disarmRows - 1 - extraRows);
+    const logicalBottom = Math.max(1, self.disarmRows - 1 - extraRows);
     const top = 1;
+    const logicalRows = Math.max(0, logicalBottom - top + 1);
+    // Apply the same reflowedPhysicalRows inflation as the armed EXPAND path:
+    // if the EXPAND also narrowed columns (e.g. tmux adding rows while reducing
+    // cols), DECAWM autowrap reflows old rows wider than newCols into
+    // ceil(oldCols / newCols) physical rows — under-erasing ghost rows without
+    // this inflation. `disarmCols` is the column count snapshotted at disarm
+    // (parallel to disarmRows); `lastKnownCols` is zeroed by resetState() and
+    // cannot be used here.
+    const newCols = self.stdout.columns ?? 80;
+    const physicalRows = reflowedPhysicalRows(logicalRows, self.disarmCols, newCols);
+    // bottom may exceed liveRows after inflation; flushResizeGhostErase clamps.
+    const bottom = top + physicalRows - 1;
     if (top <= bottom) {
       self.pendingResizeErase = { top, bottom, origin: 'expand' };
     }
