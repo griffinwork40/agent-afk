@@ -37,7 +37,8 @@ function parsePosixStage(raw: string): PosixBaseline | null {
   if (!raw.trim()) return null;
   const parsed = JSON.parse(raw) as PosixBaseline;
   if (!parsed.entries || typeof parsed.entries !== 'object') throw new Error('Invalid POSIX baseline: missing entries');
-  for (const counts of Object.values(parsed.entries)) {
+  for (const [key, counts] of Object.entries(parsed.entries)) {
+    if (counts === null || typeof counts !== 'object') throw new Error(`Invalid POSIX baseline: entry value for "${key}" must be a plain object`);
     for (const v of Object.values(counts as Record<string, unknown>)) {
       if (!Number.isFinite(v)) throw new Error('Invalid POSIX baseline: non-finite count');
     }
@@ -52,7 +53,7 @@ function parseTypecheckStage(raw: string): TypecheckBaseline | null {
   return parsed;
 }
 
-/** Scans both the working tree and the staged index for leftover conflict markers. */
+/** Scans both the working tree and the staged index for leftover conflict markers. Changed files are found with --diff-filter=ACMR. */
 function assertCodeResolved(root: string, unmerged: string[]): void {
   const unresolved = unmerged.filter((file) => !GENERATED_PATHS.has(file));
   // Invariant: match marker lines, not inline fixture strings or // ===== dividers.

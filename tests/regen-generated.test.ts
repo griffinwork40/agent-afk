@@ -136,6 +136,7 @@ describe('regen-generated CLI', () => {
     conflict(baselineName, serializeBaseline(baseline(370, 'ours')), serializeBaseline(baseline(380, 'theirs', true)));
     const result = run();
     expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Merged ratchets:');
     expect(JSON.parse(git('show', `:${baselineName}`))).toEqual(baseline(380, 'ours', true));
     expect(git('diff', '--name-only', '--diff-filter=U')).toBe('');
     expect(git('diff', '--cached', '--name-only')).toContain(baselineName);
@@ -205,6 +206,37 @@ describe('regen-generated CLI', () => {
     expect(JSON.parse(git('show', `:${funcName}`))).toEqual(baseline(220, 'ours', true));
     expect(git('diff', '--name-only', '--diff-filter=U')).toBe('');
     expect(git('diff', '--cached', '--name-only')).toContain(funcName);
+  });
+
+  it('parsePosixStage: rejects non-object entry value and non-finite count', () => {
+    const posixName = '.posix-guard-baseline.json';
+    write('.gitattributes', `${baselineName} -merge\n${posixName} -merge\n`);
+    write(posixName, JSON.stringify({ entries: {} })); commit('base posix');
+
+    // Case 1: entry value is a number (non-object) — must be rejected.
+    conflict(posixName,
+      JSON.stringify({ entries: { 'file.ts': { R1: 1 } } }),
+      JSON.stringify({ entries: { 'file.ts': 42 } }),
+    );
+    const result1 = run();
+    expect(result1.status).toBe(1);
+    expect(result1.stderr).toContain('Invalid POSIX baseline');
+    expect(fs.existsSync(path.join(root, 'calls.log'))).toBe(false);
+
+    // Reset for case 2: entry value has a non-finite count (null is not finite).
+    git('merge', '--abort');
+    git('checkout', '-q', 'main');
+    git('branch', '-D', 'theirs');
+    write(posixName, JSON.stringify({ entries: {} }));
+    git('add', posixName); git('commit', '-qm', 'reset posix');
+    conflict(posixName,
+      JSON.stringify({ entries: { 'file.ts': { R1: 1 } } }),
+      JSON.stringify({ entries: { 'file.ts': { R1: null } } }),
+    );
+    const result2 = run();
+    expect(result2.status).toBe(1);
+    expect(result2.stderr).toContain('Invalid POSIX baseline: non-finite count');
+    expect(fs.existsSync(path.join(root, 'calls.log'))).toBe(false);
   });
 
   it('throws on invalid JSON (non-numeric errors) in a conflicted typecheck stage', () => {
