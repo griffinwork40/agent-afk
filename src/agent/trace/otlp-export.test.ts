@@ -365,7 +365,7 @@ describe('traceToOtlp', () => {
       ev({ ts: '2026-01-01T00:00:01.000Z', seq: 1, kind: 'tool_call', payload: {
         phase: 'completed', toolUseId: 'tu-err', name: 'bash',
         resultBytes: 0, isError: true, truncated: false, durationMs: 10,
-        failureClass: 'exec-error', errorHead: 'Error: secret-token=abc123',
+        errorHead: 'Error: secret-token=abc123',
       }}),
     ];
     const result = traceToOtlp(events, { sessionId: SESSION_ID });
@@ -380,7 +380,7 @@ describe('traceToOtlp', () => {
       ev({ ts: '2026-01-01T00:00:01.000Z', seq: 1, kind: 'tool_call', payload: {
         phase: 'completed', toolUseId: 'tu-err2', name: 'bash',
         resultBytes: 0, isError: true, truncated: false, durationMs: 10,
-        failureClass: 'exec-error', errorHead: 'Error: command not found',
+        errorHead: 'Error: command not found',
       }}),
     ];
     const result = traceToOtlp(events, { sessionId: SESSION_ID, includeErrorDetails: true });
