@@ -85,8 +85,12 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
       ? { openaiBaseUrl: ctx.baseUrl }
       : undefined;
     const provider = providers.resolve(model, hints);
-    if (typeof provider.complete !== 'function') return null;
-    const complete = provider.complete.bind(provider);
+    // Prefer the stop-reason variant so a reply cut at maxTokens is detectable
+    // (see ./suggest-reply); fall back to the text-only complete().
+    const complete = typeof provider.completeWithStop === 'function'
+      ? provider.completeWithStop.bind(provider)
+      : typeof provider.complete === 'function' ? provider.complete.bind(provider) : null;
+    if (complete === null) return null;
     // Invariant: the credential is resolved for the SUGGESTION model's
     // provider, never borrowed from the session (see ./suggest-credential).
     // Attached here, the single chokepoint both producers call through.

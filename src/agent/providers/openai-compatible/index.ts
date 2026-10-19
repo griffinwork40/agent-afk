@@ -17,6 +17,7 @@ import type {
   ProviderQuery,
   ProviderQueryArgs,
   ProviderCompleteArgs,
+  ProviderCompleteResult,
 } from '../../provider.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
 import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
@@ -54,7 +55,7 @@ import { applyReadOnlyGitPermissions, readOnlyGitSchemas } from '../../tools/rea
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
-import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
+import { completeWithWireWithStop, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
@@ -569,6 +570,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
    * `args.baseUrl` overrides the construction option when both are present.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
+    return (await this.completeWithStop(args)).text;
+  }
+
+  /** {@link complete} plus the stop reason (see ModelProvider.completeWithStop). */
+  async completeWithStop(args: ProviderCompleteArgs): Promise<ProviderCompleteResult> {
     const input: OpenAIOneShotInput = {
       model: args.model ?? 'gpt-4o-mini',
       system: args.system,
@@ -582,7 +588,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // setEndpointDefaults) so complete() matches query() credentials.
     if (this._defaultHeaders !== undefined) input.defaultHeaders = this._defaultHeaders;
     if (args.signal) input.signal = args.signal;
-    return completeWithWire(input);
+    return completeWithWireWithStop(input);
   }
 }
 

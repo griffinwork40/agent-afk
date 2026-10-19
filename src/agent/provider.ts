@@ -23,6 +23,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig } from './types/config-types.js';
 import type { ToolFailureClass } from './trace/types.js';
 import type { UsageLimitProvider } from '../utils/errors.js';
+import type { OneShotStopReason } from './providers/anthropic-direct/oneshot.js';
 
 /**
  * Normalized session identity emitted on the synthetic `session.init` event.
@@ -798,6 +799,16 @@ export interface ProviderCompleteArgs {
   baseUrl?: string;
 }
 
+/**
+ * Reply of {@link ModelProvider.completeWithStop}: the trimmed text plus why the
+ * model stopped. `'max_tokens'` means the reply was cut at the token cap, so
+ * its final word may be partial.
+ */
+export interface ProviderCompleteResult {
+  text: string;
+  stopReason: OneShotStopReason;
+}
+
 export interface ModelProvider {
   /** Human-friendly name for diagnostics. */
   readonly name: string;
@@ -809,6 +820,13 @@ export interface ModelProvider {
    * MUST feature-detect (`if (typeof provider.complete === 'function')`).
    */
   complete?(args: ProviderCompleteArgs): Promise<string>;
+  /**
+   * Optional {@link complete} variant that also reports the stop reason, so a
+   * small-budget caller can tell a finished reply from one cut at `maxTokens`.
+   * Same auth, error, and trimming contract as `complete()`. Callers MUST
+   * feature-detect and fall back to `complete()` when it is absent.
+   */
+  completeWithStop?(args: ProviderCompleteArgs): Promise<ProviderCompleteResult>;
   /**
    * Optional disposal hook. Releases provider-held resources — notably the
    * SQLite `MemoryStore` handle opened in the constructor. Callers that build a
