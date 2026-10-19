@@ -112,6 +112,44 @@ describe('sumBillingUsage', () => {
     expect(warnSpy.mock.calls[0]![0]).toMatch(/provider mismatch/);
     warnSpy.mockRestore();
   });
+
+  it('sumBillingUsage(undefined, mixedRecord) returns a copy without warning', () => {
+    // Identity path: a is absent, b is already 'mixed'.  The short-circuit must
+    // propagate 'mixed' without emitting a second warning.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mixed = sumBillingUsage(
+      anthropicBilling({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 }),
+      openAICompatibleBilling(20, 10, 3),
+    )!;
+    warnSpy.mockClear(); // discard the construction warn
+    const result = sumBillingUsage(undefined, mixed);
+    expect(result).toEqual(mixed);
+    expect(result).not.toBe(mixed); // must be a copy, not the same reference
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('re-summing a mixed record does not warn again', () => {
+    // Deserialized 'mixed' records should not flood the log on every accumulation.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mixed = sumBillingUsage(
+      anthropicBilling({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 }),
+      openAICompatibleBilling(20, 10, 3),
+    )!;
+    expect(mixed.provider).toBe('mixed');
+    warnSpy.mockClear(); // discard the one construction warn
+
+    const normal = anthropicBilling({ input_tokens: 5, output_tokens: 2 });
+    const result = sumBillingUsage(mixed, normal)!;
+    expect(result.provider).toBe('mixed');
+    expect(result.uncachedInput).toBe(mixed.uncachedInput + normal.uncachedInput);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    const result2 = sumBillingUsage(normal, mixed)!;
+    expect(result2.provider).toBe('mixed');
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
 });
 
 describe('sumProviderUsage carries billing (summed) beside the legacy fields', () => {

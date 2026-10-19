@@ -115,10 +115,13 @@ export interface ProviderUsage {
  *     different providers are summed (e.g. a multi-provider child session).
  *     Per-provider cache-hit metrics are not meaningful for a `mixed` bucket;
  *     only the `total` counters should be used. `BillingRollup.snapshot().byProvider`
- *     will surface a `'mixed'` key when this occurs.
+ *     will surface a `'mixed'` key when this occurs. `billingLifecycleFields`
+ *     propagates `provider` (including `'mixed'`) into `subagent_lifecycle`
+ *     payloads so the sentinel is visible in the trace.
  *
- * Rollups split by `provider` via `BillingRollup`; analytics consumers must
- * treat `byProvider` as an open map and handle unexpected keys gracefully.
+ * Rollups are split by `provider` via `BillingRollup` (schema:
+ * `BillingRollupSchema` in `trace/events.billing.ts`); analytics consumers
+ * must treat `byProvider` as an open map and handle unexpected keys gracefully.
  */
 export interface BillingUsage {
   provider: string;

@@ -84,14 +84,22 @@ export function sumBillingUsage(
 ): BillingUsage | undefined {
   if (!a) return b ? { ...b } : undefined;
   if (!b) return { ...a };
-  let provider = b.provider;
-  if (a.provider !== b.provider) {
+  // Short-circuit: if either input is already 'mixed', propagate without
+  // re-warning.  A deserialized 'mixed' record has already been flagged at
+  // construction time; warning again on every subsequent accumulation would
+  // flood the log with redundant noise.
+  let provider: string;
+  if (a.provider === 'mixed' || b.provider === 'mixed') {
+    provider = 'mixed';
+  } else if (a.provider !== b.provider) {
     // eslint-disable-next-line no-console
     console.warn(
       `[billing] sumBillingUsage: provider mismatch (${a.provider} vs ${b.provider}). ` +
         `Tagging result as 'mixed'. Child sessions should use a single provider per run.`,
     );
     provider = 'mixed';
+  } else {
+    provider = b.provider;
   }
   return {
     provider,

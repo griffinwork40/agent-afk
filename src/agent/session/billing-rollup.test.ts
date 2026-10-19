@@ -67,6 +67,10 @@ describe('BillingRollup', () => {
     expect(snap.byProvider['mixed']).toEqual({ uncachedInput: 210, cacheRead: 300, cacheWrite: 50, output: 13 });
     expect(snap.byProvider['anthropic-direct']).toEqual({ uncachedInput: 5, cacheRead: 100, cacheWrite: 0, output: 2 });
     expect(snap.total).toEqual({ uncachedInput: 215, cacheRead: 400, cacheWrite: 50, output: 15 });
+    // The warn is the behavioral signal that 'mixed' was produced.
+    expect(warnSpy).toHaveBeenCalledOnce();
+    // Exhaustive key check: no stale 'openai-compatible' key alongside 'mixed'.
+    expect(Object.keys(snap.byProvider).sort()).toEqual(['anthropic-direct', 'mixed']);
     warnSpy.mockRestore();
   });
 });
