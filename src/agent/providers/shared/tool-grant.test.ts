@@ -9,6 +9,7 @@ import { providerGrantsTool, grantsWorkspacePrompt } from './tool-grant.js';
 import { WorkspaceStore } from '../../workspace/workspace-store.js';
 import { AnthropicDirectProvider } from '../anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../openai-compatible/index.js';
+import { XaiProvider } from '../xai/index.js';
 import type { ModelProvider } from '../../provider.js';
 
 const READ_ONLY = { allowedTools: ['Read', 'Grep', 'Glob', 'bash'] };
@@ -53,6 +54,7 @@ describe('grantsWorkspacePrompt', () => {
 describe.each([
   ['anthropic-direct', (opts: object): ModelProvider => new AnthropicDirectProvider(opts)],
   ['openai-compatible', (opts: object): ModelProvider => new OpenAICompatibleProvider(opts)],
+  ['xai', (opts: object): ModelProvider => new XaiProvider(opts)],
 ])('%s grantsTool', (_name, make) => {
   it('denies workspace tools to a read-only allowlist without a store (the #4060 child)', () => {
     const provider = make({ permissions: READ_ONLY });

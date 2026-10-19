@@ -52,6 +52,16 @@ describe('computeReflowShift', () => {
     expect(computeReflowShift([hard(5, 229), { row: 6, width: 0, hard: false }], 230, 115)).toBe(1);
   });
 
+  it('a full-width frame row (w === cols) is hard: reflow shift is computed, not null (#4124)', () => {
+    // tmux grid_reflow calls grid_reflow_move (no GRID_LINE_WRAPPED) for lines
+    // whose width equals the terminal width, so they are hard. A 230-col
+    // full-width status bar above the cursor at 230→115 creates one extra row.
+    expect(computeReflowShift([{ row: 5, width: 230, hard: true }], 230, 115)).toBe(1);
+    // Sanity: a non-hard full-width line (should not occur from snapshotLines
+    // after the fix) still makes N unknown.
+    expect(computeReflowShift([{ row: 5, width: 230, hard: false }], 230, 115)).toBeNull();
+  });
+
   it('non-positive column counts make N unknown (null → caller falls back)', () => {
     expect(computeReflowShift([hard(5, 229)], 230, 0)).toBeNull();
     expect(computeReflowShift([hard(5, 229)], 0, 115)).toBeNull();
