@@ -40,7 +40,9 @@ function aiSourceOf(self: AutocompleteHost, ghost: string): GhostSource {
 /**
  * Record an accept of `ghost`. Call BEFORE the buffer is rewritten: `buffer`
  * in the record is what the user had typed when they accepted. `full` is true
- * when the accept consumes the whole ghost (Tab, or a final word nibble).
+ * when the accept consumes the whole ghost (Tab, or a final word-nibble that
+ * exhausts the suggestion) — emits `accepted`. `full` is false for a partial
+ * nibble that leaves ghost text remaining — emits `word_accepted`.
  */
 export function recordGhostAccept(self: AutocompleteHost, ghost: string, full: boolean): void {
   const source = aiSourceOf(self, ghost);

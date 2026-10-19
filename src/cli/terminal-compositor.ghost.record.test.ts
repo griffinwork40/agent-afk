@@ -152,6 +152,9 @@ describe('AI ghost outcome recording', () => {
       ['word_accepted', 'prompt'],
       ['accepted', 'prompt'],
     ]);
+    // prompt-sourced records never carry `buffer` (only completion records do)
+    expect(engine.records[0]).not.toHaveProperty('buffer');
+    expect(engine.records[1]).not.toHaveProperty('buffer');
     c.disarm();
   });
 

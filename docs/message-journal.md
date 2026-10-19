@@ -182,7 +182,8 @@ back to its text `shadowHistory`, as before.
 - REPL AI suggestions are journaled as `mark('suggestion', detail)` with
   `detail: JournalSuggestionDetail` (`src/agent/journal/types.ts`):
   `event` is `generated` (the suggestion model returned a usable proposal),
-  `accepted` (Tab), `word_accepted` (one word nibbled), or `dismissed` (Esc on
+  `accepted` (Tab, or a final word-nibble that exhausts the ghost),
+  `word_accepted` (partial nibble that leaves ghost text remaining), or `dismissed` (Esc on
   an empty-prompt proposal); `source` is `completion` (inline continuation) or
   `prompt` (empty-prompt next action). `text` and `buffer` pass through
   `redactSecrets` first. History-sourced ghost text is not AI output and is not
