@@ -43,8 +43,30 @@ import { registerDefectsCommand } from '../src/cli/commands/defects.js';
 // the renderer must declare the same import to build metadata-only, never execute.
 import { registerAcpCommand } from '../src/cli/commands/acp.js';
 // jscpd:ignore-end
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { renderCli } from './render-cli-reference.mdx.js';
-import { isMain, writeReference } from './lib/docs-reference.js';
+import { isMain, repoRoot, writeReference } from './lib/docs-reference.js';
+
+/** Extract ordered `registerXxxCommand` call sites from source text. */
+function registrations(text: string): string[] {
+  return [...text.matchAll(/^\s*(register\w+Command)\(program\);/gm)].map((m) => m[1]!);
+}
+
+/** Returns true when the generator mirrors the entry point exactly; logs diff on mismatch. */
+function checkMirror(): boolean {
+  const entry = readFileSync(join(repoRoot, 'src/cli/index.ts'), 'utf8');
+  const generator = readFileSync(join(repoRoot, 'scripts/render-cli-reference.ts'), 'utf8');
+  const entryRegs = registrations(entry);
+  const genRegs = registrations(generator);
+  if (JSON.stringify(entryRegs) === JSON.stringify(genRegs)) return true;
+  const missing = entryRegs.filter((r) => !genRegs.includes(r));
+  const extra = genRegs.filter((r) => !entryRegs.includes(r));
+  if (missing.length) console.error(`scan:cli:check: registrars in src/cli/index.ts missing from render-cli-reference.ts: ${missing.join(', ')}`);
+  if (extra.length) console.error(`scan:cli:check: registrars in render-cli-reference.ts not in src/cli/index.ts: ${extra.join(', ')}`);
+  if (JSON.stringify(entryRegs) !== JSON.stringify(genRegs)) console.error('scan:cli:check: registration order mismatch. Run pnpm scan:cli to regenerate.');
+  return false;
+}
 
 export function buildCli(): Command {
   // The version option is documented, but the release number is intentionally
@@ -102,8 +124,11 @@ export function buildCli(): Command {
 }
 
 if (isMain(import.meta.url)) {
+  const check = process.argv.includes('--check');
   const program = buildCli();
   const count = (cmd: Command): number => cmd.commands.reduce((n, c) => n + 1 + count(c), 0);
   console.log(`${program.commands.length} top level commands; ${count(program) - program.commands.length} subcommands`);
-  process.exitCode = writeReference('cli', renderCli(program), process.argv.includes('--check')) ? 0 : 1;
+  const mirrorOk = check ? checkMirror() : true;
+  const refOk = writeReference('cli', renderCli(program), check, undefined, 'scan:cli');
+  process.exitCode = mirrorOk && refOk ? 0 : 1;
 }
