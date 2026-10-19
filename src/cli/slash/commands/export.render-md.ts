@@ -46,22 +46,43 @@ function toolSummary(turns: readonly TurnRecord[]): {
   return { totalCalls, errorCalls, byTool };
 }
 
+// Invariant: CommonMark fenced code blocks require the closing fence to be at
+// least as long as the opening fence, and the content must not contain a line
+// that is ONLY backticks of that length or longer. We compute the minimum safe
+// fence length (longest backtick-only run in the content + 1, minimum 3) so
+// tool output containing ``` never breaks the fence.
+function safeFence(content: string): string {
+  let max = 2;
+  for (const m of content.matchAll(/^(`+)$/gm)) {
+    if (m[1]!.length > max) max = m[1]!.length;
+  }
+  return '`'.repeat(max + 1);
+}
+
+const MD_RESULT_LIMIT = 4000;
+
 function renderToolBlock(toolName: string, input: string, result: string | undefined, isError: boolean): string {
   const safeInput = redactSecrets(input);
-  const safeResult = result !== undefined ? redactSecrets(result) : '';
+  const rawResult = result !== undefined ? redactSecrets(result) : '';
   const status = isError ? '❌ error' : '✅ ok';
+  const inputFence = safeFence(safeInput);
   const lines: string[] = [
     `<details>`,
     `<summary><code>${toolName}</code> — ${status}</summary>`,
     ``,
     `**Args**`,
     ``,
-    '```json',
+    `${inputFence}json`,
     safeInput,
-    '```',
+    inputFence,
   ];
-  if (safeResult) {
-    lines.push('', '**Result**', '', '```', safeResult.slice(0, 4000), '```');
+  if (rawResult) {
+    const omitted = rawResult.length > MD_RESULT_LIMIT ? rawResult.length - MD_RESULT_LIMIT : 0;
+    const safeResult = omitted > 0
+      ? `${rawResult.slice(0, MD_RESULT_LIMIT)}\n[truncated — ${omitted} chars omitted]`
+      : rawResult;
+    const resultFence = safeFence(safeResult);
+    lines.push('', '**Result**', '', resultFence, safeResult, resultFence);
   }
   lines.push('', '</details>');
   return lines.join('\n');
@@ -72,7 +93,7 @@ function renderToolBlock(toolName: string, input: string, result: string | undef
 // ---------------------------------------------------------------------------
 
 export function renderSessionMarkdown(stats: SessionStats): string {
-  const { turns, model, sessionStartTime, totalCostUsd, totalDurationMs } = stats;
+  const { turns, model, sessionStartTime, totalCostUsd, totalDurationMs, unpricedTurns } = stats;
   const lines: string[] = [];
 
   // Header
@@ -80,10 +101,16 @@ export function renderSessionMarkdown(stats: SessionStats): string {
   lines.push('');
   lines.push(`| Field | Value |`);
   lines.push(`|---|---|`);
-  lines.push(`| Model | \`${String(model)}\` |`);
+  // Invariant: pipe characters in the model name would break the GFM table cell;
+  // escape them so the table renders correctly for models with org/name separators.
+  const safeModel = String(model).replace(/\|/g, '\\|');
+  const costCell = unpricedTurns > 0
+    ? `${formatCost(totalCostUsd)} *(+${unpricedTurns} unpriced turn${unpricedTurns === 1 ? '' : 's'})*`
+    : formatCost(totalCostUsd);
+  lines.push(`| Model | \`${safeModel}\` |`);
   lines.push(`| Started | ${ts(sessionStartTime)} |`);
   lines.push(`| Duration | ${formatDuration(totalDurationMs)} |`);
-  lines.push(`| Cost | ${formatCost(totalCostUsd)} |`);
+  lines.push(`| Cost | ${costCell} |`);
   lines.push(`| Turns | ${turns.length} |`);
   if (stats.name) lines.push(`| Session | ${stats.name} |`);
   lines.push('');

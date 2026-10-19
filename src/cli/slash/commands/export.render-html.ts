@@ -81,9 +81,19 @@ pre{white-space:pre-wrap;word-break:break-all;font-size:.8rem;
 .footer{margin-top:2rem;font-size:.78rem;color:#484f58;text-align:center}
 `;
 
+const HTML_RESULT_LIMIT = 8000;
+
 function renderToolHtml(toolName: string, input: string, result: string | undefined, isError: boolean): string {
   const safeInput = escapeHtml(redactSecrets(input));
-  const safeResult = result !== undefined ? escapeHtml(redactSecrets(result)).slice(0, 8000) : '';
+  // Invariant: slice the raw string BEFORE escapeHtml so we never cut mid-entity
+  // (e.g. splitting "&amp;" would produce a broken entity in the output).
+  let safeResult = '';
+  if (result !== undefined) {
+    const raw = redactSecrets(result);
+    const omitted = raw.length > HTML_RESULT_LIMIT ? raw.length - HTML_RESULT_LIMIT : 0;
+    const truncated = omitted > 0 ? `${raw.slice(0, HTML_RESULT_LIMIT)}\n[truncated — ${omitted} chars omitted]` : raw;
+    safeResult = escapeHtml(truncated);
+  }
   const statusIcon = isError ? '❌' : '✅';
   const errorClass = isError ? ' tool-error' : '';
   return [
@@ -164,7 +174,7 @@ function buildToolSummaryHtml(turns: readonly TurnRecord[]): string {
 // ---------------------------------------------------------------------------
 
 export function renderSessionHtml(stats: SessionStats): string {
-  const { turns, model, sessionStartTime, totalCostUsd, totalDurationMs } = stats;
+  const { turns, model, sessionStartTime, totalCostUsd, totalDurationMs, unpricedTurns } = stats;
   const sessionLabel = stats.name ? escapeHtml(stats.name) : 'Session Export';
   const turnsHtml = turns.map((t, i) => renderTurnHtml(t, i)).join('\n');
   const toolSummaryHtml = buildToolSummaryHtml(turns);
@@ -184,7 +194,7 @@ export function renderSessionHtml(stats: SessionStats): string {
 <tr><td>Model</td><td><code>${escapeHtml(String(model))}</code></td></tr>
 <tr><td>Started</td><td>${escapeHtml(ts(sessionStartTime))}</td></tr>
 <tr><td>Duration</td><td>${escapeHtml(formatDuration(totalDurationMs))}</td></tr>
-<tr><td>Cost</td><td>${escapeHtml(formatCost(totalCostUsd))}</td></tr>
+<tr><td>Cost</td><td>${escapeHtml(formatCost(totalCostUsd))}${unpricedTurns > 0 ? ` <span style="color:#8b949e;font-size:.85em">(+${unpricedTurns} unpriced turn${unpricedTurns === 1 ? '' : 's'})</span>` : ''}</td></tr>
 <tr><td>Turns</td><td>${turns.length}</td></tr>
 ${stats.name ? `<tr><td>Session</td><td>${escapeHtml(stats.name)}</td></tr>` : ''}
 </table>

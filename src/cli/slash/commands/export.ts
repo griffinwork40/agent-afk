@@ -20,9 +20,9 @@
  * @module cli/slash/commands/export
  */
 
-import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { getAfkHome } from '../../../paths.js';
+import { atomicWriteFileAsync } from '../../../utils/atomic-write.js';
 import { renderSessionMarkdown } from './export.render-md.js';
 import { renderSessionHtml } from './export.render-html.js';
 import type { SlashCommand } from '../types.js';
@@ -62,6 +62,10 @@ async function resolveOutputPath(
     // Add extension if caller omitted it.
     return explicit.endsWith(ext) ? explicit : explicit + ext;
   }
+  // Invariant: mkdir runs inside resolveOutputPath, which is called before either
+  // try/catch in the handler. Wrap here so mkdir failures surface as a normal
+  // error message rather than an unhandled rejection.
+  const { promises: fs } = await import('node:fs');
   const exportDir = path.join(getAfkHome(), 'exports');
   await fs.mkdir(exportDir, { recursive: true });
   const stem = sessionId ?? `session-${Date.now()}`;
@@ -86,7 +90,13 @@ export const exportCmd: SlashCommand = {
     }
 
     const { format, outPath: explicitPath } = parseArgs(args);
-    const outPath = await resolveOutputPath(format, explicitPath, stats.sessionId);
+    let outPath: string;
+    try {
+      outPath = await resolveOutputPath(format, explicitPath, stats.sessionId);
+    } catch (err) {
+      out.error(`Could not resolve export path: ${err instanceof Error ? err.message : String(err)}`);
+      return 'continue';
+    }
 
     let content: string;
     try {
@@ -98,8 +108,12 @@ export const exportCmd: SlashCommand = {
       return 'continue';
     }
 
+    // Invariant: atomicWriteFileAsync always creates the destination with mode
+    // 0o600 via a temp-file + rename, so an existing file with looser permissions
+    // is replaced rather than overwritten in place (fixing the POSIX mode-on-create
+    // only behaviour of fs.writeFile).
     try {
-      await fs.writeFile(outPath, content, { encoding: 'utf8', mode: 0o600 });
+      await atomicWriteFileAsync(outPath, content, { encoding: 'utf8', mode: 0o600, mkdirp: false });
     } catch (err) {
       out.error(`Could not write export to ${outPath}: ${err instanceof Error ? err.message : String(err)}`);
       return 'continue';
