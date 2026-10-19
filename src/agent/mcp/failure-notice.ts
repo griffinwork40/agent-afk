@@ -176,10 +176,13 @@ export function mcpUnknownToolMessage(
   const reason = redactSecrets(server.error ?? 'unknown error');
   const safeName = sanitiseServerName(server.serverName);
   const safeReason = sanitiseErrorText(reason);
+  // Sanitise toolName for display only — prefix matching above uses the raw
+  // value so routing is unaffected.
+  const safeToolName = normaliseUntrustedText(toolName, SANITISED_NAME_MAX_LEN);
   return (
     `MCP server "${safeName}" is configured but failed to connect. ` +
     `Error reported by the server (untrusted): "${safeReason}". ` +
-    `Tool "${toolName}" is unavailable this session. ` +
+    `Tool "${safeToolName}" is unavailable this session. ` +
     `Do NOT retry this tool or any ${prefix}* variant.`
   );
 }

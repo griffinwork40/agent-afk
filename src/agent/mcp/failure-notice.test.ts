@@ -145,6 +145,34 @@ describe('mcpUnknownToolMessage', () => {
     expect(msg).toContain('"mcp__cm-data__search"');
   });
 
+  it('sanitises toolName containing a double-quote for display', () => {
+    // A crafted tool name with an embedded double-quote must not break
+    // the surrounding quoted span in the model-visible message.
+    const hostile = 'mcp__cm-data__search"inject';
+    const msg = mcpUnknownToolMessage(hostile, failedStates);
+    expect(msg).toBeDefined();
+    // The embedded " is replaced with a single-quote.
+    expect(msg).toContain("search'inject");
+    expect(msg).not.toContain('search"inject');
+  });
+
+  it('sanitises toolName containing a backtick for display', () => {
+    const hostile = 'mcp__cm-data__search`code`';
+    const msg = mcpUnknownToolMessage(hostile, failedStates);
+    expect(msg).toBeDefined();
+    expect(msg).not.toContain('`');
+    expect(msg).toContain("search'code'");
+  });
+
+  it('sanitises toolName containing U+2028 for display', () => {
+    const hostile = 'mcp__cm-data__search\u2028inject';
+    const msg = mcpUnknownToolMessage(hostile, failedStates);
+    expect(msg).toBeDefined();
+    expect(msg).not.toContain('\u2028');
+    expect(msg).toContain('search');
+    expect(msg).toContain('inject');
+  });
+
   it('returns undefined for a malformed mcp__ tool name with no server segment', () => {
     expect(mcpUnknownToolMessage('mcp__', failedStates)).toBeUndefined();
     expect(mcpUnknownToolMessage('mcp__cm-data', failedStates)).toBeUndefined();
@@ -259,12 +287,12 @@ describe('failure-notice security — error text quoting (item 3)', () => {
 // Item 1 — buildMcpFailureNotice: long server name → both globs in notice
 // ---------------------------------------------------------------------------
 
-describe('buildMcpFailureNotice — overflow server name (item 1, #4095)', () => {
+describe('buildMcpFailureNotice — dual-prefix server name (item 1, #4095)', () => {
   it('includes both globs when serverWirePrefixes returns two prefixes', () => {
     // serverWirePrefixes returns [normalPrefix, hashPrefix] for any server
     // name where the two differ and the normal prefix fits within MAX_LEN.
-    // Use a long-but-valid name that stays within the normal prefix budget
-    // so we get two distinct prefixes (normal + hash).
+    // Use a name that stays within the normal prefix budget so we get two
+    // distinct prefixes (normal + hash).
     const longServer = 'super-long-server-name-that-uses-up-budget';
     const notice = buildMcpFailureNotice([
       { serverName: longServer, status: 'error', error: 'timeout' },
@@ -397,22 +425,31 @@ describe('failure-notice — server name sanitisation (item 3, #4095)', () => {
 // ---------------------------------------------------------------------------
 // Item 4 — serverWirePrefixes edge-case documentation (nit, #4095)
 // ---------------------------------------------------------------------------
-// The edge case (normalPrefix === hashPrefix) is handled in naming.ts by
-// returning [normalPrefix] rather than [normalPrefix, hashPrefix].  No
-// behavioural change needed here; the test just documents the contract so a
-// future refactor cannot silently regress it.
-describe('serverWirePrefixes — self-hash edge case (item 4, #4095)', () => {
-  it('returns a single entry when normalPrefix equals hashPrefix', async () => {
+// The dedup branch in naming.ts (normalPrefix === hashPrefix → single-entry
+// return) requires sanitizeNameSegment(name) === sha256(name).slice(0,6).
+// '5b0555' is a natural collision: its sanitised form equals its own 6-char
+// SHA-256 prefix, so serverWirePrefixes deduplicates to a single entry.
+describe('serverWirePrefixes — dedup branch (normalPrefix === hashPrefix) (item 4, #4095)', () => {
+  it('returns a single prefix when normalPrefix equals hashPrefix (natural collision)', async () => {
+    const { serverWirePrefixes: swp, sanitizeNameSegment } = await import('./naming.js');
+    const { createHash } = await import('node:crypto');
+
+    // Precondition: '5b0555' is a self-hashing 6-hex-char name.
+    const serverName = '5b0555';
+    expect(sanitizeNameSegment(serverName)).toBe(serverName);
+    expect(createHash('sha256').update(serverName).digest('hex').slice(0, 6)).toBe(serverName);
+
+    // The dedup branch (naming.ts ~line 106) returns [normalPrefix] only.
+    const prefixes = swp(serverName);
+    expect(prefixes).toHaveLength(1);
+    expect(prefixes[0]).toBe(`mcp__${serverName}__`);
+  });
+
+  it('returns two prefixes for an ordinary name (no collision)', async () => {
     const { serverWirePrefixes: swp } = await import('./naming.js');
-    // Construct a server name whose sanitized form equals its own 6-char hash.
-    // We test the dedup contract by checking length === 1 when they collide;
-    // finding a natural collision is impractical, so we test via the known
-    // return-length contract instead: for any ordinary name, we get at most 2.
     const prefixes = swp('ordinary-server');
-    expect(prefixes.length).toBeGreaterThanOrEqual(1);
-    expect(prefixes.length).toBeLessThanOrEqual(2);
-    // All entries must be unique (dedup contract).
-    expect(new Set(prefixes).size).toBe(prefixes.length);
+    expect(prefixes).toHaveLength(2);
+    expect(new Set(prefixes).size).toBe(2);
   });
 });
 
