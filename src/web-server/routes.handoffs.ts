@@ -158,13 +158,22 @@ export async function handleAnswerHandoff(
 
   const dir = hctx.handoffsDir ?? getHandoffsDir();
 
-  // Verify the record exists before attempting to answer — gives a clean 404
-  // rather than the generic "no record found" error thrown by answerHandoff.
+  // Verify the record exists and is still pending before attempting to answer.
+  // Gives a clean 404 (not found) or 409 (already answered/expired) rather than
+  // the generic error thrown by answerHandoff, and avoids a confusing 409 for
+  // records that exist but are no longer actionable.
   const existing = await readHandoff(taskId, dir);
   if (existing === null) {
     sendJson(res, 404, {
       error: 'not_found',
       message: `no handoff record found for task ${taskId}`,
+    });
+    return;
+  }
+  if (existing.status !== 'pending') {
+    sendJson(res, 409, {
+      error: 'no_longer_active',
+      message: `handoff for task ${taskId} is no longer active (already answered or expired)`,
     });
     return;
   }
@@ -192,14 +201,20 @@ export async function handleAnswerHandoff(
   let won: boolean;
   try {
     won = await answerHandoff(taskId, answer, 'web', dir, identity);
-  } catch {
-    // Record vanished between the pre-check read and the CAS write —
-    // semantically equivalent to "no longer active".
-    sendJson(res, 409, {
-      error: 'no_longer_active',
-      message: `handoff for task ${taskId} is no longer active (already answered or expired)`,
-    });
-    return;
+  } catch (err) {
+    // Only swallow the well-known race: the record was deleted between the
+    // pre-check read above and the CAS write inside answerHandoff. Any other
+    // error (disk I/O, permission failure, etc.) is a genuine 500 and must
+    // not be silently mapped to "no longer active".
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith('handoff-store: no record found')) {
+      sendJson(res, 409, {
+        error: 'no_longer_active',
+        message: `handoff for task ${taskId} is no longer active (already answered or expired)`,
+      });
+      return;
+    }
+    throw err;
   }
 
   if (!won) {

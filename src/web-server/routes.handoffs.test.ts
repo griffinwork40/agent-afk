@@ -292,6 +292,26 @@ describe('routes.handoffs — handleAnswerHandoff', () => {
     expect(mockAnswerHandoff).not.toHaveBeenCalled();
   });
 
+  it('returns 409 when record exists but status is already answered', async () => {
+    mockReadHandoff.mockResolvedValue(makeRecord({ status: 'answered' }));
+    const { res, json } = makeRes();
+    await handleAnswerHandoff(makeReq(), res, 'q-1700000000000-abc', { answer: 'yes' }, { handoffsDir: DIR });
+    const { status, body } = json();
+    expect(status).toBe(409);
+    expect((body as { error: string }).error).toBe('no_longer_active');
+    expect(mockAnswerHandoff).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 when record exists but status is expired', async () => {
+    mockReadHandoff.mockResolvedValue(makeRecord({ status: 'expired' }));
+    const { res, json } = makeRes();
+    await handleAnswerHandoff(makeReq(), res, 'q-1700000000000-abc', { answer: 'yes' }, { handoffsDir: DIR });
+    const { status, body } = json();
+    expect(status).toBe(409);
+    expect((body as { error: string }).error).toBe('no_longer_active');
+    expect(mockAnswerHandoff).not.toHaveBeenCalled();
+  });
+
   it('returns 200 and calls answerHandoff with correct args when CAS wins', async () => {
     mockReadHandoff.mockResolvedValue(makeRecord());
     mockAnswerHandoff.mockResolvedValue(true);
@@ -368,6 +388,16 @@ describe('routes.handoffs — handleAnswerHandoff', () => {
     const { status, body } = json();
     expect(status).toBe(409);
     expect((body as { error: string }).error).toBe('no_longer_active');
+  });
+
+  it('rethrows non-race errors from answerHandoff (disk I/O, permission failure, etc.)', async () => {
+    mockReadHandoff.mockResolvedValue(makeRecord());
+    const ioError = new Error('EACCES: permission denied');
+    mockAnswerHandoff.mockRejectedValue(ioError);
+    const { res } = makeRes();
+    await expect(
+      handleAnswerHandoff(makeReq(), res, 'q-1700000000000-abc', { answer: 'yes' }, { handoffsDir: DIR }),
+    ).rejects.toThrow('EACCES: permission denied');
   });
 
   it('returns 400 when answer exceeds MAX_ANSWER_BYTES', async () => {
