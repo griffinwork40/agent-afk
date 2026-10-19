@@ -27,6 +27,34 @@ export function hasMergeBase(baseRef: string): boolean {
   }
 }
 
+/** A single clone fragment as reported by jscpd. */
+export interface CloneFragment {
+  name: string;
+  start: number;
+  end: number;
+  startLoc: { line: number };
+  endLoc: { line: number };
+}
+
+/**
+ * Whether a clone fragment overlaps any added line in the diff map.
+ * Extracted here so tests can import it without triggering the script's
+ * top-level `main()` call.
+ */
+export function fragmentOverlapsAdded(
+  frag: CloneFragment,
+  added: Map<string, Set<number>>,
+): boolean {
+  const lines = added.get(frag.name);
+  if (!lines) return false;
+  const startLine = frag.startLoc.line;
+  const endLine = frag.endLoc.line;
+  for (let l = startLine; l <= endLine; l++) {
+    if (lines.has(l)) return true;
+  }
+  return false;
+}
+
 /**
  * Parse the output of `git diff --unified=0 --diff-filter=ACMR` into a map
  * of relative path → set of added line numbers.
