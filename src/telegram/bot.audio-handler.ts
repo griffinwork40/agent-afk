@@ -70,11 +70,20 @@ export function registerAudioHandlers(
         const synthCtx = Object.create(Object.getPrototypeOf(ctx)) as Context;
         Object.assign(synthCtx, ctx);
         Object.defineProperty(synthCtx, 'message', {
-          // Carry caption_entities as entities so the tag-only gate in
-          // MessageHandler.handle() sees the @mention that addressed the bot.
-          // Without this, audio files addressed by caption @mention pass the
-          // pre-transcription gate but are silently dropped by the second gate.
-          value: Object.assign({}, ctx.message, { text: transcript, entities: captionEntities ?? [] }),
+          // Encode the pre-transcription addressing decision so the second
+          // tag-only gate in MessageHandler.handle() passes without
+          // re-checking caption entities against the (different) transcript
+          // text — caption entity offsets are relative to the caption, not
+          // the transcript, so forwarding them causes a silent mismatch.
+          value: Object.assign({}, ctx.message, {
+            text: transcript,
+            // The pre-transcription gate (above) already confirmed this audio is
+            // addressed to the bot.  Encode that decision as a zero-width
+            // text_mention so the second tag-only gate in MessageHandler.handle()
+            // passes without re-slicing the transcript at caption-relative offsets
+            // (which would silently fail to match the @mention).
+            entities: [{ type: 'text_mention' as const, offset: 0, length: 0, user: { id: ctx.botInfo?.id ?? 0, is_bot: true, first_name: '' } }],
+          }),
           writable: true,
           enumerable: true,
           configurable: true,

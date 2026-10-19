@@ -224,7 +224,8 @@ export async function handleVoiceOrAudio(
   const safeTranscript = transcript
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
   await ctx
     .reply(`🎙️ <b>Transcript:</b> ${safeTranscript}`, { parse_mode: 'HTML' })
     .catch(() =>
