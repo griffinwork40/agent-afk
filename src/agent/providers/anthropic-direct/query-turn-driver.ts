@@ -51,6 +51,8 @@ export interface TurnDriverContext {
   readonly temperature: number | undefined;
   readonly thinkingBlockBinding: import('./types.js').RunTurnInput['thinkingBlockBinding'] | undefined;
   readonly baseUrl: string | undefined;
+  /** Per-endpoint concurrency cap (from slot binding `maxConcurrency`). Part of #3886. */
+  readonly endpointConcurrency: number | undefined;
   readonly maxToolUseIterations: number | undefined;
   readonly softDeadlineMs: number | undefined;
   readonly traceWriter: import('../../trace/index.js').TraceSink | undefined;
@@ -141,6 +143,7 @@ function buildTurnRunInput(
     ...(ctx.temperature !== undefined ? { temperature: ctx.temperature } : {}),
     ...(ctx.thinkingBlockBinding !== undefined ? { thinkingBlockBinding: ctx.thinkingBlockBinding } : {}),
     ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
+    ...(ctx.endpointConcurrency !== undefined ? { endpointConcurrency: ctx.endpointConcurrency } : {}),
     ...(ctx.maxToolUseIterations !== undefined ? { maxToolUseIterations: ctx.maxToolUseIterations } : {}),
     ...(ctx.softDeadlineMs !== undefined ? { softDeadlineMs: ctx.softDeadlineMs } : {}),
     ...(ctx.traceWriter ? { traceWriter: ctx.traceWriter } : {}),
