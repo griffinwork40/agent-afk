@@ -373,6 +373,16 @@ describe('classifyRisk — bash safe', () => {
   it('gh pr comment → medium (mutating, not safe-listed)', () => {
     expect(classifyRisk('bash', { command: 'gh pr comment 123 --body "LGTM"' }, ctx)).toBe('medium');
   });
+
+  // Known residual (Tier-2, #4103): classifyBashCommand's FS_MUTATING regex
+  // matches bare unquoted FS-verb args of safe-listed readers — e.g.
+  // `grep -rn truncate src/` is classified mutating and escalated to `high`
+  // even though `truncate` is a grep search term, not a command invocation.
+  // This is safe-side (over-gates: prompts the user, never silently allows a
+  // write). Fix tracked in #3846 remaining work (CMD_START-anchoring FS_MUTATING).
+  it('grep -rn truncate src/ → high (known Tier-2 over-gate, safe-side)', () => {
+    expect(classifyRisk('bash', { command: 'grep -rn truncate src/' }, ctx)).toBe('high');
+  });
 });
 
 // ---- bash safe: command-position matching ---------------------------------
