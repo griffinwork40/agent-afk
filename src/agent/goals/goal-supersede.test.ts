@@ -306,4 +306,46 @@ describe('Scenario 3 (#3714): goal change while worker runs', () => {
     expect(envelope).toContain('superseded="true"');
   });
 
+  /**
+   * Pause→resume→same-text path (#4053): when a goal was active at dispatch,
+   * paused mid-flight, then resumed with the same text before delivery, the
+   * result must NOT be marked superseded — the goal identity is unchanged.
+   *
+   * `resumeGoal` restores `status: 'active'` on the same text, so
+   * `isSuperseded()` must return false: the current goal is active AND the
+   * text matches the dispatch-time snapshot.
+   */
+  it('delivered result is NOT marked superseded when the goal was paused then resumed with the same text', async () => {
+    const { BgResultNotifier } = await import(
+      '../../cli/commands/interactive/bg-result-notifier.js'
+    );
+
+    const registry = makeStubRegistry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const notifier = new BgResultNotifier(registry as any);
+
+    // Goal is active at dispatch time
+    goalStore.setGoal('refactor the auth module', 'parent-session-001');
+    const goalTextAtDispatch = goalStore.getGoal()!.text;
+
+    // Operator pauses the goal mid-flight …
+    const paused = goalStore.pauseGoal();
+    expect(paused?.status).toBe('paused');
+
+    // … then resumes it — same text, status back to active
+    const resumed = goalStore.resumeGoal();
+    expect(resumed?.status).toBe('active');
+    expect(resumed?.text).toBe(goalTextAtDispatch);
+
+    const job = makeStubJob({ goalTextAtDispatch });
+    registry.emit('settled', job);
+
+    const envelope = notifier.drainInjections();
+
+    // Goal is active again with the same text — result is still relevant
+    expect(envelope).toContain('<background-subagent-result');
+    expect(envelope).toContain('status="completed"');
+    expect(envelope).not.toContain('superseded');
+  });
+
 });
