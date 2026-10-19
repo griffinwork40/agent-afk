@@ -252,7 +252,7 @@ must hold in mind. `pnpm audit:funcsize:list` ranks the current worst.
 
 The Windows CI leg runs only on main pushes and `windows-compat`-labelled PRs, so
 `tests/posix-guard.test.ts` enforces a static Windows guard inside **`pnpm test`**
-(ubuntu CI and auto-release) on every PR (#703). AST rules in
+(ubuntu CI and publish.yml) on every PR (#703). AST rules in
 `scripts/lib/posix-guard-rules.ts`: **R1** a literal `/bin/sh`/`sh`/`bash` as the
 command of `execFile`/`spawn`/`exec` or as `shell:` in product code (use
 `resolveShell()` from `src/utils/resolve-shell.ts`); **R2** `mkdtemp` on a

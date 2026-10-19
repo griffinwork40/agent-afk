@@ -4,9 +4,9 @@
  *
  * Compares the `engines.node` field in package.json between the most recent
  * git tag (LAST_TAG) and HEAD.  If the minimum Node.js version has been raised,
- * exits 1 so the auto-release workflow classifies the change as a major bump.
+ * exits 1: raising the floor is breaking, so the release must be a major.
  *
- * Usage (called by .github/workflows/auto-release.yml):
+ * Usage (run by hand before `pnpm release`; no workflow calls it):
  *   tsx scripts/check-engines-node-floor.ts [LAST_TAG]
  *
  *   LAST_TAG defaults to `git describe --tags --abbrev=0` when not supplied.
@@ -77,8 +77,8 @@ if (status === 'changed-unparseable') {
     `check-engines-node-floor: engines.node changed between refs but could not be parsed ` +
     `(${lastTag}: ${JSON.stringify(oldRange)}, HEAD: ${JSON.stringify(newRange)}). ` +
     `Cannot confirm the floor was not raised — treating as BUMP=major. ` +
-    `Fix engines.node to use a supported >=X.Y.Z form, or run the Auto Release ` +
-    `workflow manually with bump=minor/patch if the range did not raise the floor.`,
+    `Fix engines.node to use a supported >=X.Y.Z form, or release with ` +
+    `\`pnpm release minor|patch\` if the range did not raise the floor.`,
   );
   process.exit(1);
 }
@@ -104,8 +104,8 @@ if (status === 'raised') {
     `${oldRange} (${lastTag}) to ${newRange} (HEAD). ` +
     `Raising the Node.js floor is a compatibility-breaking change — ` +
     `treating as BUMP=major. ` +
-    `Run the Auto Release workflow manually with bump=major to publish it, ` +
-    `or bump=minor/patch if the detection is a false positive.`,
+    `Release it with \`pnpm release major\`, ` +
+    `or \`pnpm release minor|patch\` if the detection is a false positive.`,
   );
   console.error(`  Old floor: ${oldStr}  →  New floor: ${newStr}`);
   process.exit(1);

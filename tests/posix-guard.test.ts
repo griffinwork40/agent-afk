@@ -1,6 +1,6 @@
 /**
  * The POSIX-assumption guard, enforced inside `pnpm test` so ubuntu CI and
- * auto-release (`pnpm lint && pnpm test`) catch Windows regressions on every PR,
+ * publish.yml (`pnpm lint` + `pnpm test`) catch Windows regressions on every PR,
  * not only on the Windows leg. Rules: `scripts/lib/posix-guard-rules.ts`.
  *
  * Every fixture below is a STRING, so the violating shapes it spells are never

@@ -3,7 +3,7 @@
  * POSIX-assumption guard: catch Windows regressions on every PR, on ubuntu.
  *
  * The Windows CI leg only runs on main pushes and `windows-compat`-labelled
- * PRs, and auto-release gates publishing on `pnpm lint && pnpm test` (ubuntu),
+ * PRs, and publish.yml gates publishing on `pnpm lint` + `pnpm test` (ubuntu),
  * so a PR can ship a Windows break unseen (#2588: host `path.resolve('/dev/null')`
  * in bash-scan-exempt.ts). This gate statically flags the known shapes; the
  * rules live in `lib/posix-guard-rules.ts`. It is enforced inside `pnpm test`

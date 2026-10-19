@@ -6,8 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries in the [Unreleased] section may include a short commit hash suffix
-(e.g. `- add thing (abc1234)`). The hash is used by `/changelog` and the
-auto-release workflow to deduplicate commits across successive runs.
+(e.g. `- add thing (abc1234)`). The hash is used by `/changelog` and
+`scripts/generate-changelog.mjs` to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
