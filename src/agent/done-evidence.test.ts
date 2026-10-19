@@ -108,12 +108,31 @@ describe('classifyDoneEvidence', () => {
     expect(classifyDoneEvidence(events)).toBe('unverified');
   });
 
-  it('#3822: "pnpm test 2>&1 | tee log.txt" — tee write after test must be unverified', () => {
+  it('#3822: "pnpm test 2>&1 | tee test-log.txt" — tee write after test must be unverified', () => {
     const events: ToolEventMin[] = [
       { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
       { toolName: 'bash', input: 'pnpm test 2>&1 | tee test-log.txt', isError: false },
     ];
     expect(classifyDoneEvidence(events)).toBe('unverified');
+  });
+
+  // F2: verify that test-path args containing FS-verb substrings (rm, mv) do
+  // NOT trigger false 'unverified' classification — the narrow SHELL_WRITE_OPERATOR
+  // check must not match word-boundary tokens inside path components.
+  it('edit_file then pnpm test src/rm.test.ts → verified (path arg must not trigger false mutation)', () => {
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/agent/done-evidence.ts', isError: false },
+      { toolName: 'bash', input: 'pnpm test src/rm.test.ts', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+
+  it('edit_file then vitest src/mv-files.test.ts → verified (path arg must not trigger false mutation)', () => {
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/agent/done-evidence.ts', isError: false },
+      { toolName: 'bash', input: 'vitest src/mv-files.test.ts', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
   });
 
   it('#3822: read-only bash (grep, cat, git status) after edit+test must remain verified', () => {
