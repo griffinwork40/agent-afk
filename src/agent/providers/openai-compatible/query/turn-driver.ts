@@ -388,6 +388,9 @@ export async function* runTurnInner(
 
       if (windDownReason !== null) {
         // Tools stay advertised on wind-down; NEVER dispatch. See wind-down-final.ts.
+        // Invariant: windDownFinalText unconditionally overwrites finalAssistantText
+        // because wind-down is the terminal round — any earlier planning text
+        // ("Let me write the file…") is not the answer; only this round's text is.
         finalAssistantText = windDownFinalText(result.text);
         if (isTruncationStopReason(result.state.finishReason)) {
           droppedToolNames = finalizedToolCalls(result.state).map((c) => c.name);

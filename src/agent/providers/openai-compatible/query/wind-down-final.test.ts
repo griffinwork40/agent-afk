@@ -16,6 +16,7 @@ import { createHookRegistry } from '../../../hooks.js';
 import type { ToolHandler } from '../../../tools/types.js';
 import { __setOpenAIClientFactory, OpenAICompatibleQuery, type OpenAIClientFactory } from '../query.js';
 import type { OpenAIChunk } from '../translate.js';
+import type { ResponsesStreamEvent } from '../responses-translate.js';
 import { WIND_DOWN_NOTE } from '../../shared/tool-loop-cap.js';
 import {
   stripToolCallMarkup,
@@ -177,5 +178,109 @@ describe('openai-compatible wind-down round keeps tools and never dispatches', (
     handlerCalls.length = 0;
     expect(finalAnswer(await run(1))).toBe(WIND_DOWN_NO_ANSWER_PLACEHOLDER);
     expect(handlerCalls).toHaveLength(1);
+  });
+});
+
+// ---- Responses-wire wind-down ------------------------------------------------
+
+let responsesCreateCalls: Record<string, unknown>[] = [];
+const responsesHandlerCalls: unknown[] = [];
+
+const textResponsesTurn = (text: string): ResponsesStreamEvent[] => [
+  { type: 'response.output_text.delta', delta: text, output_index: 0 },
+  { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+];
+
+const toolCallResponsesTurn = (): ResponsesStreamEvent[] => [
+  { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'item0', call_id: 'call0', name: 'echo' } },
+  { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{}' },
+  { type: 'response.function_call_arguments.done', output_index: 0, arguments: '{}', name: 'echo' },
+  { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'item0', call_id: 'call0', name: 'echo', arguments: '{}' } },
+  { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+];
+
+function installResponsesFactory(): void {
+  const factory: OpenAIClientFactory = () =>
+    ({
+      responses: {
+        create: async (args: Record<string, unknown>) => {
+          responsesCreateCalls.push(args);
+          const chunks = responsesScripted.shift();
+          if (!chunks) throw new Error('no scripted responses turn');
+          return (async function* () { for (const c of chunks) yield c; })();
+        },
+      },
+    }) as unknown as OpenAI;
+  __setOpenAIClientFactory(factory);
+}
+
+let responsesScripted: ResponsesStreamEvent[][] = [];
+
+function responsesDispatcher(): SessionToolDispatcher {
+  const echo: ToolHandler = async (input) => {
+    responsesHandlerCalls.push(input);
+    return { content: 'echoed' };
+  };
+  return new SessionToolDispatcher({
+    handlers: new Map<string, ToolHandler>([['echo', echo]]),
+    schemas: [{ name: 'echo', description: 'Echo', input_schema: { type: 'object', properties: {} } }],
+    hookRegistry: createHookRegistry(),
+  });
+}
+
+async function runResponses(maxToolUseIterations: number): Promise<ProviderEvent[]> {
+  async function* input(): AsyncIterable<ProviderUserTurn> { yield { content: 'go' }; }
+  const q = new OpenAICompatibleQuery({
+    auth: { apiKey: 'sk', source: 'config' },
+    model: 'gpt-4o-mini',
+    synthesizedSessionId: 'sid-resp',
+    promptStream: input(),
+    config: { model: 'gpt-4o-mini', apiKey: 'sk', maxToolUseIterations } as AgentConfig,
+    toolDispatcher: responsesDispatcher(),
+    useResponsesApi: true,
+  });
+  const events: ProviderEvent[] = [];
+  for await (const ev of q) events.push(ev);
+  return events;
+}
+
+describe('openai-compatible wind-down round — Responses wire keeps tools and never dispatches', () => {
+  beforeEach(() => {
+    vi.stubEnv('AFK_VITALS', '0');
+    responsesScripted = [];
+    responsesCreateCalls = [];
+    responsesHandlerCalls.length = 0;
+    installResponsesFactory();
+  });
+  afterEach(() => {
+    __setOpenAIClientFactory(null);
+    vi.unstubAllEnvs();
+  });
+
+  it('sends the identical tools array on the Responses wire wind-down round', async () => {
+    responsesScripted = [toolCallResponsesTurn(), textResponsesTurn('Final answer.')];
+    const events = await runResponses(1);
+    expect(responsesCreateCalls).toHaveLength(2);
+    const [normal, windDown] = responsesCreateCalls as [Record<string, unknown>, Record<string, unknown>];
+    expect(Array.isArray(normal['tools']) && (normal['tools'] as unknown[]).length).toBeGreaterThan(0);
+    expect(JSON.stringify(windDown['tools'])).toBe(JSON.stringify(normal['tools']));
+    expect('tool_choice' in windDown).toBe(false);
+    expect(finalAnswer(events)).toBe('Final answer.');
+  });
+
+  it('Responses-wire wind-down: structured tool call is NOT dispatched; text is the answer', async () => {
+    responsesScripted = [toolCallResponsesTurn(), toolCallResponsesTurn()];
+    const events = await runResponses(1);
+    expect(responsesCreateCalls).toHaveLength(2); // no third round
+    expect(responsesHandlerCalls).toHaveLength(1); // only the pre-wind-down call ran
+    expect(events.filter((e) => e.type === 'tool.use.start')).toHaveLength(1);
+    const completed = events.at(-1);
+    expect(completed?.type === 'turn.completed' && completed.usage.stopReason).toBe('tool_use_loop_capped');
+  });
+
+  it('Responses-wire wind-down: text answer is extracted correctly', async () => {
+    responsesScripted = [toolCallResponsesTurn(), textResponsesTurn('Partial result.\n<tool_call>{"name":"echo","arguments":{}}</tool_call>')];
+    expect(finalAnswer(await runResponses(1))).toBe('Partial result.');
+    expect(responsesHandlerCalls).toHaveLength(1);
   });
 });
