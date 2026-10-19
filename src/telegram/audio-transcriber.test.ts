@@ -147,4 +147,117 @@ describe('OpenAIAudioTranscriber.transcribe', () => {
       expect(result.safeMessage).not.toContain(API_KEY);
     }
   });
+
+  it('returns network-error when SSRF guard blocks the host', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const blockedCheck = vi.fn(async () => ({ allowed: false, reason: 'private address 127.0.0.1' }));
+    const t = new OpenAIAudioTranscriber(API_URL, API_KEY, MODEL, 60_000, blockedCheck);
+    const result = await t.transcribe(AUDIO_BYTES, FILE_NAME, MAX_BYTES);
+    expect(result.status).toBe('network-error');
+    if (result.status === 'network-error') {
+      expect(result.safeMessage).toContain('SSRF guard');
+      expect(result.safeMessage).toContain('private address 127.0.0.1');
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('proceeds normally when SSRF guard allows the host', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeOkResponse('hello')));
+    const allowedCheck = vi.fn(async () => ({ allowed: true as const }));
+    const t = new OpenAIAudioTranscriber(API_URL, API_KEY, MODEL, 60_000, allowedCheck);
+    const result = await t.transcribe(AUDIO_BYTES, FILE_NAME, MAX_BYTES);
+    expect(result.status).toBe('ok');
+    expect(allowedCheck).toHaveBeenCalledWith(API_URL);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createTranscriber — URL-scheme guard and timeout parsing
+// ---------------------------------------------------------------------------
+
+describe('createTranscriber URL-scheme guard', () => {
+  it('throws on ftp:// scheme', () => {
+    expect(() => createTranscriber({ AFK_TRANSCRIBE_API_URL: 'ftp://example.com/transcribe' }))
+      .toThrow(/must use http or https/);
+  });
+
+  it('throws on file:// scheme', () => {
+    expect(() => createTranscriber({ AFK_TRANSCRIBE_API_URL: 'file:///etc/passwd' }))
+      .toThrow(/must use http or https/);
+  });
+
+  it('throws on a custom scheme', () => {
+    expect(() => createTranscriber({ AFK_TRANSCRIBE_API_URL: 'custom://host/path' }))
+      .toThrow(/must use http or https/);
+  });
+
+  it('throws on a malformed URL', () => {
+    expect(() => createTranscriber({ AFK_TRANSCRIBE_API_URL: 'not a url' }))
+      .toThrow(/not a valid URL/);
+  });
+
+  it('accepts http:// scheme', () => {
+    expect(createTranscriber({ AFK_TRANSCRIBE_API_URL: 'http://localhost/transcribe' }))
+      .not.toBeNull();
+  });
+
+  it('accepts https:// scheme', () => {
+    expect(createTranscriber({ AFK_TRANSCRIBE_API_URL: API_URL }))
+      .not.toBeNull();
+  });
+});
+
+describe('createTranscriber AFK_TRANSCRIBE_TIMEOUT_MS parsing', () => {
+  it('uses the supplied positive integer', () => {
+    const t = createTranscriber({
+      AFK_TRANSCRIBE_API_URL: API_URL,
+      AFK_TRANSCRIBE_TIMEOUT_MS: '30000',
+    });
+    // Transcriber is created without error; the timeout is internal state.
+    expect(t).not.toBeNull();
+  });
+
+  it('falls back to 60000 for a non-numeric value (warns)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = createTranscriber({
+      AFK_TRANSCRIBE_API_URL: API_URL,
+      AFK_TRANSCRIBE_TIMEOUT_MS: 'abc',
+    });
+    expect(t).not.toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('AFK_TRANSCRIBE_TIMEOUT_MS'));
+    warnSpy.mockRestore();
+  });
+
+  it('falls back to 60000 for a negative value (warns)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = createTranscriber({
+      AFK_TRANSCRIBE_API_URL: API_URL,
+      AFK_TRANSCRIBE_TIMEOUT_MS: '-1',
+    });
+    expect(t).not.toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('AFK_TRANSCRIBE_TIMEOUT_MS'));
+    warnSpy.mockRestore();
+  });
+
+  it('falls back to 60000 for zero (warns)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = createTranscriber({
+      AFK_TRANSCRIBE_API_URL: API_URL,
+      AFK_TRANSCRIBE_TIMEOUT_MS: '0',
+    });
+    expect(t).not.toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('AFK_TRANSCRIBE_TIMEOUT_MS'));
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn for a valid positive integer', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    createTranscriber({
+      AFK_TRANSCRIBE_API_URL: API_URL,
+      AFK_TRANSCRIBE_TIMEOUT_MS: '15000',
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
 });
