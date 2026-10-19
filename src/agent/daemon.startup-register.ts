@@ -31,6 +31,7 @@ export function registerTasksWithQuarantine(
     try {
       scheduler.register(task);
     } catch (err) {
+      // Intentionally quarantines ANY register() error, not only date validation.
       // eslint-disable-next-line no-console
       console.warn(
         `[daemon] skipping task ${task.taskId} at startup: ${errorMessage(err)}. ` +
