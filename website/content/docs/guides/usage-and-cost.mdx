@@ -1,0 +1,124 @@
+---
+title: "Track usage, quota, and cost"
+description: "Distinguish session cost from subscription quota, inspect provider headroom, and handle usage-limit pauses."
+---
+
+Cost, context occupancy, and subscription quota answer different questions. Check session cost to understand this conversation's estimated spend, quota to decide whether an account can keep working, and context occupancy to understand how much the model can retain.
+
+## Check the right number
+
+<Steps>
+<Step>
+
+For machine-wide provider headroom, run:
+
+```sh
+afk usage
+```
+
+Use JSON when another tool needs to inspect the result:
+
+```sh
+afk usage --json
+```
+
+</Step>
+<Step>
+
+Inside the REPL, run `/usage` for Claude subscription windows, `/cost` for this session's estimated dollar cost, and `/tokens` for context and token details.
+
+</Step>
+<Step>
+
+Before starting expensive parallel work, check the binding quota window and its reset time. The binding window is the highest-utilization window, not necessarily the shortest one.
+
+</Step>
+</Steps>
+
+| Surface | Reports |
+| --- | --- |
+| `afk usage` | Provider/account headroom, per-minute limits when observed, active 429 freezes, subscription windows, and data age |
+| `/usage` | Claude subscription five-hour and seven-day windows, plus model-specific seven-day windows when reported |
+| `/cost` | Session total, average per turn, recent turn costs, and a warning for turns without cost metadata |
+| `/tokens` | Context occupancy and available token breakdowns |
+| REPL status line and footer | Ambient Claude quota and warnings as windows approach their cap |
+
+`afk usage` is not a historical, cross-session spending report. Its records are shared across afk processes on the machine so concurrent REPLs, Telegram, and the daemon can see the same provider headroom.
+
+## Read subscription quota
+
+`afk usage` refreshes Claude and Codex subscription information when available. An API-key account is distinct from a ChatGPT subscription. Credentials without usable observations appear as unknown or with an endpoint error, not as zero usage.
+
+The REPL's `/usage` command specifically reads Claude subscription usage. It needs a Claude subscription sign-in; an API key alone does not provide those rolling-window readings. The subscription endpoints are undocumented and can change independently of afk.
+
+Quota readings have an age. The shared evaluator treats readings older than ten minutes as unknown. Codex readings are refreshed on demand, so an old number between checks is not a live guarantee.
+
+### Status line, footer, and burn rate
+
+The REPL quota indicator is an ambient status-line signal. The more prominent quota footer starts at 80% utilization, escalates near exhaustion, and can show the reset countdown and another hot window.
+
+When enough recent samples show rising utilization, afk can display a projection such as `cap in ~40m at this rate`. It needs at least three recent samples and suppresses the estimate when usage is flat, falling, stale, or projected to cap only after the window resets. Treat this as a forecast, not a reservation of capacity.
+
+### What `[vitals]` means
+
+The model receives a short `[vitals]` note after tool rounds. It includes local time, elapsed turn time, and the remaining soft-deadline time when a deadline exists. Context occupancy appears from 50%; applicable Claude quota appears from 80%, with a burn-rate estimate when supported. High readings are marked at 90%.
+
+This note is enabled by default and controlled by `AFK_VITALS`. Set it to `0` to disable it. It reads cached/shared state rather than making a network request each round. Subagents do not receive the subscription-usage field. It is model awareness, not an additional billing meter or a promise that a turn will stop at a particular dollar amount.
+
+## Understand cost estimates
+
+`/cost` uses completed-turn cost metadata. Token accounting normalizes provider differences: OpenAI-compatible input totals already include cache hits, whereas Anthropic reports cached input separately. Do not add every displayed cache counter to an input total without checking its meaning.
+
+For known OpenAI-compatible model IDs, afk estimates cost from a static USD-per-million-token pricing table. For example, the shipped `gpt-4.1` entry uses $2 input, $0.50 cached input, and $8 output per million tokens. Dated snapshot IDs can resolve to their base model's table entry. Cached input is priced once at its discounted rate, not again as ordinary input.
+
+Unknown model IDs have unknown cost, not zero cost. This includes local model IDs without a pricing entry: afk does not infer that a model is free simply because its ID contains a slash. A locally hosted model may have no provider charge, but afk's unknown estimate is not a measured $0 bill.
+
+<Callout type="info">
+Cost is an estimate, not your provider invoice. Static prices can lag provider changes, and special billing tiers or long-context surcharges may not be modeled. OpenAI priority pricing uses an approximate multiplier only when the response confirms the priority tier. Subscription usage percentages do not translate directly to dollar charges.
+</Callout>
+
+## Handle a usage-limit pause
+
+With `autoResumeOnUsageLimit` enabled, afk can park a turn when a supported subscription or quota limit is reached and retry when capacity returns. The top-level default is true. To fail instead of waiting, set:
+
+```json
+{
+  "autoResumeOnUsageLimit": false
+}
+```
+
+In an interactive REPL with a live automatic wait, a picker offers:
+
+| Choice | Result |
+| --- | --- |
+| Keep waiting | Leave automatic resume running |
+| Switch model / provider | Interrupt the wait, then use `/model` and resend your message |
+| Stop waiting | Interrupt the wait without choosing a different model |
+
+Noninteractive output, or a pause with automatic resume disabled, shows a passive information card instead. Follow the options actually shown by your version rather than relying on an old keyboard shortcut.
+
+For Claude, the picker also explains that you can run `claude login` in another terminal to change accounts while the turn waits. The Anthropic pause path detects a changed keychain credential. This account-switch shortcut does not apply to OpenAI-compatible providers.
+
+Waiting is bounded, not indefinite. The usage-limit retry budget is two hours. Claude can probe for a usable account or lifted limit when no reset timestamp is available, including a distant reset while automatic waiting is enabled. OpenAI-compatible quota waiting also uses a two-hour budget and rejects a known reset beyond that wait horizon. Short per-minute throttles use ordinary retry/backoff rather than every 429 becoming a long quota pause.
+
+### Subagents have a separate parking policy
+
+Forked children fail fast by default so the parent can decide what to do. Set `AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT=1` to opt them into waiting. An explicit child `autoResumeOnUsageLimit` value wins over that environment default.
+
+The environment default is ignored for daemon children, where no human is available to switch accounts. A caller can still explicitly opt a child in. The policy applies to both providers; an OpenAI-compatible child waits on the timer/retry path rather than the Claude keychain-switch mechanism.
+
+## Keep scheduled work within budget
+
+Before a scheduled agent task runs, the daemon checks the subscription its configured model uses: Claude for an Anthropic model, or Codex for an OpenAI-compatible model authenticated through ChatGPT. API-key and local-model workloads do not have an applicable subscription-window gate in the same way.
+
+`AFK_DAEMON_BUDGET_SKIP_PCT` defaults to `90`. At or above that utilization, an applicable task is skipped with `budget-over` in its schedule history. A Telegram alert is sent once per budget episode rather than for every skipped task. Shell and built-in tasks are not gated.
+
+`AFK_DAEMON_BUDGET_GATE_DISABLED=1` disables this check. A threshold of `100` also makes the gate pass without fetching. No token, a network error, or stale-only data passes the gate, so it is a workload-management aid, not a hard spending cap.
+
+## Related
+
+<Cards>
+  <Card title="Configure models and providers" href="/configuration/models-providers" description="Choose authentication and the model that draws on your budget." />
+  <Card title="Schedule agent work" href="/guides/scheduling" description="Inspect skipped tasks and choose execution strategies." />
+  <Card title="Environment variables" href="/reference/environment-variables" description="Look up usage, vitals, and daemon budget controls." />
+</Cards>

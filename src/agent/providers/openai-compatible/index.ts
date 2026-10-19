@@ -17,6 +17,7 @@ import type {
   ProviderQuery,
   ProviderQueryArgs,
   ProviderCompleteArgs,
+  ProviderCompleteResult,
 } from '../../provider.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
 import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
@@ -47,13 +48,14 @@ import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspac
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
+import { grantsWorkspacePrompt, providerGrantsTool } from '../shared/tool-grant.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
 import { applyReadOnlyGitPermissions, readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
-import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
+import { completeWithWireWithStop, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
@@ -313,7 +315,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const spw = buildSystemPromptWiring({
       config,
       skillExecutor: this.providerOpts.skillExecutor ?? undefined,
-      hasWorkspaceStore: this.workspaceStore !== undefined,
+      workspacePromptEnabled: grantsWorkspacePrompt((toolName) => this.grantsTool(toolName)),
       readOnlyMemory: this.providerOpts.readOnlyMemory,
       readOnlyState: this.providerOpts.readOnlyState,
       resolvedSessionId: resolvedSession.id,
@@ -418,6 +420,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // AnthropicDirectProvider; the required key on the dispatcher options
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
+      // #4064: MCP-aware unknown-tool messages. Forward a live accessor so that
+      // when a model calls mcp__<server>__<tool> for a failed server the response
+      // names the server and its error instead of the generic "tool does not exist".
+      // Mirrors AnthropicDirectProvider build-dispatcher.ts:389-391.
+      getMcpServerStates: this.providerOpts.mcpManager
+        ? () => this.providerOpts.mcpManager!.getServerStates()
+        : () => [],
     };
     // MCP + custom-tool unions, then operator denies LAST (shared with
     // AnthropicDirectProvider; invariant in tools/permissions-compose.ts).
@@ -533,6 +542,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
     return this.grantManager.getGrants();
   }
 
+  /** See {@link ModelProvider.grantsTool}. Same permissions + store the dispatcher uses. */
+  grantsTool(toolName: string): boolean {
+    return providerGrantsTool(toolName, this.providerOpts.permissions, this.workspaceStore !== undefined);
+  }
+
   close(): void {
     // Only close owned stores; the workspace store is always injected.
     if (!this._injectedMemoryStore) {
@@ -556,6 +570,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
    * `args.baseUrl` overrides the construction option when both are present.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
+    return (await this.completeWithStop(args)).text;
+  }
+
+  /** {@link complete} plus the stop reason (see ModelProvider.completeWithStop). */
+  async completeWithStop(args: ProviderCompleteArgs): Promise<ProviderCompleteResult> {
     const input: OpenAIOneShotInput = {
       model: args.model ?? 'gpt-4o-mini',
       system: args.system,
@@ -569,7 +588,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // setEndpointDefaults) so complete() matches query() credentials.
     if (this._defaultHeaders !== undefined) input.defaultHeaders = this._defaultHeaders;
     if (args.signal) input.signal = args.signal;
-    return completeWithWire(input);
+    return completeWithWireWithStop(input);
   }
 }
 

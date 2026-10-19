@@ -55,11 +55,16 @@ beforeEach(async () => {
   dbPath = join(tmpDir, 'test.db');
   vi.resetModules();
   goalStore = await import('./goal-store.js');
+  // BgResultNotifier.onSettled early-returns when AFK_BG_AUTO_DELIVER=0.
+  // Stub explicitly so the test does not silently pass via that branch if
+  // the env var happens to be unset or disabled in the test runner.
+  vi.stubEnv('AFK_BG_AUTO_DELIVER', '1');
 });
 
 afterEach(() => {
   goalStore.closeStore();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs(); // undo vi.stubEnv() — restoreAllMocks() does NOT cover env stubs
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -238,6 +243,67 @@ describe('Scenario 3 (#3714): goal change while worker runs', () => {
 
     // No superseded annotation — goals matched, result is still relevant
     expect(envelope).not.toContain('superseded');
+  });
+
+  /**
+   * Cleared-goal path (#3976): when a goal was active at dispatch but is
+   * cleared (no current goal) at delivery, the result is superseded.
+   */
+  it('delivered result is marked superseded when the goal was cleared after dispatch', async () => {
+    const { BgResultNotifier } = await import(
+      '../../cli/commands/interactive/bg-result-notifier.js'
+    );
+
+    const registry = makeStubRegistry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const notifier = new BgResultNotifier(registry as any);
+
+    // Goal is active at dispatch time
+    goalStore.setGoal('refactor the auth module', 'parent-session-001');
+    const goalTextAtDispatch = goalStore.getGoal()!.text;
+
+    // Operator clears the goal entirely while the worker runs
+    goalStore.clearGoal();
+    expect(goalStore.getGoal()).toBeNull();
+
+    const job = makeStubJob({ goalTextAtDispatch });
+    registry.emit('settled', job);
+
+    const envelope = notifier.drainInjections();
+
+    // Result should be annotated superseded — goal no longer exists
+    expect(envelope).toContain('superseded="true"');
+  });
+
+  /**
+   * Paused-goal path (#3976): when a goal was active at dispatch but is
+   * paused (non-active status) at delivery, the result is superseded.
+   */
+  it('delivered result is marked superseded when the goal was paused after dispatch', async () => {
+    const { BgResultNotifier } = await import(
+      '../../cli/commands/interactive/bg-result-notifier.js'
+    );
+
+    const registry = makeStubRegistry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const notifier = new BgResultNotifier(registry as any);
+
+    // Goal is active at dispatch time
+    goalStore.setGoal('refactor the auth module', 'parent-session-001');
+    const goalTextAtDispatch = goalStore.getGoal()!.text;
+
+    // Operator pauses the goal while the worker runs
+    goalStore.pauseGoal();
+    const paused = goalStore.getGoal();
+    expect(paused?.status).toBe('paused');
+
+    const job = makeStubJob({ goalTextAtDispatch });
+    registry.emit('settled', job);
+
+    const envelope = notifier.drainInjections();
+
+    // Result should be annotated superseded — goal is no longer active
+    expect(envelope).toContain('superseded="true"');
   });
 
 });

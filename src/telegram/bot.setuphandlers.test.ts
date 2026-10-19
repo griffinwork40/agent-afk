@@ -586,7 +586,7 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
       expect(api).toHaveBeenCalledWith(
         'sendMessage',
         expect.objectContaining({
-          text: expect.stringContaining('Voice and video support is not yet available'),
+          text: expect.stringContaining('Voice transcription is not configured'),
         }),
       );
     });

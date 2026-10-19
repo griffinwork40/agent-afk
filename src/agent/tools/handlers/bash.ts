@@ -94,8 +94,25 @@ function parseBashInput(input: unknown): {
       timeout_ms = bashInput.timeout_ms;
     }
   }
+  // NOTE: this guard is logically unreachable after a background clamp.
+  // When background===true, maxTimeout===MAX_PROCESS_MAX_RUNTIME_MS (86400000 ms).
+  // Any timeout_ms > maxTimeout is clamped TO maxTimeout (≥1000), and any
+  // timeout_ms ≤ maxTimeout that is also < 1000 would have to be a small
+  // positive value (1–999). That path is still guarded here defensively, but
+  // the clamp branch above (line 87) can never produce a sub-1000 value.
   if (background && bashInput.timeout_ms !== undefined && timeout_ms < 1000) {
     throw new Error('timeout_ms must be at least 1000 with run_in_background');
+  }
+  // Emit telemetry AFTER the min-1000 guard so the event is only recorded
+  // when the input is fully validated and the clamped value is final.
+  // Previously emitted before the guard, creating an implicit ordering
+  // dependency (advisory finding from PR #4022 review).
+  if (clampedTimeoutWarning) {
+    void appendRoutingDecision({
+      event: 'tool.bash_timeout_clamped',
+      tool: 'bash',
+      mode: background ? 'background' : 'foreground',
+    });
   }
 
   return {

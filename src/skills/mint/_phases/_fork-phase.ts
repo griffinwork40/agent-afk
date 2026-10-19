@@ -21,6 +21,7 @@ import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
 import type { PhaseRole } from '../../../agent/tools/nesting.js';
 import type { DelegationBudget } from '../../../agent/tools/delegation-budget.js';
+import { mintModelFallback } from './model-fallback.js';
 
 export interface ForkMintPhaseOptions {
   /** Human-readable phase name used in error messages, e.g. `'spec'`. */
@@ -105,6 +106,7 @@ export async function forkMintPhase(opts: ForkMintPhaseOptions): Promise<string>
     },
     idPrefix: phaseId,
     agentType: phaseId,
+    ...mintModelFallback(parentSessionId),
     ...(phaseRole !== undefined ? { phaseRole } : {}),
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });

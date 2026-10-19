@@ -14,6 +14,7 @@ import type {
   ProviderQuery,
   ProviderQueryArgs,
   ProviderCompleteArgs,
+  ProviderCompleteResult,
 } from '../../provider.js';
 import type { OpenAICompatibleProviderOptions } from '../openai-compatible/index.js';
 import { OpenAICompatibleProvider } from '../openai-compatible/index.js';
@@ -138,6 +139,11 @@ export class XaiProvider implements ModelProvider {
     this.lastXaiBaseUrl = xaiBaseUrl;
   }
 
+  /** See {@link ModelProvider.grantsTool}. Delegates to the composed inner provider. */
+  grantsTool(toolName: string): boolean {
+    return this.inner.grantsTool(toolName);
+  }
+
   // Grant-manager surface — forward so slash commands work on Grok sessions.
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
     this.inner.addReadRoot(absPath, source, sessionId);
@@ -171,6 +177,11 @@ export class XaiProvider implements ModelProvider {
   }
 
   async complete(args: ProviderCompleteArgs): Promise<string> {
+    return (await this.completeWithStop(args)).text;
+  }
+
+  /** {@link complete} plus the stop reason, via the inner OpenAI-compatible provider. */
+  async completeWithStop(args: ProviderCompleteArgs): Promise<ProviderCompleteResult> {
     // Prefer last query() resolution (slot forceXai* / dual-cred) over bare
     // construction authMode — complete() has no AgentConfig to re-read forces.
     const forceMode = resolveCompleteForceMode(this.authMode, this.lastResolvedMode);
@@ -198,7 +209,7 @@ export class XaiProvider implements ModelProvider {
       baseURL: endpoint.baseURL,
       defaultHeaders: endpoint.defaultHeaders,
     });
-    return this.inner.complete({
+    return this.inner.completeWithStop({
       ...args,
       apiKey: resolution.apiKey,
       // Invariant: never forward args.baseUrl (suggest engine passes

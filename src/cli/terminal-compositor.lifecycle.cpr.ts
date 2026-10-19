@@ -68,6 +68,7 @@
 import { env } from '../config/env.js';
 import { armCprKeypressGuard, disarmCprKeypressGuard, CPR_KEYPRESS_GRACE_MS } from './input/emit-keypress.js';
 import { CPR_REPLY_RE as _CPR_REPLY_RE_LEAF } from './input/cpr-reply-re.js';
+import { takeReflowPrediction, applyReflowShift, type ReflowHost, type ReflowPrediction } from './terminal-compositor.reflow-shift.js';
 
 /**
  * Regex that matches a complete CPR response: ESC [ row ; col R
@@ -493,13 +494,17 @@ function _requestCpr(self: CprHost, rttObserver?: (rttMs: number) => void): void
     const shrinkTotal = burst?.shrinkTotal ?? 0;
 
     const delta = parsed.row - expectedRow;
+    // Predicted tmux narrowing reflow (0 outside tmux / when unknown). A
+    // top-pinned terminal moves the cursor down by up to N, so widen hi by N.
+    const reflow = takeReflowPrediction(self);
+    const reflowN = reflow?.n ?? 0;
 
     // ── Plausibility guard ────────────────────────────────────────────────
-    // Accumulated range since the last render: delta ∈ [−shrinkTotal, +growTotal].
+    // Accumulated range since the last render: delta ∈ [−shrinkTotal, +growTotal + N].
     // Any measured delta outside this range indicates the cursor moved for
     // reasons we don't model — discard the delta, fall back, repaint.
     const lo = -shrinkTotal;
-    const hi = growTotal;
+    const hi = growTotal + reflowN;
     if (delta < lo || delta > hi) {
       if (env.AFK_DEBUG_COMPOSITOR) {
         process.stderr.write(
@@ -522,9 +527,7 @@ function _requestCpr(self: CprHost, rttObserver?: (rttMs: number) => void): void
       );
     }
     // Apply the delta (may be 0 on a net-zero burst — still repaint below).
-    if (delta !== 0) {
-      applyScrollDelta(self, delta, currentRows);
-    }
+    applyMeasuredShift(self, delta, currentRows, reflow);
     self.cprBurst = null;
     // ALWAYS repaint after the quiescent reply so the frame reflows to the
     // new geometry — even when delta==0, because the debounced resize repaint
@@ -565,6 +568,17 @@ function _requestCpr(self: CprHost, rttObserver?: (rttMs: number) => void): void
     cleanup(onData);
     self.cprBurst = null;
   }
+}
+
+/**
+ * Apply the quiescent burst's measured cursor `delta`, then the predicted
+ * tmux narrowing reflow: rows above the cursor moved by (delta − N), so after
+ * the delta the remaining component is −N (no-op when `reflow` is null).
+ */
+function applyMeasuredShift(self: CprHost, delta: number, newRows: number, reflow: ReflowPrediction | null): void {
+  const preBandTop = self.committedBandTopRow;
+  if (delta !== 0) applyScrollDelta(self, delta, newRows);
+  if (reflow) applyReflowShift(self as unknown as ReflowHost, reflow, delta, preBandTop);
 }
 
 /**

@@ -146,7 +146,7 @@ export async function executeOnce(
     childCwd: parsed.cwd ?? currentCwd,
   });
 
-  const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist } = buildChildConfig({
+  const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist, modelFallback } = buildChildConfig({
     parsed,
     namedAgent,
     depth,
@@ -190,7 +190,7 @@ export async function executeOnce(
     nestedAgentAllowlist: nestedAgentAllowlist as string[] | undefined,
     isolationTeardown, getCancelGeneration, retryCancelGeneration,
     budgetReceipt, childManager, identity, depth,
-    updateCurrentWaveUnit, callId: call.id,
+    updateCurrentWaveUnit, callId: call.id, modelFallback,
   });
   if ('forkError' in forkResult) { budgetReceipt = undefined; return forkResult.result; }
   if (forkResult.cancelled) { budgetReceipt = undefined; return forkResult.result; }

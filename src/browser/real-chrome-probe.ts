@@ -60,9 +60,15 @@ export interface RealChromeProbeOptions {
   platform?: NodeJS.Platform;
   home?: string;
   localAppData?: string;
-  /** Linux: overrides the config-base dir (highest priority, mirrors Puppeteer). */
+  /**
+   * Linux: overrides the config-base dir (highest priority, mirrors Puppeteer).
+   * @remarks Linux-only; ignored on darwin and win32.
+   */
   chromeConfigHome?: string;
-  /** Linux: XDG base-dir override (second priority after chromeConfigHome). */
+  /**
+   * Linux: XDG base-dir override (second priority after chromeConfigHome).
+   * @remarks Linux-only; ignored on darwin and win32.
+   */
   xdgConfigHome?: string;
   terminalBundleId?: string;
   /** Test seam: open-then-close the file, throwing a Node errno error on failure. */

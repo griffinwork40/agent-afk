@@ -83,8 +83,10 @@ export function isValidIsoDate(value: unknown): value is string {
   const offsetMatch = /([+-])(\d{2}):(\d{2})$/.exec(value);
   if (offsetMatch) {
     const sign   = offsetMatch[1] === '+' ? 1 : -1;
-    const offH   = parseInt(offsetMatch[2] ?? '0', 10);
-    const offM   = parseInt(offsetMatch[3] ?? '0', 10);
+    // offsetMatch[2] and [3] are always defined when the regex matches — the
+    // prior `?? '0'` fallbacks were dead code (the regex requires both groups).
+    const offH   = parseInt(offsetMatch[2]!, 10);
+    const offM   = parseInt(offsetMatch[3]!, 10);
     const offsetMs = sign * (offH * 60 + offM) * 60_000;
     const localMs  = ms + offsetMs; // shift UTC epoch to declared-offset local time
     const local    = new Date(localMs);

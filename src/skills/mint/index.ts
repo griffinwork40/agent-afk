@@ -17,7 +17,8 @@
  */
 
 import { registerSkill, type SkillExecutionContext, type SkillMetadata } from '../index.js';
-import { resolveChildModel } from '../../agent/subagent/resolve-child-model.js';
+import { resolveChildModel, defaultTierModelFallback } from '../../agent/subagent/resolve-child-model.js';
+import { setMintModelFallback } from './_phases/model-fallback.js';
 import type { AgentModelInput, IAgentSession } from '../../agent/types.js';
 import type { TraceSink } from '../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../agent/workspace/index.js';
@@ -394,10 +395,13 @@ async function handler(
   // tool-lane entry in both the live overlay and the committed scrollback
   // block. See skills/index.ts SkillExecutionContext.callId.
   const skillCallId = ctx?.callId;
-  const defaultSubagentModel = resolveChildModel({
+  const resolvedPhaseModel = resolveChildModel({
     defaultSubagentModel: ctx?.defaultSubagentModel,
     defaultModel: ctx?.defaultModel,
-  });
+  }, { withSource: true });
+  const defaultSubagentModel = resolvedPhaseModel.model;
+  // Every mint phase fork reads this back (see _phases/model-fallback.ts).
+  setMintModelFallback(parentSessionId, defaultTierModelFallback(resolvedPhaseModel, ctx?.defaultModel));
 
   // Resume path — caller-supplied resumeFrom wins; otherwise reload the last
   // paused state for this session from disk.

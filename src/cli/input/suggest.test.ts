@@ -1101,3 +1101,70 @@ describe('createSuggestEngine — credential is resolved per suggestion model', 
     engine.dispose();
   });
 });
+
+// ── AI-suggestion records (onRecord) ──────────────────────────────────────────
+
+describe('createSuggestEngine — onRecord', () => {
+  const llmCtx = (overrides: Partial<SuggestContext> = {}) =>
+    makeCtx({
+      llmEnabled: () => true,
+      promptSuggestEnabled: () => true,
+      getTranscriptTail: () => 'user: fix the parser\nassistant: fixed',
+      ...overrides,
+    });
+
+  it('records one generated completion per model reply, not per cache hit', async () => {
+    const onRecord = vi.fn();
+    const engine = createSuggestEngine({
+      completeFn: async () => 'git status --short',
+      debounceMs: 0,
+      onRecord,
+    });
+    expect(await engine.getGhost('git st', llmCtx())).toBe('git status --short');
+    expect(await engine.getGhost('git st', llmCtx())).toBe('git status --short');
+    expect(onRecord).toHaveBeenCalledOnce();
+    expect(onRecord).toHaveBeenCalledWith({
+      event: 'generated',
+      source: 'completion',
+      text: 'git status --short',
+      buffer: 'git st',
+      model: expect.any(String),
+    });
+    engine.dispose();
+  });
+
+  it('does not record a rejected (non-continuation) reply', async () => {
+    const onRecord = vi.fn();
+    const engine = createSuggestEngine({ completeFn: async () => 'unrelated', debounceMs: 0, onRecord });
+    expect(await engine.getGhost('git st', llmCtx())).toBeNull();
+    expect(onRecord).not.toHaveBeenCalled();
+    engine.dispose();
+  });
+
+  it('records a generated empty-prompt proposal', async () => {
+    const onRecord = vi.fn();
+    const engine = createSuggestEngine({ completeFn: async () => 'run the parser test', onRecord });
+    await engine.primePromptSuggestion(llmCtx());
+    expect(onRecord).toHaveBeenCalledWith({
+      event: 'generated',
+      source: 'prompt',
+      text: 'run the parser test',
+      model: expect.any(String),
+    });
+    engine.dispose();
+  });
+
+  it('forwards recordOutcome and swallows a throwing sink', async () => {
+    const onRecord = vi.fn(() => {
+      throw new Error('disk full');
+    });
+    const engine = createSuggestEngine({ completeFn: async () => 'run the parser test', onRecord });
+    await expect(engine.primePromptSuggestion(llmCtx())).resolves.toBeUndefined();
+    expect(engine.peekPromptSuggestion()).toBe('run the parser test');
+    expect(() =>
+      engine.recordOutcome?.({ event: 'dismissed', source: 'prompt', text: 'x' }),
+    ).not.toThrow();
+    expect(onRecord).toHaveBeenCalledTimes(2);
+    engine.dispose();
+  });
+});

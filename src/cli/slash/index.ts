@@ -50,6 +50,7 @@ import { goodCmd, badCmd } from './commands/feedback.js';
 import { bugCmd } from './commands/bug.js';
 import { inboxCmd } from './commands/inbox.js';
 import { peersCmd } from './commands/peers.js';
+import { handoffsCommands } from './commands/handoffs.js';
 import '../trusted-skills-registered.js';
 
 export function registerAll(): void {
@@ -93,6 +94,7 @@ export function registerAll(): void {
   register(bugCmd);
   register(inboxCmd);
   register(peersCmd);
+  for (const cmd of handoffsCommands) register(cmd);
   // Placeholders for plugin-backed commands. The real lists get registered
   // after `session.waitForInitialization()` resolves, via
   // `registerPluginSkills(session)` / `registerPluginAgents(session)` in

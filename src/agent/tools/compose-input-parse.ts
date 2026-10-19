@@ -8,12 +8,9 @@
  * @module agent/tools/compose-input-parse
  */
 
-import path from 'path';
 import type { DAGEdge } from '../dag.js';
 import { parseComposeBudgets, parseToolRounds } from './compose-input-parse.budgets.js';
-import { isReadDenied, READ_DENYLIST_ENTRY_MARKER } from './handlers/read-denylist.js';
-import { isTooBroadRoot, ungatedSensitiveRoot } from './subagent/root-validation.js';
-import { realpathSafe } from './handlers/_cwd-utils.js';
+import { validateRootPath } from './subagent/root-validation.js';
 
 export interface ComposeNodeInput {
   id: string;
@@ -93,36 +90,8 @@ function parseNodePaths(n: Record<string, unknown>, id: string): {
   readRoots?: string[];
   writeRoots?: string[];
 } {
-  let cwd: string | undefined;
-  if (n['cwd'] !== undefined) {
-    if (typeof n['cwd'] !== 'string' || n['cwd'].trim().length === 0) {
-      throw new Error(`Node "${id}" cwd must be a non-empty string`);
-    }
-    cwd = n['cwd'];
-    if (!path.isAbsolute(cwd)) {
-      throw new Error(`Node "${id}" cwd must be an absolute path (got "${cwd}")`);
-    }
-    if (cwd.split(/[/\\]/).includes('..')) {
-      throw new Error(`Node "${id}" cwd must not contain ".." segments`);
-    }
-    // S-2: breadth guards on cwd — check both lexical path and realpath-resolved
-    // form, same as the agent tool's input-parse.ts, so a symlinked cwd that
-    // resolves to home or a credential root is caught too.
-    const cwdReal = realpathSafe(cwd);
-    for (const form of [...new Set([cwd, cwdReal])]) {
-      if (isTooBroadRoot(form)) {
-        throw new Error(
-          `Node "${id}" cwd is too broad (filesystem root, home, or an ancestor of home/AFK dirs): "${cwd}"`,
-        );
-      }
-      const sensitive = ungatedSensitiveRoot(form);
-      if (sensitive !== undefined) {
-        throw new Error(
-          `Node "${id}" cwd would un-gate credential root "${sensitive}": "${cwd}"`,
-        );
-      }
-    }
-  }
+  const cwd = n['cwd'] === undefined ? undefined
+    : validateRootPath(n['cwd'], 'cwd', { kind: 'compose', nodeId: id });
 
   const readRoots = parseRootArray(n, id, 'readRoots');
   const writeRoots = parseRootArray(n, id, 'writeRoots');
@@ -140,50 +109,9 @@ function parseRootArray(
   if (!Array.isArray(n[field])) {
     throw new Error(`Node "${id}" ${field} must be an array`);
   }
-  const roots: string[] = [];
-  for (const r of n[field] as unknown[]) {
-    if (typeof r !== 'string' || r.trim().length === 0) {
-      throw new Error(`Node "${id}" ${field} entries must be non-empty strings`);
-    }
-    if (!path.isAbsolute(r)) {
-      throw new Error(`Node "${id}" ${field} entry must be an absolute path (got "${r}")`);
-    }
-    if (r.split(/[/\\]/).includes('..')) {
-      throw new Error(`Node "${id}" ${field} entry must not contain ".." segments`);
-    }
-    // S-2: breadth guards — isTooBroadRoot and ungatedSensitiveRoot applied to
-    // every root entry. Checked on both lexical and realpath-resolved spellings
-    // so a symlinked path that resolves to home or a credential ancestor is
-    // caught at parse time rather than only downstream in validateDagNodeRoots.
-    const rReal = realpathSafe(r);
-    for (const form of [...new Set([r, rReal])]) {
-      if (isTooBroadRoot(form)) {
-        throw new Error(
-          `Node "${id}" ${field} entry is too broad (filesystem root, home, or an ancestor of home/AFK dirs): ${JSON.stringify(r)}`,
-        );
-      }
-      const sensitive = ungatedSensitiveRoot(form);
-      if (sensitive !== undefined) {
-        throw new Error(
-          `Node "${id}" ${field} entry would un-gate credential root "${sensitive}": ${JSON.stringify(r)}`,
-        );
-      }
-    }
-    // S-3: isReadDenied applied to BOTH readRoots and writeRoots. Previously
-    // gated to readRoots only (mirroring the original agent path's #740
-    // asymmetry), but a writeRoots entry pointing at a credential path is just
-    // as dangerous — a node that can write to ~/.ssh can exfiltrate or corrupt
-    // keys. isReadDenied realpaths internally, so a symlinked credential path
-    // is caught here too.
-    const denied = isReadDenied(r);
-    if (denied.denied) {
-      throw new Error(
-        `Node "${id}" ${field} entry must not target a protected/credential path ` +
-          `(matches ${READ_DENYLIST_ENTRY_MARKER} ${denied.matched}), got: ${JSON.stringify(r)}`,
-      );
-    }
-    roots.push(r);
-  }
+  const roots = Array.from(n[field] as unknown[], (entry) =>
+    validateRootPath(entry, field, { kind: 'compose', nodeId: id }),
+  );
   return roots.length > 0 ? roots : undefined;
 }
 

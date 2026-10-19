@@ -2,10 +2,12 @@
  * Tests for the shared session-cost definition (#3879).
  */
 import { describe, expect, it } from 'vitest';
-import { computeSessionCost, type CostEventLike } from './cost.js';
+import { computeSessionCost, SessionCostAccumulator, type CostEventLike } from './cost.js';
 import { generateReceipt } from './receipt.js';
 import { parseTraceSignals } from '../facets/derive.trace.js';
 import type { TraceEvent } from './types.js';
+import { InMemoryTraceWriter } from './writer.js';
+import { emitClosureEvent, type ClosureSignals, type ClosureTokenCounters } from '../session/closure-emitter.js';
 
 const ts = '2026-10-16T00:00:00.000Z';
 let seq = 0;
@@ -222,5 +224,133 @@ describe('consumers agree with computeSessionCost (#3879 acceptance)', () => {
     const signals = parseTraceSignals(toJsonl([started('a', 'root')]));
     expect(signals).not.toHaveProperty('totalCostUsd');
     expect(signals).not.toHaveProperty('subagentCostUsd');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4007 — closure provenance through the real emitClosureEvent path
+//
+// The #3932 AC1/AC2 tests inject `subagentId` via the synthetic closureChild()
+// helper, proving the accumulator logic but NOT that emitClosureEvent actually
+// stamps the field. This suite exercises the real emission path so that a
+// future deletion of the `subagentId` stamping in closure-emitter.ts would
+// cause a deterministic test failure rather than a silent cost-equality
+// regression.
+// ---------------------------------------------------------------------------
+
+describe('#4007 closure provenance through emitClosureEvent', () => {
+  const cleanSignal = new AbortController().signal;
+  const zeroTokens: ClosureTokenCounters = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  const baseSignals: ClosureSignals = {
+    dispatchReason: 'close',
+    signal: cleanSignal,
+    maxTurnsHit: false,
+    hookBlocked: false,
+    lastStopReason: undefined,
+    sawProviderError: false,
+  };
+
+  it('emitClosureEvent stamps subagentId onto the closure payload', async () => {
+    // Verifies that the stamping line in closure-emitter.ts is reachable and
+    // actually writes the field — the synthetic closureChild() helper in AC1
+    // cannot catch a deletion of this line.
+    const writer = new InMemoryTraceWriter();
+    await emitClosureEvent(writer, {
+      ...baseSignals,
+      subagentId: 'child-abc',
+      finalTurnCount: 1,
+      finalCostUsd: 0.5,
+      runningTokens: { input: 10, output: 5, cacheRead: 0, cacheCreation: 0 },
+    });
+
+    expect(writer.events).toHaveLength(1);
+    const ev = writer.events[0];
+    expect(ev?.kind).toBe('closure');
+    if (ev?.kind === 'closure') {
+      expect(ev.payload.subagentId).toBe('child-abc');
+    }
+  });
+
+  it('emitClosureEvent omits subagentId for root (no subagentId input)', async () => {
+    const writer = new InMemoryTraceWriter();
+    await emitClosureEvent(writer, {
+      ...baseSignals,
+      finalTurnCount: 1,
+      finalCostUsd: 0.5,
+      runningTokens: zeroTokens,
+    });
+
+    const ev = writer.events[0];
+    expect(ev?.kind).toBe('closure');
+    if (ev?.kind === 'closure') {
+      expect(ev.payload.subagentId).toBeUndefined();
+    }
+  });
+
+  it('accumulator takes the provenance branch when closure is emitted via emitClosureEvent with subagentId', async () => {
+    // This is the key regression guard: a child closure emitted through the
+    // real path must make the accumulator treat the root closure as lost
+    // (rootClosureLost=true via subagentId presence) and add sealRoot to the
+    // child closure sum — yielding $2, not $1 as the old equality heuristic did.
+    const childWriter = new InMemoryTraceWriter();
+    await emitClosureEvent(childWriter, {
+      ...baseSignals,
+      dispatchReason: 'close',
+      subagentId: 'child-xyz',
+      finalTurnCount: 2,
+      finalCostUsd: 1.0,
+      runningTokens: zeroTokens,
+    });
+
+    const childClosureEvent = childWriter.events[0];
+    expect(childClosureEvent?.kind).toBe('closure');
+
+    // Construct a realistic trace: child closure then a root seal (sealRoot=$1).
+    const sealEvent: CostEventLike = {
+      kind: 'session_sealed',
+      payload: { finalCostUsd: 1.0, subagentCostUsd: 0, finalTurnCount: 3, closedAt: ts, status: 'succeeded' },
+    };
+
+    const acc = new SessionCostAccumulator();
+    acc.add(childClosureEvent!);
+    acc.add(sealEvent);
+    const result = acc.result();
+
+    // rootClosureLost=true because lastClosureSubagentId='child-xyz' (not null).
+    // total = closureSum($1) + sealRoot($1) = $2.
+    expect(result.totalCostUsd).toBe(2);
+    expect(result.rootCostUsd).toBe(1);
+    expect(result.subagentCostUsd).toBe(1);
+    expect(result.source).toBe('closures+seal');
+  });
+
+  it('accumulator falls back to equality heuristic when subagentId is absent (root closure)', async () => {
+    // Mirrors #3932 AC2 but through the real emission path: a root closure
+    // (no subagentId) whose cost equals sealRoot → rootClosureLost=false → $1.
+    const rootWriter = new InMemoryTraceWriter();
+    await emitClosureEvent(rootWriter, {
+      ...baseSignals,
+      finalTurnCount: 1,
+      finalCostUsd: 1.0,
+      runningTokens: zeroTokens,
+    });
+
+    const rootClosureEvent = rootWriter.events[0];
+    expect(rootClosureEvent?.kind).toBe('closure');
+
+    const sealEvent: CostEventLike = {
+      kind: 'session_sealed',
+      payload: { finalCostUsd: 1.0, subagentCostUsd: 0, finalTurnCount: 1, closedAt: ts, status: 'succeeded' },
+    };
+
+    const acc = new SessionCostAccumulator();
+    acc.add(rootClosureEvent!);
+    acc.add(sealEvent);
+    const result = acc.result();
+
+    // lastClosureSubagentId=null (root) → equality fallback: $1===$1 → rootClosureLost=false.
+    expect(result.totalCostUsd).toBe(1);
+    expect(result.rootCostUsd).toBe(1);
+    expect(result.subagentCostUsd).toBe(0);
   });
 });

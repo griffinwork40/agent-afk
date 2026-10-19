@@ -18,6 +18,7 @@ import { computeLineDiff } from '../../../utils/diff.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { sha256Hex } from './patch-validate.js';
 import { isBlankInput } from '../subagent/optional-input.js';
+import { appendLspDiagnostics } from './lsp-diagnostics.js';
 
 /**
  * Input shape for the edit_file tool (validated at runtime).
@@ -232,7 +233,10 @@ const editFileImpl = async (
       occurrences === 1
         ? `Replaced 1 occurrence in ${file_path}`
         : `Replaced ${occurrences} occurrences in ${file_path}`;
-    const resultMsg = snapshotWarning ? `${baseMsg}\nWARNING: ${snapshotWarning}` : baseMsg;
+    const lspSuffix = await appendLspDiagnostics(writeTarget);
+    const resultMsg = snapshotWarning
+      ? `${baseMsg}\nWARNING: ${snapshotWarning}${lspSuffix}`
+      : `${baseMsg}${lspSuffix}`;
 
     const _t0 = performance.now();
     const diff = computeLineDiff(content, modified);

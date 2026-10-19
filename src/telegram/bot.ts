@@ -15,6 +15,8 @@ import { BOT_COMMAND_DESCRIPTORS } from './bot.command-descriptors.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { handleFarmCallback } from './handlers/farm-callbacks.js';
 import { MessageHandler } from './handlers/message.js';
+import type { AudioTranscriber } from './audio-transcriber.js';
+import { registerAudioHandlers } from './bot.audio-handler.js';
 import { createAllowlistMiddleware } from './allowlist.js';
 import { FARM_CALLBACK_PREFIX } from './farm-callback-data.js';
 import { makeTelegramElicitationHandler } from './elicitation-handler.js';
@@ -51,6 +53,14 @@ export interface BotOptions extends SessionManagerOptions {
    * in the bootstrap.
    */
   allowedChatIds: Set<number>;
+
+  /**
+   * Optional audio transcriber for voice/audio messages.  When null or omitted,
+   * voice and audio messages receive a refusal reply naming the env var to set.
+   * Constructed by entry.ts from the typed env object and injected here so the
+   * single env read-point (env.ts) is preserved.
+   */
+  transcriber?: AudioTranscriber | null;
 
   /**
    * Chat IDs with the opt-in "tag-only" response policy: in these chats the bot
@@ -253,8 +263,16 @@ export class TelegramBot {
     // matches the 'text' filter even if the user added a caption).
     this.bot.on('photo', (ctx) => runDetached(this.messageHandler.handlePhoto(ctx)));
     this.bot.on('document', (ctx) => runDetached(this.messageHandler.handleDocument(ctx)));
-    // Acknowledge unsupported message types so users know why the bot is silent.
-    this.bot.on(['voice', 'video', 'sticker', 'video_note', 'audio'], (ctx) => { if (ctx.chat) void ctx.reply('I can process text, photo, and document messages. Voice and video support is not yet available.').catch((e) => this.log('Failed to send unsupported-type reply:', e)); });
+    // Voice/audio → transcript → text turn (+ video/sticker refusal). See bot.audio-handler.ts.
+    registerAudioHandlers(
+      this.bot,
+      this.options.transcriber ?? null,
+      this.messageHandler,
+      runDetached,
+      this.log.bind(this),
+      this.options.tagOnlyChats ?? new Set(),
+    );
+
 
     // Inline-button callbacks emitted by the farm digest. The allowlist
     // middleware (registered above) already filters callback_query updates

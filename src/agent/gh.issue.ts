@@ -106,6 +106,9 @@ export async function createIssue(
     // validation (e.g. validateIssueUrl threw). Preserve the original Error
     // message so callers see "gh issue create failed (unknown): invalid issue URL"
     // instead of the useless "gh issue create failed (unknown): ".
+    // GhError.stderr stays raw (the original stderr bytes) while `message`
+    // uses the enriched `detail` string — which falls back to err.message when
+    // stderr is empty (e.g. "invalid issue URL" from validateIssueUrl).
     const detail = stderr.trim() || (err instanceof Error ? err.message : '');
     throw new GhError(`gh issue create failed (${kind}): ${detail}`, kind, e.exitCode ?? 1, stderr);
   }

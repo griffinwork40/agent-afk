@@ -15,6 +15,7 @@ import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { VerifyResult } from './verify.js';
 import type { BuildResult } from './build.js';
 import { runVerifyPhase } from './verify.js';
+import { mintModelFallback } from './model-fallback.js';
 
 export async function runHealPhase(
   plan: string,
@@ -126,6 +127,7 @@ export async function runHealPhase(
       },
       idPrefix: 'mint-heal',
       agentType: 'mint-heal',
+      ...mintModelFallback(parentSession.sessionId),
       ...(skillCallId ? { parentId: skillCallId } : {}),
     });
 

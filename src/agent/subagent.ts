@@ -36,6 +36,7 @@ import { resolveReadScope, composeWriteRoots } from './subagent/resolve-fork-sco
 import { providerForModel, type BundledProviderName } from './providers/index.js';
 import { validatePhaseRole } from './subagent/fork-validation.js';
 import { assembleChildConfig, type ParentForkFields } from './subagent/fork-child-config.js';
+import { buildForkModelFallback } from './subagent/fork-model-fallback.js';
 import { emitForkStarted, appendForkTelemetry, emitSubagentStartedEvent } from './subagent/fork-lifecycle.js';
 import { SubagentHandleImpl, type SubagentHandle } from './subagent/handle.js';
 import { resolveForkInputs } from './subagent/fork-resolution.js';
@@ -460,6 +461,11 @@ export class SubagentManager {
       throw err;
     }
     const { handle, effectiveAgentType, effectiveResolvedAgentType } = constructed;
+    // Default-tier model fallback (single choke point for every fork path):
+    // see ./subagent/handle.model-fallback.ts.
+    handle._modelFallback = buildForkModelFallback({
+      options, childConfig, id, parentApiKey: this.parentApiKey?.(), parentBaseUrl: this.parentBaseUrl, parentProvider: this.parentProvider, workspaceStore: this.workspaceStore,
+    });
     // #3961: publish each stream into the root registry the moment it starts, so
     // a depth-2+ handle still ACTIVE in a nested manager is visible at seal.
     handle._billingStreamSink = this.billingStreamRegistry;

@@ -27,7 +27,7 @@ import {
 export interface RequestBodyInputs {
   model: string;
   messages: OpenAIMessage[];
-  /** Tools to advertise this turn; undefined on a wind-down round (tools stripped). */
+  /** Tools to advertise this turn; undefined when none are available. Wind-down rounds send the same array. */
   activeTools: OpenAIFunctionTool[] | undefined;
   maxOutputTokens: number | undefined;
   effort: EffortLevel | undefined;
