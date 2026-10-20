@@ -157,6 +157,7 @@ const GENERAL_PURPOSE_MAX_TOOL_USE_ITERATIONS = 150;
  * shadowing leak into the next in long-lived processes (tests, telegram).
  */
 export function builtinAgents(): Map<string, RegisteredAgent> {
+  const grants = researchAgentRegistryGrants();
   const entries: RegisteredAgent[] = [
     {
       name: researchAgent.name,
@@ -165,7 +166,7 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         description: researchAgent.description,
         prompt: withRegistryGrants(
           vendoredPromptBody(researchAgent.systemPrompt),
-          researchAgentRegistryGrants(),
+          grants,
           researchAgent.allowedTools,
         ),
         // The scoped `Agent(git-investigator)` grant matches the vendored
@@ -199,7 +200,7 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         // `git_read` is added by `researchAgentRegistryGrants()` when
         // `AFK_READONLY_GIT_TOOL` is on (#4059): research-agent can then answer
         // git questions directly, without the nested git-investigator hop.
-        tools: [...researchAgent.allowedTools, ...researchAgentRegistryGrants()],
+        tools: [...researchAgent.allowedTools, ...grants],
         // Anti-runaway bound (see READONLY_AGENT_MAX_TOOL_USE_ITERATIONS): a
         // read-only research/review agent that keeps tool-calling without ever
         // emitting a final message otherwise runs unbounded on the (uncapped)
