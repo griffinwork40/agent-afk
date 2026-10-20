@@ -58,6 +58,11 @@ import type { TraceEvent, HookDecisionPayload } from '../../agent/trace/types.js
  * counting, which is observable as a drop to zero — easy to notice and fix.
  */
 export const SHADOW_GIT_OBSERVE_REASON_PREFIX = 'shadow-git observe-only';
+// Invariant: SHADOW_GIT_OBSERVE_REASON_PREFIX must equal SHADOW_GIT_REASON_PREFIX
+// in src/agent/shadow-git-detect.ts. They are kept as separate literals so
+// this aggregator stays decoupled from the runtime module (same pattern as
+// denial-circuit-breaker.ts). The equality is asserted in the test suite
+// (shadow-git-observe.test.ts: 'matches the shadow-git-detect producer prefix').
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -189,6 +194,11 @@ export function aggregateShadowGitObserve(
     for (const ev of events) {
       if (ev.kind !== 'hook_decision') continue;
       const p = ev.payload as HookDecisionPayload;
+      // Invariant: only 'approve' decisions are counted. The shadow-git guard
+      // runs in observe-only mode and always emits decision: 'approve' — it
+      // never blocks. Events with decision: 'block' (from other guards that
+      // happen to share the reason prefix) must not be counted here.
+      if (p.decision !== 'approve') continue;
       if (typeof p.reason !== 'string') continue;
       if (!p.reason.startsWith(SHADOW_GIT_OBSERVE_REASON_PREFIX)) continue;
 

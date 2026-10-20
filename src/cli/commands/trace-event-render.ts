@@ -81,7 +81,7 @@ export function renderEvent(event: TraceEvent, ctx: RenderContext): string | nul
       if (p.decision === undefined) return null; // all handlers passed — noise
       // Named risk category (#3900): bracket after the hookEvent so reviewers
       // see WHY an action was held or blocked, not just that it was.
-      const cat = p.riskCategory ? ` [${p.riskCategory}]` : '';
+      const cat = p.riskCategory !== undefined ? ` [${p.riskCategory}]` : '';
       if (p.decision === 'block') {
         const tool = p.blockedTool ? ` ${p.blockedTool}` : '';
         const reason = p.reason ? `  (${truncate(p.reason, 80)})` : '';
