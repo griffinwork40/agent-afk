@@ -40,18 +40,26 @@ pnpm exec tsx scripts/tty-replay.ts ~/afk-tty.cast --at 4.2
 
 # Stop at the first output event that contains a given string:
 pnpm exec tsx scripts/tty-replay.ts ~/afk-tty.cast --until-match "afk ›"
+
+# Override the starting size (the header size is used by default; a header of
+# 0x0, recorded on a PTY with no window size, falls back to 80x24):
+pnpm exec tsx scripts/tty-replay.ts ~/afk-tty.cast --cols 230 --rows 57
 ```
 
 Output looks like:
 
 ```
-── Terminal snapshot (220×50) ──
+── Terminal snapshot (230×57) ──
 
-  0: ╭─ tool: bash ─────────
-  1: │ pnpm test
+  h0: (scrollback rows are labelled h<n>)
   ...
- 49: afk ›
-     ^-- row 48 should be blank; if it shows the last reply line, that's the bug
+── visible screen (rows are CUP-addressable) ──
+   1: ╭─ ✓ Done ─────────
+  ...
+  48: afk  ›
+  49:            CLI will use his signature ...   <-- the stale row: should be blank
+  ...
+  57: claude-opus-5-5 · ... (status line)
 
 ── End of snapshot ──
 ```

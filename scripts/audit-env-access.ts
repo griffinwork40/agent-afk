@@ -98,14 +98,6 @@ const ALLOWED_FILES: ReadonlyArray<{ file: string; reason: string }> = [
     reason:
       'Reads process.env to build a MINIMAL allowlist for spawned hook subprocesses: a fixed set of runtime-safe vars (PATH/HOME/SHELL/LANG/TERM/TMPDIR/TMP/TEMP/USER/LOGNAME) plus non-secret AFK_* context vars, then named additions (AFK_PROJECT_DIR/SESSION_ID/HOOK_EVENT/TOOL_NAME). NOT whole-env forwarding — secrets, including AFK_-prefixed credential aliases (AFK_TELEGRAM_BOT_TOKEN/AFK_LOCAL_API_KEY/AFK_OPENAI_API_KEY), are deliberately excluded.',
   },
-  {
-    file: 'src/cli/tty-trace.ts',
-    reason:
-      'Reads two OS-level vars that are outside the AFK domain and do not belong in ENV_REGISTRY: ' +
-      'HOME (to expand a leading ~/ in the cast path — same expansion pattern as paths.ts) and ' +
-      'TERM (recorded verbatim in the asciinema v2 header for replay fidelity). ' +
-      'Both are bounded static reads of well-known POSIX vars, not whole-env forwarding.',
-  },
 ];
 
 interface Violation {
