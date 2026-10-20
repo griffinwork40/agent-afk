@@ -47,4 +47,19 @@ export const TOOLS_ENV_REGISTRY = [
     example: '3000',
     category: 'misc',
   },
+  {
+    name: 'AFK_LSP_SYMBOLS_TIMEOUT_MS',
+    description:
+      'Hard timeout in milliseconds for code_symbols (go-to-definition / ' +
+      'find-references) LSP queries (AFK_LSP_DIAGNOSTICS=1). Symbol queries ' +
+      'can require a cold-start index build and therefore need a longer budget ' +
+      'than the post-edit diagnostics timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS). ' +
+      'Default 5000 (5 s). Raise for large monorepos where the first query ' +
+      'triggers a full project load.',
+    type: 'number',
+    required: false,
+    default: '5000',
+    example: '10000',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];

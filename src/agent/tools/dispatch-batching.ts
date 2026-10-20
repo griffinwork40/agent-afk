@@ -43,6 +43,9 @@ const SAFE_TOOLS: ReadonlySet<string> = new Set(
     skillTool,
     composeTool,
     gitReadTool,
+    // codeSymbolsTool: concurrencySafe:true because each invocation spawns
+    // its own isolated typescript-language-server process with no shared
+    // state, making parallel calls independently safe.
     codeSymbolsTool,
     ...memoryToolSchemas,
     ...stateToolSchemas,

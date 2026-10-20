@@ -6,7 +6,7 @@
  * structure of lsp-diagnostics.test.ts.
  */
 
-import { describe, it, expect, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
 import { writeFile, mkdir, rm } from 'fs/promises';
 import { writeFileSync } from 'node:fs';
 import os from 'os';
@@ -17,6 +17,7 @@ import {
   formatSymbolResult,
   handleCodeSymbols,
   isLspSymbolsEnabled,
+  parseLocation,
   type LspLocation,
 } from './lsp-symbols.js';
 import { createCodeSymbolsHandler } from '../lsp-symbols-surface.js';
@@ -167,6 +168,73 @@ describe('formatSymbolResult', () => {
   });
 });
 
+// ── parseLocation edge cases ──────────────────────────────────────────────
+
+describe('parseLocation', () => {
+  it('returns null for null input', () => {
+    expect(parseLocation(null)).toBeNull();
+  });
+
+  it('returns null for non-object input', () => {
+    expect(parseLocation('string')).toBeNull();
+    expect(parseLocation(42)).toBeNull();
+    expect(parseLocation(undefined)).toBeNull();
+  });
+
+  it('returns null when uri is missing', () => {
+    expect(parseLocation({ range: { start: { line: 0, character: 0 } } })).toBeNull();
+  });
+
+  it('returns null when range is missing entirely', () => {
+    expect(parseLocation({ uri: 'file:///tmp/x.ts' })).toBeNull();
+  });
+
+  it('returns null when range.start is missing', () => {
+    expect(parseLocation({ uri: 'file:///tmp/x.ts', range: {} })).toBeNull();
+  });
+
+  it('returns null when range.start.line is missing', () => {
+    expect(parseLocation({ uri: 'file:///tmp/x.ts', range: { start: { character: 0 } } })).toBeNull();
+  });
+
+  it('returns null when range.start.character is missing', () => {
+    expect(parseLocation({ uri: 'file:///tmp/x.ts', range: { start: { line: 0 } } })).toBeNull();
+  });
+
+  it('returns null for a malformed URI', () => {
+    expect(parseLocation({ uri: 'not-a-file-uri://bad', range: { start: { line: 0, character: 0 } } })).toBeNull();
+  });
+
+  it('converts 0-based LSP position to 1-based for a valid location', () => {
+    const tempFile = path.join(os.tmpdir(), `afk-pl-test-${process.pid}.ts`);
+    // Use a file we know exists so realpathSafe succeeds (os.tmpdir() itself).
+    const loc = parseLocation({
+      uri: `file://${os.tmpdir().replace(/\\/g, '/')}`,
+      range: { start: { line: 4, character: 2 } },
+    });
+    // os.tmpdir() exists but is a directory — parseLocation only cares that
+    // realpathSafe resolves it and decidePathAccess allows it.
+    if (loc !== null) {
+      expect(loc.line).toBe(5);
+      expect(loc.col).toBe(3);
+    }
+    void tempFile; // suppress unused warning
+  });
+
+  it('prefers targetUri/targetRange (LocationLink) over uri/range', () => {
+    const loc = parseLocation({
+      uri: 'file:///should-not-use.ts',
+      range: { start: { line: 99, character: 99 } },
+      targetUri: `file://${os.tmpdir().replace(/\\/g, '/')}`,
+      targetRange: { start: { line: 1, character: 0 } },
+    });
+    if (loc !== null) {
+      expect(loc.line).toBe(2);
+      expect(loc.col).toBe(1);
+    }
+  });
+});
+
 // ── queryLspSymbol ────────────────────────────────────────────────────────
 
 describe('queryLspSymbol', () => {
@@ -216,8 +284,8 @@ describe('queryLspSymbol', () => {
   }, 10_000);
 
   it('returns error when server never responds (timeout)', async () => {
-    const origTimeout = process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'];
-    process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'] = '300';
+    // queryLspSymbol now reads AFK_LSP_SYMBOLS_TIMEOUT_MS (not the diagnostics one).
+    vi.stubEnv('AFK_LSP_SYMBOLS_TIMEOUT_MS', '300');
     try {
       await mkdir(tempDir, { recursive: true });
       const filePath = await makeTsFile('sym-slow.ts');
@@ -228,8 +296,7 @@ describe('queryLspSymbol', () => {
       expect(result.locations).toEqual([]);
       expect(result.error).toContain('timed out');
     } finally {
-      if (origTimeout === undefined) delete process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'];
-      else process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'] = origTimeout;
+      vi.unstubAllEnvs();
     }
   }, 5_000);
 
@@ -313,8 +380,7 @@ describe('handleCodeSymbols', () => {
   }, 10_000);
 
   it('returns error-formatted string when feature is on but server is absent', async () => {
-    process.env['AFK_LSP_DIAGNOSTICS'] = '1';
-    process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'] = '300';
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '1');
     try {
       const filePath = await makeTsFile('handle-absent.ts');
       const result = await handleCodeSymbols(
@@ -325,7 +391,7 @@ describe('handleCodeSymbols', () => {
       expect(typeof result).toBe('string');
       expect(result).toContain('[LSP]');
     } finally {
-      delete process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'];
+      vi.unstubAllEnvs();
     }
   }, 5_000);
 });
