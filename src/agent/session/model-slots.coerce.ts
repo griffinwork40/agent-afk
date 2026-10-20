@@ -15,22 +15,8 @@ import {
   DIRECT_MODEL_ALIASES,
   MAX_CONTEXT_WINDOW_OVERRIDE,
 } from './model-slots.js';
-import type { ModelSlotBinding, SlotProvider } from './model-slots.js';
-
-function normalizeSlotProvider(value: unknown): SlotProvider | undefined {
-  if (typeof value !== 'string') return undefined;
-  const lowered = value.trim().toLowerCase();
-  if (lowered === 'anthropic' || lowered === 'anthropic-direct') return 'anthropic';
-  if (lowered === 'openai' || lowered === 'openai-compatible') return 'openai';
-  if (lowered === 'chatgpt-oauth' || lowered === 'chatgpt') return 'chatgpt-oauth';
-  if (lowered === 'xai') return 'xai';
-  if (lowered === 'xai-oauth' || lowered === 'xai_oauth') return 'xai-oauth';
-  return undefined;
-}
-
-function parseStringField(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
+import type { ModelSlotBinding } from './model-slots.js';
+import { normalizeSlotProvider, parseStringField } from './model-slots.utils.js';
 
 function hasControlChars(value: string): boolean {
   // eslint-disable-next-line no-control-regex

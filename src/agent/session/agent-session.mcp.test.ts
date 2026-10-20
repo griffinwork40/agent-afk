@@ -21,12 +21,17 @@
  * @module agent/session/agent-session.mcp.test
  */
 
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import type { McpManager } from '../mcp/manager.js';
 import type { ModelProvider, ProviderEvent, ProviderQuery, ProviderQueryArgs } from '../provider.js';
 import type { AgentConfig } from '../types.js';
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const MCP_FIXTURE = resolve(__dirname, '../mcp/__fixtures__/test-server.mjs');
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -377,6 +382,97 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
     await callerManager.disconnectAll();
   });
 
+  // -------------------------------------------------------------------------
+  // End-to-end: real stdio fixture connected through an SDK AgentSession
+  // (#4075 item 1 — #4063 acceptance: "an SDK session configured with a
+  // working stdio server can call its tools")
+  // -------------------------------------------------------------------------
+
+  it('(e2e) mcp__* tools from a working stdio fixture reach the provider', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    // Build the real manager from the fixture so we can spy on it — the
+    // session will receive it as a caller-supplied mcpManager (avoiding the
+    // timing-sensitive fromConfig spawn inside AgentSession init).
+    const manager = await McpManagerCls.fromConfig({
+      testsrv: { type: 'stdio', command: process.execPath, args: [MCP_FIXTURE] },
+    });
+
+    try {
+      const states = manager.getServerStates();
+      expect(states.length).toBe(1);
+      expect(states[0]?.serverName).toBe('testsrv');
+      expect(states[0]?.status).toBe('connected');
+      // The fixture exposes 3 tools (add, echo, boom).
+      expect(states[0]?.toolCount).toBe(3);
+
+      // Wire names are prefixed: mcp__<serverName>__<toolName>.
+      const wireNames = manager.getMcpToolWireNames();
+      expect(wireNames).toContain('mcp__testsrv__add');
+      expect(wireNames).toContain('mcp__testsrv__echo');
+      expect(wireNames).toContain('mcp__testsrv__boom');
+
+      // Build an AgentSession with the pre-built manager — the provider will
+      // see mcp__testsrv__* tools in its tool list.
+      const session = new AgentSession({
+        model: 'claude-haiku-4-5',
+        apiKey: 'test-key',
+        persistSession: false,
+        cwd: process.cwd(),
+        mcpManager: manager,
+      });
+
+      await session.waitForInitialization();
+
+      // mcpServerStatus() should reflect the connected fixture server.
+      const statuses = await session.mcpServerStatus();
+      expect(statuses.length).toBeGreaterThan(0);
+      const srv = statuses.find((s) => s.name === 'testsrv');
+      expect(srv).toBeDefined();
+      expect(srv?.status).toMatch(/connected/);
+      // toolCount must be forwarded through the provider boundary (#4122).
+      expect(srv?.toolCount).toBe(3);
+
+      await session.close();
+    } finally {
+      await manager.disconnectAll();
+    }
+  });
+
+  // (e2e-mcpServers) auto-build path: AgentSession configured with mcpServers
+  // (no pre-built mcpManager) connects to the stdio fixture and surfaces its
+  // tools through mcpServerStatus().
+  //
+  // This exercises the acceptance criterion from #4092: "an SDK session
+  // configured with mcpServers can call its tools" (the auto-build path with a
+  // working server). The beforeEach Anthropic mock resolves
+  // waitForInitialization() via the end-turn stream it returns; this coupling
+  // is intentional — the mock stands in for a real Anthropic provider so the
+  // test stays self-contained without network access.
+  it('(e2e-mcpServers) mcpServers auto-build path: session connects fixture and reports toolCount', async () => {
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpServers: {
+        testsrv: { type: 'stdio', command: process.execPath, args: [MCP_FIXTURE] },
+      },
+    });
+
+    await session.waitForInitialization();
+
+    const statuses = await session.mcpServerStatus();
+    expect(statuses.length).toBeGreaterThan(0);
+    const srv = statuses.find((s) => s.name === 'testsrv');
+    expect(srv).toBeDefined();
+    expect(srv?.status).toMatch(/connected/);
+    // toolCount forwarded through the provider boundary (#4122).
+    expect(srv?.toolCount).toBe(3);
+
+    await session.close();
+  });
+
   // (d) Phase 2 rebuilds the provider ONLY when the SDK built the manager.
   // A caller-supplied manager (daemon, CLI, Telegram) is already wired into
   // the Phase-1 provider; rebuilding for it ran provider.query() twice and
@@ -518,5 +614,166 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
 
     fromConfigSpy.mockRestore();
     await session.close();
+  });
+
+  // -------------------------------------------------------------------------
+  // (f) Spec item 1 + 2: Phase-1 provider close() rejection is caught/logged
+  // and Phase-2 rebuild still settles waitForInitialization(). Uses an injected
+  // provider so close() is controllable.
+  //
+  // Also verifies spec item 2: isClosed() checked after the awaited close() so
+  // a concurrent AgentSession.close() prevents the Phase-2 rebuild from running.
+  // -------------------------------------------------------------------------
+
+  it('(f) Phase-1 provider close() rejection is caught and Phase-2 rebuild/settlement proceeds', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    const closeCalls: string[] = [];
+
+    const makeQuery = (label: string, closeRejects = false): ProviderQuery => {
+      let closed = false;
+      return {
+        async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
+          yield {
+            type: 'session.init',
+            info: {
+              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'default',
+              cwd: process.cwd(), tools: [], slashCommands: [], skills: [], plugins: [],
+              mcpServers: [], apiKeySource: 'api-key', version: 'test',
+            },
+          };
+          while (!closed) await new Promise((r) => setTimeout(r, 5));
+        },
+        async interrupt() {}, async setModel() {}, async setPermissionMode() {},
+        async supportedCommands() { return []; }, async supportedModels() { return []; },
+        async supportedAgents() { return []; },
+        async getContextUsage() { return { tools: [], isAutoCompactEnabled: false, apiUsage: null }; },
+        async mcpServerStatus() { return []; },
+        async accountInfo() { return { subscriptionType: 'api-key' }; },
+        async rewindFiles() { return { canRewind: false }; },
+        close(): void | Promise<void> {
+          closed = true;
+          closeCalls.push(label);
+          if (closeRejects) return Promise.reject(new Error(`${label} close() rejected`));
+        },
+      } as unknown as ProviderQuery;
+    };
+
+    let callCount = 0;
+    const provider: ModelProvider = {
+      name: 'close-tracking-provider',
+      query(_args: ProviderQueryArgs): ProviderQuery {
+        callCount += 1;
+        // Phase-1 close() rejects; Phase-2 closes normally.
+        return makeQuery(callCount === 1 ? 'phase-1' : 'phase-2', callCount === 1);
+      },
+    } as unknown as ModelProvider;
+
+    // Use mcpServers so Phase 2 triggers a rebuild (SDK-built manager path).
+    const sdkManager = await McpManagerCls.fromConfig({});
+    const spy = vi.spyOn(McpManagerCls, 'fromConfig').mockResolvedValueOnce(sdkManager);
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      persistSession: false,
+      cwd: process.cwd(),
+      provider,
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+
+    // waitForInitialization must resolve even though Phase-1 close() rejected.
+    await session.waitForInitialization();
+
+    // Phase-1 query must have been closed (and its rejection swallowed).
+    expect(closeCalls).toContain('phase-1');
+    // Two queries were built: one for Phase 1, one for Phase 2.
+    expect(callCount).toBe(2);
+
+    await session.close();
+    spy.mockRestore();
+    await sdkManager.disconnectAll();
+  });
+
+  it('(f) AgentSession.close() racing pending Phase-1 close prevents Phase-2 rebuild', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    // Two-deferred design: closeEntered resolves the moment Phase-1 close() is
+    // called (so we know Phase 2 is blocked inside it); phase1ClosedPromise is
+    // the gate that keeps Phase-1 close() suspended until we release it.
+    let signalCloseEntered!: () => void;
+    const closeEntered = new Promise<void>((res) => { signalCloseEntered = res; });
+    let phase1CloseResolve!: () => void;
+    const phase1ClosedPromise = new Promise<void>((res) => { phase1CloseResolve = res; });
+
+    const makeQuery = (label: string): ProviderQuery => {
+      let closed = false;
+      return {
+        async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
+          yield {
+            type: 'session.init',
+            info: {
+              sessionId: `${label}-session`, model: 'sonnet', permissionMode: 'default',
+              cwd: process.cwd(), tools: [], slashCommands: [], skills: [], plugins: [],
+              mcpServers: [], apiKeySource: 'api-key', version: 'test',
+            },
+          };
+          while (!closed) await new Promise((r) => setTimeout(r, 5));
+        },
+        async interrupt() {}, async setModel() {}, async setPermissionMode() {},
+        async supportedCommands() { return []; }, async supportedModels() { return []; },
+        async supportedAgents() { return []; },
+        async getContextUsage() { return { tools: [], isAutoCompactEnabled: false, apiUsage: null }; },
+        async mcpServerStatus() { return []; },
+        async accountInfo() { return { subscriptionType: 'api-key' }; },
+        async rewindFiles() { return { canRewind: false }; },
+        close(): Promise<void> {
+          closed = true;
+          if (label === 'phase-1') {
+            // Signal that Phase-1 close() has been entered, then suspend.
+            signalCloseEntered();
+            return phase1ClosedPromise;
+          }
+          return Promise.resolve();
+        },
+      } as unknown as ProviderQuery;
+    };
+
+    let callCount = 0;
+    const provider: ModelProvider = {
+      name: 'race-provider',
+      query(_args: ProviderQueryArgs): ProviderQuery {
+        callCount += 1;
+        return makeQuery(callCount === 1 ? 'phase-1' : 'phase-2');
+      },
+    } as unknown as ModelProvider;
+
+    const sdkManager = await McpManagerCls.fromConfig({});
+    const spy = vi.spyOn(McpManagerCls, 'fromConfig').mockResolvedValueOnce(sdkManager);
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      persistSession: false,
+      cwd: process.cwd(),
+      provider,
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+
+    // Wait until Phase-2 has entered Phase-1 close() and is suspended there.
+    // This is deterministic: closeEntered resolves inside close() itself,
+    // guaranteeing Phase 2 is blocked before we call AgentSession.close().
+    await closeEntered;
+
+    // Now Phase-2 is suspended inside Phase-1 close(). Call AgentSession.close()
+    // so it sets currentState='closed', then release the Phase-1 close() gate
+    // so the isClosed() re-check inside Phase-2 fires and skips the rebuild.
+    const closePromise = session.close();
+    phase1CloseResolve();
+    await closePromise;
+
+    // Phase-2 rebuild must NOT have run because isClosed() returned true.
+    expect(callCount).toBe(1);
+
+    spy.mockRestore();
+    await sdkManager.disconnectAll();
   });
 });

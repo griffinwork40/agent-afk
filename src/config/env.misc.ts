@@ -262,18 +262,52 @@ export const MISC_ENV_REGISTRY = [
     example: '1',
     category: 'misc',
   },
+  {
+    name: 'AFK_STEER_MODE',
+    description:
+      'Controls when a typed-ahead REPL message is delivered to the model during a multi-round ' +
+      'turn. "boundary" (opt-in): drain the compositor queue at every tool-round boundary, so a ' +
+      'correction typed during tool execution reaches the model on the NEXT tool round rather than ' +
+      'waiting for the whole turn to end. "turn-end" (default): existing behaviour — the message ' +
+      'is delivered as its own turn once the current turn finishes. The "boundary" mode is gated ' +
+      'behind this env var during soak (issue #3897). Note: the user-yield contract ' +
+      '(wait_for / exit_plan_mode) relies on "turn-end" semantics; those tools tell the model ' +
+      '"end your turn so the message is delivered first", which is only accurate in "turn-end" ' +
+      'mode. In "boundary" mode the message arrives mid-turn and the yield notice is redundant ' +
+      'but harmless — the tool still returns early, the model still sees the message.',
+    type: 'string',
+    required: false,
+    default: 'turn-end',
+    example: 'boundary',
+    category: 'misc',
+  },
 
   // ── Observability / OTLP export ───────────────────────────────────────────
   {
     name: 'AFK_OTLP_ENDPOINT',
     description:
       'OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). ' +
-      'When set, `afk trace export-otlp` will POST the converted payload to this endpoint ' +
-      'in addition to (or instead of) writing to stdout. Currently informational — live push ' +
-      'support is a follow-up to the offline converter (issue #3901).',
+      'When set, `afk trace export-otlp` POSTs the converted OTLP/JSON payload to this ' +
+      'endpoint after converting the witness trace. A dead or unreachable endpoint never ' +
+      'blocks or fails the command — the error is printed to stderr and the command still ' +
+      'exits 0. Equivalent to passing `--endpoint <url>` on the command line; the flag ' +
+      'takes precedence when both are provided.',
     type: 'string',
     required: false,
     example: 'http://localhost:4318/v1/traces',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_OTLP_HEADERS',
+    description:
+      'Comma-separated list of `Key=Value` HTTP headers appended to every OTLP/HTTP push ' +
+      'request made by `afk trace export-otlp` when `AFK_OTLP_ENDPOINT` or `--endpoint` ' +
+      'is set. Typical use: bearer tokens and tenant identifiers required by managed ' +
+      'collectors (e.g. Grafana Cloud, Honeycomb). Values that contain a literal comma must ' +
+      'be percent-encoded (%2C). Example: `Authorization=Bearer <tok>,X-Org=acme`.',
+    type: 'string',
+    required: false,
+    example: 'Authorization=Bearer tok123,X-Org=acme',
     category: 'misc',
   },
 ] as const satisfies readonly EnvVarMeta[];

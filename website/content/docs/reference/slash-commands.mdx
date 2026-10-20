@@ -261,6 +261,18 @@ Hint: When you want to tear down the REPL — Ctrl+D on an empty prompt does the
 
 Flags: None
 
+### `/export`
+
+Export session as a self-contained md or html file
+
+Usage: `/export [md\|html] [path]`
+
+Aliases: None
+
+Hint: When you want a portable artifact of the full session — transcript, tool calls, and cost summary — to share or archive offline.
+
+Flags: None
+
 ### `/fast`
 
 Toggle fast mode for the session (Anthropic Opus fast, OpenAI priority tier)
@@ -330,6 +342,30 @@ Usage: `/good [note]`
 Aliases: None
 
 Hint: Rate this session as successful. Adds a strong explicit_feedback vote that overrides the combiner and settles the outcome immediately.
+
+Flags: None
+
+### `/handoffs`
+
+List pending daemon handoff questions
+
+Usage: `/handoffs`
+
+Aliases: None
+
+Hint: When a daemon task asked a question and is waiting for your answer — use /handoffs:answer &lt;id&gt; to respond.
+
+Flags: None
+
+### `/handoffs:answer`
+
+Answer a pending daemon handoff question
+
+Usage: `/handoffs:answer <task-id> [answer]`
+
+Aliases: None
+
+Hint: Provide your answer to a daemon task that is waiting on human input. Omit the answer to be prompted interactively.
 
 Flags: None
 

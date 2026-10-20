@@ -601,6 +601,21 @@ describe('parseAgentInput', () => {
         /must not be at or above a credential root/,
       );
     });
+
+    // --- Exact message pin (#4139) ---
+    // The remedy text in these messages is what child agents act on; wording
+    // drift in the concatenated/ternary fragments would go unnoticed by a
+    // prefix-regex match alone.
+    it('pins the full cwd sensitive-root error string so remedy text cannot drift (#4139)', () => {
+      const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
+      const quoted = JSON.stringify(appSupport);
+      expect(() => parseAgentInput({ prompt: 'p', cwd: appSupport })).toThrow(
+        `Agent tool cwd must not be at or above a credential root the bash ` +
+        `restriction protects (${appSupport}) — anchoring the child there would ` +
+        `silently drop that whole tree out of its bash gate. Pass a directory ` +
+        `outside it. Got: ${quoted}`,
+      );
+    });
   });
 
   describe('writeRoots', () => {
@@ -724,6 +739,28 @@ describe('parseAgentInput', () => {
       const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
       expect(() => parseAgentInput({ prompt: 'p', writeRoots: [appSupport] })).toThrow(
         /must not be at or above a credential root/,
+      );
+    });
+
+    // --- Exact message pin (#4139) ---
+    it('pins the full writeRoots breadth error string so remedy text cannot drift (#4139)', () => {
+      const home = os.homedir();
+      const quoted = JSON.stringify(home);
+      expect(() => parseAgentInput({ prompt: 'p', writeRoots: [home] })).toThrow(
+        `Agent tool writeRoots entries must not be a filesystem root, your home ` +
+        `directory, or an ancestor of it (checked after resolving symlinks) — ` +
+        `grant a specific subdirectory instead, got: ${quoted}`,
+      );
+    });
+
+    it('pins the full writeRoots sensitive-root error string so remedy text cannot drift (#4139)', () => {
+      const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
+      const quoted = JSON.stringify(appSupport);
+      expect(() => parseAgentInput({ prompt: 'p', writeRoots: [appSupport] })).toThrow(
+        `Agent tool writeRoots entries must not be at or above a credential root ` +
+        `the bash restriction protects (${appSupport}) — granting it would silently ` +
+        `drop that whole tree out of the child's bash gate. Grant a narrower ` +
+        `subdirectory instead. Got: ${quoted}`,
       );
     });
 
@@ -924,6 +961,32 @@ describe('parseAgentInput', () => {
       const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
       expect(() => parseAgentInput({ prompt: 'p', readRoots: [appSupport] })).toThrow(
         /must not be at or above a credential root/,
+      );
+    });
+
+    // --- Exact message pins (#4139) ---
+    it('pins the full readRoots breadth error string so remedy text cannot drift (#4139)', () => {
+      const home = os.homedir();
+      const quoted = JSON.stringify(home);
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [home] })).toThrow(
+        `Agent tool readRoots entries must not be a filesystem root, your home directory, ` +
+        `or an ancestor of it (checked after resolving symlinks) — grant specific ` +
+        `subdirectories, or the individual FILES you need: a single file is a valid ` +
+        `read root and grants exactly that file, which is how to reach home-root ` +
+        `dotfiles (e.g. "<home>/.zshrc", "<home>/.gitconfig") without granting the ` +
+        `home directory. Got: ${quoted}`,
+      );
+    });
+
+    it('pins the full readRoots sensitive-root error string so remedy text cannot drift (#4139)', () => {
+      const appSupport = path.join(os.homedir(), 'Library', 'Application Support');
+      const quoted = JSON.stringify(appSupport);
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [appSupport] })).toThrow(
+        `Agent tool readRoots entries must not be at or above a credential root ` +
+        `the bash restriction protects (${appSupport}) — granting it would silently ` +
+        `drop that whole tree out of the child's bash gate. Grant a narrower ` +
+        `subdirectory, or the individual FILES you need: a single file is a valid ` +
+        `read root and grants exactly that file. Got: ${quoted}`,
       );
     });
 
@@ -1197,6 +1260,61 @@ describe('parseAgentInput', () => {
       const result = parseAgentInput({ prompt: 'p', bogusExtra: 'ignored' } as Record<string, unknown>);
       expect(result.prompt).toBe('p');
       expect('bogusExtra' in result).toBe(false);
+    });
+  });
+
+  // Finding 5: isValidSshTarget validation at parse time
+  describe('host validation', () => {
+    it('accepts a valid user@host SSH target', () => {
+      const result = parseAgentInput({ prompt: 'p', host: 'user@myhost' });
+      expect(result.host).toBe('user@myhost');
+    });
+
+    it('accepts a hosts.json alias (simple identifier)', () => {
+      const result = parseAgentInput({ prompt: 'p', host: 'my-server' });
+      expect(result.host).toBe('my-server');
+    });
+
+    it('throws for host with spaces (fails isValidSshTarget)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: 'bad host' })).toThrow(
+        /not a valid SSH target/,
+      );
+    });
+
+    it('throws for host containing shell metacharacters', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: 'host;evil' })).toThrow(
+        /not a valid SSH target/,
+      );
+    });
+
+    it('throws for host starting with "-" (ssh flag injection)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: '-oProxyCommand=evil' })).toThrow(
+        /may not start with "-"/,
+      );
+    });
+
+    it('omits host from result when not provided', () => {
+      const result = parseAgentInput({ prompt: 'p' });
+      expect(result.host).toBeUndefined();
+    });
+
+    // #4202 follow-up: reject control characters (mirrors remote-agent.ts cwd guard).
+    it('throws for host containing NUL character', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: 'host\0evil' })).toThrow(
+        /must not contain NUL/,
+      );
+    });
+
+    it('throws for host containing newline', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: 'host\nevil' })).toThrow(
+        /must not contain NUL/,
+      );
+    });
+
+    it('throws for host containing carriage-return', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: 'host\revil' })).toThrow(
+        /must not contain NUL/,
+      );
     });
   });
 });

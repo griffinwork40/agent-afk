@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Plus, ArrowDown } from 'lucide-react';
 import { Sidebar } from './components/sidebar';
+import type { NavItem } from './components/sidebar';
 import { CommandPalette } from './components/command-palette';
 import { KeyboardShortcuts } from './components/keyboard-shortcuts';
 import { TranscriptView } from './components/transcript-view';
@@ -8,6 +9,7 @@ import { SessionMeter } from './components/session-meter';
 import { MemoryView } from './components/memory-view';
 import { SchedulesView } from './components/schedules-view';
 import { BgJobsView } from './components/bg-jobs-view';
+import { HandoffsView } from './components/handoffs-view';
 import { SettingsView } from './components/settings-view';
 import { Composer } from './components/composer';
 import { ApprovalCards } from './components/approval-cards';
@@ -20,7 +22,7 @@ import { useScrollPin } from './hooks/use-scroll-pin';
 import { useQueue } from './hooks/use-queue';
 import { apiFetch } from './lib/api';
 
-type NavItem = 'sessions' | 'memory' | 'schedules' | 'jobs' | 'settings';
+// NavItem is imported from sidebar.tsx
 
 export function App() {
   return (
@@ -155,6 +157,7 @@ function Dashboard() {
               {activeNav === 'memory' && 'Memory'}
               {activeNav === 'schedules' && 'Schedules'}
               {activeNav === 'jobs' && 'Background Jobs'}
+              {activeNav === 'handoffs' && 'Pending Handoffs'}
               {activeNav === 'settings' && 'Settings'}
             </h1>
             {activeNav === 'sessions' && selectedSession && (
@@ -208,6 +211,7 @@ function Dashboard() {
             {activeNav === 'memory' && <MemoryView />}
             {activeNav === 'schedules' && <SchedulesView />}
             {activeNav === 'jobs' && <BgJobsView />}
+            {activeNav === 'handoffs' && <HandoffsView />}
             {activeNav === 'settings' && <SettingsView />}
           </div>
 

@@ -15,14 +15,16 @@ import type OpenAI from 'openai';
 const resolveOpenAIAuth = vi.fn();
 vi.mock('./auth.js', () => ({ resolveOpenAIAuth: (...a: unknown[]) => resolveOpenAIAuth(...a) }));
 
-const oneShotChatCompletion = vi.fn(async () => 'chat-reply');
+const oneShotChatCompletionWithStop = vi.fn(
+  async (): Promise<{ text: string; stopReason: 'max_tokens' | 'end' | 'other' }> => ({ text: 'chat-reply', stopReason: 'end' }),
+);
 const oneShotResponses = vi.fn(async () => 'responses-reply');
 vi.mock('./oneshot.js', () => ({
-  oneShotChatCompletion: (...a: unknown[]) => oneShotChatCompletion(...(a as [])),
+  oneShotChatCompletionWithStop: (...a: unknown[]) => oneShotChatCompletionWithStop(...(a as [])),
   oneShotResponses: (...a: unknown[]) => oneShotResponses(...(a as [])),
 }));
 
-import { completeWithWire, type CompleteWireClientOptions } from './complete-wire.js';
+import { completeWithWire, completeWithWireWithStop, type CompleteWireClientOptions } from './complete-wire.js';
 import { CHATGPT_BACKEND_BASE_URL } from './responses-config.js';
 
 const base = { model: 'gpt-6-luna', system: 'sys', user: 'input: git sta', maxTokens: 24 };
@@ -30,7 +32,7 @@ const base = { model: 'gpt-6-luna', system: 'sys', user: 'input: git sta', maxTo
 describe('completeWithWire', () => {
   beforeEach(() => {
     resolveOpenAIAuth.mockReset();
-    oneShotChatCompletion.mockClear();
+    oneShotChatCompletionWithStop.mockClear();
     oneShotResponses.mockClear();
   });
 
@@ -43,7 +45,7 @@ describe('completeWithWire', () => {
     const out = await completeWithWire({ ...base, signal }, factory);
 
     expect(out).toBe('responses-reply');
-    expect(oneShotChatCompletion).not.toHaveBeenCalled();
+    expect(oneShotChatCompletionWithStop).not.toHaveBeenCalled();
     expect(factory).toHaveBeenCalledTimes(1);
     const opts = factory.mock.calls[0]![0];
     expect(opts.apiKey).toBe('chatgpt-access');
@@ -76,7 +78,7 @@ describe('completeWithWire', () => {
     expect(out).toBe('chat-reply');
     expect(factory).not.toHaveBeenCalled();
     expect(oneShotResponses).not.toHaveBeenCalled();
-    expect(oneShotChatCompletion).toHaveBeenCalledWith(
+    expect(oneShotChatCompletionWithStop).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: 'sk-platform', baseURL: 'http://localhost:8080/v1', model: 'gpt-6-luna' }),
     );
   });
@@ -88,7 +90,7 @@ describe('completeWithWire', () => {
 
     expect(resolveOpenAIAuth).toHaveBeenCalledWith('xai-key', {}, false);
     expect(oneShotResponses).not.toHaveBeenCalled();
-    expect(oneShotChatCompletion).toHaveBeenCalledWith(
+    expect(oneShotChatCompletionWithStop).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: 'xai-key', baseURL: 'https://api.x.ai/v1' }),
     );
   });
@@ -100,7 +102,7 @@ describe('completeWithWire', () => {
     await completeWithWire(input);
 
     expect(oneShotResponses).not.toHaveBeenCalled();
-    expect(oneShotChatCompletion).toHaveBeenCalledWith(input);
+    expect(oneShotChatCompletionWithStop).toHaveBeenCalledWith(input);
   });
 
   it('forwards forceChatgptOAuth to auth resolution', async () => {
@@ -127,8 +129,27 @@ describe('completeWithWire', () => {
     expect(out).toBe('chat-reply');
     expect(factory).not.toHaveBeenCalled();
     expect(oneShotResponses).not.toHaveBeenCalled();
-    expect(oneShotChatCompletion).toHaveBeenCalledWith(
+    expect(oneShotChatCompletionWithStop).toHaveBeenCalledWith(
       expect.objectContaining({ baseURL: 'http://my-proxy.internal/v1', apiKey: 'chatgpt-access' }),
     );
+  });
+
+  // Ghost-text truncation fix: the stop reason must survive the wire so the
+  // suggestion engine can tell a finished reply from one cut at maxTokens.
+  it('completeWithWireWithStop passes a Chat Completions max_tokens stop through', async () => {
+    resolveOpenAIAuth.mockReturnValue({ apiKey: 'sk-platform', source: 'env' });
+    oneShotChatCompletionWithStop.mockResolvedValueOnce({ text: 'git sta', stopReason: 'max_tokens' });
+
+    const out = await completeWithWireWithStop({ ...base });
+
+    expect(out).toEqual({ text: 'git sta', stopReason: 'max_tokens' });
+  });
+
+  it('completeWithWireWithStop reports a completed Responses reply as a clean end', async () => {
+    resolveOpenAIAuth.mockReturnValue({ apiKey: 'chatgpt-access', source: 'chatgpt-oauth', accountId: 'acct_1' });
+
+    const out = await completeWithWireWithStop({ ...base }, () => ({}) as OpenAI);
+
+    expect(out).toEqual({ text: 'responses-reply', stopReason: 'end' });
   });
 });

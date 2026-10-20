@@ -12,6 +12,7 @@ import { TurnStreamRunner, type TurnRunnerDeps } from './turn-stream-runner.js';
 import { buildProviderLifecycle, rebuildProviderQuery } from './provider-lifecycle.js';
 import { ProviderInitializer } from './provider-lifecycle.js';
 import { ensureError } from '../../utils/errors.js';
+import { debugLog } from '../../utils/debug.js';
 import type { AgentConfig } from '../types.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { SessionShutdown } from './session-shutdown.js';
@@ -19,6 +20,7 @@ import type { SessionStateManager } from './session-state.js';
 import type { HookRegistry } from '../hooks.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
 import type { QueryInputStream } from './input-iterable.js';
+import { buildMcpDisconnectNotice } from '../mcp/failure-notice.js';
 
 /** Mutable slots on AgentSession that `buildSessionRunner` reads and writes. */
 export interface SessionRunnerSlots {
@@ -113,6 +115,8 @@ export interface BuildInitPromiseOptions {
   getProviderIterator: () => AsyncIterator<ProviderEvent>;
   /** Returns the Phase-1 `QueryInputStream` so Phase 2 can reuse its iterable. */
   getInputStream: () => QueryInputStream;
+  /** Returns the current (Phase-1) provider query so Phase 2 can close it before rebuilding. */
+  getProviderQuery: () => ProviderQuery;
   /** Returns true when the session has been closed (to abort Phase 2). */
   isClosed: () => boolean;
   abortSignal: AbortSignal;
@@ -149,7 +153,7 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
   // doing so ran `provider.query()` twice per session (land round 3, #4069).
   const phase1Manager = opts.getConfig().mcpManager;
   return opts.mcpInitPromise.then(
-    () => {
+    async () => {
       // Item 3: skip Phase-2 provider rebuild if session was closed while MCP
       // init was in flight. The owned manager is disconnected by the
       // `startMcpInit` callback on the calling side.
@@ -157,6 +161,26 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
 
       const phase2Manager = opts.getConfig().mcpManager;
       if (phase2Manager !== undefined && phase2Manager !== phase1Manager) {
+        // #4074 item 2: close the Phase-1 provider query before installing the
+        // rebuilt one. The Phase-1 ProviderRouter iterator is a lazy async
+        // generator that has never been driven, and QueryInputStream's single
+        // pendingResolve slot is last-writer-wins — both are harmless today.
+        // An injected config.provider that holds resources from query() would
+        // leak them without this close(), so we close defensively.
+        //
+        // Phase-1 provider close() may throw synchronously or return a
+        // rejecting promise. Catch either; never let a failure abort Phase 2 —
+        // the provider is discarded regardless of whether close() succeeds.
+        try {
+          await opts.getProviderQuery().close();
+        } catch (err: unknown) {
+          debugLog(`🟡 AgentSession: Phase-1 provider close() rejected (continuing): ${ensureError(err).message}`);
+        }
+        // Recheck isClosed() AFTER the await (which may have
+        // yielded while AgentSession.close() ran concurrently). If the session
+        // closed while we awaited the Phase-1 close, skip the rebuild so a
+        // freshly-constructed Phase-2 provider is never started after close.
+        if (opts.isClosed()) return;
         // Item 1: reuse the Phase-1 inputStream's iterable so sendMessage
         // pushes into the stream the rebuilt provider actually reads.
         const promptIterable = opts.getInputStream().createIterable();
@@ -169,6 +193,19 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
       // SDK-built manager (#4063) gets the failure notice as well as a
       // caller-supplied one.
       const mcpManager = opts.getConfig().mcpManager;
+
+      // #4064-b: wire onServerError so mid-session transport failures queue a
+      // framework-context notice for the model's NEXT turn. Chain through any
+      // pre-existing callback set by the provider runtime.
+      if (mcpManager !== undefined) {
+        const existingOnServerError = mcpManager.onServerError;
+        mcpManager.onServerError = (serverName, reason) => {
+          existingOnServerError?.(serverName, reason);
+          const notice = buildMcpDisconnectNotice(serverName, reason);
+          opts.queueFrameworkContext(notice);
+        };
+      }
+
       const initializer = new ProviderInitializer(
         opts.getConfig(),
         opts.abortSignal,

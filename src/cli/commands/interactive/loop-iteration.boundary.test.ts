@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AdmissionQueue } from '../../../agent/peer/admission-queue.js';
-import { installPeerBoundary, reinstallPeerBoundary, applyDeferPeers } from './loop-iteration.boundary.js';
+import { installPeerBoundary, reinstallPeerBoundary, applyDeferPeers, resolveSteerMode, setupPeerBoundary } from './loop-iteration.boundary.js';
 import type { InjectionSource } from './loop-iteration.injections.js';
 
 // ── Minimal fakes ────────────────────────────────────────────────────────────
@@ -1344,5 +1344,314 @@ describe('consumeEnvelopes synchronous-callback invariant (#2901 medium)', () =>
     expect(notifier.hasPendingInjections()).toBe(false);
     // A second drain returns empty.
     expect(notifier.drainInjections()).toBe('');
+  });
+});
+
+describe('setupPeerBoundary capability warning', () => {
+  it.each([
+    { mode: 'boundary', missing: 'dropQueued', peek: true, drop: false },
+    { mode: 'boundary', missing: 'peekQueuedText, dropQueued', peek: false, drop: false },
+    { mode: 'boundary', missing: '', peek: true, drop: true },
+    { mode: 'turn-end', missing: '', peek: true, drop: false },
+  ])('mode=$mode peek=$peek drop=$drop warns only for missing boundary capabilities', ({ mode, missing, peek, drop }) => {
+    const orig = process.env['AFK_STEER_MODE'];
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      process.env['AFK_STEER_MODE'] = mode;
+      const session = makeSession();
+      const compositor = {
+        hasPendingSubmission: () => false,
+        ...(peek ? { peekQueuedText: () => undefined } : {}),
+        ...(drop ? { dropQueued: () => 0 } : {}),
+      };
+      const boundary = setupPeerBoundary(
+        { session: { current: session } } as never,
+        { getCompositor: () => compositor } as never,
+        makePeerNotifier() as never,
+        () => false,
+      );
+      // Reinstall and tool-round callbacks must not repeat the setup warning.
+      boundary.reinstall();
+      expect(session.invokeCallback()).toBeUndefined();
+      if (missing) {
+        expect(stderr).toHaveBeenCalledExactlyOnceWith(
+          '[afk] warning: AFK_STEER_MODE=boundary is set but the compositor does not expose ' +
+          `${missing} — mid-turn human-queue drain will be inactive.\n`,
+        );
+      } else {
+        expect(stderr).not.toHaveBeenCalled();
+      }
+    } finally {
+      stderr.mockRestore();
+      if (orig === undefined) delete process.env['AFK_STEER_MODE'];
+      else process.env['AFK_STEER_MODE'] = orig;
+    }
+  });
+});
+
+// ── AFK_STEER_MODE=boundary: mid-turn human-queue drain (Part of #3897) ──────
+
+describe('AFK_STEER_MODE=boundary — human queue drained at tool-round boundary', () => {
+  let admissionQueue: AdmissionQueue;
+
+  beforeEach(() => {
+    admissionQueue = new AdmissionQueue();
+  });
+
+  it('drains queued text mid-turn and returns it as steering text', () => {
+    const session = makeSession();
+    const compositor = makeCompositor('steer me now');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier() as never,
+      admissionQueue,
+      steerMode: 'boundary',
+    });
+
+    const result = session.invokeCallback();
+    expect(result).toBe('steer me now');
+    // Invariant: dropQueued fired — queue is now empty (no double-delivery).
+    expect(compositor.hasPendingSubmission()).toBe(false);
+  });
+
+  it('does NOT drain when steerMode is turn-end (default)', () => {
+    const session = makeSession();
+    const compositor = makeCompositor('user typed this');
+    const peerBuffer = ['peer-msg'];
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier(peerBuffer) as never,
+      admissionQueue,
+      steerMode: 'turn-end',
+    });
+
+    // In turn-end mode the human barrier blocks peer injection too.
+    const result = session.invokeCallback();
+    expect(result).toBeUndefined();
+    // The human queue is still intact — not consumed.
+    expect(compositor.hasPendingSubmission()).toBe(true);
+  });
+
+  it('falls through to normal peer delivery when no text-only message is queued (boundary mode)', () => {
+    // Attachment-bearing payload: hasPendingSubmission=true but peekQueuedText→undefined.
+    const session = makeSession();
+    const compositor = makeCompositorWithAttachment();
+    const peerBuffer = ['peer-msg'];
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier(peerBuffer) as never,
+      admissionQueue,
+      steerMode: 'boundary',
+    });
+
+    // Attachment payload has no text snapshot → peekQueuedText returns undefined
+    // → boundary falls through to peer delivery path → human barrier is still
+    // active (hasPendingSubmission=true) → peer is deferred.
+    const result = session.invokeCallback();
+    // Invariant: attachment stays in compositor, peer stays deferred.
+    expect(result).toBeUndefined();
+    expect(compositor.hasPendingSubmission()).toBe(true);
+  });
+
+  it('does not double-deliver: idle drain after boundary drain returns nothing', () => {
+    const session = makeSession();
+    const compositor = makeCompositor('only once');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier() as never,
+      admissionQueue,
+      steerMode: 'boundary',
+    });
+
+    // First call: drained mid-turn.
+    const first = session.invokeCallback();
+    expect(first).toBe('only once');
+
+    // Second call (simulates next tool-round boundary): nothing left.
+    const second = session.invokeCallback();
+    expect(second).toBeUndefined();
+
+    // Compositor queue is empty — idle drain would deliver nothing.
+    expect(compositor.hasPendingSubmission()).toBe(false);
+  });
+
+  it('peers are delivered AFTER the human message is drained (human-first invariant)', () => {
+    // Turn 1: human message → drained mid-turn.
+    const session = makeSession();
+    const compositor = makeCompositor('human says hi');
+    const peerBuffer = ['peer-says-hello'];
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier(peerBuffer) as never,
+      admissionQueue,
+      steerMode: 'boundary',
+    });
+
+    // Boundary 1: human text returned, peer deferred.
+    const round1 = session.invokeCallback();
+    expect(round1).toBe('human says hi');
+    expect(compositor.hasPendingSubmission()).toBe(false);
+
+    // Boundary 2: human gone, peer can now be admitted.
+    const round2 = session.invokeCallback();
+    expect(round2).toContain('peer-says-hello');
+  });
+
+  it('resolveSteerMode returns "boundary" when env is set', () => {
+    // resolveSteerMode reads process.env live on each call via the env proxy,
+    // so mutating process.env here directly controls its return value.
+    const orig = process.env['AFK_STEER_MODE'];
+    try {
+      process.env['AFK_STEER_MODE'] = 'boundary';
+      expect(resolveSteerMode()).toBe('boundary');
+    } finally {
+      if (orig === undefined) delete process.env['AFK_STEER_MODE'];
+      else process.env['AFK_STEER_MODE'] = orig;
+    }
+  });
+
+  it('resolveSteerMode returns "turn-end" for unknown/absent values', () => {
+    const orig = process.env['AFK_STEER_MODE'];
+    try {
+      delete process.env['AFK_STEER_MODE'];
+      expect(resolveSteerMode()).toBe('turn-end');
+      process.env['AFK_STEER_MODE'] = 'unknown-value';
+      expect(resolveSteerMode()).toBe('turn-end');
+    } finally {
+      if (orig === undefined) delete process.env['AFK_STEER_MODE'];
+      else process.env['AFK_STEER_MODE'] = orig;
+    }
+  });
+
+  it('does NOT drain queued /exit — leaves it for normal REPL dispatch', () => {
+    const session = makeSession();
+    const compositor = makeCompositor('/exit');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier() as never,
+      admissionQueue,
+      steerMode: 'boundary',
+    });
+
+    // Boundary must NOT return the slash command text — it must stay queued
+    // for the normal turn-end path which routes it through REPL dispatch.
+    const result = session.invokeCallback();
+    expect(result).toBeUndefined();
+    // The compositor queue is untouched — /exit is still pending.
+    expect(compositor.hasPendingSubmission()).toBe(true);
+    expect(compositor.peekQueuedText()?.text).toBe('/exit');
+    expect(compositor._dropped).toHaveLength(0);
+  });
+
+  it('does NOT drain queued !echo secret — leaves it for shell passthrough dispatch', () => {
+    const session = makeSession();
+    const compositor = makeCompositor('!echo secret');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier() as never,
+      admissionQueue,
+      steerMode: 'boundary',
+    });
+
+    // Shell passthrough must NOT be sent to the model as raw text.
+    const result = session.invokeCallback();
+    expect(result).toBeUndefined();
+    expect(compositor.hasPendingSubmission()).toBe(true);
+    expect(compositor.peekQueuedText()?.text).toBe('!echo secret');
+    expect(compositor._dropped).toHaveLength(0);
+  });
+
+  it('does NOT drain queued /clear with leading whitespace', () => {
+    const session = makeSession();
+    const compositor = makeCompositor('  /clear');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier() as never,
+      admissionQueue,
+      steerMode: 'boundary',
+    });
+
+    const result = session.invokeCallback();
+    expect(result).toBeUndefined();
+    expect(compositor.hasPendingSubmission()).toBe(true);
+  });
+
+  it('still drains plain prose in boundary mode', () => {
+    const session = makeSession();
+    const compositor = makeCompositor('focus on the auth module');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier() as never,
+      admissionQueue,
+      steerMode: 'boundary',
+    });
+
+    const result = session.invokeCallback();
+    expect(result).toBe('focus on the auth module');
+    expect(compositor.hasPendingSubmission()).toBe(false);
+  });
+
+  it('command-shaped text blocks peers (human barrier remains active)', () => {
+    const session = makeSession();
+    const compositor = makeCompositor('/exit');
+    const peerBuffer = ['peer-msg'];
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier(peerBuffer) as never,
+      admissionQueue,
+      steerMode: 'boundary',
+    });
+
+    // /exit is command-shaped → not drained, humanPending stays true → peer blocked.
+    const result = session.invokeCallback();
+    expect(result).toBeUndefined();
+
+    // After the turn ends and the slash command drains normally, peer is admitted.
+    compositor._clear();
+    const result2 = session.invokeCallback();
+    expect(result2).toContain('peer-msg');
+  });
+
+  it('emitQueuedUserMessage is NOT called by boundary (provider is canonical)', () => {
+    // The boundary callback must not emit queued_user_message — the provider
+    // loop (inter-round.ts / turn-driver.ts) emits it when it consumes the
+    // steeringText. Emitting in both places produces duplicate witness rows.
+    const session = makeSession();
+    const compositor = makeCompositor('plain text');
+    const traceWriter = { emit: vi.fn() };
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor,
+      peerNotifier: makePeerNotifier() as never,
+      admissionQueue,
+      steerMode: 'boundary',
+      traceWriter: traceWriter as never,
+    });
+
+    const result = session.invokeCallback();
+    expect(result).toBe('plain text');
+    // The boundary must NOT have called emitQueuedUserMessage / traceWriter.emit.
+    expect(traceWriter.emit).not.toHaveBeenCalled();
   });
 });

@@ -1,11 +1,11 @@
 /**
- * Unit tests for the structured read-only `git_read` tool (#3754): policy
+ * Unit tests for the structured read-only `git_read` tool (#3754, #4058): policy
  * allowlist, injection rejection, path confinement, and output bounding,
  * plus a live run against a scratch repository.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { planGitRead, confinePathspec, GIT_READ_SUBCOMMANDS } from '../git-read.policy.js';
@@ -20,7 +20,7 @@ function rejected(req: Parameters<typeof planGitRead>[0]): string {
 }
 
 describe('planGitRead: subcommand allowlist', () => {
-  it.each(['commit', 'push', 'checkout', 'reset', 'fetch', 'config', 'clean', 'stash', 'rm', 'am', '!sh', 'difftool'])('rejects %s', (sub) => {
+  it.each(['commit', 'push', 'checkout', 'reset', 'fetch', 'config', 'clean', 'rm', 'am', '!sh', 'difftool'])('rejects %s', (sub) => {
     expect(rejected({ subcommand: sub })).toContain('must be one of');
   });
 
@@ -257,6 +257,279 @@ describe('git_read handler (live repo)', () => {
   it('a git failure surfaces as isError', async () => {
     const h = createGitReadHandler(repo);
     const r = await h({ subcommand: 'show', args: ['no-such-ref'] }, signal);
+    expect(r.isError).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests for #4058 new subcommands
+// ---------------------------------------------------------------------------
+
+describe('planGitRead (#4058): new subcommand allowlist', () => {
+  it('accepts all new subcommands with no args', () => {
+    const newSubs = ['merge-base', 'rev-list', 'reflog', 'for-each-ref', 'describe', 'shortlog', 'cat-file', 'remote', 'stash', 'worktree'] as const;
+    for (const sub of newSubs) {
+      const plan = planGitRead({ subcommand: sub }, CWD);
+      expect(plan.ok, `${sub} should be accepted`).toBe(true);
+    }
+  });
+
+  it('rejects old unlisted subcommands still', () => {
+    for (const sub of ['commit', 'push', 'fetch', 'config', 'ls-remote']) {
+      expect(planGitRead({ subcommand: sub }, CWD).ok).toBe(false);
+    }
+  });
+
+  it('forces reflog to show', () => {
+    const plan = planGitRead({ subcommand: 'reflog' }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['reflog', 'show']);
+  });
+
+  it('reflog with explicit ref', () => {
+    const plan = planGitRead({ subcommand: 'reflog', args: ['--oneline', 'HEAD'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['reflog', 'show', '--oneline', 'HEAD']);
+  });
+
+  it('forces remote to -v', () => {
+    const plan = planGitRead({ subcommand: 'remote' }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['remote', '-v']);
+  });
+
+  it('forces stash to list', () => {
+    const plan = planGitRead({ subcommand: 'stash' }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['stash', 'list']);
+  });
+
+  it('forces worktree to list', () => {
+    const plan = planGitRead({ subcommand: 'worktree' }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['worktree', 'list']);
+  });
+
+  it('shortlog injects HEAD when no rev supplied', () => {
+    const plan = planGitRead({ subcommand: 'shortlog', args: ['-s', '-n'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['shortlog', '-s', '-n', 'HEAD']);
+  });
+
+  it('shortlog with explicit rev does not double-inject HEAD', () => {
+    const plan = planGitRead({ subcommand: 'shortlog', args: ['-s', 'main'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['shortlog', '-s', 'main']);
+  });
+
+  it('merge-base accepts --is-ancestor and revs', () => {
+    const plan = planGitRead({ subcommand: 'merge-base', args: ['--is-ancestor', 'HEAD~1', 'HEAD'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['merge-base', '--is-ancestor', 'HEAD~1', 'HEAD']);
+  });
+
+  it('rev-list with --count', () => {
+    const plan = planGitRead({ subcommand: 'rev-list', args: ['--count', 'HEAD'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['rev-list', '--count', 'HEAD']);
+  });
+
+  it('for-each-ref with --format and --sort', () => {
+    const plan = planGitRead({ subcommand: 'for-each-ref', args: ['--format=%(refname:short)', '--sort=-creatordate'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['for-each-ref', '--format=%(refname:short)', '--sort=-creatordate']);
+  });
+
+  it('describe with --tags and rev', () => {
+    const plan = planGitRead({ subcommand: 'describe', args: ['--tags', '--always', 'HEAD'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['describe', '--tags', '--always', 'HEAD']);
+  });
+
+  it('cat-file -t and -p', () => {
+    expect(planGitRead({ subcommand: 'cat-file', args: ['-t', 'HEAD'] }, CWD).ok).toBe(true);
+    expect(planGitRead({ subcommand: 'cat-file', args: ['-p', 'HEAD'] }, CWD).ok).toBe(true);
+  });
+
+  it('log accepts --diff-filter= (regression from issue)', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['--diff-filter=M', '--oneline'] }, CWD);
+    expect(plan.ok).toBe(true);
+  });
+});
+
+describe('planGitRead (#4058): injection rejection for new subcommands', () => {
+  it('rejects write-mode reflog subcommands via rev allowlist', () => {
+    // "expire" starts with a letter so would pass REV_RE; but reflog forces `show`
+    // first — `expire` would be treated as a rev and hit git with `reflog show expire`
+    // which is a harmless no-op (unknown ref). The real guard is that `expire`/`delete`
+    // can never appear as the first positional because `forced` owns that slot.
+    // We verify the option-injection vector is blocked:
+    expect(planGitRead({ subcommand: 'reflog', args: ['--expire=now'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'reflog', args: ['--expire-unreachable=now'] }, CWD).ok).toBe(false);
+  });
+
+  it('rejects stash write flags', () => {
+    expect(planGitRead({ subcommand: 'stash', args: ['push'] }, CWD).ok).toBe(false); // revs: false
+    expect(planGitRead({ subcommand: 'stash', args: ['-m', 'msg'] }, CWD).ok).toBe(false);
+  });
+
+  it('rejects worktree write flags', () => {
+    expect(planGitRead({ subcommand: 'worktree', args: ['add'] }, CWD).ok).toBe(false); // revs: false
+    expect(planGitRead({ subcommand: 'worktree', args: ['--porcelain', 'add'] }, CWD).ok).toBe(false);
+  });
+
+  it('rejects remote write variants', () => {
+    expect(planGitRead({ subcommand: 'remote', args: ['add'] }, CWD).ok).toBe(false); // revs: false
+    expect(planGitRead({ subcommand: 'remote', args: ['set-url', 'origin', 'x'] }, CWD).ok).toBe(false);
+  });
+
+  it('rejects cat-file --batch and --textconv', () => {
+    expect(planGitRead({ subcommand: 'cat-file', args: ['--batch'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'cat-file', args: ['--batch-all-objects'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'cat-file', args: ['--textconv', 'HEAD:file'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'cat-file', args: ['--filters', 'HEAD:file'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'cat-file', args: ['--path=/etc/passwd', 'HEAD'] }, CWD).ok).toBe(false);
+  });
+
+  it('rejects for-each-ref signature format/sort', () => {
+    expect(planGitRead({ subcommand: 'for-each-ref', args: ['--format=%(signature)'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'for-each-ref', args: ['--sort=signature'] }, CWD).ok).toBe(false);
+  });
+
+  it('rejects rev-list --stdin and --objects', () => {
+    expect(planGitRead({ subcommand: 'rev-list', args: ['--stdin'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'rev-list', args: ['--objects'] }, CWD).ok).toBe(false);
+  });
+
+  it('rejects paths on no-path subcommands', () => {
+    for (const sub of ['remote', 'stash', 'worktree', 'for-each-ref', 'reflog'] as const) {
+      expect(planGitRead({ subcommand: sub, paths: ['src/'] }, CWD).ok).toBe(false);
+    }
+  });
+
+  it('injection via revision slot is blocked by REV_RE', () => {
+    expect(planGitRead({ subcommand: 'rev-list', args: ['HEAD;rm -rf /'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'merge-base', args: ['HEAD', '$(id)'] }, CWD).ok).toBe(false);
+  });
+});
+
+describe('git_read handler (#4058 live repo)', () => {
+  let repo: string;
+  const signal = new AbortController().signal;
+  const git = (...a: string[]): void => { execFileSync('git', a, { cwd: repo, stdio: 'ignore' }); };
+
+  beforeAll(() => {
+    repo = mkdtempSync(join(tmpdir(), 'git-read-4058-'));
+    git('init', '-q');
+    git('config', 'user.email', 't@example.com');
+    git('config', 'user.name', 'T');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(repo, 'a.txt'), 'hello\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'first');
+    writeFileSync(join(repo, 'b.txt'), 'world\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'second');
+    git('tag', 'v0.1.0');
+  });
+  afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
+
+  it('rev-list --count HEAD returns a number', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'rev-list', args: ['--count', 'HEAD'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(Number(String(r.content).trim())).toBe(2);
+  });
+
+  it('merge-base returns common ancestor SHA', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'merge-base', args: ['HEAD', 'HEAD~1'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content).trim()).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('merge-base --is-ancestor true case is not an error', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'merge-base', args: ['--is-ancestor', 'HEAD~1', 'HEAD'] }, signal);
+    expect(r.isError).toBeFalsy();
+  });
+
+  it('merge-base --is-ancestor false case returns non-ancestor message', async () => {
+    const h = createGitReadHandler(repo);
+    // HEAD is not an ancestor of HEAD~1
+    const r = await h({ subcommand: 'merge-base', args: ['--is-ancestor', 'HEAD', 'HEAD~1'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content)).toContain('not an ancestor');
+  });
+
+  it('reflog show returns entries', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'reflog', args: ['--oneline'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content)).toContain('second');
+  });
+
+  it('for-each-ref lists tags', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'for-each-ref', args: ['--format=%(refname:short)', 'refs/tags/'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content)).toContain('v0.1.0');
+  });
+
+  it('describe --tags returns tag', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'describe', args: ['--tags', 'HEAD'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content)).toContain('v0.1.0');
+  });
+
+  it('shortlog -s -n HEAD summarises authors', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'shortlog', args: ['-s', '-n'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content)).toContain('T');
+  });
+
+  it('cat-file -t HEAD returns commit', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'cat-file', args: ['-t', 'HEAD'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content).trim()).toBe('commit');
+  });
+
+  it('cat-file -e for absent object returns non-error', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'cat-file', args: ['-e', 'deadbeef1234567890123456789012345678dead'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content)).toContain('object not found');
+  });
+
+  it('remote -v lists remotes (may be empty)', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'remote' }, signal);
+    // No remotes configured in scratch repo — empty output is fine, not an error.
+    expect(r.isError).toBeFalsy();
+  });
+
+  it('stash list lists stashes (may be empty)', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'stash' }, signal);
+    expect(r.isError).toBeFalsy();
+  });
+
+  it('worktree list lists worktrees', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'worktree' }, signal);
+    expect(r.isError).toBeFalsy();
+    // On Windows, mkdtempSync may return an 8.3 short path (C:\Users\RUNNER~1\...)
+    // while `git worktree list` prints the real long forward-slash path.
+    // Resolve `repo` to its canonical long path and normalise to forward slashes;
+    // compare case-insensitively so win32 drive-letter casing is irrelevant.
+    // Never skip on win32 — posix-guard forbids platform-gated tests.
+    const canonicalRepo = realpathSync.native(repo).replace(/\\/g, '/');
+    const output = String(r.content).replace(/\\/g, '/');
+    expect(output.toLowerCase()).toContain(canonicalRepo.toLowerCase());
+  });
+
+  it('log --diff-filter=M is accepted (regression)', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'log', args: ['--oneline', '--diff-filter=M'] }, signal);
+    expect(r.isError).toBeFalsy();
+  });
+
+  it('write-variant requests never run git and never write', async () => {
+    const h = createGitReadHandler(repo);
+    // cat-file --batch would be the most dangerous; policy must reject it
+    const r = await h({ subcommand: 'cat-file', args: ['--batch'] }, signal);
     expect(r.isError).toBe(true);
   });
 });

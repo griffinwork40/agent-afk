@@ -8,6 +8,7 @@ import {
   classifyDispatchIntent,
   checkReadOnlyDispatchIntent,
   checkComposeReadOnlyDispatchIntent,
+  stripQuotedContent,
 } from './subagent-executor.dispatch-intent.js';
 import type { RegisteredAgent } from '../agents/types.js';
 
@@ -78,6 +79,34 @@ describe('classifyDispatchIntent (#3754)', () => {
 
     it('passes real refused review brief #2 (previously matched "change file")', () => {
       expect(classifyDispatchIntent(REAL_REVIEW_BRIEF_2)).toBeUndefined();
+    });
+  });
+
+  // #3796: mixed-intent prompts — document where RECON_EXEMPTION_RE can hide genuine write intent.
+  // These tests pin the current behaviour so any future regex change is visible.
+  describe('mixed-intent prompts — RECON_EXEMPTION_RE boundary cases', () => {
+    // Known gap: "report what changed" in the tail triggers the recon exemption even though
+    // "edit the file" in the head is a clear write imperative.  Pinned as a false-negative
+    // so the boundary is explicit and a future fix must update this test.
+    it('[known-gap] "edit the file, then report what changed" — currently exempted (false negative)', () => {
+      expect(classifyDispatchIntent('edit the file, then report what changed')).toBeUndefined();
+    });
+
+    // This one correctly rejects: "implement the fix" matches the impl pattern and
+    // "describe your changes" does NOT match the recon-exemption pattern (no what/which/etc.).
+    it('rejects "implement the fix and describe your changes" — implement is write intent', () => {
+      expect(classifyDispatchIntent('implement the fix and describe your changes')).toBeDefined();
+    });
+
+    // Known gap: "list what you modified" triggers the recon exemption even though
+    // "patch src/foo.ts" in the head is a clear write imperative.  Same category as above.
+    it('[known-gap] "patch src/foo.ts … then list what you modified" — currently exempted (false negative)', () => {
+      expect(classifyDispatchIntent('patch src/foo.ts to add the feature, then list what you modified')).toBeUndefined();
+    });
+
+    // Pure recon brief with negation — must continue to pass.
+    it('still passes a pure recon brief that mentions verbs in negation context', () => {
+      expect(classifyDispatchIntent('do not edit anything, just report what changed')).toBeUndefined();
     });
   });
 });
@@ -200,5 +229,216 @@ describe('checkComposeReadOnlyDispatchIntent (#3754)', () => {
       [{ id: 'e', prompt: 'do not edit files, only report findings', agent_type: 'research-agent' }],
       [{ readOnly: true }],
     )).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4057 — stripQuotedContent + quoted-verb exemption
+// ---------------------------------------------------------------------------
+
+describe('stripQuotedContent (#4057)', () => {
+  it('strips fenced code blocks (backtick fence)', () => {
+    const s = stripQuotedContent('before\n```\nedit src/foo.ts\n```\nafter');
+    expect(s).not.toContain('edit src/foo.ts');
+    expect(s).toContain('before');
+    expect(s).toContain('after');
+  });
+
+  it('strips fenced code blocks (tilde fence)', () => {
+    const s = stripQuotedContent('before\n~~~\nfix the bug\n~~~\nafter');
+    expect(s).not.toContain('fix the bug');
+  });
+
+  it('strips inline code spans', () => {
+    const s = stripQuotedContent('run `edit src/foo.ts` to see');
+    expect(s).not.toContain('edit src/foo.ts');
+    expect(s).toContain('run');
+    expect(s).toContain('to see');
+  });
+
+  it('strips markdown blockquote lines', () => {
+    const s = stripQuotedContent('context:\n> edit git-investigator.md\nrank these');
+    expect(s).not.toContain('edit git-investigator.md');
+    expect(s).toContain('context');
+    expect(s).toContain('rank these');
+  });
+
+  it('strips double-quoted strings (balanced)', () => {
+    const s = stripQuotedContent('the proposal was "edit git-investigator.md directly" — rank it');
+    expect(s).not.toContain('edit git-investigator.md directly');
+    expect(s).toContain('rank it');
+  });
+
+  it('strips attributed list items (the #4057 exact repro shape)', () => {
+    const s = stripQuotedContent('- pragmatist (medium): edit git-investigator.md directly');
+    expect(s).not.toContain('edit git-investigator.md');
+  });
+
+  it('does NOT strip an unbalanced backtick (fails closed)', () => {
+    // A prompt that opens a code span but never closes it must leave the
+    // content in place so a real instruction cannot hide behind it.
+    const s = stripQuotedContent('please `edit src/foo.ts and keep going');
+    expect(s).toContain('edit src/foo.ts');
+  });
+
+  it('does NOT strip an unbalanced double-quote (fails closed)', () => {
+    const s = stripQuotedContent('the plan is "edit src/foo.ts and keep going');
+    expect(s).toContain('edit src/foo.ts');
+  });
+
+  it('does NOT strip a plain bullet with no label: colon pattern', () => {
+    // A genuine imperative bullet like "- edit src/foo.ts" must NOT be stripped
+    // because it IS addressed to the dispatched agent.
+    const s = stripQuotedContent('- edit src/foo.ts');
+    expect(s).toContain('edit src/foo.ts');
+  });
+
+  // --- #4101 regression: overly-broad label pattern must not strip labelled imperatives ---
+
+  it('does NOT strip a numbered-step bullet (- Step 1: ...)', () => {
+    // "Step 1" is a procedural label, not a critic-name+severity — must stay.
+    const s = stripQuotedContent('- Step 1: edit src/a.ts');
+    expect(s).toContain('edit src/a.ts');
+  });
+
+  it('does NOT strip a bare capitalised-word label with no severity (- Fix: ...)', () => {
+    // "Fix" has no parenthesised severity — the label pattern must not match it.
+    const s = stripQuotedContent('- Fix: rewrite the handler');
+    expect(s).toContain('rewrite the handler');
+  });
+
+  it('does NOT strip a bare task label with no severity (- Task: ...)', () => {
+    const s = stripQuotedContent('- Task: implement the parser');
+    expect(s).toContain('implement the parser');
+  });
+
+  it('does NOT strip a cross-line sequence where \\s spanning newline caused a false match', () => {
+    // The old [\w\s] label matched across the newline in
+    // "- inspect the context\nTask: edit src/foo.ts", swallowing both lines.
+    // With [ \t] the match cannot cross the newline, so the second line survives.
+    const s = stripQuotedContent('- inspect the context\nTask: edit src/foo.ts');
+    expect(s).toContain('edit src/foo.ts');
+  });
+
+  it('still strips attributed critic items that have the severity paren (pragmatist/paranoid/etc.)', () => {
+    // Positive-control: the narrowed pattern must still strip the exact #4057 shapes.
+    expect(stripQuotedContent('- pragmatist (medium): edit git-investigator.md')).not.toContain('edit git-investigator.md');
+    expect(stripQuotedContent('- paranoid (high): patch the config')).not.toContain('patch the config');
+    expect(stripQuotedContent('- architect (low): refactor the module')).not.toContain('refactor the module');
+    expect(stripQuotedContent('- steelman (critical): rewrite the handler')).not.toContain('rewrite the handler');
+  });
+});
+
+describe('classifyDispatchIntent — #4057 quoted-verb exemptions', () => {
+  // --- Exact repro from the issue ---
+  it('passes: attributed list item with edit verb (exact #4057 repro)', () => {
+    const prompt =
+      'Here are the critic proposals:\n' +
+      '- pragmatist (medium): edit git-investigator.md directly to add context\n' +
+      '- contrarian (high): rewrite the approach entirely\n\n' +
+      'Please rank these options by feasibility.';
+    expect(classifyDispatchIntent(prompt)).toBeUndefined();
+  });
+
+  // --- Fenced code block ---
+  it('passes: write verb inside a fenced code block', () => {
+    const prompt =
+      'Review the following patch:\n' +
+      '```diff\n' +
+      '- edit src/auth.ts to add the guard\n' +
+      '```\n' +
+      'Tell me if it looks correct.';
+    expect(classifyDispatchIntent(prompt)).toBeUndefined();
+  });
+
+  // --- Inline code span ---
+  it('passes: write verb inside an inline code span', () => {
+    expect(classifyDispatchIntent('The critic suggested `edit git-investigator.md` — rank the options.')).toBeUndefined();
+  });
+
+  // --- Blockquote line ---
+  it('passes: write verb on a markdown blockquote line', () => {
+    const prompt = 'Previous agent said:\n> edit git-investigator.md directly\nPlease rank the options.';
+    expect(classifyDispatchIntent(prompt)).toBeUndefined();
+  });
+
+  // --- Double-quoted string ---
+  it('passes: write verb inside a double-quoted string', () => {
+    expect(classifyDispatchIntent('Critic A proposed "edit git-investigator.md" — synthesise and rank.')).toBeUndefined();
+  });
+
+  // --- /devils-advocate synthesis shape ---
+  it('passes: devils-advocate synthesis prompt with attributed critic lines', () => {
+    const prompt =
+      'Three critics evaluated the approach:\n' +
+      '- pragmatist (medium): edit git-investigator.md directly\n' +
+      '- paranoid (high): patch the config to add a guard\n' +
+      '- architect (low): refactor the module entirely\n\n' +
+      'Rank these by safety and feasibility. Return findings only.';
+    expect(classifyDispatchIntent(prompt)).toBeUndefined();
+  });
+
+  // --- Genuine imperatives outside quotes must still be refused ---
+  it('still refuses: genuine imperative edit verb outside any quoted region', () => {
+    expect(classifyDispatchIntent('edit git-investigator.md directly')).toBeDefined();
+  });
+
+  it('still refuses: edit verb after bullet with no label:colon', () => {
+    // Plain bullet "- edit src/a.ts" is a genuine directive, not attributed.
+    expect(classifyDispatchIntent('Steps:\n- edit src/a.ts\n- run the tests')).toBeDefined();
+  });
+
+  it('still refuses: genuine imperative after attributed list items', () => {
+    // The attributed lines are stripped but the plain imperative at the end is not.
+    const prompt =
+      '- pragmatist (medium): edit git-investigator.md\n' +
+      '- contrarian (high): patch the config\n\n' +
+      'Now implement the feature described above.';
+    expect(classifyDispatchIntent(prompt)).toBeDefined();
+  });
+
+  // --- Adversarial: unbalanced delimiters must NOT hide real instructions ---
+  //
+  // Inline code spans (`...`) and double-quoted strings ("...") are only
+  // stripped when the closing delimiter is present on the same line.  A quote
+  // character that sits BETWEEN the clause-lead position and the write verb
+  // naturally breaks CLAUSE_LEAD matching regardless of balance, so those
+  // shapes are protected by the pattern structure rather than by the stripper.
+  // The stripQuotedContent unit tests above verify the "fails closed" invariant
+  // for the stripping logic directly.
+  //
+  // Fenced code blocks DO permit CLAUSE_LEAD to fire via the `\n` anchor inside
+  // the block, so an unclosed fence is the meaningful adversarial case:
+  it('still refuses: unclosed fenced block does not hide a real instruction', () => {
+    // No closing ``` — stripQuotedContent leaves the block in place.
+    // The verb sits on its own line so CLAUSE_LEAD fires via the \n branch.
+    const prompt = 'Review this:\n```\nedit src/foo.ts\ndo the work';
+    expect(classifyDispatchIntent(prompt)).toBeDefined();
+  });
+
+  // --- #4101 regression: labelled-step/fix/task bullets must not bypass the gate ---
+
+  it('still refuses: numbered-step bullet (- Step 1: edit src/a.ts)', () => {
+    // "Step 1:" is a procedural step label. The imperative edit verb must still
+    // be detected after the narrowed strip no longer swallows this line.
+    expect(classifyDispatchIntent('- Step 1: edit src/a.ts')).toBeDefined();
+  });
+
+  it('still refuses: bare Fix label (- Fix: rewrite the handler)', () => {
+    // "Fix:" has no parenthesised severity, so the attributed-label strip must
+    // not remove this line. The write verb must be detected by the classifier.
+    expect(classifyDispatchIntent('- Fix: rewrite the handler')).toBeDefined();
+  });
+
+  it('still refuses: bare Task label (- Task: implement the parser)', () => {
+    expect(classifyDispatchIntent('- Task: implement the parser')).toBeDefined();
+  });
+
+  it('still refuses: cross-line shape (- inspect the context\\nTask: edit src/foo.ts)', () => {
+    // Exact example from spec: the old regex matched across the newline via \s,
+    // stripping both lines and hiding the real directive on the second line.
+    // With [ \t] the cross-line match is impossible; the second line is retained
+    // and the classifier detects the edit verb via the colon branch of CLAUSE_LEAD.
+    expect(classifyDispatchIntent('- inspect the context\nTask: edit src/foo.ts')).toBeDefined();
   });
 });

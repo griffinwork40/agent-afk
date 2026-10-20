@@ -89,6 +89,10 @@ export interface LifecycleHost {
   resizeUnsub: (() => void) | null;
   resizeImmediateUnsub: (() => void) | null;
   disarmRows: number;
+  /** Snapshot of `stdout.columns` at disarm time — mirrors `disarmRows`. Used
+   *  by `handleDisarmWindowResize` to compute `reflowedPhysicalRows` inflation
+   *  when the terminal also narrowed while the compositor was disarmed. */
+  disarmCols: number;
 
   logUpdate: LogUpdateFn | null;
   readonly scrollRegion?: CompositorScrollRegionGuard;
@@ -655,6 +659,7 @@ export function disarm(self: LifecycleHost): void {
   // called again to tear it down). Placed after resetState() deliberately:
   // resetState() zeros disarmRows, so the snapshot must come after.
   self.disarmRows = self.stdout.rows ?? 24;
+  self.disarmCols = self.stdout.columns ?? 80;
   // Dispose the suggest engine AFTER resetState so no pending promise
   // resolves try to call repaint() on a disarmed compositor. The engine's
   // dispose() signals all in-flight promises to resolve null — the

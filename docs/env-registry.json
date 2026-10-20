@@ -462,7 +462,7 @@
     },
     {
       "name": "AFK_LSP_DIAGNOSTICS",
-      "description": "Enable opt-in post-edit LSP diagnostics (phase 1 of #3904). When set to 1, after every successful edit_file or write_file call the handler queries typescript-language-server (must be on PATH) for diagnostics on the touched file and appends any errors/warnings to the tool result. Off by default. A missing or slow server never fails or stalls the edit — the query times out silently. TypeScript only in this phase.",
+      "description": "Enable opt-in LSP features (#3904). When set to 1: (phase 1) after every successful edit_file or write_file call the handler queries typescript-language-server (must be on PATH) for diagnostics on the touched file and appends any errors/warnings to the tool result; (phase 2) enables the code_symbols tool for go-to-definition and find-references. Off by default. A missing or slow server never fails or stalls the edit — the query times out silently. TypeScript / JavaScript only in this phase.",
       "type": "boolean",
       "required": false,
       "default": "0",
@@ -807,10 +807,18 @@
     },
     {
       "name": "AFK_OTLP_ENDPOINT",
-      "description": "OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). When set, `afk trace export-otlp` will POST the converted payload to this endpoint in addition to (or instead of) writing to stdout. Currently informational — live push support is a follow-up to the offline converter (issue #3901).",
+      "description": "OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). When set, `afk trace export-otlp` POSTs the converted OTLP/JSON payload to this endpoint after converting the witness trace. A dead or unreachable endpoint never blocks or fails the command — the error is printed to stderr and the command still exits 0. Equivalent to passing `--endpoint <url>` on the command line; the flag takes precedence when both are provided.",
       "type": "string",
       "required": false,
       "example": "http://localhost:4318/v1/traces",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_OTLP_HEADERS",
+      "description": "Comma-separated list of `Key=Value` HTTP headers appended to every OTLP/HTTP push request made by `afk trace export-otlp` when `AFK_OTLP_ENDPOINT` or `--endpoint` is set. Typical use: bearer tokens and tenant identifiers required by managed collectors (e.g. Grafana Cloud, Honeycomb). Values that contain a literal comma must be percent-encoded (%2C). Example: `Authorization=Bearer <tok>,X-Org=acme`.",
+      "type": "string",
+      "required": false,
+      "example": "Authorization=Bearer tok123,X-Org=acme",
       "category": "misc"
     },
     {
@@ -1049,6 +1057,15 @@
       "type": "string",
       "required": false,
       "category": "paths"
+    },
+    {
+      "name": "AFK_STEER_MODE",
+      "description": "Controls when a typed-ahead REPL message is delivered to the model during a multi-round turn. \"boundary\" (opt-in): drain the compositor queue at every tool-round boundary, so a correction typed during tool execution reaches the model on the NEXT tool round rather than waiting for the whole turn to end. \"turn-end\" (default): existing behaviour — the message is delivered as its own turn once the current turn finishes. The \"boundary\" mode is gated behind this env var during soak (issue #3897). Note: the user-yield contract (wait_for / exit_plan_mode) relies on \"turn-end\" semantics; those tools tell the model \"end your turn so the message is delivered first\", which is only accurate in \"turn-end\" mode. In \"boundary\" mode the message arrives mid-turn and the yield notice is redundant but harmless — the tool still returns early, the model still sees the message.",
+      "type": "string",
+      "required": false,
+      "default": "turn-end",
+      "example": "boundary",
+      "category": "misc"
     },
     {
       "name": "AFK_STOP_HOOK_MAX_CONTINUATIONS",
@@ -1301,6 +1318,40 @@
       "required": false,
       "example": "1",
       "category": "debug"
+    },
+    {
+      "name": "AFK_TRANSCRIBE_API_KEY",
+      "description": "Bearer token for the AFK_TRANSCRIBE_API_URL transcription endpoint. Leave unset for unauthenticated local servers.",
+      "type": "string",
+      "required": false,
+      "category": "telegram",
+      "secret": true
+    },
+    {
+      "name": "AFK_TRANSCRIBE_API_URL",
+      "description": "OpenAI-compatible /audio/transcriptions endpoint URL used to transcribe inbound Telegram voice and audio messages. When unset, voice/audio messages receive a refusal reply naming this variable. Supports any OpenAI-compatible server including local Whisper deployments.",
+      "type": "string",
+      "required": false,
+      "example": "https://api.openai.com/v1/audio/transcriptions",
+      "category": "telegram"
+    },
+    {
+      "name": "AFK_TRANSCRIBE_MODEL",
+      "description": "Model name forwarded to the AFK_TRANSCRIBE_API_URL endpoint (default: whisper-1). Change when using an endpoint that expects a different model identifier.",
+      "type": "string",
+      "required": false,
+      "default": "whisper-1",
+      "example": "whisper-large-v3",
+      "category": "telegram"
+    },
+    {
+      "name": "AFK_TRANSCRIBE_TIMEOUT_MS",
+      "description": "Timeout in milliseconds for the transcription API POST request (default: 60000). Increase for slow local Whisper servers or large audio files.",
+      "type": "number",
+      "required": false,
+      "default": "60000",
+      "example": "120000",
+      "category": "telegram"
     },
     {
       "name": "AFK_TURN_SEPARATOR",
@@ -1633,6 +1684,13 @@
       "category": "process"
     },
     {
+      "name": "CHROME_CONFIG_HOME",
+      "description": "Linux only. When set, Chrome stores its profile under $CHROME_CONFIG_HOME/<channel-dir> instead of $XDG_CONFIG_HOME/<channel-dir>. Mirrors the override that chrome-devtools-mcp/Puppeteer apply when locating DevToolsActivePort so the real-Chrome probe checks the same path.",
+      "type": "string",
+      "required": false,
+      "category": "process"
+    },
+    {
       "name": "CI",
       "description": "Standard CI-detection convention. Auto-set by GitHub Actions, CircleCI, etc. Used to switch off TTY-only UX.",
       "type": "string",
@@ -1898,6 +1956,13 @@
       "required": false,
       "category": "auth",
       "secret": true
+    },
+    {
+      "name": "XDG_CONFIG_HOME",
+      "description": "Linux XDG base-dir spec override for per-user config files. When set (and CHROME_CONFIG_HOME is not), Chrome stores its profile under $XDG_CONFIG_HOME/<channel-dir>. Mirrors the override that chrome-devtools-mcp/Puppeteer apply when locating DevToolsActivePort.",
+      "type": "string",
+      "required": false,
+      "category": "process"
     }
   ]
 }

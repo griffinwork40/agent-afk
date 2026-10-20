@@ -34,6 +34,13 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { env } from '../../../config/env.js';
+import {
+  encodeMessage,
+  killProc,
+  parseMessages,
+  languageIdForExt,
+  getTimeoutMs,
+} from './lsp-shared.js';
 
 /** A single LSP diagnostic item (subset of the full LSP spec). */
 export interface LspDiagnostic {
@@ -56,20 +63,6 @@ const SEVERITY_LABEL: Record<number, string> = {
 };
 
 /**
- * Map file extension to LSP languageId.
- * Returns undefined for unsupported extensions (caller should skip LSP).
- */
-function languageIdForExt(ext: string): string | undefined {
-  switch (ext) {
-    case '.ts': return 'typescript';
-    case '.tsx': return 'typescriptreact';
-    case '.js': return 'javascript';
-    case '.jsx': return 'javascriptreact';
-    default: return undefined;
-  }
-}
-
-/**
  * Return true when the LSP diagnostics feature is enabled.
  * Reads AFK_LSP_DIAGNOSTICS from env — truthy iff "1" or "true".
  */
@@ -78,78 +71,6 @@ export function isLspDiagnosticsEnabled(): boolean {
   if (!raw) return false;
   const v = raw.trim().toLowerCase();
   return v === '1' || v === 'true';
-}
-
-/**
- * Return the configured timeout in milliseconds.
- * Reads AFK_LSP_DIAGNOSTICS_TIMEOUT_MS; defaults to 1500.
- *
- * Tradeoff: the default is intentionally low (1500 ms) because this runs
- * inline inside edit_file / write_file tool responses. A slow language server
- * adds perceived latency to every edit. The env var lets operators raise the
- * ceiling when their server is slow but the diagnostics are valuable enough
- * to wait for.
- */
-function getTimeoutMs(): number {
-  const raw = env.AFK_LSP_DIAGNOSTICS_TIMEOUT_MS;
-  if (!raw) return 1500;
-  const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : 1500;
-}
-
-/** Encode a JSON-RPC message with the LSP Content-Length framing. */
-function encodeMessage(obj: unknown): Buffer {
-  const body = JSON.stringify(obj);
-  const header = `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n`;
-  return Buffer.concat([Buffer.from(header, 'utf8'), Buffer.from(body, 'utf8')]);
-}
-
-/** Kill a child process and close its stdin, ignoring errors. */
-function killProc(proc: ChildProcess): void {
-  try { proc.stdin?.end(); } catch { /* ignore */ }
-  try {
-    // Invariant: on win32, proc.kill() calls TerminateProcess on the direct
-    // child only — child-of-child processes (e.g. a .cmd shim spawning node)
-    // are orphaned.  Spawning with shell: true on win32 means the direct child
-    // IS the shell; TerminateProcess on the shell tears down its child tree.
-    // On POSIX, SIGTERM to the direct child is sufficient.
-    proc.kill();
-  } catch { /* ignore */ }
-}
-
-/**
- * Parse all complete LSP messages from `buf`. Returns parsed JSON objects and
- * the remaining unparsed bytes.
- */
-function parseMessages(buf: Buffer): { messages: unknown[]; remaining: Buffer } {
-  const messages: unknown[] = [];
-  let offset = 0;
-
-  while (offset < buf.length) {
-    // Find end of headers: \r\n\r\n
-    const headerEnd = buf.indexOf('\r\n\r\n', offset);
-    if (headerEnd === -1) break;
-
-    const headerSection = buf.subarray(offset, headerEnd).toString('utf8');
-    const clMatch = headerSection.match(/Content-Length:\s*(\d+)/i);
-    if (!clMatch || clMatch[1] === undefined) break;
-
-    const contentLength = parseInt(clMatch[1], 10);
-    const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + contentLength;
-
-    if (bodyEnd > buf.length) break; // incomplete — wait for more data
-
-    const body = buf.subarray(bodyStart, bodyEnd).toString('utf8');
-    try {
-      messages.push(JSON.parse(body));
-    } catch {
-      // malformed — skip
-    }
-    offset = bodyEnd;
-  }
-
-  return { messages, remaining: buf.subarray(offset) };
 }
 
 /**

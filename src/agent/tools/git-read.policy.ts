@@ -19,6 +19,9 @@ import path from 'node:path';
 
 export const GIT_READ_SUBCOMMANDS = [
   'status', 'log', 'diff', 'show', 'grep', 'tag', 'branch', 'blame', 'ls-files', 'rev-parse',
+  // Added by #4058:
+  'merge-base', 'rev-list', 'reflog', 'for-each-ref', 'describe', 'shortlog',
+  'cat-file', 'remote', 'stash', 'worktree',
 ] as const;
 export type GitReadSubcommand = (typeof GIT_READ_SUBCOMMANDS)[number];
 
@@ -39,7 +42,7 @@ const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
   status: { flags: ['-s', '--short', '-b', '--branch', '--porcelain', '--porcelain=v1', '--porcelain=v2', '--untracked-files=no', '--untracked-files=normal', '--untracked-files=all', '--ignored'], valued: [], forced: [], revs: false },
   log: {
     flags: ['--oneline', '--graph', '--decorate', '--all', '--merges', '--no-merges', '--first-parent', '--reverse', '-p', '--patch', '--follow', ...DIFF_FORMAT],
-    valued: ['--format=', '--pretty=', '--author=', '--committer=', '--grep=', '--since=', '--until=', '--after=', '--before=', '--max-count=', '--skip=', '--date=', '--unified='],
+    valued: ['--format=', '--pretty=', '--author=', '--committer=', '--grep=', '--since=', '--until=', '--after=', '--before=', '--max-count=', '--skip=', '--date=', '--unified=', '--diff-filter='],
     forced: ['--no-ext-diff', '--no-textconv'], revs: true,
   },
   diff: {
@@ -58,6 +61,60 @@ const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
   blame: { flags: ['-w', '-s', '--porcelain', '--line-porcelain', '-l'], valued: ['-L'], forced: ['--no-textconv'], revs: true },
   'ls-files': { flags: ['--cached', '--others', '-o', '--exclude-standard', '--modified', '-m', '--deleted', '-d', '--stage', '-s'], valued: [], forced: [], revs: false },
   'rev-parse': { flags: ['--abbrev-ref', '--short', '--verify', '--show-toplevel', '--show-prefix', '--is-inside-work-tree', '--symbolic-full-name'], valued: [], forced: [], revs: true },
+
+  // --- subcommands added by #4058 ---
+
+  // merge-base: purely reads the commit graph. --is-ancestor exits 0/1 (true/false),
+  // which the handler must treat as success (like grep). No write path exists.
+  // --independent/--fork-point omitted: complex semantics, revs alone are sufficient.
+  'merge-base': { flags: ['--is-ancestor'], valued: [], forced: [], revs: true },
+
+  // rev-list: walks commit graph, no writes. --objects/--disk-usage omitted (can be
+  // very expensive / expose object layout). --stdin omitted (network of stdin).
+  'rev-list': { flags: ['--count', '--oneline', '--reverse', '--merges', '--no-merges', '--first-parent', '--ancestry-path', '--topo-order', '--date-order'], valued: ['--max-count=', '--max-age=', '--min-age=', '--since=', '--until=', '--after=', '--before=', '--format=', '--pretty=', '--author=', '--committer=', '--grep='], forced: [], revs: true },
+
+  // reflog: forced to `show` (the read-only subcommand). `expire`/`delete` are write
+  // subcommands and are structurally blocked because `forced` prepends `show` and the
+  // model cannot inject a second positional subcommand through the rev allowlist.
+  'reflog': { flags: ['--oneline', '--decorate', '--no-walk', '--all'], valued: ['--format=', '--pretty=', '--date=', '--max-count=', '--since=', '--until=', '--after=', '--before='], forced: ['show'], revs: true },
+
+  // for-each-ref: reads refs only, never writes. The signature guard in checkToken
+  // already blocks %(signature…) and --sort=signature. --python/--shell/--tcl/--perl
+  // omitted (can embed refs into shell-interpreted output; the default plain output
+  // is safe). --stdin omitted.
+  // revs: true so positional ref-pattern arguments (e.g. `refs/tags/`) pass REV_RE;
+  // they match [A-Za-z0-9_./@{}^~:+-]* which covers all valid ref-glob prefixes.
+  'for-each-ref': { flags: [], valued: ['--format=', '--sort=', '--count=', '--contains=', '--merged=', '--points-at=', '--no-merged='], forced: [], revs: true },
+
+  // describe: reads tags/commits, no writes. --match= accepts a glob that git
+  // interprets internally (no exec). --dirty/--broken omitted (reads working tree
+  // state; non-fatal but unnecessary scope expansion).
+  'describe': { flags: ['--tags', '--always', '--long', '--exact-match', '--all'], valued: ['--match=', '--abbrev='], forced: [], revs: true },
+
+  // shortlog: summarises log output. When stdin is not a tty git reads commits from
+  // stdin; the handler uses execFile (not a shell) so stdin is the default 'pipe'
+  // which gets EOF immediately — no hang. We also force a HEAD default in planGitRead
+  // so a bare `shortlog` without revs still gets a rev, which triggers the non-stdin
+  // path. No write path exists.
+  'shortlog': { flags: ['-s', '--summary', '-n', '--numbered', '-e', '--email', '--group=author', '--group=committer'], valued: ['--max-count=', '--since=', '--until=', '--after=', '--before=', '--format=', '--date='], forced: [], revs: true },
+
+  // cat-file: reads object content. --batch*/--batch-all-objects omitted (stream
+  // arbitrary objects; would read unrelated refs). --textconv/--filters/--path
+  // omitted (can run external programs). -t/-s/-p/-e are safe single-object queries.
+  'cat-file': { flags: ['-t', '-s', '-p', '-e'], valued: [], forced: [], revs: true },
+
+  // remote: forced to `-v` (list only). `add`/`set-url`/`remove`/`rename`/`prune`/
+  // `update` are write/network subcommands; they are structurally blocked because
+  // `forced` prepends `-v` and revs are disabled.
+  'remote': { flags: [], valued: [], forced: ['-v'], revs: false },
+
+  // stash: forced to `list` (read-only). `push`/`pop`/`drop`/`clear`/`apply`/`show --index`
+  // and other write subcommands are blocked structurally.
+  'stash': { flags: [], valued: ['--format=', '--pretty=', '--date='], forced: ['list'], revs: false },
+
+  // worktree: forced to `list` (read-only). `add`/`remove`/`prune`/`move`/`lock`/
+  // `unlock` are blocked structurally.
+  'worktree': { flags: ['--porcelain', '-z'], valued: [], forced: ['list'], revs: false },
 };
 
 /** A revision-like token: refs, SHAs, ranges, `HEAD~2`, `@{u}`, `HEAD:path`. Never starts with `-`. */
@@ -125,6 +182,20 @@ export function confinePathspec(cwd: string, p: string): string | { error: strin
   return rel.split(path.sep).join('/');
 }
 
+/**
+ * Subcommands that take no pathspecs and return early before the `--` append.
+ * Includes the new forced-subcommand entries (remote, stash, worktree, reflog,
+ * for-each-ref) where pathspecs are meaningless or harmful.
+ */
+const NO_PATH_SUBCOMMANDS = new Set<GitReadSubcommand>([
+  'tag', 'branch', 'rev-parse', 'merge-base', 'rev-list',
+  'reflog', 'for-each-ref', 'describe', 'shortlog',
+  'cat-file', 'remote', 'stash', 'worktree',
+]);
+// for-each-ref accepts positional ref-pattern args (e.g. refs/tags/) via revs:true,
+// but those patterns must NOT be treated as pathspecs — for-each-ref has no path
+// semantics. It is in NO_PATH_SUBCOMMANDS so it exits before the confinePathspec loop.
+
 /** Validate a request and build the argv that follows the fixed global options. */
 export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   const sub = req.subcommand;
@@ -161,20 +232,23 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
     if (req.pattern !== undefined) return { ok: false, error: '"pattern" is only valid for subcommand "grep".' };
     argv.push(...args);
   }
-  if (subcommand === 'tag' || subcommand === 'branch') {
-    // Listing only: the trailing non-option tokens of `--list` are glob patterns, not names to create.
+
+  // shortlog: if no rev was supplied, inject HEAD so git uses the commit-graph
+  // path (not stdin). This prevents a hang when stdin is closed/pipe.
+  if (subcommand === 'shortlog' && !args.some((t) => !t.startsWith('-'))) {
+    argv.push('HEAD');
+  }
+
+  if (NO_PATH_SUBCOMMANDS.has(subcommand)) {
     if (paths.length > 0) return { ok: false, error: `git ${subcommand} takes no paths.` };
     return { ok: true, argv };
   }
+
   const confined: string[] = [];
   for (const p of paths) {
     const r = confinePathspec(cwd, p);
     if (typeof r !== 'string') return { ok: false, error: r.error };
     confined.push(r);
-  }
-  if (subcommand === 'rev-parse') {
-    if (confined.length > 0) return { ok: false, error: 'git rev-parse takes no paths.' };
-    return { ok: true, argv };
   }
   argv.push('--', ...confined);
   return { ok: true, argv };

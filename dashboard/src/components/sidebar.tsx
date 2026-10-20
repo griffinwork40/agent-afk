@@ -9,17 +9,21 @@ import {
   Settings,
   PanelLeftClose,
   PanelLeft,
+  Bell,
 } from 'lucide-react';
 
-type NavItem = 'sessions' | 'memory' | 'schedules' | 'jobs' | 'settings';
+type NavItem = 'sessions' | 'memory' | 'schedules' | 'jobs' | 'handoffs' | 'settings';
 
 const navItems: { id: NavItem; label: string; icon: React.ReactNode }[] = [
   { id: 'sessions', label: 'Sessions', icon: <MessageSquare className="size-4" /> },
   { id: 'memory', label: 'Memory', icon: <Brain className="size-4" /> },
   { id: 'schedules', label: 'Schedules', icon: <Calendar className="size-4" /> },
   { id: 'jobs', label: 'Jobs', icon: <Briefcase className="size-4" /> },
+  { id: 'handoffs', label: 'Handoffs', icon: <Bell className="size-4" /> },
   { id: 'settings', label: 'Settings', icon: <Settings className="size-4" /> },
 ];
+
+export type { NavItem };
 
 export function Sidebar({
   sessions,

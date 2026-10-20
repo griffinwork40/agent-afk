@@ -23,6 +23,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig } from './types/config-types.js';
 import type { ToolFailureClass } from './trace/types.js';
 import type { UsageLimitProvider } from '../utils/errors.js';
+import type { OneShotStopReason } from './providers/anthropic-direct/oneshot.js';
 
 /**
  * Normalized session identity emitted on the synthetic `session.init` event.
@@ -115,10 +116,13 @@ export interface ProviderUsage {
  *     different providers are summed (e.g. a multi-provider child session).
  *     Per-provider cache-hit metrics are not meaningful for a `mixed` bucket;
  *     only the `total` counters should be used. `BillingRollup.snapshot().byProvider`
- *     will surface a `'mixed'` key when this occurs.
+ *     will surface a `'mixed'` key when this occurs. `billingLifecycleFields`
+ *     propagates `provider` (including `'mixed'`) into `subagent_lifecycle`
+ *     payloads so the sentinel is visible in the trace.
  *
- * Rollups split by `provider` via `BillingRollup`; analytics consumers must
- * treat `byProvider` as an open map and handle unexpected keys gracefully.
+ * Rollups are split by `provider` via `BillingRollup` (schema:
+ * `BillingRollupSchema` in `trace/events.billing.ts`); analytics consumers
+ * must treat `byProvider` as an open map and handle unexpected keys gracefully.
  */
 export interface BillingUsage {
   provider: string;
@@ -666,6 +670,8 @@ export interface ProviderContextUsage {
 export interface ProviderMcpServerStatus {
   name: string;
   status: string;
+  /** Number of tools exposed by this server; undefined when not yet known. */
+  toolCount?: number;
 }
 
 /** Loose structural shape for account info. */
@@ -796,6 +802,16 @@ export interface ProviderCompleteArgs {
   baseUrl?: string;
 }
 
+/**
+ * Reply of {@link ModelProvider.completeWithStop}: the trimmed text plus why the
+ * model stopped. `'max_tokens'` means the reply was cut at the token cap, so
+ * its final word may be partial.
+ */
+export interface ProviderCompleteResult {
+  text: string;
+  stopReason: OneShotStopReason;
+}
+
 export interface ModelProvider {
   /** Human-friendly name for diagnostics. */
   readonly name: string;
@@ -807,6 +823,13 @@ export interface ModelProvider {
    * MUST feature-detect (`if (typeof provider.complete === 'function')`).
    */
   complete?(args: ProviderCompleteArgs): Promise<string>;
+  /**
+   * Optional {@link complete} variant that also reports the stop reason, so a
+   * small-budget caller can tell a finished reply from one cut at `maxTokens`.
+   * Same auth, error, and trimming contract as `complete()`. Callers MUST
+   * feature-detect and fall back to `complete()` when it is absent.
+   */
+  completeWithStop?(args: ProviderCompleteArgs): Promise<ProviderCompleteResult>;
   /**
    * Optional disposal hook. Releases provider-held resources — notably the
    * SQLite `MemoryStore` handle opened in the constructor. Callers that build a

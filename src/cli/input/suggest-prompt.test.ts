@@ -296,4 +296,12 @@ describe('generatePromptSuggestion — echo guard', () => {
     await engine.primePromptSuggestion(enabledCtx());
     expect(engine.peekPromptSuggestion()).toBe('run the failing tests');
   });
+
+  it('drops the cut-off final word when the proposal hit the token cap', async () => {
+    const engine = createSuggestEngine({
+      completeFn: async () => ({ text: 'run the failing tests in suggest-tie', stopReason: 'max_tokens' as const }),
+    });
+    await engine.primePromptSuggestion(enabledCtx());
+    expect(engine.peekPromptSuggestion()).toBe('run the failing tests in');
+  });
 });

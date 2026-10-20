@@ -360,6 +360,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     catalog_model_upgrade: true,
     hook_block_repeat_tripped: true,
     billing_settled: true,
+    subagent_model_fallback: true,
   };
 
   it('the Zod enum contains exactly the union members (no drift either way)', () => {

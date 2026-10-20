@@ -6,10 +6,201 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries in the [Unreleased] section may include a short commit hash suffix
-(e.g. `- add thing (abc1234)`). The hash is used by `/changelog` and the
-auto-release workflow to deduplicate commits across successive runs.
+(e.g. `- add thing (abc1234)`). The hash is used by `/changelog` and
+`scripts/generate-changelog.mjs` to deduplicate commits across successive runs.
 
 ## [Unreleased]
+
+## [5.328.1] - 2026-10-20
+
+### Fixed
+- fix word-doubling in joinContinuation, add missing tests, deprecate completeWithWire (#4174) (81b38187)
+
+## [5.328.0] - 2026-10-20
+
+### Added
+- grant git_read to research-agent under AFK_READONLY_GIT_TOOL (#4196) (a4c82f2f)
+
+### Fixed
+- address handoffs-view review findings (#4197 follow-up) (#4207) (56420f74)
+- plan-mode gate for agent{host}, host control-char rejection (#4206) (c0a8bdd3)
+
+## [5.327.13] - 2026-10-20
+
+### Changed
+- stable tool-list partition for prefix-cache reuse (#4205) (06c5cb04)
+
+## [5.327.12] - 2026-10-20
+
+### Added
+- wire host field on agent tool to RemoteSubagentHandle (#4202) (5262a205)
+- pending handoffs view in dashboard (poll + answer form) (#4197) (6ff53f95)
+- LSP symbol lookup tool (phase 2, opt-in, off by default) (#4201) (bcaf1538)
+
+### Fixed
+- route DaemonHandle.registerTask through quarantine, fix JSDoc, strengthen quarantine tests (#4175) (4d4604fe)
+- fix dead code in checkMirror, improve order-mismatch logging, export registrations/checkMirror, add tests (#4193) (14e5a0f7)
+
+## [5.327.11] - 2026-10-20
+
+### Added
+- measure shadow-git-detect observe-window firing rate (#4200) (53c4e74f)
+- live OTLP/HTTP push for afk trace export-otlp (#4195) (0f09b9fe)
+- add /insights Telegram command for text summary of usage analytics (#4194) (95f3ecc3)
+- surface riskCategory in trace show and status-line chip (#4199) (9263d0c9)
+
+### Fixed
+- @internal tags on OTLP wire types; ROOT_PARENT_SENTINEL for background agents (#4192) (becd7fa1)
+- use "safe idempotent" in web_request retry wording (#4191) (096a2c75)
+
+## [5.327.10] - 2026-10-20
+
+### Fixed
+- add disarmCols to ResetStateHost and zero it in resetState (#4177) (2ce59472)
+- clean up fallbackBySession on mint completion and document void close() (#4178) (0f2a4f47)
+
+## [5.327.9] - 2026-10-20
+
+### Fixed
+- correct billing_settled comment to say cumulative totals, not delta (#4184) (a918fbec)
+- pin readRoots/writeRoots confinement descriptions in CI (#3772) (#4186) (65265cbb)
+
+## [5.327.8] - 2026-10-20
+
+### Fixed
+- record failed/cancelled child costUsd in subagentRunningCostUsd (#4185) (c8aff4ed)
+- narrow catch to race error, add pending-status pre-check, add tests (#4179) (30696807)
+- JSDoc ALL_TOOL_SCHEMAS flag note; tighten Scenario 4 vote assertion (#4187) (1ed6a132)
+
+## [5.327.7] - 2026-10-20
+
+### Fixed
+- oauth_pending servers and mid-session disconnects now surface model-visible notices (#4183) (b6542f25)
+- fix four low-risk advisory correctness gaps in /handoffs:answer (#4180) (a7b97e60)
+- add missing test assertions from 2026-10-19 advisory findings (#4176) (8e7eb6bc)
+
+## [5.327.6] - 2026-10-20
+
+### Fixed
+- pass explicit scanCmd to writeReference; add mirror check to scan:cli:check (#4152) (551e74c8)
+
+### Changed
+- fix lint:tests ratchet regression from #4153 (#4188) (2198554c)
+
+## [5.327.5] - 2026-10-19
+
+### Fixed
+- correct web_request schema and header to match retry implementation (#4151) (dba2b24e)
+- correct root span status, best-effort completed-only spans, omit errorHead by default, index background_agent (#4153) (7a589b4a)
+
+### Changed
+- mark Task Scheduler service backend as shipped in windows-setup.md (#4150) (f5ed0866)
+- update evidence-gate header and test description to "on by default" (#4149) (6e170733)
+
+## [5.327.4] - 2026-10-19
+
+### Fixed
+- sanitise toolName in mcpUnknownToolMessage + make dedup test reach collision branch (#4157 follow-up) (#4173) (61baa1b3)
+- include offending value in startup quarantine warning (#4161 follow-up) (#4171) (5695f9b7)
+
+## [5.327.3] - 2026-10-19
+
+### Fixed
+- harden MCP failure-notice sanitiser and wire-prefix glob (#4157) (64df554b)
+
+## [5.327.2] - 2026-10-19
+
+### Fixed
+- cross-reference mirror guard comment + document per-call allocation nit (#4163) (aa0596dd)
+- apply reflowedPhysicalRows inflation to disarmed EXPAND path (#4162) (4fc3100c)
+- quarantine malformed runAt/expiresAt tasks at daemon startup (#4161) (7791f0f4)
+- advisory findings from #3986 — mixed provider on BillingUsage (#4160) (a6dac97b)
+- advisory closure-provenance test improvements from #4021 review (#4159) (5676dfcb)
+- add explicit test for pause→resume→same-text not superseded (#4158) (4b54ee4f)
+- add Known residual test for FS_MUTATING over-gate in risk-classifier (#4156) (c0b2dd37)
+- doc, test, comment, and regex-safety fixes for wind-down-final (#4155) (fec0d50e)
+- add single-quoted -c test case and document -C/--git-dir omission (#4154) (0b00bc7f)
+
+## [5.327.1] - 2026-10-19
+
+### Added
+- /export md|html — self-contained session export (#4026) (23c7c271)
+- afk acp — Agent Client Protocol JSON-RPC 2.0 stdio server (#4040) (b1f8b8c8)
+
+### Fixed
+- Linux CHROME_CONFIG_HOME/XDG_CONFIG_HOME ignored by real-Chrome probe; surface silent catch in error-hints (#4023) (c46be820)
+- bash write-shaped verification command also advances lastMutationIndex (#4028) (ca6edc96)
+- stop hardcoding bash/workspace_query as forbidden in compose prompt suffix (#4016) (f116f20d)
+- regenerate slash-command reference after /handoffs landed (#4164) (875c97e5)
+
+## [5.327.0] - 2026-10-19
+
+### Added
+- add /handoffs and /handoffs:answer REPL slash commands (#4027) (e9dba5f2)
+- POST /api/handoffs/:taskId/answer with CSRF + responder identity (#4033) (2c328d93)
+- fall back to parent model when the default subagent model is rejected (#4117) (bc465c2f)
+
+### Fixed
+- stop LLM ghost-text suggestions from truncating mid-word (#4142) (c663ec63)
+
+## [5.326.3] - 2026-10-19
+
+### Added
+- journal AI ghost-text suggestions and their outcomes (#4128) (f15358df)
+
+### Changed
+- stage 2 — shared root validation + reuse setupIsolationWorktree in DAG dispatch (#4138) (c6fffd6a)
+
+## [5.326.2] - 2026-10-19
+
+### Fixed
+- address advisory findings from voice/audio transcription review (#4132) (a27acb0f)
+- harden regen:generated marker scan and conflicted-stage parsing (#4131) (c5a8db4b)
+- forward toolCount through provider boundary; add mcpServers e2e variant (#4137) (acc498b6)
+
+## [5.326.1] - 2026-10-19
+
+### Fixed
+- add centered reflow-shift eviction test and document fallback contracts (#4133) (96a9b94d)
+- mark full-width frame rows as hard for tmux reflow-shift (#4129) (d66bc7b0)
+- typecheck baseline reason edge cases in regen:generated merges (#4130) (4c9c9b59)
+- complete prediction fixture in baseline-budget test (#4134) (c6c48cf7)
+- address advisory findings from bash_timeout_clamped review (#4136) (bdff2e4b)
+- delegate grantsTool in XaiProvider, note tool-grant.ts gap, fix nit comment (#4135) (4a30545a)
+
+## [5.326.0] - 2026-10-18
+
+### Added
+- resolve generated-file conflicts with pnpm regen:generated (#4116) (a50df293)
+
+## [5.325.0] - 2026-10-18
+
+### Added
+- transcribe inbound Telegram voice and audio messages (#4047) (9a5169e8)
+
+### Fixed
+- erase tmux-reflowed echo duplicate on pane split (#4114) (97eaa72f)
+
+## [5.324.4] - 2026-10-18
+
+### Fixed
+- strip quoted content before dispatch-intent classification (#4101) (9c9f6bdf)
+- tidy two-phase MCP provider rebuild from #4069 (#4093) (7cadc910)
+- add missing read-only subcommands to git_read (#4099) (4b595a2f)
+- keep tools on anthropic-direct wind-down rounds for prefix-cache preservation (#4094) (b2ee0b22)
+
+## [5.324.3] - 2026-10-18
+
+### Added
+- drain REPL queue at tool-round boundary (AFK_STEER_MODE=boundary) (#4041) (2b84cf58)
+
+### Fixed
+- add e2e MCP fixture test, assert public exports, fix stale sdk.mdx MCP text (#4092) (b26f111a)
+
+## [5.324.2] - 2026-10-18
+
+### Fixed
+- clone gate falls back to two-dot diff when shallow checkout has no merge base (#4115) (0bd621db)
 
 ## [5.324.1] - 2026-10-18
 

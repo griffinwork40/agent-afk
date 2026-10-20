@@ -17,6 +17,7 @@ import type {
   ProviderQuery,
   ProviderQueryArgs,
   ProviderCompleteArgs,
+  ProviderCompleteResult,
 } from '../../provider.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
 import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
@@ -50,11 +51,12 @@ import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provide
 import { grantsWorkspacePrompt, providerGrantsTool } from '../shared/tool-grant.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
+import { sortMcpSchemas } from '../../tools/schemas.order.js';
 import { applyReadOnlyGitPermissions, readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
-import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
+import { completeWithWireWithStop, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
@@ -413,7 +415,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // schema appended last, RESIDENT whenever planExitControls is present
       // (top-level); query.ts drops it from the advertised tools on non-plan
       // turns so the model sees it only when it is actionable.
-      schemas: [...baseSchemas, ...mcpSchemas, ...(planExitControls ? [exitPlanModeTool] : [])],
+      // MCP segment sorted by name (#4198): deterministic across connection
+      // orders so prefix-cache hits are not broken by MCP registration order.
+      schemas: [...baseSchemas, ...sortMcpSchemas(mcpSchemas), ...(planExitControls ? [exitPlanModeTool] : [])],
       // Session hook registry via the one canonical resolver (query-scoped
       // config registry wins over any constructor-provided one). Mirrors
       // AnthropicDirectProvider; the required key on the dispatcher options
@@ -569,6 +573,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
    * `args.baseUrl` overrides the construction option when both are present.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
+    return (await this.completeWithStop(args)).text;
+  }
+
+  /** {@link complete} plus the stop reason (see ModelProvider.completeWithStop). */
+  async completeWithStop(args: ProviderCompleteArgs): Promise<ProviderCompleteResult> {
     const input: OpenAIOneShotInput = {
       model: args.model ?? 'gpt-4o-mini',
       system: args.system,
@@ -582,7 +591,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // setEndpointDefaults) so complete() matches query() credentials.
     if (this._defaultHeaders !== undefined) input.defaultHeaders = this._defaultHeaders;
     if (args.signal) input.signal = args.signal;
-    return completeWithWire(input);
+    return completeWithWireWithStop(input);
   }
 }
 

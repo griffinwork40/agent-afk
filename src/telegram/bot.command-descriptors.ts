@@ -21,4 +21,5 @@ export const BOT_COMMAND_DESCRIPTORS: ReadonlyArray<{ command: string; descripti
   { command: 'watch', description: 'Live-tail a CLI session from this chat' },
   { command: 'unwatch', description: 'Stop watching a session' },
   { command: 'inbox', description: 'List, release, or drop held peer messages (AFK_PEER_INBOUND=hold)' },
+  { command: 'insights', description: 'Show usage analytics and recommendations (optional: /insights <days>)' },
 ];

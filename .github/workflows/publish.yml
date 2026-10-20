@@ -47,7 +47,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # prepublishOnly -> build:dist -> scripts/build-web-ui.mjs needs these;
-      # mirrors auto-release.yml and ci.yml.
+      # mirrors ci.yml.
       - name: Install dashboard dependencies
         run: cd dashboard && pnpm install --frozen-lockfile
 

@@ -219,11 +219,11 @@ describe('loop.ts runTurn', () => {
     const progressEvents = events.filter((e) => e.type === 'progress');
     expect(progressEvents.length).toBe(2);
 
-    // A 3rd model call happened (the wind-down) and it was sent WITHOUT tools,
-    // while the first round WAS sent with tools.
+    // A 3rd model call happened (the wind-down) and it was sent WITH tools
+    // (prefix-cache fix #4072 — tools kept identical so the cache stays valid).
     expect(callIdx).toBe(3);
     expect((createCalls[0] as { tools?: unknown[] }).tools?.length ?? 0).toBeGreaterThan(0);
-    expect((createCalls[2] as { tools?: unknown }).tools).toBeUndefined();
+    expect((createCalls[2] as { tools?: unknown[] }).tools?.length ?? 0).toBeGreaterThan(0);
 
     // The model's wind-down answer is surfaced as an assistant.message ...
     const assistantMsg = events.find((e) => e.type === 'assistant.message');
@@ -1216,10 +1216,11 @@ describe('loop.ts runTurn', () => {
         }),
       );
 
-      // Exactly ONE tools-stripped extra round ran — not an unbounded loop.
+      // Exactly ONE wind-down extra round ran — not an unbounded loop.
+      // Tools are KEPT on the wind-down request (prefix-cache fix #4072).
       expect(callIdx).toBe(2);
       expect((createCalls[0] as { tools?: unknown[] }).tools?.length ?? 0).toBeGreaterThan(0);
-      expect((createCalls[1] as { tools?: unknown }).tools).toBeUndefined();
+      expect((createCalls[1] as { tools?: unknown[] }).tools?.length ?? 0).toBeGreaterThan(0);
 
       // The model's synthesis is delivered — the whole point of winding down
       // rather than being killed at the hard abort.

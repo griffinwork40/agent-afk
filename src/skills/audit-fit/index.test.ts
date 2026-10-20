@@ -63,7 +63,9 @@ vi.mock('../../agent/subagent/wave.js', () => ({
 
 // Mock resolveChildModel so tests don't need real session config.
 vi.mock('../../agent/subagent/resolve-child-model.js', () => ({
-  resolveChildModel: vi.fn(() => 'claude-test-model'),
+  resolveChildModel: vi.fn((_opts: unknown, extra?: { withSource: true }) =>
+    extra?.withSource ? { model: 'claude-test-model', source: 'default' } : 'claude-test-model'),
+  defaultTierModelFallback: vi.fn(() => undefined),
 }));
 
 // Mock discover helpers so we control what artifacts are returned.

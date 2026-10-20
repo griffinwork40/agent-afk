@@ -182,6 +182,17 @@ export interface ForkSubagentOptions<T = unknown> {
    * Undefined = unscoped (no restriction emitted). Empty array = deny-all.
    */
   nestedAgentAllowlist?: readonly string[];
+  /**
+   * Default-tier model fallback (see ../subagent/handle.model-fallback.ts).
+   * Set ONLY when the child's model came from the default tier
+   * (`resolveChildModel` source `'default'`/`'floor'`) and the parent model
+   * differs — use {@link defaultTierModelFallback} to derive it. When the
+   * child's first model request is rejected with a typed ModelRejectedError
+   * before any progress, the handle re-runs once on `model`. `buildProvider`
+   * rebuilds a caller-constructed provider for the fallback model; without
+   * it a pre-built provider is reused only when it is the same family.
+   */
+  modelFallback?: { model: string; buildProvider?: (model: string) => import('../provider.js').ModelProvider };
 }
 
 /**

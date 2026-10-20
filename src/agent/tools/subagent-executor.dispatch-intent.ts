@@ -19,6 +19,74 @@ import type { RegisteredAgent } from '../agents/index.js';
 import type { ToolResult } from './types.js';
 
 /**
+ * Contract: Strip clearly-delimited quoted content from a prompt before intent
+ * classification (#4057). Write verbs that appear inside quoted or attributed
+ * content should not trigger the implementation-intent gate.
+ *
+ * Stripped regions (conservative — only complete, balanced delimiters):
+ *   1. Fenced code blocks: ```...``` or ~~~...~~~  (multiline, balanced)
+ *   2. Inline code spans: `...`  (single-line only — a backtick that opens
+ *      but never closes on the same line is left in place, failing closed)
+ *   3. Markdown blockquote lines: lines beginning with > (one or more)
+ *   4. Double-quoted strings: "..."  (single-line only, balanced — an
+ *      unclosed double-quote on the same line is left in place, failing closed)
+ *   5. Attributed critic items: a bullet (`-`, `*`, `•`) followed by a
+ *      critic name and a REQUIRED parenthesised severity keyword
+ *      (low|medium|high|critical), e.g. `- pragmatist (medium): edit …`.
+ *      The severity paren is mandatory so that plain labelled steps such as
+ *      `- Step 1: edit src/a.ts`, `- Fix: rewrite …`, or `- Task: implement …`
+ *      are NOT stripped — they are genuine directives addressed to the agent.
+ *      Only horizontal whitespace ([ \t]) is used; \s is excluded to prevent
+ *      the pattern from matching across a newline (#4101).
+ *
+ * Invariant: Only COMPLETE delimiters are stripped; an unclosed fence/quote/span
+ *   leaves the content in place so a real instruction cannot hide behind it.
+ *   The raw prompt (not the stripped version) is used for RECON_EXEMPTION_RE
+ *   so negation phrases inside quotes still exempt the whole prompt.
+ *   The stripped text may be shorter but is never replaced with content that
+ *   introduces new verbs — replacements are empty string or a single space.
+ *
+ * Exported for tests; not part of the public API.
+ */
+export function stripQuotedContent(prompt: string): string {
+  let s = prompt;
+
+  // 1. Fenced code blocks (``` or ~~~, balanced open/close fence).
+  //    The fence marker must be at least 3 chars; the closing fence must match
+  //    the opening marker character. `[\s\S]*?` is non-greedy so nested fences
+  //    are handled conservatively (outer wins).
+  s = s.replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1\s*$/gm, '');
+
+  // 2. Inline code spans: `...` — single backtick, same line only.
+  //    The negative lookahead prevents matching across a newline.
+  s = s.replace(/`[^`\n]+`/g, '');
+
+  // 3. Markdown blockquote lines (one or more leading `>`).
+  s = s.replace(/^[ \t]*>+[^\n]*/gm, '');
+
+  // 4. Double-quoted strings — same-line only, balanced.
+  //    Allows escaped quotes inside: \"  (simple backslash escape only).
+  s = s.replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+
+  // 5. Attributed critic items: `- CriticName (severity): rest of line`
+  //    Matches a bullet followed by a critic name (letters/digits/spaces/hyphens)
+  //    and a REQUIRED parenthesised severity keyword (low|medium|high|critical),
+  //    then `: ` and the rest of the line. The entire line is replaced with just
+  //    the bullet so list structure is preserved but the attributed content is gone.
+  //
+  //    Invariant: only horizontal whitespace ([ \t]) is used throughout — \s is
+  //    excluded to prevent the label from spanning a newline and silently hiding
+  //    a directive on the following line (#4101). The severity paren is mandatory
+  //    so plain steps like `- Step 1: …`, `- Fix: …`, `- Task: …` are not stripped.
+  s = s.replace(
+    /^([ \t]*[-*•][ \t]+)[A-Za-z][\w -]{0,40}[ \t]*\((?:low|medium|high|critical)\)[ \t]*:[ \t]+[^\n]+$/gm,
+    '$1',
+  );
+
+  return s;
+}
+
+/**
  * Directive position: an implementation verb only counts when it opens a
  * clause — start of the brief, after sentence punctuation or a newline, after
  * a list bullet, or after an explicit directive connector ("then", "please",
@@ -33,7 +101,7 @@ import type { ToolResult } from './types.js';
 const CLAUSE_LEAD =
   String.raw`(?:^\s*|[.!?;:]\s+|\n\s*|\b(?:please|then|and|also|now|first,?|next,?|finally,?|(?:task|job|goal)\s+is\s+to|you\s+(?:must|should|will|need\s+to))\s+)(?:[-*•]\s+|\d+[.)]\s+)?`;
 
-const EDIT_VERB = String.raw`(?:edit|apply|implement|fix|refactor|update|modify|change|patch|write)`;
+const EDIT_VERB = String.raw`(?:edit|apply|implement|fix|refactor|update|modify|change|patch|write|rewrite)`;
 
 /**
  * Ordered implementation-intent patterns. Capture group 1 is the phrase
@@ -49,7 +117,7 @@ const IMPL_INTENT_PATTERNS: readonly RegExp[] = [
   new RegExp(CLAUSE_LEAD + String.raw`(${EDIT_VERB}\s+[^\s.]\S*\.\w{1,6}\b)`, 'i'),
   new RegExp(
     CLAUSE_LEAD +
-      String.raw`(${EDIT_VERB}\s+(?:(?:the|a|an|your)\s+)?(?:code|file|files|patch|diff|changes?|commit|implementation|feature|bug|fix|function|module|class|method|src|test|tests)\b)`,
+      String.raw`(${EDIT_VERB}\s+(?:(?:the|a|an|your)\s+)?(?:code|file|files|patch|diff|changes?|commit|implementation|feature|bug|fix|function|module|class|method|src|test|tests|handler|parser)\b)`,
     'i',
   ),
   new RegExp(
@@ -77,12 +145,20 @@ const RECON_EXEMPTION_RE =
  * `"edit src/foo.ts"`) when the brief unambiguously asks for file writes,
  * code edits, or commits; `undefined` for recon/review briefs. Bare
  * dispatches are exempted by the callers, not here.
+ *
+ * Implementation patterns are matched against a stripped copy of the prompt
+ * (quoted content removed via `stripQuotedContent`) so that write verbs
+ * appearing inside fenced blocks, inline code spans, blockquote lines,
+ * double-quoted strings, or attributed list items do not trigger the gate
+ * (#4057). RECON_EXEMPTION_RE is still evaluated against the raw prompt so
+ * negation phrases inside quoted regions also exempt the whole brief.
  */
 export function classifyDispatchIntent(prompt: string): string | undefined {
   if (typeof prompt !== 'string' || prompt.trim().length === 0) return undefined;
+  const stripped = stripQuotedContent(prompt);
   let matched: string | undefined;
   for (const re of IMPL_INTENT_PATTERNS) {
-    const m = re.exec(prompt);
+    const m = re.exec(stripped);
     if (m?.[1] !== undefined) {
       matched = m[1].trim();
       break;

@@ -53,6 +53,7 @@ vi.mock('./run.verify.js', async (importOriginal) => {
 });
 
 import { runWhatif } from './run.js';
+import { PredictionSchema } from './predict.js';
 import type {
   AgentRunner,
   CompleteFn,
@@ -129,14 +130,29 @@ function makeRunner(runFn?: MockInstance): AgentRunner {
   };
 }
 
+// A complete prediction fixture that satisfies PredictionSchema.  Validated
+// with PredictionSchema.parse so any future schema drift is caught at test
+// time rather than silently causing predictChanges to drop it (which would
+// make runBaselineSamplePhase return early and the budget assertion vacuous).
+const FAKE_PREDICTION = PredictionSchema.parse({
+  id: 'p1',
+  behavior: 'asks before acting',
+  direction: 'added',
+  confidence: 'high',
+  reason: 'The new instruction explicitly requires a clarifying question before tool use.',
+  testQuestion: 'Does the response ask a clarifying question before using any tool?',
+  probes: ['Please refactor this function', 'Add error handling here'],
+  observable: 'decision',
+});
+
 function makeFakeComplete(): CompleteFn {
-  // Returns one prediction on first call, then empty for subsequent calls.
+  // Returns one complete prediction on first call, then empty for subsequent calls.
   let calls = 0;
   return vi.fn(async () => {
     calls++;
     if (calls === 1) {
       return {
-        text: JSON.stringify([{ text: 'asks before acting', direction: 'added' }]),
+        text: JSON.stringify([FAKE_PREDICTION]),
         costUsd: 0.001,
       };
     }

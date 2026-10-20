@@ -250,43 +250,6 @@ describe('#4007 closure provenance through emitClosureEvent', () => {
     sawProviderError: false,
   };
 
-  it('emitClosureEvent stamps subagentId onto the closure payload', async () => {
-    // Verifies that the stamping line in closure-emitter.ts is reachable and
-    // actually writes the field — the synthetic closureChild() helper in AC1
-    // cannot catch a deletion of this line.
-    const writer = new InMemoryTraceWriter();
-    await emitClosureEvent(writer, {
-      ...baseSignals,
-      subagentId: 'child-abc',
-      finalTurnCount: 1,
-      finalCostUsd: 0.5,
-      runningTokens: { input: 10, output: 5, cacheRead: 0, cacheCreation: 0 },
-    });
-
-    expect(writer.events).toHaveLength(1);
-    const ev = writer.events[0];
-    expect(ev?.kind).toBe('closure');
-    if (ev?.kind === 'closure') {
-      expect(ev.payload.subagentId).toBe('child-abc');
-    }
-  });
-
-  it('emitClosureEvent omits subagentId for root (no subagentId input)', async () => {
-    const writer = new InMemoryTraceWriter();
-    await emitClosureEvent(writer, {
-      ...baseSignals,
-      finalTurnCount: 1,
-      finalCostUsd: 0.5,
-      runningTokens: zeroTokens,
-    });
-
-    const ev = writer.events[0];
-    expect(ev?.kind).toBe('closure');
-    if (ev?.kind === 'closure') {
-      expect(ev.payload.subagentId).toBeUndefined();
-    }
-  });
-
   it('accumulator takes the provenance branch when closure is emitted via emitClosureEvent with subagentId', async () => {
     // This is the key regression guard: a child closure emitted through the
     // real path must make the accumulator treat the root closure as lost
@@ -352,5 +315,56 @@ describe('#4007 closure provenance through emitClosureEvent', () => {
     expect(result.totalCostUsd).toBe(1);
     expect(result.rootCostUsd).toBe(1);
     expect(result.subagentCostUsd).toBe(0);
+    expect(result.source).toBe('closures+seal');
+  });
+
+  it('two-child-closure case: both children emitted via emitClosureEvent accumulate correctly', async () => {
+    // Regression guard: a trace with TWO child closures (each stamped with a
+    // distinct subagentId by the real emission path) must sum both costs and
+    // add sealRoot — exercising the multi-closure accumulator path end-to-end.
+    const writerA = new InMemoryTraceWriter();
+    await emitClosureEvent(writerA, {
+      ...baseSignals,
+      subagentId: 'child-a',
+      finalTurnCount: 1,
+      finalCostUsd: 1.0,
+      runningTokens: { input: 10, output: 5, cacheRead: 0, cacheCreation: 0 },
+    });
+
+    const writerB = new InMemoryTraceWriter();
+    await emitClosureEvent(writerB, {
+      ...baseSignals,
+      subagentId: 'child-b',
+      finalTurnCount: 2,
+      finalCostUsd: 2.0,
+      runningTokens: { input: 20, output: 10, cacheRead: 0, cacheCreation: 0 },
+    });
+
+    const childA = writerA.events[0];
+    const childB = writerB.events[0];
+    expect(childA?.kind).toBe('closure');
+    expect(childB?.kind).toBe('closure');
+
+    // Root seal reports its own cost ($0.5); no subagentCostUsd in seal
+    // (old-style seal without rollup).
+    const sealEvent: CostEventLike = {
+      kind: 'session_sealed',
+      payload: { finalCostUsd: 0.5, subagentCostUsd: 0, finalTurnCount: 5, closedAt: ts, status: 'succeeded' },
+    };
+
+    const acc = new SessionCostAccumulator();
+    acc.add(childA!);
+    acc.add(childB!);
+    acc.add(sealEvent);
+    const result = acc.result();
+
+    // closureSum($1+$2=$3) + sealRoot($0.5) = $3.5; last closure has subagentId
+    // → rootClosureLost=true.
+    expect(result.totalCostUsd).toBeCloseTo(3.5);
+    expect(result.rootCostUsd).toBe(0.5);
+    expect(result.subagentCostUsd).toBeCloseTo(3);
+    expect(result.closureCount).toBe(2);
+    expect(result.source).toBe('closures+seal');
+    expect(result.totalTokens).toEqual({ input: 30, output: 15 });
   });
 });

@@ -88,6 +88,25 @@ describe('resolveComposeNodeAgent — executor-backed tool stripping', () => {
     const prompt = resolveComposeAgentPrompt(resolved, 'base');
     expect(prompt).toContain('read_file');
     expect(prompt).toContain('bash');
+    // #4012: the suffix must NOT name bash as a forbidden tool when it is allowed.
+    expect(prompt).not.toMatch(/Do not call bash/);
+  });
+
+  it('does not discourage workspace_query when the named agent grants it', () => {
+    const resolved = resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'workspace_query']));
+    const prompt = resolveComposeAgentPrompt(resolved, 'base');
+    // workspace_query must appear in the allowed-tools list.
+    expect(resolved.namedAgentAllowedTools).toContain('workspace_query');
+    expect(prompt).toContain('workspace_query');
+    // #4012: workspace_query must not appear in the forbidden-tools clause
+    // (e.g. 'Do not call bash, workspace_query, ...').
+    expect(prompt).not.toMatch(/Do not call[^.]*workspace_query/);
+  });
+
+  it('names both bash and workspace_query as forbidden when neither is granted', () => {
+    const resolved = resolveComposeNodeAgent('test-agent', makeRegistry(['read_file', 'grep']));
+    const prompt = resolveComposeAgentPrompt(resolved, 'base');
+    expect(prompt).toContain('Do not call bash, workspace_query, or other tools unless they appear in this list');
   });
   // undefined agent_type and unknown agent_type cases are covered in
   // compose-leaf-tool-strip.test.ts (returns {} / throws 'not found').

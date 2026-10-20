@@ -384,6 +384,8 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
    */
   disarmRows = 0;
+  /** @internal — mirrors disarmRows for column-narrowing inflation in handleDisarmWindowResize. */
+  disarmCols = 0;
 
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   readonly spinnerController: SpinnerController;

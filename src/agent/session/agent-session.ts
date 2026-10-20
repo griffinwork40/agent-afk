@@ -298,8 +298,8 @@ export class AgentSession implements IAgentSession {
       getConfig: () => this.config, getRunner: () => this.runner,
       setProviderQuery: (q) => { this.providerQuery = q; }, setProviderIterator: (i) => { this.providerIterator = i; },
       getProviderIterator: () => this.providerIterator, getInputStream: () => this.inputStream,
-      isClosed: () => this.currentState === 'closed', abortSignal: this.abortController.signal,
-      accounting: this.accounting, shutdown: this.shutdown,
+      getProviderQuery: () => this.providerQuery, isClosed: () => this.currentState === 'closed',
+      abortSignal: this.abortController.signal, accounting: this.accounting, shutdown: this.shutdown,
       hookRegistry: this._hookRegistry,
       queueFrameworkContext: (text) => this.queueFrameworkContext(text),
     });
@@ -384,6 +384,19 @@ export class AgentSession implements IAgentSession {
    * yielding a session whose conversation context is empty. Forwarding the
    * literal string `/clear` to a provider does NOT clear context (the model
    * sees plain user text), so `/clear` in the CLI calls this method instead.
+   *
+   * Contract: `reset()` intentionally reuses the already-resolved
+   * `mcpInitPromise` and the patched `config.mcpManager` from construction.
+   *
+   * This means a server that died mid-session is **not** reconnected on
+   * reset — `initSdkLifecycle()` runs again (rebuilding the provider query
+   * and input stream) but the MCP manager lifecycle is NOT restarted.
+   *
+   * Rationale: reconnecting MCP servers on every `/clear` would cause
+   * observable side-effects (re-running stdio server startup, re-acquiring
+   * sockets) that operators do not expect from a context-clear operation.
+   * If reconnection after server failure is needed, close and reconstruct
+   * the session. This is a deliberate product decision (#4074 item 5).
    */
   async reset(): Promise<void> {
     await resetSession({

@@ -60,6 +60,16 @@ export interface RealChromeProbeOptions {
   platform?: NodeJS.Platform;
   home?: string;
   localAppData?: string;
+  /**
+   * Linux: overrides the config-base dir (highest priority, mirrors Puppeteer).
+   * @remarks Linux-only; ignored on darwin and win32.
+   */
+  chromeConfigHome?: string;
+  /**
+   * Linux: XDG base-dir override (second priority after chromeConfigHome).
+   * @remarks Linux-only; ignored on darwin and win32.
+   */
+  xdgConfigHome?: string;
   terminalBundleId?: string;
   /** Test seam: open-then-close the file, throwing a Node errno error on failure. */
   touchFile?: (file: string) => void;
@@ -93,20 +103,33 @@ export function chromeAppName(channel: RealChromeChannel): string {
 
 /**
  * Resolve Chrome's default user-data-dir for a channel. Mirrors the locations
- * `--autoConnect` looks in (Puppeteer's default-user-data-dir resolution), minus
- * the Linux `CHROME_CONFIG_HOME` / `XDG_CONFIG_HOME` overrides.
+ * `--autoConnect` looks in (Puppeteer's default-user-data-dir resolution),
+ * including the Linux `CHROME_CONFIG_HOME` / `XDG_CONFIG_HOME` overrides.
+ *
+ * Priority on Linux (same as Puppeteer / chrome-devtools-mcp):
+ *   1. `$CHROME_CONFIG_HOME/<channel-dir>`
+ *   2. `$XDG_CONFIG_HOME/<channel-dir>`
+ *   3. `$HOME/.config/<channel-dir>`
  */
 export function resolveChromeUserDataDir(
   channel: RealChromeChannel,
   platform: NodeJS.Platform,
   home: string,
   localAppData: string | undefined,
+  chromeConfigHome?: string | undefined,
+  xdgConfigHome?: string | undefined,
 ): string | null {
   if (platform === 'darwin') {
     return path.posix.join(home, 'Library', 'Application Support', 'Google', MAC_DIRS[channel]);
   }
   if (platform === 'linux') {
-    return path.posix.join(home, '.config', LINUX_DIRS[channel]);
+    const configBase =
+      (chromeConfigHome !== undefined && chromeConfigHome !== '')
+        ? chromeConfigHome
+        : (xdgConfigHome !== undefined && xdgConfigHome !== '')
+          ? xdgConfigHome
+          : path.posix.join(home, '.config');
+    return path.posix.join(configBase, LINUX_DIRS[channel]);
   }
   if (platform === 'win32') {
     if (localAppData === undefined || localAppData === '') return null;
@@ -135,6 +158,8 @@ export function probeRealChrome(opts: RealChromeProbeOptions = {}): RealChromePr
     platform,
     home,
     opts.localAppData ?? env.LOCALAPPDATA,
+    opts.chromeConfigHome ?? env.CHROME_CONFIG_HOME,
+    opts.xdgConfigHome ?? env.XDG_CONFIG_HOME,
   );
   const bundleId = platform === 'darwin' ? (opts.terminalBundleId ?? env.__CFBundleIdentifier) : undefined;
   const base = {

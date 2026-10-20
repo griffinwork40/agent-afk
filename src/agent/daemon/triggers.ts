@@ -146,7 +146,7 @@ export function validateScheduledTask(task: ScheduledTask): void {
   }
   if (task.runAt !== undefined) {
     if (!isValidIsoDate(task.runAt)) {
-      throw new Error(`task ${task.taskId}: runAt must be a valid ISO 8601 date string`);
+      throw new Error(`task ${task.taskId}: runAt must be a valid ISO 8601 date string (got: ${task.runAt})`);
     }
     if (task.cronExpression !== undefined) {
       throw new Error(
@@ -156,7 +156,7 @@ export function validateScheduledTask(task: ScheduledTask): void {
   }
   if (task.expiresAt !== undefined) {
     if (!isValidIsoDate(task.expiresAt)) {
-      throw new Error(`task ${task.taskId}: expiresAt must be a valid ISO 8601 date string`);
+      throw new Error(`task ${task.taskId}: expiresAt must be a valid ISO 8601 date string (got: ${task.expiresAt})`);
     }
   }
   const executor = task.executor ?? 'agent';

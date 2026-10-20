@@ -52,15 +52,66 @@ export interface ProviderLifecycleResult {
   providerIterator: AsyncIterator<ProviderEvent>;
 }
 
-/** Objects returned by {@link rebuildProviderQuery}. */
+/**
+ * @internal Objects returned by {@link rebuildProviderQuery}.
+ */
 export interface ProviderQueryResult {
   providerQuery: ProviderQuery;
   providerIterator: AsyncIterator<ProviderEvent>;
 }
 
 /**
- * Rebuild only the provider query + iterator for a new config, reusing an
- * existing `promptIterable` from the live `QueryInputStream`.
+ * Build a provider query + iterator from `config` and a `promptIterable`.
+ *
+ * Shared by {@link buildProviderLifecycle} (Phase 1) and
+ * {@link rebuildProviderQuery} (Phase 2) so that a new executor option added
+ * to one branch is never silently missed by the other.
+ *
+ * Mirrors the `config.provider` / `ProviderRouter` + `resolveProviderFn`
+ * branch logic that previously lived in both callers (#4074 item 1).
+ */
+function buildProviderQuery(
+  config: AgentConfig,
+  promptIterable: AsyncIterable<ProviderUserTurn>,
+  label: string,
+): ProviderQuery {
+  if (config.provider) {
+    debugLog(`🟢 AgentSession: Creating query session via injected provider=${config.provider.name} (${label})`);
+    return config.provider.query({ prompt: promptIterable, config });
+  }
+  debugLog(`🟢 AgentSession: Creating query session via ProviderRouter (${label})`);
+  // When config.providerFactory is set, use it as resolveProvider so every
+  // provider built during a cross-family /model swap is fully wired (with
+  // subagentExecutor, skillExecutor, composeExecutor, memoryStore,
+  // mcpManager, and permission lists). When absent, fall back to the bare
+  // resolveProvider which is suitable for one-shot and test paths.
+  const resolveProviderFn = config.providerFactory
+    ? config.providerFactory
+    : (m: string | undefined) =>
+        resolveProvider(m, undefined, {
+          customTools: config.customTools,
+          canUseTool: config.canUseTool,
+          // #3442: opt-in executors ride along on every provider the router
+          // builds, including ones rebuilt by a cross-family model swap.
+          ...(config.executors !== undefined ? { executors: config.executors } : {}),
+          // #4063: forward the resolved MCP manager (caller-supplied or
+          // SDK-built from config.mcpServers) so MCP tools are bridged and
+          // mcpServerStatus() returns the live server states.
+          ...(config.mcpManager !== undefined ? { mcpManager: config.mcpManager } : {}),
+        });
+  return new ProviderRouter(
+    { prompt: promptIterable, config },
+    {
+      resolveProvider: resolveProviderFn,
+      providerNameForModel: (m) => providerForModel(m),
+      resolveApiKey: (m) => resolveCredentialForModel(m),
+    },
+  );
+}
+
+/**
+ * @internal Rebuild only the provider query + iterator for a new config,
+ * reusing an existing `promptIterable` from the live `QueryInputStream`.
  *
  * Used by Phase 2 of `buildSessionInitPromise` (#4063) so the rebuilt
  * provider reads from the same input stream that `sendMessage` pushes to.
@@ -71,28 +122,7 @@ export function rebuildProviderQuery(
   config: AgentConfig,
   promptIterable: AsyncIterable<ProviderUserTurn>,
 ): ProviderQueryResult {
-  let providerQuery: ProviderQuery;
-  if (config.provider) {
-    providerQuery = config.provider.query({ prompt: promptIterable, config });
-  } else {
-    const resolveProviderFn = config.providerFactory
-      ? config.providerFactory
-      : (m: string | undefined) =>
-          resolveProvider(m, undefined, {
-            customTools: config.customTools,
-            canUseTool: config.canUseTool,
-            ...(config.executors !== undefined ? { executors: config.executors } : {}),
-            ...(config.mcpManager !== undefined ? { mcpManager: config.mcpManager } : {}),
-          });
-    providerQuery = new ProviderRouter(
-      { prompt: promptIterable, config },
-      {
-        resolveProvider: resolveProviderFn,
-        providerNameForModel: (m) => providerForModel(m),
-        resolveApiKey: (m) => resolveCredentialForModel(m),
-      },
-    );
-  }
+  const providerQuery = buildProviderQuery(config, promptIterable, 'phase-2 rebuild');
   const iterable = providerQuery as AsyncIterable<ProviderEvent>;
   return { providerQuery, providerIterator: iterable[Symbol.asyncIterator]() };
 }
@@ -134,41 +164,7 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
   const promptIterable = inputStream.createIterable();
   let providerQuery: ProviderQuery;
 
-  if (config.provider) {
-    debugLog(
-      `🟢 AgentSession: Creating query session via injected provider=${config.provider.name}`,
-    );
-    providerQuery = config.provider.query({ prompt: promptIterable, config });
-  } else {
-    debugLog(`🟢 AgentSession: Creating query session via ProviderRouter`);
-    // When config.providerFactory is set, use it as resolveProvider so every
-    // provider built during a cross-family /model swap is fully wired (with
-    // subagentExecutor, skillExecutor, composeExecutor, memoryStore,
-    // mcpManager, and permission lists). When absent, fall back to the bare
-    // resolveProvider which is suitable for one-shot and test paths.
-    const resolveProviderFn = config.providerFactory
-      ? config.providerFactory
-      : (m: string | undefined) =>
-          resolveProvider(m, undefined, {
-            customTools: config.customTools,
-            canUseTool: config.canUseTool,
-            // #3442: opt-in executors ride along on every provider the router
-            // builds, including ones rebuilt by a cross-family model swap.
-            ...(config.executors !== undefined ? { executors: config.executors } : {}),
-            // #4063: forward the resolved MCP manager (caller-supplied or
-            // SDK-built from config.mcpServers) so MCP tools are bridged and
-            // mcpServerStatus() returns the live server states.
-            ...(config.mcpManager !== undefined ? { mcpManager: config.mcpManager } : {}),
-          });
-    providerQuery = new ProviderRouter(
-      { prompt: promptIterable, config },
-      {
-        resolveProvider: resolveProviderFn,
-        providerNameForModel: (m) => providerForModel(m),
-        resolveApiKey: (m) => resolveCredentialForModel(m),
-      },
-    );
-  }
+  providerQuery = buildProviderQuery(config, promptIterable, 'phase-1');
 
   const iterable = providerQuery as AsyncIterable<ProviderEvent>;
   const providerIterator = iterable[Symbol.asyncIterator]();

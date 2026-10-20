@@ -23,10 +23,11 @@
 import OpenAI from 'openai';
 import { resolveOpenAIAuth, type AuthResolverDeps } from './auth.js';
 import {
-  oneShotChatCompletion,
+  oneShotChatCompletionWithStop,
   oneShotResponses,
   type OpenAIOneShotInput,
 } from './oneshot.js';
+import type { ProviderCompleteResult } from '../../provider.js';
 import { resolveWireMode } from './responses-config.js';
 import { h1ModelFetch } from '../shared/h1-fetch.js';
 
@@ -59,12 +60,29 @@ const defaultClientFactory: CompleteWireClientFactory = (opts) => new OpenAI(opt
  * @param authDeps - Injectable auth-resolver dependencies (env/fs). Used by
  *   tests to drive the Responses-wire path without real credentials.  Production
  *   callers omit this and get the real env + file-system resolvers.
+ *
+ * @deprecated Use {@link completeWithWireWithStop} instead — it returns the
+ *   stop reason so callers can detect a `max_tokens` cut (ghost-text truncation
+ *   detection). This wrapper discards that information and exists only for
+ *   back-compat; it will be removed in a future cleanup.
  */
 export async function completeWithWire(
   input: OpenAIOneShotInput,
   clientFactory: CompleteWireClientFactory = defaultClientFactory,
   authDeps: AuthResolverDeps = {},
 ): Promise<string> {
+  return (await completeWithWireWithStop(input, clientFactory, authDeps)).text;
+}
+
+/**
+ * {@link completeWithWire} plus the stop reason, for callers that must tell a
+ * finished reply from one cut at `maxTokens` (ghost-text suggestions).
+ */
+export async function completeWithWireWithStop(
+  input: OpenAIOneShotInput,
+  clientFactory: CompleteWireClientFactory = defaultClientFactory,
+  authDeps: AuthResolverDeps = {},
+): Promise<ProviderCompleteResult> {
   const auth = resolveOpenAIAuth(input.apiKey, authDeps, input.forceChatgptOAuth ?? false);
   const wire = resolveWireMode(auth, false, input.baseURL);
 
@@ -74,7 +92,10 @@ export async function completeWithWire(
     if (baseURL !== undefined) clientOpts.baseURL = baseURL;
     const headers = { ...input.defaultHeaders, ...wire.headers };
     if (Object.keys(headers).length > 0) clientOpts.defaultHeaders = headers;
-    return oneShotResponses({
+    // Invariant: oneShotResponses returns ONLY on `response.completed` and
+    // throws on `response.incomplete` (which is how a token-cap stop arrives on
+    // this wire), so any text it returns is a finished reply.
+    const text = await oneShotResponses({
       client: clientFactory(clientOpts),
       model: input.model,
       system: input.system,
@@ -83,12 +104,14 @@ export async function completeWithWire(
       ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
+    return { text, stopReason: 'end' };
   }
 
   // Chat Completions: unchanged behaviour. Forward the resolved key (when
-  // there is one) so oneShotChatCompletion does not re-read ~/.codex/auth.json;
-  // on a null key it keeps throwing its own "no usable OpenAI auth" error.
-  return oneShotChatCompletion(
+  // there is one) so oneShotChatCompletionWithStop does not re-read
+  // ~/.codex/auth.json; on a null key it keeps throwing its own "no usable
+  // OpenAI auth" error.
+  return oneShotChatCompletionWithStop(
     auth.apiKey !== null ? { ...input, apiKey: auth.apiKey } : input,
   );
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * generate-changelog.mjs — CI helper for auto-release workflow.
+ * generate-changelog.mjs — manual changelog stamper (formerly run by the
+ * removed auto-release workflow; no workflow calls it now).
  *
  * Generates changelog entries from conventional commits, writes them into
  * the [Unreleased] section, then stamps the release heading.
@@ -13,8 +14,8 @@
  *
  * WARNING: The import path "dist/changelog.js" mirrors tsconfig.json `outDir`.
  * No package.json `exports` map enforces this contract — if `outDir` ever
- * changes, this script silently breaks. The auto-release workflow guards
- * against a missing build with an explicit accessSync check before invocation.
+ * changes, this script silently breaks. Run `pnpm build` first so
+ * dist/changelog.js exists.
  */
 
 import { resolve, dirname } from 'node:path';

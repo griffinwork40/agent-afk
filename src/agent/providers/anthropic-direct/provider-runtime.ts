@@ -35,8 +35,9 @@ import type {
   ProviderQuery,
   ProviderQueryArgs,
   ProviderCompleteArgs,
+  ProviderCompleteResult,
 } from '../../provider.js';
-import { oneShotCompletion, type OneShotInput } from './oneshot.js';
+import { oneShotCompletionWithStop, type OneShotInput } from './oneshot.js';
 // Re-export the pure param resolvers extracted to ./resolve-params.ts (issue
 // #103) so the historical `from './index.js'` import path stays valid.
 export { resolveEffort, resolveMaxTokens, resolveThinkingParam } from './resolve-params.js';
@@ -323,6 +324,11 @@ export class AnthropicDirectProvider implements ModelProvider {
    * Local-model suggestions go through the openai-compatible provider instead.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
+    return (await this.completeWithStop(args)).text;
+  }
+
+  /** {@link complete} plus the mapped stop reason (see ModelProvider.completeWithStop). */
+  async completeWithStop(args: ProviderCompleteArgs): Promise<ProviderCompleteResult> {
     const token =
       args.apiKey && args.apiKey.length > 0
         ? args.apiKey
@@ -346,7 +352,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     // oneShotCompletion never sets — structurally compatible, hence the cast.
     const factory = this.providerFactory ?? getClientFactory();
     if (factory) input.clientFactory = factory as OneShotInput['clientFactory'];
-    return oneShotCompletion(input);
+    return oneShotCompletionWithStop(input);
   }
 
   // ---------------------------------------------------------------------------

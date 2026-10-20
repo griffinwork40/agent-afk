@@ -48,6 +48,7 @@ import {
 import { buildFrameLines, buildPickerFrameLines } from './terminal-compositor.frame.lines.js';
 import { computeFramePosition } from './terminal-compositor.frame.position.js';
 import { contentBand } from './render/measure.js';
+import { recordRenderedFrame } from './terminal-compositor.reflow-shift.js';
 import { contentHugAnchor, contentHugBandReserve, contentHugTargetBottom } from './terminal-compositor.content-hug.js';
 
 /**
@@ -262,6 +263,7 @@ export function repaint(self: FrameHost): void {
   // anchorRow floor.
   const renderFloor = hug && targetBottomRow < absoluteBottom ? desiredTopRow : self.anchorRow;
   self.logUpdate.render(frame, targetBottomRow, renderFloor);
+  recordRenderedFrame(self, frame, targetBottomRow, self.stdout.columns ?? 80);
   self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, targetBottomRow);
 }
 
@@ -342,5 +344,6 @@ function repaintPickerFrame(self: FrameHost): void {
   }
   const renderFloor = bottomRow < absoluteBottom ? desiredTopRow : self.anchorRow;
   self.logUpdate.render(frame, bottomRow, renderFloor);
+  recordRenderedFrame(self, frame, bottomRow, self.stdout.columns ?? 80);
   self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, bottomRow);
 }
