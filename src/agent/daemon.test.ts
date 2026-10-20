@@ -694,7 +694,7 @@ describe('startDaemon', () => {
       // A console.warn must have been emitted for the operator,
       // including the taskId and the field name that was malformed.
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('bad-runat'));
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('runAt'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/\brunAt\b/));
     } finally {
       warnSpy.mockRestore();
     }

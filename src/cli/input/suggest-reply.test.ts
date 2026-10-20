@@ -56,6 +56,15 @@ describe('joinContinuation', () => {
     expect(joinContinuation('hel', '')).toBeNull();
     expect(joinContinuation('hel', 'hel')).toBeNull();
   });
+
+  it('overlap comparison is case-insensitive; output preserves continuation casing', () => {
+    // trailing word 'bar', reply starts with 'Bar' (different case) — should join
+    expect(joinContinuation('foo bar', 'Bar baz')).toBe('foo Bar baz');
+    // trailing word 'BAR', reply starts with 'bar' — should join
+    expect(joinContinuation('foo BAR', 'bar baz')).toBe('foo bar baz');
+    // no overlap at all — still rejected
+    expect(joinContinuation('foo bar', 'Qux')).toBeNull();
+  });
 });
 
 describe('dropPartialWord / trimTruncatedLine', () => {
