@@ -12,6 +12,7 @@ import { loadAgentRegistry } from './registry.js';
 import { builtinAgents } from './builtins.js';
 import { resolveAgentToolAccess } from './resolve.js';
 import { CHILD_ALLOWED_TOOLS, RECON_ALLOWED_TOOLS } from '../tools/nesting.js';
+import { isReadOnlyGitToolEnabled } from '../tools/readonly-git-surface.js';
 
 const fsMocks = vi.hoisted(() => ({ readFileSync: vi.fn() }));
 
@@ -52,13 +53,15 @@ describe('loadAgentRegistry', () => {
     expect(registry.get('git-investigator')?.bashReadOnly).toBe(true);
     expect(registry.get('general-purpose')?.source).toBe('builtin');
     expect(registry.get('Explore')?.source).toBe('builtin');
-    // research-agent keeps its vendored read-only contract PLUS two
-    // registry-entry grants: `memory_search` (read-only archive access — see
-    // the #883 test below) and the scoped git-investigator dispatch grant
-    // (matches the vendored prompt frontmatter; resolve.ts turns
-    // Agent(git-investigator) into nestedAgentTypes and the executor restricts
-    // research-agent to dispatching only git-investigator).
-    expect(registry.get('research-agent')?.definition.tools).toEqual([
+    // research-agent keeps its vendored read-only contract PLUS registry-entry
+    // grants: `memory_search` (read-only archive access — see the #883 test
+    // below), the scoped git-investigator dispatch grant (matches the vendored
+    // prompt frontmatter; resolve.ts turns Agent(git-investigator) into
+    // nestedAgentTypes and the executor restricts research-agent to dispatching
+    // only git-investigator), and — when AFK_READONLY_GIT_TOOL is on (#4059) —
+    // `git_read` so research-agent can answer git questions directly without the
+    // nested hop.
+    const expectedResearchTools = [
       'Read',
       'Grep',
       'Glob',
@@ -66,7 +69,9 @@ describe('loadAgentRegistry', () => {
       'WebSearch',
       'memory_search',
       'Agent(git-investigator)',
-    ]);
+      ...(isReadOnlyGitToolEnabled() ? ['git_read'] : []),
+    ];
+    expect(registry.get('research-agent')?.definition.tools).toEqual(expectedResearchTools);
     // Anti-runaway bound: the read-only research/review builtins carry an
     // explicit tool-use-round cap so the uncapped agent-tool dispatch path
     // cannot let them loop forever and die opaquely when cut off mid-run.
