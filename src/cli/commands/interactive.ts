@@ -22,6 +22,7 @@ import { handleCommandError } from '../errors/index.js';
 import { type UpdateInfo } from '../update-checker.js';
 import { resolveWorktreeExitPolicy } from './interactive/worktree-disposition.js';
 import { installUnknownCommandGuard, checkBareUnknownCommand } from './interactive/unknown-command-guard.js';
+import { installTtyTrace, uninstallTtyTrace } from '../tty-trace.js';
 
 // Lifecycle-phase siblings
 import {
@@ -114,6 +115,11 @@ export function registerInteractiveCommand(program: Command): void {
       if (options.debug) { process.env['AFK_DEBUG'] = '1'; }
       if (options.plain) { process.env['AFK_PLAIN_OUTPUT'] = '1'; }
       activateDumpPrompt(options.dumpPrompt, options.provider);
+
+      // TTY trace recorder: install before any REPL output so the header is
+      // the very first line in the cast file. Uninstalled in rl.close below.
+      // No-op when AFK_TTY_TRACE is unset or stdout is not a TTY.
+      installTtyTrace();
 
       const spinner = ora({ text: 'Initializing interactive session...', ...REPL_SPINNER_OPTIONS }).start();
 
@@ -251,6 +257,7 @@ export function registerInteractiveCommand(program: Command): void {
         ctx.exitReasonRef!.current ??= 'eof';
         printExitSummary(ctx, worktreeHandleRef.current, saveCurrentSession);
         console.log(palette.info('ℹ ') + 'Goodbye!');
+        uninstallTtyTrace();
         await runCleanupFunctions();
         process.exit(0);
       });

@@ -65,6 +65,7 @@ import { SESSION_STORAGE_ENV_REGISTRY } from './env.session-storage.js';
 import { MEMORY_GC_ENV_REGISTRY } from './env.memory-gc.js';
 import { VITALS_ENV_REGISTRY } from './env.vitals.js';
 import { TOOLS_ENV_REGISTRY } from './env.tools.js';
+import { TTY_TRACE_ENV_REGISTRY } from './env.tty-trace.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -181,6 +182,9 @@ export const ENV_REGISTRY = [
 
   // ── Per-tool opt-in features (#3904 and future, env.tools.ts) ────────────
   ...TOOLS_ENV_REGISTRY,
+
+  // ── TTY trace recorder (env.tty-trace.ts) ───────────────────────────────
+  ...TTY_TRACE_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];
 
 /**

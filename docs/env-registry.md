@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**240 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**242 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -203,6 +203,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SUBAGENT_LOG` | boolean |  |  | `1` | Opt-in per-subagent conversation log. Writes OutputEvent JSONL to state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and background subagents. Powers /tasks:view replay. OFF by default (raw tool arguments are written without redaction). Set to 1 to enable. |
 | `AFK_TELEGRAM_TRACE` | boolean |  |  | `1` | Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only. |
 | `AFK_TRACE_DISABLED` | boolean |  |  | `1` | Disable the agent trace subsystem entirely. Set to 1 to skip trace file writes. |
+| `AFK_TTY_TRACE` | string |  |  | `~/afk-tty.cast` | Absolute path for the asciinema v2 cast file the interactive REPL writes when stdout is a TTY. Every byte sent to stdout/stderr is tee-d to this file in real time using a sync fd so a crash loses nothing. Terminal resize events are recorded as resize ("r") events. Unset (the default) means off with zero overhead. Use to capture a reproducer for stale-row rendering bugs in tmux/multiplexer sessions. Replay with: pnpm exec tsx scripts/tty-replay.ts <cast> |
 | `AFK_WITNESS_MAX_AGE_DAYS` | number |  | `30` |  | Evict a witness session directory once its newest content is older than this many days. Default 30. |
 | `AFK_WITNESS_MAX_BYTES` | number |  | `2147483648` |  | Aggregate byte cap for the witness tree; oldest session directories are evicted first once exceeded. Default 2147483648 (2 GiB). |
 | `AFK_WITNESS_RETENTION_DISABLE` | boolean |  |  | `1` | Disable the witness-tree retention sweep entirely, so no session directory is ever evicted. |
@@ -244,6 +245,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `SCRIPT` | string |  |  | `/tmp/typescript` | Set by script(1) on BSD/macOS/Linux to the typescript filename while a terminal session is being recorded. Presence of a non-empty value triggers capture-mode. |
 | `SHELL` | string |  |  | `/bin/zsh` | Standard POSIX env var pointing to the user's login shell binary. Used by shell-init and worktree commands to auto-detect the correct shell syntax for emitted wrapper code. |
 | `SystemRoot` | string |  |  |  | Windows system root directory (typically C:\Windows). Used to identify WSL bash.exe shim paths in resolve-shell.ts. |
+| `TERM` | string |  |  |  | Terminal type (e.g. xterm-256color). Recorded verbatim in the asciinema v2 cast header written by AFK_TTY_TRACE for replay fidelity. Standard POSIX var; not AFK-specific. |
 | `TMUX` | string |  |  | `/tmp/tmux-501/default,12345,0` | OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment, and by peer messaging to derive a default session name (#S:#I); for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env. |
 | `TMUX_PANE` | string |  |  | `%0` | tmux pane identifier, set automatically by tmux inside any pane (e.g. %0). Used by AFK to target the correct pane when composing a tmux display-message label. |
 | `USER` | string |  |  |  | Unix login name of the current user. Used as a default approver identity in improve/approve. |
