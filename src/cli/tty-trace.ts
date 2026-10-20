@@ -37,7 +37,7 @@ import { getTerminalHeight, getTerminalWidth } from './terminal-size.js';
  * the real `node:fs` functions in production.
  */
 export interface FsOps {
-  openSync(path: string, flags: string): number;
+  openSync(path: string, flags: string, mode?: number): number;
   writeSync(fd: number, data: string): number;
   closeSync(fd: number): void;
 }
@@ -167,7 +167,7 @@ export function installTtyTrace(fsOps?: FsOps): void {
   // Open the file synchronously once. On error, warn once on stderr and leave
   // the recorder uninstalled (no wrappers); the REPL keeps running.
   try {
-    _fd = _fs.openSync(expandedPath, 'w');
+    _fd = _fs.openSync(expandedPath, 'w', 0o600);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[afk tty-trace] could not open ${expandedPath}: ${msg}\n`);

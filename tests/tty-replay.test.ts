@@ -18,7 +18,9 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const SCRIPT = path.resolve(import.meta.dirname, '../scripts/tty-replay.ts');
-const TSX = path.resolve(import.meta.dirname, '../node_modules/.bin/tsx');
+// Use process.execPath + tsx's JS entry so the test works on every platform
+// (node_modules/.bin/tsx has no .cmd on Windows → ENOENT).
+const TSX_ENTRY = path.resolve(import.meta.dirname, '../node_modules/tsx/dist/cli.mjs');
 
 let dir: string;
 
@@ -38,7 +40,7 @@ function writeCast(header: { width: number; height: number }, events: unknown[])
 }
 
 function replay(cast: string, flags: string[] = []): string {
-  return child_process.execFileSync(TSX, [SCRIPT, cast, ...flags], { encoding: 'utf8' });
+  return child_process.execFileSync(process.execPath, [TSX_ENTRY, SCRIPT, cast, ...flags], { encoding: 'utf8' });
 }
 
 describe('tty-replay', () => {

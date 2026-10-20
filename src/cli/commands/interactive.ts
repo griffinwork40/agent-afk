@@ -69,6 +69,25 @@ export function setInteractiveUpdateNotices(
   _setInteractiveUpdateNotices(updateInfo, pendingMessage);
 }
 
+/**
+ * rl.close handler — extracted so `registerInteractiveCommand` stays under the
+ * 200-line function ceiling. Takes explicit parameters (no closure capture).
+ */
+async function handleRlClose(
+  ctx: InteractiveCtx,
+  worktreeHandle: WorktreeHandle | undefined,
+  saveCurrentSession: () => string | undefined,
+): Promise<void> {
+  ctx.statusLine.stop();
+  setTerminalTitleIfEnabled(process.stdout, '');
+  ctx.exitReasonRef!.current ??= 'eof';
+  printExitSummary(ctx, worktreeHandle, saveCurrentSession);
+  console.log(palette.info('ℹ ') + 'Goodbye!');
+  uninstallTtyTrace();
+  await runCleanupFunctions();
+  process.exit(0);
+}
+
 export function registerInteractiveCommand(program: Command): void {
   // Build the command with shared options, then append interactive-only flags.
   const interactiveCmd = applyInteractiveOptions(
@@ -117,9 +136,11 @@ export function registerInteractiveCommand(program: Command): void {
       activateDumpPrompt(options.dumpPrompt, options.provider);
 
       // TTY trace recorder: install before any REPL output so the header is
-      // the very first line in the cast file. Uninstalled in rl.close below.
-      // No-op when AFK_TTY_TRACE is unset or stdout is not a TTY.
+      // the very first line in the cast file. Uninstalled in the finally block
+      // below (and in rl.close for normal exit). No-op when AFK_TTY_TRACE is
+      // unset or stdout is not a TTY.
       installTtyTrace();
+      try {
 
       const spinner = ora({ text: 'Initializing interactive session...', ...REPL_SPINNER_OPTIONS }).start();
 
@@ -250,19 +271,16 @@ export function registerInteractiveCommand(program: Command): void {
       ctx.statusLine.start();
       ctx.slashCtx.ui.repaintStatusLine();
 
-      ctx.rl.on('close', async () => {
-        ctx.statusLine.stop();
-        setTerminalTitleIfEnabled(process.stdout, '');
-        // No signal handler wrote exitReason → stdin reached EOF.
-        ctx.exitReasonRef!.current ??= 'eof';
-        printExitSummary(ctx, worktreeHandleRef.current, saveCurrentSession);
-        console.log(palette.info('ℹ ') + 'Goodbye!');
-        uninstallTtyTrace();
-        await runCleanupFunctions();
-        process.exit(0);
-      });
+      // No signal handler wrote exitReason → stdin reached EOF.
+      ctx.rl.on('close', () => handleRlClose(ctx, worktreeHandleRef.current, saveCurrentSession));
 
       await runReplLoop(ctx, transcript, turnState, handleSigint);
+
+      } finally {
+        // Ensure the TTY trace fd is closed even if an error path above
+        // bypasses the normal rl.close → uninstallTtyTrace() sequence.
+        uninstallTtyTrace();
+      }
     });
 
   // Issue #710 mode 1: name the unrecognized COMMAND when a mistyped subcommand

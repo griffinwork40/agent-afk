@@ -11,13 +11,15 @@ import { installTtyTrace, uninstallTtyTrace } from '../tty-trace.js';
 
 // ── Fake FsOps ────────────────────────────────────────────────────────────────
 
-function makeFakeFsOps(): FsOps & { lines: string[]; closed: boolean; throwOnOpen: boolean; throwOnWrite: boolean } {
+function makeFakeFsOps(): FsOps & { lines: string[]; closed: boolean; throwOnOpen: boolean; throwOnWrite: boolean; lastOpenMode: number | undefined } {
   const state = {
     lines: [] as string[],
     closed: false,
     throwOnOpen: false,
     throwOnWrite: false,
-    openSync(_path: string, _flags: string): number {
+    lastOpenMode: undefined as number | undefined,
+    openSync(_path: string, _flags: string, mode?: number): number {
+      state.lastOpenMode = mode;
       if (state.throwOnOpen) throw new Error('EACCES: permission denied');
       return 42;
     },
@@ -265,7 +267,14 @@ describe('tty-trace', () => {
     expect(fs.lines.length).toBe(0);
   });
 
-  // 14. Idempotent install
+  // 14. Cast file is opened with mode 0o600 (owner-only)
+  it('opens the cast file with mode 0o600', () => {
+    const fs = makeFakeFsOps();
+    installTtyTrace(fs);
+    expect(fs.lastOpenMode).toBe(0o600);
+  });
+
+  // 15. Idempotent install
   it('does not double-install on repeated installTtyTrace calls', () => {
     const fs = makeFakeFsOps();
     installTtyTrace(fs);
