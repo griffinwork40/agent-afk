@@ -284,7 +284,11 @@ export function parseAgentInput(input: unknown): AgentInput {
   if (hostRaw !== undefined && !isValidSshTarget(hostRaw)) {
     throw new Error(`Agent tool \`host\` is not a valid SSH target: ${JSON.stringify(hostRaw)}`);
   }
-  const host = hostRaw !== undefined && !hostRaw.startsWith('-') ? hostRaw : undefined;
+  // Invariant: the startsWith('-') case is already rejected by the throw
+  // above, and isValidSshTarget also rejects it — so hostRaw is always a
+  // valid, non-dash-prefixed target at this point.  The ternary is kept as
+  // a simple pass-through for clarity.
+  const host = hostRaw;
 
   return {
     prompt,

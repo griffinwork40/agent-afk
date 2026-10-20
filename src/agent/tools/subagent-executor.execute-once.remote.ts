@@ -47,7 +47,8 @@ function frameRemote(text: string): string {
   return `<remote-output>\n${neutraliseRemoteOutput(text)}\n</remote-output>`;
 }
 
-function formatRemoteOutcome(
+/** @internal Exported for unit-testing lost/aborted outcome formatting without SSH. */
+export function formatRemoteOutcome(
   outcome: RemoteRunOutcome,
   host: RemoteHost,
   runId: string,
