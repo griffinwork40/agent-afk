@@ -275,6 +275,9 @@ export function parseAgentInput(input: unknown): AgentInput {
   // enforced at dispatch time in executeOnce, not at parse time, to keep this
   // parser pure (no I/O).
   const hostRaw = readOptionalString(agentInput, 'host');
+  if (hostRaw !== undefined && /[\0\n\r]/.test(hostRaw)) {
+    throw new Error('Agent tool `host` must not contain NUL, newline, or carriage-return.');
+  }
   if (hostRaw !== undefined && hostRaw.startsWith('-')) {
     throw new Error('Agent tool `host` may not start with "-".');
   }

@@ -1234,5 +1234,24 @@ describe('parseAgentInput', () => {
       const result = parseAgentInput({ prompt: 'p' });
       expect(result.host).toBeUndefined();
     });
+
+    // #4202 follow-up: reject control characters (mirrors remote-agent.ts cwd guard).
+    it('throws for host containing NUL character', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: 'host\0evil' })).toThrow(
+        /must not contain NUL/,
+      );
+    });
+
+    it('throws for host containing newline', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: 'host\nevil' })).toThrow(
+        /must not contain NUL/,
+      );
+    });
+
+    it('throws for host containing carriage-return', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: 'host\revil' })).toThrow(
+        /must not contain NUL/,
+      );
+    });
   });
 });
