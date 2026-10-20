@@ -293,6 +293,41 @@ describe('HandoffsView', () => {
   });
 
   // -------------------------------------------------------------------------
+  // select/choice with empty or absent choices → free-text fallback
+  // -------------------------------------------------------------------------
+
+  it('falls back to free-text when type is select but choices is undefined', async () => {
+    setupApiFetch([
+      makeHandoff({ questionType: 'select', questionChoices: undefined }),
+    ]);
+    render(<HandoffsView />);
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Your answer…')).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('button', { name: /staging|production/i })).not.toBeInTheDocument();
+  });
+
+  it('falls back to free-text when type is select but choices is empty', async () => {
+    setupApiFetch([
+      makeHandoff({ questionType: 'select', questionChoices: [] }),
+    ]);
+    render(<HandoffsView />);
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Your answer…')).toBeInTheDocument(),
+    );
+  });
+
+  it('falls back to free-text when type is choice but choices is undefined', async () => {
+    setupApiFetch([
+      makeHandoff({ questionType: 'choice', questionChoices: undefined }),
+    ]);
+    render(<HandoffsView />);
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Your answer…')).toBeInTheDocument(),
+    );
+  });
+
+  // -------------------------------------------------------------------------
   // Free-text type
   // -------------------------------------------------------------------------
 
@@ -325,6 +360,54 @@ describe('HandoffsView', () => {
     const [path, opts] = postCalls()[0] as [string, RequestInit];
     expect(path).toBe('/api/handoffs/q-text/answer');
     expect(JSON.parse(opts.body as string)).toEqual({ answer: 'my-answer' });
+  });
+
+  it('POSTs trimmed text when Enter is pressed', async () => {
+    setupApiFetch([
+      makeHandoff({ taskId: 'q-enter', questionType: 'text' }),
+    ]);
+    render(<HandoffsView />);
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Your answer…')).toBeInTheDocument(),
+    );
+    act(() => {
+      fireEvent.change(screen.getByPlaceholderText('Your answer…'), {
+        target: { value: '  trimmed  ' },
+      });
+    });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByPlaceholderText('Your answer…'), {
+        key: 'Enter',
+        code: 'Enter',
+      });
+    });
+    await waitFor(() => expect(postCalls()).toHaveLength(1));
+    const [path, opts] = postCalls()[0] as [string, RequestInit];
+    expect(path).toBe('/api/handoffs/q-enter/answer');
+    expect(JSON.parse(opts.body as string)).toEqual({ answer: 'trimmed' });
+  });
+
+  it('does not POST when Enter is pressed with whitespace-only input', async () => {
+    setupApiFetch([
+      makeHandoff({ taskId: 'q-blank', questionType: 'text' }),
+    ]);
+    render(<HandoffsView />);
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Your answer…')).toBeInTheDocument(),
+    );
+    act(() => {
+      fireEvent.change(screen.getByPlaceholderText('Your answer…'), {
+        target: { value: '   ' },
+      });
+    });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByPlaceholderText('Your answer…'), {
+        key: 'Enter',
+        code: 'Enter',
+      });
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(postCalls()).toHaveLength(0);
   });
 
   // -------------------------------------------------------------------------

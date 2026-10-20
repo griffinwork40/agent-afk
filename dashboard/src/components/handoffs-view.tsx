@@ -76,8 +76,12 @@ function HandoffCard({
   const hasChoices =
     Array.isArray(question.choices) && question.choices.length > 0;
   const type = question.type ?? 'confirm';
-  const isSelectLike = hasChoices || type === 'select' || type === 'choice';
-  const isConfirm = !isSelectLike && (type === 'confirm' || !question.type);
+  // Invariant: isSelectLike requires actual choices to render; a bare
+  // type='select'/'choice' with no choices array falls through to free-text
+  // so the handoff is still answerable. type='select'/'choice' with no choices
+  // must NOT match isConfirm either — it falls to the free-text branch.
+  const isSelectLike = hasChoices;
+  const isConfirm = !isSelectLike && (type === 'confirm' || !question.type) && type !== 'select' && type !== 'choice';
 
   const relativeTime = (() => {
     try {
@@ -182,11 +186,11 @@ function HandoffCard({
               'disabled:cursor-not-allowed disabled:opacity-50',
             )}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && textValue.trim()) void answer(textValue);
+              if (e.key === 'Enter' && textValue.trim()) void answer(textValue.trim());
             }}
           />
           <button
-            onClick={() => { void answer(textValue); }}
+            onClick={() => { void answer(textValue.trim()); }}
             disabled={busy || !textValue.trim()}
             className={cn(
               'h-8 rounded-md bg-brand px-3 text-xs font-medium text-white',
@@ -240,8 +244,33 @@ export function HandoffsView() {
 
   useEffect(() => {
     void load();
-    timerRef.current = setInterval(() => { void load(); }, POLL_INTERVAL_MS);
-    return () => clearInterval(timerRef.current);
+
+    function startPoll() {
+      timerRef.current = setInterval(() => { void load(); }, POLL_INTERVAL_MS);
+    }
+
+    function stopPoll() {
+      clearInterval(timerRef.current);
+    }
+
+    // Invariant: pause polling while the document is hidden to avoid
+    // unnecessary requests when the user switches tabs, mirroring the
+    // pattern used in BgJobsView.
+    function handleVisibility() {
+      if (document.hidden) {
+        stopPoll();
+      } else {
+        void load();
+        startPoll();
+      }
+    }
+
+    if (!document.hidden) startPoll();
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      stopPoll();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [load]);
 
   const handleAnswered = useCallback((taskId: string) => {
