@@ -6,12 +6,14 @@ import {
   composeTool,
   skillTool,
 } from './schemas.js';
+import { INVARIANT_CORE_COUNT, sortMcpSchemas } from './schemas.order.js';
 import { CHILD_ALLOWED_TOOLS, COMPOSE_LEAF_STRIPPED_TOOLS } from './nesting.js';
 import { clipboardWriteTool, clipboardReadTool } from './schemas.interaction-tools.js';
 import { sendToSessionTool } from './schemas.peer.js';
 import { createScheduleTool, updateScheduleTool } from './schemas.schedule.js';
 import { TASK_MAX_ATTEMPTS_LIMIT, TASK_RETRY_DELAY_MAX_MS, TASK_RETRY_DELAY_MIN_MS } from '../daemon/task-retry.js';
 import { cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
+import type { AnthropicToolDef } from './types.js';
 
 describe('builtinToolSchemas', () => {
   it('contains exactly 45 tools', () => {
@@ -19,7 +21,11 @@ describe('builtinToolSchemas', () => {
   });
 
   it('exports the expected tool names', () => {
+    // ORDERING INVARIANT (#4198): invariant core tools occupy indices 0..25;
+    // optional/disableable/surface-filtered tools occupy indices 26..44.
+    // Changing this order breaks prefix-cache reuse across tool-config variants.
     expect(BUILTIN_TOOL_NAMES).toEqual([
+      // -- Invariant core (0..25) --
       'bash',
       'read_file',
       'view_image',
@@ -29,9 +35,25 @@ describe('builtinToolSchemas', () => {
       'glob',
       'grep',
       'list_directory',
-      'send_telegram',
+      'wait_for',
+      'patch_apply',
+      'test_run',
+      'get_facet',
+      'json_query',
+      'model_complete',
+      'worktree',
+      'config_get',
+      'config_set',
+      'read_witness',
+      'search_witness',
+      'cancel_background_job',
+      'send_message_to_agent',
+      'get_background_job_health',
+      'remote_agent',
       'web_scrape',
       'web_request',
+      // -- Optional tail (26..44) --
+      'send_telegram',
       'image_generate',
       'image_edit',
       'create_schedule',
@@ -39,33 +61,44 @@ describe('builtinToolSchemas', () => {
       'list_schedules',
       'get_schedule_history',
       'cancel_schedule',
-      'cancel_background_job',
-      'send_message_to_agent',
-      'get_background_job_health',
-      'read_witness',
-      'search_witness',
-      'worktree',
-      'terminal_font_size',
-      'config_get',
-      'config_set',
-      'ask_question',
-      'wait_for',
       'browser_open',
       'browser_observe',
       'browser_act',
       'browser_screenshot',
       'browser_close',
-      'patch_apply',
-      'test_run',
-      'get_facet',
-      'json_query',
-      'model_complete',
-      'remote_agent',
       'clipboard_write',
       'clipboard_read',
       'list_sessions',
       'send_to_session',
+      'terminal_font_size',
+      'ask_question',
     ]);
+  });
+
+  it('INVARIANT_CORE_COUNT matches the actual boundary in builtinToolSchemas', () => {
+    // The optional tools are the disableable groups plus surface-filtered singles.
+    const optionalTools = new Set([
+      'send_telegram',
+      'image_generate', 'image_edit',
+      'create_schedule', 'update_schedule', 'list_schedules',
+      'get_schedule_history', 'cancel_schedule',
+      'browser_open', 'browser_observe', 'browser_act',
+      'browser_screenshot', 'browser_close',
+      'clipboard_write', 'clipboard_read',
+      'list_sessions', 'send_to_session',
+      'terminal_font_size',
+      'ask_question',
+    ]);
+    // Every tool at index < INVARIANT_CORE_COUNT must not be optional.
+    for (let i = 0; i < INVARIANT_CORE_COUNT; i++) {
+      const name = builtinToolSchemas[i]!.name;
+      expect(optionalTools.has(name), `Expected invariant core at index ${i} but found optional tool "${name}"`).toBe(false);
+    }
+    // Every tool at index >= INVARIANT_CORE_COUNT must be optional.
+    for (let i = INVARIANT_CORE_COUNT; i < builtinToolSchemas.length; i++) {
+      const name = builtinToolSchemas[i]!.name;
+      expect(optionalTools.has(name), `Expected optional tail at index ${i} but found non-optional tool "${name}"`).toBe(true);
+    }
   });
 
 
@@ -316,5 +349,71 @@ describe('schedule tool retry fields (#3243)', () => {
       minimum: TASK_RETRY_DELAY_MIN_MS,
       maximum: TASK_RETRY_DELAY_MAX_MS,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prefix-cache stability tests (#4198)
+// ---------------------------------------------------------------------------
+
+describe('prefix-cache stability: invariant core prefix (#4198)', () => {
+  /**
+   * Build a fake assembled schemas[] the way both providers do, but with a
+   * simulated deny list applied (filtering out named optional tools).
+   */
+  function assembleWithDisabled(disabled: string[]): AnthropicToolDef[] {
+    const deniedSet = new Set(disabled);
+    return [...builtinToolSchemas].filter((t) => !deniedSet.has(t.name));
+  }
+
+  it('two tools.disabled configs removing different optional tools share identical invariant core prefix', () => {
+    // Config A: disable send_telegram only
+    const schemasA = assembleWithDisabled(['send_telegram']);
+    // Config B: disable all image tools only
+    const schemasB = assembleWithDisabled(['image_generate', 'image_edit']);
+
+    // Both should have the same first INVARIANT_CORE_COUNT tools in identical order.
+    const prefixA = schemasA.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    const prefixB = schemasB.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    expect(prefixA).toEqual(prefixB);
+
+    // And that prefix must equal the invariant core of builtinToolSchemas itself.
+    const coreNames = builtinToolSchemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    expect(prefixA).toEqual(coreNames);
+  });
+
+  it('disabling a whole group still leaves invariant core prefix intact', () => {
+    // Simulate disabling the "schedules" and "browser" groups.
+    const scheduleTools = ['create_schedule', 'update_schedule', 'list_schedules', 'get_schedule_history', 'cancel_schedule'];
+    const browserTools = ['browser_open', 'browser_observe', 'browser_act', 'browser_screenshot', 'browser_close'];
+    const schemas = assembleWithDisabled([...scheduleTools, ...browserTools]);
+
+    const prefix = schemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    const coreNames = builtinToolSchemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    expect(prefix).toEqual(coreNames);
+  });
+});
+
+describe('prefix-cache stability: MCP sort (#4198)', () => {
+  function makeTool(name: string): AnthropicToolDef {
+    return { name, description: name, input_schema: { type: 'object', properties: {}, required: [] } };
+  }
+
+  it('two getMcpTools() return values in different insertion orders produce identical sorted segment', () => {
+    // Simulate two sessions where MCP servers connected in different orders.
+    const orderA = [makeTool('mcp__z__tool'), makeTool('mcp__a__tool'), makeTool('mcp__m__tool')];
+    const orderB = [makeTool('mcp__m__tool'), makeTool('mcp__z__tool'), makeTool('mcp__a__tool')];
+
+    const sortedA = sortMcpSchemas(orderA).map((t) => t.name);
+    const sortedB = sortMcpSchemas(orderB).map((t) => t.name);
+    expect(sortedA).toEqual(sortedB);
+    expect(sortedA).toEqual(['mcp__a__tool', 'mcp__m__tool', 'mcp__z__tool']);
+  });
+
+  it('sortMcpSchemas does not mutate the input array', () => {
+    const tools = [makeTool('mcp__z__tool'), makeTool('mcp__a__tool')];
+    const originalOrder = tools.map((t) => t.name);
+    sortMcpSchemas(tools);
+    expect(tools.map((t) => t.name)).toEqual(originalOrder);
   });
 });

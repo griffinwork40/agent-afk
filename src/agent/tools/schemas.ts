@@ -107,8 +107,37 @@ import { remoteAgentTool } from './schemas.remote-agent.js';
  * registered unconditionally — the underlying provider lazy-loads Playwright
  * only when a tool is actually invoked, so users who never call them pay
  * zero runtime cost beyond the schema bytes.
+ *
+ * ORDERING INVARIANT (#4198): invariant core tools occupy indices
+ * 0..INVARIANT_CORE_COUNT-1 (see schemas.order.ts). Optional / disableable /
+ * surface-filtered tools are grouped at the tail. This ensures two sessions
+ * differing only in which optional tools are enabled produce a byte-identical
+ * serialized prefix for all invariant core tools, maximising prefix-cache
+ * reuse on Anthropic prompt caching and local inference servers.
+ *
+ * ---- Invariant core (indices 0..25) -----------------------------------------
+ *   bash, read_file, view_image, extract_document, write_file, edit_file,
+ *   glob, grep, list_directory,
+ *   wait_for, patch_apply, test_run, get_facet, json_query, model_complete,
+ *   worktree, config_get, config_set,
+ *   read_witness, search_witness,
+ *   cancel_background_job, send_message_to_agent, get_background_job_health,
+ *   remote_agent, web_scrape, web_request
+ *
+ * ---- Optional tail (indices 26..44) -----------------------------------------
+ *   send_telegram,
+ *   image_generate, image_edit,
+ *   create_schedule, update_schedule, list_schedules, get_schedule_history,
+ *   cancel_schedule,
+ *   browser_open, browser_observe, browser_act, browser_screenshot,
+ *   browser_close,
+ *   clipboard_write, clipboard_read,
+ *   list_sessions, send_to_session,
+ *   terminal_font_size,
+ *   ask_question
  */
 export const builtinToolSchemas: readonly AnthropicToolDef[] = [
+  // -- Invariant core (0..25): never disabled, never surface-filtered ----------
   bashTool,
   readFileTool,
   viewImageTool,
@@ -118,34 +147,43 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   globTool,
   grepTool,
   listDirectoryTool,
-  sendTelegramTool,
+  waitForTool,
+  patchApplyTool,
+  testRunTool,
+  getFacetTool,
+  jsonQueryTool,
+  modelCompleteTool,
+  worktreeTool,
+  configGetTool,
+  configSetTool,
+  readWitnessTool,
+  searchWitnessTool,
+  cancelBackgroundJobTool,
+  sendMessageToAgentTool,
+  getBackgroundJobHealthTool,
+  remoteAgentTool,
   webScrapeTool,
   webRequestTool,
+  // -- Optional tail (26..44): disableable groups / surface-filtered -----------
+  sendTelegramTool,
   imageGenerateTool,
   imageEditTool,
   createScheduleTool,
   updateScheduleTool,
   listSchedulesTool,
   getScheduleHistoryTool,
-  cancelScheduleTool, cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool,
-  readWitnessTool, searchWitnessTool,
-  worktreeTool, terminalFontSizeTool,
-  configGetTool, configSetTool,
-  askQuestionTool, waitForTool,
+  cancelScheduleTool,
   browserOpenTool,
   browserObserveTool,
   browserActTool,
   browserScreenshotTool,
-  browserCloseTool, patchApplyTool,
-  testRunTool,
-  getFacetTool,
-  jsonQueryTool,
-  modelCompleteTool,
-  remoteAgentTool,
+  browserCloseTool,
   clipboardWriteTool,
   clipboardReadTool,
   listSessionsTool,
   sendToSessionTool,
+  terminalFontSizeTool,
+  askQuestionTool,
 ];
 
 /** Tool names in the always-on built-in set. */

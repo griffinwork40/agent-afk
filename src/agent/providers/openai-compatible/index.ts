@@ -51,6 +51,7 @@ import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provide
 import { grantsWorkspacePrompt, providerGrantsTool } from '../shared/tool-grant.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
+import { sortMcpSchemas } from '../../tools/schemas.order.js';
 import { applyReadOnlyGitPermissions, readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
@@ -414,7 +415,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // schema appended last, RESIDENT whenever planExitControls is present
       // (top-level); query.ts drops it from the advertised tools on non-plan
       // turns so the model sees it only when it is actionable.
-      schemas: [...baseSchemas, ...mcpSchemas, ...(planExitControls ? [exitPlanModeTool] : [])],
+      // MCP segment sorted by name (#4198): deterministic across connection
+      // orders so prefix-cache hits are not broken by MCP registration order.
+      schemas: [...baseSchemas, ...sortMcpSchemas(mcpSchemas), ...(planExitControls ? [exitPlanModeTool] : [])],
       // Session hook registry via the one canonical resolver (query-scoped
       // config registry wins over any constructor-provided one). Mirrors
       // AnthropicDirectProvider; the required key on the dispatcher options
