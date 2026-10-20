@@ -52,6 +52,12 @@ const KNOWN_AFK_TOOL_NAMES: ReadonlySet<string> = new Set([
   'memory_search',
   'agent',
   'skill',
+  // git_read (#3754, opt-in via AFK_READONLY_GIT_TOOL): listed unconditionally
+  // so resolveAgentToolAccess passes it through when present in a declared
+  // `tools:` array (e.g. researchAgentRegistryGrants() adds it when the flag
+  // is on). The flag-gating lives at the grant site; the recognizer must be
+  // flag-agnostic or a declared grant is silently dropped fail-closed.
+  'git_read',
 ]);
 
 /**

@@ -171,6 +171,35 @@ describe('loadAgentRegistry', () => {
     }
   });
 
+  // Regression guard for git_read reachability through resolveAgentToolAccess.
+  //
+  // When AFK_READONLY_GIT_TOOL is on, researchAgentRegistryGrants() adds
+  // git_read to the declared tools array. resolveAgentToolAccess must pass it
+  // through to the effective set — it was previously dropped fail-closed
+  // because git_read was absent from KNOWN_AFK_TOOL_NAMES (#4196).
+  // When the flag is off, git_read must be absent (no silent widening).
+  it('git_read survives resolveAgentToolAccess for research-agent iff AFK_READONLY_GIT_TOOL=1', () => {
+    const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn: () => {} });
+    const entry = registry.get('research-agent');
+    expect(entry).toBeDefined();
+
+    for (const [surface, pool] of [
+      ['read-only skill child (ground-state)', RECON_ALLOWED_TOOLS],
+      ['ordinary child', CHILD_ALLOWED_TOOLS],
+    ] as const) {
+      const resolved = resolveAgentToolAccess(entry!, [...pool]);
+      if (isReadOnlyGitToolEnabled()) {
+        expect(resolved.allowedTools, `git_read unreachable on ${surface} with flag on`).toContain(
+          'git_read',
+        );
+      } else {
+        expect(resolved.allowedTools, `git_read present on ${surface} with flag off`).not.toContain(
+          'git_read',
+        );
+      }
+    }
+  });
+
   // Structural invariant over ALL restricted builtin agents (#942).
   //
   // The other half of #883 (tool access ↔ prompt consistency), now generalised
