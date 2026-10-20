@@ -38,10 +38,12 @@ describe('joinContinuation', () => {
   });
 
   it('strips a repeated last word when the buffer ends in whitespace (non-compliant model)', () => {
-    // Model non-compliantly repeats the trailing word "bar": "foo bar " + "bar baz"
-    // must yield "foo bar baz", not "foo bar bar baz".
+    // Model non-compliantly repeats the preceding word "bar" followed by new text:
+    // "foo bar " + "bar baz" must yield "foo bar baz", not "foo bar bar baz".
     expect(joinContinuation('foo bar ', 'bar baz')).toBe('foo bar baz');
-    // Only strip when the repeat is exact word+space; a different word is kept verbatim.
+    // A bare echo of just the preceding word with nothing new must be rejected.
+    expect(joinContinuation('foo bar ', 'bar')).toBeNull();
+    // A different word is kept verbatim.
     expect(joinContinuation('foo bar ', 'baz qux')).toBe('foo bar baz qux');
   });
 
