@@ -145,6 +145,28 @@ export interface PendingApproval {
 }
 
 // ---------------------------------------------------------------------------
+// Daemon handoffs
+// ---------------------------------------------------------------------------
+
+export interface HandoffQuestion {
+  message?: string;
+  type?: string;
+  choices?: string[];
+}
+
+export interface HandoffSummary {
+  taskId: string;
+  sessionId: string;
+  createdAt: string;
+  status: 'pending';
+  question: HandoffQuestion;
+}
+
+export interface HandoffsResponse {
+  handoffs: HandoffSummary[];
+}
+
+// ---------------------------------------------------------------------------
 // Tool results (message journal)
 // ---------------------------------------------------------------------------
 
