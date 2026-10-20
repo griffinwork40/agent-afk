@@ -53,16 +53,12 @@ const KNOWN_AFK_TOOL_NAMES: ReadonlySet<string> = new Set([
   // git_read (#4059): not in builtinToolSchemas (conditional on
   // AFK_READONLY_GIT_TOOL), but declared in research-agent's tools array when
   // the flag is on. Without this entry normalizeToolToken drops it fail-closed,
-  // silently denying the grant that builtins.ts already wired.
+  // silently denying the grant that builtins.ts already wired. Listed
+  // unconditionally: flag-gating lives at the grant site, so this recognizer
+  // must be flag-agnostic.
   'git_read',
   'agent',
   'skill',
-  // git_read (#3754, opt-in via AFK_READONLY_GIT_TOOL): listed unconditionally
-  // so resolveAgentToolAccess passes it through when present in a declared
-  // `tools:` array (e.g. researchAgentRegistryGrants() adds it when the flag
-  // is on). The flag-gating lives at the grant site; the recognizer must be
-  // flag-agnostic or a declared grant is silently dropped fail-closed.
-  'git_read',
 ]);
 
 /**
