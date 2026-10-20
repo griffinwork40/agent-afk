@@ -18,8 +18,10 @@
  * - One POST per call; no retry, no queue. Retry belongs in the collector
  *   (standard OTLP collector protocol).
  * - `AFK_OTLP_HEADERS` accepts a comma-separated list of `Key=Value` pairs
- *   (same format used by `otelcol` and Grafana Alloy). Additional headers
- *   supplied programmatically are merged, with programmatic headers winning.
+ *   (same format used by `otelcol` and Grafana Alloy). Values that contain a
+ *   literal comma must be `%2C`-encoded; `parseOtlpHeaders` decodes them with
+ *   `decodeURIComponent`. Additional headers supplied programmatically are
+ *   merged, with the fixed `Content-Type: application/json` always winning.
  *
  * @module agent/trace/otlp-http-push
  */
@@ -39,13 +41,13 @@ export type OtlpPushResult =
 export interface OtlpHttpPushOptions {
   /**
    * OTLP/HTTP endpoint URL (e.g. `http://localhost:4318/v1/traces`).
-   * Required.
+   * Must use `http:` or `https:` scheme. Required.
    */
   endpoint: string;
   /**
-   * Additional HTTP headers merged on top of the defaults
-   * (`Content-Type: application/json`).  Caller-supplied headers win on
-   * collision.
+   * Additional HTTP headers merged below the fixed
+   * `Content-Type: application/json` (content-type is always JSON and cannot
+   * be overridden by extra headers).
    */
   headers?: Record<string, string>;
   /**
@@ -64,9 +66,15 @@ export interface OtlpHttpPushOptions {
 // Header parsing
 // ---------------------------------------------------------------------------
 
+/** Regex that matches CR or LF characters — forbidden in HTTP header values. */
+const CRLF_RE = /[\r\n]/;
+
 /**
  * Parse `AFK_OTLP_HEADERS` — a comma-separated `Key=Value` list — into a
- * plain object.  Malformed pairs (no `=`) are silently skipped.
+ * plain object.  Malformed pairs (no `=`) are silently skipped.  Header names
+ * or values containing CR/LF are silently skipped (injection guard).  Values
+ * are `decodeURIComponent`-decoded so that a literal comma can be represented
+ * as `%2C`; malformed percent sequences are left as-is (no unhandled throw).
  *
  * Example: `"Authorization=Bearer tok,X-Org=acme"` →
  *   `{ Authorization: 'Bearer tok', 'X-Org': 'acme' }`.
@@ -77,8 +85,18 @@ export function parseOtlpHeaders(raw: string): Record<string, string> {
     const eq = pair.indexOf('=');
     if (eq < 1) continue; // skip empty key or no '='
     const key = pair.slice(0, eq).trim();
-    const value = pair.slice(eq + 1).trim();
-    if (key) result[key] = value;
+    const rawValue = pair.slice(eq + 1).trim();
+    if (!key) continue;
+    if (CRLF_RE.test(key)) continue; // injection guard on name
+    // Decode %2C (and other percent-sequences) safely; leave malformed as-is.
+    let value: string;
+    try {
+      value = decodeURIComponent(rawValue);
+    } catch {
+      value = rawValue;
+    }
+    if (CRLF_RE.test(value)) continue; // injection guard on value
+    result[key] = value;
   }
   return result;
 }
@@ -93,6 +111,13 @@ export function parseOtlpHeaders(raw: string): Record<string, string> {
  * Never throws — all errors are returned as `{ ok: false, error }`.
  * A 4xx/5xx response is also returned as `{ ok: false }` so the caller can
  * log without needing a try/catch.
+ *
+ * The endpoint must use `http:` or `https:`; any other scheme is rejected
+ * immediately with `{ ok: false, error }` (no network call is made).
+ *
+ * `Content-Type: application/json` is always set and cannot be overridden by
+ * `headers` — extra headers are applied first via `Headers`, then the
+ * content-type is set unconditionally.
  */
 export async function pushOtlpHttp(
   payload: OtlpExportRequest,
@@ -105,6 +130,24 @@ export async function pushOtlpHttp(
     fetchFn = fetch,
   } = opts;
 
+  // Validate endpoint scheme before making any network call.
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(endpoint);
+  } catch {
+    return { ok: false, error: `Invalid OTLP endpoint URL: ${endpoint}` };
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    return {
+      ok: false,
+      error: `OTLP endpoint must use http: or https: scheme, got: ${parsedUrl.protocol}`,
+    };
+  }
+
+  // Build headers: extra headers first, then content-type wins unconditionally.
+  const headers = new Headers(extraHeaders);
+  headers.set('Content-Type', 'application/json');
+
   const body = JSON.stringify(payload);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -112,13 +155,14 @@ export async function pushOtlpHttp(
   try {
     const response = await fetchFn(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...extraHeaders,
-      },
+      headers,
       body,
       signal: controller.signal,
     });
+
+    // Consume/cancel the response body to free the underlying connection,
+    // regardless of status code.
+    await response.body?.cancel();
 
     if (!response.ok) {
       return { ok: false, status: response.status, error: `HTTP ${response.status} ${response.statusText}` };
