@@ -50,6 +50,13 @@ const KNOWN_AFK_TOOL_NAMES: ReadonlySet<string> = new Set([
   // workspace grant impossible.
   ...WORKSPACE_TOOL_NAMES,
   'memory_search',
+  // git_read (#4059): not in builtinToolSchemas (conditional on
+  // AFK_READONLY_GIT_TOOL), but declared in research-agent's tools array when
+  // the flag is on. Without this entry normalizeToolToken drops it fail-closed,
+  // silently denying the grant that builtins.ts already wired. Listed
+  // unconditionally: flag-gating lives at the grant site, so this recognizer
+  // must be flag-agnostic.
+  'git_read',
   'agent',
   'skill',
 ]);

@@ -20,6 +20,7 @@ import type { SessionStateManager } from './session-state.js';
 import type { HookRegistry } from '../hooks.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
 import type { QueryInputStream } from './input-iterable.js';
+import { buildMcpDisconnectNotice } from '../mcp/failure-notice.js';
 
 /** Mutable slots on AgentSession that `buildSessionRunner` reads and writes. */
 export interface SessionRunnerSlots {
@@ -192,6 +193,19 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
       // SDK-built manager (#4063) gets the failure notice as well as a
       // caller-supplied one.
       const mcpManager = opts.getConfig().mcpManager;
+
+      // #4064-b: wire onServerError so mid-session transport failures queue a
+      // framework-context notice for the model's NEXT turn. Chain through any
+      // pre-existing callback set by the provider runtime.
+      if (mcpManager !== undefined) {
+        const existingOnServerError = mcpManager.onServerError;
+        mcpManager.onServerError = (serverName, reason) => {
+          existingOnServerError?.(serverName, reason);
+          const notice = buildMcpDisconnectNotice(serverName, reason);
+          opts.queueFrameworkContext(notice);
+        };
+      }
+
       const initializer = new ProviderInitializer(
         opts.getConfig(),
         opts.abortSignal,

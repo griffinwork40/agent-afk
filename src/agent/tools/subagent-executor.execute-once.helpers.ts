@@ -402,3 +402,47 @@ export function checkNestedScope(
     isError: true,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Remote dispatch gate
+// ---------------------------------------------------------------------------
+
+import { executeRemoteAgentDispatch } from './subagent-executor.execute-once.remote.js';
+
+/**
+ * When `parsed.host` is set, releases the budget receipt and delegates to
+ * `executeRemoteAgentDispatch`.  Returns the `ToolResult` so the caller can
+ * `return` it immediately, or `undefined` when the local path should proceed.
+ *
+ * Extracted here to keep `executeOnce` within the 200-line ceiling.
+ */
+export async function checkAndRunRemoteDispatch(
+  parsed: Pick<AgentInput, 'host' | 'prompt' | 'model' | 'isolation' | 'cwd'>,
+  signal: AbortSignal,
+  budgetReceipt: SpawnReceipt | undefined,
+  callId: string,
+  updateCurrentWaveUnit: (
+    callId: string,
+    status: 'running' | 'done' | 'failed',
+    error?: string,
+    cwd?: string,
+  ) => void,
+): Promise<ToolResult | undefined> {
+  if (parsed.host === undefined) return undefined;
+  // Remote runs don't consume local delegation budget — roll it back rather
+  // than releasing it, so the slot stays available for future local dispatches.
+  // release() is called only after a successful runRemoteAgent completes;
+  // on every early-return failure path inside executeRemoteAgentDispatch
+  // (isRemoteRun guard, isolation guard, host-resolve error) the caller never
+  // ran, so we must not permanently burn the slot.
+  updateCurrentWaveUnit(callId, 'running');
+  const result = await executeRemoteAgentDispatch(parsed, signal);
+  if (result.isError) {
+    budgetReceipt?.rollback();
+    updateCurrentWaveUnit(callId, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
+  } else {
+    budgetReceipt?.release();
+    updateCurrentWaveUnit(callId, 'done');
+  }
+  return result;
+}

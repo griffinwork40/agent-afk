@@ -381,11 +381,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       // failed event here to avoid a double-emit for the same termination.
       if ((this._currentStatus as string) === 'cancelled') {
         // cancel() already emitted the row and settled the billing known then;
-        // settle only the DELTA that accrued after it (a `done` drained on
+        // settle any spend that accrued after it (a `done` drained on
         // interrupt) so it still reaches the rollup, counted once (#3878).
-        // Emit a billing_settled session_phase so trace readers can account for
-        // the delta — without it the cancelled row's totals are understated
-        // (#3931 item 1). Fire-and-forget: mirrors pause_extension_granted.
+        // Emit a billing_settled session_phase carrying cumulative run totals
+        // (not a delta); consumers derive the post-cancel delta by subtracting
+        // the cancelled row's watermark (#3931 item 1).
+        // Fire-and-forget: mirrors pause_extension_granted.
         const postCancelFields = settleUnreportedBilling(this, 'cancelled', billingContext);
         if (postCancelFields.provider !== undefined && postCancelFields.tokens !== undefined) {
           const { uncachedInput, cacheRead, cacheWrite, output } = postCancelFields.tokens;

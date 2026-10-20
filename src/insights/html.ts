@@ -15,7 +15,7 @@
 import type { InsightAggregates, Recommendation, InsightsOptions } from './types.js';
 import { renderOutcomes } from './html.outcomes.js';
 import { renderPreexistingDefects } from './html.preexisting-defects.js';
-import { renderGuardrailFalsePositives } from './html.guardrail-false-positives.js';
+import { renderGuardrailFalsePositives, renderShadowGitObserve } from './html.guardrail-false-positives.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -400,6 +400,7 @@ export function generateHtml(
     renderOutcomes(aggregates),
     renderPreexistingDefects(aggregates),
     renderGuardrailFalsePositives(aggregates),
+    renderShadowGitObserve(aggregates),
     renderRecommendations(recommendations),
     renderAbout(aggregates),
   ].join('\n');
@@ -458,6 +459,7 @@ export function generateHtml(
     <a href="#outcomes">Outcomes</a>
     <a href="#preexisting-defects">Pre-existing Defects</a>
     <a href="#guardrail-false-positives">Guardrail FPs</a>
+    <a href="#shadow-git-observe">Shadow-Git</a>
     <a href="#recommendations">Recommendations</a>
     <a href="#about">About</a>
   </nav>

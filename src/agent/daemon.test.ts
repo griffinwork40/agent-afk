@@ -691,8 +691,10 @@ describe('startDaemon', () => {
       expect(handle.scheduler.list().map((t) => t.taskId)).toContain('good-task');
       // The bad task must have been skipped.
       expect(handle.scheduler.list().map((t) => t.taskId)).not.toContain('bad-runat');
-      // A console.warn must have been emitted for the operator.
+      // A console.warn must have been emitted for the operator,
+      // including the taskId and the field name that was malformed.
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('bad-runat'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('runAt'));
     } finally {
       warnSpy.mockRestore();
     }
@@ -717,8 +719,12 @@ describe('startDaemon', () => {
         tasks: [bad],
       });
 
+      // Daemon must still be reachable after quarantining the bad task.
+      expect(handle.port).toBeGreaterThan(0);
       expect(handle.scheduler.list().map((t) => t.taskId)).not.toContain('bad-expiry');
+      // Warn must name the taskId and the field that was malformed.
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('bad-expiry'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('expiresAt'));
     } finally {
       warnSpy.mockRestore();
     }

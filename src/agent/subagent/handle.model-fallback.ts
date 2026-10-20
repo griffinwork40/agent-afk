@@ -94,6 +94,9 @@ export async function streamWithModelFallback<T>(
     });
     const previous = handle.session;
     handle.session = fallback.createSession();
+    // Best-effort close: the rejected session produced no progress, so any
+    // close failure is a resource-cleanup concern only, not a correctness one.
+    // Fire-and-forget is intentional; errors are logged but not propagated.
     void previous.close().catch((closeErr: unknown) => debugLog('model-fallback: closing rejected child session failed', closeErr));
     const message = await streamToFinalMessage(handle, prompt, sinkOverride, billingContext);
     return { ...message, content: buildModelFallbackWarning(fallback.fromModel, fallback.toModel, reason) + message.content };

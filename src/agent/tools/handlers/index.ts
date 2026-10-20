@@ -59,6 +59,7 @@ import {
 import { listSessionsHandler, sendToSessionHandler } from './peer.js';
 import { createGitReadHandler } from './git-read.js';
 import { isReadOnlyGitToolEnabled, GIT_READ_TOOL_NAME } from '../readonly-git-surface.js';
+import { createCodeSymbolsHandler, LSP_SYMBOLS_TOOL_NAME } from '../lsp-symbols-surface.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -147,6 +148,9 @@ export function createBuiltinHandlers(
   ]);
   // Opt-in structured read-only git tool (#3754); absent unless AFK_READONLY_GIT_TOOL is on.
   if (isReadOnlyGitToolEnabled()) handlers.set(GIT_READ_TOOL_NAME, createGitReadHandler(cwd));
+  // Opt-in LSP symbol lookup (#3904 phase 2); absent unless AFK_LSP_DIAGNOSTICS is on.
+  const codeSymbolsHandler = createCodeSymbolsHandler(cwd);
+  if (codeSymbolsHandler) handlers.set(LSP_SYMBOLS_TOOL_NAME, codeSymbolsHandler);
   return handlers;
 }
 

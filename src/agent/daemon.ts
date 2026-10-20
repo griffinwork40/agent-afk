@@ -249,7 +249,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     host,
     scheduler,
     registerTask(task) {
-      scheduler.register(task);
+      registerTasksWithQuarantine(scheduler, [task]);
     },
     unregisterTask(taskId) {
       scheduler.unregister(taskId);

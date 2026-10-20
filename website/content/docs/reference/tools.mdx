@@ -26,6 +26,7 @@ For the fastest availability check, ask the agent to call `get_runtime_state` wi
 | `grep` | Search file contents with bundled ripgrep. | R, S, D |
 | `list_directory` | List directory entries. | R, S, D |
 | `git_read` | Run constrained read-only git queries. | R, S, D, opt-in |
+| `code_symbols` | Go-to-definition and find-references via LSP. | R, S, D, opt-in |
 | `json_query` | Extract bounded results from JSON. | R, S, D |
 | **Shell and waiting** | | |
 | `bash` | Execute a shell command. | R, S, D; background processes only in root REPL |
@@ -199,6 +200,17 @@ Subcommands: `status`, `log`, `diff`, `show`, `grep`, `tag` (listing), `branch` 
 | `paths` | string[] | | Pathspecs relative to the working directory. |
 | `pattern` | string | | Search pattern; required for `grep`, invalid otherwise. |
 | `max_bytes` | number | | Output cap in bytes (default 51200, ceiling 204800). |
+
+### `code_symbols`
+
+Opt-in: advertised only when `AFK_LSP_DIAGNOSTICS=1` (phase 2 of #3904). Queries `typescript-language-server` (must be on PATH) for go-to-definition or find-references at a given cursor position in a TypeScript or JavaScript file. Each call spawns a fresh server process, queries it, and exits — no persistent server. A missing or slow server never fails the call; it returns an informative message instead.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_path` | string | ✓ | Absolute path to the TypeScript or JavaScript file. |
+| `subcommand` | string | ✓ | `definition` — go to declaration; `references` — find all usages. |
+| `line` | number | ✓ | 1-based line number of the symbol position. |
+| `col` | number | ✓ | 1-based column number of the symbol position. |
 
 ### `json_query`
 

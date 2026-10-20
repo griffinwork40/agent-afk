@@ -11,6 +11,87 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.328.0] - 2026-10-20
+
+### Added
+- grant git_read to research-agent under AFK_READONLY_GIT_TOOL (#4196) (a4c82f2f)
+
+### Fixed
+- address handoffs-view review findings (#4197 follow-up) (#4207) (56420f74)
+- plan-mode gate for agent{host}, host control-char rejection (#4206) (c0a8bdd3)
+
+## [5.327.13] - 2026-10-20
+
+### Changed
+- stable tool-list partition for prefix-cache reuse (#4205) (06c5cb04)
+
+## [5.327.12] - 2026-10-20
+
+### Added
+- wire host field on agent tool to RemoteSubagentHandle (#4202) (5262a205)
+- pending handoffs view in dashboard (poll + answer form) (#4197) (6ff53f95)
+- LSP symbol lookup tool (phase 2, opt-in, off by default) (#4201) (bcaf1538)
+
+### Fixed
+- route DaemonHandle.registerTask through quarantine, fix JSDoc, strengthen quarantine tests (#4175) (4d4604fe)
+- fix dead code in checkMirror, improve order-mismatch logging, export registrations/checkMirror, add tests (#4193) (14e5a0f7)
+
+## [5.327.11] - 2026-10-20
+
+### Added
+- measure shadow-git-detect observe-window firing rate (#4200) (53c4e74f)
+- live OTLP/HTTP push for afk trace export-otlp (#4195) (0f09b9fe)
+- add /insights Telegram command for text summary of usage analytics (#4194) (95f3ecc3)
+- surface riskCategory in trace show and status-line chip (#4199) (9263d0c9)
+
+### Fixed
+- @internal tags on OTLP wire types; ROOT_PARENT_SENTINEL for background agents (#4192) (becd7fa1)
+- use "safe idempotent" in web_request retry wording (#4191) (096a2c75)
+
+## [5.327.10] - 2026-10-20
+
+### Fixed
+- add disarmCols to ResetStateHost and zero it in resetState (#4177) (2ce59472)
+- clean up fallbackBySession on mint completion and document void close() (#4178) (0f2a4f47)
+
+## [5.327.9] - 2026-10-20
+
+### Fixed
+- correct billing_settled comment to say cumulative totals, not delta (#4184) (a918fbec)
+- pin readRoots/writeRoots confinement descriptions in CI (#3772) (#4186) (65265cbb)
+
+## [5.327.8] - 2026-10-20
+
+### Fixed
+- record failed/cancelled child costUsd in subagentRunningCostUsd (#4185) (c8aff4ed)
+- narrow catch to race error, add pending-status pre-check, add tests (#4179) (30696807)
+- JSDoc ALL_TOOL_SCHEMAS flag note; tighten Scenario 4 vote assertion (#4187) (1ed6a132)
+
+## [5.327.7] - 2026-10-20
+
+### Fixed
+- oauth_pending servers and mid-session disconnects now surface model-visible notices (#4183) (b6542f25)
+- fix four low-risk advisory correctness gaps in /handoffs:answer (#4180) (a7b97e60)
+- add missing test assertions from 2026-10-19 advisory findings (#4176) (8e7eb6bc)
+
+## [5.327.6] - 2026-10-20
+
+### Fixed
+- pass explicit scanCmd to writeReference; add mirror check to scan:cli:check (#4152) (551e74c8)
+
+### Changed
+- fix lint:tests ratchet regression from #4153 (#4188) (2198554c)
+
+## [5.327.5] - 2026-10-19
+
+### Fixed
+- correct web_request schema and header to match retry implementation (#4151) (dba2b24e)
+- correct root span status, best-effort completed-only spans, omit errorHead by default, index background_agent (#4153) (7a589b4a)
+
+### Changed
+- mark Task Scheduler service backend as shipped in windows-setup.md (#4150) (f5ed0866)
+- update evidence-gate header and test description to "on by default" (#4149) (6e170733)
+
 ## [5.327.4] - 2026-10-19
 
 ### Fixed
