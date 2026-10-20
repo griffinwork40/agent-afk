@@ -58,16 +58,23 @@ type AnyValue =
   | { boolValue: boolean }
   | { doubleValue: number };
 
+/** @internal Subsystem-private OTLP wire type; do not import outside `src/agent/trace/`. */
 export interface KeyValue { key: string; value: AnyValue }
 
-/** Minimal OTLP span event (attached to a span). */
+/**
+ * Minimal OTLP span event (attached to a span).
+ * @internal Subsystem-private OTLP wire type; do not import outside `src/agent/trace/`.
+ */
 export interface SpanEvent {
   timeUnixNano: string;
   name: string;
   attributes?: KeyValue[];
 }
 
-/** OTLP span status. */
+/**
+ * OTLP span status.
+ * @internal Subsystem-private OTLP wire type; do not import outside `src/agent/trace/`.
+ */
 export interface SpanStatus { code: 0 | 1 | 2; message?: string }
 
 /** Minimal OTLP Span. */
