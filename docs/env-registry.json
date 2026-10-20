@@ -807,10 +807,18 @@
     },
     {
       "name": "AFK_OTLP_ENDPOINT",
-      "description": "OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). When set, `afk trace export-otlp` will POST the converted payload to this endpoint in addition to (or instead of) writing to stdout. Currently informational — live push support is a follow-up to the offline converter (issue #3901).",
+      "description": "OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). When set, `afk trace export-otlp` POSTs the converted OTLP/JSON payload to this endpoint after converting the witness trace. A dead or unreachable endpoint never blocks or fails the command — the error is printed to stderr and the command still exits 0. Equivalent to passing `--endpoint <url>` on the command line; the flag takes precedence when both are provided.",
       "type": "string",
       "required": false,
       "example": "http://localhost:4318/v1/traces",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_OTLP_HEADERS",
+      "description": "Comma-separated list of `Key=Value` HTTP headers appended to every OTLP/HTTP push request made by `afk trace export-otlp` when `AFK_OTLP_ENDPOINT` or `--endpoint` is set. Typical use: bearer tokens and tenant identifiers required by managed collectors (e.g. Grafana Cloud, Honeycomb). Values that contain a literal comma must be percent-encoded (%2C). Example: `Authorization=Bearer <tok>,X-Org=acme`.",
+      "type": "string",
+      "required": false,
+      "example": "Authorization=Bearer tok123,X-Org=acme",
       "category": "misc"
     },
     {

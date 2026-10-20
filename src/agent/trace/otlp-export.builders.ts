@@ -23,6 +23,18 @@ export function doubleAttr(key: string, value: number): KeyValue { return { key,
 // ID helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Sentinel stored as `SubagentInfo.parentId` for background agents, which have
+ * no parent subagent — they are always direct children of the root session span.
+ *
+ * Resolution: `buildSubagentSpans` checks `subagentMap.has(info.parentId)`. Since
+ * `ROOT_PARENT_SENTINEL` is never a map key, background agents always fall through
+ * to `rootSpanId` for their `parentSpanId`. The emitted `afk.subagent.parent_id`
+ * attribute is set to the actual resolved root span id (not this sentinel) so
+ * OTLP consumers see a real span id rather than an opaque string.
+ */
+export const ROOT_PARENT_SENTINEL = '__root__';
+
 export const SCOPE_NAME = 'agent-afk.witness';
 export const SCOPE_VERSION = '0.1.0';
 export const GEN_AI_SYSTEM = 'agent-afk';
@@ -107,7 +119,7 @@ export function indexSubagents(events: readonly TraceEvent[]): Map<string, Subag
       // fired by background jobs are attributed to their own span.
       const p = ev.payload;
       if (p.transition === 'started') {
-        map.set(p.subagentId, { parentId: 'root', model: p.model,
+        map.set(p.subagentId, { parentId: ROOT_PARENT_SENTINEL, model: p.model,
           agentType: `background/${p.label}`, startTs: ev.ts,
           succeeded: false, failed: false });
       } else if (p.transition === 'completed') {
@@ -180,12 +192,15 @@ export function buildSubagentSpans(
     spanIds.set(subId, spanId);
     const parentSpanId = subagentMap.has(info.parentId)
       ? (spanIds.get(info.parentId) ?? rootSpanId) : rootSpanId;
+    // Emit the resolved parent span id rather than a raw sentinel value so
+    // OTLP consumers see a real span id in afk.subagent.parent_id.
+    const parentIdAttr = info.parentId === ROOT_PARENT_SENTINEL ? rootSpanId : info.parentId;
 
     const attrs: KeyValue[] = [
       strAttr('gen_ai.system', GEN_AI_SYSTEM),
       strAttr('gen_ai.operation.name', 'agent.invoke'),
       strAttr('afk.subagent.id', subId),
-      strAttr('afk.subagent.parent_id', info.parentId),
+      strAttr('afk.subagent.parent_id', parentIdAttr),
       strAttr('gen_ai.agent.id', subId),
     ];
     if (info.model) attrs.push(strAttr('gen_ai.request.model', info.model));

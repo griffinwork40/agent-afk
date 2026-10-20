@@ -1,10 +1,13 @@
 /**
- * HTML section renderer for guardrail false-positive metrics (#3849).
+ * HTML section renderers for guardrail false-positive metrics (#3849).
  *
  * Extracted as a sibling of `html.ts` to respect the 350-code-line ceiling.
- * Renders a small metrics section showing hook-block-repeat trip counts and
- * the false-positive rate. Returns an empty string when no trips are recorded
- * (avoids an empty heading cluttering reports before any guard fires).
+ * Renders metrics sections for:
+ *   - hook-block-repeat trip counts and FP rate
+ *   - shadow-git-detect observe-window firing counts
+ *
+ * Each renderer returns an empty string when there is no data (avoids empty
+ * headings cluttering reports before any guard fires).
  *
  * @module insights/html.guardrail-false-positives
  */
@@ -59,5 +62,38 @@ export function renderGuardrailFalsePositives(agg: InsightAggregates): string {
       <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.sessionsScanned))}</div><div class="metric-label">Sessions Scanned</div></div>
     </div>
     <p class="caption">Hook-block-repeat meta-guard — a high FP rate suggests the threshold may be too aggressive.</p>
+  </section>`;
+}
+
+/**
+ * Render the shadow-git-detect observe-window metrics section.
+ * Returns empty string when there are no firings (nothing to show).
+ */
+export function renderShadowGitObserve(agg: InsightAggregates): string {
+  const sgo = agg.shadowGitObserve;
+  if (!sgo || sgo.totalFirings === 0) return '';
+
+  const labelRows = Object.entries(sgo.byLabel)
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, count]) =>
+      `<tr><td>${htmlEscape(label)}</td><td>${htmlEscape(safeNum(count))}</td></tr>`,
+    )
+    .join('');
+
+  const labelTable = labelRows
+    ? `<table class="data-table"><thead><tr><th>Pattern</th><th>Count</th></tr></thead><tbody>${labelRows}</tbody></table>`
+    : '';
+
+  return `
+  <section id="shadow-git-observe">
+    <h2>Shadow-Git Detect (Observe Window)</h2>
+    <div class="metrics-grid">
+      <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(sgo.totalFirings))}</div><div class="metric-label">Total Firings</div></div>
+      <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(sgo.forkFirings))}</div><div class="metric-label">Fork Firings</div></div>
+      <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(sgo.sessionsWithFirings))}</div><div class="metric-label">Sessions with Firings</div></div>
+      <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(sgo.sessionsScanned))}</div><div class="metric-label">Sessions Scanned</div></div>
+    </div>
+    ${labelTable}
+    <p class="caption">Shadow-git-detect fires in observe-only mode — counts here inform the NEEDS-DECISION on promotion to block (#3849).</p>
   </section>`;
 }

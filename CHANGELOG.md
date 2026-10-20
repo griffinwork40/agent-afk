@@ -11,6 +11,25 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.327.10] - 2026-10-20
+
+### Fixed
+- add disarmCols to ResetStateHost and zero it in resetState (#4177) (2ce59472)
+- clean up fallbackBySession on mint completion and document void close() (#4178) (0f2a4f47)
+
+## [5.327.9] - 2026-10-20
+
+### Fixed
+- correct billing_settled comment to say cumulative totals, not delta (#4184) (a918fbec)
+- pin readRoots/writeRoots confinement descriptions in CI (#3772) (#4186) (65265cbb)
+
+## [5.327.8] - 2026-10-20
+
+### Fixed
+- record failed/cancelled child costUsd in subagentRunningCostUsd (#4185) (c8aff4ed)
+- narrow catch to race error, add pending-status pre-check, add tests (#4179) (30696807)
+- JSDoc ALL_TOOL_SCHEMAS flag note; tighten Scenario 4 vote assertion (#4187) (1ed6a132)
+
 ## [5.327.7] - 2026-10-20
 
 ### Fixed
