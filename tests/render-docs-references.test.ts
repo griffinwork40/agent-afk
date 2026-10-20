@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Command, Option } from 'commander';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -60,16 +60,45 @@ describe('CLI reference', () => {
     expect(renderCli(root)).toBe(renderCli(buildCli()));
   });
 
-  it('returns false and logs detail when checkMirror detects a mismatch', () => {
-    const errors: string[] = [];
-    const origError = console.error.bind(console);
-    console.error = (...args: unknown[]) => errors.push(args.join(' '));
-    // checkMirror reads src/cli/index.ts and scripts/render-cli-reference.ts from
-    // the real repo; both are in sync on HEAD so it must return true.
+  it('returns true and logs nothing when files are in sync', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
+      // checkMirror reads src/cli/index.ts and scripts/render-cli-reference.ts from
+      // the real repo; both are in sync on HEAD so it must return true.
       expect(checkMirror()).toBe(true);
-      expect(errors).toHaveLength(0);
-    } finally { console.error = origError; }
+      expect(spy).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
+
+  it('returns false and logs missing-registrar message when a registrar is absent', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // entry has registerFooCommand; generator does not → missing registrar
+      const entry = 'registerFooCommand(program);\nregisterBarCommand(program);';
+      const generator = 'registerBarCommand(program);';
+      expect(checkMirror(entry, generator)).toBe(false);
+      expect(spy).toHaveBeenCalledWith(
+        expect.stringContaining('registrars in src/cli/index.ts missing from render-cli-reference.ts: registerFooCommand'),
+      );
+      // Must NOT emit the order-mismatch message — sets differ, not just order
+      expect(spy).not.toHaveBeenCalledWith(expect.stringContaining('registration order mismatch'));
+    } finally { spy.mockRestore(); }
+  });
+
+  it('returns false and logs order-mismatch message when sets are equal but order differs', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // Same registrars, different order
+      const entry = 'registerFooCommand(program);\nregisterBarCommand(program);';
+      const generator = 'registerBarCommand(program);\nregisterFooCommand(program);';
+      expect(checkMirror(entry, generator)).toBe(false);
+      expect(spy).toHaveBeenCalledWith(
+        expect.stringContaining('registration order mismatch'),
+      );
+      // Must NOT emit the missing/extra messages — sets are equal
+      expect(spy).not.toHaveBeenCalledWith(expect.stringContaining('missing from render-cli-reference.ts'));
+      expect(spy).not.toHaveBeenCalledWith(expect.stringContaining('not in src/cli/index.ts'));
+    } finally { spy.mockRestore(); }
   });
 
   it('imports/registers in an empty isolated home with no state writes and neutralizes ambient config', () => {
@@ -163,16 +192,17 @@ describe('Config reference and shared output contract', () => {
     const directory = mkdtempSync(join(tmpdir(), 'afk-reference-scanCmd-'));
     const slug = 'fixture';
     const path = join(directory, `${slug}.mdx`);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       writeFileSync(path, 'stale\n');
-      const errors: string[] = [];
-      const origError = console.error.bind(console);
-      console.error = (...args: unknown[]) => errors.push(args.join(' '));
-      try {
-        const result = writeReference(slug, 'fresh\n', true, directory, 'scan:custom');
-        expect(result).toBe(false);
-        expect(errors.some((e) => e.includes('scan:custom'))).toBe(true);
-      } finally { console.error = origError; }
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+      const result = writeReference(slug, 'fresh\n', true, directory, 'scan:custom');
+      expect(result).toBe(false);
+      const errors = spy.mock.calls.map((args) => args.join(' '));
+      expect(errors.some((e) => e.includes('scan:custom'))).toBe(true);
+      expect(errors.every((e) => !e.includes('scan:fixture'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

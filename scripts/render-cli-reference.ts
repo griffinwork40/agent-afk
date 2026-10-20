@@ -54,9 +54,12 @@ export function registrations(text: string): string[] {
 }
 
 /** Returns true when the generator mirrors the entry point exactly; logs diff on mismatch. */
-export function checkMirror(): boolean {
-  const entry = readFileSync(join(repoRoot, 'src/cli/index.ts'), 'utf8');
-  const generator = readFileSync(join(repoRoot, 'scripts/render-cli-reference.ts'), 'utf8');
+export function checkMirror(
+  entryText?: string,
+  generatorText?: string,
+): boolean {
+  const entry = entryText ?? readFileSync(join(repoRoot, 'src/cli/index.ts'), 'utf8');
+  const generator = generatorText ?? readFileSync(join(repoRoot, 'scripts/render-cli-reference.ts'), 'utf8');
   const entryRegs = registrations(entry);
   const genRegs = registrations(generator);
   if (JSON.stringify(entryRegs) === JSON.stringify(genRegs)) return true;
@@ -64,13 +67,11 @@ export function checkMirror(): boolean {
   const extra = genRegs.filter((r) => !entryRegs.includes(r));
   if (missing.length) console.error(`scan:cli:check: registrars in src/cli/index.ts missing from render-cli-reference.ts: ${missing.join(', ')}`);
   if (extra.length) console.error(`scan:cli:check: registrars in render-cli-reference.ts not in src/cli/index.ts: ${extra.join(', ')}`);
-  // Dead-code guard removed: control only reaches here after the equality check
-  // above already failed, so the condition was always true. Log unconditionally.
+  // Only emit the order-mismatch message when the sets are equal but the
+  // sequence differs — missing/extra cases are already reported above.
   if (!missing.length && !extra.length) {
     // Pure order mismatch — set is identical, sequence differs.
     console.error(`scan:cli:check: registration order mismatch.\n  expected: ${entryRegs.join(', ')}\n  actual:   ${genRegs.join(', ')}\n  Run pnpm scan:cli to regenerate.`);
-  } else {
-    console.error('scan:cli:check: registration order mismatch. Run pnpm scan:cli to regenerate.');
   }
   return false;
 }
