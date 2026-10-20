@@ -535,6 +535,11 @@ describe('classifyRisk — other tools', () => {
   it('remote_agent → high (arbitrary remote execution, bypassPermissions default)', () => {
     expect(classifyRisk('remote_agent', { host: 'cm', prompt: 'rm -rf /' }, ctx)).toBe('high');
   });
+
+  // Finding 6: agent tool with host set must also be high risk
+  it('agent with host → high (same SSH transport as remote_agent)', () => {
+    expect(classifyRisk('agent', { host: 'myhost', prompt: 'hi' }, ctx)).toBe('high');
+  });
   it('send_telegram → medium', () => {
     expect(classifyRisk('send_telegram', { message: 'hello' }, ctx)).toBe('medium');
   });
@@ -1540,6 +1545,11 @@ describe('classifyRiskDetailed — category field (#3900)', () => {
 
   it('remote_agent → remote-exec', () => {
     expect(classifyRiskDetailed('remote_agent', {}, ctx).category).toBe('remote-exec');
+  });
+
+  // Finding 6: agent+host must classify as remote-exec
+  it('agent with host → remote-exec category', () => {
+    expect(classifyRiskDetailed('agent', { host: 'myhost', prompt: 'hi' }, ctx).category).toBe('remote-exec');
   });
 
   it('mcp__db__delete → mcp-destructive', () => {

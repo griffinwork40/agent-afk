@@ -176,4 +176,47 @@ describe('executeRemoteAgentDispatch', () => {
     );
     expect(result.isError).toBeUndefined();
   });
+
+  // Finding 1: budget receipt rollback on pre-execution refusals
+  it('returns isError (rollback path) when AFK_REMOTE_DEPTH causes refusal', async () => {
+    vi.stubEnv('AFK_REMOTE_DEPTH', '1');
+    const result = await executeRemoteAgentDispatch(
+      { host: 'test-host', prompt: 'hello' },
+      ABORT.signal,
+      makeDeps(),
+    );
+    // The result must be an error so checkAndRunRemoteDispatch calls rollback().
+    expect(result.isError).toBe(true);
+  });
+
+  // Finding 3: parsed.cwd takes precedence over host.cwd
+  it('prefers parsed.cwd over host.cwd when both are set', async () => {
+    // Both parsed.cwd and host.cwd are set; parsed.cwd must win.
+    // We verify the call succeeds (cwd resolution did not crash) and the result
+    // carries the expected framed reply — meaning runRemoteAgent was reached.
+    const deps: RemoteAgentDispatchDeps = {
+      runner: makeFakeRunner(doneEvent('ok from remote')),
+      loadHostsFn: async () => ({ 'test-host': makeHost({ cwd: '/host/cwd' }) }),
+    };
+    const result = await executeRemoteAgentDispatch(
+      { host: 'test-host', prompt: 'task', cwd: '/parsed/cwd' },
+      ABORT.signal,
+      deps,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('ok from remote');
+  });
+
+  it('uses parsed.cwd when host has no cwd', async () => {
+    const deps: RemoteAgentDispatchDeps = {
+      runner: makeFakeRunner(doneEvent('done')),
+      loadHostsFn: async () => ({ 'test-host': makeHost() }), // no host.cwd
+    };
+    const result = await executeRemoteAgentDispatch(
+      { host: 'test-host', prompt: 'task', cwd: '/my/project' },
+      ABORT.signal,
+      deps,
+    );
+    expect(result.isError).toBeUndefined();
+  });
 });

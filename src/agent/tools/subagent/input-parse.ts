@@ -21,6 +21,7 @@ import {
   parseReadRoots,
   parseWriteRoots,
 } from './input-parse.roots.js';
+import { isValidSshTarget } from '../../../remote/hosts.js';
 
 export type AgentExecutionMode = 'foreground' | 'background';
 
@@ -274,10 +275,13 @@ export function parseAgentInput(input: unknown): AgentInput {
   // enforced at dispatch time in executeOnce, not at parse time, to keep this
   // parser pure (no I/O).
   const hostRaw = readOptionalString(agentInput, 'host');
-  const host = hostRaw !== undefined && !hostRaw.startsWith('-') ? hostRaw : undefined;
   if (hostRaw !== undefined && hostRaw.startsWith('-')) {
     throw new Error('Agent tool `host` may not start with "-".');
   }
+  if (hostRaw !== undefined && !isValidSshTarget(hostRaw)) {
+    throw new Error(`Agent tool \`host\` is not a valid SSH target: ${JSON.stringify(hostRaw)}`);
+  }
+  const host = hostRaw !== undefined && !hostRaw.startsWith('-') ? hostRaw : undefined;
 
   return {
     prompt,

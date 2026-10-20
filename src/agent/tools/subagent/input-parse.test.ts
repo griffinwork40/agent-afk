@@ -1199,4 +1199,40 @@ describe('parseAgentInput', () => {
       expect('bogusExtra' in result).toBe(false);
     });
   });
+
+  // Finding 5: isValidSshTarget validation at parse time
+  describe('host validation', () => {
+    it('accepts a valid user@host SSH target', () => {
+      const result = parseAgentInput({ prompt: 'p', host: 'user@myhost' });
+      expect(result.host).toBe('user@myhost');
+    });
+
+    it('accepts a hosts.json alias (simple identifier)', () => {
+      const result = parseAgentInput({ prompt: 'p', host: 'my-server' });
+      expect(result.host).toBe('my-server');
+    });
+
+    it('throws for host with spaces (fails isValidSshTarget)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: 'bad host' })).toThrow(
+        /not a valid SSH target/,
+      );
+    });
+
+    it('throws for host containing shell metacharacters', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: 'host;evil' })).toThrow(
+        /not a valid SSH target/,
+      );
+    });
+
+    it('throws for host starting with "-" (ssh flag injection)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', host: '-oProxyCommand=evil' })).toThrow(
+        /may not start with "-"/,
+      );
+    });
+
+    it('omits host from result when not provided', () => {
+      const result = parseAgentInput({ prompt: 'p' });
+      expect(result.host).toBeUndefined();
+    });
+  });
 });

@@ -108,7 +108,7 @@ export interface RemoteAgentDispatchDeps {
 }
 
 export async function executeRemoteAgentDispatch(
-  parsed: Pick<AgentInput, 'host' | 'prompt' | 'model' | 'isolation'>,
+  parsed: Pick<AgentInput, 'host' | 'prompt' | 'model' | 'isolation' | 'cwd'>,
   signal: AbortSignal,
   deps: RemoteAgentDispatchDeps = {},
 ): Promise<ToolResult> {
@@ -162,7 +162,7 @@ export async function executeRemoteAgentDispatch(
       sessionId,
       ...(keychainPassword !== undefined ? { keychainPassword } : {}),
       ...(parsed.model !== undefined ? { model: parsed.model } : {}),
-      ...(host.cwd !== undefined ? { cwd: host.cwd } : {}),
+      ...((parsed.cwd ?? host.cwd) !== undefined ? { cwd: parsed.cwd ?? host.cwd } : {}),
       ...(host.afkPath !== undefined ? { afkPath: host.afkPath } : {}),
       ...(host.permissionMode !== undefined ? { permissionMode: host.permissionMode } : {}),
     },
