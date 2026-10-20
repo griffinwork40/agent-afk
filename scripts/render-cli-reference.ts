@@ -49,12 +49,12 @@ import { renderCli } from './render-cli-reference.mdx.js';
 import { isMain, repoRoot, writeReference } from './lib/docs-reference.js';
 
 /** Extract ordered `registerXxxCommand` call sites from source text. */
-function registrations(text: string): string[] {
+export function registrations(text: string): string[] {
   return [...text.matchAll(/^\s*(register\w+Command)\(program\);/gm)].map((m) => m[1]!);
 }
 
 /** Returns true when the generator mirrors the entry point exactly; logs diff on mismatch. */
-function checkMirror(): boolean {
+export function checkMirror(): boolean {
   const entry = readFileSync(join(repoRoot, 'src/cli/index.ts'), 'utf8');
   const generator = readFileSync(join(repoRoot, 'scripts/render-cli-reference.ts'), 'utf8');
   const entryRegs = registrations(entry);
@@ -64,7 +64,14 @@ function checkMirror(): boolean {
   const extra = genRegs.filter((r) => !entryRegs.includes(r));
   if (missing.length) console.error(`scan:cli:check: registrars in src/cli/index.ts missing from render-cli-reference.ts: ${missing.join(', ')}`);
   if (extra.length) console.error(`scan:cli:check: registrars in render-cli-reference.ts not in src/cli/index.ts: ${extra.join(', ')}`);
-  if (JSON.stringify(entryRegs) !== JSON.stringify(genRegs)) console.error('scan:cli:check: registration order mismatch. Run pnpm scan:cli to regenerate.');
+  // Dead-code guard removed: control only reaches here after the equality check
+  // above already failed, so the condition was always true. Log unconditionally.
+  if (!missing.length && !extra.length) {
+    // Pure order mismatch — set is identical, sequence differs.
+    console.error(`scan:cli:check: registration order mismatch.\n  expected: ${entryRegs.join(', ')}\n  actual:   ${genRegs.join(', ')}\n  Run pnpm scan:cli to regenerate.`);
+  } else {
+    console.error('scan:cli:check: registration order mismatch. Run pnpm scan:cli to regenerate.');
+  }
   return false;
 }
 

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { buildCli } from '../scripts/render-cli-reference.js';
+import { buildCli, checkMirror, registrations } from '../scripts/render-cli-reference.js';
 import { renderCli } from '../scripts/render-cli-reference.mdx.js';
 import { collectSlash, isPublicBuiltin, partitionSlash } from '../scripts/render-slash-commands.js';
 import { renderSlash } from '../scripts/render-slash-commands.mdx.js';
@@ -51,7 +51,6 @@ describe('CLI reference', () => {
   it('mirrors every registrar and alias in the entry point without importing it', () => {
     const entry = readFileSync(join(repoRoot, 'src/cli/index.ts'), 'utf8');
     const generator = readFileSync(join(repoRoot, 'scripts/render-cli-reference.ts'), 'utf8');
-    const registrations = (text: string): string[] => [...text.matchAll(/^\s*(register\w+Command)\(program\);/gm)].map((m) => m[1]!);
     expect(registrations(generator)).toEqual(registrations(entry));
     const root = buildCli();
     expect(root.commands).toHaveLength(registrations(entry).length);
@@ -59,6 +58,18 @@ describe('CLI reference', () => {
     expect(root.commands.find((cmd) => cmd.name() === 'interactive')?.aliases()).toContain('i');
     expect(root.commands.find((cmd) => cmd.name() === 'status')?.aliases()).toContain('s');
     expect(renderCli(root)).toBe(renderCli(buildCli()));
+  });
+
+  it('returns false and logs detail when checkMirror detects a mismatch', () => {
+    const errors: string[] = [];
+    const origError = console.error.bind(console);
+    console.error = (...args: unknown[]) => errors.push(args.join(' '));
+    // checkMirror reads src/cli/index.ts and scripts/render-cli-reference.ts from
+    // the real repo; both are in sync on HEAD so it must return true.
+    try {
+      expect(checkMirror()).toBe(true);
+      expect(errors).toHaveLength(0);
+    } finally { console.error = origError; }
   });
 
   it('imports/registers in an empty isolated home with no state writes and neutralizes ambient config', () => {
@@ -145,6 +156,23 @@ describe('Config reference and shared output contract', () => {
       writeFileSync(path, 'a\r\n');
       expect(writeReference(slug, 'a\n', true, directory)).toBe(false);
       expect(readFileSync(path, 'utf8')).toBe('a\r\n');
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it('passes an explicit scanCmd through to the drift error message', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'afk-reference-scanCmd-'));
+    const slug = 'fixture';
+    const path = join(directory, `${slug}.mdx`);
+    try {
+      writeFileSync(path, 'stale\n');
+      const errors: string[] = [];
+      const origError = console.error.bind(console);
+      console.error = (...args: unknown[]) => errors.push(args.join(' '));
+      try {
+        const result = writeReference(slug, 'fresh\n', true, directory, 'scan:custom');
+        expect(result).toBe(false);
+        expect(errors.some((e) => e.includes('scan:custom'))).toBe(true);
+      } finally { console.error = origError; }
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 });
