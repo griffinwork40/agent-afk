@@ -75,7 +75,7 @@ function _writeLine(line: string): void {
   }
 }
 
-/** Silently disable the recorder and emit a one-time warning. */
+/** Disable the recorder after a write error, emitting one stderr warning; the REPL keeps running. */
 function _disable(reason: string): void {
   if (_disabled) return;
   _disabled = true;
@@ -164,7 +164,8 @@ export function installTtyTrace(fsOps?: FsOps): void {
   const home = env.HOME ?? '';
   const expandedPath = tracePath.startsWith('~/') ? home + tracePath.slice(1) : tracePath;
 
-  // Open the file synchronously once. Any error silently aborts.
+  // Open the file synchronously once. On error, warn once on stderr and leave
+  // the recorder uninstalled (no wrappers); the REPL keeps running.
   try {
     _fd = _fs.openSync(expandedPath, 'w');
   } catch (err) {
