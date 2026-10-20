@@ -8,6 +8,11 @@
     },
     {
       "kind": "command",
+      "name": "afk acp",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "command",
       "name": "afk bg",
       "source": "src/cli/commands/bg.ts"
     },
@@ -1273,6 +1278,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_OTLP_HEADERS",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_OVERLOAD_PAUSE_MS",
       "source": "src/config/env.model-tiers.ts"
     },
@@ -1415,6 +1425,11 @@
       "kind": "env",
       "name": "AFK_STATE_DIR",
       "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_STEER_MODE",
+      "source": "src/config/env.misc.ts"
     },
     {
       "kind": "env",
@@ -1565,6 +1580,26 @@
       "kind": "env",
       "name": "AFK_TRACE_DISABLED",
       "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_API_KEY",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_API_URL",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_MODEL",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_TIMEOUT_MS",
+      "source": "src/config/env.telegram.ts"
     },
     {
       "kind": "env",
@@ -1768,6 +1803,11 @@
     },
     {
       "kind": "env",
+      "name": "CHROME_CONFIG_HOME",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
       "name": "CI",
       "source": "src/config/env.debug.ts"
     },
@@ -1943,6 +1983,11 @@
     },
     {
       "kind": "env",
+      "name": "XDG_CONFIG_HOME",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
       "name": "__CFBundleIdentifier",
       "source": "src/config/env.paths.ts"
     },
@@ -1960,6 +2005,26 @@
       "kind": "flag",
       "name": "afk --version",
       "source": "src/cli/index.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --dangerously-skip-permissions",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --help",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --max-turns",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --model",
+      "source": "src/cli/commands/acp.ts"
     },
     {
       "kind": "flag",
@@ -3423,6 +3488,11 @@
     },
     {
       "kind": "flag",
+      "name": "afk trace export-otlp --endpoint",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk trace export-otlp --help",
       "source": "src/cli/commands/trace.ts"
     },
@@ -3988,6 +4058,11 @@
     },
     {
       "kind": "slash",
+      "name": "/export",
+      "source": "src/cli/slash/commands/export.ts"
+    },
+    {
+      "kind": "slash",
       "name": "/fast",
       "source": "src/cli/slash/commands/fast.ts"
     },
@@ -4020,6 +4095,16 @@
       "kind": "slash",
       "name": "/good",
       "source": "src/cli/slash/commands/feedback.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/handoffs",
+      "source": "src/cli/slash/commands/handoffs.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/handoffs:answer",
+      "source": "src/cli/slash/commands/handoffs.ts"
     },
     {
       "kind": "slash",
@@ -4275,6 +4360,11 @@
       "kind": "tool",
       "name": "clipboard_write",
       "source": "src/agent/tools/schemas.interaction-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "code_symbols",
+      "source": "src/agent/tools/schemas.lsp-symbols.ts"
     },
     {
       "kind": "tool",
