@@ -28,6 +28,7 @@
 
 import * as nodeFs from 'node:fs';
 import { env } from '../config/env.js';
+import { getTerminalWidth } from './terminal-size.js';
 
 // ── Injectable fs operations ─────────────────────────────────────────────────
 
@@ -107,7 +108,7 @@ function _recordOutput(chunk: Uint8Array | string): void {
 /** Record a resize event: `[t, "r", "COLSxROWS"]` */
 function _recordResize(): void {
   if (_fd === null || _disabled) return;
-  const cols = process.stdout.columns ?? 80;
+  const cols = getTerminalWidth();
   const rows = process.stdout.rows ?? 24;
   _writeLine(JSON.stringify([_elapsed(), 'r', `${cols}x${rows}`]));
 }
@@ -177,7 +178,7 @@ export function installTtyTrace(fsOps?: FsOps): void {
 
   // Write asciinema v2 header. env.TERM is registered in ENV_REGISTRY via
   // env.tty-trace.ts so this read goes through the typed env object.
-  const cols = process.stdout.columns ?? 80;
+  const cols = getTerminalWidth();
   const rows = process.stdout.rows ?? 24;
   const header = {
     version: 2,
