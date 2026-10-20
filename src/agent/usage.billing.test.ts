@@ -150,6 +150,27 @@ describe('sumBillingUsage', () => {
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+
+  it('sumBillingUsage(mixed, mixed) merges totals without warning', () => {
+    // Two independently-constructed mixed records (e.g. from deserialized sidecars)
+    // must merge cleanly with no provider-mismatch warn.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mixed1 = sumBillingUsage(
+      anthropicBilling({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 }),
+      openAICompatibleBilling(20, 10, 3),
+    )!;
+    const mixed2 = sumBillingUsage(
+      anthropicBilling({ input_tokens: 8, output_tokens: 4, cache_read_input_tokens: 50 }),
+      openAICompatibleBilling(12, 6, 2),
+    )!;
+    warnSpy.mockClear(); // discard the two construction warns
+    const result = sumBillingUsage(mixed1, mixed2)!;
+    expect(result.provider).toBe('mixed');
+    expect(result.uncachedInput).toBe(mixed1.uncachedInput + mixed2.uncachedInput);
+    expect(result.output).toBe(mixed1.output + mixed2.output);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
 });
 
 describe('sumProviderUsage carries billing (summed) beside the legacy fields', () => {

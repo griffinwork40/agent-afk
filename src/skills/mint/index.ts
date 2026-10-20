@@ -375,6 +375,9 @@ function finalizeAfterSpec(sessionId: string, result: MintResult): MintResult {
   assertMintResultShape(result);
   if ('completed' in result || result.phase === 'heal-failed') {
     clearMintState(sessionId);
+    // Remove the module-scoped fallbackBySession entry so long-lived daemon
+    // processes do not accumulate one entry per completed mint invocation.
+    setMintModelFallback(sessionId, undefined);
   }
   return result;
 }

@@ -13,6 +13,8 @@ import {
 } from './readonly-git-surface.js';
 import { GIT_READ_SUBCOMMANDS } from './git-read.policy.js';
 import { builtinAgents } from '../agents/builtins.js';
+import { resolveAgentToolAccess } from '../agents/resolve.js';
+import { CHILD_ALLOWED_TOOLS, RECON_ALLOWED_TOOLS } from './nesting.js';
 
 const FLAG = 'AFK_READONLY_GIT_TOOL';
 let saved: string | undefined;
@@ -95,5 +97,29 @@ describe('flag on', () => {
     expect(readOnlyBashDenialOverride('bash', true)).toBe(READONLY_BASH_DISABLED_REASON);
     expect(readOnlyBashDenialOverride('bash', false)).toBeUndefined();
     expect(readOnlyBashDenialOverride('workspace_publish', true)).toBeUndefined();
+  });
+
+  // Regression guard parallel to #883 in registry.test.ts: asserts that
+  // git_read survives resolution (not just declaration) on every child surface
+  // research-agent can be dispatched from. Without this, a declared git_read
+  // that is absent from KNOWN_AFK_TOOL_NAMES is silently dropped by
+  // normalizeToolToken's fail-closed path (#4059).
+  it('research-agent can reach git_read on every child surface after resolution (#4059)', () => {
+    const entry = builtinAgents().get('research-agent');
+    expect(entry).toBeDefined();
+
+    for (const [surface, pool] of [
+      ['read-only skill child (ground-state)', RECON_ALLOWED_TOOLS],
+      ['ordinary child', CHILD_ALLOWED_TOOLS],
+    ] as const) {
+      const resolved = resolveAgentToolAccess(entry!, [...pool]);
+      expect(resolved.allowedTools, `git_read unreachable on ${surface}`).toContain(
+        'git_read',
+      );
+      // The grant must not have widened the read-only contract.
+      for (const forbidden of ['write_file', 'edit_file', 'bash', 'memory_update']) {
+        expect(resolved.allowedTools, `${forbidden} leaked on ${surface}`).not.toContain(forbidden);
+      }
+    }
   });
 });

@@ -276,6 +276,7 @@ describe('openai-compatible wind-down round — Responses wire keeps tools and n
     expect(events.filter((e) => e.type === 'tool.use.start')).toHaveLength(1);
     const completed = events.at(-1);
     expect(completed?.type === 'turn.completed' && completed.usage.stopReason).toBe('tool_use_loop_capped');
+    expect(finalAnswer(events)).toBe(WIND_DOWN_NO_ANSWER_PLACEHOLDER);
   });
 
   it('Responses-wire wind-down: text answer is extracted correctly', async () => {

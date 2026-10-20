@@ -1583,7 +1583,7 @@ Guide: [observability](/guides/observability)
 | --- | --- |
 | `show` | Pretty-print a session's trace for humans. [session] is a session id or "latest" (the default) — the most recently written trace. |
 | `list` | List sessions that have a trace, most recent first |
-| `export-otlp` | Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest). Emits GenAI semantic convention spans: one session root, one span per subagent fork (gen_ai.agent.invoke), one span per tool call. Output is written to stdout; pipe to a collector or save with -o. [session] is a session id or "latest" (default). |
+| `export-otlp` | Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest). Emits GenAI semantic convention spans: one session root, one span per subagent fork (gen_ai.agent.invoke), one span per tool call. Output is written to stdout; pipe to a collector or save with -o. Set --endpoint (or AFK_OTLP_ENDPOINT) to also POST the payload to a live OTLP/HTTP collector. A dead endpoint never fails the command. [session] is a session id or "latest" (default). |
 
 ## `afk trace show`
 
@@ -1629,7 +1629,7 @@ Guide: [observability](/guides/observability)
 
 ## `afk trace export-otlp`
 
-Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest). Emits GenAI semantic convention spans: one session root, one span per subagent fork (gen_ai.agent.invoke), one span per tool call. Output is written to stdout; pipe to a collector or save with -o. [session] is a session id or "latest" (default).
+Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest). Emits GenAI semantic convention spans: one session root, one span per subagent fork (gen_ai.agent.invoke), one span per tool call. Output is written to stdout; pipe to a collector or save with -o. Set --endpoint (or AFK_OTLP_ENDPOINT) to also POST the payload to a live OTLP/HTTP collector. A dead endpoint never fails the command. [session] is a session id or "latest" (default).
 
 Usage: `afk trace export-otlp [options] [session]`
 
@@ -1646,6 +1646,7 @@ Guide: [observability](/guides/observability)
 | Flags | Description | Default |
 | --- | --- | --- |
 | `-o, --out <file>` | Write output to a file instead of stdout |  |
+| `--endpoint <url>` | OTLP/HTTP collector URL to POST the payload to (overrides AFK_OTLP_ENDPOINT) |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk whatif`

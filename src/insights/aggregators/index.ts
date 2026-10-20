@@ -27,6 +27,10 @@ import {
   aggregateGuardrailFalsePositives,
   zeroGuardrailFalsePositiveAggregates,
 } from './guardrail-false-positives.js';
+import {
+  aggregateShadowGitObserve,
+  zeroShadowGitObserveAggregates,
+} from './shadow-git-observe.js';
 import type { InsightsOptions, InsightAggregates } from '../types.js';
 import { errorMessage } from '../../utils/errors.js';
 
@@ -39,6 +43,7 @@ export {
   aggregatePreexistingDefects,
   aggregateSubagentOutcomes,
   aggregateGuardrailFalsePositives,
+  aggregateShadowGitObserve,
 };
 
 /**
@@ -89,6 +94,11 @@ export async function aggregateAll(options: InsightsOptions): Promise<InsightAgg
       'guardrail-false-positives',
       () => aggregateGuardrailFalsePositives(options),
       zeroGuardrailFalsePositiveAggregates,
+    ),
+    shadowGitObserve: safeAggregate(
+      'shadow-git-observe',
+      () => aggregateShadowGitObserve(options),
+      zeroShadowGitObserveAggregates,
     ),
   };
 }

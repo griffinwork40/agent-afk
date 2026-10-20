@@ -31,6 +31,8 @@ import { handleCommandError } from '../errors/index.js';
 import { buildTraceResults, DEFAULT_RESULT_LINES } from './trace-results.js';
 import { formatTrace } from './trace-summary-render.js';
 import { traceToOtlp } from '../../agent/trace/otlp-export.js';
+import { pushOtlpHttp, parseOtlpHeaders } from '../../agent/trace/otlp-http-push.js';
+import { env } from '../../config/env.js';
 import {
   analyzeBlockEvasion,
   formatBlockEvasionReport,
@@ -302,10 +304,16 @@ export function registerTraceCommand(program: Command): void {
         'Emits GenAI semantic convention spans: one session root, one span per\n' +
         'subagent fork (gen_ai.agent.invoke), one span per tool call.\n' +
         'Output is written to stdout; pipe to a collector or save with -o.\n' +
+        'Set --endpoint (or AFK_OTLP_ENDPOINT) to also POST the payload to a\n' +
+        'live OTLP/HTTP collector. A dead endpoint never fails the command.\n' +
         '[session] is a session id or "latest" (default).',
     )
     .option('-o, --out <file>', 'Write output to a file instead of stdout')
-    .action(async (session: string | undefined, options: { out?: string }) => {
+    .option(
+      '--endpoint <url>',
+      'OTLP/HTTP collector URL to POST the payload to (overrides AFK_OTLP_ENDPOINT)',
+    )
+    .action(async (session: string | undefined, options: { out?: string; endpoint?: string }) => {
       try {
         const selector = session ?? 'latest';
         const loaded = await loadTrace(selector);
@@ -320,6 +328,21 @@ export function registerTraceCommand(program: Command): void {
           process.stdout.write(`Wrote OTLP payload to ${options.out}\n`);
         } else {
           process.stdout.write(json);
+        }
+
+        // Live push: --endpoint flag takes precedence over AFK_OTLP_ENDPOINT.
+        const pushUrl = options.endpoint ?? env.AFK_OTLP_ENDPOINT;
+        if (pushUrl) {
+          const rawHeaders = env.AFK_OTLP_HEADERS ?? '';
+          const headers = rawHeaders ? parseOtlpHeaders(rawHeaders) : {};
+          const result = await pushOtlpHttp(payload, { endpoint: pushUrl, headers });
+          if (result.ok) {
+            process.stderr.write(`[otlp] pushed to ${pushUrl} → HTTP ${result.status}\n`);
+          } else {
+            process.stderr.write(
+              `[otlp] push to ${pushUrl} failed (${result.error ?? `HTTP ${result.status ?? '?'}`}) — trace still exported locally\n`,
+            );
+          }
         }
       } catch (err) {
         handleCommandError(err);
