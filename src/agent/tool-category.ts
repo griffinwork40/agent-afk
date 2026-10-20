@@ -68,6 +68,8 @@ const READ_TOOLS = new Set([
   'json_query',
   // git_read — structured read-only git (#3754, opt-in via AFK_READONLY_GIT_TOOL).
   'git_read',
+  // code_symbols — LSP symbol lookup (#3904 phase 2, opt-in via AFK_LSP_DIAGNOSTICS).
+  'code_symbols',
   // state-tools.ts — read-only queries against the durable cross-session KV store.
   'state_get', 'state_query',
 ]);

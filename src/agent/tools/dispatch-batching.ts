@@ -12,6 +12,7 @@
 import { builtinToolSchemas } from './schemas.js';
 import { agentTool, skillTool, composeTool } from './schemas.agent-tools.js';
 import { gitReadTool } from './schemas.git-read.js';
+import { codeSymbolsTool } from './schemas.lsp-symbols.js';
 import { memoryToolSchemas } from '../memory/memory-tools.js';
 import { stateToolSchemas } from '../state/state-schemas.js';
 import { getRuntimeStateTool } from '../awareness/index.js';
@@ -42,6 +43,7 @@ const SAFE_TOOLS: ReadonlySet<string> = new Set(
     skillTool,
     composeTool,
     gitReadTool,
+    codeSymbolsTool,
     ...memoryToolSchemas,
     ...stateToolSchemas,
     getRuntimeStateTool,

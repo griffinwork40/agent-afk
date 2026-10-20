@@ -93,6 +93,7 @@ import { jsonQueryTool } from './schemas.json-query.js';
 import { modelCompleteTool } from './schemas.model-complete.js';
 import { gitReadTool } from './schemas.git-read.js';
 import { remoteAgentTool } from './schemas.remote-agent.js';
+import { codeSymbolsTool } from './schemas.lsp-symbols.js';
 
 /**
  * The always-on built-in tool definitions,
@@ -174,4 +175,6 @@ export const ALL_TOOL_SCHEMAS: readonly AnthropicToolDef[] = [
   composeTool,
   // Opt-in (AFK_READONLY_GIT_TOOL, #3754); registered via readonly-git-surface.ts.
   gitReadTool,
+  // Opt-in (AFK_LSP_DIAGNOSTICS, #3904 phase 2); registered via lsp-symbols-surface.ts.
+  codeSymbolsTool,
 ];

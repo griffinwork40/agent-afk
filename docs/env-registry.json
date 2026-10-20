@@ -462,7 +462,7 @@
     },
     {
       "name": "AFK_LSP_DIAGNOSTICS",
-      "description": "Enable opt-in post-edit LSP diagnostics (phase 1 of #3904). When set to 1, after every successful edit_file or write_file call the handler queries typescript-language-server (must be on PATH) for diagnostics on the touched file and appends any errors/warnings to the tool result. Off by default. A missing or slow server never fails or stalls the edit — the query times out silently. TypeScript only in this phase.",
+      "description": "Enable opt-in LSP features (#3904). When set to 1: (phase 1) after every successful edit_file or write_file call the handler queries typescript-language-server (must be on PATH) for diagnostics on the touched file and appends any errors/warnings to the tool result; (phase 2) enables the code_symbols tool for go-to-definition and find-references. Off by default. A missing or slow server never fails or stalls the edit — the query times out silently. TypeScript / JavaScript only in this phase.",
       "type": "boolean",
       "required": false,
       "default": "0",
