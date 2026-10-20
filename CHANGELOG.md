@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.327.6] - 2026-10-20
+
+### Fixed
+- pass explicit scanCmd to writeReference; add mirror check to scan:cli:check (#4152) (551e74c8)
+
+### Changed
+- fix lint:tests ratchet regression from #4153 (#4188) (2198554c)
+
 ## [5.327.5] - 2026-10-19
 
 ### Fixed
