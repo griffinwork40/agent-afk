@@ -151,7 +151,7 @@ export interface PendingApproval {
 export interface HandoffQuestion {
   message?: string;
   type?: string;
-  choices?: string[];
+  choices?: unknown[];
 }
 
 export interface HandoffSummary {

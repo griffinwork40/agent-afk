@@ -39,7 +39,7 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 
-import { apiFetch } from '@/lib/api';
+import { apiFetch, ApiError } from '@/lib/api';
 const { HandoffsView } = await import('./handoffs-view');
 
 const mockApiFetch = apiFetch as ReturnType<typeof vi.fn>;
@@ -114,6 +114,21 @@ describe('HandoffsView', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // Loading state
+  // -------------------------------------------------------------------------
+
+  it('shows "Loading handoffs…" before the fetch resolves', async () => {
+    let resolve!: (v: unknown) => void;
+    mockApiFetch.mockReturnValue(new Promise((r) => { resolve = r; }));
+    render(<HandoffsView />);
+    expect(screen.getByText('Loading handoffs…')).toBeInTheDocument();
+    await act(async () => { resolve({ handoffs: [] }); });
+    await waitFor(() =>
+      expect(screen.queryByText('Loading handoffs…')).not.toBeInTheDocument(),
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -323,8 +338,7 @@ describe('HandoffsView', () => {
         if (method === 'GET') {
           return { handoffs: [makeHandoff({ questionType: 'confirm' })] };
         }
-        const err = new Error('API 409: {"error":"no_longer_active"}');
-        throw err;
+        throw new ApiError(409, '{"error":"no_longer_active"}');
       },
     );
     render(<HandoffsView />);

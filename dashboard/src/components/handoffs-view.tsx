@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import type { HandoffSummary, HandoffsResponse } from '@/types/api';
 
@@ -31,7 +31,7 @@ async function fetchHandoffs(): Promise<HandoffSummary[]> {
 }
 
 async function submitAnswer(taskId: string, answer: unknown): Promise<void> {
-  await apiFetch(`/api/handoffs/${taskId}/answer`, {
+  await apiFetch(`/api/handoffs/${encodeURIComponent(taskId)}/answer`, {
     method: 'POST',
     body: JSON.stringify({ answer }),
   });
@@ -61,7 +61,7 @@ function HandoffCard({
         await submitAnswer(taskId, value);
         onAnswered(taskId);
       } catch (err) {
-        if (err instanceof Error && err.message.includes('409')) {
+        if (err instanceof ApiError && err.status === 409) {
           setError('This handoff is no longer active (already answered).');
         } else {
           setError('Failed to submit — try again.');
@@ -123,19 +123,22 @@ function HandoffCard({
       {/* Answer controls */}
       {isSelectLike && (
         <div className="flex flex-wrap gap-1.5">
-          {(question.choices ?? []).map((choice) => (
-            <button
-              key={choice}
-              onClick={() => { void answer(choice); }}
-              disabled={busy}
-              className={cn(
-                'rounded-md border border-border px-3 py-1 text-xs font-medium',
-                'transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50',
-              )}
-            >
-              {choice}
-            </button>
-          ))}
+          {(question.choices ?? []).map((choice, idx) => {
+            const label = String(choice);
+            return (
+              <button
+                key={`${label}-${idx}`}
+                onClick={() => { void answer(choice); }}
+                disabled={busy}
+                className={cn(
+                  'rounded-md border border-border px-3 py-1 text-xs font-medium',
+                  'transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50',
+                )}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -218,8 +221,11 @@ export function HandoffsView() {
   // waiting for the next poll cycle.
   const [answered, setAnswered] = useState<Set<string>>(new Set());
   const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const inFlightRef = useRef(false);
 
   const load = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       const list = await fetchHandoffs();
       setHandoffs(list);
@@ -227,6 +233,7 @@ export function HandoffsView() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load handoffs.');
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
     }
   }, []);
