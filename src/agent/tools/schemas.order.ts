@@ -24,16 +24,30 @@
 import type { AnthropicToolDef } from './types.js';
 
 /**
- * Number of leading entries in `builtinToolSchemas` that are invariant core
- * tools -- always present, never disabled, never surface-filtered.
+ * Number of leading entries in `builtinToolSchemas` that form the invariant
+ * core segment.
  *
- * These tools appear before any optional/disableable tool so that two sessions
- * differing only in which optional tools are enabled produce a byte-identical
- * serialized prefix for all invariant tools.
+ * Contract: the core segment = builtins not in any toolGroups() group, not
+ * surface-filtered (ask_question / terminal_font_size / clipboard_read /
+ * clipboard_write are dropped on some surfaces), and not send_telegram (placed
+ * in the optional tail by convention). These tools appear before any optional
+ * tool so that two sessions differing only in which optional tools are enabled
+ * produce a byte-identical serialized prefix for all core tools, maximising
+ * prefix-cache reuse.
  *
- * Invariant core tools (indices 0..INVARIANT_CORE_COUNT-1):
- *   bash, read_file, view_image, extract_document, write_file, edit_file,
- *   glob, grep, list_directory,
+ * The first six entries are the LOCKED_TOOLS builtins:
+ *   read_file, write_file, edit_file, grep, glob, list_directory
+ * LOCKED_TOOLS (operator-denied.ts) guarantees these can never be disabled by
+ * operator config, so they form the maximal guaranteed-stable prefix head.
+ *
+ * The remaining 20 core tools (indices 6..25) are individually disableable via
+ * tools.disabled / tools.disabledBySlot. Disabling any one truncates the
+ * shared prefix at that tool's index. What is invariant by default (absent any
+ * disable config) is the membership and order of all 26 core tools.
+ *
+ * Core tools (indices 0..INVARIANT_CORE_COUNT-1):
+ *   read_file, write_file, edit_file, grep, glob, list_directory,  <- LOCKED
+ *   bash, view_image, extract_document,
  *   wait_for, patch_apply, test_run, get_facet, json_query, model_complete,
  *   worktree, config_get, config_set,
  *   read_witness, search_witness,
@@ -42,7 +56,7 @@ import type { AnthropicToolDef } from './types.js';
  *
  * Decision notes:
  *   - `web_scrape` / `web_request`: not in any disable group; no surface filter
- *     removes them; treated as invariant core.
+ *     removes them; placed in core.
  *   - `worktree` / `config_get` / `config_set`: not in any disable group.
  *   - `remote_agent`: not in any disable group.
  *   - `gitReadTool` is opt-in (AFK_READONLY_GIT_TOOL flag) and lives in
@@ -50,7 +64,7 @@ import type { AnthropicToolDef } from './types.js';
  *   - Nesting tools (agentTool, skillTool, composeTool) are NOT in
  *     builtinToolSchemas; they are appended conditionally at provider-
  *     construction time and placed after ALL builtins. They do not affect the
- *     invariant core prefix of builtinToolSchemas itself.
+ *     core prefix of builtinToolSchemas itself.
  *
  * Optional tail (indices INVARIANT_CORE_COUNT..44):
  *   send_telegram,

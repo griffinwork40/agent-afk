@@ -7,6 +7,7 @@ import {
   skillTool,
 } from './schemas.js';
 import { INVARIANT_CORE_COUNT, sortMcpSchemas } from './schemas.order.js';
+import { LOCKED_TOOLS, toolGroups } from './operator-denied.js';
 import { CHILD_ALLOWED_TOOLS, COMPOSE_LEAF_STRIPPED_TOOLS } from './nesting.js';
 import { clipboardWriteTool, clipboardReadTool } from './schemas.interaction-tools.js';
 import { sendToSessionTool } from './schemas.peer.js';
@@ -24,17 +25,20 @@ describe('builtinToolSchemas', () => {
     // ORDERING INVARIANT (#4198): invariant core tools occupy indices 0..25;
     // optional/disableable/surface-filtered tools occupy indices 26..44.
     // Changing this order breaks prefix-cache reuse across tool-config variants.
+    // Indices 0..5 are the LOCKED_TOOLS builtins (never operator-disableable).
     expect(BUILTIN_TOOL_NAMES).toEqual([
       // -- Invariant core (0..25) --
-      'bash',
+      // 0..5: LOCKED_TOOLS builtins
       'read_file',
-      'view_image',
-      'extract_document',
       'write_file',
       'edit_file',
-      'glob',
       'grep',
+      'glob',
       'list_directory',
+      // 6..25: remaining core (individually disableable)
+      'bash',
+      'view_image',
+      'extract_document',
       'wait_for',
       'patch_apply',
       'test_run',
@@ -76,18 +80,15 @@ describe('builtinToolSchemas', () => {
   });
 
   it('INVARIANT_CORE_COUNT matches the actual boundary in builtinToolSchemas', () => {
-    // The optional tools are the disableable groups plus surface-filtered singles.
+    // Derive the optional set from live group definitions plus surface-filtered
+    // singles and send_telegram (tail by convention). toolGroups() is called
+    // inside the test body to avoid import-cycle evaluation at module load time.
+    const groups = toolGroups();
+    const surfaceFiltered = ['ask_question', 'terminal_font_size', 'clipboard_read', 'clipboard_write'];
     const optionalTools = new Set([
+      ...Object.values(groups).flat(),
+      ...surfaceFiltered,
       'send_telegram',
-      'image_generate', 'image_edit',
-      'create_schedule', 'update_schedule', 'list_schedules',
-      'get_schedule_history', 'cancel_schedule',
-      'browser_open', 'browser_observe', 'browser_act',
-      'browser_screenshot', 'browser_close',
-      'clipboard_write', 'clipboard_read',
-      'list_sessions', 'send_to_session',
-      'terminal_font_size',
-      'ask_question',
     ]);
     // Every tool at index < INVARIANT_CORE_COUNT must not be optional.
     for (let i = 0; i < INVARIANT_CORE_COUNT; i++) {
@@ -98,6 +99,26 @@ describe('builtinToolSchemas', () => {
     for (let i = INVARIANT_CORE_COUNT; i < builtinToolSchemas.length; i++) {
       const name = builtinToolSchemas[i]!.name;
       expect(optionalTools.has(name), `Expected optional tail at index ${i} but found non-optional tool "${name}"`).toBe(true);
+    }
+  });
+
+  it('first K entries are exactly the LOCKED_TOOLS builtins that appear in builtinToolSchemas', () => {
+    // toolGroups() is called here (not at module scope) to avoid import-cycle
+    // issues during evaluation. LOCKED_TOOLS includes agent/skill/compose/
+    // exit_plan_mode/get_runtime_state which are NOT in builtinToolSchemas, so
+    // we intersect with the actual schema names.
+    const builtinNames = new Set(builtinToolSchemas.map((t) => t.name));
+    const lockedBuiltins = [...LOCKED_TOOLS].filter((n) => builtinNames.has(n));
+    const K = lockedBuiltins.length;
+    // The first K entries must all be in LOCKED_TOOLS.
+    for (let i = 0; i < K; i++) {
+      const name = builtinToolSchemas[i]!.name;
+      expect(LOCKED_TOOLS.has(name), `Index ${i} ("${name}") is not a LOCKED_TOOLS builtin`).toBe(true);
+    }
+    // Every LOCKED_TOOLS builtin in builtinToolSchemas must appear in indices 0..K-1.
+    const headNames = new Set(builtinToolSchemas.slice(0, K).map((t) => t.name));
+    for (const name of lockedBuiltins) {
+      expect(headNames.has(name), `LOCKED_TOOLS builtin "${name}" is not in the first ${K} entries`).toBe(true);
     }
   });
 

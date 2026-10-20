@@ -115,9 +115,18 @@ import { remoteAgentTool } from './schemas.remote-agent.js';
  * serialized prefix for all invariant core tools, maximising prefix-cache
  * reuse on Anthropic prompt caching and local inference servers.
  *
+ * The core segment = builtins not in any toolGroups() group, not
+ * surface-filtered, and not send_telegram. It starts with the six LOCKED_TOOLS
+ * builtins (read_file, write_file, edit_file, grep, glob, list_directory),
+ * which LOCKED_TOOLS guarantees can never be disabled by operator config.
+ * Every other core tool can still be disabled individually via tools.disabled
+ * or tools.disabledBySlot; doing so truncates the shared prefix at that tool's
+ * index. send_telegram is placed in the optional tail by convention (not
+ * grouped, not surface-filtered, but not locked either).
+ *
  * ---- Invariant core (indices 0..25) -----------------------------------------
- *   bash, read_file, view_image, extract_document, write_file, edit_file,
- *   glob, grep, list_directory,
+ *   read_file, write_file, edit_file, grep, glob, list_directory,  <- LOCKED
+ *   bash, view_image, extract_document,
  *   wait_for, patch_apply, test_run, get_facet, json_query, model_complete,
  *   worktree, config_get, config_set,
  *   read_witness, search_witness,
@@ -137,16 +146,21 @@ import { remoteAgentTool } from './schemas.remote-agent.js';
  *   ask_question
  */
 export const builtinToolSchemas: readonly AnthropicToolDef[] = [
-  // -- Invariant core (0..25): never disabled, never surface-filtered ----------
-  bashTool,
+  // -- Invariant core (0..25) ---------------------------------------------------
+  // Indices 0..5: LOCKED_TOOLS builtins -- operator config can never disable
+  // these six. Placing them first maximises the guaranteed-stable prefix.
   readFileTool,
-  viewImageTool,
-  extractDocumentTool,
   writeFileTool,
   editFileTool,
-  globTool,
   grepTool,
+  globTool,
   listDirectoryTool,
+  // Indices 6..25: remaining core builtins -- not in any toolGroups() group and
+  // not surface-filtered, but individually disableable via tools.disabled /
+  // tools.disabledBySlot. Disabling any one truncates the shared prefix there.
+  bashTool,
+  viewImageTool,
+  extractDocumentTool,
   waitForTool,
   patchApplyTool,
   testRunTool,
