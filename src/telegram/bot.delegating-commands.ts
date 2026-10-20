@@ -11,6 +11,7 @@ import { handleCwd, handleModelSwitch, handleName } from './handlers/commands.js
 import { handleAfk } from './handlers/afk.js';
 import { handleUsage } from './handlers/usage.js';
 import { handleInbox } from './handlers/inbox.js';
+import { handleInsights } from './handlers/insights.js';
 import { registerFeedbackCommands } from './bot.feedback-commands.js';
 import type { SessionManager } from './session-manager.js';
 
@@ -50,5 +51,11 @@ export function registerDelegatingCommands(
   // messages carry no user authority and are not elevated here.
   bot.command('inbox', (ctx) =>
     handleInbox(ctx, sessionManager)
+  );
+  // /insights [days] — send a short text summary of usage analytics and
+  // recommendations. Reuses aggregateAll + evaluateRecommendations from
+  // src/insights/ with no new aggregation logic; no HTML file, no browser.
+  bot.command('insights', (ctx) =>
+    handleInsights(ctx)
   );
 }
