@@ -402,3 +402,26 @@ export function checkNestedScope(
     isError: true,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Remote dispatch gate
+// ---------------------------------------------------------------------------
+
+import { executeRemoteAgentDispatch } from './subagent-executor.execute-once.remote.js';
+
+/**
+ * When `parsed.host` is set, releases the budget receipt and delegates to
+ * `executeRemoteAgentDispatch`.  Returns the `ToolResult` so the caller can
+ * `return` it immediately, or `undefined` when the local path should proceed.
+ *
+ * Extracted here to keep `executeOnce` within the 200-line ceiling.
+ */
+export async function checkAndRunRemoteDispatch(
+  parsed: Pick<AgentInput, 'host' | 'prompt' | 'model' | 'isolation'>,
+  signal: AbortSignal,
+  budgetReceipt: SpawnReceipt | undefined,
+): Promise<ToolResult | undefined> {
+  if (parsed.host === undefined) return undefined;
+  budgetReceipt?.release();
+  return executeRemoteAgentDispatch(parsed, signal);
+}
