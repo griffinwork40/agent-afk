@@ -23,25 +23,49 @@ export const LSP_SYMBOLS_TOOL_NAME = 'code_symbols';
  * Build a `code_symbols` ToolHandler for registration in the built-in handler
  * map. Returns undefined when the feature is disabled so the caller can skip
  * the map insertion cleanly.
+ *
+ * @param cwd - Session working directory for path resolution and rootUri.
+ *   Threaded from `createBuiltinHandlers(permissionMode, cwd)` like
+ *   `createGitReadHandler(cwd)`.
  */
-export function createCodeSymbolsHandler(): ToolHandler | undefined {
+export function createCodeSymbolsHandler(cwd?: string): ToolHandler | undefined {
   if (!isLspSymbolsEnabled()) return undefined;
-  return async (input: unknown) => {
+  return async (input: unknown, _signal, context) => {
     const i = input as {
       file_path?: unknown;
       subcommand?: unknown;
       line?: unknown;
       col?: unknown;
     };
+
+    // Finding 3: return validation errors instead of silent defaults.
     const file_path = typeof i.file_path === 'string' ? i.file_path : '';
-    const subcommand: SymbolSubcommand =
-      i.subcommand === 'definition' || i.subcommand === 'references'
-        ? i.subcommand
-        : 'definition';
+    if (!file_path) return { content: '[LSP] code_symbols: file_path is required', isError: true };
+
+    if (i.subcommand !== undefined && i.subcommand !== 'definition' && i.subcommand !== 'references') {
+      return {
+        content: `[LSP] code_symbols: invalid subcommand '${String(i.subcommand)}'. Must be 'definition' or 'references'.`,
+        isError: true,
+      };
+    }
+    const subcommand: SymbolSubcommand = (i.subcommand as SymbolSubcommand | undefined) ?? 'definition';
+
+    if (i.line !== undefined && (typeof i.line !== 'number' || !Number.isFinite(i.line) || i.line < 1)) {
+      return {
+        content: `[LSP] code_symbols: invalid line '${String(i.line)}'. Must be a positive integer.`,
+        isError: true,
+      };
+    }
+    if (i.col !== undefined && (typeof i.col !== 'number' || !Number.isFinite(i.col) || i.col < 1)) {
+      return {
+        content: `[LSP] code_symbols: invalid col '${String(i.col)}'. Must be a positive integer.`,
+        isError: true,
+      };
+    }
     const line = typeof i.line === 'number' ? i.line : 1;
     const col = typeof i.col === 'number' ? i.col : 1;
-    if (!file_path) return { content: '[LSP] code_symbols: file_path is required', isError: true };
-    const content = await handleCodeSymbols({ file_path, subcommand, line, col });
+
+    const content = await handleCodeSymbols({ file_path, subcommand, line, col }, context, cwd);
     return { content };
   };
 }

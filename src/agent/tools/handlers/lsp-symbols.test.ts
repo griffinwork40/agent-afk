@@ -19,6 +19,7 @@ import {
   isLspSymbolsEnabled,
   type LspLocation,
 } from './lsp-symbols.js';
+import { createCodeSymbolsHandler } from '../lsp-symbols-surface.js';
 
 // ── scratch dir ────────────────────────────────────────────────────────────
 
@@ -178,7 +179,7 @@ describe('queryLspSymbol', () => {
       { uri: targetUri, range: { start: { line: 11, character: 0 } } },
     ]);
 
-    const result = await queryLspSymbol(filePath, 'definition', 5, 3, nodeCmd(scriptPath));
+    const result = await queryLspSymbol(filePath, 'definition', 5, 3, undefined, nodeCmd(scriptPath));
     expect(result.error).toBeUndefined();
     expect(result.locations).toHaveLength(1);
     const loc = result.locations[0]!;
@@ -196,7 +197,7 @@ describe('queryLspSymbol', () => {
       { uri: targetUri, range: { start: { line: 4, character: 2 } } },
     ]);
 
-    const result = await queryLspSymbol(filePath, 'references', 1, 1, nodeCmd(scriptPath));
+    const result = await queryLspSymbol(filePath, 'references', 1, 1, undefined, nodeCmd(scriptPath));
     expect(result.error).toBeUndefined();
     expect(result.locations).toHaveLength(2);
     expect(result.locations[1]!.line).toBe(5);
@@ -209,7 +210,7 @@ describe('queryLspSymbol', () => {
     const scriptPath = path.join(tempDir, 'fake-err-server.js');
     writeFakeErrorServer(scriptPath);
 
-    const result = await queryLspSymbol(filePath, 'definition', 1, 1, nodeCmd(scriptPath));
+    const result = await queryLspSymbol(filePath, 'definition', 1, 1, undefined, nodeCmd(scriptPath));
     expect(result.locations).toEqual([]);
     expect(result.error).toBeDefined();
   }, 10_000);
@@ -223,7 +224,7 @@ describe('queryLspSymbol', () => {
       const scriptPath = path.join(tempDir, 'fake-silent-sym-server.js');
       writeSilentServer(scriptPath);
 
-      const result = await queryLspSymbol(filePath, 'definition', 1, 1, nodeCmd(scriptPath));
+      const result = await queryLspSymbol(filePath, 'definition', 1, 1, undefined, nodeCmd(scriptPath));
       expect(result.locations).toEqual([]);
       expect(result.error).toContain('timed out');
     } finally {
@@ -238,14 +239,14 @@ describe('queryLspSymbol', () => {
     const scriptPath = path.join(tempDir, 'fake-crash-sym-server.js');
     writeCrashServer(scriptPath);
 
-    const result = await queryLspSymbol(filePath, 'definition', 1, 1, nodeCmd(scriptPath));
+    const result = await queryLspSymbol(filePath, 'definition', 1, 1, undefined, nodeCmd(scriptPath));
     expect(result.locations).toEqual([]);
     expect(result.error).toBeDefined();
   }, 10_000);
 
   it('returns error when binary does not exist', async () => {
     const filePath = await makeTsFile('sym-nobin.ts');
-    const result = await queryLspSymbol(filePath, 'definition', 1, 1, [
+    const result = await queryLspSymbol(filePath, 'definition', 1, 1, undefined, [
       '/nonexistent-binary-afk-lsp-sym-test',
     ]);
     expect(result.locations).toEqual([]);
@@ -259,6 +260,7 @@ describe('queryLspSymbol', () => {
     const result = await queryLspSymbol(
       path.join(tempDir, 'no-such-file.ts'),
       'definition', 1, 1,
+      undefined,
       nodeCmd(scriptPath),
     );
     expect(result.locations).toEqual([]);
@@ -304,7 +306,7 @@ describe('handleCodeSymbols', () => {
 
     const result = await handleCodeSymbols(
       { file_path: filePath, subcommand: 'definition', line: 3, col: 7 },
-      nodeCmd(scriptPath),
+      undefined, undefined, nodeCmd(scriptPath),
     );
     expect(result).toContain('[LSP] definition');
     expect(result).toContain(':10:5');
@@ -317,7 +319,7 @@ describe('handleCodeSymbols', () => {
       const filePath = await makeTsFile('handle-absent.ts');
       const result = await handleCodeSymbols(
         { file_path: filePath, subcommand: 'definition', line: 1, col: 1 },
-        ['/nonexistent-binary-afk-lsp-sym-test2'],
+        undefined, undefined, ['/nonexistent-binary-afk-lsp-sym-test2'],
       );
       // Should return a formatted error string, not throw
       expect(typeof result).toBe('string');

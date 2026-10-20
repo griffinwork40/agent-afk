@@ -149,7 +149,7 @@ export function createBuiltinHandlers(
   // Opt-in structured read-only git tool (#3754); absent unless AFK_READONLY_GIT_TOOL is on.
   if (isReadOnlyGitToolEnabled()) handlers.set(GIT_READ_TOOL_NAME, createGitReadHandler(cwd));
   // Opt-in LSP symbol lookup (#3904 phase 2); absent unless AFK_LSP_DIAGNOSTICS is on.
-  const codeSymbolsHandler = createCodeSymbolsHandler();
+  const codeSymbolsHandler = createCodeSymbolsHandler(cwd);
   if (codeSymbolsHandler) handlers.set(LSP_SYMBOLS_TOOL_NAME, codeSymbolsHandler);
   return handlers;
 }
