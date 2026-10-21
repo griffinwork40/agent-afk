@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 
 import { getSessionJournalPath, isSafeLedgerSessionId } from '../../paths.js';
-import { loadJournalFold } from './reader.js';
+import { loadJournalFold, type JournalLocator } from './reader.js';
 import { JOURNAL_VERSION, type JournalRecord } from './types.js';
 import { isMessageJournalDisabled } from './noop.js';
 
@@ -28,16 +28,19 @@ import { isMessageJournalDisabled } from './noop.js';
  * message. Blob refs are copied as-is (they are sessions-root-relative, so they
  * keep pointing at the source's blobs; no bytes are duplicated).
  *
+ * `loc` selects a CHILD journal (`{ subagentId }`) under the source session,
+ * used by subagent continuation (docs/subagent-continuation.md).
+ *
  * @returns true when a journal was written; false when the source has no
  *   journal (caller falls back to the sidecar-only fork) or on any I/O error.
  *   Also false when journaling is disabled, either id is unsafe, the ids are
  *   equal, or the destination already has a journal.
  */
-export function forkJournal(sourceSessionId: string, newSessionId: string): boolean {
+export function forkJournal(sourceSessionId: string, newSessionId: string, loc?: JournalLocator): boolean {
   if (isMessageJournalDisabled()) return false;
   if (!isSafeLedgerSessionId(sourceSessionId) || !isSafeLedgerSessionId(newSessionId)) return false;
-  if (sourceSessionId === newSessionId) return false;
-  const fold = loadJournalFold(sourceSessionId);
+  if (sourceSessionId === newSessionId && loc?.subagentId === undefined) return false;
+  const fold = loadJournalFold(sourceSessionId, loc);
   if (!fold) return false;
   let tmp: string | undefined;
   try {
