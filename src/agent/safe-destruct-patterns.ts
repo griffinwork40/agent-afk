@@ -143,7 +143,9 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   // here; the detector gates it on cwd. This avoids the pattern table needing
   // runtime state and keeps patterns purely declarative.
   //
-  // The pattern matches:
+  // The pattern is an allowlist: ANY `git stash` invocation blocks unless the
+  // next word is a read-only subcommand. This catches implicit pushes too
+  // (`git stash && x`, `git stash; x`, `git stash -u`). Matches include:
   //   git stash                       (bare — equivalent to push)
   //   git stash push [opts]           (write new stash entry)
   //   git stash save [opts]           (deprecated alias for push)
@@ -158,7 +160,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   // within the worktree, or commit to a rescue branch.
   {
     id: 'git-stash-mutating',
-    re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*stash(?:\s*$|\s+(?:push|save|pop|apply|drop|clear)\b)/i,
+    re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*stash(?![\w-])(?!\s+(?:list|show|create|store|branch)\b)/i,
     tier: 'block',
     blockReason:
       'safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with `git diff > <file-in-worktree>` and restore with `git apply <file>`, or commit to a rescue branch (`git switch -c rescue-<name> && git add <paths> && git commit`). `git stash list`, `show`, `create`, `store`, and `branch` are still fine. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.',

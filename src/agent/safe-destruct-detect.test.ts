@@ -284,6 +284,13 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
       'git stash save "wip"',
       'git -C /tmp stash pop',
       'git --work-tree=/tmp stash push',
+      // Implicit push: bare `stash` followed by a shell operator or by push flags.
+      'git stash && pnpm test',
+      'git stash; pnpm test',
+      'git stash\npnpm test',
+      'git stash -u',
+      'git stash --include-untracked',
+      'git stash list && git stash pop',
     ])('blocks %j when cwd is inside a worktree', (cmd) => {
       const h = createSafeDestructDetect(WORKTREE_CWD);
       const d = h(preCtx(cmd));
