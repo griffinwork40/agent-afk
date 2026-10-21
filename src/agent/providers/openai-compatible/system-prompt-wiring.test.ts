@@ -38,16 +38,17 @@ function makeArgs(
 ): SystemPromptWiringArgs {
   return {
     config: {
+      model: 'sonnet',
       systemPrompt: { type: 'preset', preset: 'claude_code', append: APPEND },
-    },
-    hasSkillExecutor: false,
+    } as SystemPromptWiringArgs['config'],
+    skillExecutor: undefined,
     workspacePromptEnabled: false,
     readOnlyMemory: false,
     readOnlyState: false,
     resolvedSessionId: undefined,
     surface: 'cli',
     getCurrentCwd: () => '/test',
-    runtimeStateSource: { getWorkspace: () => undefined },
+    runtimeStateSource: { getWorkspace: () => undefined } as unknown as SystemPromptWiringArgs['runtimeStateSource'],
     ...overrides,
   };
 }
@@ -171,7 +172,7 @@ describe('buildSystemPromptWiring — unnamed-worker toolBase dedupe guard (#335
 
   it('unnamed worker: resolveToolSystemPrompt called with (undefined, true) and result not prepended', () => {
     const { initialSystemPrompt } = buildSystemPromptWiring(
-      makeArgs({ config: { isUnnamedWorker: true } }),
+      makeArgs({ config: { model: 'sonnet', isUnnamedWorker: true } as SystemPromptWiringArgs['config'] }),
     );
     // Verify the call site passes isSkillDispatch=undefined and isUnnamedWorker=true.
     expect(systemPromptMod.resolveToolSystemPrompt).toHaveBeenCalledWith(undefined, true);

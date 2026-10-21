@@ -23,7 +23,7 @@ import { assembleQueryPrompt } from './query/prompt-assembly.js';
 import { dumpIfEnabled } from '../../session/prompt-dump.js';
 import type { ProviderQueryContext } from './provider-context.js';
 import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
-import { grantsWorkspacePrompt } from '../shared/tool-grant.js';
+import { grantsWorkspacePrompt, grantsToolStrict } from '../shared/tool-grant.js';
 import { deriveCredentialFromStore } from './provider-query-setup.credential.js';
 import { loadClaudeCodeOauthToken } from '../../auth/keychain.js';
 
@@ -211,7 +211,7 @@ export function setUpQuerySession(
     // absent, which could expose agent names the embedder never intended to grant.
     // Both providers now use the same rule: listing is emitted iff the tool is
     // present in the advertised set AND `grantsTool` explicitly returns true.
-    agentTypeListing: toolDefs.some((t) => t.name === 'agent') && (ctx.grantsTool?.('agent') === true)
+    agentTypeListing: toolDefs.some((t) => t.name === 'agent') && grantsToolStrict(ctx.grantsTool, 'agent')
       ? (ctx.subagentExecutor?.describeAgentTypeListing?.() ?? '')
       : '',
   });
