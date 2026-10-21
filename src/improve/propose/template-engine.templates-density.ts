@@ -15,6 +15,7 @@ import type {
   ValidationPlan,
 } from '../schemas.js';
 import type { RootCauseClass, Severity } from '../schemas.js';
+import type { ErrorCluster } from '../scan/detectors/tool-failure-density.normalize.js';
 
 // ---------------------------------------------------------------------------
 // PatternTemplate interface (local mirror — the canonical copy lives in
@@ -50,8 +51,27 @@ export const toolFailureDensityTemplate: PatternTemplate = {
     const truncatedPart = truncated > 0
       ? ` ${truncated} of those failures were also truncated, which often indicates a separate output-shape problem.`
       : '';
+
+    const rawClusters = card.detail['errorClusters'];
+    const clusters: ErrorCluster[] = Array.isArray(rawClusters)
+      ? (rawClusters as ErrorCluster[]).filter(
+          (c) => c && typeof c.key === 'string' && typeof c.count === 'number',
+        )
+      : [];
+
+    const clusterPart =
+      clusters.length > 0
+        ? ` Dominant error cluster: "${clusters[0]!.key}" (${clusters[0]!.count} failure${clusters[0]!.count !== 1 ? 's' : ''}).` +
+          (clusters.length > 1
+            ? ` Other clusters: ${clusters
+                .slice(1)
+                .map((c) => `"${c.key}" (${c.count})`)
+                .join(', ')}.`
+            : '')
+        : '';
+
     return (
-      `The '${toolName}' tool returned isError: true on ${failures}/${total} calls (${rate}).${truncatedPart} ` +
+      `The '${toolName}' tool returned isError: true on ${failures}/${total} calls (${rate}).${truncatedPart}${clusterPart} ` +
       `Likely causes: (a) the tool's handler has a bug, (b) the model is calling the tool with malformed inputs the tool rejects, ` +
       `(c) a permission/hook guard is denying legitimate calls, or (d) the tool legitimately returns isError as a signal to the model and this detector is firing on normal behavior.`
     );

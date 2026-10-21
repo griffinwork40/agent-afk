@@ -49,6 +49,7 @@ function toolPair(
     resultBytes?: number;
     circuitBreaker?: boolean;
     failureClass?: string;
+    errorHead?: string;
   } = {},
 ): string[] {
   const started = JSON.stringify({
@@ -68,6 +69,7 @@ function toolPair(
   };
   if (opts.circuitBreaker === true) completedPayload['circuitBreaker'] = true;
   if (opts.failureClass !== undefined) completedPayload['failureClass'] = opts.failureClass;
+  if (opts.errorHead !== undefined) completedPayload['errorHead'] = opts.errorHead;
   const completed = JSON.stringify({
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
     seq: seqCounter++,
@@ -568,5 +570,57 @@ describe('detectToolFailureDensity — failureClass exclusion', () => {
     ];
     const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
     expect(r.evidence[0]?.annotation).toContain('class=timeout');
+  });
+});
+
+describe('detectToolFailureDensity — errorClusters', () => {
+  it('populates errorClusters when failures carry errorHead', () => {
+    resetSeq();
+    const lines = [
+      ...toolPair('a', 'bash', { isError: true, errorHead: 'command blocked by risk classifier' }),
+      ...toolPair('b', 'bash', { isError: true, errorHead: 'command blocked by risk classifier' }),
+      ...toolPair('c', 'bash', { isError: true, errorHead: 'command blocked by risk classifier' }),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    const clusters = r.detail['errorClusters'] as Array<{ key: string; count: number; sample: string }>;
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]!.count).toBe(3);
+    expect(clusters[0]!.key).toContain('command blocked by risk classifier');
+    expect(clusters[0]!.sample).toBe('command blocked by risk classifier');
+  });
+
+  it('groups heads differing only in numbers into one cluster', () => {
+    resetSeq();
+    const lines = [
+      ...toolPair('a', 'wait_for', { isError: true, errorHead: 'timed out after 3000ms' }),
+      ...toolPair('b', 'wait_for', { isError: true, errorHead: 'timed out after 9000ms' }),
+      ...toolPair('c', 'wait_for', { isError: true, errorHead: 'timed out after 1000ms' }),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    const clusters = r.detail['errorClusters'] as Array<{ key: string; count: number }>;
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]!.count).toBe(3);
+  });
+
+  it('produces empty errorClusters when no failure carries errorHead', () => {
+    resetSeq();
+    const lines = [
+      ...toolPair('a', 'bash', { isError: true }),
+      ...toolPair('b', 'bash', { isError: true }),
+      ...toolPair('c', 'bash', { isError: true }),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    expect(r.detail['errorClusters']).toEqual([]);
+  });
+
+  it('detector version is tool-failure-density@v3', () => {
+    resetSeq();
+    const lines = [
+      ...toolPair('a', 'bash', { isError: true }),
+      ...toolPair('b', 'bash', { isError: true }),
+      ...toolPair('c', 'bash', { isError: true }),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    expect(r.detail['detector']).toBe('tool-failure-density@v3');
   });
 });
