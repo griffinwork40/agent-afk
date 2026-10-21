@@ -80,7 +80,7 @@ describe('TerminalCompositor — resize while disarmed', () => {
   it('EXPAND while disarmed resets geometry so first armed repaint uses new dimensions', async () => {
     stdout.rows = 24;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
-    type Internals = { disarmRows: number };
+    type Internals = { disarmRows: number; disarmCols: number };
     try {
       await c.arm();
       c.repaint();
@@ -98,6 +98,9 @@ describe('TerminalCompositor — resize while disarmed', () => {
 
       // arm() should have consumed the snapshot (reset to 0).
       expect(internals.disarmRows).toBe(0);
+      // disarmCols must also be reset (#4203: handleDisarmWindowResize zeroed
+      // disarmRows but not disarmCols; both must be cleared together).
+      expect(internals.disarmCols).toBe(0);
       // The frame should render at the new expanded bottom row (39 = 40-1),
       // NOT at the old position (23 = 24-1). This is the core assertion:
       // without the fix, the renderer's stale previousTopRow/previousLineCount

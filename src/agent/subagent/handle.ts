@@ -518,9 +518,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       transition: 'cancelled',
       subagentId: this.id,
       source: 'explicit',
-      // Unreported spend accrued before the cancel (#3878): rolls up the delta,
-      // stamps the cumulative total; `{}` when all of it was already reported.
-      // May undercount spend that lands later — the rollup is authoritative.
+      // Unreported spend accrued before the cancel (#3878): stamps the
+      // cumulative total fields (not a delta); `{}` when all spend was already
+      // reported. May undercount spend that lands later — the rollup is authoritative.
       ...settleUnreportedBilling(this, 'cancelled'),
     });
 

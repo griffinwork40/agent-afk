@@ -218,7 +218,10 @@ export class McpManager {
         record.state.status = 'error';
         record.state.error = truncate(err.message, 200);
         console.warn(`[mcp:${serverName}] transport error: ${err.message}`);
-        managerBox.manager?.onServerError?.(serverName, err.message);
+        // Truncate before passing to onServerError so the session layer's
+        // buildMcpDisconnectNotice receives the same 200-char-capped string
+        // that record.state.error holds — not the raw unbounded message. (#4203)
+        managerBox.manager?.onServerError?.(serverName, truncate(err.message, 200));
       };
       // Wire notifications/tools/list_changed → refreshServer() so the
       // next tool_use round sees the updated tool set without session restart.
