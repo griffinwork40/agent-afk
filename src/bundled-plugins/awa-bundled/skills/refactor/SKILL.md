@@ -99,7 +99,7 @@ Dispatch one sub-agent per site in this layer, all in parallel, each in a worktr
   - The `diff_applied` for that site
   - The `failure_reason`
   - The current layer number and which layers (if any) already completed successfully
-  - Recommendation: "Revert layer N changes manually or run `git stash` in each affected worktree, then diagnose with `/diagnose`."
+  - Recommendation: "Revert layer N changes manually, or save them with `git diff > <file-in-worktree>` and then `git checkout -- .` in each affected worktree, then diagnose with `/diagnose`. Do not use `git stash`: the stash ref is shared by every worktree of the repo, so a later pop can apply another worktree's changes."
 
 ---
 
