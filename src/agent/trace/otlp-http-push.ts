@@ -70,6 +70,15 @@ export interface OtlpHttpPushOptions {
 const CRLF_RE = /[\r\n]/;
 
 /**
+ * RFC 7230 §3.2.6 token regex — the only characters legal in an HTTP header
+ * field-name.  Names that do not match are silently dropped by
+ * {@link parseOtlpHeaders} so they never reach the `Headers` constructor
+ * (which would throw `TypeError` and break the "never throws" contract of
+ * {@link pushOtlpHttp}).
+ */
+const HEADER_NAME_TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
  * Parse `AFK_OTLP_HEADERS` — a comma-separated `Key=Value` list — into a
  * plain object.  Malformed pairs (no `=`) are silently skipped.  Header names
  * or values containing CR/LF are silently skipped (injection guard).  Values
@@ -88,6 +97,7 @@ export function parseOtlpHeaders(raw: string): Record<string, string> {
     const rawValue = pair.slice(eq + 1).trim();
     if (!key) continue;
     if (CRLF_RE.test(key)) continue; // injection guard on name
+    if (!HEADER_NAME_TOKEN_RE.test(key)) continue; // RFC 7230 token guard
     // Decode %2C (and other percent-sequences) safely; leave malformed as-is.
     let value: string;
     try {
@@ -144,15 +154,17 @@ export async function pushOtlpHttp(
     };
   }
 
-  // Build headers: extra headers first, then content-type wins unconditionally.
-  const headers = new Headers(extraHeaders);
-  headers.set('Content-Type', 'application/json');
-
   const body = JSON.stringify(payload);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    // Build headers inside try so a malformed extraHeaders key (e.g. one that
+    // slipped past parseOtlpHeaders via programmatic `headers` option) causes
+    // {ok:false} instead of an unhandled rejection.
+    const headers = new Headers(extraHeaders);
+    headers.set('Content-Type', 'application/json');
+
     const response = await fetchFn(endpoint, {
       method: 'POST',
       headers,
@@ -160,14 +172,19 @@ export async function pushOtlpHttp(
       signal: controller.signal,
     });
 
-    // Consume/cancel the response body to free the underlying connection,
-    // regardless of status code.
-    await response.body?.cancel();
-
-    if (!response.ok) {
-      return { ok: false, status: response.status, error: `HTTP ${response.status} ${response.statusText}` };
+    // Capture status before cancelling the body — a cancel() rejection must
+    // not lose the HTTP status that is already available.
+    const { status, statusText, ok: httpOk } = response;
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Body cancel failure is non-fatal; the status is already captured.
     }
-    return { ok: true, status: response.status };
+
+    if (!httpOk) {
+      return { ok: false, status, error: `HTTP ${status} ${statusText}` };
+    }
+    return { ok: true, status };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: msg };

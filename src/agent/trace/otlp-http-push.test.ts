@@ -200,12 +200,39 @@ describe('pushOtlpHttp', () => {
   it('clearTimeout is called even when fetch is aborted', async () => {
     const abortErr = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
     const fetchFn = vi.fn().mockRejectedValue(abortErr) as unknown as typeof fetch;
-    // If clearTimeout were not called the timer handle would leak — vitest's
-    // fake-timer mode would surface this as an unclosed handle. Here we just
-    // assert the call resolves cleanly (no leak / unhandled rejection).
+    // Real timers are used here — we only assert the call resolves cleanly
+    // (no leak / unhandled rejection) rather than inspecting clearTimeout.
     await expect(
       pushOtlpHttp(MINIMAL_PAYLOAD, { endpoint: ENDPOINT, timeoutMs: 50, fetchFn }),
     ).resolves.toMatchObject({ ok: false });
+  });
+
+  it('returns ok:false (not a rejection) when extraHeaders contains an invalid name', async () => {
+    const fetchFn = mockFetch(200, true);
+    // A header name with a space is invalid per RFC 7230 but could be passed
+    // programmatically via the `headers` option (bypassing parseOtlpHeaders).
+    const result = await pushOtlpHttp(MINIMAL_PAYLOAD, {
+      endpoint: ENDPOINT,
+      headers: { 'Bad Header': 'value' },
+      fetchFn,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBeTruthy();
+    // Must NOT have called fetch — failed at Headers construction.
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('captures HTTP status even when body.cancel() rejects', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: false, status: 502, statusText: 'Bad Gateway',
+      body: { cancel: vi.fn().mockRejectedValue(new Error('cancel boom')) },
+    } as unknown as Response);
+    const result = await pushOtlpHttp(MINIMAL_PAYLOAD, { endpoint: ENDPOINT, fetchFn });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(502);
+      expect(result.error).toContain('502');
+    }
   });
 
   it('returns ok:false on non-Error thrown value', async () => {
@@ -348,5 +375,24 @@ describe('parseOtlpHeaders', () => {
     const result = parseOtlpHeaders('X-Bad=value\nbad,Safe=ok');
     expect(result['Safe']).toBe('ok');
     expect(result['X-Bad']).toBeUndefined();
+  });
+
+  it('skips header names with spaces (RFC 7230 token guard)', () => {
+    const result = parseOtlpHeaders('Bad Header=value,Safe=ok');
+    expect(result['Safe']).toBe('ok');
+    expect(result['Bad Header']).toBeUndefined();
+  });
+
+  it('skips header names with NUL bytes (RFC 7230 token guard)', () => {
+    const result = parseOtlpHeaders('Bad\x00Name=value,Safe=ok');
+    expect(result['Safe']).toBe('ok');
+    expect(Object.keys(result)).toEqual(['Safe']);
+  });
+
+  it('accepts valid RFC 7230 token characters in header names', () => {
+    // Exercise the full token charset: tchar = "!" / "#" / "$" / "%" / "&" /
+    //   "'" / "*" / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
+    const result = parseOtlpHeaders('X-My_Header.v2=val');
+    expect(result['X-My_Header.v2']).toBe('val');
   });
 });
