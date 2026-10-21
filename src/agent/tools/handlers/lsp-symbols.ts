@@ -43,8 +43,9 @@ import {
   killProc,
   parseMessages,
   languageIdForExt,
-  getTimeoutMs,
+  getSymbolsTimeoutMs,
 } from './lsp-shared.js';
+import { realpathSafe } from './_cwd-utils.js';
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -72,7 +73,7 @@ export type SymbolSubcommand = 'definition' | 'references';
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 /** Parse an LSP Location or LocationLink into an LspLocation. */
-function parseLocation(raw: unknown): LspLocation | null {
+export function parseLocation(raw: unknown): LspLocation | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const loc = raw as {
     uri?: string;
@@ -82,17 +83,24 @@ function parseLocation(raw: unknown): LspLocation | null {
   };
   const uri = loc.targetUri ?? loc.uri;
   const range = loc.targetRange ?? loc.range;
+  // Treat missing uri or range.start as malformed — skip rather than defaulting.
   if (typeof uri !== 'string') return null;
+  if (typeof range?.start?.line !== 'number' || typeof range?.start?.character !== 'number') return null;
   let filePath: string;
   try { filePath = fileURLToPath(uri); } catch { return null; }
+
+  // Security: resolve symlinks via realpathSafe before access-policy check so
+  // symlinks cannot escape read roots (e.g. a symlink pointing outside the
+  // workspace would otherwise bypass decidePathAccess).
+  try { filePath = realpathSafe(filePath); } catch { return null; }
 
   // Security (finding 2): filter out locations pointing at denylisted paths
   // so credential paths from LSP responses are never surfaced in tool output.
   const decision = decidePathAccess(filePath, 'read');
   if (decision.kind === 'deny') return null;
 
-  const line = (typeof range?.start?.line === 'number' ? range.start.line : 0) + 1;
-  const col = (typeof range?.start?.character === 'number' ? range.start.character : 0) + 1;
+  const line = range.start.line + 1;
+  const col = range.start.character + 1;
   return { filePath, line, col };
 }
 
@@ -122,6 +130,8 @@ export function isLspSymbolsEnabled(): boolean {
  * @param rootDir    - Workspace root for rootUri (session cwd). When provided,
  *                     enables cross-file definition/references.
  * @param serverCmd  - LSP server binary + args (injectable for tests).
+ * @param signal     - Optional AbortSignal; resolves immediately with an error
+ *                     when aborted before the LSP server responds.
  */
 export async function queryLspSymbol(
   filePath: string,
@@ -130,8 +140,10 @@ export async function queryLspSymbol(
   col: number,
   rootDir?: string,
   serverCmd: readonly string[] = ['typescript-language-server', '--stdio'],
+  signal?: AbortSignal,
 ): Promise<LspSymbolResult> {
-  const timeoutMs = getTimeoutMs();
+  if (signal?.aborted) return { locations: [], error: 'Aborted' };
+  const timeoutMs = getSymbolsTimeoutMs();
   const langId = languageIdForExt(path.extname(filePath));
   if (!langId) {
     return { locations: [], error: `Unsupported file type: ${path.extname(filePath)}` };
@@ -149,8 +161,17 @@ export async function queryLspSymbol(
       resolve(result);
     };
 
-    const timer = setTimeout(() => done({ locations: [], error: 'LSP server timed out' }), timeoutMs);
+    const timer = setTimeout(() => {
+      if (env.AFK_DEBUG) {
+        process.stderr.write(`[afk:lsp-symbols] timeout after ${timeoutMs}ms — server did not respond\n`);
+      }
+      done({ locations: [], error: 'LSP symbols timed out (increase AFK_LSP_SYMBOLS_TIMEOUT_MS)' });
+    }, timeoutMs);
     timer.unref();
+
+    // Honour abort signal: resolve immediately if the caller cancels.
+    const onAbort = () => done({ locations: [], error: 'Aborted' });
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     readFile(filePath, 'utf8')
       .then((fileContent) => {
@@ -162,12 +183,20 @@ export async function queryLspSymbol(
             stdio: ['pipe', 'pipe', 'ignore'],
             shell: process.platform === 'win32',
           });
-        } catch {
+        } catch (spawnErr) {
+          if (env.AFK_DEBUG) {
+            process.stderr.write(`[afk:lsp-symbols] spawn failed: ${String(spawnErr)}\n`);
+          }
           done({ locations: [], error: 'Failed to spawn LSP server' });
           return;
         }
 
-        proc.on('error', () => done({ locations: [], error: 'LSP server process error' }));
+        proc.on('error', (procErr) => {
+          if (env.AFK_DEBUG) {
+            process.stderr.write(`[afk:lsp-symbols] process error: ${String(procErr)}\n`);
+          }
+          done({ locations: [], error: 'LSP server process error' });
+        });
 
         const uri = pathToFileURL(filePath).toString();
         // Finding 5: send session cwd as rootUri so cross-file
@@ -215,7 +244,9 @@ export async function queryLspSymbol(
           position: { line: line - 1, character: col - 1 },
         };
         if (subcommand === 'references') {
-          params['context'] = { includeDeclaration: true };
+          // includeDeclaration:false — report call-sites only; the declaration
+          // itself is a separate go-to-definition query.
+          params['context'] = { includeDeclaration: false };
         }
         send({ jsonrpc: '2.0', id: symbolReqId, method: lspMethod, params });
 
@@ -232,6 +263,9 @@ export async function queryLspSymbol(
             if (typeof msg !== 'object' || msg === null) continue;
             const m = msg as { id?: unknown; result?: unknown; error?: unknown };
             if (m.id !== symbolReqId) continue;
+            // Skip messages that carry neither result nor error — not a valid
+            // JSON-RPC response for our request (e.g. a stray notification).
+            if (!('result' in m) && !('error' in m)) continue;
 
             // 6. Graceful shutdown.
             send({ jsonrpc: '2.0', id: ++reqId, method: 'shutdown', params: null });
@@ -259,7 +293,12 @@ export async function queryLspSymbol(
           }
         });
 
-        proc.on('close', () => done({ locations: [], error: 'LSP server exited before responding' }));
+        proc.on('close', (code) => {
+          if (env.AFK_DEBUG) {
+            process.stderr.write(`[afk:lsp-symbols] server closed (code=${code ?? 'null'}) before responding\n`);
+          }
+          done({ locations: [], error: 'LSP server exited before responding' });
+        });
       })
       .catch(() => done({ locations: [], error: 'Failed to read source file' }));
   });
@@ -303,6 +342,7 @@ export async function handleCodeSymbols(
   context?: ToolHandlerContext,
   cwd?: string,
   serverCmd?: readonly string[],
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!isLspSymbolsEnabled()) {
     return (
@@ -321,9 +361,11 @@ export async function handleCodeSymbols(
 
   try {
     const rootDir = context?.resolveBase ?? cwd;
-    const result = serverCmd !== undefined
-      ? await queryLspSymbol(resolvedPath, input.subcommand, input.line, input.col, rootDir, serverCmd)
-      : await queryLspSymbol(resolvedPath, input.subcommand, input.line, input.col, rootDir);
+    const result = await queryLspSymbol(
+      resolvedPath, input.subcommand, input.line, input.col, rootDir,
+      serverCmd ?? ['typescript-language-server', '--stdio'],
+      signal,
+    );
     return formatSymbolResult(input.file_path, input.subcommand, input.line, input.col, result);
   } catch {
     return '[LSP] code_symbols: unexpected error';

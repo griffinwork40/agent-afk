@@ -101,6 +101,20 @@ describe('CLI reference', () => {
     } finally { spy.mockRestore(); }
   });
 
+  it('returns false and logs both missing and extra messages when registrars differ in both directions', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // entry has Foo+Bar; generator has Bar+Baz — Foo is missing, Baz is extra
+      const entry = 'registerFooCommand(program);\nregisterBarCommand(program);';
+      const generator = 'registerBarCommand(program);\nregisterBazCommand(program);';
+      expect(checkMirror(entry, generator)).toBe(false);
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('missing from render-cli-reference.ts'));
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('not in src/cli/index.ts'));
+      // Must NOT emit the order-mismatch message — sets differ, not just order
+      expect(spy).not.toHaveBeenCalledWith(expect.stringContaining('registration order mismatch'));
+    } finally { spy.mockRestore(); }
+  });
+
   it('imports/registers in an empty isolated home with no state writes and neutralizes ambient config', () => {
     const result = runIsolated('cli', { AFK_MODEL: 'POISON_MODEL', CLAUDE_MODEL: 'POISON_MODEL', AFK_INTERNAL: '1' });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -198,8 +212,8 @@ describe('Config reference and shared output contract', () => {
       const result = writeReference(slug, 'fresh\n', true, directory, 'scan:custom');
       expect(result).toBe(false);
       const errors = spy.mock.calls.map((args) => args.join(' '));
-      expect(errors.some((e) => e.includes('scan:custom'))).toBe(true);
-      expect(errors.every((e) => !e.includes('scan:fixture'))).toBe(true);
+      expect(errors).toEqual(expect.arrayContaining([expect.stringMatching(/scan:custom/)]));
+      expect(errors).not.toEqual(expect.arrayContaining([expect.stringMatching(/scan:fixture/)]));
     } finally {
       spy.mockRestore();
       rmSync(directory, { recursive: true, force: true });

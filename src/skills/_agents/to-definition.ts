@@ -17,6 +17,11 @@ const KNOWN_AFK_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...AWARENESS_TOOL_NAMES,
   ...WORKSPACE_TOOL_NAMES,
   'memory_search',
+  // git_read (#4059): not in BUILTIN_TOOL_NAMES (conditional on
+  // AFK_READONLY_GIT_TOOL) but present in research-agent's allowedTools when
+  // the flag is on. Must be listed here so normalizeToolToken does not drop it
+  // fail-closed. Mirrors resolve.ts:59.
+  'git_read',
   'agent',
   'skill',
 ]);

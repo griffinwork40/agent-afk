@@ -134,7 +134,7 @@ export async function executeOnce(
     }
     budgetReceipt = ctx.delegationBudget.recordSpawn(ctx.parentSession.sessionId ?? '');
   }
-  { const r = await checkAndRunRemoteDispatch(parsed, call.signal, budgetReceipt, call.id, updateCurrentWaveUnit); if (r !== undefined) return r; }
+  { const r = await checkAndRunRemoteDispatch(parsed, call.signal, budgetReceipt, call.id, updateCurrentWaveUnit); if (r !== undefined) return r; } // Invariant: remote path exits before buildChildConfig; see helper JSDoc for gate-parity rationale.
   const usageNotice = await evaluateDispatchUsageForModel(ctx.parentModel, ctx.traceWriter);
 
   const childScopeInputs = ctx.subagentManager.getReadScopeInputs?.() ?? {

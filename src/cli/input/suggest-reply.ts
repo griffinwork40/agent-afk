@@ -71,7 +71,7 @@ export function joinContinuation(buffer: string, reply: string): string | null {
       } else {
         line = buffer + reply;
       }
-    } else if (reply.startsWith(word)) line = buffer.slice(0, buffer.length - word.length) + reply;
+    } else if (reply.toLowerCase().startsWith(word.toLowerCase())) line = buffer.slice(0, buffer.length - word.length) + reply;
     else return null;
   }
   return line.length > buffer.length ? line : null;

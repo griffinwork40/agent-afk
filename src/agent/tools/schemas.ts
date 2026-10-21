@@ -125,16 +125,16 @@ import { codeSymbolsTool } from './schemas.lsp-symbols.js';
  * index. send_telegram is placed in the optional tail by convention (not
  * grouped, not surface-filtered, but not locked either).
  *
- * ---- Invariant core (indices 0..25) -----------------------------------------
+ * ---- Invariant core (indices 0..22) -----------------------------------------
  *   read_file, write_file, edit_file, grep, glob, list_directory,  <- LOCKED
  *   bash, view_image, extract_document,
  *   wait_for, patch_apply, test_run, get_facet, json_query, model_complete,
  *   worktree, config_get, config_set,
  *   read_witness, search_witness,
- *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   remote_agent, web_scrape, web_request
  *
- * ---- Optional tail (indices 26..44) -----------------------------------------
+ * ---- Optional tail (indices 23..44) -----------------------------------------
+ *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
  *   image_generate, image_edit,
  *   create_schedule, update_schedule, list_schedules, get_schedule_history,
@@ -147,7 +147,7 @@ import { codeSymbolsTool } from './schemas.lsp-symbols.js';
  *   ask_question
  */
 export const builtinToolSchemas: readonly AnthropicToolDef[] = [
-  // -- Invariant core (0..25) ---------------------------------------------------
+  // -- Invariant core (0..22) ---------------------------------------------------
   // Indices 0..5: LOCKED_TOOLS builtins -- operator config can never disable
   // these six. Placing them first maximises the guaranteed-stable prefix.
   readFileTool,
@@ -156,9 +156,10 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   grepTool,
   globTool,
   listDirectoryTool,
-  // Indices 6..25: remaining core builtins -- not in any toolGroups() group and
-  // not surface-filtered, but individually disableable via tools.disabled /
-  // tools.disabledBySlot. Disabling any one truncates the shared prefix there.
+  // Indices 6..22: remaining core builtins -- not in any toolGroups() group,
+  // not surface-filtered, and not registry-filtered (unlike the background-job
+  // tools). Individually disableable via tools.disabled / tools.disabledBySlot.
+  // Disabling any one truncates the shared prefix there.
   bashTool,
   viewImageTool,
   extractDocumentTool,
@@ -173,13 +174,13 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   configSetTool,
   readWitnessTool,
   searchWitnessTool,
-  cancelBackgroundJobTool,
-  sendMessageToAgentTool,
-  getBackgroundJobHealthTool,
   remoteAgentTool,
   webScrapeTool,
   webRequestTool,
-  // -- Optional tail (26..44): disableable groups / surface-filtered -----------
+  // -- Optional tail (23..44): disableable groups / surface-filtered -----------
+  cancelBackgroundJobTool,
+  sendMessageToAgentTool,
+  getBackgroundJobHealthTool,
   sendTelegramTool,
   imageGenerateTool,
   imageEditTool,

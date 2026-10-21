@@ -27,7 +27,8 @@ const POLL_INTERVAL_MS = 3_000;
 
 async function fetchHandoffs(): Promise<HandoffSummary[]> {
   const data = await apiFetch<HandoffsResponse>('/api/handoffs');
-  return data.handoffs;
+  // Runtime narrowing: only surface records the server confirms are pending.
+  return data.handoffs.filter((h) => h.status === 'pending');
 }
 
 async function submitAnswer(taskId: string, answer: unknown): Promise<void> {
@@ -52,13 +53,19 @@ function HandoffCard({
   const [textValue, setTextValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Ref-based in-flight guard: prevents a double-click from firing two POSTs
+  // before React re-renders with busy=true (state update is async).
+  const submittingRef = useRef(false);
 
   const answer = useCallback(
     async (value: unknown) => {
+      if (submittingRef.current) return;
+      submittingRef.current = true;
       setBusy(true);
       setError(null);
       try {
         await submitAnswer(taskId, value);
+        setTextValue('');
         onAnswered(taskId);
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
@@ -67,6 +74,7 @@ function HandoffCard({
           setError('Failed to submit — try again.');
         }
       } finally {
+        submittingRef.current = false;
         setBusy(false);
       }
     },
@@ -81,7 +89,7 @@ function HandoffCard({
   // so the handoff is still answerable. type='select'/'choice' with no choices
   // must NOT match isConfirm either — it falls to the free-text branch.
   const isSelectLike = hasChoices;
-  const isConfirm = !isSelectLike && (type === 'confirm' || !question.type) && type !== 'select' && type !== 'choice';
+  const isConfirm = !isSelectLike && type === 'confirm' && type !== 'select' && type !== 'choice';
 
   const relativeTime = (() => {
     try {
@@ -222,7 +230,8 @@ export function HandoffsView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Track locally-answered taskIds so the card disappears immediately without
-  // waiting for the next poll cycle.
+  // waiting for the next poll cycle.  Pruned on each successful poll to ids
+  // still present in the response so recycled taskIds are not permanently hidden.
   const [answered, setAnswered] = useState<Set<string>>(new Set());
   const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const inFlightRef = useRef(false);
@@ -233,6 +242,13 @@ export function HandoffsView() {
     try {
       const list = await fetchHandoffs();
       setHandoffs(list);
+      // Prune answered set to only ids still present in the latest poll so
+      // a recycled taskId is not permanently hidden.
+      const liveIds = new Set(list.map((h) => h.taskId));
+      setAnswered((prev) => {
+        const pruned = new Set([...prev].filter((id) => liveIds.has(id)));
+        return pruned.size === prev.size ? prev : pruned;
+      });
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load handoffs.');
@@ -246,6 +262,9 @@ export function HandoffsView() {
     void load();
 
     function startPoll() {
+      // Clear any existing interval before starting a new one so that a rapid
+      // hide→show cycle cannot stack multiple intervals on timerRef.
+      clearInterval(timerRef.current);
       timerRef.current = setInterval(() => { void load(); }, POLL_INTERVAL_MS);
     }
 

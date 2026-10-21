@@ -62,10 +62,13 @@ export function createCodeSymbolsHandler(cwd?: string): ToolHandler | undefined 
         isError: true,
       };
     }
+    // When line/col are absent the caller omitted them; default to 1:1
+    // (beginning of file) which is a valid LSP position. Invalid values
+    // were already rejected above.
     const line = typeof i.line === 'number' ? i.line : 1;
     const col = typeof i.col === 'number' ? i.col : 1;
 
-    const content = await handleCodeSymbols({ file_path, subcommand, line, col }, context, cwd);
+    const content = await handleCodeSymbols({ file_path, subcommand, line, col }, context, cwd, undefined, _signal);
     return { content };
   };
 }

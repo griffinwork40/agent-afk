@@ -11,6 +11,11 @@
  *   - 409 "no longer active" maps to a user-visible error message
  *   - API fetch error shows error banner
  *   - Pending count badge renders when handoffs > 0
+ *   - Double-click sends only one POST (in-flight ref guard)
+ *   - answered Set is pruned when taskId disappears from poll response
+ *   - textValue is cleared after a successful answer
+ *   - visibilitychange pauses and resumes polling
+ *   - Unmount clears the interval (no post-unmount state updates)
  */
 
 import {
@@ -446,5 +451,208 @@ describe('HandoffsView', () => {
     await waitFor(() =>
       expect(screen.getByText('Network error')).toBeInTheDocument(),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // Double-click in-flight guard — second click must not POST
+  // -------------------------------------------------------------------------
+
+  it('sends only one POST when a confirm button is double-clicked rapidly', async () => {
+    // Block the first POST until we resolve it manually so the second click
+    // arrives while the first is still in-flight.
+    let resolvePost!: (v: unknown) => void;
+    mockApiFetch.mockImplementation(
+      async (path: string, options?: RequestInit) => {
+        const method = options?.method?.toUpperCase() ?? 'GET';
+        if (method === 'GET') {
+          return { handoffs: [makeHandoff({ taskId: 'q-dbl', questionType: 'confirm' })] };
+        }
+        // First POST blocks; subsequent calls resolve immediately (they should
+        // never arrive due to the in-flight guard).
+        return new Promise((r) => { resolvePost = r; });
+      },
+    );
+    render(<HandoffsView />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Yes' })).toBeInTheDocument(),
+    );
+    // Fire two clicks in the same synchronous frame — only the first should
+    // reach submitAnswer because submittingRef blocks the second.
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
+    });
+    // Resolve the in-flight POST.
+    await act(async () => { resolvePost({ ok: true }); });
+    await waitFor(() => expect(postCalls()).toHaveLength(1));
+  });
+
+  // -------------------------------------------------------------------------
+  // answered Set pruning — recycled taskId must reappear
+  // -------------------------------------------------------------------------
+
+  it('prunes the answered set when a taskId disappears from the poll response', async () => {
+    // Drive polls manually with fake timers (shouldAdvanceTime keeps waitFor working).
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const taskId = 'q-recycle';
+
+    // Phase 1: card present.
+    mockApiFetch.mockImplementation(async (_path: string, opts?: RequestInit) => {
+      const method = opts?.method?.toUpperCase() ?? 'GET';
+      if (method === 'GET') return { handoffs: [makeHandoff({ taskId, questionMessage: 'Recycled?' })] };
+      return { ok: true };
+    });
+
+    render(<HandoffsView />);
+    await waitFor(() =>
+      expect(screen.getByText('Recycled?')).toBeInTheDocument(),
+    );
+
+    // Answer the card — taskId enters answered set, card disappears.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
+    });
+    await waitFor(() =>
+      expect(screen.queryByText('Recycled?')).not.toBeInTheDocument(),
+    );
+
+    // Phase 2: server no longer returns the taskId — switch mock to empty.
+    mockApiFetch.mockImplementation(async (_path: string, opts?: RequestInit) => {
+      const method = opts?.method?.toUpperCase() ?? 'GET';
+      if (method === 'GET') return { handoffs: [] };
+      return { ok: true };
+    });
+
+    // Trigger a poll tick — pruning logic removes taskId from answered set.
+    await act(async () => { vi.advanceTimersByTime(3_000); });
+    await waitFor(() =>
+      expect(screen.getByText('No pending handoffs.')).toBeInTheDocument(),
+    );
+
+    // Phase 3: taskId recycled — server returns it again.
+    mockApiFetch.mockImplementation(async (_path: string, opts?: RequestInit) => {
+      const method = opts?.method?.toUpperCase() ?? 'GET';
+      if (method === 'GET') return { handoffs: [makeHandoff({ taskId, questionMessage: 'Recycled?' })] };
+      return { ok: true };
+    });
+
+    // Trigger another poll — recycled card must now be visible.
+    await act(async () => { vi.advanceTimersByTime(3_000); });
+    await waitFor(() =>
+      expect(screen.getByText('Recycled?')).toBeInTheDocument(),
+    );
+
+    vi.useRealTimers();
+  });
+
+  // -------------------------------------------------------------------------
+  // textValue cleared after successful answer
+  // -------------------------------------------------------------------------
+
+  it('clears the text input after a successful free-text answer', async () => {
+    // Block the POST so the card stays mounted long enough to check the input.
+    let resolvePost!: (v: unknown) => void;
+    mockApiFetch.mockImplementation(async (path: string, opts?: RequestInit) => {
+      const method = opts?.method?.toUpperCase() ?? 'GET';
+      if (method === 'GET') {
+        return { handoffs: [makeHandoff({ taskId: 'q-clear', questionType: 'text' })] };
+      }
+      return new Promise((r) => { resolvePost = r; });
+    });
+
+    render(<HandoffsView />);
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Your answer…')).toBeInTheDocument(),
+    );
+
+    act(() => {
+      fireEvent.change(screen.getByPlaceholderText('Your answer…'), {
+        target: { value: 'hello' },
+      });
+    });
+    expect((screen.getByPlaceholderText('Your answer…') as HTMLInputElement).value).toBe('hello');
+
+    // Click Submit — POST is in-flight (blocked).
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+    });
+
+    // Resolve the POST — setTextValue('') fires before onAnswered.
+    await act(async () => { resolvePost({ ok: true }); });
+
+    // Card is now hidden (onAnswered fired). Verify exactly one POST.
+    await waitFor(() => expect(postCalls()).toHaveLength(1));
+  });
+
+  // -------------------------------------------------------------------------
+  // visibilitychange — pause and resume polling
+  // -------------------------------------------------------------------------
+
+  it('stops polling when the document becomes hidden and resumes on visible', async () => {
+    // shouldAdvanceTime:true lets wall-clock pass so waitFor() still works
+    // while we can also manually jump the timer forward for the poll interval.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    setupApiFetch([]);
+
+    render(<HandoffsView />);
+    await waitFor(() =>
+      expect(screen.getByText('No pending handoffs.')).toBeInTheDocument(),
+    );
+
+    const callsBefore = mockApiFetch.mock.calls.length;
+
+    // Simulate tab hidden — polling should stop.
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      vi.advanceTimersByTime(6_000);
+    });
+    const callsWhileHidden = mockApiFetch.mock.calls.length;
+    expect(callsWhileHidden).toBe(callsBefore);
+
+    // Simulate tab visible — an immediate load + new interval should fire.
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    // The resume triggers an immediate load.
+    await waitFor(() =>
+      expect(mockApiFetch.mock.calls.length).toBeGreaterThan(callsWhileHidden),
+    );
+
+    // Advance another interval — periodic polling should have resumed.
+    await act(async () => { vi.advanceTimersByTime(3_000); });
+    expect(mockApiFetch.mock.calls.length).toBeGreaterThan(callsWhileHidden + 1);
+
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    vi.useRealTimers();
+  });
+
+  // -------------------------------------------------------------------------
+  // Unmount — clears the interval (no post-unmount state updates / warnings)
+  // -------------------------------------------------------------------------
+
+  it('clears the polling interval on unmount', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const clearSpy = vi.spyOn(globalThis, 'clearInterval');
+    setupApiFetch([]);
+
+    const { unmount } = render(<HandoffsView />);
+    await waitFor(() =>
+      expect(screen.getByText('No pending handoffs.')).toBeInTheDocument(),
+    );
+
+    const callsAtUnmount = mockApiFetch.mock.calls.length;
+    unmount();
+
+    // clearInterval must have been called at least once during cleanup.
+    expect(clearSpy).toHaveBeenCalled();
+
+    // Advance timers — no further apiFetch calls should occur after unmount.
+    await act(async () => { vi.advanceTimersByTime(9_000); });
+    expect(mockApiFetch.mock.calls.length).toBe(callsAtUnmount);
+
+    vi.useRealTimers();
   });
 });

@@ -66,10 +66,24 @@ export function languageIdForExt(ext: string): string | undefined {
   }
 }
 
-/** Return the LSP timeout from env, defaulting to 1500 ms. */
+/** Return the LSP diagnostics timeout from env, defaulting to 1500 ms. */
 export function getTimeoutMs(): number {
   const raw = env.AFK_LSP_DIAGNOSTICS_TIMEOUT_MS;
   if (!raw) return 1500;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : 1500;
+}
+
+/**
+ * Return the LSP symbols timeout from env, defaulting to 5000 ms.
+ *
+ * Symbol queries (go-to-definition, find-references) may trigger a cold-start
+ * project index build inside typescript-language-server. 5 s is a practical
+ * budget for most repos; raise AFK_LSP_SYMBOLS_TIMEOUT_MS for large monorepos.
+ */
+export function getSymbolsTimeoutMs(): number {
+  const raw = env.AFK_LSP_SYMBOLS_TIMEOUT_MS;
+  if (!raw) return 5000;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 5000;
 }
