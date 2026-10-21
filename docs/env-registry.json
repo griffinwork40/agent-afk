@@ -1354,6 +1354,14 @@
       "category": "telegram"
     },
     {
+      "name": "AFK_TTY_TRACE",
+      "description": "Absolute path for the asciinema v2 cast file the interactive REPL writes when stdout is a TTY. Every byte sent to stdout/stderr is tee-d to this file in real time using a sync fd so a crash loses nothing. Terminal resize events are recorded as resize (\"r\") events. Unset (the default) means off with zero overhead. Use to capture a reproducer for stale-row rendering bugs in tmux/multiplexer sessions. Replay with: pnpm exec tsx scripts/tty-replay.ts <cast>",
+      "type": "string",
+      "required": false,
+      "example": "~/afk-tty.cast",
+      "category": "debug"
+    },
+    {
       "name": "AFK_TURN_SEPARATOR",
       "description": "Render a dim horizontal rule between conversation turns in the REPL. 0 = off, unset/1 = on (default). TTY-only: piped/one-shot output (afk chat) never emits the rule.",
       "type": "boolean",
@@ -1896,6 +1904,13 @@
       "required": false,
       "example": "true",
       "category": "telegram"
+    },
+    {
+      "name": "TERM",
+      "description": "Terminal type (e.g. xterm-256color). Recorded verbatim in the asciinema v2 cast header written by AFK_TTY_TRACE for replay fidelity. Standard POSIX var; not AFK-specific.",
+      "type": "string",
+      "required": false,
+      "category": "process"
     },
     {
       "name": "TMUX",
