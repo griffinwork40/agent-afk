@@ -54,7 +54,7 @@ describe('agentTool readRoots/writeRoots confinement descriptions', () => {
  * the agentTool equivalents. CI must catch any drift. (#4203, #3794)
  */
 function composeNodePropDesc(propName: string): string {
-  const schema = composeTool.input_schema as {
+  const schema = composeTool.input_schema as unknown as {
     properties: {
       nodes: {
         items: {
