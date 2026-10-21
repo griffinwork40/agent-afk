@@ -77,7 +77,13 @@ export class OpenAIAudioTranscriber implements AudioTranscriber {
     // SSRF host guard: reject private/loopback/link-local/cloud-metadata hosts.
     // Runs at transcribe-time so async DNS resolution is available.
     if (this.checkEgress) {
-      const verdict = await this.checkEgress(this.apiUrl);
+      let verdict: { allowed: boolean; reason?: string };
+      try {
+        verdict = await this.checkEgress(this.apiUrl);
+      } catch (err) {
+        const raw = String(err instanceof Error ? err.message : err);
+        return { status: 'network-error', safeMessage: `SSRF egress check failed: ${raw}` };
+      }
       if (!verdict.allowed) {
         return {
           status: 'network-error',
