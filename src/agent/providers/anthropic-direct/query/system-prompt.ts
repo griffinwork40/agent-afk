@@ -6,7 +6,8 @@
  * so the two can never drift. Only the `# Environment` fragment varies with cwd.
  *
  * Invariant: top-level order is
- *   `[toolBase, userSystem?, memoryPrompt, hotMemory?, <# Environment>, manifest?]`.
+ *   `[toolBase, userSystem?, memoryPrompt, workspacePrompt?, hotMemory?,
+ *    goalPrompt?, <# Environment>, manifest?, agentTypeListing?]`.
  * The `# Agent AFK` doctrine + operator overlay travel in `userSystem` and are
  * placed EARLY — right after the tool/runtime conventions and before the
  * cross-session memory (instructions + hot-memory project context) and the

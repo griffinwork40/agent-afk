@@ -204,7 +204,14 @@ export function setUpQuerySession(
     // past the operator tool-toggle filter) and granted by this provider's
     // permissions, the same #4060 grant answer the workspace section uses, so
     // the prompt never lists agent types for a tool the model cannot call.
-    agentTypeListing: toolDefs.some((t) => t.name === 'agent') && (ctx.grantsTool?.('agent') ?? true)
+    //
+    // Contract (parity with openai-compatible/index.ts): FAIL-CLOSED — an
+    // embedder that omits `grantsTool` gets NO listing. The previous `?? true`
+    // fallback was fail-open: it injected the listing whenever `grantsTool` was
+    // absent, which could expose agent names the embedder never intended to grant.
+    // Both providers now use the same rule: listing is emitted iff the tool is
+    // present in the advertised set AND `grantsTool` explicitly returns true.
+    agentTypeListing: toolDefs.some((t) => t.name === 'agent') && (ctx.grantsTool?.('agent') === true)
       ? (ctx.subagentExecutor?.describeAgentTypeListing?.() ?? '')
       : '',
   });
