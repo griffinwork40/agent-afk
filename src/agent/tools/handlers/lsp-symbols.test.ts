@@ -18,6 +18,7 @@ import {
   handleCodeSymbols,
   isLspSymbolsEnabled,
   parseLocation,
+  DEFAULT_LSP_CMD,
   type LspLocation,
 } from './lsp-symbols.js';
 import { createCodeSymbolsHandler } from '../lsp-symbols-surface.js';
@@ -214,10 +215,9 @@ describe('parseLocation', () => {
     });
     // os.tmpdir() exists but is a directory — parseLocation only cares that
     // realpathSafe resolves it and decidePathAccess allows it.
-    if (loc !== null) {
-      expect(loc.line).toBe(5);
-      expect(loc.col).toBe(3);
-    }
+    expect(loc).not.toBeNull();
+    expect(loc!.line).toBe(5);
+    expect(loc!.col).toBe(3);
     void tempFile; // suppress unused warning
   });
 
@@ -228,10 +228,9 @@ describe('parseLocation', () => {
       targetUri: `file://${os.tmpdir().replace(/\\/g, '/')}`,
       targetRange: { start: { line: 1, character: 0 } },
     });
-    if (loc !== null) {
-      expect(loc.line).toBe(2);
-      expect(loc.col).toBe(1);
-    }
+    expect(loc).not.toBeNull();
+    expect(loc!.line).toBe(2);
+    expect(loc!.col).toBe(1);
   });
 });
 
@@ -394,4 +393,56 @@ describe('handleCodeSymbols', () => {
       vi.unstubAllEnvs();
     }
   }, 5_000);
+});
+
+// ── AbortSignal ───────────────────────────────────────────────────────────
+
+describe('queryLspSymbol — AbortSignal', () => {
+  it('returns Aborted immediately when signal is pre-aborted', async () => {
+    const filePath = await makeTsFile('abort-pre.ts');
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await queryLspSymbol(
+      filePath, 'definition', 1, 1, undefined,
+      ['/nonexistent-binary-afk-lsp-sym-test-abort'],
+      controller.signal,
+    );
+    expect(result.locations).toEqual([]);
+    expect(result.error).toBe('Aborted');
+  }, 5_000);
+
+  it('returns Aborted when signal fires mid-flight (slow server)', async () => {
+    vi.stubEnv('AFK_LSP_SYMBOLS_TIMEOUT_MS', '3000');
+    try {
+      await mkdir(tempDir, { recursive: true });
+      const filePath = await makeTsFile('abort-mid.ts');
+      const scriptPath = path.join(tempDir, 'fake-silent-abort-server.js');
+      writeSilentServer(scriptPath);
+
+      const controller = new AbortController();
+      // Abort after 100 ms — well before the 3 s timeout.
+      setTimeout(() => controller.abort(), 100);
+
+      const result = await queryLspSymbol(
+        filePath, 'definition', 1, 1, undefined,
+        nodeCmd(scriptPath),
+        controller.signal,
+      );
+      expect(result.locations).toEqual([]);
+      expect(result.error).toBe('Aborted');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 5_000);
+});
+
+// ── DEFAULT_LSP_CMD ───────────────────────────────────────────────────────
+
+describe('DEFAULT_LSP_CMD', () => {
+  it('is a readonly array with typescript-language-server as the binary', () => {
+    expect(Array.isArray(DEFAULT_LSP_CMD)).toBe(true);
+    expect(DEFAULT_LSP_CMD[0]).toBe('typescript-language-server');
+    expect(DEFAULT_LSP_CMD[1]).toBe('--stdio');
+  });
 });
