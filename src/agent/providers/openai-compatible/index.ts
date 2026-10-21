@@ -326,7 +326,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // Dynamic agent-type listing injected into the volatile system-prompt tail
       // rather than the tool description, preserving prefix-cache stability across
       // sessions that differ only in their agent sets (#4217).
-      agentTypeListing: this.providerOpts.subagentExecutor?.describeAgentTypeListing?.() ?? '',
+      // Gate on the agent tool being both registered (this.schemas: executor wired
+      // at construction) and granted by this provider's permissions, the same
+      // #4060 grant answer the workspace section uses, so the prompt never lists
+      // agent types for a tool the model cannot call.
+      agentTypeListing: this.schemas.some((s) => s.name === 'agent') && this.grantsTool('agent')
+        ? (this.providerOpts.subagentExecutor?.describeAgentTypeListing?.() ?? '')
+        : '',
     });
 
     const patchedConfig: typeof config = { ...config, systemPrompt: spw.initialSystemPrompt };

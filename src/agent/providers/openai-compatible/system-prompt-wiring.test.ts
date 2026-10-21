@@ -95,6 +95,31 @@ describe('buildSystemPromptWiring — preset append semantics (#3305)', () => {
   });
 });
 
+describe('buildSystemPromptWiring — agentTypeListing injection (#4217)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('injects agentTypeListing into the initial prompt when provided', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({ agentTypeListing: 'AGENT_LISTING' }),
+    );
+    expect(initialSystemPrompt).toContain('AGENT_LISTING');
+  });
+
+  it('does not inject listing when agentTypeListing is absent (agent tool not in schema)', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(makeArgs());
+    expect(initialSystemPrompt).not.toContain('Available agent types');
+  });
+
+  it('does not inject listing when agentTypeListing is empty string', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({ agentTypeListing: '' }),
+    );
+    expect(initialSystemPrompt).not.toContain('Available agent types');
+  });
+});
+
 describe('buildSystemPromptWiring — unnamed-worker toolBase dedupe guard (#3359)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

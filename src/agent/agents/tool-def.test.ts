@@ -61,7 +61,7 @@ describe('buildAgentToolDef', () => {
 
   it('agent_type property description refers to system prompt, not tool description', () => {
     const def = buildAgentToolDef(registryOf('research-agent'));
-    const agentTypeProp = def.input_schema.properties?.agent_type as
+    const agentTypeProp = def.input_schema.properties?.['agent_type'] as
       | { description?: string }
       | undefined;
     expect(agentTypeProp?.description).toContain('system prompt');
