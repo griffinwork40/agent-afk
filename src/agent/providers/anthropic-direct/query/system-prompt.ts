@@ -33,6 +33,14 @@ export interface StableSystemPromptInputs {
   goalPrompt?: string;
   /** Skill/agent manifest block; empty string when none. */
   manifest: string;
+  /**
+   * Dynamic "Available agent types" listing from {@link buildAgentTypeListing}.
+   * Empty string (or omitted) when no named agents are registered.  Appended
+   * after the skill manifest so it lands in the already-volatile tail of the
+   * system prompt (after `# Environment`), keeping the prefix cache stable
+   * across sessions that differ only in their agent sets (#4217).
+   */
+  agentTypeListing?: string;
   /** Operator system-prompt overlay; empty string or null when none. */
   userSystem: string | null;
 }
@@ -72,18 +80,20 @@ export interface EnvironmentIdentity {
  * cwd-dependent `# Environment` fragment, joined by blank lines.
  *
  * Order (see the module Invariant):
- *   1. `toolBase`        — tool/runtime conventions
- *   2. `userSystem`      — `# Agent AFK` doctrine + operator overlay + directives
- *   3. `memoryPrompt`    — cross-session-memory instructions
- *   4. `workspacePrompt` — shared-workspace usage instructions (when enabled)
- *   5. `hotMemory`       — `<cross-session-memory>` project-context block
- *  5b. `goalPrompt`      — `<active-goal>` persistent objective (when set)
- *   6. `# Environment`   — cwd/session/workspace (recomputed per cwd)
- *   7. `manifest`        — skill/agent catalog
- * Optional parts (`userSystem`, `hotMemory`, `manifest`) are skipped when
- * empty; `# Environment` is inserted before `manifest` by name rather than a
- * fixed index, so it stays correctly positioned regardless of which optional
- * parts are present.
+ *   1. `toolBase`          — tool/runtime conventions
+ *   2. `userSystem`        — `# Agent AFK` doctrine + operator overlay + directives
+ *   3. `memoryPrompt`      — cross-session-memory instructions
+ *   4. `workspacePrompt`   — shared-workspace usage instructions (when enabled)
+ *   5. `hotMemory`         — `<cross-session-memory>` project-context block
+ *  5b. `goalPrompt`        — `<active-goal>` persistent objective (when set)
+ *   6. `# Environment`     — cwd/session/workspace (recomputed per cwd)
+ *   7. `manifest`          — skill/agent catalog
+ *   8. `agentTypeListing`  — dynamic agent-type listing (#4217, volatile tail)
+ * Optional parts (`userSystem`, `hotMemory`, `manifest`, `agentTypeListing`)
+ * are skipped when empty.  `agentTypeListing` is placed AFTER `manifest` so
+ * it lands in the already-volatile tail of the system prompt alongside the
+ * `# Environment` block, keeping the prefix cache stable across sessions that
+ * differ only in their agent sets.
  *
  * `formatEnvironmentFragment` always emits `- Working directory: <cwd>`,
  * conditionally appends `- Session: <id> (...)` when an identity field is
@@ -116,5 +126,8 @@ export function assembleSystemPrompt(
   if (parts.goalPrompt && parts.goalPrompt.length > 0) ordered.push(parts.goalPrompt);
   ordered.push(environment);
   if (parts.manifest.length > 0) ordered.push(parts.manifest);
+  // Agent-type listing is placed last — in the already-volatile tail — so
+  // agent-set differences between sessions never break the prefix cache (#4217).
+  if (parts.agentTypeListing && parts.agentTypeListing.length > 0) ordered.push(parts.agentTypeListing);
   return ordered.join('\n\n');
 }

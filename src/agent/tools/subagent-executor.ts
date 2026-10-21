@@ -10,7 +10,7 @@
 
 import type { TraceSink } from '../trace/index.js';
 import type { AnthropicToolDef, ToolCall, ToolResult } from './types.js';
-import { buildAgentToolDef } from '../agents/index.js';
+import { buildAgentToolDef, buildAgentTypeListing } from '../agents/index.js';
 import type { AgentExecutionMode } from './subagent/input-parse.js';
 import type { BuildChildConfigArgs } from './subagent/child-config.js';
 import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
@@ -81,6 +81,20 @@ export class SubagentExecutor implements SubagentControl {
    */
   describeAgentTool(): AnthropicToolDef {
     return buildAgentToolDef(this.ctx.agentRegistry);
+  }
+
+  /**
+   * The dynamic "Available agent types" listing for the **system prompt**.
+   *
+   * Returns an empty string when no named agents are registered (nothing is
+   * injected into the prompt).  This is the counterpart to
+   * {@link describeAgentTool}: the tool description stays static and
+   * byte-identical across sessions, while this string carries the
+   * session-specific listing into the already-volatile tail of the system
+   * prompt after the `# Environment` block (#4217).
+   */
+  describeAgentTypeListing(): string {
+    return buildAgentTypeListing(this.ctx.agentRegistry);
   }
 
   /**

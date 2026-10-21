@@ -10,4 +10,4 @@ export type {
 } from './types.js';
 export { resolveAgentToolAccess } from './resolve.js';
 export { loadAgentRegistry } from './registry.js';
-export { buildAgentToolDef } from './tool-def.js';
+export { buildAgentToolDef, buildAgentTypeListing } from './tool-def.js';

@@ -323,6 +323,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
       surface: this.providerOpts.surface ?? 'cli',
       getCurrentCwd: () => _currentCwd,
       runtimeStateSource,
+      // Dynamic agent-type listing injected into the volatile system-prompt tail
+      // rather than the tool description, preserving prefix-cache stability across
+      // sessions that differ only in their agent sets (#4217).
+      agentTypeListing: this.providerOpts.subagentExecutor?.describeAgentTypeListing?.() ?? '',
     });
 
     const patchedConfig: typeof config = { ...config, systemPrompt: spw.initialSystemPrompt };

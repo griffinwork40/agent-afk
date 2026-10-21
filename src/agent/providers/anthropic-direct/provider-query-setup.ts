@@ -193,6 +193,10 @@ export function setUpQuerySession(
     skillExecutor: ctx.skillExecutor ?? undefined,
     runtimeStateSource,
     userSystem,
+    // Dynamic agent-type listing injected into the volatile system-prompt tail
+    // rather than the tool description, preserving prefix-cache stability across
+    // sessions that differ only in their agent sets (#4217).
+    agentTypeListing: ctx.subagentExecutor?.describeAgentTypeListing() ?? '',
   });
 
   // Dump prompt debug info if AFK_DUMP_PROMPT is set (wired via --dump-prompt CLI flag).
