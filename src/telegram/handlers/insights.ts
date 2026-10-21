@@ -109,4 +109,5 @@ export async function handleInsights(ctx: Context, log: LogFn): Promise<void> {
   for (const chunk of splitLongMessage(fullText)) {
     await ctx.reply(chunk, { parse_mode: 'HTML' });
   }
+  log('Insights command completed:', { days, recs: recs.length });
 }

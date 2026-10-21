@@ -257,7 +257,7 @@ describe('handleInsights', () => {
   it('sends multiple reply chunks when output exceeds 4096 chars', async () => {
     // Build enough recommendations to push past Telegram's 4096-char limit
     const manyRecs = Array.from({ length: 60 }, (_, i) => ({
-      severity: 'info',
+      severity: 'info' as const,
       title: `Recommendation number ${i + 1} with a fairly long title`,
       body: 'This is the body text for the recommendation, long enough to push the total past the limit.',
       metric: 0.1,
