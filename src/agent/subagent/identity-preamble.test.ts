@@ -270,25 +270,25 @@ describe('injectSubagentIdentityPreamble', () => {
   });
 
   it('injects stash rule when config.cwd is a worktree path', () => {
-    const cfg: AgentConfig = {
+    const cfg = {
       systemPrompt: 'TASK PROMPT',
       isNonInteractive: true,
       depth: 1,
       maxDepth: 3,
       cwd: WORKTREE_CWD,
-    };
+    } as AgentConfig;
     const sp = injectSubagentIdentityPreamble(cfg).systemPrompt as string;
     expect(sp).toContain(STASH_RULE);
   });
 
   it('does NOT inject stash rule when config.cwd is a non-worktree path', () => {
-    const cfg: AgentConfig = {
+    const cfg = {
       systemPrompt: 'TASK PROMPT',
       isNonInteractive: true,
       depth: 1,
       maxDepth: 3,
       cwd: ROOT_CWD,
-    };
+    } as AgentConfig;
     const sp = injectSubagentIdentityPreamble(cfg).systemPrompt as string;
     expect(sp).not.toContain(STASH_RULE);
   });
