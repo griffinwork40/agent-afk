@@ -138,7 +138,7 @@ sh(`git commit -m "chore(release): ${tag}"`, { mutates: true, inherit: true });
 // 7. Tag
 sh(`git tag -a ${tag} -m "${tag}"`, { mutates: true, inherit: true });
 
-// 8. Push
+// 8. Push (--atomic needs a remote that advertises atomic capability)
 sh(`git push --atomic origin ${branch} refs/tags/${tag}`, { mutates: true, inherit: true });
 
 console.log(`\n✓ Released ${tag}`);
