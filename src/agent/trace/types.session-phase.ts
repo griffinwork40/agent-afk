@@ -313,8 +313,8 @@ export type SessionPhaseName =
   | 'subagent_model_fallback'
   // The round-cap delivery notice (roundDeliveryNotice) could not be injected
   // into any valid message position — the tail message shape did not allow it
-  // (e.g. anthropic: tail was not a user message; openai: tail tool message
-  // had neither string nor array content). PURE OBSERVABILITY — the notice was
+  // (e.g. anthropic: tail was not a user message; openai: no string-content
+  // tool message to carry it). PURE OBSERVABILITY — the notice was
   // silently dropped before this event existed; now a trace row is written so
   // operators can detect the gap. `metadata` carries `provider` and `round`.
   | 'round_cap_notice_dropped'
