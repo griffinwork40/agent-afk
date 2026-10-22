@@ -6,6 +6,7 @@
  * @module agent/tools/handlers/lsp-shared
  */
 
+import { readFile } from 'node:fs/promises';
 import { env } from '../../../config/env.js';
 import { LspClientError } from '../../lsp/client.js';
 
@@ -21,6 +22,30 @@ export function lspFailureMessage(err: unknown, timeoutMessage: string): string 
     case 'spawn': return 'Failed to spawn LSP server';
     case 'exited': return 'LSP server exited before responding';
     case 'response': return err.message === 'Unsupported file type' ? err.message : 'LSP server returned an error';
+  }
+}
+
+/** Abort the I/O where supported AND race it: a stalled OS open may ignore abort. */
+export async function readLspSource(filePath: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new LspClientError('aborted', 'Aborted');
+  if (timeoutMs <= 0) throw new LspClientError('timeout', 'LSP source read timed out');
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    const fail = (kind: 'timeout' | 'aborted') => {
+      reject(new LspClientError(kind, kind === 'aborted' ? 'Aborted' : 'LSP source read timed out'));
+      controller.abort();
+    };
+    timer = setTimeout(() => fail('timeout'), timeoutMs);
+    onAbort = () => fail('aborted');
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([readFile(filePath, { encoding: 'utf8', signal: controller.signal }), guard]);
+  } finally {
+    clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
   }
 }
 

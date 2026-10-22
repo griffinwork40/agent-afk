@@ -10,7 +10,7 @@
  *   - A start that every acquirer has abandoned (timeout/abort) is disposed,
  *     so a server that never finishes `initialize` is not left orphaned.
  *   - Idle timers are `.unref()`ed and every live server is disposed on
- *     process exit via `registerCleanup`.
+ *     graceful cleanup via `registerCleanup`; client-process guards hard exit.
  *
  * Key deviation from the #4272 contract wording: the key also includes the
  * spec's command + args, so two different binaries for the same language and
@@ -66,6 +66,7 @@ interface Entry {
   /** Acquirers currently waiting on `starting`. */
   waiters: number;
   abortStart: AbortController;
+  lastAcquiredAt: number;
   idleTimer: NodeJS.Timeout | null;
   abandonTimer: NodeJS.Timeout | null;
 }
@@ -109,7 +110,7 @@ export class LspServerPool {
       entry = undefined;
     }
     if (entry?.client) {
-      this.scheduleIdle(entry);
+      entry.lastAcquiredAt = Date.now();
       return entry.client;
     }
     if (!entry) entry = this.createEntry(key, spec, realpathOr(root));
@@ -120,6 +121,7 @@ export class LspServerPool {
     const entry: Entry = {
       key, client: null, starting: null, waiters: 0,
       abortStart: new AbortController(), idleTimer: null, abandonTimer: null,
+      lastAcquiredAt: Date.now(),
     };
     this.entries.set(key, entry);
     this.spawnCount++;
@@ -134,6 +136,7 @@ export class LspServerPool {
           throw new LspClientError('exited', 'LSP server exited before responding');
         }
         entry.client = client;
+        entry.lastAcquiredAt = Date.now();
         client.onExit(() => { if (this.entries.get(key) === entry) this.evict(entry); });
         this.scheduleIdle(entry);
         return client;
@@ -190,20 +193,19 @@ export class LspServerPool {
     }
   }
 
-  private scheduleIdle(entry: Entry): void {
-    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+  private scheduleIdle(entry: Entry, delayMs?: number): void {
     const idleMs = this.opts.idleShutdownMs ?? getIdleShutdownMs();
     entry.idleTimer = setTimeout(() => {
       entry.idleTimer = null;
       const client = entry.client;
       if (!client || this.entries.get(entry.key) !== entry) return;
-      const idleFor = Date.now() - client.lastActivityAt;
+      const idleFor = Date.now() - Math.max(client.lastActivityAt, entry.lastAcquiredAt);
       if (client.pendingRequests > 0 || idleFor < idleMs) {
-        this.scheduleIdle(entry);
+        this.scheduleIdle(entry, client.pendingRequests > 0 ? idleMs : idleMs - idleFor);
         return;
       }
       this.evict(entry);
-    }, idleMs);
+    }, delayMs ?? idleMs);
     entry.idleTimer.unref();
   }
 
@@ -243,24 +245,9 @@ export function getLspPool(): LspServerPool {
   if (!pool) {
     const created = new LspServerPool();
     pool = created;
-    // Async cleanup for graceful shutdown (SIGTERM / normal exit with drain).
+    // Graceful draining is async. The spawn-time guardian in client-process
+    // independently kills ready, starting, and disposing servers on hard exit.
     registerCleanup(() => created.disposeAll());
-    // Synchronous process.on('exit') fires even on daemon crash / SIGKILL-after-
-    // exit-event. We cannot await here (synchronous context) but calling
-    // disposeAll() schedules the async disposal chain. What matters on a hard
-    // exit is that each LspClient calls killServerTree() synchronously via its
-    // own 'exit' handler registered in dispose(). This hook ensures the pool
-    // iterates all live entries and triggers those kills even when the async
-    // cleanup above never had a chance to run.
-    process.on('exit', () => {
-      for (const entry of created['entries'].values()) {
-        const client = entry.client;
-        if (client) {
-          // Best-effort synchronous kill; errors are silently swallowed on exit.
-          try { void client.dispose(); } catch { /* ignore */ }
-        }
-      }
-    });
   }
   return pool;
 }

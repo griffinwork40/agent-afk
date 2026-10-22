@@ -24,14 +24,14 @@
  * @module agent/tools/handlers/lsp-symbols
  */
 
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { env } from '../../../config/env.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { decidePathAccess } from './path-policy.js';
 import type { ToolHandlerContext } from '../types.js';
-import { getSymbolsTimeoutMs, lspFailureMessage } from './lsp-shared.js';
+import { getSymbolsTimeoutMs, lspFailureMessage, readLspSource } from './lsp-shared.js';
+import { LspClientError } from '../../lsp/client.js';
 import { realpathSafe } from './_cwd-utils.js';
 import { withPooledFile } from '../../lsp/query.js';
 import {
@@ -145,11 +145,14 @@ export async function queryLspSymbol(
     return { locations: [], error: `Unsupported file type: ${ext}` };
   }
   const t0 = Date.now();
+  const budgetMs = getSymbolsTimeoutMs();
   let content: string;
   try {
-    content = await readFile(filePath, 'utf8');
-  } catch {
-    return { locations: [], error: 'Failed to read source file' };
+    content = await readLspSource(filePath, budgetMs, signal);
+  } catch (err) {
+    return { locations: [], error: err instanceof LspClientError
+      ? lspFailureMessage(err, 'LSP symbols timed out (increase AFK_LSP_SYMBOLS_TIMEOUT_MS)')
+      : 'Failed to read source file' };
   }
   const spec = typescriptSpecFromCommand(serverCmd);
   const root = rootDir ?? typescriptRootFor(filePath);
@@ -157,7 +160,7 @@ export async function queryLspSymbol(
   // F4: subtract the time spent reading the file so the withPooledFile
   // deadline covers the full budget, not just what remains after the read.
   const elapsed = Date.now() - t0;
-  const timeoutMs = Math.max(0, getSymbolsTimeoutMs() - elapsed);
+  const timeoutMs = Math.max(0, budgetMs - elapsed);
   try {
     const raw = await withPooledFile(spec, filePath, content, { root, timeoutMs, signal }, (ctx) => {
       const params: Record<string, unknown> = {

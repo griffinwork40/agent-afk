@@ -21,10 +21,9 @@
  * @module agent/tools/handlers/lsp-diagnostics
  */
 
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { env } from '../../../config/env.js';
-import { getTimeoutMs } from './lsp-shared.js';
+import { getTimeoutMs, readLspSource } from './lsp-shared.js';
 import { awaitSyncDiagnostics, withPooledFile } from '../../lsp/query.js';
 import {
   DEFAULT_LSP_CMD,
@@ -76,12 +75,14 @@ export function isLspDiagnosticsEnabled(): boolean {
 export async function queryLspDiagnostics(
   filePath: string,
   serverCmd: readonly string[] = DEFAULT_LSP_CMD,
+  signal?: AbortSignal,
 ): Promise<LspDiagnostic[]> {
   if (!TYPESCRIPT_SERVER_DEFINITION.languageIds[path.extname(filePath).toLowerCase()]) return [];
   const t0 = Date.now();
+  const budgetMs = getTimeoutMs();
   let content: string;
   try {
-    content = await readFile(filePath, 'utf8');
+    content = await readLspSource(filePath, budgetMs, signal);
   } catch {
     return [];
   }
@@ -92,8 +93,8 @@ export async function queryLspDiagnostics(
     const elapsed = Date.now() - t0;
     const published = await withPooledFile(
       spec, filePath, content,
-      { root: typescriptRootFor(filePath), timeoutMs: Math.max(0, getTimeoutMs() - elapsed) },
-      (ctx) => awaitSyncDiagnostics(ctx),
+      { root: typescriptRootFor(filePath), timeoutMs: Math.max(0, budgetMs - elapsed), signal },
+      (ctx) => awaitSyncDiagnostics(ctx, signal),
     );
     return published ? published.diagnostics.filter(isObject).map(toDiagnostic) : [];
   } catch (err) {
@@ -148,12 +149,11 @@ export function formatDiagnostics(filePath: string, diags: LspDiagnostic[]): str
 export async function appendLspDiagnostics(
   filePath: string,
   serverCmd?: readonly string[],
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!isLspDiagnosticsEnabled()) return '';
   try {
-    const diags = serverCmd !== undefined
-      ? await queryLspDiagnostics(filePath, serverCmd)
-      : await queryLspDiagnostics(filePath);
+    const diags = await queryLspDiagnostics(filePath, serverCmd, signal);
     return formatDiagnostics(filePath, diags);
   } catch {
     return '';

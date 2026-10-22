@@ -8,7 +8,7 @@
  * @module agent/lsp/install.footprint
  */
 
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getLspServersDir } from '../../paths.lsp.js';
 
@@ -37,6 +37,7 @@ async function dirBytes(dir: string): Promise<number> {
   let total = 0;
   let entries: string[];
   try {
+    if (!(await lstat(dir)).isDirectory()) return 0;
     entries = await readdir(dir);
   } catch {
     return 0;
@@ -50,7 +51,7 @@ async function dirBytes(dir: string): Promise<number> {
       if (name === undefined) break;
       const child = join(dir, name);
       try {
-        const st = await stat(child);
+        const st = await lstat(child);
         if (st.isDirectory()) {
           total += await dirBytes(child);
         } else {

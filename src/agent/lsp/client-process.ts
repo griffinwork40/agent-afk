@@ -18,7 +18,7 @@
  * @module agent/lsp/client-process
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { killProcessGroup, killProcessGroupAndWait } from '../../utils/kill-process-group.js';
@@ -86,15 +86,50 @@ export function buildSpawnCommand(
   return { file: deps.execPath ?? process.execPath, args: [entry, ...args] };
 }
 
+// Track from spawn, not initialize: even a starting or asynchronously disposing
+// client must be killed when Node can no longer run promise continuations.
+const children = new Set<ChildProcess>();
+let guardianInstalled = false;
+
+function terminateChildren(): void {
+  for (const child of children) killServerTreeSync(child);
+}
+
+function onSigterm(): void {
+  terminateChildren();
+  // A CLI/daemon shutdown handler owns termination when present. Otherwise
+  // restore Node's default signal semantics rather than swallowing SIGTERM.
+  if (process.listenerCount('SIGTERM') === 1) {
+    process.removeListener('SIGTERM', onSigterm);
+    process.kill(process.pid, 'SIGTERM');
+  }
+}
+
+function trackChild(child: ChildProcess): void {
+  children.add(child);
+  const forget = () => { children.delete(child); };
+  child.once('exit', forget);
+  child.once('error', forget);
+  if (!guardianInstalled) {
+    guardianInstalled = true;
+    process.once('exit', terminateChildren);
+    // Run before existing once-listeners remove themselves during dispatch,
+    // so listenerCount still reflects the surface's ownership of shutdown.
+    process.prependListener('SIGTERM', onSigterm);
+  }
+}
+
 /** Spawn the server for `command args` in `root` (stdio piped, stderr ignored). */
 export function spawnServer(command: string, args: readonly string[], root: string): ChildProcess {
   const cmd = buildSpawnCommand(command, args);
-  return spawn(cmd.file, [...cmd.args], {
+  const child = spawn(cmd.file, [...cmd.args], {
     cwd: root,
     stdio: ['pipe', 'pipe', 'ignore'],
     detached: process.platform !== 'win32',
     windowsHide: true,
   });
+  trackChild(child);
+  return child;
 }
 
 /** Promise that settles once `proc` has exited (or failed to spawn). */
@@ -142,6 +177,23 @@ export async function killServerTreeAndWait(
     await killProcessGroupAndWait(pid, 'SIGKILL', { platform }, timeoutMs);
   }
   if (platform !== 'win32') forceKillRoot(proc);
+}
+
+/** Exit-only tree kill: no promises or async taskkill may outlive this call. */
+export function killServerTreeSync(proc: ChildProcess, platform: NodeJS.Platform = process.platform): void {
+  if (hasTerminated(proc)) return;
+  if (platform !== 'win32') {
+    killServerTree(proc, platform);
+    return;
+  }
+  if (proc.pid !== undefined && proc.pid > 0) {
+    try {
+      spawnSync('taskkill', ['/F', '/T', '/PID', String(proc.pid)], {
+        stdio: 'ignore', timeout: 5_000, windowsHide: true,
+      });
+    } catch { /* best effort; root fallback below */ }
+  }
+  forceKillRoot(proc);
 }
 
 /** Kill only the direct child. Never throws. */
