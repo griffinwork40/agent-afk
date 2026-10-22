@@ -56,6 +56,9 @@ agent-afk@*
 .afk-work/
 .afk/plans
 .afk/generated-images/
+# Browser-smoke scratch (scripts, screenshots, results) written by agent lanes.
+.afk/smoke*
+.afk/*-smoke/
 drafts/
 
 # AFK worktree bookkeeping (local-only)

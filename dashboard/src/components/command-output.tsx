@@ -7,7 +7,7 @@
  *
  * Each item contains one or more `CommandOutputBlock` entries from the
  * `POST /api/sessions/:id/commands` response. Blocks are rendered via the
- * block-renderer registry; unknown kinds fall back to the ANSI text renderer.
+ * block-renderer registry; unknown kinds fall back to the plain-text field.
  */
 
 import { useState, type ReactElement } from 'react';
@@ -69,13 +69,13 @@ export function CommandOutput({ input, blocks }: CommandOutputProps): ReactEleme
         </button>
       </div>
       {/* Output blocks */}
-      <div className="px-3 py-2 flex flex-col gap-0.5 whitespace-pre-wrap break-words leading-snug">
+      <div className="min-w-0 px-3 py-2 flex flex-col gap-2 break-words leading-snug">
         {blocks.map((block, i) => {
           const renderer = getBlockRenderer(block.kind ?? 'text');
           try {
-            return <span key={i}>{renderer(block)}</span>;
+            return <div key={i} className="min-w-0 whitespace-pre-wrap">{renderer(block)}</div>;
           } catch {
-            return <span key={i}>{block.text}</span>;
+            return <div key={i} className="whitespace-pre-wrap">{block.text}</div>;
           }
         })}
       </div>

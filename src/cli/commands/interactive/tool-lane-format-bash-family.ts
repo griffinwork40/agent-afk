@@ -75,7 +75,9 @@ function blankProse(segment: string): string {
 /** Family of the command word `span` within the plain (escape-free) command. */
 export function verbFamily(plain: string, span: Span): VerbFamily {
   const word = plain.slice(span.start, span.end);
-  const verb = word.split('/').pop() ?? word;
+  const rawVerb = word.split('/').pop() ?? word;
+  // Strip a trailing ellipsis (width-truncated word) before the floor lookup.
+  const verb = rawVerb.endsWith('\u2026') ? rawVerb.slice(0, -1) : rawVerb;
   if (DANGER_VERBS.has(verb)) return 'danger';
   const raw = plain.slice(span.start, span.segmentEnd).trim();
   const body = PAYLOAD_VERBS.has(verb) ? raw : blankProse(raw);

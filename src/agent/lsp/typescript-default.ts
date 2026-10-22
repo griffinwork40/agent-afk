@@ -11,7 +11,7 @@ import path from 'node:path';
 import type { ServerDefinition, ServerSpec } from './server-spec.js';
 
 /** Default LSP server command (binary + stdio flag). */
-export const DEFAULT_LSP_CMD: readonly string[] = ['typescript-language-server', '--stdio'];
+export const DEFAULT_LSP_CMD: readonly string[] = Object.freeze(['typescript-language-server', '--stdio']);
 
 /** TS/JS server definition. The registry lane replaces this in wave 2. */
 export const TYPESCRIPT_SERVER_DEFINITION: ServerDefinition = {

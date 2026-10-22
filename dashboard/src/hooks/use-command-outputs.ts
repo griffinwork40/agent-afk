@@ -23,6 +23,7 @@ export interface CommandOutputItem {
 export interface UseCommandOutputsResult {
   /** Ordered output items for one session (empty when none). */
   itemsFor: (sessionId: string | null) => CommandOutputItem[];
+  clearItems: (sessionId: string, preserveClearConfirmation?: boolean) => void;
   /** Append an output for a session, anchored after `afterCount` transcript items. */
   addItem: (sessionId: string, input: string, response: CommandResponse, afterCount: number) => void;
 }
@@ -35,16 +36,31 @@ export function useCommandOutputs(): UseCommandOutputsResult {
 
   const addItem = useCallback(
     (sessionId: string, input: string, response: CommandResponse, afterCount: number) => {
-      const item: CommandOutputItem = { key: ++nextKey, input, response, afterCount };
-      setBySession((prev) => ({ ...prev, [sessionId]: [...(prev[sessionId] ?? EMPTY), item] }));
+      const cleared = response.control.kind === 'clear';
+      const item: CommandOutputItem = {
+        key: ++nextKey, input, response, afterCount: cleared ? 0 : afterCount,
+      };
+      // Keep the clear confirmation, but discard all previous local outputs.
+      setBySession((prev) => ({
+        ...prev, [sessionId]: [...(cleared ? EMPTY : prev[sessionId] ?? EMPTY), item],
+      }));
     },
     [],
   );
+
+  const clearItems = useCallback((sessionId: string, preserveClearConfirmation = false) => {
+    setBySession((prev) => {
+      const confirmation = preserveClearConfirmation
+        ? [...(prev[sessionId] ?? EMPTY)].reverse().find((item) => item.response.control.kind === 'clear')
+        : undefined;
+      return { ...prev, [sessionId]: confirmation ? [confirmation] : EMPTY };
+    });
+  }, []);
 
   const itemsFor = useCallback(
     (sessionId: string | null) => (sessionId === null ? EMPTY : bySession[sessionId] ?? EMPTY),
     [bySession],
   );
 
-  return { itemsFor, addItem };
+  return { itemsFor, addItem, clearItems };
 }

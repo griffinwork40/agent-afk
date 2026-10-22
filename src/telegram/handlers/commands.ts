@@ -1,193 +1,24 @@
 import { Context } from 'telegraf';
-import { Markup } from 'telegraf';
 import type { Message } from 'telegraf/types';
 import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import { isAbsolute, resolve } from 'path';
-import { HookBlockedError, isEnoent, isErrnoCode } from '../../utils/errors.js';
+import { isEnoent, isErrnoCode } from '../../utils/errors.js';
 import { SessionManager } from '../session-manager.js';
-import { withTypingIndicator } from '../typing-indicator.js';
 import {
   formatError,
-  formatClear,
-  formatCompact,
-  formatCompactNoop,
-  formatModelSwitch,
   formatCwdCurrent,
   formatCwdSwitch,
-  formatNameCurrent,
-  formatNameInvalid,
-  formatNameSet,
-  escapeHtml,
   formatSystemError,
 } from '../formatter.js';
-import { isModelAvailable } from '../../agent/auth/model-availability.js';
-import {
-  MODEL_ALIASES_HINT,
-  unconfiguredSlotError,
-} from '../../agent/session/model-slots.js';
-import type { AgentModelInput } from '../../agent/types.js';
-import { slugifySessionName } from '../../cli/session-name.js';
-import { formatResumeCommand } from '../../cli/resume-command.js';
 import { routeFromCtx } from '../route.js';
-import { isValidTelegramModelArg } from './commands.model-validate.js';
 
 type LogFn = (...args: unknown[]) => void;
 
-/**
- * Canonical model handles accepted by /model and the inline keyboard. Re-exported
- * from the single source of truth in `model-slots.ts` so this surface and the CLI
- * `/model` picker can never drift. bot.ts imports it from here.
+/*
+ * Telegram-only commands. /clear, /compact, /model and /name were duplicates of
+ * shared slash commands and now run through handlers/slash.ts (Stage 5).
  */
-export { MODEL_ALIASES_HINT };
-
-/**
- * Handle /clear command (SDK /clear - clear conversation history)
- */
-export async function handleClear(
-  ctx: Context,
-  sessionManager: SessionManager,
-  registeredCommandChats: Set<number>,
-  log: LogFn
-): Promise<void> {
-  const route = routeFromCtx(ctx);
-  if (!route) {
-    await ctx.reply(formatError('Could not identify chat'));
-    return;
-  }
-
-  try {
-    await sessionManager.resetSession(route);
-    // Command re-registration is chat-scoped (setMyCommands per chat).
-    registeredCommandChats.delete(route.chatId);
-    await ctx.reply(formatClear());
-  } catch (error) {
-    log('Clear error:', error);
-    await ctx.reply(formatError(error as Error));
-  }
-}
-
-/**
- * Handle /compact command — runs the provider-side summarization step in
- * place. Replies with counts on success, a neutral info line on no-op, or
- * an error message on failure.
- */
-export async function handleCompact(
-  ctx: Context,
-  sessionManager: SessionManager,
-  log: LogFn
-): Promise<void> {
-  const route = routeFromCtx(ctx);
-  if (!route) {
-    await ctx.reply(formatError('Could not identify chat'));
-    return;
-  }
-
-  try {
-    const session = await sessionManager.getSession(route);
-    const hookRegistry = session.hookRegistry;
-    // Keep the "typing…" indicator alive across the PreCompact hook and the
-    // model-call compaction, which can outlast the ~5s one-shot expiry.
-    // Invariant: fire PreCompact before compaction. block -> skip, not error.
-    const result = await withTypingIndicator(ctx, async () => {
-      if (hookRegistry) {
-        await hookRegistry.dispatch({
-          event: 'PreCompact',
-          sessionId: session.sessionId,
-          trigger: 'manual',
-        });
-      }
-      return session.compact();
-    });
-    if (!result.compacted) {
-      await ctx.reply(formatCompactNoop(result.reason ?? 'unknown'));
-    } else {
-      await ctx.reply(
-        formatCompact({
-          before: result.messagesBefore,
-          after: result.messagesAfter,
-          ...(result.tokensSavedEstimate !== undefined
-            ? { tokensSavedEstimate: result.tokensSavedEstimate }
-            : {}),
-        }),
-      );
-    }
-  } catch (error) {
-    if (error instanceof HookBlockedError) {
-      await ctx.reply(`Compaction skipped: ${escapeHtml(error.reason ?? 'blocked by hook')}`);
-    } else {
-      log('Compact error:', error);
-      await ctx.reply(formatError(error as Error));
-    }
-  }
-}
-
-/**
- * Handle /model command - switch Claude model
- */
-export async function handleModelSwitch(
-  ctx: Context,
-  sessionManager: SessionManager,
-  log: LogFn
-): Promise<void> {
-  const route = routeFromCtx(ctx);
-  if (!route) {
-    await ctx.reply(formatError('Could not identify chat'));
-    return;
-  }
-
-  const text = (ctx.message as Message.TextMessage).text;
-  const args = text.split(/\s+/).slice(1);
-
-  if (args.length === 0) {
-    const currentModel = sessionManager.getModel(route);
-    const buttons = MODEL_ALIASES_HINT.map(alias => [
-      Markup.button.callback(
-        isModelAvailable(alias) ? alias : `${alias} — needs sign-in`,
-        `afk:m:${alias}`,
-      ),
-    ]);
-    await ctx.reply(
-      `Current model: <b>${escapeHtml(currentModel.toUpperCase())}</b>\n\nSwitch to:`,
-      {
-        parse_mode: 'HTML',
-        reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
-      },
-    );
-    return;
-  }
-
-  const modelArg = args[0];
-  if (!modelArg) {
-    await ctx.reply(formatError('Please specify a model: local, small, medium, large, opus, sonnet, haiku, or an org/model id'));
-    return;
-  }
-
-  const model = modelArg.toLowerCase() as AgentModelInput;
-  if (!isValidTelegramModelArg(model)) {
-    await ctx.reply(
-      formatError(`Invalid model: ${modelArg}\nAliases: ${MODEL_ALIASES_HINT.join(', ')}, or a full model id`)
-    );
-    return;
-  }
-
-  // Reject an unconfigured capability tier (e.g. an empty `local` slot) before
-  // the close-and-recreate switch — an empty id would otherwise reach the
-  // provider as an opaque empty-model error or a silent cloud fallback.
-  const unconfigured = unconfiguredSlotError(model);
-  if (unconfigured) {
-    await ctx.reply(formatError(unconfigured));
-    return;
-  }
-
-  try {
-    await sessionManager.switchModel(route, model);
-    await ctx.reply(formatModelSwitch(model));
-  } catch (error) {
-    log('Model switch error:', error);
-    await ctx.reply(formatError(error as Error));
-  }
-}
 
 /**
  * Resolve a user-supplied path to an absolute path.
@@ -287,63 +118,5 @@ export async function handleCwd(
   } catch (error) {
     log('Cwd switch error:', error);
     await ctx.reply(formatError(error as Error));
-  }
-}
-
-/**
- * Handle /name [name] — show or set the human-readable name for this chat's
- * session. Mirrors the CLI `/name` command so a Telegram conversation can be
- * resumed by name from the CLI (`afk i --resume <name>`) instead of a UUID.
- *
- * - No args: reply with the current name (or a hint when unset).
- * - With an arg: slugify it; reject when it has no usable characters;
- *   otherwise set the name on the chat's accumulating session stats. Once the
- *   conversation has a recorded turn the name persists immediately so it's
- *   resolvable from the CLI; before the first turn the name rides along on the
- *   first per-turn autosave.
- *
- * The leading command token (`/name`, or `/name@botname` in groups) is
- * dropped and the remainder is joined back into one string, so a multi-word
- * name like `/name my cool session` slugifies as a phrase.
- */
-export async function handleName(
-  ctx: Context,
-  sessionManager: SessionManager,
-  log: LogFn,
-): Promise<void> {
-  const route = routeFromCtx(ctx);
-  if (!route) {
-    await ctx.reply(formatError('Could not identify chat'));
-    return;
-  }
-
-  const text = (ctx.message as Message.TextMessage).text;
-  const raw = text.split(/\s+/).slice(1).join(' ').trim();
-
-  // No arg → report the current name.
-  if (!raw) {
-    await ctx.reply(formatNameCurrent(sessionManager.getSessionName(route)));
-    return;
-  }
-
-  const slug = slugifySessionName(raw);
-  if (!slug) {
-    await ctx.reply(formatNameInvalid());
-    return;
-  }
-
-  try {
-    const { persisted } = sessionManager.setSessionName(route, slug);
-    const resumeCommand = persisted
-      ? formatResumeCommand(slug, sessionManager.getModel(route))
-      : undefined;
-    await ctx.reply(formatNameSet(slug, resumeCommand));
-  } catch (error) {
-    // The name was set in memory; only the immediate persist failed (it will
-    // retry on the next per-turn autosave). Surface the failure without
-    // pretending the rename didn't take. Do NOT forward error.message — a
-    // failed writeFileSync leaks the host filesystem path to the user.
-    log('Name set error:', error);
-    await ctx.reply(`🏷️ Named "${slug}" but couldn't save it — it'll retry on your next message.`);
   }
 }
