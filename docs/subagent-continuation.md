@@ -53,10 +53,19 @@ inherited from the chain. Omit them, or pass exactly the chain's values.
     sibling's chain.
   - The registry holds at most 256 chains and evicts the oldest chains that
     are not in flight. An evicted chain is refused as unknown.
-  - Before a terminal outcome clears in-flight, the runtime waits (at most
-    5s) for the child's message journal to flush, so an immediate
-    continuation never folds a truncated journal. On timeout the previous
-    link is kept.
+  - **Settling.** The subagent result is returned (foreground) or
+    delivered (background) as soon as the child finishes. The terminal
+    bookkeeping runs after that: the child's message journal flush (at most
+    5s) and, for write-capable chains, the workspace checkpoint (git, 10s
+    timeout per call). That bookkeeping is the chain's `settling` promise,
+    which never rejects. In-flight stays true until it settles. An
+    uncapped initial run's round charge is applied before the result is
+    delivered, so the delivered metadata is final. If the flush times out,
+    the previous link is kept, so a continuation never folds a truncated
+    journal.
+  - Checkpoint git calls pass `--no-optional-locks` (and set
+    `GIT_OPTIONAL_LOCKS=0`), so `git status` never takes `index.lock` while
+    the parent or a sibling commits in the same worktree.
 - `src/agent/tools/subagent/continuation-dispatch.ts`: mints a chain for
   every local initial dispatch and wraps the child handle so that every
   terminal outcome records into the chain exactly once (foreground, promoted,
@@ -91,8 +100,14 @@ inherited from the chain. Omit them, or pass exactly the chain's values.
 The initial run is charged its round cap. If the initial run was uncapped, it
 is charged the rounds it actually used, counted at runtime. Each continuation
 is charged its full allowance up front, clipped to what remains of the
-aggregate. Admission is synchronous, so two concurrent continuations of one
-chain cannot both pass. Charges are never refunded, with one exception: when
+aggregate. A continuation call reserves the chain synchronously before it
+awaits anything, so a concurrent second call on the same chain is refused at
+once as in flight and runs no git. The call holding the reservation then
+waits (at most 15s) for the previous run to settle, so a parent that
+continues right after receiving a result is admitted with the complete
+journal. After that it checks in-flight, drift, and limits. The charge
+itself is synchronous, so two concurrent continuations of one chain cannot
+both pass. Charges are never refunded, with one exception: when
 the continuation child was never constructed or never started (budget
 refusal, fork failure, or teardown before running), the charge, the count,
 and the in-flight flag are rolled back. A continuation is never re-dispatched
@@ -107,7 +122,10 @@ forked.` Reasons:
 - the chain is unknown (this includes invented ids and chains from before a
   restart or `/resume`);
 - the chain is owned by another actor;
-- a run on the chain is still in flight;
+- a run on the chain is still in flight (including another continuation
+  call that is being admitted);
+- the previous run is still finishing its bookkeeping after the 15s wait
+  (retry the continuation);
 - the continuation limit or the aggregate round limit has been reached;
 - an inherited field (`agent_type`, `model`, `cwd`, `isolation`,
   `readRoots`, `writeRoots`) differs from the chain's value;
@@ -116,6 +134,9 @@ forked.` Reasons:
   uncommitted changes (`git status --porcelain` fingerprint) changed.
   Checked for write-capable chains only; read-only chains and non-git cwds
   skip this check;
+- the workspace checkpoint is unavailable: `git status` (or the repo probe)
+  failed or timed out when the checkpoint was taken or at the recheck, so
+  drift cannot be ruled out. Write-capable chains only (fail closed; retry);
 - the previous child left no usable journal, either because message
   journaling is disabled (`AFK_MESSAGE_JOURNAL_DISABLED`) or because its fold
   is missing or empty;
