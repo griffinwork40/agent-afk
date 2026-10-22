@@ -24,6 +24,8 @@ import { dumpIfEnabled } from '../../session/prompt-dump.js';
 import type { ProviderQueryContext } from './provider-context.js';
 import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
 import { grantsWorkspacePrompt } from '../shared/tool-grant.js';
+import { deriveCredentialFromStore } from './provider-query-setup.credential.js';
+import { loadClaudeCodeOauthToken } from '../../auth/keychain.js';
 
 /** Everything the second half of `query()` needs from this one. */
 export interface QuerySetupResult {
@@ -36,6 +38,8 @@ export interface QuerySetupResult {
   systemPrefix: Awaited<ReturnType<typeof setUpQueryClient>>['systemPrefix'];
   throttleQueue: ReturnType<typeof setUpQueryClient>['throttleQueue'];
   tokenRefresher: ReturnType<typeof setUpQueryClient>['tokenRefresher'];
+  /** See {@link RetryLayerOptions.credentialFromStore}. */
+  credentialFromStore: boolean;
   queryDispatcher: ReturnType<typeof wireQueryDispatcher>['queryDispatcher'];
   runtimeStateSource: ReturnType<typeof wireQueryDispatcher>['runtimeStateSource'];
   toolDefs: ReturnType<typeof wireQueryDispatcher>['toolDefs'];
@@ -205,7 +209,60 @@ export function setUpQuerySession(
       : '',
   });
 
-  // Dump prompt debug info if AFK_DUMP_PROMPT is set (wired via --dump-prompt CLI flag).
+  dumpQuerySetupPrompt({ args, config, model, maxTokens, toolSystemAppend });
+
+  // Contract: `credentialFromStore` is true IFF the session token was sourced
+  // from the Claude Code OAuth keychain store (not an env var or slot-pinned
+  // key). `tokenRefresher` presence alone is insufficient: every top-level
+  // surface fills config.apiKey FROM the store (credential-resolver.ts:55-62),
+  // so `tokenRefresher` is installed for EVERY oauth && !localMode session —
+  // including ones whose token came from AFK_MODEL_<TIER>_API_KEY. We therefore
+  // compare the live token against the store value. The store read uses the
+  // 5 s in-process cache (keychain.ts:~24) so this is a cache hit on the same
+  // value the RetryLayer constructor already read in this construction path.
+  // If the store is unreadable, loadClaudeCodeOauthToken() returns undefined →
+  // comparison yields false → conservative outcome (no auto-swap).
+  const credentialFromStore = deriveCredentialFromStore(
+    token,
+    tokenRefresher !== undefined,
+    loadClaudeCodeOauthToken,
+  );
+
+  return {
+    client,
+    authMode,
+    localMode,
+    model,
+    maxTokens,
+    cwd,
+    systemPrefix,
+    throttleQueue,
+    tokenRefresher,
+    credentialFromStore,
+    queryDispatcher,
+    runtimeStateSource,
+    toolDefs,
+    modelToolsFactory,
+    resolvedSessionId,
+    stableSystemPrefix,
+    toolSystemAppend,
+  };
+}
+
+/** Dump prompt debug info if AFK_DUMP_PROMPT is set (wired via --dump-prompt CLI flag). */
+function dumpQuerySetupPrompt({
+  args,
+  config,
+  model,
+  maxTokens,
+  toolSystemAppend,
+}: {
+  args: ProviderQueryArgs;
+  config: AgentConfig;
+  model: string;
+  maxTokens: number;
+  toolSystemAppend: string | null;
+}): void {
   dumpIfEnabled({
     prompt: args.prompt,
     options: { model, maxTokens, system: toolSystemAppend },
@@ -226,23 +283,4 @@ export function setUpQuerySession(
       ...(config.apiKey ? { apiKey: { source: 'config' } } : {}),
     },
   });
-
-  return {
-    client,
-    authMode,
-    localMode,
-    model,
-    maxTokens,
-    cwd,
-    systemPrefix,
-    throttleQueue,
-    tokenRefresher,
-    queryDispatcher,
-    runtimeStateSource,
-    toolDefs,
-    modelToolsFactory,
-    resolvedSessionId,
-    stableSystemPrefix,
-    toolSystemAppend,
-  };
 }

@@ -221,6 +221,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       ...(opts.tokenRefresher ? { tokenRefresher: opts.tokenRefresher } : {}),
       autoResumeOnUsageLimit: opts.autoResumeOnUsageLimit ?? true,
       ...(opts.surface !== undefined ? { surface: opts.surface } : {}),
+      credentialFromStore: opts.credentialFromStore,
     });
     this.state = createSessionState({
       model: opts.model,

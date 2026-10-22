@@ -43,6 +43,7 @@ export function buildProviderQuery(
     systemPrefix,
     throttleQueue,
     tokenRefresher,
+    credentialFromStore,
     queryDispatcher,
     runtimeStateSource,
     toolDefs,
@@ -152,6 +153,7 @@ export function buildProviderQuery(
     userSystem: toolSystemAppend,
     systemPrefix,
     tokenRefresher,
+    credentialFromStore,
     ...(config.thinking !== undefined
       ? {
           thinking: resolveThinkingParam(config.thinking, maxTokens, model, resolvedEffort),
