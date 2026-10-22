@@ -29,8 +29,9 @@ import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
 import { prependSetupNotice } from '../worktree/worktree-setup.js';
 import { prependNeedsInputHeader } from './subagent/foreground-handoff.js';
-import { parseDispatchInput, wireDispatchChain, annotateChainResult, markChainPromoted } from './subagent/continuation-dispatch.js';
+import { parseDispatchInput, wireDispatchChain, annotateChainResult, markChainPromoted, isContinuableChain } from './subagent/continuation-dispatch.js';
 import { runContinuation, type ContinuationPlan } from './subagent/continuation-run.js';
+import { buildIsolationTeardownHook } from './subagent/continuation-worktree.js';
 import {
   setupIsolationWorktree,
   forkAndCheckCancel,
@@ -154,9 +155,10 @@ export async function executeOnce(
   { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.release(); return r; } }
 
   // isolation:"worktree" — may mutate childConfig.cwd to the worktree path.
+  // Skip worktree setup on continuation: the chain already owns the worktree.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
   let setupNotice: string | undefined; // #3601: failed repo-declared setup, surfaced to the parent too
-  if (parsed.isolation === 'worktree') {
+  if (parsed.isolation === 'worktree' && plan === undefined) {
     const isoResult = await setupIsolationWorktree({
       parsed, currentCwd, isolationCounterRef, childConfig,
       childWriteCapable, probe, budgetReceipt, signal: call.signal,
@@ -223,6 +225,11 @@ export async function executeOnce(
 
   const budgetRelease = budgetReceipt?.release;
   const promotionTookBudget = { value: false };
+  // For worktree-isolated chains: if the chain is still continuable after the
+  // child ends, keep the worktree locked (for the next link) instead of tearing
+  // it down. Extracted to buildIsolationTeardownHook (continuation-worktree.ts)
+  // to satisfy the 200-line function ceiling.
+  const onIsolationTeardown = buildIsolationTeardownHook(isolationTeardown, chain, ctx.continuationRegistry, isContinuableChain);
   const result = await runForegroundWithPromotion({
     handle,
     signal: call.signal,
@@ -240,6 +247,7 @@ export async function executeOnce(
     promotionTriggers,
     activeForegroundHandles,
     ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
+    ...(onIsolationTeardown !== undefined ? { onIsolationTeardown } : {}),
     ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
     onPromoted: () => markChainPromoted(handle),
   });

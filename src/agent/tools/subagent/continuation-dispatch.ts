@@ -142,15 +142,25 @@ export async function recordChainTerminal(args: ChainTerminalArgs): Promise<Work
 }
 
 /**
- * True when a continuation would be admitted on limits and isolation: worktree
- * chains are refused in v1 (D3), and an exhausted continuation count (incl.
- * MAX_CONTINUATIONS=0) or aggregate round budget would be refused (D4), so
- * the result line must not invite one.
+ * True when a continuation would be admitted on limits: an exhausted
+ * continuation count (incl. MAX_CONTINUATIONS=0) or aggregate round budget
+ * would be refused (D4), so the result line must not invite one.
+ * Worktree-isolated chains are now continuable (the worktree is kept and
+ * locked between links).
  */
 function isContinuable(chain: ChainRecord): boolean {
-  return chain.inputs.isolation !== 'worktree' &&
-    chain.continuations < chain.limits.maxContinuations &&
+  return chain.continuations < chain.limits.maxContinuations &&
     chain.roundsCharged < chain.limits.maxRounds;
+}
+
+/**
+ * Exported for the executor's isolation teardown hook: true when the chain
+ * will admit at least one more continuation. Callers that need to decide
+ * whether to keep or release a worktree use this instead of replicating the
+ * limit arithmetic.
+ */
+export function isContinuableChain(chain: ChainRecord): boolean {
+  return isContinuable(chain);
 }
 
 /** D6 structured chain metadata (snapshot of the chain's current state). */

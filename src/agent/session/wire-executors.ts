@@ -33,7 +33,9 @@ import {
 import { loadAgentRegistry } from '../agents/index.js';
 import { discoverPluginAgents } from '../tools/skill-bridge.js';
 import { resolveDelegationBudgetConfig, DelegationBudget } from '../tools/delegation-budget.js';
+import { dirname } from 'node:path';
 import { ContinuationRegistry } from '../subagent/continuation-registry.js';
+import { releaseChainWorktree } from '../tools/subagent/continuation-worktree.js';
 import type { SubagentExecutorContext } from '../tools/subagent-executor.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { TraceSink } from '../trace/writer.js';
@@ -335,6 +337,15 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   // Continuation chains (docs/subagent-continuation.md, D2): one in-memory
   // registry per root session, shared by reference with nested executors.
   const continuationRegistry = new ContinuationRegistry();
+  // Release any worktree kept for a chain when it is evicted from the 256-cap
+  // or disposed at session end (#4266). Best-effort: the callback never throws.
+  continuationRegistry.onEvict = (chain) => {
+    if (chain.isolatedWorktreePath === undefined) return;
+    // Resolve repoRoot from worktreePath: afk worktrees live under
+    // <repoRoot>/.afk-worktrees/<slug>, so parent of parent is the repo root.
+    const repoRoot = dirname(dirname(chain.isolatedWorktreePath));
+    void releaseChainWorktree({ repoRoot, worktreePath: chain.isolatedWorktreePath, chainId: chain.chainId, registry: continuationRegistry }).catch(() => { /* best-effort */ });
+  };
 
   // 1. The single root manager. Every executor below reads through this
   //    instance; a second manager would fork children outside the abort graph

@@ -3,7 +3,7 @@
  *
  * Contract: a call carrying `continuation_chain_id` is admitted here (fail
  * closed, nothing forked on any refusal) in this order: chain lookup + owner,
- * inherited-field overrides / worktree / host (D3), workspace drift for
+ * inherited-field overrides / host (D3), workspace drift for
  * write-capable chains (D5), the chain's synchronous charge + in-flight
  * (D4), then the seed (D1): the latest child journal's fold, read directly. The admitted call is then re-run
  * through the NORMAL dispatch path (`executeOnce`) with an input rebuilt from
@@ -117,9 +117,19 @@ async function reservedRefusal(chain: ChainRecord, id: string, recapture?: (cwd:
   return undefined;
 }
 
-/** Rebuild the dispatch input from the chain's stored inputs (D2: inherited, not overridable). */
+/**
+ * Rebuild the dispatch input from the chain's stored inputs (D2: inherited,
+ * not overridable). For worktree-isolated chains the cwd is overridden with
+ * the path of the kept + locked worktree stored on the chain record, so the
+ * continuation child runs in the SAME tree as its predecessor.
+ */
 function continuationInput(parsed: AgentInput, chain: ChainRecord, prompt: string, allowance: number): Record<string, unknown> {
   const s = chain.inputs;
+  // Worktree-isolated chain: use the kept worktree path instead of the
+  // original cwd so the continuation child sees the previous run's edits.
+  const cwd = s.isolation === 'worktree' && chain.isolatedWorktreePath !== undefined
+    ? chain.isolatedWorktreePath
+    : s.cwd;
   return {
     prompt,
     mode: parsed.mode,
@@ -127,7 +137,7 @@ function continuationInput(parsed: AgentInput, chain: ChainRecord, prompt: strin
     ...(parsed.max_turns_explicit ? { max_turns: parsed.max_turns } : {}),
     ...(s.agent_type !== undefined ? { agent_type: s.agent_type } : {}),
     ...(s.model !== undefined ? { model: s.model } : {}),
-    ...(s.cwd !== undefined ? { cwd: s.cwd } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
     ...(s.readRoots !== undefined ? { readRoots: [...s.readRoots] } : {}),
     ...(s.writeRoots !== undefined ? { writeRoots: [...s.writeRoots] } : {}),
     ...(parsed.id_prefix !== undefined ? { id_prefix: parsed.id_prefix } : {}),
