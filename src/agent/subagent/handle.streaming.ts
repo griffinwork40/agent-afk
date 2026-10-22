@@ -573,18 +573,26 @@ export async function dispatchStopAndRelease<T>(
 
 /**
  * Advance `handle._runtimeRoundsUsed` from this stream's `progress.roundsUsed`
- * values and return the new baseline (the last value seen). A positive delta
- * adds the delta; a value equal to the baseline (a retry-tier replay that
- * re-emits the same count, e.g. anthropic-direct's turnState survives retries)
- * adds nothing; a value BELOW the baseline is a new segment (openai-compatible
- * resets its round counter when a blocking Stop hook restarts the turn), so the
- * whole value is added. Example: 1,2,3 then 1,2 counts 5.
+ * values and return the new baseline (the last value seen).
+ *
+ * Invariant (provider contract): within one stream, `roundsUsed` rises by
+ * exactly 1 per progress event inside a segment, and a new segment restarts
+ * at 1. No provider re-emits an equal value:
+ * - anthropic-direct yields one progress per `turn.iterations += 1`
+ *   (loop/tool-round.ts); the TurnAccumulator is shared by retry-tier
+ *   replays and Stop-hook continuations (loop.ts `turnState`), and a replay
+ *   resumes after the last completed round, so values keep rising.
+ * - openai-compatible yields one progress per `round += 1` and resets `round`
+ *   to 0 per Stop-hook segment (query/turn-driver.ts); its 401 replay runs
+ *   only when no tool was dispatched, i.e. before any progress event.
+ * So a value above the baseline adds the delta, and a value at or below it
+ * starts a new segment and adds the whole value. Examples: 1,2,3 then 1,2
+ * counts 5; 1 then 1 counts 2.
  * @internal exported for tests.
  */
 export function countRuntimeRounds<T>(handle: Pick<SubagentHandleImpl<T>, '_runtimeRoundsUsed'>, event: OutputEvent, last: number): number {
   if (event.type !== 'progress' || typeof event.progress.roundsUsed !== 'number') return last;
   const r = event.progress.roundsUsed;
-  if (r === last) return last;
   handle._runtimeRoundsUsed += r > last ? r - last : Math.max(0, r);
   return r;
 }

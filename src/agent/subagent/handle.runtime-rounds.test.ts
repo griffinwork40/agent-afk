@@ -17,8 +17,13 @@ describe('countRuntimeRounds (D4 runtime round counter)', () => {
     expect(count([1, 2, 3, 1, 2])).toBe(5);
   });
 
-  it('a retry-tier replay that re-emits the same value counts once', () => {
-    expect(count([1, 2, 2, 3, 3])).toBe(3);
+  it('a Stop-hook restart after a 1-round segment counts both segments: 1 then 1 counts 2', () => {
+    expect(count([1, 1])).toBe(2);
+    expect(count([2, 1, 2])).toBe(4);
+  });
+
+  it('a retry-tier replay continues the monotonic count (anthropic-direct turnState): 1,2 then 3 counts 3', () => {
+    expect(count([1, 2, 3])).toBe(3);
   });
 
   it('ignores non-progress events and progress without roundsUsed', () => {

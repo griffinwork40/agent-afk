@@ -137,6 +137,10 @@ describe('anthropic-direct: turn budgets survive a retry-tier replay', () => {
     // Wind-down keeps tools for prefix-cache preservation (#4072).
     expect(tools[3]).toBeDefined();
     expect(completedOf(events).usage.stopReason).toBe('tool_use_loop_capped');
+    // Subagent runtime round counting (handle.streaming countRuntimeRounds)
+    // relies on this: a replay never re-emits an equal roundsUsed; values keep
+    // rising by one per round across the replay.
+    expect(events.flatMap((e) => (e.type === 'progress' ? [e.progress.roundsUsed] : []))).toEqual([1, 2]);
   });
 
   it("turn usage includes the pre-replay rounds (no silent undercount)", async () => {
