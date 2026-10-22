@@ -12,7 +12,7 @@ import { SUBAGENT_BACKGROUND_TIMEOUT_MS } from '../subagent.js';
 import { computeInheritedReadRoots } from '../subagent-read-scope.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { resolveMaxNestingDepth } from './nesting.js';
-import type { RegisteredAgent } from '../agents/index.js';
+import { resolveNamedAgent } from './subagent-executor.execute-once.gates.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
 import { backgroundTarget } from './subagent/background-delivery.js';
@@ -29,6 +29,7 @@ import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
 import { prependSetupNotice } from '../worktree/worktree-setup.js';
 import { parseDispatchInput, wireDispatchChain, annotateChainResult } from './subagent/continuation-dispatch.js';
+import { runContinuation, type ContinuationPlan } from './subagent/continuation-run.js';
 import {
   setupIsolationWorktree,
   forkAndCheckCancel,
@@ -62,6 +63,7 @@ export async function executeOnce(
   args: ExecuteOnceArgs,
   probe?: StreamCutProbe,
   retryCancelGeneration?: number,
+  plan?: ContinuationPlan,
 ): Promise<ToolResult> {
   const {
     ctx, currentCwd, isolationCounterRef, waveTracker,
@@ -73,25 +75,14 @@ export async function executeOnce(
     return { content: 'Agent tool call aborted', isError: true };
   }
 
-  // Parse + D7 continuation gate. TODO(continuation-d8): the gate becomes the continuation fork path.
   const parsedOrError = parseDispatchInput(call.input);
   if ('error' in parsedOrError) return parsedOrError.error;
   const { parsed } = parsedOrError;
+  if (parsed.continuation_chain_id !== undefined && plan === undefined) return runContinuation(call, parsed, ctx, (c, p) => executeOnce(c, args, probe, retryCancelGeneration, p)); // D8: admit + seed, then this path
 
-  // Named-agent resolution. A miss fails fast with the available list.
-  let namedAgent: RegisteredAgent | undefined;
-  if (parsed.agent_type !== undefined) {
-    namedAgent = ctx.agentRegistry?.get(parsed.agent_type);
-    if (namedAgent === undefined) {
-      const available = [...(ctx.agentRegistry?.keys() ?? [])].sort().join(', ');
-      return {
-        content:
-          `Agent type "${parsed.agent_type}" not found. ` +
-          `Available agent types: ${available.length > 0 ? available : '(none)'}`,
-        isError: true,
-      };
-    }
-  }
+  const named = resolveNamedAgent(ctx, parsed.agent_type); // a miss fails fast with the available list
+  if ('error' in named) return named.error;
+  const { namedAgent } = named;
 
   // Nested-dispatch scope gate.
   const nestedScope = ctx.nestedAgentAllowlist;
@@ -188,7 +179,7 @@ export async function executeOnce(
     nestedAgentAllowlist: nestedAgentAllowlist as string[] | undefined,
     isolationTeardown, getCancelGeneration, retryCancelGeneration,
     budgetReceipt, childManager, identity, depth,
-    updateCurrentWaveUnit, callId: call.id, modelFallback,
+    updateCurrentWaveUnit, callId: call.id, modelFallback, continuation: plan?.fork,
   });
   if ('forkError' in forkResult) { budgetReceipt = undefined; return forkResult.result; }
   if (forkResult.cancelled) { budgetReceipt = undefined; return forkResult.result; }
@@ -199,7 +190,7 @@ export async function executeOnce(
     childParentSession.messageJournal = handle.session?.messageJournal;
   }
   updateCurrentWaveUnit(call.id, 'running', undefined, isolationTeardown !== undefined ? childConfig.cwd : undefined);
-  const chain = wireDispatchChain({ ctx, parsed, handle, childConfig, currentCwd, writeCapable: childWriteCapable }); // D2 mint + D9 terminal hooks
+  const chain = wireDispatchChain({ ctx, parsed, handle, childConfig, currentCwd, writeCapable: childWriteCapable, plan }); // D2 mint (or reuse the continued chain) + D9 terminal hooks
 
   if (parsed.mode === 'background') {
     return prependSetupNotice(setupNotice, await runBackgroundDispatch({
@@ -247,7 +238,7 @@ export async function executeOnce(
     ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
   });
   if (!promotionTookBudget.value) budgetRelease?.();
-  annotateChainResult(result, chain); // D6: chain metadata + continuation line on capped results
+  annotateChainResult(result, chain, plan !== undefined); // D6: chain metadata + line on capped/continuation results
   addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, ctx.traceWriter);
   prependSetupNotice(setupNotice, result);
   if (result.isError === true) {

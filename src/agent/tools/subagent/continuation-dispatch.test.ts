@@ -53,12 +53,13 @@ describe('continuation dispatch wiring', () => {
     expect(() => parseAgentInput({ prompt: 'x', continuation_chain_id: 3 })).toThrow();
   });
 
-  it('D7 placeholder: a continuation call is refused and forks nothing', async () => {
+  it('D3: a model-invented chain id is refused and forks nothing', async () => {
     const handle = handleFor(cappedResult());
     const exec = executorWith(handle, new ContinuationRegistry());
     const r = await exec.execute(call({ prompt: 'go on', continuation_chain_id: 'chain_x' }));
     expect(r.isError).toBe(true);
-    expect(r.content).toContain('continuation not yet wired');
+    expect(r.content).toContain('unknown continuation chain "chain_x"');
+    expect(r.content).toContain('Nothing was forked');
     expect(handle.runToResult).not.toHaveBeenCalled();
   });
 

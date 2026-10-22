@@ -132,5 +132,6 @@ export function resolveForkInputs(args: ResolveForkInputsArgs): ForkResolved {
  */
 export function applyContinuationSeed(config: AgentConfig, options: Pick<ForkSubagentOptions, 'continuation'>): AgentConfig {
   if (options.continuation === undefined) return config;
-  return { ...config, resumeMessages: options.continuation.messages };
+  // autoCompact: children have none by default, but a resumed history is large (D8).
+  return { ...config, resumeMessages: options.continuation.messages, autoCompact: config.autoCompact ?? true };
 }

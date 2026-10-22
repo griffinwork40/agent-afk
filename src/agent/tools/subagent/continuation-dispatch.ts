@@ -20,6 +20,7 @@ import {
   type WorkspaceCheckpoint,
 } from '../../subagent/continuation-registry.js';
 import { captureWorkspaceCheckpoint } from '../../subagent/continuation-guards.js';
+import type { ContinuationPlan } from './continuation-run.js';
 
 /** Structured chain fields carried on the tool result (D6 metadata). */
 export interface ContinuationResultFields {
@@ -33,26 +34,13 @@ export interface ContinuationResultFields {
   };
 }
 
-/** TODO(continuation-d8): replaced by the continuation fork path in the next chunk. */
-export function refuseUnwiredContinuation(parsed: AgentInput): ToolResult | undefined {
-  if (parsed.continuation_chain_id === undefined) return undefined;
-  return {
-    content: 'Agent tool `continuation_chain_id` refused: continuation not yet wired in this build. ' +
-      'Dispatch a fresh subagent instead.',
-    isError: true,
-  };
-}
-
-/** Parse agent input, then apply the D7 continuation gate. */
+/** Parse agent input (continuation calls are routed by executeOnce to runContinuation). */
 export function parseDispatchInput(input: unknown): { parsed: AgentInput } | { error: ToolResult } {
-  let parsed: AgentInput;
   try {
-    parsed = parseAgentInput(input);
+    return { parsed: parseAgentInput(input) };
   } catch (err) {
     return { error: { content: `Agent tool input validation failed: ${errorMessage(err)}`, isError: true } };
   }
-  const refusal = refuseUnwiredContinuation(parsed);
-  return refusal !== undefined ? { error: refusal } : { parsed };
 }
 
 export interface MintChainArgs {
@@ -127,7 +115,7 @@ function isContinuable(chain: ChainRecord): boolean {
  * D6: stamp chain metadata on every result; append the continuation line only
  * to incomplete/capped results of continuable chains. Mutates and returns `result`.
  */
-export function annotateChainResult<R extends ToolResult>(result: R, chain: ChainRecord | undefined): R & ContinuationResultFields {
+export function annotateChainResult<R extends ToolResult>(result: R, chain: ChainRecord | undefined, always = false): R & ContinuationResultFields {
   const out = result as R & ContinuationResultFields;
   if (chain === undefined) return out;
   const continuable = isContinuable(chain);
@@ -139,7 +127,7 @@ export function annotateChainResult<R extends ToolResult>(result: R, chain: Chai
     maxContinuations: chain.limits.maxContinuations,
     continuable,
   };
-  if (result.incomplete === true && continuable) {
+  if ((always || result.incomplete === true) && continuable) {
     out.content = `${result.content}\n\n${formatContinuationLine(chain)}`;
   }
   return out;
@@ -167,7 +155,13 @@ type ChainHandle = {
  */
 export function instrumentHandleForChain(
   handle: ChainHandle,
-  terminal: Omit<ChainTerminalArgs, 'childId' | 'roundsUsed' | 'endReason' | 'journalUsable'> & { journalUsable: () => boolean },
+  terminal: Omit<ChainTerminalArgs, 'childId' | 'roundsUsed' | 'endReason' | 'journalUsable'> & {
+    journalUsable: () => boolean;
+    /** Continuation: undo the admission charge when the child is torn down before it ever ran. */
+    rollbackIfNotStarted?: () => void;
+    /** D6b: continuation results always carry the line. */
+    alwaysLine?: boolean;
+  },
 ): void {
   if (terminal.registry === undefined || terminal.chain === undefined) return;
   let done = false;
@@ -181,33 +175,57 @@ export function instrumentHandleForChain(
   const reasonOf = (r: import('../../subagent/result.js').SubagentResult): string =>
     r.incomplete === true ? (r.incompleteReason ?? 'incomplete') : r.status;
   const h = handle as unknown as Record<string, unknown>;
-  if (typeof handle.runToResult === 'function') wrapRun(h, handle, record, reasonOf);
-  if (typeof handle.runInBackground === 'function') wrapBackground(h, handle, record, reasonOf, terminal.chain);
+  const started = { value: false };
+  if (typeof handle.runToResult === 'function') wrapRun(h, handle, record, reasonOf, started);
+  if (typeof handle.runInBackground === 'function') wrapBackground(h, handle, record, reasonOf, terminal.chain, started, terminal.alwaysLine === true);
+  wrapTeardownBeforeStart(h, started, () => {
+    if (done) return;
+    if (terminal.rollbackIfNotStarted !== undefined) { done = true; terminal.rollbackIfNotStarted(); return; }
+    record(undefined, 'not_started');
+  });
+}
+
+/**
+ * Stuck-chain fix: dispatch exits after the fork but before the run
+ * (attachment-expansion error, no background registry, background job cap,
+ * register error) all tear the handle down; a teardown before any run entry
+ * point fired clears in-flight (initial: terminal record; continuation: rollback).
+ */
+function wrapTeardownBeforeStart(h: Record<string, unknown>, started: { value: boolean }, onUnstarted: () => void): void {
+  const orig = h['teardown'];
+  if (typeof orig !== 'function') return;
+  const bound = (orig as (...a: unknown[]) => Promise<void>).bind(h);
+  h['teardown'] = (...a: unknown[]) => {
+    if (!started.value) onUnstarted();
+    return bound(...a);
+  };
 }
 
 type Res = import('../../subagent/result.js').SubagentResult;
 
-function wrapRun(h: Record<string, unknown>, handle: ChainHandle, record: (r: Res | undefined, reason: string) => void, reasonOf: (r: Res) => string): void {
+function wrapRun(h: Record<string, unknown>, handle: ChainHandle, record: (r: Res | undefined, reason: string) => void, reasonOf: (r: Res) => string, started: { value: boolean }): void {
   const origRun = handle.runToResult.bind(handle) as (p: unknown) => Promise<import('../../subagent/result.js').SubagentResult>;
-  h['runToResult'] = (p: unknown) => origRun(p).then(
+  h['runToResult'] = (p: unknown) => { started.value = true; return origRun(p).then(
     (r) => { record(r, reasonOf(r)); return r; },
     (err: unknown) => { record(undefined, 'failed'); throw err; },
-  );
+  ); };
 }
 
-function wrapBackground(h: Record<string, unknown>, handle: ChainHandle, record: (r: Res | undefined, reason: string) => void, reasonOf: (r: Res) => string, chain: ChainRecord): void {
+function wrapBackground(h: Record<string, unknown>, handle: ChainHandle, record: (r: Res | undefined, reason: string) => void, reasonOf: (r: Res) => string, chain: ChainRecord, started: { value: boolean }, always: boolean): void {
   const origBg = handle.runInBackground.bind(handle) as (p: unknown, cb?: (r: import('../../subagent/result.js').SubagentResult) => void, ...rest: unknown[]) => unknown;
-  h['runInBackground'] = (p: unknown, cb?: (r: import('../../subagent/result.js').SubagentResult) => void, ...rest: unknown[]) =>
-    origBg(p, (r) => {
+  h['runInBackground'] = (p: unknown, cb?: (r: import('../../subagent/result.js').SubagentResult) => void, ...rest: unknown[]) => {
+    started.value = true;
+    return origBg(p, (r) => {
       record(r, reasonOf(r));
-      appendLineToMessage(r, chain);
+      appendLineToMessage(r, chain, always);
       cb?.(r);
     }, ...rest);
+  };
 }
 
 /** Background delivery: append the continuation line to a capped result's message (D6). */
-function appendLineToMessage(r: import('../../subagent/result.js').SubagentResult, chain: ChainRecord): void {
-  if (r.incomplete !== true || !isContinuable(chain) || r.message === undefined) return;
+function appendLineToMessage(r: import('../../subagent/result.js').SubagentResult, chain: ChainRecord, always: boolean): void {
+  if ((!always && r.incomplete !== true) || !isContinuable(chain) || r.message === undefined) return;
   r.message.content = `${r.message.content}\n\n${formatContinuationLine(chain)}`;
 }
 
@@ -219,10 +237,12 @@ export function wireDispatchChain(args: {
   childConfig: { model?: string; cwd?: string; maxToolUseIterations?: number };
   currentCwd: string | undefined;
   writeCapable: boolean;
+  /** Continuation: reuse the admitted chain (never mint a new one) and mark it wired. */
+  plan?: ContinuationPlan | undefined;
 }): ChainRecord | undefined {
-  const { ctx, parsed, handle, childConfig } = args;
+  const { ctx, parsed, handle, childConfig, plan } = args;
   const cwd = childConfig.cwd ?? args.currentCwd;
-  const chain = mintDispatchChain({
+  const chain = plan !== undefined ? plan.chain : mintDispatchChain({
     registry: ctx.continuationRegistry,
     owner: ctx.parentSession.sessionId,
     rootSessionId: ctx.parentRootSessionId ?? ctx.parentSession.sessionId,
@@ -231,7 +251,10 @@ export function wireDispatchChain(args: {
   });
   instrumentHandleForChain(handle, {
     registry: ctx.continuationRegistry, chain, cwd,
-    journalUsable: () => handle.session?.messageJournal !== undefined,
+    // D9: advance the link only when the child journal holds messages.
+    journalUsable: () => ((handle.session?.messageJournal as { length?: number } | undefined)?.length ?? 0) > 0,
+    ...(plan !== undefined ? { rollbackIfNotStarted: plan.rollback, alwaysLine: true } : {}),
   });
+  if (plan !== undefined) plan.wired = true;
   return chain;
 }

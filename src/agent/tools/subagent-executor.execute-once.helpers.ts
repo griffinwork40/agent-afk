@@ -166,6 +166,8 @@ export interface ForkAndCheckCancelArgs {
   callId: string;
   /** Default-tier model fallback from buildChildConfig (undefined = not eligible). */
   modelFallback?: ForkSubagentOptions['modelFallback'];
+  /** D8: continuation fork (resume the seeded journal); undefined on ordinary dispatches. */
+  continuation?: ForkSubagentOptions['continuation'];
 }
 
 export type ForkResult =
@@ -225,6 +227,7 @@ export async function forkAndCheckCancel(
       progressEvents: parsed.progress_events,
       ...(nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist } : {}),
       ...(args.modelFallback !== undefined ? { modelFallback: args.modelFallback } : {}),
+      ...(args.continuation !== undefined ? { continuation: args.continuation } : {}),
     });
   } catch (err) {
     const message = errorMessage(err);

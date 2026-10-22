@@ -1,0 +1,148 @@
+/**
+ * D8 continuation path for the `agent` tool (docs/subagent-continuation.md).
+ *
+ * Contract: a call carrying `continuation_chain_id` is admitted here (fail
+ * closed, nothing forked on any refusal) in this order: chain lookup + owner,
+ * inherited-field overrides / worktree / host (D3), workspace drift for
+ * write-capable chains (D5), the chain's synchronous charge + in-flight
+ * (D4), then the child-journal seed (D1). The admitted call is then re-run
+ * through the NORMAL dispatch path (`executeOnce`) with an input rebuilt from
+ * the chain's stored dispatch inputs, so config assembly, permissions,
+ * DelegationBudget admission, and fork wiring are the ordinary ones. The plan
+ * object rides along so the fork resumes the seed (`continuation` fork
+ * option) and the terminal updates THIS chain instead of minting a new one.
+ *
+ * Invariant (rollback): if the re-run returns or throws before the child
+ * handle was wired to the chain (budget refusal, fork-construction failure,
+ * cancel-between-retry), the charge and in-flight flag are rolled back. Once
+ * wired, the instrumented handle's terminal clears in-flight (D9) and the
+ * charge is kept (no refunds).
+ *
+ * @module agent/tools/subagent/continuation-run
+ */
+
+import { randomBytes } from 'node:crypto';
+
+import type { ToolCall, ToolResult } from '../types.js';
+import type { AgentInput } from './input-parse.js';
+import type { ForkSubagentOptions } from '../../subagent/fork-types.js';
+import type { ChainRecord, ContinuationRegistry } from '../../subagent/continuation-registry.js';
+import { checkContinuationOverrides, checkWorkspaceDrift } from '../../subagent/continuation-guards.js';
+import { forkJournal, loadJournalMessages } from '../../journal/index.js';
+import { SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../../subagent/constants.js';
+
+/** Admitted continuation state threaded through the normal dispatch path. */
+export interface ContinuationPlan {
+  chain: ChainRecord;
+  allowance: number;
+  /** Undo the admission charge + in-flight (construction failure only). */
+  rollback: () => void;
+  /** Set by wireDispatchChain once the child handle is instrumented against the chain. */
+  wired: boolean;
+  fork: NonNullable<ForkSubagentOptions['continuation']>;
+}
+
+interface AdmitCtx {
+  continuationRegistry?: ContinuationRegistry;
+  parentSession: { sessionId?: string | undefined };
+}
+
+/** Tool error for a refused continuation; the text names the reason (D10). */
+export function refuseContinuation(reason: string): { error: ToolResult } {
+  return { error: { content: `Agent tool continuation refused: ${reason}. Nothing was forked.`, isError: true } };
+}
+
+/** D8 runtime note prefixed to the parent's prompt. */
+export function continuationNote(chain: ChainRecord, index: number, allowance: number): string {
+  return `[Continuation ${index} of chain ${chain.chainId}: your previous run ended (${chain.lastEndReason ?? 'unknown'}). ` +
+    `You have ${allowance} tool-use rounds for this run.]`;
+}
+
+/** Pre-charge checks (D3/D5); undefined to proceed. */
+function preAdmissionRefusal(chain: ChainRecord | undefined, id: string, caller: string, parsed: AgentInput): string | undefined {
+  if (chain === undefined) {
+    return `unknown continuation chain "${id}" (chains are runtime-minted and in-memory only; they do not survive a restart or /resume)`;
+  }
+  if (chain.owner !== caller) return `continuation chain "${id}" is owned by another actor`;
+  const override = checkContinuationOverrides(chain, parsed);
+  if (override !== undefined) return override;
+  if (chain.inFlight) return `a run on continuation chain "${id}" is still in flight`;
+  const drift = checkWorkspaceDrift(chain);
+  if (drift !== undefined) return drift;
+  if (chain.latestChildId === undefined) {
+    return 'the chain has no resumable child journal (message journaling disabled, or the previous run wrote none)';
+  }
+  return undefined;
+}
+
+/** Rebuild the dispatch input from the chain's stored inputs (D2: inherited, not overridable). */
+function continuationInput(parsed: AgentInput, chain: ChainRecord, prompt: string, allowance: number): Record<string, unknown> {
+  const s = chain.inputs;
+  return {
+    prompt,
+    mode: parsed.mode,
+    max_tool_use_iterations: allowance,
+    ...(parsed.max_turns_explicit ? { max_turns: parsed.max_turns } : {}),
+    ...(s.agent_type !== undefined ? { agent_type: s.agent_type } : {}),
+    ...(s.model !== undefined ? { model: s.model } : {}),
+    ...(s.cwd !== undefined ? { cwd: s.cwd } : {}),
+    ...(s.readRoots !== undefined ? { readRoots: [...s.readRoots] } : {}),
+    ...(s.writeRoots !== undefined ? { writeRoots: [...s.writeRoots] } : {}),
+    ...(parsed.id_prefix !== undefined ? { id_prefix: parsed.id_prefix } : {}),
+    ...(parsed.progress_events !== undefined ? { progress_events: parsed.progress_events } : {}),
+    ...(parsed.attachments !== undefined ? { attachments: parsed.attachments } : {}),
+  };
+}
+
+/** Admission (check + charge + in-flight) and seed. Fail closed: nothing is forked on refusal. */
+export function admitContinuationCall(parsed: AgentInput, ctx: AdmitCtx): { plan: ContinuationPlan; input: Record<string, unknown> } | { error: ToolResult } {
+  const id = parsed.continuation_chain_id ?? '';
+  const registry = ctx.continuationRegistry;
+  if (registry === undefined) return refuseContinuation('continuation is not available in this session');
+  const caller = ctx.parentSession.sessionId ?? '';
+  const chain = registry.get(id);
+  const pre = preAdmissionRefusal(chain, id, caller, parsed);
+  if (pre !== undefined || chain === undefined) return refuseContinuation(pre ?? 'unknown chain');
+  const requested = parsed.max_tool_use_iterations_explicit ? parsed.max_tool_use_iterations : undefined;
+  const admitted = registry.admitContinuation(id, caller, requested, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS);
+  if (!admitted.ok) return refuseContinuation(admitted.reason);
+  const previous = chain.latestChildId ?? '';
+  const seedId = `${chain.chainId}-c${admitted.index}-${randomBytes(4).toString('hex')}`;
+  let messages: ReturnType<typeof loadJournalMessages> = null;
+  try {
+    messages = forkJournal(chain.rootSessionId, seedId, { subagentId: previous }) ? loadJournalMessages(seedId) : null;
+  } catch {
+    messages = null;
+  }
+  if (messages === null) {
+    admitted.rollback();
+    return refuseContinuation(`could not seed from the previous child journal "${previous}" (journaling disabled, or the journal is missing or empty)`);
+  }
+  const plan: ContinuationPlan = {
+    chain, allowance: admitted.allowance, rollback: admitted.rollback, wired: false,
+    fork: { resume: seedId, messages, chainId: chain.chainId, continuationOf: previous, continuationIndex: admitted.index },
+  };
+  const prompt = `${continuationNote(chain, admitted.index, admitted.allowance)}\n\n${parsed.prompt}`;
+  return { plan, input: continuationInput(parsed, chain, prompt, admitted.allowance) };
+}
+
+/**
+ * executeOnce entry for a continuation call: admit + seed, then re-run the
+ * normal dispatch with the rebuilt input and the plan. Rolls back when the
+ * re-run never wired a child to the chain.
+ */
+export async function runContinuation(
+  call: ToolCall,
+  parsed: AgentInput,
+  ctx: AdmitCtx,
+  dispatch: (call: ToolCall, plan: ContinuationPlan) => Promise<ToolResult>,
+): Promise<ToolResult> {
+  const admitted = admitContinuationCall(parsed, ctx);
+  if ('error' in admitted) return admitted.error;
+  const { plan, input } = admitted;
+  try {
+    return await dispatch({ ...call, input }, plan);
+  } finally {
+    if (!plan.wired) plan.rollback();
+  }
+}
