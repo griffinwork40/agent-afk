@@ -61,8 +61,11 @@ const CTX: RiskContext = { cwd: '/home/user' };
 // ---------------------------------------------------------------------------
 
 /**
- * Assert that classifyRisk and classifyBashCommand agree that a command is
- * read-only: risk === 'safe' AND mutating === false.
+ * Assert that all four classifiers agree a command is read-only:
+ *   A. classifyRisk === 'safe'
+ *   B. classifyBashCommand.mutating === false
+ *   C. detectDestructiveCommands returns no hits
+ *   D. detectReleaseBoundaryCommands returns no hits
  */
 function expectReadOnly(cmd: string): void {
   expect(classifyRisk('bash', { command: cmd }, CTX), `classifyRisk("${cmd}")`).toBe('safe');
@@ -70,11 +73,27 @@ function expectReadOnly(cmd: string): void {
     classifyBashCommand(cmd).mutating,
     `classifyBashCommand("${cmd}").mutating`,
   ).toBe(false);
+  expect(
+    detectDestructiveCommands(cmd),
+    `detectDestructiveCommands("${cmd}") should be empty`,
+  ).toHaveLength(0);
+  expect(
+    detectReleaseBoundaryCommands(cmd),
+    `detectReleaseBoundaryCommands("${cmd}") should be empty`,
+  ).toHaveLength(0);
 }
 
 /**
- * Assert that classifyRisk and classifyBashCommand agree that a command is
- * mutating: risk !== 'safe' AND mutating === true.
+ * Assert that all four classifiers agree a command is mutating:
+ *   A. classifyRisk !== 'safe'
+ *   B. classifyBashCommand.mutating === true
+ *   C. detectDestructiveCommands — checked (may or may not match; not all
+ *      mutating commands are destructive-pattern matches)
+ *   D. detectReleaseBoundaryCommands — checked (may or may not match)
+ *
+ * Classifiers C and D are OBSERVE-tier pattern detectors: they record but do
+ * not block. A mutating command may or may not appear in their pattern tables,
+ * so we assert they return without error (coverage) but do not require hits.
  */
 function expectMutating(cmd: string): void {
   expect(
@@ -85,6 +104,9 @@ function expectMutating(cmd: string): void {
     classifyBashCommand(cmd).mutating,
     `classifyBashCommand("${cmd}").mutating`,
   ).toBe(true);
+  // Classifiers C+D: exercise to confirm no throw; hits are command-dependent.
+  detectDestructiveCommands(cmd);
+  detectReleaseBoundaryCommands(cmd);
 }
 
 // ---------------------------------------------------------------------------
@@ -335,8 +357,13 @@ describe('cross-classifier: remaining divergences to fix in #3846', () => {
 // ---------------------------------------------------------------------------
 
 describe('cross-classifier: safe-destruct + release-boundary spot-checks (#3846)', () => {
-  it('rm -rf dist/ → detected by safe-destruct, not release-boundary', () => {
-    expect(detectDestructiveCommands('rm -rf dist/').length).toBeGreaterThan(0);
+  it('rm -rf dist/ → detected by safe-destruct (OBSERVE tier), not release-boundary', () => {
+    // OBSERVE tier — detection only, not blocking. The safe-destruct hook
+    // records this pattern (rm-recursive-force) for telemetry but allows it
+    // through; it does not gate execution.
+    const hits = detectDestructiveCommands('rm -rf dist/');
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits).toContain('rm-recursive-force');
     expect(detectReleaseBoundaryCommands('rm -rf dist/')).toHaveLength(0);
   });
 
@@ -348,7 +375,8 @@ describe('cross-classifier: safe-destruct + release-boundary spot-checks (#3846)
     expect(detectReleaseBoundaryCommands('git push origin main')).toHaveLength(0);
   });
 
-  it('curl -X POST https://api.example.com/data → detected by safe-destruct', () => {
+  it('curl -X POST https://api.example.com/data → detected by safe-destruct (OBSERVE tier)', () => {
+    // OBSERVE tier — detection only, not blocking.
     expect(detectDestructiveCommands('curl -X POST https://api.example.com/data').length).toBeGreaterThan(0);
   });
 
