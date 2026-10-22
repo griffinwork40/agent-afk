@@ -12,6 +12,7 @@
 
 import type { AgentConfig, PlanExitControls } from '../../types/config-types.js';
 import { isHeadlessSession } from '../shared/headless-session.js';
+import { lspInstallEligible } from '../shared/lsp-install-eligibility.js';
 import type { RuntimeStateSource } from '../../awareness/index.js';
 
 export interface BuildDispatcherOpts {
@@ -98,6 +99,12 @@ export interface BuildDispatcherOpts {
    * 'plan'`, the handler + schema are registered. Mirrors AnthropicDirectProvider.
    */
   planExitControls?: PlanExitControls;
+  /**
+   * Forwarded from `AgentConfig.lspInstallAllowed` — parity with
+   * `anthropic-direct/build-dispatcher.ts`. The dispatcher additionally denies
+   * it for forks/non-interactive sessions regardless of this value.
+   */
+  lspInstallAllowed?: boolean;
 }
 
 /**
@@ -124,10 +131,14 @@ export function sessionRegistryOpts(src: {
  * absence can never tell the bash-restriction hook a session is unattended.
  * Extracted so `index.ts` (file-size baselined) forwards it without growing.
  */
-export function headlessSignalOpts(src: Pick<BuildDispatcherOpts, 'headless'>): {
+export function headlessSignalOpts(src: Pick<BuildDispatcherOpts, 'headless' | 'lspInstallAllowed'>): {
   isNonInteractive?: true;
+  lspInstallAllowed?: true;
 } {
-  return src.headless === true ? { isNonInteractive: true } : {};
+  return {
+    ...(src.headless === true ? { isNonInteractive: true as const } : {}),
+    ...(src.lspInstallAllowed === true ? { lspInstallAllowed: true as const } : {}),
+  };
 }
 
 /**
@@ -137,10 +148,11 @@ export function headlessSignalOpts(src: Pick<BuildDispatcherOpts, 'headless'>): 
  * forwards both in the one line that used to forward `isNonInteractive`.
  */
 export function interactivityOpts(
-  config: Pick<AgentConfig, 'isNonInteractive' | 'surface'>,
-): Pick<BuildDispatcherOpts, 'isNonInteractive' | 'headless'> {
+  config: Pick<AgentConfig, 'isNonInteractive' | 'surface' | 'lspInstallAllowed' | 'depth' | 'parentSessionId' | 'subagentId'>,
+): Pick<BuildDispatcherOpts, 'isNonInteractive' | 'headless' | 'lspInstallAllowed'> {
   return {
     ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
     ...(isHeadlessSession(config) ? { headless: true } : {}),
+    ...(lspInstallEligible(config) ? { lspInstallAllowed: true } : {}),
   };
 }

@@ -75,6 +75,9 @@ export class LspClient {
   private disposing: Promise<void> | null = null;
   private holds = 0;
   private initialized = false;
+  /** Capabilities returned by initialize; dynamic registration is not used. */
+  serverCapabilities: Record<string, unknown> = {};
+  private workspaceEditHandler: ((edit: unknown) => Promise<{ applied: boolean; failureReason?: string }>) | undefined;
   private readonly exited: Promise<void>;
   /** Uris an in-flight query is using; never closed underneath it. */
   private readonly docUses = new Map<string, number>();
@@ -93,7 +96,13 @@ export class LspClient {
       new StreamMessageWriter(proc.stdin!),
       SILENT_LOGGER,
     );
-    this.conn.onRequest((method: string, params: unknown) => answerServerRequest(spec.definition, method, params));
+    this.conn.onRequest((method: string, params: unknown) => {
+      if (method === 'workspace/applyEdit' && this.workspaceEditHandler) {
+        return this.workspaceEditHandler((params as { edit?: unknown } | null)?.edit)
+          .catch(() => ({ applied: false, failureReason: 'Workspace edit failed' }));
+      }
+      return answerServerRequest(spec.definition, method, params);
+    });
     this.conn.onNotification('textDocument/publishDiagnostics', (params: unknown) => {
       this.diagnostics.record(params);
     });
@@ -152,7 +161,7 @@ export class LspClient {
 
   private async initialize(opts: RequestOptions): Promise<void> {
     const rootUri = pathToFileURL(this.root).toString();
-    await this.request('initialize', {
+    const result = await this.request<{ capabilities?: Record<string, unknown> }>('initialize', {
       processId: process.pid,
       rootUri,
       rootPath: this.root,
@@ -160,6 +169,7 @@ export class LspClient {
       initializationOptions: this.spec.definition.initializationOptions,
       capabilities: CLIENT_CAPABILITIES,
     }, { timeoutMs: opts.timeoutMs ?? DEFAULT_INIT_TIMEOUT_MS, signal: opts.signal });
+    this.serverCapabilities = result?.capabilities ?? {};
     this.notify('initialized', {});
     this.initialized = true;
   }
@@ -235,6 +245,35 @@ export class LspClient {
       this.touch();
     }
   }
+
+  /** Grant applyEdit only for the lifetime of one explicitly selected command. */
+  async withWorkspaceEditHandler<T>(
+    handler: (edit: unknown) => Promise<{ applied: boolean; failureReason?: string }>,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    if (this.workspaceEditHandler) throw new LspClientError('response', 'Another workspace edit is active');
+    let active = true;
+    let pending: Promise<unknown> = Promise.resolve();
+    this.workspaceEditHandler = (edit) => {
+      if (!active) return Promise.resolve({ applied: false, failureReason: 'Command has completed' });
+      // Sequential edits use the disk/version produced by their predecessor.
+      const task = pending.then(() => active
+        ? handler(edit)
+        : { applied: false, failureReason: 'Command has completed' });
+      pending = task.catch(() => {});
+      return task;
+    };
+    try { return await fn(); }
+    finally {
+      active = false;
+      await pending;
+      this.workspaceEditHandler = undefined;
+    }
+  }
+
+  /** Last synchronized document version (undefined for an unseen document). */
+  documentVersion(uri: string): number | undefined { return this.docs.version(uri); }
+  documentContents(): ReadonlyMap<string, string> { return this.docs.contents(); }
 
   /** Fire-and-forget notification. No-op on a dead client. */
   notify(method: string, params: unknown): void {

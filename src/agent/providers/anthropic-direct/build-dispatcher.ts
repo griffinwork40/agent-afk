@@ -145,6 +145,11 @@ export interface BuildDispatcherOptions {
    * presence cannot tell the bash-restriction hook it is unattended.
    */
   isNonInteractive?: boolean;
+  /**
+   * Forwarded from `AgentConfig.lspInstallAllowed`. The dispatcher additionally
+   * denies it when `parentSessionId`/`subagentId`/`isNonInteractive` are set.
+   */
+  lspInstallAllowed?: boolean;
 }
 
 /**
@@ -306,6 +311,7 @@ export function buildDispatcher(
     // Explicit headless signal for the bash-restriction floor (#2302); the
     // grant manager above is wired on every surface, so it cannot carry this.
     ...(opts?.isNonInteractive === true ? { isNonInteractive: true } : {}),
+    ...(opts?.lspInstallAllowed === true ? { lspInstallAllowed: true } : {}),
     // Path-containment bypass: bypassPermissions (explicit) AND autonomous
     // (AFK) both carry allowAll:true so path containment + the path-approval
     // prompt are disabled per-call. In AFK the afk-mode-gate is the safety
