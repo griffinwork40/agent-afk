@@ -26,6 +26,7 @@ import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError, errorMessage } from '../../utils/errors.js';
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import { classifyBashCommand } from './readonly-bash.js';
+import { isCodeSymbolsMutation } from '../tool-category.js';
 import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
 import {
   DENIAL_CIRCUIT_BREAKER_THRESHOLD,
@@ -277,6 +278,11 @@ async function checkReadOnlyBash(
   call: ToolCall,
   deps: PreDispatchGateDeps,
 ): Promise<ToolResult | null> {
+  if (deps.readOnlyBash && isCodeSymbolsMutation(call.name, call.input)) {
+    const reason = 'code_symbols mutation blocked: read-only agents may not apply refactors.';
+    await emitPreToolUseBlock(call.name, reason, deps);
+    return { content: reason, isError: true, failureClass: 'permission-denied' };
+  }
   if (!deps.readOnlyBash || call.name !== 'bash') return null;
   const input = call.input;
   const command =

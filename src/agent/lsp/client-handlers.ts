@@ -53,6 +53,8 @@ export const CLIENT_CAPABILITIES = {
     rename: { dynamicRegistration: false, prepareSupport: true },
     codeAction: {
       dynamicRegistration: false,
+      dataSupport: true,
+      resolveSupport: { properties: ['edit', 'command'] },
       codeActionLiteralSupport: {
         codeActionKind: { valueSet: ['', 'quickfix', 'refactor', 'source', 'source.organizeImports'] },
       },

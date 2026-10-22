@@ -214,6 +214,8 @@ export interface SessionToolDispatcherOptions {
    * though a grant manager is wired (#2302). Default false.
    */
   isNonInteractive?: boolean;
+  /** Set only by trusted REPL/Telegram session wiring, never tool input. */
+  lspInstallAllowed?: boolean;
   /** Witness-layer trace writer. When provided, every PreToolUse and
    *  PostToolUse dispatch records a `hook_decision` event. */
   traceWriter?: TraceSink;
@@ -344,6 +346,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly sessionGrantManager: GrantManager | undefined;
   /** See {@link SessionToolDispatcherOptions.isNonInteractive}. */
   private readonly isNonInteractive: boolean;
+  private readonly lspInstallAllowed: boolean;
   private readonly traceWriter: TraceSink | undefined;
   /** When true, mutating `bash` commands are blocked (read-only skill child). */
   private readonly readOnlyBash: boolean;
@@ -441,6 +444,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.subagentId = opts.subagentId;
     this.sessionGrantManager = opts.sessionGrantManager;
     this.isNonInteractive = opts.isNonInteractive === true;
+    this.lspInstallAllowed = opts.lspInstallAllowed === true && !this.isNonInteractive
+      && opts.parentSessionId === undefined && opts.subagentId === undefined;
     this.traceWriter = opts.traceWriter;
     this.readOnlyBash = opts.readOnlyBash === true;
     // Central output cap: only a positive finite number arms the backstop; any
@@ -486,6 +491,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   private get handlerContext(): ToolHandlerContext {
     return {
+      lspInstallAllowed: this.lspInstallAllowed,
       resolveBase: this.resolveBase,
       // @deprecated alias — kept for back-compat with custom tools that read
       // context.cwd (#2935). Internal code must NOT start reading this field;

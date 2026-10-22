@@ -57,6 +57,7 @@ import type { BuildDispatcherOptions } from '../build-dispatcher.js';
 import type { RuntimeSubagents } from '../../../awareness/index.js';
 import { isWhatifEpisode } from '../../../whatif-episode-gate.js';
 import { isHeadlessSession } from '../../shared/headless-session.js';
+import { lspInstallEligible } from '../../shared/lsp-install-eligibility.js';
 
 export interface DispatcherWiringArgs {
   config: AgentConfig;
@@ -245,6 +246,7 @@ function buildQueryTools(args: DispatcherWiringArgs, runtimeStateSource: Runtime
         // isHeadlessSession (not bare isNonInteractive) so daemon pull tasks,
         // which keep ask_question, still get the unattended floor.
         ...(isHeadlessSession(config) ? { isNonInteractive: true } : {}),
+        ...(lspInstallEligible(config) ? { lspInstallAllowed: true } : {}),
       });
 
   // External-dispatcher branch: the caller owns routing for whatever tools

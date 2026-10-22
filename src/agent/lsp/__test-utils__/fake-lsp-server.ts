@@ -38,6 +38,15 @@ export interface FakeServerConfig {
   spawnGrandchild?: boolean;
   /** Definition result echoes this file's open copy, falling back to disk. */
   readFileUri?: string;
+  capabilities?: Record<string, unknown>;
+  workspaceEdit?: unknown;
+  prepareRename?: unknown;
+  documentSymbols?: unknown[];
+  workspaceSymbols?: unknown[];
+  codeActions?: unknown[];
+  resolvedCodeAction?: unknown;
+  /** workspace/applyEdit sent during executeCommand; command completes after its reply. */
+  commandEdit?: unknown;
 }
 
 /** Write the fake server script to `scriptPath`. */
@@ -58,10 +67,30 @@ const send = (o) => {
   process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
 };
 let buf = Buffer.alloc(0);
+let commandId;
 const handle = (m) => {
   log({ msg: m });
   if (cfg.silent) return;
-  if (m.method === 'initialize') return send({ id: m.id, result: { capabilities: {} } });
+  if (m.method === 'initialize') return send({ id: m.id, result: { capabilities: cfg.capabilities || {} } });
+  if (m.id === 'apply-1' && !m.method) return send({ id: commandId, result: m.result });
+  const results = {
+    'textDocument/prepareRename': cfg.prepareRename === undefined ? { defaultBehavior: true } : cfg.prepareRename,
+    'textDocument/rename': cfg.workspaceEdit === undefined ? null : cfg.workspaceEdit,
+    'textDocument/documentSymbol': cfg.documentSymbols || [],
+    'workspace/symbol': cfg.workspaceSymbols || [],
+    'textDocument/codeAction': cfg.codeActions || [],
+    'codeAction/resolve': cfg.resolvedCodeAction || null,
+  };
+  if (Object.prototype.hasOwnProperty.call(results, m.method) || m.method === 'workspace/executeCommand') {
+    if (cfg.crashOnRequest) process.exit(1);
+    if (cfg.hangRequests) return;
+    if (cfg.requestError) return send({ id: m.id, error: { code: -32601, message: 'nope' } });
+    if (m.method === 'workspace/executeCommand' && cfg.commandEdit !== undefined) {
+      commandId = m.id;
+      return send({ id: 'apply-1', method: 'workspace/applyEdit', params: { edit: cfg.commandEdit } });
+    }
+    return send({ id: m.id, result: results[m.method] === undefined ? null : results[m.method] });
+  }
   if (m.method === 'initialized' && cfg.configurationSections) {
     return send({ id: 'cfg-1', method: 'workspace/configuration',
       params: { items: cfg.configurationSections.map((section) => ({ section })) } });

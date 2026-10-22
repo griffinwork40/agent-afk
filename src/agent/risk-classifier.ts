@@ -18,7 +18,7 @@
  * @module agent/risk-classifier
  */
 
-import { categorizeTool } from './tool-category.js';
+import { categorizeTool, isCodeSymbolsMutation } from './tool-category.js';
 import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
 import { classifyFilePath, classifyPatchApply } from './risk-classifier.paths.js';
 import { findHighBashPattern } from './risk-classifier.bash-boundary.js';
@@ -512,13 +512,20 @@ export function classifyRiskDetailed(
   // path across the entire changes array. An empty changes array is safe.
   if (tool === 'patch_apply') return classifyPatchApply(input, ctx);
 
+  // LSP refactors may edit multiple server-selected files. The source path risk
+  // is a floor; the workspace-edit applier separately validates every target.
+  if (isCodeSymbolsMutation(tool, input)) {
+    const verdict = classifyFilePath(extractFilePath(input), ctx);
+    return verdict.level === 'safe' ? { level: 'medium', category: 'workspace-write' } : verdict;
+  }
+
   // ---- read-class tools ---------------------------------------------------
   // Derive from tool-category taxonomy rather than a local hand-maintained list.
   // Previously this was a 5-entry if-chain that diverged from tool-category.ts
   // (notably missing memory_search). Now any tool that categorizeTool returns
   // 'read' for is safe by default; new read tools automatically get the right
   // risk level without a secondary edit here.
-  if (categorizeTool(toolName) === 'read') return { level: 'safe', category: 'read-only' };
+  if (categorizeTool(toolName, input) === 'read') return { level: 'safe', category: 'read-only' };
 
   // ---- outbound communication --------------------------------------------
   if (tool === 'send_telegram') {

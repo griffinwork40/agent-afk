@@ -69,6 +69,10 @@ export async function buildAndRegisterSession(
   const config: AgentConfig = {
     model: data.model,
     apiKey: opts.apiKey,
+    // Trusted top-level interactive Telegram session: LSP install consent
+    // prompts are reachable via elicitation. The dispatcher enforces the rest
+    // of the predicate structurally (no parent/subagent/non-interactive).
+    lspInstallAllowed: true,
     telegramChatId: route.chatId,
     ...(route.threadId !== undefined ? { telegramThreadId: route.threadId } : {}),
     // Wire the per-session idle-wake hook when the SessionManager was

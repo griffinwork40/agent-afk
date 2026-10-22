@@ -141,7 +141,7 @@ const ASK_QUESTION_TOOL = 'ask_question';
  */
 function shouldExecute(toolName: string, input: unknown): boolean {
   // Read-category tools are always safe.
-  if (categorizeTool(toolName) === 'read') return true;
+  if (categorizeTool(toolName, input) === 'read') return true;
 
   // Bash: allowed only when the classifier confirms it is non-mutating.
   if (toolName === 'bash') {

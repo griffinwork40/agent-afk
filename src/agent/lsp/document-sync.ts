@@ -31,6 +31,11 @@ export class DocumentSync {
     return this.versions.get(uri);
   }
 
+  /** Snapshot the synchronized text for stale-edit protection during refactor RPCs. */
+  contents(): ReadonlyMap<string, string> {
+    return new Map([...this.docs].map(([uri, state]) => [uri, state.text]));
+  }
+
   /** Uris currently open (tests / diagnostics). */
   openUris(): string[] {
     return [...this.docs.keys()];

@@ -324,7 +324,16 @@ export const STREAM_CUT_RETRY_SAFE_TOOLS: readonly string[] = [
   'agent',
 ];
 
-export function categorizeTool(name: string): ToolCategory {
+/** Input-sensitive mutation predicate shared by policy gates and risk classification. */
+export function isCodeSymbolsMutation(name: string, input: unknown): boolean {
+  if (name.toLowerCase() !== 'code_symbols' || typeof input !== 'object' || input === null) return false;
+  const args = input as Record<string, unknown>;
+  return (args['subcommand'] === 'rename' && args['apply'] !== false)
+    || (args['subcommand'] === 'code_actions' && args['apply'] === true);
+}
+
+export function categorizeTool(name: string, input?: unknown): ToolCategory {
+  if (isCodeSymbolsMutation(name, input)) return 'write';
   if (name.startsWith('mcp__') || name.startsWith('MCP__')) return 'mcp';
   if (hasCI(READ_TOOLS, name)) return 'read';
   if (hasCI(WRITE_TOOLS, name)) return 'write';
