@@ -23,6 +23,7 @@ import {
   createMessageConnection,
   StreamMessageReader,
   StreamMessageWriter,
+  type Logger,
   type MessageConnection,
 } from 'vscode-jsonrpc/node';
 import type { ServerSpec } from './server-spec.js';
@@ -52,6 +53,9 @@ export interface FileSync extends SyncResult {
   readonly uri: string;
 }
 
+/** vscode-jsonrpc logs connection errors to the console by default; stay silent. */
+const SILENT_LOGGER: Logger = { error: () => {}, warn: () => {}, info: () => {}, log: () => {} };
+
 /** Default deadline for the `initialize` handshake when the caller gives none. */
 const DEFAULT_INIT_TIMEOUT_MS = 30_000;
 
@@ -79,6 +83,7 @@ export class LspClient {
     this.conn = createMessageConnection(
       new StreamMessageReader(proc.stdout!),
       new StreamMessageWriter(proc.stdin!),
+      SILENT_LOGGER,
     );
     this.conn.onRequest((method: string, params: unknown) => answerServerRequest(spec.definition, method, params));
     this.conn.onNotification('textDocument/publishDiagnostics', (params: unknown) => {
@@ -193,9 +198,14 @@ export class LspClient {
       const response = this.conn.sendRequest<R>(method, params, cts.token);
       response.catch(() => { /* superseded by a race loser; never unhandled */ });
       const guard = new Promise<never>((_, reject) => {
-        const fail = (err: LspClientError) => { cts.cancel(); reject(err); };
-        this.deathWaiters.add(fail);
-        cleanups.push(() => this.deathWaiters.delete(fail));
+        // Abandoning a live request sends `$/cancelRequest`; a dead
+        // connection cannot carry it, so death only rejects.
+        const fail = (err: LspClientError) => {
+          if (!this.dead) { try { cts.cancel(); } catch { /* closed */ } }
+          reject(err);
+        };
+        this.deathWaiters.add(reject);
+        cleanups.push(() => this.deathWaiters.delete(reject));
         if (opts.timeoutMs !== undefined) {
           const t = setTimeout(() => fail(new LspClientError('timeout', `LSP ${method} timed out`)), opts.timeoutMs);
           t.unref();
