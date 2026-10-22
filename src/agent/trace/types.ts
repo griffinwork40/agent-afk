@@ -426,7 +426,7 @@ export interface SubagentStartedPayload {
    * Absent on traces written before this field existed.
    */
   maxToolUseIterations?: number;
-  /** Continuation chain id (docs/subagent-continuation.md, D10); continuation and initial forks of a chain. */
+  /** Continuation chain id (docs/subagent-continuation.md, D10). Set on continuation forks only; an initial fork's `started` event carries none. */
   chainId?: string;
   /** Subagent id of the chain's previous link this continuation resumes. */
   continuationOf?: string;
