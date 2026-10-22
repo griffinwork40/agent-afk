@@ -30,6 +30,7 @@ import { errorMessage } from '../../utils/errors.js';
 import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
 import { prependSetupNotice } from '../worktree/worktree-setup.js';
+import { refuseUnwiredContinuation, wireDispatchChain, annotateChainResult } from './subagent/continuation-dispatch.js';
 import {
   setupIsolationWorktree,
   forkAndCheckCancel,
@@ -80,6 +81,7 @@ export async function executeOnce(
   } catch (err) {
     return { content: `Agent tool input validation failed: ${errorMessage(err)}`, isError: true };
   }
+  { const r = refuseUnwiredContinuation(parsed); if (r !== undefined) return r; } // TODO(continuation-d8): replace with the continuation fork path.
 
   // Named-agent resolution. A miss fails fast with the available list.
   let namedAgent: RegisteredAgent | undefined;
@@ -202,6 +204,7 @@ export async function executeOnce(
     childParentSession.messageJournal = handle.session?.messageJournal;
   }
   updateCurrentWaveUnit(call.id, 'running', undefined, isolationTeardown !== undefined ? childConfig.cwd : undefined);
+  const chain = wireDispatchChain({ ctx, parsed, handle, childConfig, currentCwd, writeCapable: childWriteCapable }); // D2 mint + D9 terminal hooks
 
   if (parsed.mode === 'background') {
     return prependSetupNotice(setupNotice, await runBackgroundDispatch({
@@ -249,6 +252,7 @@ export async function executeOnce(
     ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
   });
   if (!promotionTookBudget.value) budgetRelease?.();
+  annotateChainResult(result, chain); // D6: chain metadata + continuation line on capped results
   addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, ctx.traceWriter);
   prependSetupNotice(setupNotice, result);
   if (result.isError === true) {

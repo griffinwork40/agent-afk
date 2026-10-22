@@ -168,6 +168,14 @@ export const agentTool: AnthropicToolDef = {
           'Incompatible with `isolation:"worktree"` (isolation creates a local worktree). ' +
           'Background mode is supported.',
       },
+      continuation_chain_id: {
+        type: 'string',
+        description:
+          'Continue a previous subagent with its full prior conversation (the chain id from a ' +
+          '`[continuation: chain_id=...]` line or result metadata; runtime-minted, never invent one). ' +
+          '`prompt` is the new instruction. agent_type/model/cwd/isolation are inherited from the chain ' +
+          'and must be omitted or equal. `mode` (foreground/background) may differ.',
+      },
     },
     required: ['prompt'],
   },
