@@ -6,7 +6,18 @@
 // plugin-skills split).
 
 import { readFileSync, existsSync, realpathSync } from 'fs';
+import { estimateTokens } from '../../agent/memory/index.js';
 import { getUserAfkMdPath, getProjectAfkMdPath } from '../../paths.js';
+
+/**
+ * Warn above this estimated token count for the composed AFK.md overlay.
+ *
+ * The threshold is deliberately the same value used by `/afk-md` so operators
+ * see a consistent signal whether they notice the startup warning or run the
+ * command themselves. `targets.ts` re-exports this constant so the slash
+ * command always reflects the authoritative loader value.
+ */
+export const OVERLAY_TOKEN_WARN_THRESHOLD = 10_000;
 
 export interface AfkMdResult {
   content: string;
@@ -22,9 +33,29 @@ export interface AfkMdResult {
    * files and both are non-empty.
    */
   paths: string[];
+  /**
+   * Estimated token count of the composed `content` (chars / 3.5, ceiling),
+   * using the same estimator as `/afk-md`. Populated whenever `content` is
+   * non-empty; 0 when the result is null (caller never sees that case).
+   * Consumers can use this to surface the size signal without re-reading files.
+   */
+  estimatedTokens: number;
 }
 
 let afkMdCache: { cwd: string; value: AfkMdResult | null } | undefined;
+
+/**
+ * Tracks paths that have already triggered the size warning so the operator
+ * sees it exactly once per process per path set, not once per loadAfkMd call.
+ * Module scope is deliberate: warn-once-per-process semantics survive the
+ * `afkMdCache` reset path used by tests.
+ */
+const warnedAfkMdSize = new Set<string>();
+
+/** Test-only hook to reset the size warn-once tracker. Internal API. */
+export function _resetAfkMdSizeWarnCache(): void {
+  warnedAfkMdSize.clear();
+}
 
 /**
  * Clear this tier's memoized AFK.md read. Called (only) by
@@ -84,15 +115,42 @@ const projectScopeHeader = (path: string): string =>
   `## Project configuration (${path}) — takes precedence on conflict`;
 
 /**
+ * Emit a one-shot stderr warning when the composed AFK.md overlay exceeds
+ * `OVERLAY_TOKEN_WARN_THRESHOLD` estimated tokens. Keyed on the joined path
+ * string so a different file set re-warns (e.g. after `/afk-md reload`).
+ *
+ * Uses `console.warn` (stderr) — never stdout — so one-shot `afk chat`
+ * pipelines are not polluted. Warning only: content is never truncated.
+ */
+function maybeWarnSize(result: AfkMdResult): void {
+  if (result.estimatedTokens < OVERLAY_TOKEN_WARN_THRESHOLD) return;
+  const key = result.paths.join('\0');
+  if (warnedAfkMdSize.has(key)) return;
+  warnedAfkMdSize.add(key);
+  const pathList = result.paths.map((p) => `  ${p}`).join('\n');
+  const tokStr =
+    result.estimatedTokens < 1000
+      ? `~${result.estimatedTokens}`
+      : `~${(result.estimatedTokens / 1000).toFixed(1)}k`;
+  // eslint-disable-next-line no-console -- one-shot operator UX warning
+  console.warn(
+    `[afk] AFK.md overlay is large (${tokStr} est. tokens) and is sent on every API request.\n` +
+      `      Path(s):\n${pathList}\n` +
+      `      Run \`/afk-md\` to inspect and trim, or move detail to HOT.md / the fact archive.`,
+  );
+}
+
+/**
  * Load a system-prompt overlay from AFK.md.
  *
  * Additive hybrid — checks BOTH:
  *   1. `$AFK_HOME/AFK.md` (default `~/.afk/AFK.md`) — user-scope, broadest
  *   2. `<cwd>/AFK.md` — project-scope, most specific
- * and concatenates whichever are present and non-empty, user-scope first —
- * mirroring Claude Code's CLAUDE.md load order (broadest first, most
- * specific last, so the more specific instructions land closest to the
- * actual conversation). This replaces the previous "first non-empty wins"
+ * and concatenates whichever are present and non-empty, user-scope first
+ * (broadest first, most specific last, so the more specific instructions land
+ * closest to the actual conversation — the same ordering Claude Code uses for
+ * CLAUDE.md, though this implementation does not walk ancestor directories or
+ * support imports). This replaces the previous "first non-empty wins"
  * exclusive fallback, where a project AFK.md fully hid a personal one.
  *
  * When only one tier resolves — by far the common case, since most repos
@@ -108,6 +166,10 @@ const projectScopeHeader = (path: string): string =>
  * into the system prompt by `composeSystemPrompt()` under the one outer
  * `# Operator configuration` header — never delivered as a separate
  * synthetic user-turn message the way Claude Code delivers CLAUDE.md.
+ *
+ * When the composed overlay exceeds `OVERLAY_TOKEN_WARN_THRESHOLD` estimated
+ * tokens, a one-shot warning is emitted to stderr naming the path(s) and
+ * token estimate. Content is never truncated.
  *
  * Memoized via `afkMdCache` — see the cache block above for the
  * invalidation contract.
@@ -129,19 +191,31 @@ export function loadAfkMd(cwd: string = process.cwd()): AfkMdResult | null {
 
   let result: AfkMdResult | null;
   if (userContent !== null && projectContent !== null) {
+    const content =
+      `${userScopeHeader(userPath)}\n\n${userContent}\n\n` +
+      `${projectScopeHeader(projectPath)}\n\n${projectContent}`;
     result = {
-      content:
-        `${userScopeHeader(userPath)}\n\n${userContent}\n\n` +
-        `${projectScopeHeader(projectPath)}\n\n${projectContent}`,
+      content,
       paths: [userPath, projectPath],
+      estimatedTokens: estimateTokens(content),
     };
   } else if (projectContent !== null) {
-    result = { content: projectContent, paths: [projectPath] };
+    result = {
+      content: projectContent,
+      paths: [projectPath],
+      estimatedTokens: estimateTokens(projectContent),
+    };
   } else if (userContent !== null) {
-    result = { content: userContent, paths: [userPath] };
+    result = {
+      content: userContent,
+      paths: [userPath],
+      estimatedTokens: estimateTokens(userContent),
+    };
   } else {
     result = null;
   }
+
+  if (result !== null) maybeWarnSize(result);
 
   afkMdCache = { cwd, value: result };
   return afkMdCache.value;

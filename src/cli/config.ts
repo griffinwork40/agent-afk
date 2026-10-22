@@ -55,8 +55,8 @@ export {
 
 /**
  * Clear the in-memory config-disk caches. Exposed for tests that mock the
- * filesystem per-case and for any future "config changed" invalidation
- * hook (currently none — config is reread on next CLI process).
+ * filesystem per-case and for live-reload paths such as `/afk-md reload`
+ * that bust the cache and recompose mid-session.
  *
  * Also clears the env-config cache so tests that mutate `process.env`
  * between cases see the new values; in production this matters less since
