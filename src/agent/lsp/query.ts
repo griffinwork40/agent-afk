@@ -10,6 +10,7 @@
  * @module agent/lsp/query
  */
 
+import { pathToFileURL } from 'node:url';
 import { LspClient, LspClientError, type FileSync } from './client.js';
 import { getLspPool, type LspServerPool } from './pool.js';
 import type { PublishedDiagnostics } from './diagnostics-store.js';
@@ -51,12 +52,19 @@ export async function withPooledFile<T>(
   const pool = opts.pool ?? getLspPool();
   const client = await pool.acquire(spec, opts.root, { timeoutMs: remainingMs(), signal: opts.signal });
   const release = client.hold();
+  const releaseDoc = client.useDocument(pathToFileURL(filePath).toString());
+  let syncedUri: string | null = null;
   try {
     const seqBeforeSync = client.diagnostics.seq;
     const sync = await client.syncFile(filePath, content);
     if (!sync) throw new LspClientError('response', 'Unsupported file type');
+    syncedUri = sync.uri;
     return await fn({ client, sync, seqBeforeSync, remainingMs });
   } finally {
+    // Close every other open document so a file later edited by another
+    // route is re-read from disk on its next query (#4293 review C-2).
+    releaseDoc();
+    if (syncedUri !== null) client.closeOthers(syncedUri);
     release();
   }
 }

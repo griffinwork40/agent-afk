@@ -4,8 +4,13 @@
  * Runs:
  *   npm install --prefix <getLspLanguageInstallDir(lang)> --no-audit --no-fund <packages...>
  *
- * The npm executable is resolved cross-platform: `npm.cmd` on win32, `npm`
- * elsewhere. Execution uses `execFile` (not a shell) per the repo's POSIX guard.
+ * The npm executable is resolved cross-platform: `npm` on POSIX; on win32
+ * npm's JS CLI is run as `process.execPath npm-cli.js` because Node refuses
+ * to execFile `npm.cmd` without a shell (EINVAL, CVE-2024-27980) and a shell
+ * would interpret the arguments (#4293 review C-4). Never uses a shell.
+ *
+ * Failure reasons are secret-redacted and capped before they leave this
+ * module (they are written to the effect ledger and surfaced; review S-3).
  *
  * @module agent/lsp/install.npm
  */
@@ -13,6 +18,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getLspLanguageInstallDir } from '../../paths.lsp.js';
+import { resolveNpmCli } from '../../utils/npm-cli.js';
+import { redactSecrets } from '../redact-secrets.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,9 +42,35 @@ const execFileAsync = promisify(execFile) as NpmExecFn;
 /** Default timeout for npm install: 3 minutes. */
 const NPM_INSTALL_TIMEOUT_MS = 180_000;
 
-/** Resolve the npm executable name for the current platform. */
-export function resolveNpmBin(_platform: string = process.platform): string {
-  return _platform === 'win32' ? 'npm.cmd' : 'npm';
+/** Maximum length of a failure reason stored in the ledger / returned. */
+export const MAX_FAILURE_REASON_CHARS = 500;
+
+/** Redact secrets from an npm failure message and cap its length. */
+export function sanitizeFailureReason(message: string): string {
+  const redacted = redactSecrets(message);
+  return redacted.length > MAX_FAILURE_REASON_CHARS
+    ? `${redacted.slice(0, MAX_FAILURE_REASON_CHARS)}… [truncated]`
+    : redacted;
+}
+
+/** Executable + leading args for running npm (never through a shell). */
+export interface NpmCommand {
+  readonly file: string;
+  readonly args: readonly string[];
+}
+
+/**
+ * Resolve how to run npm on `platform`: `npm` on POSIX; on win32
+ * `execPath <npm-cli.js>` (undefined when npm-cli.js cannot be located).
+ */
+export function resolveNpmCommand(
+  platform: string = process.platform,
+  locateCli: () => string | undefined = () => resolveNpmCli(),
+  execPath: string = process.execPath,
+): NpmCommand | undefined {
+  if (platform !== 'win32') return { file: 'npm', args: [] };
+  const cli = locateCli();
+  return cli === undefined ? undefined : { file: execPath, args: [cli] };
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +87,7 @@ export function resolveNpmBin(_platform: string = process.platform): string {
  * @param signal    - Optional AbortSignal to cancel the install.
  * @param execFn    - Injectable executor (default: promisified execFile).
  * @param platform  - Injectable platform string (default: process.platform).
+ * @param locateCli - Injectable npm-cli.js locator for win32 (tests).
  */
 export async function runNpmInstall(
   language: string,
@@ -61,10 +95,15 @@ export async function runNpmInstall(
   signal?: AbortSignal,
   execFn: NpmExecFn = execFileAsync,
   platform: string = process.platform,
+  locateCli?: () => string | undefined,
 ): Promise<NpmInstallResult> {
   const installDir = getLspLanguageInstallDir(language);
-  const npmBin = resolveNpmBin(platform);
+  const npm = resolveNpmCommand(platform, locateCli);
+  if (npm === undefined) {
+    return { ok: false, reason: 'Could not locate npm in the running Node installation' };
+  }
   const args = [
+    ...npm.args,
     'install',
     '--prefix', installDir,
     '--no-audit',
@@ -73,13 +112,13 @@ export async function runNpmInstall(
   ];
 
   try {
-    await execFn(npmBin, args, { timeout: NPM_INSTALL_TIMEOUT_MS, signal });
+    await execFn(npm.file, args, { timeout: NPM_INSTALL_TIMEOUT_MS, signal });
     return { ok: true };
   } catch (err: unknown) {
     const message =
       err instanceof Error
         ? err.message
         : String(err);
-    return { ok: false, reason: message };
+    return { ok: false, reason: sanitizeFailureReason(message) };
   }
 }

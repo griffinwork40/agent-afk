@@ -13,6 +13,8 @@ import { getAfkCacheDir, getAfkStateDir } from './paths.js';
  */
 
 const LANGUAGE_SAFE = /^[a-z0-9][a-z0-9_-]*$/;
+/** Binary names: no separators, no `..`, no leading dot/dash (#4293 review S-2). */
+const BIN_NAME_SAFE = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 
 export function getLspServersDir(): string {
   return join(getAfkCacheDir(), 'lsp-servers');
@@ -26,8 +28,14 @@ export function getLspLanguageInstallDir(language: string): string {
   return join(getLspServersDir(), language);
 }
 
-/** Path of an npm-installed server binary for `language`. Does not check existence. */
+/**
+ * Path of an npm-installed server binary for `language`. Does not check existence.
+ * @throws if `language` or `binName` is not path-safe (separators, `..`).
+ */
 export function getLspInstalledBinPath(language: string, binName: string): string {
+  if (!BIN_NAME_SAFE.test(binName) || binName.includes('..')) {
+    throw new Error(`Invalid LSP binary name for install path: ${JSON.stringify(binName)}`);
+  }
   const bin = process.platform === 'win32' ? `${binName}.cmd` : binName;
   return join(getLspLanguageInstallDir(language), 'node_modules', '.bin', bin);
 }

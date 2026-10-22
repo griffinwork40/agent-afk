@@ -13,7 +13,7 @@ import type { ServerDefinition, InstallContext } from './server-spec.js';
 import { createEnsureInstalled } from './install.js';
 import { createGrantStore } from './install.grants.js';
 import { getLspInstallFootprint } from './install.footprint.js';
-import { resolveNpmBin } from './install.npm.js';
+import { resolveNpmCommand, sanitizeFailureReason, MAX_FAILURE_REASON_CHARS, runNpmInstall } from './install.npm.js';
 import type { NpmExecFn } from './install.npm.js';
 
 // ---------------------------------------------------------------------------
@@ -96,17 +96,57 @@ function makeInstall(tmpDir: string, def: ServerDefinition, execFn: NpmExecFn) {
 // resolveNpmBin
 // ---------------------------------------------------------------------------
 
-describe('resolveNpmBin', () => {
-  it('returns npm.cmd on win32', () => {
-    expect(resolveNpmBin('win32')).toBe('npm.cmd');
+describe('resolveNpmCommand', () => {
+  it('win32: runs npm-cli.js via the node binary (never npm.cmd)', () => {
+    const cli = path.win32.join('C:\\Program Files\\nodejs', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    expect(resolveNpmCommand('win32', () => cli, 'C:\\Program Files\\nodejs\\node.exe'))
+      .toEqual({ file: 'C:\\Program Files\\nodejs\\node.exe', args: [cli] });
   });
 
-  it('returns npm on linux', () => {
-    expect(resolveNpmBin('linux')).toBe('npm');
+  it('win32: undefined when npm-cli.js cannot be located', () => {
+    expect(resolveNpmCommand('win32', () => undefined)).toBeUndefined();
   });
 
-  it('returns npm on darwin', () => {
-    expect(resolveNpmBin('darwin')).toBe('npm');
+  it('returns npm on linux and darwin', () => {
+    expect(resolveNpmCommand('linux')).toEqual({ file: 'npm', args: [] });
+    expect(resolveNpmCommand('darwin')).toEqual({ file: 'npm', args: [] });
+  });
+
+  it('win32 runNpmInstall passes npm-cli.js as the first arg, no shell', async () => {
+    const calls: Array<{ file: string; args: readonly string[] }> = [];
+    const execFn: NpmExecFn = async (file, args) => { calls.push({ file, args }); return { stdout: '', stderr: '' }; };
+    const res = await runNpmInstall('typescript', ['pkg'], undefined, execFn, 'win32', () => 'C:\\n\\npm-cli.js');
+    expect(res).toEqual({ ok: true });
+    expect(calls[0]!.file).toBe(process.execPath);
+    expect(calls[0]!.args[0]).toBe('C:\\n\\npm-cli.js');
+    expect(calls[0]!.args.slice(1, 2)).toEqual(['install']);
+  });
+
+  it('win32 runNpmInstall fails cleanly when npm-cli.js is missing', async () => {
+    const execFn: NpmExecFn = async () => ({ stdout: '', stderr: '' });
+    const res = await runNpmInstall('typescript', ['pkg'], undefined, execFn, 'win32', () => undefined);
+    expect(res).toMatchObject({ ok: false, reason: expect.stringContaining('Could not locate npm') });
+  });
+});
+
+describe('sanitizeFailureReason', () => {
+  it('redacts secrets and caps the length', () => {
+    const secret = 'ghp_' + 'a'.repeat(36);
+    const out = sanitizeFailureReason(`npm ERR! 401 token ${secret} ` + 'x'.repeat(2000));
+    expect(out).not.toContain(secret);
+    expect(out).toContain('[REDACTED]');
+    expect(out.length).toBeLessThanOrEqual(MAX_FAILURE_REASON_CHARS + 20);
+  });
+
+  it('runNpmInstall returns a redacted, capped reason', async () => {
+    const secret = 'ghp_' + 'b'.repeat(36);
+    const res = await runNpmInstall('typescript', ['pkg'], undefined,
+      async () => { throw new Error(`auth failed ${secret} ` + 'y'.repeat(5000)); }, 'linux');
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).not.toContain(secret);
+      expect(res.reason.length).toBeLessThanOrEqual(MAX_FAILURE_REASON_CHARS + 20);
+    }
   });
 });
 
@@ -545,5 +585,50 @@ describe('getLspInstallFootprint', () => {
     const result = await getLspInstallFootprint(tmpDir);
     const langs = result.map((r) => r.language);
     expect(langs).toEqual([...langs].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4293 review C-5: never throws on ledger I/O; dedupe keyed on interactive
+// ---------------------------------------------------------------------------
+
+describe('ensureServerInstalled — C-5 hardening', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    (globalThis as any).__lspTestServersDir = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    delete (globalThis as any).__lspTestServersDir;
+  });
+
+  it('maps a ledger write error to {kind:"failed"} instead of throwing', async () => {
+    const def = makeDefinition();
+    const grantStore = createGrantStore(path.join(tmpDir, 'grants.json'));
+    await grantStore.persistGrant(def.language, [...def.install!.packages]);
+    // A directory as the ledger path: appending to it fails (EISDIR/EPERM).
+    const ledgerPath = path.join(tmpDir, 'ledger-is-a-dir');
+    fs.mkdirSync(ledgerPath);
+    const ensure = createEnsureInstalled({
+      grantStore, execFn: makeSuccessExec(tmpDir, def), ledgerPath, inFlightMap: new Map(),
+    });
+    const result = await ensure(def, makeCtx());
+    expect(result).toMatchObject({ kind: 'failed', reason: expect.stringContaining('LSP install error') });
+  });
+
+  it('an unattended call in flight does not answer a concurrent interactive call', async () => {
+    const def = makeDefinition();
+    const grantStore = createGrantStore(path.join(tmpDir, 'grants.json'));
+    const ensure = createEnsureInstalled({
+      grantStore, execFn: makeSuccessExec(tmpDir, def),
+      ledgerPath: path.join(tmpDir, 'ledger.jsonl'), inFlightMap: new Map(),
+    });
+    const unattended = ensure(def, makeCtx({ interactive: false }));
+    const interactive = ensure(def, makeCtx({ interactive: true, askConsent: async () => true }));
+    expect(await unattended).toEqual({ kind: 'refused-unattended' });
+    expect(await interactive).toMatchObject({ kind: 'installed', freshInstall: true });
   });
 });

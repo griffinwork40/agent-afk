@@ -235,14 +235,20 @@ export function resolveServerWith(deps: RegistryDeps): ResolveServerFn {
 // fallback subset, which covers all cases the LSP server binaries need.
 const WIN32_EXTS = ['.cmd', '.exe', '.bat', '.com'] as const;
 
-function defaultPathLookup(binName: string): string | undefined {
+/**
+ * Find `binName` on PATH (win32: trying .cmd/.exe/.bat/.com). Returns the
+ * absolute path, or undefined. Never throws. Exported for the win32
+ * shell-free spawn path in client-process.ts.
+ */
+export function findOnPath(binName: string, platform: NodeJS.Platform = process.platform): string | undefined {
   try {
     const pathVar = env.PATH ?? '';
-    const dirs = pathVar.split(path.delimiter).filter(Boolean);
-    const exts = process.platform === 'win32' ? WIN32_EXTS : [''];
+    const delimiter = platform === 'win32' ? ';' : ':';
+    const dirs = pathVar.split(delimiter).filter(Boolean);
+    const exts = platform === 'win32' ? WIN32_EXTS : [''];
     for (const dir of dirs) {
       for (const ext of exts) {
-        const candidate = path.join(dir, binName + ext);
+        const candidate = (platform === 'win32' ? path.win32 : path).join(dir, binName + ext);
         try {
           fs.accessSync(candidate, fs.constants.X_OK);
           return candidate;
@@ -269,5 +275,5 @@ function defaultFsStat(p: string): boolean {
 /** Default `ResolveServerFn` — uses real fs and real PATH. */
 export const resolveServer: ResolveServerFn = resolveServerWith({
   fsStat: defaultFsStat,
-  pathLookup: defaultPathLookup,
+  pathLookup: (binName) => findOnPath(binName),
 });

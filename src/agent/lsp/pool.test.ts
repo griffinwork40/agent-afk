@@ -15,11 +15,14 @@ import {
   messagesWithMethod,
   readFakeLog,
   fakeServerCmd,
+  pidAlive,
   type FakeServerConfig,
 } from './__test-utils__/fake-lsp-server.js';
 import { LspServerPool, getIdleShutdownMs, DEFAULT_LSP_IDLE_SHUTDOWN_MS } from './pool.js';
 import { LspClientError } from './client.js';
 import { withPooledFile, awaitSyncDiagnostics } from './query.js';
+import { DiagnosticsStore } from './diagnostics-store.js';
+import { pathToFileURL } from 'node:url';
 import { TYPESCRIPT_SERVER_DEFINITION } from './typescript-default.js';
 import type { ServerSpec } from './server-spec.js';
 
@@ -32,7 +35,10 @@ afterEach(async () => {
   await Promise.all(pools.splice(0).map((p) => p.disposeAll()));
   vi.unstubAllEnvs();
 });
-afterAll(() => rmSync(tempDir, { recursive: true, force: true }));
+afterAll(async () => {
+  await Promise.all(pools.splice(0).map((p) => p.disposeAll()));
+  rmSync(tempDir, { recursive: true, force: true });
+});
 
 /** Fresh fake server + log + spec; settings feed workspace/configuration. */
 function setup(config: FakeServerConfig = {}, settings?: Record<string, unknown>) {
@@ -223,4 +229,110 @@ describe('LspClient', () => {
     expect(second.published?.diagnostics).toEqual([diag]);
     expect(pool.spawned).toBe(1);
   }, 10_000);
+});
+
+describe('#4293 review fixes', () => {
+  it('dispose kills the server and its child tree and awaits exit (C-1)', async () => {
+    const { logFile, spec } = setup({ spawnGrandchild: true });
+    const pool = newPool();
+    const client = await pool.acquire(spec, tempDir);
+    await until(() => readFakeLog(logFile).some((e) => e.grandchild !== undefined));
+    const pid = client.pid!;
+    const grandchild = readFakeLog(logFile).find((e) => e.grandchild !== undefined)!.grandchild!;
+    expect(pidAlive(pid)).toBe(true);
+    await pool.disposeAll();
+    // dispose resolved only after the root exited.
+    expect(pidAlive(pid)).toBe(false);
+    await until(() => !pidAlive(grandchild), 5000);
+  }, 15_000);
+
+  it('eviction (idle shutdown) leaves no live server process', async () => {
+    const { spec } = setup();
+    const pool = newPool({ idleShutdownMs: 50 });
+    const client = await pool.acquire(spec, tempDir);
+    const pid = client.pid!;
+    await until(() => !client.alive);
+    await client.dispose();
+    expect(pidAlive(pid)).toBe(false);
+  }, 10_000);
+
+  it('the server cwd can be removed right after disposeAll (no EBUSY)', async () => {
+    const root = path.join(tempDir, `cwd-${++counter}`);
+    mkdirSync(root, { recursive: true });
+    const { spec } = setup({ spawnGrandchild: true });
+    const pool = newPool();
+    await pool.acquire(spec, root);
+    await pool.disposeAll();
+    expect(() => rmSync(root, { recursive: true, force: true })).not.toThrow();
+  }, 15_000);
+
+  it('disposeAll waits for a still-starting server too', async () => {
+    const { logFile, spec } = setup({ silent: true });
+    const pool = newPool();
+    const pending = pool.acquire(spec, tempDir).catch(() => null);
+    await until(() => spawnCount(logFile) === 1);
+    const pid = readFakeLog(logFile).find((e) => e.spawn !== undefined)!.spawn!;
+    await pool.disposeAll();
+    await pending;
+    expect(pidAlive(pid)).toBe(false);
+  }, 10_000);
+
+  it('a late unversioned publish for an earlier edit is not reported for the current one (C-3)', async () => {
+    const { spec } = setup({ echoText: true, publishVersion: false, publishDelays: { '1': 100, '2': 150 } });
+    const client = await newPool().acquire(spec, tempDir);
+    const file = tsFile('race.ts');
+    await client.syncFile(file, 'old');
+    const seq = client.diagnostics.seq;
+    const sync = await client.syncFile(file, 'new');
+    const published = await client.diagnostics.waitFor(sync!.uri, sync!.version, seq, 3000);
+    expect(published?.diagnostics).toEqual([{ message: 'new' }]);
+  }, 10_000);
+
+  it('a previously queried file is didClosed when another file is queried (C-2)', async () => {
+    const { logFile, spec } = setup({ echoText: true });
+    const pool = newPool();
+    const a = tsFile('closed-a.ts', 'a1');
+    const b = tsFile('closed-b.ts', 'b1');
+    const query = (file: string, text: string) => withPooledFile(spec, file, text, { root: tempDir, timeoutMs: 3000, pool },
+      async (ctx) => ({ client: ctx.client, published: await awaitSyncDiagnostics(ctx) }));
+    await query(a, 'a1');
+    writeFileSync(a, 'a2-edited-elsewhere', 'utf8');
+    const { client, published } = await query(b, 'b1');
+    expect(published?.diagnostics).toEqual([{ message: 'b1' }]);
+    const uriA = pathToFileURL(a).toString();
+    await until(() => messagesWithMethod(logFile, 'textDocument/didClose').some((m) => m?.params.textDocument.uri === uriA));
+    expect(client.openDocuments).toEqual([pathToFileURL(b).toString()]);
+    // Re-querying A re-opens it with the fresh text (didOpen, not a stale didChange).
+    const again = await query(a, 'a2-edited-elsewhere');
+    expect(again.published?.diagnostics).toEqual([{ message: 'a2-edited-elsewhere' }]);
+    expect(messagesWithMethod(logFile, 'textDocument/didOpen').filter((m) => m?.params.textDocument.uri === uriA)).toHaveLength(2);
+  }, 10_000);
+});
+
+describe('DiagnosticsStore unversioned settle (C-3)', () => {
+  it('returns the newest unversioned publish after the settle window', async () => {
+    const store = new DiagnosticsStore(50);
+    const seq = store.seq;
+    const wait = store.waitFor('u', 2, seq, 2000);
+    store.record({ uri: 'u', diagnostics: ['stale'] });
+    store.record({ uri: 'u', diagnostics: ['fresh'] });
+    expect((await wait)?.diagnostics).toEqual(['fresh']);
+  });
+
+  it('versioned publishes still match exactly and resolve immediately', async () => {
+    const store = new DiagnosticsStore(10_000);
+    const wait = store.waitFor('u', 2, store.seq, 2000);
+    store.record({ uri: 'u', version: 1, diagnostics: ['old'] });
+    store.record({ uri: 'u', version: 2, diagnostics: ['cur'] });
+    const started = Date.now();
+    expect((await wait)?.diagnostics).toEqual(['cur']);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('never waits past the timeout: returns the candidate seen so far', async () => {
+    const store = new DiagnosticsStore(10_000);
+    const wait = store.waitFor('u', undefined, store.seq, 50);
+    store.record({ uri: 'u', diagnostics: ['only'] });
+    expect((await wait)?.diagnostics).toEqual(['only']);
+  });
 });

@@ -222,11 +222,17 @@ export class LspServerPool {
   async disposeAll(): Promise<void> {
     const all = [...this.entries.values()];
     const clients = all.map((e) => e.client).filter((c): c is LspClient => c !== null);
+    // A still-starting entry disposes its own client (and awaits its exit)
+    // once the abort lands; wait for that too so callers can rm the cwd.
+    const starting = all.map((e) => e.starting).filter((p): p is Promise<LspClient> => p !== null);
     for (const e of all) {
       e.abortStart.abort();
       this.evict(e);
     }
-    await Promise.all(clients.map((c) => c.dispose()));
+    await Promise.all([
+      ...clients.map((c) => c.dispose()),
+      ...starting.map((p) => p.then((c) => c.dispose(), () => undefined)),
+    ]);
   }
 }
 

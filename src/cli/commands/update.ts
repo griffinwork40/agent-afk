@@ -1,7 +1,6 @@
 import { spawn } from 'child_process';
-import { existsSync, realpathSync } from 'fs';
-import { basename, dirname, join } from 'path';
 import { Command } from 'commander';
+import { resolveNpmCli } from '../../utils/npm-cli.js';
 import { palette } from '../palette.js';
 import { getVersion } from '../version.js';
 import {
@@ -13,36 +12,7 @@ import { isNewerVersion } from '../update-version.js';
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[\da-z.]+)?$/i;
 
-/**
- * Locate npm's JavaScript entrypoint in the running Node installation.
- * Calling a sibling npm launcher is insufficient: its env-node shebang can
- * choose a different interpreter and therefore a different global prefix.
- * Fail closed rather than silently installing with an unrelated PATH npm.
- * Explicit npm prefix configuration remains authoritative.
- */
-export function resolveNpmCli(
-  execPath: string = process.execPath,
-  existsFn: (p: string) => boolean = existsSync,
-  realpathFn: (p: string) => string = realpathSync,
-): string | undefined {
-  const nodeDir = dirname(execPath);
-  // Homebrew links the Cellar sibling npm to the shared prefix's npm CLI.
-  // Resolve that symlink, but never execute a shell/cmd wrapper with Node.
-  try {
-    const sibling = join(nodeDir, 'npm');
-    if (existsFn(sibling)) {
-      const cli = realpathFn(sibling);
-      if (basename(cli) === 'npm-cli.js' && existsFn(cli)) return cli;
-    }
-  } catch {
-    // No readable sibling link; try standard npm package layouts below.
-  }
-  const candidates = [
-    join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-    join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-  ];
-  return candidates.find(existsFn);
-}
+export { resolveNpmCli } from '../../utils/npm-cli.js';
 
 /** Foreground installation with visible npm output; `upgrade` is an alias. */
 export function registerUpdateCommand(program: Command): void {

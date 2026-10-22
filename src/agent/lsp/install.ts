@@ -10,8 +10,13 @@
  *   5. No grant + interactive → ask via ctx.askConsent; decline → {kind:'declined'}.
  *   6. Approved → persist grant BEFORE install, run npm, verify bin, ledger rows.
  *
- * Concurrency: concurrent ensure calls for the same language share one
- * in-flight Promise (dedup map). Cross-process locking is NOT implemented
+ * Concurrency: concurrent ensure calls for the same language AND the same
+ * `interactive` flag share one in-flight Promise (dedup map). Keying on
+ * `interactive` too means an interactive caller never inherits an unattended
+ * caller's `refused-unattended` (#4293 review C-5).
+ *
+ * Never throws: ledger I/O errors, path-validation errors, and any other
+ * unexpected failure map to `{kind:'failed'}` (review C-5). Cross-process locking is NOT implemented
  * because no file-lock helper exists in the repo; see GAP comment below.
  *
  * @module agent/lsp/install
@@ -30,7 +35,7 @@ import type {
   EnsureInstalledFn,
 } from './server-spec.js';
 import { createGrantStore, type GrantStore } from './install.grants.js';
-import { runNpmInstall, type NpmExecFn } from './install.npm.js';
+import { runNpmInstall, sanitizeFailureReason, type NpmExecFn } from './install.npm.js';
 
 // ---------------------------------------------------------------------------
 // GAP: cross-process file lock
@@ -46,7 +51,7 @@ import { runNpmInstall, type NpmExecFn } from './install.npm.js';
 // In-process dedup map
 // ---------------------------------------------------------------------------
 
-/** Active install Promises keyed by language. Prevents duplicate installs
+/** Active install Promises keyed by `inFlightKey`. Prevents duplicate installs
  *  when multiple callers race within the same process. */
 const inFlight = new Map<string, Promise<EnsureInstalledResult>>();
 
@@ -69,6 +74,8 @@ export interface InstallDeps {
   ledgerPath?: string;
   /** Override platform for npm bin resolution. */
   platform?: string;
+  /** Override the win32 npm-cli.js locator (tests). */
+  locateCli?: () => string | undefined;
   /** Override in-flight map (tests can supply a fresh map per test). */
   inFlightMap?: Map<string, Promise<EnsureInstalledResult>>;
 }
@@ -146,6 +153,7 @@ async function ensureInstalledCore(
     ctx.signal,
     deps.execFn,
     deps.platform ?? process.platform,
+    deps.locateCli,
   );
 
   if (!result.ok) {
@@ -166,6 +174,25 @@ async function ensureInstalledCore(
   await ledger.updateStatus({ id: pendingRecord.id, status: 'executed', result: { binPath } });
 
   return { kind: 'installed', command: binPath, freshInstall: true };
+}
+
+/** Run the core; any thrown error (ledger I/O, fs, paths) maps to failed. */
+async function ensureInstalledSafe(
+  definition: ServerDefinition,
+  ctx: InstallContext,
+  deps: InstallDeps,
+): Promise<EnsureInstalledResult> {
+  try {
+    return await ensureInstalledCore(definition, ctx, deps);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { kind: 'failed', reason: sanitizeFailureReason(`LSP install error: ${message}`) };
+  }
+}
+
+/** In-flight dedupe key: language + whether a human is reachable. */
+export function inFlightKey(language: string, interactive: boolean): string {
+  return `${language}\u0000${interactive ? 'interactive' : 'unattended'}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,14 +219,14 @@ export function createEnsureInstalled(deps: InstallDeps = {}): EnsureInstalledFn
     definition: ServerDefinition,
     ctx: InstallContext,
   ): Promise<EnsureInstalledResult> {
-    const { language } = definition;
-    const existing = map.get(language);
+    const key = inFlightKey(definition.language, ctx.interactive);
+    const existing = map.get(key);
     if (existing !== undefined) return existing;
 
-    const promise = ensureInstalledCore(definition, ctx, deps).finally(() => {
-      map.delete(language);
+    const promise = ensureInstalledSafe(definition, ctx, deps).finally(() => {
+      map.delete(key);
     });
-    map.set(language, promise);
+    map.set(key, promise);
     return promise;
   };
 }

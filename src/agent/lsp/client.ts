@@ -14,7 +14,7 @@
  * @module agent/lsp/client
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -30,6 +30,7 @@ import type { ServerSpec } from './server-spec.js';
 import { answerServerRequest, CLIENT_CAPABILITIES } from './client-handlers.js';
 import { DocumentSync, type SyncResult } from './document-sync.js';
 import { DiagnosticsStore } from './diagnostics-store.js';
+import { exitPromise, forceKillRoot, killServerTree, spawnServer, waitForExit } from './client-process.js';
 
 /** Failure kinds surfaced to handlers so they can map to their error strings. */
 export type LspFailureKind = 'timeout' | 'aborted' | 'exited' | 'spawn' | 'response';
@@ -59,6 +60,9 @@ const SILENT_LOGGER: Logger = { error: () => {}, warn: () => {}, info: () => {},
 /** Default deadline for the `initialize` handshake when the caller gives none. */
 const DEFAULT_INIT_TIMEOUT_MS = 30_000;
 
+/** Upper bound `dispose` waits for the process to exit after the kill. */
+export const DISPOSE_EXIT_TIMEOUT_MS = 3_000;
+
 export class LspClient {
   private readonly conn: MessageConnection;
   private readonly docs = new DocumentSync();
@@ -71,12 +75,16 @@ export class LspClient {
   private disposing: Promise<void> | null = null;
   private holds = 0;
   private initialized = false;
+  private readonly exited: Promise<void>;
+  /** Uris an in-flight query is using; never closed underneath it. */
+  private readonly docUses = new Map<string, number>();
 
   private constructor(
     readonly spec: ServerSpec,
     readonly root: string,
     private readonly proc: ChildProcess,
   ) {
+    this.exited = exitPromise(proc);
     proc.stdin?.on('error', () => this.markDead('stdin error'));
     proc.on('error', () => this.markDead('spawn error', 'spawn'));
     proc.on('exit', () => this.markDead('process exited'));
@@ -126,13 +134,9 @@ export class LspClient {
     if (opts.signal?.aborted) throw new LspClientError('aborted', 'Aborted');
     let proc: ChildProcess;
     try {
-      // Invariant: on win32 npm-installed binaries are .cmd shims that spawn()
-      // cannot resolve without shell: true.
-      proc = spawn(spec.command, [...spec.args], {
-        cwd: root,
-        stdio: ['pipe', 'pipe', 'ignore'],
-        shell: process.platform === 'win32',
-      });
+      // Invariant: never spawned through a shell; win32 .cmd shims are
+      // resolved to their JS entry (client-process.ts) so pid IS the server.
+      proc = spawnServer(spec.command, spec.args, root);
     } catch {
       throw new LspClientError('spawn', 'Failed to spawn LSP server');
     }
@@ -256,22 +260,64 @@ export class LspClient {
     return { ...result, uri };
   }
 
-  /** Graceful shutdown/exit, then kill. Idempotent; never throws. */
+  /** Mark `uri` in use by a query until the returned release is called. */
+  useDocument(uri: string): () => void {
+    this.docUses.set(uri, (this.docUses.get(uri) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const n = (this.docUses.get(uri) ?? 1) - 1;
+      if (n <= 0) this.docUses.delete(uri); else this.docUses.set(uri, n);
+    };
+  }
+
+  /**
+   * didClose every open document except `uri` and any document an in-flight
+   * query is using (call after a query on `uri`). See
+   * DocumentSync.closeAllExcept for why.
+   */
+  closeOthers(uri: string): void {
+    const keep = new Set([uri, ...this.docUses.keys()]);
+    for (const n of this.docs.closeAllExcept(keep)) this.notify(n.method, n.params);
+  }
+
+  /** Uris this client currently has open. */
+  get openDocuments(): string[] {
+    return this.docs.openUris();
+  }
+
+  /** Pid of the server process (tests / diagnostics). */
+  get pid(): number | undefined {
+    return this.proc.pid;
+  }
+
+  /**
+   * Graceful shutdown/exit, then kill the whole process tree and wait
+   * (bounded by DISPOSE_EXIT_TIMEOUT_MS) for the exit. Idempotent; never throws.
+   */
   dispose(): Promise<void> {
     this.disposing ??= this.doDispose();
     return this.disposing;
   }
 
   private async doDispose(): Promise<void> {
-    // Only a server that finished initialize gets a graceful shutdown; one
+    // Only a server that finished initialize gets a graceful `shutdown`; one
     // stuck in initialize is killed immediately.
+    // Invariant: the tree is killed while the root is still alive (no `exit`
+    // notification first) — on win32 `taskkill /T` cannot find the children
+    // of a root that already exited, and they would keep the cwd busy.
     if (!this.dead && this.initialized) {
       try { await this.request('shutdown', null, { timeoutMs: 1000 }); } catch { /* best effort */ }
-      this.notify('exit', null);
     }
     this.markDead('disposed');
     try { this.proc.stdin?.end(); } catch { /* ignore */ }
-    try { this.proc.kill(); } catch { /* ignore */ }
+    killServerTree(this.proc);
+    await waitForExit(this.exited, DISPOSE_EXIT_TIMEOUT_MS);
+    if (this.proc.exitCode === null && this.proc.signalCode === null) {
+      forceKillRoot(this.proc);
+      await waitForExit(this.exited, DISPOSE_EXIT_TIMEOUT_MS);
+    }
   }
 
   private touch(): void {
@@ -290,8 +336,6 @@ export class LspClient {
     }
     this.exitListeners.clear();
     try { this.conn.dispose(); } catch { /* ignore */ }
-    if (reason !== 'disposed') {
-      try { this.proc.kill(); } catch { /* ignore */ }
-    }
+    if (reason !== 'disposed') killServerTree(this.proc);
   }
 }

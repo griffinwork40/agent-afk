@@ -30,6 +30,12 @@ export interface FakeServerConfig {
   publishVersion?: boolean;
   /** After `initialized`, send workspace/configuration for these sections. */
   configurationSections?: string[];
+  /** Publish `[{ message: <document text> }]` instead of `diagnostics`. */
+  echoText?: boolean;
+  /** Delay (ms) before publishing for a given document version. */
+  publishDelays?: Record<string, number>;
+  /** Spawn a long-lived grandchild at startup and log its pid as `grandchild`. */
+  spawnGrandchild?: boolean;
 }
 
 /** Write the fake server script to `scriptPath`. */
@@ -40,6 +46,11 @@ const cfg = ${JSON.stringify(config)};
 const log = (o) => { if (cfg.logFile) fs.appendFileSync(cfg.logFile, JSON.stringify(o) + '\\n'); };
 log({ spawn: process.pid });
 if (cfg.crashOnStart) process.exit(1);
+if (cfg.spawnGrandchild) {
+  const gc = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  log({ grandchild: gc.pid });
+}
+const texts = new Map();
 const send = (o) => {
   const body = JSON.stringify(Object.assign({ jsonrpc: '2.0' }, o));
   process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
@@ -56,12 +67,17 @@ const handle = (m) => {
   if (m.method === 'shutdown') return send({ id: m.id, result: null });
   if (m.method === 'exit') return process.exit(0);
   if (m.method === '$/cancelRequest') return send({ id: m.params.id, error: { code: -32800, message: 'cancelled' } });
+  if (m.method === 'textDocument/didClose') return texts.delete(m.params.textDocument.uri);
   if (m.method === 'textDocument/didOpen' || m.method === 'textDocument/didChange') {
-    if (!cfg.diagnostics) return;
     const td = m.params.textDocument;
-    const params = { uri: td.uri, diagnostics: cfg.diagnostics };
+    const text = m.method === 'textDocument/didOpen' ? td.text : m.params.contentChanges[0].text;
+    texts.set(td.uri, text);
+    if (!cfg.diagnostics && !cfg.echoText) return;
+    const params = { uri: td.uri, diagnostics: cfg.echoText ? [{ message: text }] : cfg.diagnostics };
     if (cfg.publishVersion !== false) params.version = td.version;
-    return send({ method: 'textDocument/publishDiagnostics', params });
+    const delay = (cfg.publishDelays || {})[String(td.version)] || 0;
+    const publish = () => send({ method: 'textDocument/publishDiagnostics', params });
+    return delay > 0 ? void setTimeout(publish, delay) : publish();
   }
   if (m.method === 'textDocument/definition' || m.method === 'textDocument/references') {
     if (cfg.crashOnRequest) process.exit(1);
@@ -88,7 +104,7 @@ process.stdin.on('end', () => process.exit(0));
 }
 
 /** Entries of a fake server log file (empty when absent). */
-export function readFakeLog(logFile: string): Array<{ spawn?: number; msg?: { id?: unknown; method?: string; params?: any; result?: unknown } }> {
+export function readFakeLog(logFile: string): Array<{ spawn?: number; grandchild?: number; msg?: { id?: unknown; method?: string; params?: any; result?: unknown } }> {
   if (!existsSync(logFile)) return [];
   return readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 }
@@ -101,6 +117,16 @@ export function spawnCount(logFile: string): number {
 /** Received messages with the given method. */
 export function messagesWithMethod(logFile: string, method: string) {
   return readFakeLog(logFile).map((e) => e.msg).filter((m) => m?.method === method);
+}
+
+/** True while a process with `pid` exists (signal 0 probe; portable). */
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
 
 /** Server command for `writeFakeLspServer` output. */

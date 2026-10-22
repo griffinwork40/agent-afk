@@ -348,4 +348,15 @@ describe('resolveServerWith — error resilience', () => {
     const result = await resolve('/any/file.ts', '/any');
     expect(['unsupported', 'missing', 'resolved']).toContain(result.kind);
   });
+
+  it('never throws for a definition with an unsafe binName (S-2)', async () => {
+    const [base] = getServerDefinitions();
+    const resolve = resolveServerWith({
+      fsStat: () => true,
+      pathLookup: () => '/usr/bin/x',
+      definitions: [{ ...base!, binName: '../../evil' }],
+    });
+    const result = await resolve('/any/file.ts', '/any');
+    expect(result.kind).toBe('unsupported');
+  });
 });
