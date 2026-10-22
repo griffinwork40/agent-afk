@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node `^22.22.2 || ^24.15.0 || >=26.0.0` (jsdom 30's floor; keep `engines.node` in sync with it), pnpm 11 only (pinned via `package.json#packageManager`; lockfile is pnpm-specific; dependency build scripts must be allowlisted under `allowBuilds` in `pnpm-workspace.yaml`, and `dashboard/` has its own copy). CI publishes with `npm publish`/`npm version`, not the pnpm equivalents; see the Invariant in `.github/workflows/publish.yml`.
+Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node `^22.22.2 || ^24.15.0 || >=26.0.0` (jsdom 30's floor; keep `engines.node` in sync with it), pnpm 11 only (pinned via `package.json#packageManager`; lockfile is pnpm-specific; dependency build scripts must be allowlisted under `allowBuilds` in `pnpm-workspace.yaml`, and `dashboard/` has its own copy). Releases are cut via `scripts/release.mjs` (bumps version, rewrites CHANGELOG, tags, and pushes atomically); CI then publishes via `.github/workflows/publish.yml` on the tag push — run `pnpm release patch|minor|major` from `main`, never `npm version` or `pnpm version` directly.
 
 ## Commands
 

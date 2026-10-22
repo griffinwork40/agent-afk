@@ -47,6 +47,11 @@ export interface AudioTranscriber {
   transcribe(bytes: Buffer, fileName: string, maxBytes: number): Promise<TranscribeResult>;
 }
 
+/** Strip Bearer tokens from error messages before they reach logs. */
+function redactBearer(text: string): string {
+  return text.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+}
+
 /** Seam type for the SSRF egress check injected at construction time. */
 type EgressCheckFn = (url: string) => Promise<{ allowed: boolean; reason?: string }>;
 
@@ -77,11 +82,17 @@ export class OpenAIAudioTranscriber implements AudioTranscriber {
     // SSRF host guard: reject private/loopback/link-local/cloud-metadata hosts.
     // Runs at transcribe-time so async DNS resolution is available.
     if (this.checkEgress) {
-      const verdict = await this.checkEgress(this.apiUrl);
+      let verdict: { allowed: boolean; reason?: string };
+      try {
+        verdict = await this.checkEgress(this.apiUrl);
+      } catch (err) {
+        const raw = String(err instanceof Error ? err.message : err);
+        return { status: 'network-error', safeMessage: `SSRF egress check failed: ${redactBearer(raw)}` };
+      }
       if (!verdict.allowed) {
         return {
           status: 'network-error',
-          safeMessage: `AFK_TRANSCRIBE_API_URL blocked by SSRF guard: ${verdict.reason ?? 'private or internal host'}`,
+          safeMessage: `AFK_TRANSCRIBE_API_URL blocked by SSRF guard: ${redactBearer(verdict.reason ?? 'private or internal host')}`,
         };
       }
     }
@@ -107,7 +118,7 @@ export class OpenAIAudioTranscriber implements AudioTranscriber {
       });
     } catch (err) {
       const raw = String(err instanceof Error ? err.message : err);
-      const safeMessage = raw.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+      const safeMessage = redactBearer(raw);
       return { status: 'network-error', safeMessage };
     }
 

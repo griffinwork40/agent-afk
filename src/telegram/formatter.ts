@@ -340,6 +340,7 @@ export function formatHelp(sdkCommands?: string[]): string {
     '  /cd         — Change working directory',
     '  /name       — Show or set the session name',
     '  /usage      — Show Claude subscription usage',
+    '  /insights   — Show usage analytics and recommendations',
     '  /sessions   — List and switch between sessions',
     '  /new        — Start a new session (keeps the current one)',
     '  /watch      — Live-tail a CLI session from this chat',

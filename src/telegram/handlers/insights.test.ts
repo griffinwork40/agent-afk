@@ -65,6 +65,8 @@ function makeAgg(overrides: Record<string, unknown> = {}) {
 
 type MockContext = Context & { replyCalls: Array<[string, unknown?]> };
 
+const noopLog = () => undefined;
+
 function makeCtx(commandText = '/insights'): MockContext {
   const replyCalls: Array<[string, unknown?]> = [];
   const ctx = {
@@ -91,7 +93,7 @@ describe('handleInsights', () => {
     mockEvaluateRecommendations.mockReturnValue([]);
 
     const ctx = makeCtx('/insights');
-    await handleInsights(ctx);
+    await handleInsights(ctx, noopLog);
 
     expect(ctx.replyCalls[0]![0]).toContain('Aggregating');
     const summary = ctx.replyCalls[1]![0] as string;
@@ -106,7 +108,7 @@ describe('handleInsights', () => {
     mockEvaluateRecommendations.mockReturnValue([]);
 
     const ctx = makeCtx('/insights');
-    await handleInsights(ctx);
+    await handleInsights(ctx, noopLog);
 
     const summary = ctx.replyCalls[1]![0] as string;
     expect(summary).toContain('All clear');
@@ -120,7 +122,7 @@ describe('handleInsights', () => {
     ]);
 
     const ctx = makeCtx('/insights');
-    await handleInsights(ctx);
+    await handleInsights(ctx, noopLog);
 
     const summary = ctx.replyCalls[1]![0] as string;
     expect(summary).toContain('🔴');
@@ -135,7 +137,7 @@ describe('handleInsights', () => {
     mockEvaluateRecommendations.mockReturnValue([]);
 
     const ctx = makeCtx('/insights 7');
-    await handleInsights(ctx);
+    await handleInsights(ctx, noopLog);
 
     expect(mockAggregateAll).toHaveBeenCalledWith({ days: 7 });
     const summary = ctx.replyCalls[1]![0] as string;
@@ -147,7 +149,7 @@ describe('handleInsights', () => {
     mockEvaluateRecommendations.mockReturnValue([]);
 
     const ctx = makeCtx('/insights 999');
-    await handleInsights(ctx);
+    await handleInsights(ctx, noopLog);
 
     expect(mockAggregateAll).toHaveBeenCalledWith({ days: 90 });
   });
@@ -156,11 +158,22 @@ describe('handleInsights', () => {
     mockAggregateAll.mockRejectedValue(new Error('disk read failed'));
 
     const ctx = makeCtx('/insights');
-    await handleInsights(ctx);
+    await handleInsights(ctx, noopLog);
 
     const errorReply = ctx.replyCalls[1]![0] as string;
     expect(errorReply).toContain('Failed to aggregate');
     expect(errorReply).toContain('disk read failed');
+  });
+
+  it('logs server-side when aggregateAll throws', async () => {
+    const err = new Error('disk read failed');
+    mockAggregateAll.mockRejectedValue(err);
+    const log = vi.fn();
+
+    const ctx = makeCtx('/insights');
+    await handleInsights(ctx, log);
+
+    expect(log).toHaveBeenCalledWith('Insights command error:', err);
   });
 
   it('defaults to 30 days for invalid day argument', async () => {
@@ -168,7 +181,7 @@ describe('handleInsights', () => {
     mockEvaluateRecommendations.mockReturnValue([]);
 
     const ctx = makeCtx('/insights abc');
-    await handleInsights(ctx);
+    await handleInsights(ctx, noopLog);
 
     expect(mockAggregateAll).toHaveBeenCalledWith({ days: 30 });
   });
@@ -185,10 +198,82 @@ describe('handleInsights', () => {
     ]);
 
     const ctx = makeCtx('/insights');
-    await handleInsights(ctx);
+    await handleInsights(ctx, noopLog);
 
     const summary = ctx.replyCalls[1]![0] as string;
     expect(summary).not.toContain('<bash>');
     expect(summary).toContain('&lt;bash&gt;');
+  });
+
+  it('defaults to 30 days when days=0', async () => {
+    mockAggregateAll.mockResolvedValue(makeAgg() as never);
+    mockEvaluateRecommendations.mockReturnValue([]);
+
+    const ctx = makeCtx('/insights 0');
+    await handleInsights(ctx, noopLog);
+
+    expect(mockAggregateAll).toHaveBeenCalledWith({ days: 30 });
+  });
+
+  it('defaults to 30 days when days is negative', async () => {
+    mockAggregateAll.mockResolvedValue(makeAgg() as never);
+    mockEvaluateRecommendations.mockReturnValue([]);
+
+    const ctx = makeCtx('/insights -5');
+    await handleInsights(ctx, noopLog);
+
+    expect(mockAggregateAll).toHaveBeenCalledWith({ days: 30 });
+  });
+
+  it('strips @BotName suffix from command before parsing days', async () => {
+    mockAggregateAll.mockResolvedValue(makeAgg() as never);
+    mockEvaluateRecommendations.mockReturnValue([]);
+
+    const ctx = makeCtx('/insights@MyBot 14');
+    await handleInsights(ctx, noopLog);
+
+    expect(mockAggregateAll).toHaveBeenCalledWith({ days: 14 });
+  });
+
+  it('renders cost as "—" when totalCostUsd is NaN', async () => {
+    mockAggregateAll.mockResolvedValue(makeAgg({ sessions: {
+      totalSessions: 1,
+      totalCostUsd: NaN,
+      totalTokens: 0,
+      byDay: {},
+      byModel: {},
+      bySurface: {},
+    } }) as never);
+    mockEvaluateRecommendations.mockReturnValue([]);
+
+    const ctx = makeCtx('/insights');
+    await handleInsights(ctx, noopLog);
+
+    const allReplies = ctx.replyCalls.map(([t]) => t).join('\n');
+    expect(allReplies).toContain('$—');
+    expect(allReplies).not.toContain('NaN');
+  });
+
+  it('sends multiple reply chunks when output exceeds 4096 chars', async () => {
+    // Build enough recommendations to push past Telegram's 4096-char limit
+    const manyRecs = Array.from({ length: 60 }, (_, i) => ({
+      severity: 'info' as const,
+      title: `Recommendation number ${i + 1} with a fairly long title`,
+      body: 'This is the body text for the recommendation, long enough to push the total past the limit.',
+      metric: 0.1,
+    }));
+    mockAggregateAll.mockResolvedValue(makeAgg() as never);
+    mockEvaluateRecommendations.mockReturnValue(manyRecs);
+
+    const ctx = makeCtx('/insights');
+    await handleInsights(ctx, noopLog);
+
+    // reply[0] is the progress message; we need at least 2 more content chunks
+    const contentReplies = ctx.replyCalls.slice(1);
+    expect(contentReplies.length).toBeGreaterThan(1);
+    // Each chunk must be at or under 4096 chars
+    for (const [chunk] of contentReplies) {
+      expect((chunk as string).length).toBeLessThanOrEqual(4096);
+    }
   });
 });

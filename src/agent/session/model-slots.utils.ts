@@ -7,12 +7,7 @@
  * @module agent/session/model-slots.utils
  */
 
-/**
- * Canonical provider discriminants — kept in sync with `SlotProvider` in
- * model-slots.ts (a string union, so duplicating it here avoids a circular
- * import between this utils sibling and model-slots.ts).
- */
-type SlotProvider = 'anthropic' | 'openai' | 'chatgpt-oauth' | 'xai' | 'xai-oauth';
+import type { SlotProvider } from './model-slots.js';
 
 /**
  * Normalise a raw provider string to one of the canonical `SlotProvider`

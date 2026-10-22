@@ -13,14 +13,23 @@ import { existsSync } from 'node:fs';
 const AFK_WORKTREES = '/.afk-worktrees/';
 
 /**
+ * Normalize a filesystem path to forward slashes so that POSIX substring
+ * checks work correctly on native Windows paths (e.g. `C:\repo\.afk-worktrees\slug`).
+ */
+function normalizeSeps(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+/**
  * True when `cwd` is inside an afk-managed worktree directory.
  *
  * @example
  * isWorktreeCwd('/repo/.afk-worktrees/my-branch/src') // true
+ * isWorktreeCwd('C:\\repo\\.afk-worktrees\\slug')     // true (Windows)
  * isWorktreeCwd('/repo/src') // false
  */
 export function isWorktreeCwd(cwd: string): boolean {
-  return cwd.includes(AFK_WORKTREES);
+  return normalizeSeps(cwd).includes(AFK_WORKTREES);
 }
 
 /**
@@ -39,13 +48,14 @@ export function isWorktreeCwd(cwd: string): boolean {
  * // → undefined
  */
 export function extractWorktreePath(cwd: string): string | undefined {
-  const idx = cwd.indexOf(AFK_WORKTREES);
+  const normalized = normalizeSeps(cwd);
+  const idx = normalized.indexOf(AFK_WORKTREES);
   if (idx === -1) return undefined;
-  const after = cwd.slice(idx + AFK_WORKTREES.length);
+  const after = normalized.slice(idx + AFK_WORKTREES.length);
   const slash = after.indexOf('/');
   const name = slash === -1 ? after : after.slice(0, slash);
   if (name.length === 0) return undefined;
-  return cwd.slice(0, idx + AFK_WORKTREES.length) + name;
+  return normalized.slice(0, idx + AFK_WORKTREES.length) + name;
 }
 
 /**
