@@ -25,7 +25,9 @@
  * @module cli/commands/interactive/tool-lane-format-bash
  */
 
+import type { ChalkInstance } from 'chalk';
 import { palette } from '../../palette.js';
+import { verbFamily, type VerbFamily } from './tool-lane-format-bash-family.js';
 
 /** True for the tool names whose rows get command-word emphasis. */
 export function isBashToolName(name: string): boolean {
@@ -64,23 +66,41 @@ const WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['xargs', new Set(['-n', '-I', '-P', '-L', '-d', '-E', '-s', '-a'])],
 ]);
 
-interface Span {
+/**
+ * A command word. `segmentEnd` is where its command segment stops (the next
+ * unquoted separator, or end of input) and `afterPipe` records that the
+ * segment was entered through a single `|`, so `curl x | bash` can be judged
+ * on `| bash` rather than on a bare `bash`.
+ */
+export interface Span {
   start: number;
   end: number;
+  segmentEnd: number;
+  afterPipe: boolean;
 }
 
 /**
- * Style a bash command for a tool-lane row: command words in `toolVerb`, the
- * rest in `toolArg`. With no command word found the result is exactly
- * `palette.toolArg(text)`, so non-command text renders as it always has.
+ * Style a bash command for a tool-lane row: command words in a family style
+ * (`toolVerb`, `toolVerbNetwork`, `toolVerbDanger`; see
+ * tool-lane-format-bash-family.ts), the rest in `toolArg`. With no command
+ * word found the result is exactly `palette.toolArg(text)`, so non-command
+ * text renders as it always has.
  */
 export function styleBashCommand(text: string): string {
   const pieces = splitEscapes(text);
   const plain = pieces.filter((p) => !p.escape).map((p) => p.text).join('');
   const spans = findCommandWordSpans(plain);
   if (spans.length === 0) return palette.toolArg(text);
-  return renderRuns(pieces, spans);
+  const styles = spans.map((span) => FAMILY_STYLE[verbFamily(plain, span)]());
+  return renderRuns(pieces, spans, styles);
 }
+
+/** Resolved per call: `palette` is a live view over the active theme. */
+const FAMILY_STYLE: Record<VerbFamily, () => ChalkInstance> = {
+  default: () => palette.toolVerb,
+  network: () => palette.toolVerbNetwork,
+  danger: () => palette.toolVerbDanger,
+};
 
 interface Piece {
   escape: boolean;
@@ -105,14 +125,14 @@ function splitEscapes(text: string): Piece[] {
  * run that is open when they occur; they carry no visible text, so which run
  * holds them does not change what the reader sees.
  */
-function renderRuns(pieces: Piece[], spans: Span[]): string {
+function renderRuns(pieces: Piece[], spans: Span[], styles: ChalkInstance[]): string {
   let out = '';
   let buf = '';
-  let bufIsVerb = false;
+  let bufSpan = -1;
   let offset = 0;
   let spanIndex = 0;
   const flush = (): void => {
-    if (buf.length > 0) out += bufIsVerb ? palette.toolVerb(buf) : palette.toolArg(buf);
+    if (buf.length > 0) out += bufSpan === -1 ? palette.toolArg(buf) : styles[bufSpan]!(buf);
     buf = '';
   };
   for (const piece of pieces) {
@@ -123,10 +143,10 @@ function renderRuns(pieces: Piece[], spans: Span[]): string {
     for (const ch of piece.text) {
       while (spanIndex < spans.length && offset >= spans[spanIndex]!.end) spanIndex++;
       const span = spans[spanIndex];
-      const isVerb = span !== undefined && offset >= span.start;
-      if (isVerb !== bufIsVerb) {
+      const runSpan = span !== undefined && offset >= span.start ? spanIndex : -1;
+      if (runSpan !== bufSpan) {
         flush();
-        bufIsVerb = isVerb;
+        bufSpan = runSpan;
       }
       buf += ch;
       offset += ch.length;
@@ -190,16 +210,26 @@ export function findCommandWordSpans(s: string): Span[] {
   let redirectTarget: 'file' | 'heredoc' | undefined;
   const heredocs: string[] = [];
   let i = 0;
-  const toCommandPosition = (): void => {
+  // Spans pushed since the last separator share one segment; closeSegment
+  // stamps where it ends. A comment or heredoc body is never part of it.
+  let segmentFirstSpan = 0;
+  let segmentAfterPipe = false;
+  const closeSegment = (at: number): void => {
+    for (let k = segmentFirstSpan; k < spans.length; k++) spans[k]!.segmentEnd = at;
+    segmentFirstSpan = spans.length;
+  };
+  const toCommandPosition = (afterPipe: boolean): void => {
     atCommand = true;
     wrapper = undefined;
     skipWrapperValue = false;
+    segmentAfterPipe = afterPipe;
   };
   while (i < s.length) {
     const c = s[i]!;
     if (c === '\n') {
+      closeSegment(i);
       i = heredocs.length > 0 ? skipHeredocBodies(s, i + 1, heredocs.splice(0)) : i + 1;
-      toCommandPosition();
+      toCommandPosition(false);
       continue;
     }
     if (/\s/.test(c)) {
@@ -215,11 +245,14 @@ export function findCommandWordSpans(s: string): Span[] {
       continue;
     }
     if (c === '|' || c === '&' || c === ';' || c === '(') {
+      closeSegment(i);
+      const singlePipe = c === '|' && s[i + 1] !== '|' && s[i - 1] !== '|';
       i++;
-      toCommandPosition();
+      toCommandPosition(singlePipe);
       continue;
     }
     if (c === ')') {
+      closeSegment(i);
       i++;
       atCommand = false;
       continue;
@@ -227,6 +260,7 @@ export function findCommandWordSpans(s: string): Span[] {
     const end = Math.max(i + 1, readWord(s, i));
     const word = s.slice(i, end);
     if (word.startsWith('#')) {
+      closeSegment(i);
       const nl = s.indexOf('\n', i);
       i = nl === -1 ? s.length : nl;
       continue;
@@ -239,6 +273,7 @@ export function findCommandWordSpans(s: string): Span[] {
     }
     i = end;
   }
+  closeSegment(s.length);
   return spans;
 
   function classifyCommandWord(word: string, start: number, end: number): void {
@@ -256,7 +291,7 @@ export function findCommandWordSpans(s: string): Span[] {
       atCommand = false;
       return;
     }
-    spans.push({ start, end });
+    spans.push({ start, end, segmentEnd: s.length, afterPipe: segmentAfterPipe });
     wrapper = WRAPPERS.get(word.split('/').pop() ?? word);
     atCommand = wrapper !== undefined;
   }

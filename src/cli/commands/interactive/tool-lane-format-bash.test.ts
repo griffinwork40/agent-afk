@@ -163,13 +163,13 @@ describe('formatToolLine bash integration', () => {
   it('still strips a leading cd prefix before emphasising', () => {
     const line = formatToolLine('bash cd /Users/me/proj/repo && rm -rf dist');
     expect(stripAnsi(line)).toContain('bash rm -rf dist');
-    expect(line).toContain(palette.toolVerb('rm'));
+    expect(line).toContain(palette.toolVerbDanger('rm'));
   });
 
   it('treats a newline as a separator, then flattens it', () => {
     const line = formatToolLine('bash ls\nrm x');
     expect(line).not.toContain('\n');
-    expect(line).toContain(palette.toolVerb('rm'));
+    expect(line).toContain(palette.toolVerbDanger('rm'));
   });
 
   it('respects the width budget on plain text', () => {
