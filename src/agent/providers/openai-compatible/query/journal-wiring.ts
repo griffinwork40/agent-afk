@@ -117,6 +117,19 @@ export class OpenAIJournalWiring {
     return this.journalSync.snapshot();
   }
 
+  /**
+   * Commit a rewind truncation as `truncate{reason:'rewind'}` plus a `rewind`
+   * mark, matching anthropic-direct (`query/rewind-conversation.ts`). Never throws.
+   */
+  syncRewind(turns: readonly OpenAIMessage[], turnIndex: number): void {
+    try {
+      this.journalSync.sync(turns, { reason: 'rewind' });
+      this.config.messageJournal?.mark('rewind', { turnIndex });
+    } catch {
+      // Journal is best-effort; a mapping bug must never break a rewind.
+    }
+  }
+
   /** Commit the current array to the journal. Never throws. */
   sync(turns: readonly OpenAIMessage[], compacted = false): void {
     try {

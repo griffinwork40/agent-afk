@@ -216,6 +216,7 @@ export function loadConfig(overrides?: Partial<CliConfig>, cwd: string = process
     ...(merged.enableShellHooks !== undefined ? { enableShellHooks: merged.enableShellHooks } : {}),
     ...(merged.enablePluginHooks !== undefined ? { enablePluginHooks: merged.enablePluginHooks } : {}),
     ...(merged.enforceDoneEvidence !== undefined ? { enforceDoneEvidence: merged.enforceDoneEvidence } : {}),
+    ...(merged.fileCheckpoints !== undefined ? { fileCheckpoints: merged.fileCheckpoints } : {}),
     ...(merged.importFrom !== undefined ? { importFrom: merged.importFrom } : {}),
     ...(merged.theme !== undefined ? { theme: merged.theme } : {}),
   };

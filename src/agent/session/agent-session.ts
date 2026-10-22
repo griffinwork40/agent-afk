@@ -464,7 +464,7 @@ export class AgentSession implements IAgentSession {
   getContextUsage(): Promise<SDKControlGetContextUsageResponse> { return this.providerQuery.getContextUsage().then(toContextUsageResponse); }
   mcpServerStatus(): Promise<McpServerStatus[]> { return this.providerQuery.mcpServerStatus().then((ms) => ms.map(toMcpServerStatus)); }
   accountInfo(): Promise<AccountInfo> { return this.providerQuery.accountInfo(); }
-  rewindFiles(userMessageId: string, options?: { dryRun?: boolean }): Promise<RewindFilesResult> { return this.providerQuery.rewindFiles(userMessageId, options); }
+  rewindFiles(userMessageId: string, options?: { dryRun?: boolean; overwriteConflicts?: boolean }): Promise<RewindFilesResult> { return this.providerQuery.rewindFiles(userMessageId, options); }
   compact(): Promise<ProviderCompactResult> { return compact.compactSession(this.makeCompactDeps()); }
   listRewindTargets(): RewindTarget[] { return compact.listRewindTargets(this.makeCompactDeps()); }
   rewindConversation(turnIndex: number): Promise<ProviderRewindConversationResult> { return compact.rewindConversation(turnIndex, this.makeCompactDeps()); }

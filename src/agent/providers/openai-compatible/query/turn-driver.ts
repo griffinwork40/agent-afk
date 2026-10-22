@@ -349,7 +349,7 @@ export async function* runTurnInner(
   // triggered by a blocking Stop hook). The vast majority of runs execute
   // exactly once; only blocking Stop hooks cause a second iteration.
   for (;;) {
-    pushUserTurn(ctx, currentContent);
+    pushUserTurn(ctx, currentContent, stopHookContinuation === 0);
 
     // Per-segment accumulators — reset each iteration so each segment starts
     // fresh. Segment usage is summed into `turnUsage` (turn scope) at round end.
