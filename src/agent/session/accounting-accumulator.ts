@@ -151,7 +151,7 @@ export class AccountingAccumulator {
    * the running total.
    */
   recordTurnMetadata(m: ResponseMetadata): void {
-    if (typeof m.totalCostUsd === 'number' && Number.isFinite(m.totalCostUsd)) {
+    if (typeof m.totalCostUsd === 'number' && Number.isFinite(m.totalCostUsd) && m.totalCostUsd > 0) {
       this.sessionRunningCostUsd += m.totalCostUsd;
       this.lifetimeSessionCostUsd += m.totalCostUsd;
     }
