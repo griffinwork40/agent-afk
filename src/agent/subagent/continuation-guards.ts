@@ -47,41 +47,77 @@ export function checkContinuationOverrides(chain: ChainRecord, call: Continuatio
   return undefined;
 }
 
-/** Async git (never blocks the event loop); undefined on any failure or the 10s timeout. Never rejects. */
-function git(cwd: string, args: string[]): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    try {
-      execFile('git', args, { cwd, encoding: 'utf8', timeout: 10_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
-        resolve(err ? undefined : stdout);
-      });
-    } catch {
-      resolve(undefined);
-    }
-  });
-}
+/** Outcome of one checkpoint git call: stdout on success, or why it failed. */
+export type GitOutcome = { ok: true; stdout: string } | { ok: false; timedOut: boolean };
 
-/** D5: capture {cwd, branch, HEAD, dirty fingerprint}; non-git cwd => `git: false`. Never rejects. */
-export async function captureWorkspaceCheckpoint(cwd: string): Promise<WorkspaceCheckpoint> {
-  const inside = await git(cwd, ['rev-parse', '--is-inside-work-tree']);
-  if (inside?.trim() !== 'true') return { cwd, git: false };
+/** Injectable git runner (tests); the default spawns `git` asynchronously. */
+export type CheckpointGitExec = (cwd: string, args: string[]) => Promise<GitOutcome>;
+
+/**
+ * Global options on every checkpoint git call: `--no-optional-locks` keeps
+ * `git status` from refreshing the index (taking index.lock) while the parent
+ * or a sibling commits in the same worktree. Mirrors handlers/git-read.ts.
+ */
+export const CHECKPOINT_GIT_GLOBAL_ARGS: readonly string[] = ['--no-optional-locks'];
+
+/** Per-call timeout for checkpoint git calls. */
+export const CHECKPOINT_GIT_TIMEOUT_MS = 10_000;
+
+/** Async git (never blocks the event loop); never rejects. */
+const defaultGitExec: CheckpointGitExec = (cwd, args) => new Promise((resolve) => {
+  try {
+    execFile('git', args, {
+      cwd, encoding: 'utf8', timeout: CHECKPOINT_GIT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+    }, (err, stdout) => {
+      if (err) resolve({ ok: false, timedOut: (err as { killed?: boolean }).killed === true });
+      else resolve({ ok: true, stdout });
+    });
+  } catch {
+    resolve({ ok: false, timedOut: false });
+  }
+});
+
+/**
+ * D5: capture {cwd, branch, HEAD, dirty fingerprint}; non-git cwd => `git: false`.
+ * When `git status` (or the repo probe) fails or times out, the checkpoint is
+ * marked `unavailable` instead of hashing an empty status: a drift check
+ * against it fails closed. Never rejects.
+ */
+export async function captureWorkspaceCheckpoint(cwd: string, exec: CheckpointGitExec = defaultGitExec): Promise<WorkspaceCheckpoint> {
+  const git = async (args: string[]): Promise<GitOutcome> => {
+    try { return await exec(cwd, [...CHECKPOINT_GIT_GLOBAL_ARGS, ...args]); } catch { return { ok: false, timedOut: false }; }
+  };
+  const inside = await git(['rev-parse', '--is-inside-work-tree']);
+  // A timed-out probe is not proof of "not a repo": fail closed.
+  if (!inside.ok && inside.timedOut) return { cwd, git: true, unavailable: true };
+  if (!inside.ok || inside.stdout.trim() !== 'true') return { cwd, git: false };
   const [branchRaw, headRaw, statusRaw] = await Promise.all([
-    git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
-    git(cwd, ['rev-parse', 'HEAD']),
-    git(cwd, ['status', '--porcelain=v1', '-z']),
+    git(['rev-parse', '--abbrev-ref', 'HEAD']),
+    git(['rev-parse', 'HEAD']),
+    git(['status', '--porcelain=v1', '-z']),
   ]);
-  const branch = branchRaw?.trim();
-  const head = headRaw?.trim();
-  const status = statusRaw ?? '';
-  const dirtyFingerprint = createHash('sha256').update(status).digest('hex');
-  return { cwd, git: true, ...(branch !== undefined ? { branch } : {}), ...(head !== undefined ? { head } : {}), dirtyFingerprint };
+  const branch = branchRaw.ok ? branchRaw.stdout.trim() : undefined;
+  const head = headRaw.ok ? headRaw.stdout.trim() : undefined;
+  const base = { cwd, git: true, ...(branch !== undefined ? { branch } : {}), ...(head !== undefined ? { head } : {}) };
+  if (!statusRaw.ok) return { ...base, unavailable: true };
+  return { ...base, dirtyFingerprint: createHash('sha256').update(statusRaw.stdout).digest('hex') };
 }
 
-/** D5: refuse on drift for write-capable chains; read-only and non-git skip. */
+/** Refusal when a write-capable chain's checkpoint (prior or recaptured) is unavailable. */
+export const CHECKPOINT_UNAVAILABLE_REASON =
+  'workspace checkpoint unavailable (git status failed or timed out), so drift cannot be ruled out; retry the continuation';
+
+/** D5: refuse on drift for write-capable chains; read-only and non-git skip. Unavailable checkpoints fail closed. */
 export async function checkWorkspaceDrift(chain: ChainRecord, recapture: (cwd: string) => Promise<WorkspaceCheckpoint> = captureWorkspaceCheckpoint): Promise<string | undefined> {
   if (!chain.inputs.writeCapable) return undefined;
   const prior = chain.checkpoint;
-  if (prior === undefined || !prior.git) return undefined;
-  const now = await recapture(prior.cwd);
+  if (prior === undefined) return undefined;
+  if (prior.unavailable === true) return CHECKPOINT_UNAVAILABLE_REASON;
+  if (!prior.git) return undefined;
+  let now: WorkspaceCheckpoint;
+  try { now = await recapture(prior.cwd); } catch { return CHECKPOINT_UNAVAILABLE_REASON; }
+  if (now.unavailable === true) return CHECKPOINT_UNAVAILABLE_REASON;
   const drifted: string[] = [];
   if (!now.git) drifted.push('git repository');
   if (now.branch !== prior.branch) drifted.push(`branch (${prior.branch ?? '?'} -> ${now.branch ?? '?'})`);

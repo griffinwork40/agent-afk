@@ -28,6 +28,8 @@ export interface WorkspaceCheckpoint {
   branch?: string;
   head?: string;
   dirtyFingerprint?: string;
+  /** Set when git status (or the repo probe) failed/timed out: drift checks fail closed. */
+  unavailable?: true;
 }
 
 /** Dispatch inputs that determine child config; continuation reuses them (D2). */
