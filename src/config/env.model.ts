@@ -205,6 +205,22 @@ export const MODEL_ENV_REGISTRY = [
     category: 'process',
   },
   {
+    name: 'AFK_DELEGATION_PROFILE',
+    description:
+      'Named delegation profile that bundles AFK_MAX_NESTING_DEPTH, ' +
+      'AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT, AFK_MAX_CONCURRENT_AGENTS, and ' +
+      'AFK_MAX_TOTAL_AGENTS into a single knob. Built-in profiles: ' +
+      '"normal" (default — depth 3, no budget limits), ' +
+      '"deep" (depth 5, maxChildren 4, maxConcurrent 16, maxTotal 48), ' +
+      '"shallow" (depth 2, maxChildren 2, maxConcurrent 8, maxTotal 16). ' +
+      'Individual env vars (AFK_MAX_NESTING_DEPTH, etc.) always override the profile value ' +
+      'when set. Unknown or empty values fall back to "normal" silently.',
+    type: 'string',
+    required: false,
+    example: 'deep',
+    category: 'model',
+  },
+  {
     name: 'AFK_MAX_NESTING_DEPTH',
     description:
       'Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, ' +
