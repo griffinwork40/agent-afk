@@ -3,10 +3,11 @@
 `AgentConfig.enableFileCheckpointing` defaults to `false` for embedders. The
 interactive REPL turns it on unless `afk.config.json` sets `fileCheckpoints:
 false` (#4271); chat, Telegram, the daemon, and subagent forks never set it.
-Both providers attach a per-turn checkpoint registry to the tool dispatcher. Only
-`write_file`, `edit_file`, and non-dry-run `patch_apply` snapshot prior file bytes;
-Bash changes are not captured yet. Creating a registry without file writes creates
-no turn directory.
+Both providers attach a per-turn checkpoint registry to the tool dispatcher.
+`write_file`, `edit_file`, non-dry-run `patch_apply`, and foreground `bash` in git
+repos snapshot prior file bytes. Bash outcomes are tracked via `bash` turn-log
+entries (see below); git-ignored and out-of-repo files are excluded from bash
+capture. Creating a registry without file writes creates no turn directory.
 
 ## Content-addressed storage
 
@@ -50,7 +51,23 @@ It is append-only, one JSON object per line:
 
 - `{"kind":"turn","turnId":…}` when a checkpointed turn starts, even if it writes nothing;
 - `{"kind":"post","turnId":…,"paths":{absPath: sha256|null}}` at turn end, hashing every touched path;
-- `{"kind":"restore","paths":{…}}` after a live restore, superseding earlier hashes for those paths.
+- `{"kind":"restore","paths":{…}}` after a live restore, superseding earlier hashes for those paths;
+- `{"kind":"bash","turnId":…,"status":"captured"|"partial"|"skipped","reason"?:…,"files"?:number}` for each bash call in the turn.
+
+`bash` entry status meanings:
+
+| Status | Meaning |
+|---|---|
+| `captured` | The before/after diff was published; `files` counts published paths. This does not imply the command exited successfully. |
+| `partial` | Capture is incomplete: detach, truncation, skipped non-regular paths, or a publication failure. |
+| `skipped` | No usable capture: disabled, background, non-git, timeout/error, or abort before spawn. |
+
+The bash hook appends these entries via `appendTurnLog`.
+When rewinding, `rewind-plan.ts` folds `bash` entries in the suffix and collects
+human-readable warnings for any non-`captured` entry, plus a standing ignored/
+outside-repo warning whenever bash ran. These appear in
+`ProviderRewindResult.uncaptured` and are printed by `/rewind` during the preview,
+so the user understands which shell side-effects are NOT undone by the file restore.
 
 Appends are best-effort and a torn final line is skipped. Each provider also
 links the in-memory user message object to its checkpoint turnId
@@ -98,7 +115,43 @@ REPL in another terminal keeps its checkpoints. A marker left by a crashed
 process does not pin a directory. `AFK_FILE_CHECKPOINT_RETENTION_DISABLE=1`
 turns the sweep off.
 
+## Bash capture
+
+Foreground `bash` calls capture the enclosing git working tree before execution
+and at completion, including non-zero exits, timeout kills, and aborts. This
+covers tracked files and untracked, non-ignored files anywhere in that repo,
+even when the command runs in a subdirectory. Prior bytes are published into the
+same per-turn registry as file tools: the earliest snapshot wins across both,
+and bash-recorded paths participate in the post-turn drift guard.
+
+Git uses a session-private `.git-index` and `.git-objects` under the checkpoint
+session directory, never the user's index, refs, or object store. Retention
+reclaims this storage with the rest of the session.
+
+Capture is best-effort, bounded, and never fails the command. Each call writes a
+`bash` outcome (`captured`, `partial`, or `skipped`) to the turn log. `/rewind`
+previews incomplete-capture notes and always warns when bash ran that ignored
+and outside-repo files are not restorable. Those paths are not enumerated; the
+warning is a standing limitation, not a list of detected changes.
+
+- Git repositories only; non-git workspaces skip capture.
+- Git-ignored files and files outside the repo are excluded. Network calls,
+  services, git refs/index changes, and other external effects are not undone.
+- Symlinks, submodules, and changes above the file cap are skipped and reported
+  as partial capture.
+- `run_in_background: true` writes a skipped entry and takes no snapshots.
+- Ctrl+B detachment takes the final snapshot at detach and reports partial:
+  later changes made by the still-running process are not captured.
+- Subagent forks do not have checkpoint registries; their writes are not logged.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `AFK_FILE_CHECKPOINT_BASH_DISABLE` | unset | Set to `1` or `true` to skip bash capture. |
+| `AFK_FILE_CHECKPOINT_BASH_TIMEOUT_MS` | `5000` | Milliseconds allowed per capture/diff, and for publishing prior states. |
+| `AFK_FILE_CHECKPOINT_BASH_MAX_FILES` | `1000` | Changed paths captured per call; larger diffs are partial. |
+
 ## Not yet covered
 
-Bash side effects (#4271 stage 2) and a branch tree with `/branches` (stage 3)
-are tracked in #4271. Subagent writes are not checkpointed.
+A branch tree with `/branches` (stage 3) remains tracked in #4271. Subagent
+writes, ignored/outside-repo files, and post-detach/background changes remain
+outside checkpoint coverage.

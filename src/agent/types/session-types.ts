@@ -306,6 +306,11 @@ export interface RewindFilesResult {
   failures?: Array<{ path: string; error: string }>;
   /** Paths changed outside the agent since the last recorded state. */
   conflicts?: string[];
+  /**
+   * Human-readable warnings for bash calls in the rewound range that were not
+   * fully captured. See {@link import('../provider.js').ProviderRewindResult.uncaptured}.
+   */
+  uncaptured?: string[];
 }
 
 /** Agent SDK wrapper instance interface */

@@ -1,6 +1,6 @@
 /**
- * Per-turn snapshots for write_file, edit_file and patch_apply.
- * Bash mutations are not tracked. Digest-named entry directories contain
+ * Per-turn snapshots for file tools and captured bash mutations.
+ * Digest-named entry directories contain
  * content and original-path metadata, published together by one rename.
  * Content-addressed session blobs deduplicate identical bytes across turns.
  */
@@ -14,6 +14,9 @@ import { isEnoent } from '../../utils/errors.js';
 
 export interface FileCheckpointRegistry {
   snapshotFile(absPath: string): Promise<void>;
+  recordPriorState(absPath: string, prior: { bytes: Buffer; mode: number } | null): Promise<void>;
+  readonly sessionId: string;
+  readonly stateDir?: string;
   readonly turnId: string;
   /** Paths whose pre-write snapshot was published this turn, in first-touch order. */
   touchedPaths(): string[];
@@ -58,11 +61,14 @@ async function capture(absPath: string): Promise<{ content: Buffer; metadata: Sn
   }
 }
 
-async function publishSnapshot(turnDir: string, absPath: string, sessionId: string, stateDir?: string): Promise<void> {
+async function publishSnapshot(
+  turnDir: string, absPath: string, sessionId: string,
+  source: () => Promise<{ content: Buffer; metadata: SnapshotMetadata }>, stateDir?: string,
+): Promise<void> {
   const key = createHash('sha256').update(absPath).digest('hex');
   const destination = join(turnDir, `${key}.entry`);
   if (existsSync(destination)) return;
-  const { content, metadata } = await capture(absPath);
+  const { content, metadata } = await source();
   await mkdir(turnDir, { recursive: true, mode: 0o700 });
   const staging = await mkdtemp(join(turnDir, '.pending-'));
   try {
@@ -87,24 +93,29 @@ export function createFileCheckpointRegistry(
   const turnDir = turnDirectory(sessionId, turnId, _stateDir);
   const seen = new Set<string>();
   const pending = new Map<string, Promise<void>>();
+  async function snapshot(absPath: string, source: () => Promise<{ content: Buffer; metadata: SnapshotMetadata }>): Promise<void> {
+    if (seen.has(absPath)) return;
+    let task = pending.get(absPath);
+    if (!task) {
+      task = publishSnapshot(turnDir, absPath, sessionId, source, _stateDir);
+      pending.set(absPath, task);
+    }
+    try {
+      await task;
+      // Invariant: failed I/O never authorizes rewind or poisons retries.
+      seen.add(absPath);
+    } finally {
+      if (pending.get(absPath) === task) pending.delete(absPath);
+    }
+  }
   return {
-    turnId,
+    sessionId, stateDir: _stateDir, turnId,
     touchedPaths: () => [...seen],
-    async snapshotFile(absPath) {
-      if (seen.has(absPath)) return;
-      let task = pending.get(absPath);
-      if (!task) {
-        task = publishSnapshot(turnDir, absPath, sessionId, _stateDir);
-        pending.set(absPath, task);
-      }
-      try {
-        await task;
-        // Invariant: failed I/O never authorizes rewind or poisons retries.
-        seen.add(absPath);
-      } finally {
-        if (pending.get(absPath) === task) pending.delete(absPath);
-      }
-    },
+    snapshotFile: (absPath) => snapshot(absPath, () => capture(absPath)),
+    recordPriorState: (absPath, prior) => snapshot(absPath, async () => ({
+      content: prior?.bytes ?? Buffer.alloc(0),
+      metadata: { version: 3, absPath, isNewFile: prior === null, ...(prior === null ? {} : { mode: prior.mode & 0o7777 }) },
+    })),
   };
 }
 

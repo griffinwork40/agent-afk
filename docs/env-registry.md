@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**246 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**249 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -194,6 +194,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_DEBUG_CLIPBOARD` | boolean |  |  |  | Debug bracketed-paste and image-paste handling in the interactive REPL. |
 | `AFK_DEBUG_COMPOSITOR` | boolean |  |  |  | Gate compositor phase-boundary traces to stderr; any truthy value enables. |
 | `AFK_DUMP_PROMPT` | string |  |  | `/tmp/afk-prompt.txt` | Write the resolved system prompt to a file at startup. Accepts a path or 1 for default location. |
+| `AFK_FILE_CHECKPOINT_BASH_DISABLE` | boolean |  |  | `1` | Disable best-effort git-backed capture of foreground bash file changes for /rewind. |
+| `AFK_FILE_CHECKPOINT_BASH_MAX_FILES` | number |  | `1000` |  | Maximum changed files captured per bash call; larger diffs are reported as partial. Default 1000. |
+| `AFK_FILE_CHECKPOINT_BASH_TIMEOUT_MS` | number |  | `5000` |  | Maximum milliseconds per bash checkpoint capture or diff. Default 5000. |
 | `AFK_FILE_CHECKPOINT_MAX_AGE_DAYS` | number |  | `14` |  | Evict a file-checkpoint session directory once its newest content is older than this many days. Default 14. |
 | `AFK_FILE_CHECKPOINT_MAX_BYTES` | number |  | `1073741824` |  | Aggregate byte cap for state/file-checkpoints/; oldest session directories are evicted first once exceeded. Default 1073741824 (1 GiB). |
 | `AFK_FILE_CHECKPOINT_RETENTION_DISABLE` | boolean |  |  | `1` | Disable the file-checkpoint retention sweep (state/file-checkpoints/), so no session checkpoint directory is ever evicted. |

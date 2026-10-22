@@ -59,6 +59,8 @@ interface Tally {
   restored: PathHashes;
   /** Takes the retention lock on first use; see {@link rewindFiles}. */
   lock: () => void;
+  /** Bash-capture warnings from the plan, passed through to the result. */
+  uncaptured: string[];
 }
 
 /** Restore (or, on dry-run, assess) one path. Throws to record a per-path failure. */
@@ -110,6 +112,7 @@ function summarize(tally: Tally, dryRun: boolean): ProviderRewindResult {
   const extras = {
     ...(tally.failures.length ? { failures: tally.failures } : {}),
     ...(tally.conflicts.length ? { conflicts: tally.conflicts } : {}),
+    ...(tally.uncaptured.length ? { uncaptured: tally.uncaptured } : {}),
   };
   const counts = dryRun ? {} : { insertions: tally.insertions, deletions: tally.deletions };
   const first = tally.failures[0];
@@ -135,7 +138,10 @@ export async function rewindFiles(
     plan = planned.plan;
   }
   catch (err) { return { canRewind: false, error: `Cannot read checkpoint: ${errorMessage(err)}`, filesChanged: [] }; }
-  if (!plan.snapshots.length) return { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 };
+  if (!plan.snapshots.length) {
+    const base = { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 };
+    return plan.uncaptured.length ? { ...base, uncaptured: plan.uncaptured } : base;
+  }
 
   const dryRun = options?.dryRun === true;
   // Invariant: the retention lock is taken lazily, immediately before the
@@ -143,7 +149,7 @@ export async function rewindFiles(
   let release: (() => void) | undefined;
   const lock = (): void => { release ??= acquireRewindLock(deps.sessionId, deps._stateDir); };
   try {
-    const tally: Tally = { changed: [], insertions: 0, deletions: 0, failures: [], conflicts: [], restored: {}, lock };
+    const tally: Tally = { changed: [], insertions: 0, deletions: 0, failures: [], conflicts: [], restored: {}, lock, uncaptured: plan.uncaptured };
     for (const snapshot of plan.snapshots) {
       try { await restoreOne(deps, snapshot, plan.expected, options, tally); }
       catch (err) { tally.failures.push({ path: snapshot.absPath, error: errorMessage(err) }); }

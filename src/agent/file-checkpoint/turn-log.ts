@@ -33,10 +33,33 @@ import { isEnoent } from '../../utils/errors.js';
 /** Content hash per absolute path; `null` = the path did not exist. */
 export type PathHashes = Record<string, string | null>;
 
+/**
+ * Outcome of a bash call during a checkpointed turn.
+ *
+ * `captured`  — foreground bash ran and git-snapshot captured its effects.
+ * `partial`   — some effects were noted but the set is incomplete (e.g. the
+ *               process was detached mid-run).
+ * `skipped`   — no usable capture (disabled, background, non-git, timeout,
+ *               error, or abort before spawn). Subagent calls have no registry.
+ *
+ * `files` is the count of paths published, including successful partial capture.
+ * `reason` is a short human-readable explanation; absent when the status is
+ * self-explanatory (e.g. `captured` with no caveats).
+ */
+export type BashLogEntry = {
+  kind: 'bash';
+  turnId: string;
+  status: 'captured' | 'partial' | 'skipped';
+  reason?: string;
+  files?: number;
+  ts: number;
+};
+
 export type TurnLogEntry =
   | { kind: 'turn'; turnId: string; ts: number }
   | { kind: 'post'; turnId: string; paths: PathHashes; ts: number }
-  | { kind: 'restore'; paths: PathHashes; ts: number };
+  | { kind: 'restore'; paths: PathHashes; ts: number }
+  | BashLogEntry;
 
 /** SHA-256 of `bytes`, or `null` for an absent file. */
 export function hashBytes(bytes: Buffer | null): string | null {
@@ -72,6 +95,7 @@ function isEntry(value: unknown): value is TurnLogEntry {
   if (v['kind'] === 'turn') return typeof v['turnId'] === 'string';
   if (v['kind'] === 'post') return typeof v['turnId'] === 'string' && typeof v['paths'] === 'object' && v['paths'] !== null;
   if (v['kind'] === 'restore') return typeof v['paths'] === 'object' && v['paths'] !== null;
+  if (v['kind'] === 'bash') return typeof v['turnId'] === 'string' && (v['status'] === 'captured' || v['status'] === 'partial' || v['status'] === 'skipped');
   return false;
 }
 
@@ -112,8 +136,8 @@ export function turnsFrom(log: readonly TurnLogEntry[], turnId: string): string[
 export function expectedHashes(log: readonly TurnLogEntry[]): Map<string, string | null> {
   const expected = new Map<string, string | null>();
   for (const entry of log) {
-    if (entry.kind === 'turn') continue;
-    for (const [path, hash] of Object.entries(entry.paths)) expected.set(path, hash);
+    if (entry.kind === 'turn' || entry.kind === 'bash') continue;
+    for (const [path, hash] of Object.entries(entry.paths)) expected.set(path, hash as string | null);
   }
   return expected;
 }
