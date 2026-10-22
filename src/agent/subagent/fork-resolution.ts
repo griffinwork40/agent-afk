@@ -16,7 +16,7 @@
 
 import type { HookRegistry } from '../hooks.js';
 import type { TraceSink } from '../trace/index.js';
-import type { AgentModelInput } from '../types.js';
+import type { AgentConfig, AgentModelInput } from '../types.js';
 import type { ForkSubagentOptions } from './fork-types.js';
 import { coerceCrossProviderChildModel } from './child-model-fallback.js';
 import { resolveSubagentTimeoutMs } from './constants.js';
@@ -94,7 +94,8 @@ export function resolveForkInputs(args: ResolveForkInputsArgs): ForkResolved {
 
   const safePrefix = (options.idPrefix ?? 'subagent').replace(/[^A-Za-z0-9_-]/g, '-');
   const id = `${safePrefix}-${Date.now()}-${counter}`;
-  const resume = options.parent.sessionId;
+  // Continuation forks resume their seeded journal; every other fork the parent.
+  const resume = options.continuation?.resume ?? options.parent.sessionId;
 
   const registry =
     options.config.hookRegistry ?? managerHookRegistry ?? options.parent.hookRegistry;
@@ -122,4 +123,14 @@ export function resolveForkInputs(args: ResolveForkInputsArgs): ForkResolved {
     coercedFrom: childModelCoercion.coercedFrom,
     effectiveTimeoutMs,
   };
+}
+
+/**
+ * Continuation seed (D1/D8): a continuation child starts from its chain's
+ * seeded history. Applied AFTER assembleChildConfig (which clears
+ * `resumeMessages` so ordinary children never reseed from the parent).
+ */
+export function applyContinuationSeed(config: AgentConfig, options: Pick<ForkSubagentOptions, 'continuation'>): AgentConfig {
+  if (options.continuation === undefined) return config;
+  return { ...config, resumeMessages: options.continuation.messages };
 }

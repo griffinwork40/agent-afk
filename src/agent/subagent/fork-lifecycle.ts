@@ -29,6 +29,8 @@ export interface EmitForkStartedArgs {
   promptHead: string | undefined;
   effectiveAgentType: string | undefined;
   effectiveResolvedAgentType: string | undefined;
+  /** D10: continuation chain fields, present only on continuation forks. */
+  continuation?: { chainId: string; continuationOf: string; continuationIndex: number } | undefined;
 }
 
 /**
@@ -55,6 +57,7 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
     promptHead,
     effectiveAgentType,
     effectiveResolvedAgentType,
+    continuation,
   } = args;
 
   const modelString =
@@ -87,6 +90,9 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
     // can be grouped by budget straight from the trace.
     ...(typeof childConfig.maxToolUseIterations === 'number'
       ? { maxToolUseIterations: childConfig.maxToolUseIterations }
+      : {}),
+    ...(continuation !== undefined
+      ? { chainId: continuation.chainId, continuationOf: continuation.continuationOf, continuationIndex: continuation.continuationIndex }
       : {}),
   });
 

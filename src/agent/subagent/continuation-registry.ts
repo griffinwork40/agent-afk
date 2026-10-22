@@ -19,6 +19,8 @@
 
 import { randomBytes } from 'node:crypto';
 
+import { env } from '../../config/env.js';
+
 /** Workspace checkpoint captured from the child's runtime-resolved cwd (D5). */
 export interface WorkspaceCheckpoint {
   cwd: string;
@@ -75,10 +77,24 @@ export interface TerminalUpdate {
 /** Defaults match PR #2811's CONTINUATION_BUDGET_DEFAULTS intent. */
 export const CONTINUATION_DEFAULTS: ContinuationLimits = { maxRounds: 150, maxContinuations: 3 };
 
+function parseLimit(raw: string | undefined, min: number, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= min ? n : fallback;
+}
+
+/** D4: chain limits from `AFK_SUBAGENT_CONTINUATION_MAX_ROUNDS` / `_MAX_CONTINUATIONS`. */
+export function resolveContinuationLimits(): ContinuationLimits {
+  return {
+    maxRounds: parseLimit(env.AFK_SUBAGENT_CONTINUATION_MAX_ROUNDS, 1, CONTINUATION_DEFAULTS.maxRounds),
+    maxContinuations: parseLimit(env.AFK_SUBAGENT_CONTINUATION_MAX_CONTINUATIONS, 0, CONTINUATION_DEFAULTS.maxContinuations),
+  };
+}
+
 export class ContinuationRegistry {
   private readonly chains = new Map<string, ChainRecord>();
 
-  constructor(private readonly limits: ContinuationLimits = CONTINUATION_DEFAULTS) {}
+  constructor(private readonly limits: ContinuationLimits = resolveContinuationLimits()) {}
 
   /** Mint a chain for an initial dispatch; `roundCap` 0 means uncapped. */
   createChain(args: { owner: string; rootSessionId: string; inputs: ChainDispatchInputs; roundCap: number }): ChainRecord {
