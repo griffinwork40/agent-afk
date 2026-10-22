@@ -245,7 +245,9 @@ export type OutputEvent =
   // server's status changes (startup failure, mid-session disconnect, or
   // oauth_pending) so embedders can show accurate health UI without polling
   // mcpServerStatus(). Also emitted at session-init for every non-healthy
-  // server so a subscriber that attaches after init still sees the snapshot.
+  // server — but OutputBroadcast has no replay, so getOutputStream() must
+  // be subscribed BEFORE awaiting waitForInitialization() to observe the
+  // startup snapshot. Late subscribers should poll mcpServerStatus() instead.
   | {
       type: 'mcp_server_status';
       /** Operator-assigned name (from .mcp.json / mcpServers config key). */
@@ -254,8 +256,10 @@ export type OutputEvent =
        * Current server state as seen by the session layer:
        * - 'error'         — failed to start or mid-session transport error
        * - 'oauth_pending' — waiting for user to complete the OAuth flow
-       * - 'connected'     — healthy (emitted when a reconnect succeeds)
        * - 'disconnected'  — transport closed, no reconnect will be attempted
+       *
+       * Reserved (not yet emitted by any code path):
+       * - 'connected'     — healthy (intended for future reconnect-success events)
        */
       status: 'error' | 'oauth_pending' | 'connected' | 'disconnected';
       /** Raw error message (sanitised, secrets redacted). Present when status is 'error' or 'disconnected'. */

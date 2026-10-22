@@ -21,6 +21,7 @@ import type { HookRegistry } from '../hooks.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
 import type { QueryInputStream } from './input-iterable.js';
 import { buildMcpDisconnectNotice, failedMcpServers, oauthPendingMcpServers } from '../mcp/failure-notice.js';
+import { redactSecrets } from '../redact-secrets.js';
 import type { OutputEvent } from '../types/session-types.js';
 
 /** Mutable slots on AgentSession that `buildSessionRunner` reads and writes. */
@@ -208,16 +209,24 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
           opts.queueFrameworkContext(notice);
           // #4064 item 3: emit output-stream event so embedders can update
           // health UI without polling mcpServerStatus().
+          // Invariant: reason is untrusted transport text — redact secrets
+          // before it reaches the OutputEvent stream (parity with the
+          // startup-snapshot path that flows through failedMcpServers).
           opts.pushSidebandEvent({
             type: 'mcp_server_status',
             serverName,
             status: 'disconnected',
-            reason,
+            reason: redactSecrets(reason),
           });
         };
 
         // #4064 item 3: emit startup-snapshot events for every non-healthy
-        // server so a subscriber that attaches after init sees the initial state.
+        // server so an embedder that subscribes to getOutputStream() BEFORE
+        // calling waitForInitialization() sees the initial state.
+        // Note: OutputBroadcast has no replay — a subscriber that attaches
+        // AFTER init settles will NOT receive these events. Embedders must
+        // call getOutputStream() before waitForInitialization() to observe
+        // the startup snapshot, or poll mcpServerStatus() for late joiners.
         const states = mcpManager.getServerStates();
         for (const { name, reason: failReason } of failedMcpServers(states)) {
           opts.pushSidebandEvent({

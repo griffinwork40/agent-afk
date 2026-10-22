@@ -917,4 +917,59 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
 
     await session.close();
   });
+
+  // (g3-redact) The onServerError → mcp_server_status path must redact
+  // secret-shaped text from the reason before it reaches the OutputEvent
+  // stream — parity with the startup-snapshot path (failedMcpServers).
+  it('(g3-redact) onServerError reason is redacted when it contains a secret', async () => {
+    let capturedOnServerError: ((serverName: string, reason: string) => void) | undefined;
+
+    const stubManager = {
+      getServerStates: vi.fn().mockReturnValue([]),
+      getMcpToolWireNames: vi.fn().mockReturnValue([]),
+      getMcpTools: vi.fn().mockReturnValue([]),
+      getMcpHandlers: vi.fn().mockReturnValue(new Map()),
+      callTool: vi.fn(),
+      disconnectAll: vi.fn().mockResolvedValue(undefined),
+      get onServerError() { return capturedOnServerError; },
+      set onServerError(cb: ((serverName: string, reason: string) => void) | undefined) {
+        capturedOnServerError = cb;
+      },
+    } as unknown as import('../mcp/manager.js').McpManager;
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpManager: stubManager,
+    });
+
+    const events: import('../types/session-types.js').OutputEvent[] = [];
+    (async () => {
+      for await (const ev of session.getOutputStream()) {
+        events.push(ev);
+      }
+    })().catch(() => {});
+
+    await session.waitForInitialization();
+
+    // Fire onServerError with a reason containing an Anthropic API key.
+    const secretReason = 'auth failed: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    expect(capturedOnServerError).toBeDefined();
+    capturedOnServerError!('leaky-server', secretReason);
+    await new Promise((r) => setTimeout(r, 0));
+
+    const statusEvents = events.filter((e) => e.type === 'mcp_server_status') as Array<{
+      type: 'mcp_server_status'; serverName: string; status: string; reason?: string;
+    }>;
+    const ev = statusEvents.find((e) => e.serverName === 'leaky-server');
+    expect(ev).toBeDefined();
+    expect(ev?.status).toBe('disconnected');
+    // The sk-ant-* key must be replaced with [REDACTED].
+    expect(ev?.reason).toContain('[REDACTED]');
+    expect(ev?.reason).not.toContain('sk-ant-');
+
+    await session.close();
+  });
 });
