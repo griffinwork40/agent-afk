@@ -94,15 +94,21 @@ runs and the whole check is deterministic.
 contract or replay that throws forces `error`; `skipped` checks never force a
 non-pass on their own.
 
-`unsupported` is reached two ways: an eval-case whose pattern has no validation
-at all (no guardrail contract and no replay handler), **or** a pattern that has
-a replay handler whose replay was skipped (intact fixture that no longer
-reproduces the loop). The second case is deliberate: when a replay is expected
-but cannot run, the card-specific behaviour was never verified, so the run must
-not report `pass` — a guardrail-presence-only result must never be mistaken for
-behavioural proof. `pass` therefore means *the strongest validation available
-for the pattern actually ran and passed* (a real neutralise result for
-`repeated-tool-use`; guardrail presence for patterns without a replay handler).
+`unsupported` is reached three ways:
+
+1. An eval-case whose pattern has no validation at all (no guardrail contract
+   and no replay handler).
+2. A pattern that has a replay handler whose replay was skipped (intact fixture
+   that no longer reproduces the loop) — when a replay is expected but cannot
+   run, the card-specific behaviour was never verified, so the run must not
+   report `pass`.
+3. A pattern that has a replay handler but the handler returned no neutralise
+   check (the recorded loop did not reproduce during execution), so no
+   card-specific behavioural proof was obtained.
+
+In all three cases the run asserted nothing about card-specific behaviour.
+`pass` therefore means *the strongest validation available for the pattern
+actually ran and passed*.
 
 ## Adding a replay handler for another pattern
 

@@ -315,6 +315,13 @@ export function decideStatus(args: {
   /**
    * True when a replay conclusively drove the guardrail (a neutralise check is
    * present in `checks`). Only meaningful when `replayHandlerExists` is true.
+   *
+   * Coupling: when `replayHandlerExists` is `true` and this field is omitted or
+   * `false`, the function returns `unsupported` — the handler existed but the
+   * recorded loop did not produce a neutralise check, so no card-specific
+   * behavioural proof was obtained. Callers that supply `replayHandlerExists`
+   * must also supply this field to distinguish "drove but failed" from "never
+   * drove at all".
    */
   replayDrove?: boolean;
 }): EvalRunStatus {

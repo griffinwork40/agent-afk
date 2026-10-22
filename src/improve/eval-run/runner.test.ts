@@ -257,6 +257,13 @@ describe('decideStatus precedence', () => {
       decideStatus({ hasContract: true, contractThrew: false, checks: [failCheck], replayHandlerExists: false }),
     ).toBe('fail');
   });
+
+  it('legacy path: omitting replayHandlerExists with a contract and passing checks still yields pass', () => {
+    // Invariant: call-sites that predate replayHandlerExists (e.g. direct unit
+    // tests) must not be silently broken — omission is treated as "handler
+    // drove" for backward compatibility.
+    expect(decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck] })).toBe('pass');
+  });
 });
 
 // ---------------------------------------------------------------------------
