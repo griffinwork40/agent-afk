@@ -30,6 +30,10 @@ import type { ContinuationRegistry } from '../../subagent/continuation-registry.
 import type { ToolResult } from '../types.js';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
 import { getSessionsDir } from '../../../paths.js';
+import type OpenAI from 'openai';
+import { OpenAICompatibleProvider } from '../../providers/openai-compatible/index.js';
+import { __setOpenAIClientFactory } from '../../providers/openai-compatible/query/client.js';
+import { INTERRUPTED_TOOL_RESULT } from '../../providers/openai-compatible/journal-adapter.js';
 
 interface Seen { resumeMessages: JournalMessage[] | undefined; turn: string; config: AgentConfig }
 
@@ -100,7 +104,7 @@ async function setup(extra: { backgroundRegistry?: BackgroundAgentRegistry; trac
   return { session, wired, registry, run };
 }
 
-afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); __setOpenAIClientFactory(null); });
 
 describe('D8 continuation through the agent executor', () => {
   it('two-link chain resumes full history, then refuses at the continuation limit', async () => {
@@ -323,6 +327,70 @@ describe('D8 continuation through the agent executor', () => {
     expect(chain.continuations).toBe(1);
     expect(chain.roundsCharged).toBe(9);
     expect(chain.inFlight).toBe(false);
+    await session.close();
+  }, 20000);
+
+  it('openai-compatible continuation: resumeMessages honored, dangling tool call answered', async () => {
+    // Link 1 (fake transport) ends mid tool round: its journal holds an
+    // assistant tool_use with NO tool_result (the shape an abort leaves).
+    vi.stubEnv('OPENAI_API_KEY', 'sk-test');
+    const requests: Array<Array<{ role: string; tool_call_id?: string; tool_calls?: Array<{ id: string }>; content?: unknown }>> = [];
+    __setOpenAIClientFactory(() => ({
+      chat: { completions: { create: async (args: { messages: (typeof requests)[number] }) => {
+        requests.push(args.messages);
+        return (async function* () {
+          yield { choices: [{ delta: { content: 'resumed ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };
+        })();
+      } } },
+    }) as unknown as OpenAI);
+    let n = 0;
+    transport.build = (args) => {
+      if (n++ > 0) {
+        return new OpenAICompatibleProvider({ permissions: { allowedTools: args.allowedTools ?? [] }, subagentExecutor: args.childExecutor, readOnlyState: true });
+      }
+      const base = createMockProvider({ sessionId: 'child-0' });
+      return { ...base, query(queryArgs) {
+        const q = base.query(queryArgs);
+        const cfg = queryArgs.config;
+        return { ...q, async *[Symbol.asyncIterator]() {
+          for await (const event of q) {
+            if (event.type === 'assistant.message') {
+              const msgs: JournalMessage[] = [
+                { role: 'user', content: [text('initial')] },
+                { role: 'assistant', content: [text('looking'), { type: 'tool_use', id: 'call_dangling', name: 'read_file', input: { file_path: '/x' } }] },
+              ];
+              msgs.forEach((m, i) => cfg.messageJournal?.append(i, m));
+              await cfg.messageJournal?.flush();
+            }
+            if (event.type === 'turn.completed') event.usage = { ...event.usage, stopReason: 'tool_use_loop_capped' };
+            yield event;
+          }
+        } };
+      } };
+    };
+    const { run, session } = await setup();
+    const first = await run({ prompt: 'initial', model: 'gpt-4o-mini', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    const r = await run({ prompt: 'keep going', continuation_chain_id: chainId });
+    expect(r.isError, r.content).not.toBe(true);
+    expect(r.content).toContain('resumed ok');
+    expect(requests).toHaveLength(1);
+    const msgs = requests[0]!;
+    // resumeMessages honored: the prior link's turn precedes the new prompt.
+    const flat = JSON.stringify(msgs);
+    expect(flat).toContain('initial');
+    expect(flat).toContain('keep going');
+    const calls = msgs.flatMap((m) => (m.role === 'assistant' ? (m.tool_calls ?? []).map((c) => c.id) : []));
+    expect(calls).toContain('call_dangling');
+    for (const id of calls) {
+      const answer = msgs.find((m) => m.role === 'tool' && m.tool_call_id === id);
+      expect(answer, `tool_call ${id} has no role:'tool' answer`).toBeDefined();
+    }
+    const dangling = msgs.find((m) => m.role === 'tool' && m.tool_call_id === 'call_dangling')!;
+    expect(dangling.content).toBe(INTERRUPTED_TOOL_RESULT);
+    // Ordering: the synthetic answer sits right after its assistant message.
+    const ai = msgs.findIndex((m) => m.role === 'assistant' && (m.tool_calls ?? []).some((c) => c.id === 'call_dangling'));
+    expect(msgs[ai + 1]).toBe(dangling);
     await session.close();
   }, 20000);
 
