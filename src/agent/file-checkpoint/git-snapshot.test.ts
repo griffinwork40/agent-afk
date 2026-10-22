@@ -261,6 +261,18 @@ describe('captureWorkspaceTree / diffTrees (real git)', () => {
     const d = await diffTrees({ repoRoot: repo, objectDir: priv.objectDir, before: 'deadbeef', after: 'cafebabe', maxFiles: 10, timeoutMs: 20_000 });
     expect(d).toMatchObject({ ok: false, reason: 'error' });
   });
+
+  it('diffTrees creates private hooks directory next to objectDir even when capture has not run', async () => {
+    await initRepo();
+    const tree = git(repo, 'rev-parse', 'HEAD^{tree}').trim();
+    // Use a fresh private store without calling captureWorkspaceTree first.
+    const freshObjectDir = path.join(tmp, 'fresh-priv', 'objects');
+    const expectedHooksDir = path.join(path.dirname(freshObjectDir), `${path.basename(freshObjectDir)}-hooks`);
+    expect(existsSync(expectedHooksDir)).toBe(false);
+    const result = await diffTrees({ repoRoot: realRepo(), objectDir: freshObjectDir, before: tree, after: tree, maxFiles: 10, timeoutMs: 20_000 });
+    expect(result.ok).toBe(true);
+    expect(existsSync(expectedHooksDir)).toBe(true);
+  });
 });
 
 describe('review hardening (real git)', () => {

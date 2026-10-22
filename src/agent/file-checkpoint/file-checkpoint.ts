@@ -12,6 +12,7 @@ import { getFileCheckpointTurnDir } from '../../paths.js';
 import { storeCheckpointContent } from './content-store.js';
 import { isEnoent } from '../../utils/errors.js';
 
+/** @internal */
 export interface FileCheckpointRegistry {
   snapshotFile(absPath: string): Promise<void>;
   recordPriorState(absPath: string, prior: { bytes: Buffer; mode: number } | null): Promise<void>;

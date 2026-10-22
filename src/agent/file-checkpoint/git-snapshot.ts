@@ -230,6 +230,7 @@ export async function diffTrees(options: DiffOptions): Promise<DiffResult> {
     // A missing GIT_OBJECT_DIRECTORY makes git report "not a git repository";
     // create it so an unknown tree id surfaces as the 'error' it really is.
     await fs.mkdir(options.objectDir, { recursive: true });
+    await fs.mkdir(hooksDirFor(options.objectDir), { recursive: true });
     return await diffWithCtx(options, { ...ctx, env: privateEnv(ctx.env, options.objectDir, layout.objects) });
   } catch (err) {
     return { ok: false, reason: 'error', detail: describe(err) };
