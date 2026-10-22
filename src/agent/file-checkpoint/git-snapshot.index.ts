@@ -10,6 +10,8 @@
 
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { findConverting, globalAttributeFiles, systemAttributeFile, workTreeAttributeFiles } from './git-snapshot.attrs.js';
+import { isOk, runIn, type GitCtx } from './git-snapshot.exec.js';
 
 /**
  * Invariant: captures sharing one private index run one at a time. Two
@@ -30,9 +32,6 @@ export function withIndexLock<T>(indexFile: string, fn: () => Promise<T>): Promi
   return next;
 }
 
-/** Attribute keys that make the index blob differ from working-tree bytes. */
-const CONVERTING_ATTR = /\b(filter|eol|text|crlf|working-tree-encoding|ident)\b/;
-
 async function readIfExists(file: string): Promise<string> {
   try {
     return await fs.readFile(file, 'utf8');
@@ -42,17 +41,49 @@ async function readIfExists(file: string): Promise<string> {
 }
 
 /**
- * Seeding is only correct when the repo's index blobs are the raw working-tree
- * bytes. Snapshots disable attributes (no clean filters, no eol conversion), so
- * a repo that converts content would leave converted blobs for files whose stat
- * is unchanged. Detect the common cases cheaply and fall back to a full hash.
- * Contract: `autocrlf` is the repo's effective `core.autocrlf` value or ''.
+ * True when the user's index has an entry whose stat data does not vouch for
+ * its working-tree bytes: assume-unchanged (lowercase tag) or skip-worktree
+ * (`S`/`s`) in `git ls-files -v`. A seeded copy of such an entry would make
+ * `add -A` keep the stale blob and hide a real change.
  */
-export async function seedingSafe(repoRoot: string, infoAttributes: string, autocrlf: string): Promise<boolean> {
+export function hasFlaggedEntries(lsFilesV: Buffer): boolean {
+  for (const rec of lsFilesV.toString('utf8').split('\0')) {
+    if (rec === '') continue;
+    const tag = rec.charAt(0);
+    if (tag === 'S' || tag !== tag.toUpperCase()) return true;
+  }
+  return false;
+}
+
+/**
+ * Seeding is only correct when the repo's index blobs are the raw working-tree
+ * bytes and every entry's stat data is trustworthy. Snapshots disable
+ * attributes (no clean filters, no eol conversion), so a repo that converts
+ * content would leave converted blobs for files whose stat is unchanged.
+ * Invariant: never seed when ANY attribute file the user's git reads (every
+ * `.gitattributes` at any depth, `info/attributes`, global, system) names a
+ * converting attribute, when autocrlf is on, when sparse checkout is on, or
+ * when the index carries assume-unchanged / skip-worktree entries. Any
+ * uncertainty (a failed git call, an unknown system file) means "do not seed";
+ * the cost is one full hash, never a wrong snapshot.
+ * Contract: `ctx.env` must NOT carry GIT_INDEX_FILE (it reads the user's index).
+ */
+export async function seedingSafe(ctx: GitCtx, repoRoot: string, infoAttributes: string): Promise<boolean> {
+  const config = async (key: string): Promise<string> => {
+    const run = await runIn(ctx, repoRoot, ['config', '--get', key]);
+    return isOk(run) ? run.stdout.toString('utf8').trim().toLowerCase() : '';
+  };
+  const autocrlf = await config('core.autocrlf');
   if (autocrlf !== '' && autocrlf !== 'false') return false;
-  const rootAttrs = await readIfExists(path.join(repoRoot, '.gitattributes'));
-  const infoAttrs = await readIfExists(infoAttributes);
-  return !CONVERTING_ATTR.test(rootAttrs) && !CONVERTING_ATTR.test(infoAttrs);
+  if (['true', 'yes', 'on', '1'].includes(await config('core.sparsecheckout'))) return false;
+  const flags = await runIn(ctx, repoRoot, ['ls-files', '-v', '-z']);
+  if (!isOk(flags) || hasFlaggedEntries(flags.stdout)) return false;
+  const tree = await workTreeAttributeFiles(ctx, repoRoot);
+  if (!Array.isArray(tree)) return false;
+  const system = await systemAttributeFile(ctx, repoRoot);
+  if (system === undefined) return false;
+  const global = await globalAttributeFiles(ctx, repoRoot);
+  return (await findConverting([infoAttributes, system, ...global, ...tree])) === null;
 }
 
 /**

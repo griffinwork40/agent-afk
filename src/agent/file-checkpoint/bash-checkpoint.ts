@@ -49,7 +49,7 @@ async function capture(options: CaptureOptions, signal?: AbortSignal): Promise<C
 }
 
 function partialReason(result: CaptureResult): string[] {
-  return result.ok && 'partial' in result && typeof result.partial === 'string' ? [result.partial] : [];
+  return result.ok && typeof result.partial === 'string' ? [result.partial] : [];
 }
 
 export async function beginBashCheckpoint(
@@ -124,7 +124,10 @@ async function prepareBashCheckpoint(
       }), timeoutMs);
       if (!diff.ok) { log('skipped', [...reasons, diff.reason].join('; ')); return; }
       if (diff.truncated) reasons.push(`truncated at ${maxFiles} files`);
-      if (diff.skipped.length) reasons.push(`symlinks or non-regular files skipped (${diff.skipped.length})`);
+      if (diff.skipped.length) {
+        const kinds = [...new Set(diff.skipped.map((s) => s.reason))].slice(0, 3).join(', ');
+        reasons.push(`files skipped (${diff.skipped.length}): ${kinds}`);
+      }
       const deadline = Date.now() + timeoutMs;
       // Invariant: never race local publication against a timer. A write already
       // in flight must settle before endCheckpointTurn hashes touchedPaths.

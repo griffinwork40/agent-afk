@@ -36,6 +36,18 @@ export const GIT_SNAPSHOT_GLOBAL_ARGS: readonly string[] = [
   '-c', 'color.ui=false',
 ];
 
+/**
+ * Global args for one snapshot operation: the fixed set above plus
+ * `core.hooksPath` pointed at an empty private directory, so writing the
+ * private index can never run a user hook (`post-index-change`, …).
+ */
+export function snapshotArgs(hooksDir: string): string[] {
+  return [...GIT_SNAPSHOT_GLOBAL_ARGS, '-c', `core.hooksPath=${hooksDir}`];
+}
+
+/** What every git call in one snapshot operation shares. */
+export interface GitCtx { args: readonly string[]; env: GitEnv; deadline: number }
+
 /** Inherited env (sanctioned builder) minus every `GIT_*` override. */
 export function buildSnapshotEnv(): GitEnv {
   const base = buildChildEnv(undefined);
@@ -46,6 +58,8 @@ export function buildSnapshotEnv(): GitEnv {
     ...base,
     GIT_TERMINAL_PROMPT: '0',
     GIT_OPTIONAL_LOCKS: '0',
+    // Never read $(prefix)/etc/gitattributes: its filters would run in `add`.
+    GIT_ATTR_NOSYSTEM: '1',
     // Stable English diagnostics so "not a git repository" is matchable.
     LC_ALL: 'C',
   };
@@ -148,6 +162,32 @@ export function isOk(run: GitRun): boolean {
   return run.code === 0 && !run.timedOut && run.spawnError === undefined;
 }
 
-function firstLine(s: string): string {
+export function firstLine(s: string): string {
   return (s.split('\n').find((l) => l.trim() !== '') ?? '').trim().slice(0, 160);
+}
+
+/** `runGit` with the operation's shared args, env and deadline. */
+export function runIn(ctx: GitCtx, cwd: string, args: readonly string[], input?: string): Promise<GitRun> {
+  return runGit([...ctx.args, ...args], { cwd, env: ctx.env, deadline: ctx.deadline, ...(input !== undefined ? { input } : {}) });
+}
+
+/** PATH-style separator git uses for GIT_ALTERNATE_OBJECT_DIRECTORIES. */
+const ALT_SEP = process.platform === 'win32' ? ';' : ':';
+
+/**
+ * One GIT_ALTERNATE_OBJECT_DIRECTORIES entry. Contract: git splits the value on
+ * the PATH separator and C-unquotes an entry that starts with `"`, so a path
+ * containing the separator or a double quote is emitted C-style quoted
+ * (backslash, quote and control bytes escaped); any other path is passed as-is.
+ */
+export function quoteAlternate(dir: string, sep: string = ALT_SEP): string {
+  if (!dir.includes(sep) && !dir.includes('"')) return dir;
+  let out = '"';
+  for (const byte of Buffer.from(dir, 'utf8')) {
+    if (byte === 0x22 || byte === 0x5c) out += `\\${String.fromCharCode(byte)}`;
+    else if (byte < 0x20 || byte === 0x7f) out += `\\${byte.toString(8).padStart(3, '0')}`;
+    else out += String.fromCharCode(byte);
+  }
+  // Multi-byte UTF-8 passes through unescaped; rebuild those bytes faithfully.
+  return Buffer.from(`${out}"`, 'latin1').toString('utf8');
 }

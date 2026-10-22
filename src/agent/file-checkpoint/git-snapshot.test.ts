@@ -4,7 +4,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { captureWorkspaceTree, diffTrees, type CaptureResult } from './git-snapshot.js';
-import { parseCatFileBatch, parseRawDiff, toAbsPath } from './git-snapshot.diff.js';
+import { _setAttrSourceSupportForTests, hasConvertingAttribute } from './git-snapshot.attrs.js';
+import { _setMaxBlobBytesForTests, parseBatchCheck, parseCatFileBatch, parseRawDiff, toAbsPath } from './git-snapshot.diff.js';
+import { quoteAlternate } from './git-snapshot.exec.js';
+import { hasFlaggedEntries } from './git-snapshot.index.js';
 
 const GIT_ENV = {
   ...process.env,
@@ -30,7 +33,12 @@ beforeEach(() => {
   repo = path.join(tmp, 'repo');
   priv = { objectDir: path.join(tmp, 'priv', 'objects'), indexFile: path.join(tmp, 'priv', 'index') };
 });
-afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+afterEach(async () => {
+  _setAttrSourceSupportForTests(undefined);
+  _setMaxBlobBytesForTests(undefined);
+  await fs.chmod(tmp, 0o700).catch(() => undefined);
+  rmSync(tmp, { recursive: true, force: true });
+});
 
 async function initRepo(commit = true): Promise<void> {
   await fs.mkdir(repo, { recursive: true });
@@ -255,6 +263,120 @@ describe('captureWorkspaceTree / diffTrees (real git)', () => {
   });
 });
 
+describe('review hardening (real git)', () => {
+  it('never runs the user repo post-index-change hook', async () => {
+    await initRepo();
+    const marker = path.join(tmp, 'hook-ran');
+    const hook = path.join(repo, '.git', 'hooks', 'post-index-change');
+    await fs.mkdir(path.dirname(hook), { recursive: true });
+    await fs.writeFile(hook, `#!/bin/sh\necho ran >> "${marker.split(path.sep).join('/')}"\n`, { mode: 0o755 });
+    const before = await captureOk();
+    await fs.writeFile(path.join(repo, 'mod.txt'), 'after\n');
+    await captureOk();
+    expect(before.tree).toMatch(/^[0-9a-f]+$/);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('reports partial when add cannot read a file (where chmod makes it unreadable)', async () => {
+    await initRepo();
+    const locked = path.join(repo, 'secret.txt');
+    await fs.writeFile(locked, 'hidden\n');
+    await fs.chmod(locked, 0o000);
+    let unreadable = true;
+    try { readFileSync(locked); unreadable = false; } catch { /* expected */ }
+    const r = await capture();
+    await fs.chmod(locked, 0o600);
+    if (!r.ok) throw new Error(`capture failed: ${r.reason} ${r.detail ?? ''}`);
+    if (unreadable) expect(r.partial).toMatch(/could not be read/);
+    else expect(r.partial).toBeUndefined();
+  });
+
+  it('puts an oversized prior blob in skipped without reading it', async () => {
+    await initRepo();
+    await fs.writeFile(path.join(repo, 'big.bin'), Buffer.alloc(4096, 7));
+    const before = await captureOk();
+    await fs.writeFile(path.join(repo, 'big.bin'), 'small');
+    await fs.writeFile(path.join(repo, 'mod.txt'), 'after\n');
+    const after = await captureOk();
+    _setMaxBlobBytesForTests(1024);
+    const d = await diff(before.tree, after.tree);
+    expect(d.changes.map((c) => rel(c.absPath))).toEqual(['mod.txt']);
+    expect(d.changes[0]?.prior?.bytes.toString()).toBe('before\n');
+    expect(d.skipped).toEqual([{ absPath: path.join(realRepo(), 'big.bin'), reason: expect.stringContaining('larger than 1024') }]);
+  });
+
+  it('works when the repo path contains the alternates separator (where creatable)', async () => {
+    const sep = process.platform === 'win32' ? ';' : ':';
+    repo = path.join(tmp, `re${sep}po "q"`);
+    try { await fs.mkdir(repo); } catch { return; }
+    await initRepo(false);
+    // Backdate before committing so the seeded entries are not racy: `add`
+    // then reuses their blobs, which live only in the user store (the alternate).
+    const past = new Date(Date.now() - 3_600_000);
+    for (const f of ['keep.txt', 'mod.txt', 'del.txt']) await fs.utimes(path.join(repo, f), past, past);
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'init');
+    const before = await captureOk();
+    expect(listFiles(priv.objectDir).some((f) => /^[0-9a-f]{2}[/\\][0-9a-f]+$/.test(f))).toBe(false);
+    await fs.writeFile(path.join(repo, 'mod.txt'), 'after\n');
+    const after = await captureOk();
+    const d = await diff(before.tree, after.tree);
+    expect(d.changes.map((c) => [rel(c.absPath), c.prior?.bytes.toString()])).toEqual([['mod.txt', 'before\n']]);
+  });
+
+  it('refuses unsafe-attributes on git without --attr-source when a nested .gitattributes filters', async () => {
+    await initRepo();
+    _setAttrSourceSupportForTests(false);
+    await fs.mkdir(path.join(repo, 'assets'));
+    await fs.writeFile(path.join(repo, 'assets', '.gitattributes'), '*.psd filter=lfs diff=lfs merge=lfs -text\n');
+    expect(await capture()).toMatchObject({ ok: false, reason: 'unsafe-attributes' });
+  });
+
+  it('captures normally on git without --attr-source when no attribute converts', async () => {
+    await initRepo();
+    _setAttrSourceSupportForTests(false);
+    await fs.writeFile(path.join(repo, '.gitattributes'), '*.lock -merge linguist-generated\n');
+    const before = await captureOk();
+    await fs.writeFile(path.join(repo, 'mod.txt'), 'after\n');
+    const after = await captureOk();
+    expect((await diff(before.tree, after.tree)).changes.map((c) => rel(c.absPath))).toEqual(['mod.txt']);
+  });
+
+  it('refuses when info/attributes converts, even with --attr-source', async () => {
+    await initRepo();
+    _setAttrSourceSupportForTests(true);
+    const info = git(repo, 'rev-parse', '--git-path', 'info/attributes').trim();
+    await fs.mkdir(path.dirname(path.resolve(repo, info)), { recursive: true });
+    await fs.writeFile(path.resolve(repo, info), '* eol=crlf\n');
+    expect(await capture()).toMatchObject({ ok: false, reason: 'unsafe-attributes' });
+  });
+
+  it('keeps CRLF bytes exactly under * text=auto when --attr-source is supported', async () => {
+    await initRepo();
+    _setAttrSourceSupportForTests(undefined);
+    await fs.writeFile(path.join(repo, '.gitattributes'), '* text=auto\n');
+    await fs.writeFile(path.join(repo, 'crlf.txt'), 'x\r\ny\r\n');
+    const before = await capture();
+    // A git without --attr-source refuses rather than storing converted bytes.
+    if (!before.ok) { expect(before.reason).toBe('unsafe-attributes'); return; }
+    await fs.writeFile(path.join(repo, 'crlf.txt'), 'z\n');
+    const after = await captureOk();
+    const d = await diff(before.tree, after.tree);
+    expect(d.changes.find((c) => rel(c.absPath) === 'crlf.txt')?.prior?.bytes.toString('latin1')).toBe('x\r\ny\r\n');
+  });
+
+  it('does not seed from a repo index with a skip-worktree entry', async () => {
+    await initRepo();
+    git(repo, 'update-index', '--skip-worktree', 'mod.txt');
+    await fs.writeFile(path.join(repo, 'mod.txt'), 'hidden local edit\n');
+    const before = await captureOk();
+    // Seeded, the skip-worktree entry would keep the committed blob ('before').
+    const objEnv = { ...GIT_ENV, GIT_OBJECT_DIRECTORY: priv.objectDir, GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(repo, '.git', 'objects') };
+    const shown = execFileSync('git', ['cat-file', '-p', `${before.tree}:mod.txt`], { cwd: repo, env: objEnv, encoding: 'utf8' });
+    expect(shown).toBe('hidden local edit\n');
+  });
+});
+
 describe('parsers', () => {
   it('parseRawDiff reads NUL-delimited raw records, including odd path bytes', () => {
     const z = '0'.repeat(40);
@@ -274,5 +396,32 @@ describe('parsers', () => {
 
   it('toAbsPath uses platform separators', () => {
     expect(toAbsPath(path.join(os.tmpdir(), 'r'), 'a/b/c.txt')).toBe(path.join(os.tmpdir(), 'r', 'a', 'b', 'c.txt'));
+  });
+
+  it('parseBatchCheck reads sizes and fails closed on a missing object', () => {
+    expect(parseBatchCheck(Buffer.from(`${'a'.repeat(40)} blob 12\n${'b'.repeat(40)} blob 0\n`), 2)).toEqual([12, 0]);
+    expect(parseBatchCheck(Buffer.from(`${'a'.repeat(40)} missing\n`), 1)).toBeNull();
+  });
+
+  it('quoteAlternate C-quotes only paths with the separator or a quote', () => {
+    expect(quoteAlternate('/a/b', ':')).toBe('/a/b');
+    expect(quoteAlternate('/a:b', ':')).toBe('"/a:b"');
+    expect(quoteAlternate('/a"b\\c', ':')).toBe('"/a\\"b\\\\c"');
+    expect(quoteAlternate('/é:x\n', ':')).toBe('"/é:x\\012"');
+  });
+
+  it('hasConvertingAttribute matches every form, not substrings', () => {
+    for (const t of ['* filter=lfs', '*.c -text', '* !eol', 'x crlf', '[attr]bin -diff -text', '"a b" ident', 'f working-tree-encoding=UTF-16']) {
+      expect(hasConvertingAttribute(t)).toBe(true);
+    }
+    for (const t of ['# * text', '*.lock -merge', 'context.txt diff', 'textfile linguist-generated', '']) {
+      expect(hasConvertingAttribute(t)).toBe(false);
+    }
+  });
+
+  it('hasFlaggedEntries spots assume-unchanged and skip-worktree tags', () => {
+    expect(hasFlaggedEntries(Buffer.from('H a\0H b\0'))).toBe(false);
+    expect(hasFlaggedEntries(Buffer.from('H a\0S b\0'))).toBe(true);
+    expect(hasFlaggedEntries(Buffer.from('h a\0'))).toBe(true);
   });
 });
