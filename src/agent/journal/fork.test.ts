@@ -65,16 +65,4 @@ describe('forkJournal', () => {
     fs.writeFileSync(getSessionLedgerDir('blocked'), 'file in the way');
     expect(forkJournal('cleared', 'blocked')).toBe(false);
   });
-
-  it('seeds a new top-level journal from a CHILD journal via the locator (continuation)', async () => {
-    const parent = createMessageJournal({ getSessionId: () => 'root' });
-    const child = parent.forSubagent('child-1', { model: 'm' });
-    child.append(0, user('task'));
-    child.append(1, assistant('partial'));
-    await child.close();
-    await parent.close();
-    expect(forkJournal('root', 'seed', { subagentId: 'child-1' })).toBe(true);
-    expect(loadJournalMessages('seed')).toEqual(loadJournalMessages('root', { subagentId: 'child-1' }));
-    expect(forkJournal('root', 'seed2', { subagentId: 'missing' })).toBe(false);
-  });
 });

@@ -5,12 +5,22 @@
  * closed, nothing forked on any refusal) in this order: chain lookup + owner,
  * inherited-field overrides / worktree / host (D3), workspace drift for
  * write-capable chains (D5), the chain's synchronous charge + in-flight
- * (D4), then the child-journal seed (D1). The admitted call is then re-run
+ * (D4), then the seed (D1): the latest child journal's fold, read directly. The admitted call is then re-run
  * through the NORMAL dispatch path (`executeOnce`) with an input rebuilt from
  * the chain's stored dispatch inputs, so config assembly, permissions,
  * DelegationBudget admission, and fork wiring are the ordinary ones. The plan
- * object rides along so the fork resumes the seed (`continuation` fork
- * option) and the terminal updates THIS chain instead of minting a new one.
+ * object rides along so the fork starts from the seeded history
+ * (`continuation` fork option -> `resumeMessages`) and the terminal updates
+ * THIS chain instead of minting a new one. No seed session/journal is written:
+ * the continuation child resumes the parent session id like every fork and
+ * journals into its own `subagents/<id>.jsonl`, which therefore holds the
+ * seeded history plus its own run (the next link reads that).
+ *
+ * Invariant (no replay): a continuation is never re-dispatched by the
+ * executor's zero-output stream-cut retry. The retry would re-enter
+ * admission (a second charge and continuation count) and the dead child's
+ * journal already advanced the chain, so the dispatch passes no probe and
+ * the retry gate stays closed; the parent may continue the chain itself.
  *
  * Invariant (rollback): if the re-run returns or throws before the child
  * handle was wired to the chain (budget refusal, fork-construction failure,
@@ -21,14 +31,12 @@
  * @module agent/tools/subagent/continuation-run
  */
 
-import { randomBytes } from 'node:crypto';
-
 import type { ToolCall, ToolResult } from '../types.js';
 import type { AgentInput } from './input-parse.js';
 import type { ForkSubagentOptions } from '../../subagent/fork-types.js';
 import type { ChainRecord, ContinuationRegistry } from '../../subagent/continuation-registry.js';
 import { checkContinuationOverrides, checkWorkspaceDrift } from '../../subagent/continuation-guards.js';
-import { forkJournal, loadJournalMessages } from '../../journal/index.js';
+import { loadJournalMessages } from '../../journal/index.js';
 import { SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../../subagent/constants.js';
 
 /** Admitted continuation state threaded through the normal dispatch path. */
@@ -94,7 +102,7 @@ function continuationInput(parsed: AgentInput, chain: ChainRecord, prompt: strin
   };
 }
 
-/** Admission (check + charge + in-flight) and seed. Fail closed: nothing is forked on refusal. */
+/** Admission (check + charge + in-flight) and seed. Fail closed: nothing is forked on refusal (incl. a missing/empty child fold). */
 export function admitContinuationCall(parsed: AgentInput, ctx: AdmitCtx): { plan: ContinuationPlan; input: Record<string, unknown> } | { error: ToolResult } {
   const id = parsed.continuation_chain_id ?? '';
   const registry = ctx.continuationRegistry;
@@ -107,10 +115,9 @@ export function admitContinuationCall(parsed: AgentInput, ctx: AdmitCtx): { plan
   const admitted = registry.admitContinuation(id, caller, requested, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS);
   if (!admitted.ok) return refuseContinuation(admitted.reason);
   const previous = chain.latestChildId ?? '';
-  const seedId = `${chain.chainId}-c${admitted.index}-${randomBytes(4).toString('hex')}`;
   let messages: ReturnType<typeof loadJournalMessages> = null;
   try {
-    messages = forkJournal(chain.rootSessionId, seedId, { subagentId: previous }) ? loadJournalMessages(seedId) : null;
+    messages = loadJournalMessages(chain.rootSessionId, { subagentId: previous });
   } catch {
     messages = null;
   }
@@ -120,7 +127,7 @@ export function admitContinuationCall(parsed: AgentInput, ctx: AdmitCtx): { plan
   }
   const plan: ContinuationPlan = {
     chain, allowance: admitted.allowance, rollback: admitted.rollback, wired: false,
-    fork: { resume: seedId, messages, chainId: chain.chainId, continuationOf: previous, continuationIndex: admitted.index },
+    fork: { messages, chainId: chain.chainId, continuationOf: previous, continuationIndex: admitted.index },
   };
   const prompt = `${continuationNote(chain, admitted.index, admitted.allowance)}\n\n${parsed.prompt}`;
   return { plan, input: continuationInput(parsed, chain, prompt, admitted.allowance) };

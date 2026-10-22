@@ -94,8 +94,8 @@ export function resolveForkInputs(args: ResolveForkInputsArgs): ForkResolved {
 
   const safePrefix = (options.idPrefix ?? 'subagent').replace(/[^A-Za-z0-9_-]/g, '-');
   const id = `${safePrefix}-${Date.now()}-${counter}`;
-  // Continuation forks resume their seeded journal; every other fork the parent.
-  const resume = options.continuation?.resume ?? options.parent.sessionId;
+  // Every fork (continuations included) resumes the parent's session id.
+  const resume = options.parent.sessionId;
 
   const registry =
     options.config.hookRegistry ?? managerHookRegistry ?? options.parent.hookRegistry;

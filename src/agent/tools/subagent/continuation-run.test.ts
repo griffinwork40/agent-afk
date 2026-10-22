@@ -7,7 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ModelProvider } from '../../provider.js';
@@ -29,6 +29,7 @@ import { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { ContinuationRegistry } from '../../subagent/continuation-registry.js';
 import type { ToolResult } from '../types.js';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
+import { getSessionsDir } from '../../../paths.js';
 
 interface Seen { resumeMessages: JournalMessage[] | undefined; turn: string; config: AgentConfig }
 
@@ -130,6 +131,9 @@ describe('D8 continuation through the agent executor', () => {
     expect(twoLink).toContain('"toolUseId":"tu-0"'); // history from run 1
     expect(twoLink).toContain('"toolUseId":"tu-1"'); // and run 2
     expect(s2.resumeMessages).toHaveLength(8);
+    // No seed session is written: nothing chain-named appears where sessions are listed.
+    const sessions = existsSync(getSessionsDir()) ? readdirSync(getSessionsDir()) : [];
+    expect(sessions.filter((d) => d.startsWith('chain_'))).toEqual([]);
 
     const refused = await run({ prompt: 'again', continuation_chain_id: chainId });
     expect(refused.isError).toBe(true);

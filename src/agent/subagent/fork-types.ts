@@ -137,13 +137,11 @@ export interface ForkSubagentOptions<T = unknown> {
 
   /**
    * Subagent continuation (docs/subagent-continuation.md, D1/D8/D10). When
-   * set, the child resumes `resume` (a top-level journal seeded from the
-   * chain's latest child journal) with `forkSession=true` instead of the
-   * parent's session id, and starts from `messages` (that journal's fold).
-   * Absent on every ordinary fork: default resume behaviour is unchanged.
+   * set, the child starts from `messages` (the fold of the chain's latest
+   * child journal, applied as `resumeMessages`). It still resumes the
+   * parent's session id like every fork. Absent on every ordinary fork.
    */
   continuation?: {
-    resume: string;
     messages: JournalMessage[];
     chainId: string;
     continuationOf: string;
