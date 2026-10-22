@@ -255,6 +255,31 @@ describe('continuation dispatch wiring', () => {
     expect(() => JSON.parse(r.content as string)).not.toThrow();
     expect(r.continuation?.chainId).toBe(chain.chainId);
   });
+
+  it('D4/D6: MAX_CONTINUATIONS=0 => no continuation line, not continuable, and a continuation is refused', async () => {
+    vi.stubEnv('AFK_SUBAGENT_CONTINUATION_MAX_CONTINUATIONS', '0');
+    try {
+      const registry = new ContinuationRegistry();
+      const r = await executorWith(handleFor(cappedResult()), registry).execute(call({ prompt: 'work', max_tool_use_iterations: 7 }));
+      const meta = (r as ToolResultWithChain & { continuation?: { continuable: boolean } }).continuation!;
+      expect(meta.continuable).toBe(false);
+      expect(r.content).not.toContain('[continuation:');
+      const admitted = registry.admitContinuation(meta.chainId, registry.rootActor, 5, 50);
+      expect(admitted.ok).toBe(false);
+      if (!admitted.ok) expect(admitted.reason).toMatch(/continuation limit reached \(0\/0\)/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('D6: an exhausted round budget suppresses the line', () => {
+    const registry = new ContinuationRegistry({ maxRounds: 7, maxContinuations: 3 });
+    const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 7, inputs: { writeCapable: false } });
+    const r = annotateChainResult({ content: 'x', incomplete: true, incompleteReason: CAPPED }, chain);
+    expect(r.continuation?.continuable).toBe(false);
+    expect(r.content).toBe('x');
+  });
+
 });
 
 type ToolResultWithChain = { content: unknown; continuation?: { chainId: string } };

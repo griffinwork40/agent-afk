@@ -131,9 +131,16 @@ export function recordChainTerminal(args: ChainTerminalArgs): void {
   });
 }
 
-/** True when the chain may be continued in v1 (worktree chains are refused, D3). */
+/**
+ * True when a continuation would be admitted on limits and isolation: worktree
+ * chains are refused in v1 (D3), and an exhausted continuation count (incl.
+ * MAX_CONTINUATIONS=0) or aggregate round budget would be refused (D4), so
+ * the result line must not invite one.
+ */
 function isContinuable(chain: ChainRecord): boolean {
-  return chain.inputs.isolation !== 'worktree';
+  return chain.inputs.isolation !== 'worktree' &&
+    chain.continuations < chain.limits.maxContinuations &&
+    chain.roundsCharged < chain.limits.maxRounds;
 }
 
 /** D6 structured chain metadata (snapshot of the chain's current state). */
