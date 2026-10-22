@@ -35,10 +35,16 @@ interface Seen { resumeMessages: JournalMessage[] | undefined; turn: string; con
 const text = (t: string): { type: 'text'; text: string } => ({ type: 'text', text: t });
 
 /** Fake transport: every child runs one capped round (tool_use + tool_result) and journals it. */
-function installTransport(seen: Seen[], opts: { hold?: Promise<void> } = {}): void {
+function installTransport(seen: Seen[], opts: { hold?: Promise<void>; cutFrom?: number; builds?: { n: number } } = {}): void {
   let n = 0;
   transport.build = (args) => {
     const index = n++;
+    if (opts.builds !== undefined) opts.builds.n++;
+    if (opts.cutFrom !== undefined && index >= opts.cutFrom) {
+      // Zero-output stream cut: the model stream ends with no assistant output.
+      const dead = createMockProvider({ sessionId: `child-${index}` });
+      return { ...dead, query(queryArgs) { const q = dead.query(queryArgs); return { ...q, async *[Symbol.asyncIterator]() { /* cut */ } }; } };
+    }
     const base = createMockProvider({ sessionId: `child-${index}` });
     return {
       ...base,
@@ -288,6 +294,31 @@ describe('D8 continuation through the agent executor', () => {
     registry.recordTerminal(iso.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
     expect((await run({ prompt: 'x', continuation_chain_id: iso.chainId })).content).toContain('`isolation: "worktree"` chain is not supported');
     expect(seen).toHaveLength(0);
+    await session.close();
+  }, 20000);
+
+  it('stream-cut retry: a continuation is never re-dispatched (no second charge, count, or fork)', async () => {
+    const seen: Seen[] = [];
+    // Control: a read-only INITIAL dispatch whose stream is cut IS re-forked once.
+    const control = { n: 0 };
+    installTransport(seen, { cutFrom: 0, builds: control });
+    const { run, registry, session } = await setup();
+    const cut = await run({ prompt: 'initial', agent_type: 'Explore', max_tool_use_iterations: 5 });
+    expect(cut.isError).toBe(true);
+    expect(control.n).toBe(2);
+
+    const builds = { n: 0 };
+    installTransport(seen, { cutFrom: 1, builds });
+    const first = await run({ prompt: 'initial', agent_type: 'Explore', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    const r = await run({ prompt: 'go', continuation_chain_id: chainId, max_tool_use_iterations: 4 });
+    expect(r.isError).toBe(true);
+    expect(r.incompleteReason).toBe('stream_incomplete');
+    expect(builds.n).toBe(2); // initial + ONE continuation fork, no re-dispatch
+    const chain = registry.get(chainId)!;
+    expect(chain.continuations).toBe(1);
+    expect(chain.roundsCharged).toBe(9);
+    expect(chain.inFlight).toBe(false);
     await session.close();
   }, 20000);
 

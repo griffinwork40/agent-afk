@@ -78,7 +78,7 @@ export async function executeOnce(
   const parsedOrError = parseDispatchInput(call.input);
   if ('error' in parsedOrError) return parsedOrError.error;
   const { parsed } = parsedOrError;
-  if (parsed.continuation_chain_id !== undefined && plan === undefined) return runContinuation(call, parsed, ctx, (c, p) => executeOnce(c, args, probe, retryCancelGeneration, p)); // D8: admit + seed, then this path
+  if (parsed.continuation_chain_id !== undefined && plan === undefined) return runContinuation(call, parsed, ctx, (c, p) => executeOnce(c, args, undefined, retryCancelGeneration, p)); // D8: admit + seed, then this path; no probe => never stream-cut re-dispatched
 
   const named = resolveNamedAgent(ctx, parsed.agent_type); // a miss fails fast with the available list
   if ('error' in named) return named.error;
