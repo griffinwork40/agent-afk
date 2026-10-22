@@ -1,7 +1,7 @@
 import { Context, Telegraf } from 'telegraf';
 import type { Message } from 'telegraf/types';
 import { SessionManager } from '../session-manager.js';
-import { formatError, formatClear, formatInternalError, formatQueued } from '../formatter.js';
+import { formatInternalError, formatQueued } from '../formatter.js';
 import { isRateLimitError, isNetworkError, isTelegramTransportError, formatRateLimitReply } from '../error-utils.js';
 import { streamResponse } from '../streaming.js';
 import { withTypingIndicator } from '../typing-indicator.js';
@@ -22,7 +22,7 @@ import { wakeIdleSessionImpl, type WakeIdleDeps } from './message.wake-idle.js';
 import { addressedToBot } from './message.addressed-to-bot.js';
 import { reactionMap } from '../reaction-map.js';
 import { handlePhotoImpl } from './message.photo-handler.js';
-import { processCompactDirectImpl } from './message.compact-handler.js';
+import type { SlashRunnerDeps } from './slash.js';
 import { dispatchTelegramUserPromptSubmit } from './message.ups-dispatch.js';
 
 export { addressedToBot };
@@ -31,8 +31,7 @@ type QueueItem =
   | { type: 'message'; ctx: Context; text: string }
   | { type: 'photo'; ctx: Context; content: ContentBlockParam[] }
   | { type: 'document'; ctx: Context; content: ContentBlockParam[] }
-  | { type: 'clear'; ctx: Context }
-  | { type: 'compact'; ctx: Context };
+  | { type: 'slash'; ctx: Context; text: string };
 
 type LogFn = (...args: unknown[]) => void;
 
@@ -258,7 +257,9 @@ export class MessageHandler {
 
     this.log(`📬 Message from chat ID: ${chatId}`);
 
-    if (messageText.startsWith('/')) {
+    // Shared-registry slash commands (Telegram-only ones are bot.command handlers
+    // and never reach here). Skills/session-native commands fall through as text.
+    if (messageText.startsWith('/') && await this.runSlash(ctx, route, messageText)) {
       return;
     }
 
@@ -420,45 +421,27 @@ export class MessageHandler {
   }
 
   /**
-   * Process clear command when already idle (called from handlers).
-   * Resets the session for THIS route only; the chat's other topics are
-   * untouched. Command re-registration is chat-scoped (registeredCommandChats
-   * keyed by chatId).
+   * Lazy: keeps the shared command tree off the bot's import path. Public so
+   * inline-keyboard callbacks (e.g. the /model picker) run the SAME shared
+   * command as typing it, instead of a parallel implementation.
    */
-  async processClearDirect(route: TelegramRoute, ctx: Context): Promise<void> {
-    // Reserve a slot so any handle() arriving while clear is in flight sees the
-    // chat as claimed and enqueues instead of double-entering. Mirrors the
-    // reserveClaim/releaseClaim pattern in processOne. Paired 1:1 with the
-    // releaseClaim in the finally.
-    this.reserveClaim(routeKey(route));
-    try {
-      await this.sessionManager.resetSession(route);
-      this.registeredCommandChats.delete(route.chatId);
-      await ctx.reply(formatClear());
-    } catch (error) {
-      this.log('Clear error:', error);
-      await ctx.reply(formatError(error as Error));
-    } finally {
-      // No drainQueue here: processClearDirect is itself called FROM drainQueue,
-      // so re-draining would cascade back into drain and re-enter immediately.
-      this.releaseClaim(routeKey(route));
-    }
+  async runSlash(ctx: Context, route: TelegramRoute, text: string, fromQueue = false): Promise<boolean> {
+    const { dispatchTelegramSlash } = await import('./slash.js');
+    return dispatchTelegramSlash(this.slashDeps(), ctx, route, text, fromQueue);
   }
 
-  /**
-   * Process compact command at drain time (session is idle when called).
-   * Delegates to processCompactDirectImpl (message.compact-handler.ts) to stay
-   * within the 350-line file ceiling while keeping the public surface unchanged.
-   */
-  private async processCompactDirect(route: TelegramRoute, ctx: Context): Promise<void> {
-    await processCompactDirectImpl(route, ctx, {
+  /** Dependencies for the shared slash runner (handlers/slash.ts). */
+  private slashDeps(): SlashRunnerDeps {
+    return {
       sessionManager: this.sessionManager,
+      registeredCommandChats: this.registeredCommandChats,
       log: this.log,
+      isClaimed: (key) => this.isClaimed(key),
       reserveClaim: (key) => this.reserveClaim(key),
       releaseClaim: (key) => this.releaseClaim(key),
-      enqueueCompact: (r, c) => this.enqueueCompact(r, c),
-      drainQueue: (r) => this.drainQueue(r),
-    });
+      enqueueSlash: (route, ctx, text) => this.enqueueSlash(route, ctx, text),
+      drainQueue: (route) => this.drainQueue(route),
+    };
   }
 
   /** The queue for a route, creating it on first use. Keyed by routeKey. */
@@ -512,33 +495,17 @@ export class MessageHandler {
   }
 
   /**
-   * Enqueue a clear command for later processing.
-   * Respects MAX_QUEUE_DEPTH -- a /clear command issued while the queue is
-   * full is dropped and the caller is notified rather than forcing the map
-   * to grow without bound.
+   * Enqueue a session-mutating slash command (e.g. /clear, /compact) for when
+   * the route is idle. Respects MAX_QUEUE_DEPTH; returns depth or false.
    */
-  enqueueClear(route: TelegramRoute, ctx: Context): void {
+  enqueueSlash(route: TelegramRoute, ctx: Context, text: string): number | false {
     const queue = this.queueFor(route);
     if (queue.length >= MessageHandler.MAX_QUEUE_DEPTH) {
       ctx.reply('⏳ Queue full. Please wait for your messages to be processed.').catch(() => {});
-      return;
+      return false;
     }
-    queue.push({ type: 'clear', ctx });
-  }
-
-  /**
-   * Enqueue a compact command for later processing.
-   * Respects MAX_QUEUE_DEPTH -- a /compact command issued while the queue is
-   * full is dropped and the caller is notified rather than forcing the map
-   * to grow without bound.
-   */
-  enqueueCompact(route: TelegramRoute, ctx: Context): void {
-    const queue = this.queueFor(route);
-    if (queue.length >= MessageHandler.MAX_QUEUE_DEPTH) {
-      ctx.reply('⏳ Queue full. Please wait for your messages to be processed.').catch(() => {});
-      return;
-    }
-    queue.push({ type: 'compact', ctx });
+    queue.push({ type: 'slash', ctx, text });
+    return queue.length;
   }
 
   /**
@@ -660,7 +627,6 @@ export class MessageHandler {
     if (queue.length === 0) this.messageQueues.delete(key);
     if (item.type === 'message') await this.processOne(route, item.ctx, item.text);
     else if (item.type === 'photo' || item.type === 'document') await this.processOne(route, item.ctx, item.content);
-    else if (item.type === 'compact') await this.processCompactDirect(route, item.ctx);
-    else await this.processClearDirect(route, item.ctx);
+    else await this.runSlash(item.ctx, route, item.text, true);
   }
 }

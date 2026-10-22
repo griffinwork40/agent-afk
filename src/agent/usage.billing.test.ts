@@ -168,6 +168,8 @@ describe('sumBillingUsage', () => {
     expect(result.provider).toBe('mixed');
     expect(result.uncachedInput).toBe(mixed1.uncachedInput + mixed2.uncachedInput);
     expect(result.output).toBe(mixed1.output + mixed2.output);
+    expect(result.cacheRead).toBe(mixed1.cacheRead + mixed2.cacheRead);
+    expect(result.cacheWrite).toBe(mixed1.cacheWrite + mixed2.cacheWrite);
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });

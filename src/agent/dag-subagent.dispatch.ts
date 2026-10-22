@@ -230,6 +230,16 @@ export async function dispatchDagNode(
       prompt = spec.promptBuilder(inputs);
     }
     const result = await handle.runToResult(prompt);
+    // V1 safety net: compose/DAG nodes cannot yield — a yielding node looks
+    // like a successful completion to the DAG executor, so downstream nodes
+    // would proceed on partial data. Fail-fast so the error is surfaced
+    // immediately rather than silently propagating a bad result.
+    if (result.needsInput !== undefined) {
+      throw new Error(
+        `DAG node ${handle.id} yielded Asking — compose nodes cannot yield in v1. ` +
+        `Question: ${result.needsInput.question}`,
+      );
+    }
     // #3601 / #3660: attach setupNotice as a dedicated field on the result so
     // the DAG layer (dag-subagent.ts) can propagate it through DAGRunResult
     // regardless of return path. The notice is already injected into the node's

@@ -33,6 +33,7 @@ import type { TraceWriter } from '../agent/trace/index.js';
 import type { TraceSink } from '../agent/trace/writer.js';
 import { makeDeferredParentProxy } from '../agent/session/deferred-parent-proxy.js';
 import { pendingChildBillingStreams } from '../agent/session/manager-shutdown-config.js';
+import type { FastModeController } from '../agent/fast-mode.js';
 
 /** Everything `SessionOwner.create` needs beyond the base `AgentConfig`. */
 export interface WebSessionWiring {
@@ -61,6 +62,8 @@ export interface WireWebSessionOptions {
   rawPromptSource: string | undefined;
   /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
   operatorOverlay?: string | undefined;
+  /** Shared with the command adapter so /fast changes actual provider requests. */
+  fastModeController?: FastModeController;
 }
 
 /**
@@ -122,6 +125,7 @@ export async function wireWebSession(
     composeExecutor: executors.composeExecutor,
     ...(mcpManager !== undefined ? { mcpManager } : {}),
     workspaceStore,
+    ...(opts.fastModeController !== undefined ? { fastModeController: opts.fastModeController } : {}),
     surface: 'web',
   });
 

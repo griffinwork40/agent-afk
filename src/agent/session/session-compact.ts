@@ -26,6 +26,11 @@ export interface CompactDeps {
   getProviderQuery: () => ProviderQuery;
 }
 
+/** Build the state-guard bag shared by compact and rewind delegations. */
+export function makeCompactDeps(getState: CompactDeps['getState'], setState: CompactDeps['setState'], getProviderQuery: CompactDeps['getProviderQuery']): CompactDeps {
+  return { getState, setState, getProviderQuery };
+}
+
 /**
  * Compact the session's conversation history via the provider.
  *

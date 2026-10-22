@@ -217,9 +217,8 @@ export const BUILTIN_TOOL_NAMES = builtinToolSchemas.map((t) => t.name);
  *
  * Note: `gitReadTool` is included here for closed-world classification but is
  * only registered at runtime when `AFK_READONLY_GIT_TOOL` is enabled (#3754).
- * The tool schema is captured at provider-construction time, so toggling the
- * flag mid-session produces a mixed state where the schema is present but the
- * handler is not (or vice versa).
+ * The flag is read once at provider-construction time and is not expected to
+ * change during a session.
  */
 export const ALL_TOOL_SCHEMAS: readonly AnthropicToolDef[] = [
   ...builtinToolSchemas,
