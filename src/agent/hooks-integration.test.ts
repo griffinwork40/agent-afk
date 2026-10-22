@@ -136,11 +136,12 @@ describe('SubagentManager — hook integration', () => {
     const events: HookContext[] = [];
     registry.register('SubagentStart', (ctx) => { events.push(ctx); return {}; });
     const mgr = new SubagentManager({ hookRegistry: registry });
-    await mgr.forkSubagent({ parent: { sessionId: 'p-1' }, config: { model: 'sonnet' } });
+    type ForkOpts = Parameters<typeof mgr.forkSubagent>[0];
+    await mgr.forkSubagent({ parent: { sessionId: 'p-1' }, config: { model: 'sonnet' } } as unknown as ForkOpts);
     await mgr.forkSubagent({
       parent: { sessionId: 'p-1' }, config: { model: 'sonnet' },
       continuation: { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], chainId: 'chain_abc', continuationOf: 'child-0', continuationIndex: 2 },
-    });
+    } as unknown as ForkOpts);
     expect(events).toHaveLength(2);
     expect(events[0]).not.toHaveProperty('chainId');
     expect(events[0]).not.toHaveProperty('continuationIndex');
