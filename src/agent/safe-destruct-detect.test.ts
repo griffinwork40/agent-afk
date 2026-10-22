@@ -291,6 +291,12 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
       'git stash -u',
       'git stash --include-untracked',
       'git stash list && git stash pop',
+      // store and branch mutate refs/stash — must be blocked despite superficial
+      // similarity to read-only ops:
+      //   store: writes directly to refs/stash
+      //   branch: drops the stash entry on success
+      'git stash store -m "msg" abc1234',
+      'git stash branch new-branch',
     ])('blocks %j when cwd is inside a worktree', (cmd) => {
       const h = createSafeDestructDetect(WORKTREE_CWD);
       const d = h(preCtx(cmd));
@@ -328,8 +334,6 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
       'git stash show',
       'git stash show stash@{0}',
       'git stash create',
-      'git stash store -m "msg" <sha>',
-      'git stash branch new-branch stash@{0}',
     ])('allows read-only stash op %j inside a worktree', (cmd) => {
       const h = createSafeDestructDetect(WORKTREE_CWD);
       // detectDestructiveCommands should not match these

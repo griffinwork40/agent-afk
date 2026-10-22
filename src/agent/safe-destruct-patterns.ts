@@ -154,16 +154,19 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
   //   git stash drop [opts]           (delete a stash entry)
   //   git stash clear                 (delete all stash entries)
   //   git -C <path> stash pop         (global option before stash)
-  // Excluded (safe read-only): list, show, create, store, branch
+  // Excluded (safe read-only): list, show, create
+  // store and branch are NOT excluded — both mutate refs/stash:
+  //   `git stash store` updates the stash ref directly;
+  //   `git stash branch` drops the selected stash entry on success.
   //
   // Alternatives: `git diff > <file>` / `git apply <file>` to move changes
   // within the worktree, or commit to a rescue branch.
   {
     id: 'git-stash-mutating',
-    re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*stash(?![\w-])(?!\s+(?:list|show|create|store|branch)\b)/i,
+    re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*stash(?![\w-])(?!\s+(?:list|show|create)\b)/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with `git diff > <file-in-worktree>` and restore with `git apply <file>`, or commit to a rescue branch (`git switch -c rescue-<name> && git add <paths> && git commit`). `git stash list`, `show`, `create`, `store`, and `branch` are still fine. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.',
+      'safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with `git diff > <file-in-worktree>` and restore with `git apply <file>`, or commit to a rescue branch (`git switch -c rescue-<name> && git add <paths> && git commit`). `git stash list`, `show`, and `create` are still fine; `store` and `branch` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.',
   },
 
   // ── git branch -D stays OBSERVE because only the ref is deleted —
