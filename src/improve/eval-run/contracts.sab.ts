@@ -128,6 +128,22 @@ export async function runSubagentHookBlockDetector(): Promise<ContractProbeResul
     {},
   );
 
+  // Independently falsifiable exclusion check: run the detector with
+  // minOccurrences:1 against a corpus that contains ONLY PreToolUse blocks
+  // (≥2 so the occurrence threshold cannot mask a filter regression). If the
+  // hookEvent !== 'SubagentStart' filter were removed, these would be counted
+  // as subagent blocks and a card would be emitted.
+  const preToolUseOnlyCorpus = [
+    makeSessionRead('sab-excl-a', [
+      makePreToolUseBlockEvent(0, 'sab-excl-a'),
+      makePreToolUseBlockEvent(1, 'sab-excl-a'),
+    ]),
+    makeSessionRead('sab-excl-b', [
+      makePreToolUseBlockEvent(0, 'sab-excl-b'),
+    ]),
+  ];
+  const preToolUseOnlyCards = detectSubagentBlock(preToolUseOnlyCorpus, { minOccurrences: 1 });
+
   const checks: EvalCheck[] = [
     makeCheck({
       name: 'emits-card-on-recurring-subagent-block',
@@ -152,10 +168,11 @@ export async function runSubagentHookBlockDetector(): Promise<ContractProbeResul
     }),
     makeCheck({
       name: 'excludes-non-subagent-hook-blocks',
-      description: 'PreToolUse block events are not counted toward subagent-block cards',
-      pass: (card?.detail['blockCount'] as number | undefined) === 3,
-      expected: 'blockCount=3 (the PreToolUse block must not be counted)',
-      actual: `blockCount=${card?.detail['blockCount'] ?? 'undefined'}`,
+      description:
+        'a corpus of ≥2 PreToolUse blocks (minOccurrences:1) emits no card — would fail if the hookEvent filter were removed',
+      pass: preToolUseOnlyCards.length === 0,
+      expected: '0 cards from PreToolUse-only corpus',
+      actual: `${preToolUseOnlyCards.length} card(s)`,
     }),
     makeCheck({
       name: 'below-threshold-produces-no-card',

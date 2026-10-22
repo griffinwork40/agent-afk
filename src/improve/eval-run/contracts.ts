@@ -17,7 +17,12 @@
  * A contract validates the *fix* — the guardrail the pattern maps to:
  *
  *   - `repeated-tool-use`    -> the repeat-loop circuit breaker (PR #80).
- *   - `subagent-block`       -> the skill max-depth recovery hint (PR #80).
+ *   - `subagent-block`       -> the SubagentStart hook-block detector
+ *                              (`detectSubagentBlock` in
+ *                              `scan/detectors/subagent-block.ts`; aggregates
+ *                              `hook_decision { hookEvent:'SubagentStart',
+ *                              decision:'block' }` events and fires once the
+ *                              min-occurrences threshold is met).
  *   - `tool-failure-density` -> that detector being enabled by default (PR #80).
  *   - `closure-anomaly`      -> the closure recovery hint (`session/closure-guidance.ts`;
  *                              abort + truncated subtypes).
