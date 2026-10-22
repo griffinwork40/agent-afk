@@ -112,11 +112,8 @@ export function classifyError(err: unknown): ClassifiedError {
     };
   }
 
-  // 5a. HTTP 403 / PermissionDeniedError (seat removed, subscription inactive)
-  if (
-    errObj['status'] === 403 ||
-    (err instanceof Error && err.name === 'PermissionDeniedError')
-  ) {
+  // 5a. Anthropic PermissionDeniedError (seat removed, subscription inactive)
+  if (err instanceof Error && err.name === 'PermissionDeniedError') {
     return {
       kind: 'auth',
       userMessage: 'Access denied (HTTP 403). Your account seat may have been removed or subscription access is inactive.',

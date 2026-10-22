@@ -62,7 +62,7 @@ export function isRefreshablePermissionDenied(ctx: RetryTierContext, error: Erro
 }
 
 /**
- * Inner tier: on a single 401, refresh once and replay. Deduplicates
+ * Inner tier: on a single 401 or 403, refresh once and replay. Deduplicates
  * concurrent refresh calls via the layer's shared `refreshPromise`.
  */
 export async function* turnWithAuthRetry(

@@ -35,8 +35,9 @@ describe('classifyError — auth', () => {
     expect(result.exitCode).toBe(1);
   });
 
-  it('classifies HTTP 403 as auth with seat-removal guidance', () => {
+  it('classifies PermissionDeniedError (Anthropic SDK) as auth with seat-removal guidance', () => {
     const err = Object.assign(new Error('Permission denied'), { status: 403 });
+    err.name = 'PermissionDeniedError';
     const result = classifyError(err);
     expect(result.kind).toBe('auth');
     expect(result.exitCode).toBe(1);
