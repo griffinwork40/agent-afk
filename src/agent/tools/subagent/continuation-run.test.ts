@@ -114,7 +114,7 @@ async function setup(extra: { backgroundRegistry?: BackgroundAgentRegistry; trac
   });
   const registry = (wired.subagentExecutor as unknown as { ctx: { continuationRegistry: ContinuationRegistry } }).ctx.continuationRegistry;
   let c = 0;
-  const run = (input: Record<string, unknown>, signal = new AbortController().signal): Promise<ToolResult & { continuation?: { chainId: string } }> =>
+  const run = (input: Record<string, unknown>, signal = new AbortController().signal): Promise<ToolResult & { continuation?: { chainId: string; roundsCharged: number } }> =>
     wired.subagentExecutor.execute({ id: `call-${c++}`, name: 'agent', signal, input });
   return { session, wired, registry, run };
 }
@@ -130,6 +130,7 @@ describe('D8 continuation through the agent executor', () => {
     const first = await run({ prompt: 'initial task', max_tool_use_iterations: 5 });
     const chainId = first.continuation!.chainId;
     expect(first.content).toContain(`[continuation: chain_id=${chainId}`);
+    await registry.get(chainId)!.settling; // the link advances in post-delivery settling
     expect(registry.get(chainId)!.latestChildId).toBeDefined();
 
     const second = await run({ prompt: 'keep going', continuation_chain_id: chainId, max_tool_use_iterations: 7 });
@@ -301,6 +302,8 @@ describe('D8 continuation through the agent executor', () => {
     const chain = registry.get(first.continuation!.chainId)!;
     expect(chain.initialUncharged).toBe(false);
     expect(chain.roundsCharged).toBe(4);
+    // Charge-before-delivery end to end: the DELIVERED result already carries the runtime count.
+    expect(first.continuation!.roundsCharged).toBe(4);
     await session.close();
   }, 20000);
 
