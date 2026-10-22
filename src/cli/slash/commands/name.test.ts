@@ -79,10 +79,10 @@ describe('/name', () => {
     const { ctx, lines } = makeCtx(stats);
     const result = await nameCmd.handler(ctx, 'My Cool Session');
     expect(result).toBe('continue');
-    expect(stats.name).toBe('my-cool-session');
+    expect(stats.name).toBe('cool-session');
     expect(lines.some((l) => /SUCCESS:.*Named/i.test(l))).toBe(true);
     // Persisted to the single <sessionId>.json sidecar.
-    expect(loadSession('sdk-named')?.name).toBe('my-cool-session');
+    expect(loadSession('sdk-named')?.name).toBe('cool-session');
   });
 
   it('sets the name without saving when the session has no turns yet', async () => {
