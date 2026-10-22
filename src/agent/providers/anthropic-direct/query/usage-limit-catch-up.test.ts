@@ -10,7 +10,7 @@
  *  - store == client token → parks exactly as before (catch-up is a no-op)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ProviderEvent } from '../../../provider.js';
 import type { RetryTierContext, TierGenerator } from './retry-context.js';
 import type { RunTurnInput } from '../types.js';
@@ -97,10 +97,18 @@ async function drain(gen: AsyncGenerator<ProviderEvent>): Promise<ProviderEvent[
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Hermetic: a developer shell may export either var, which disables the
+  // catch-up (the env credential outranks the store).
+  vi.stubEnv('ANTHROPIC_API_KEY', '');
+  vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', '');
   emitSessionPhaseMock.mockResolvedValue(undefined);
   usageLimitResetPauseMock.mockImplementation(async function* () {
     yield { type: 'paused', reason: 'usage-limit', autoResume: true, provider: 'anthropic' };
   });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('catchUpStaleCredential', () => {
@@ -137,6 +145,34 @@ describe('catchUpStaleCredential', () => {
     const ctx = makeCtx({ clientToken: 'tok-a', authMode: 'api-key' });
     await expect(catchUpStaleCredential(ctx, makeInput())).resolves.toBe(false);
     expect(ctx._refresh).not.toHaveBeenCalled();
+  });
+
+  it.each(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'])(
+    'never moves a session whose credential is pinned by %s onto the keychain account',
+    async (name) => {
+      vi.stubEnv(name, 'pinned-credential');
+      loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b');
+      const ctx = makeCtx({ clientToken: 'tok-a' });
+      await expect(catchUpStaleCredential(ctx, makeInput())).resolves.toBe(false);
+      expect(ctx._refresh).not.toHaveBeenCalled();
+    },
+  );
+
+  it('turn-start source emits credential_swap, not usage_limit_resume', async () => {
+    loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b');
+    const ctx = makeCtx({ clientToken: 'tok-a' });
+    await expect(catchUpStaleCredential(ctx, makeInput(), 'turn-start')).resolves.toBe(true);
+    expect(emitSessionPhaseMock).toHaveBeenCalledTimes(1);
+    expect(emitSessionPhaseMock).toHaveBeenCalledWith(undefined, expect.objectContaining({
+      phase: 'credential_swap',
+      metadata: { source: 'turn-start', accountId: 'acct:tok-b', oldAccountId: 'acct:tok-a' },
+    }));
+  });
+
+  it('reads the store quietly (no per-turn expired-token warning)', async () => {
+    loadClaudeCodeOauthTokenMock.mockReturnValue('tok-a');
+    await catchUpStaleCredential(makeCtx({ clientToken: 'tok-a' }), makeInput(), 'turn-start');
+    expect(loadClaudeCodeOauthTokenMock).toHaveBeenCalledWith({ quiet: true });
   });
 
   it('returns false and keeps the old client when the refresh fails', async () => {
