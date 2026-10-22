@@ -99,9 +99,12 @@ describe('continuation dispatch wiring', () => {
     const registry = new ContinuationRegistry();
     const failing = handleFor(cappedResult());
     (failing.runToResult as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
+    (failing as { _runtimeRoundsUsed?: number })._runtimeRoundsUsed = 3; // provider progress counted 3 rounds before the failure
     const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 0, inputs: { writeCapable: false } });
     instrumentHandleForChain(failing as never, { registry, chain, cwd: undefined, journalUsable: () => true });
     await expect((failing.runToResult as (p: string) => Promise<unknown>)('x')).rejects.toThrow('boom');
+    expect(chain.roundsCharged).toBe(3); // uncapped initial: charged its runtime-counted rounds, even on rejection
+    expect(chain.initialUncharged).toBe(false);
     await chain.settling;
     expect(chain.inFlight).toBe(false);
     expect(chain.lastEndReason).toBe('failed');
