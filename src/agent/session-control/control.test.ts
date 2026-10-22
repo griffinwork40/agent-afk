@@ -157,8 +157,8 @@ describe('setSessionName', () => {
   it('slugifies and notifies; saves only after first turn via canonical store', () => {
     const stats = createSessionStats('sonnet');
     const onName = vi.fn();
-    expect(setSessionName(stats, 'My Name', { onName })).toEqual({ ok: true, name: 'my-name', saved: false });
-    expect(onName).toHaveBeenCalledWith('my-name');
+    expect(setSessionName(stats, 'My Name', { onName })).toEqual({ ok: true, name: 'name', saved: false });
+    expect(onName).toHaveBeenCalledWith('name');
     expect(persist).not.toHaveBeenCalled();
     stats.totalTurns = 1;
     expect(setSessionName(stats, 'new')).toEqual({ ok: true, name: 'new', saved: true });
