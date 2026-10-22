@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
-import { writeFile, mkdir, rm } from 'fs/promises';
+import { writeFile, mkdir, rm, stat } from 'fs/promises';
 import { writeFileSync } from 'node:fs';
 import os from 'os';
 import path from 'path';
@@ -417,18 +417,46 @@ describe('queryLspSymbol — AbortSignal', () => {
     try {
       await mkdir(tempDir, { recursive: true });
       const filePath = await makeTsFile('abort-mid.ts');
+      const sentinelPath = path.join(tempDir, 'abort-mid-spawned.flag');
       const scriptPath = path.join(tempDir, 'fake-silent-abort-server.js');
-      writeSilentServer(scriptPath);
+
+      // Fake server writes a sentinel file the moment it is spawned, then
+      // parks on stdin.  The test aborts as soon as it sees the sentinel,
+      // eliminating any dependency on wall-clock delays.
+      writeFileSync(
+        scriptPath,
+        `const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(sentinelPath)}, '1');
+process.stdin.resume();
+`,
+        'utf8',
+      );
 
       const controller = new AbortController();
-      // Abort after 100 ms — well before the 3 s timeout.
-      setTimeout(() => controller.abort(), 100);
+
+      // Poll for the sentinel file (written by the fake server on spawn),
+      // then abort immediately — no fixed wall-clock delay needed.
+      const abortOnSpawn = (async () => {
+        const deadline = Date.now() + 5_000;
+        while (Date.now() < deadline) {
+          try {
+            await stat(sentinelPath);
+            controller.abort();
+            return;
+          } catch {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+        }
+        // Safety valve: abort anyway so the test does not hang.
+        controller.abort();
+      })();
 
       const result = await queryLspSymbol(
         filePath, 'definition', 1, 1, undefined,
         nodeCmd(scriptPath),
         controller.signal,
       );
+      await abortOnSpawn; // ensure the polling loop is settled
       expect(result.locations).toEqual([]);
       expect(result.error).toBe('Aborted');
     } finally {
@@ -440,8 +468,9 @@ describe('queryLspSymbol — AbortSignal', () => {
 // ── DEFAULT_LSP_CMD ───────────────────────────────────────────────────────
 
 describe('DEFAULT_LSP_CMD', () => {
-  it('is a readonly array with typescript-language-server as the binary', () => {
+  it('is a frozen array with typescript-language-server as the binary', () => {
     expect(Array.isArray(DEFAULT_LSP_CMD)).toBe(true);
+    expect(Object.isFrozen(DEFAULT_LSP_CMD)).toBe(true);
     expect(DEFAULT_LSP_CMD[0]).toBe('typescript-language-server');
     expect(DEFAULT_LSP_CMD[1]).toBe('--stdio');
   });

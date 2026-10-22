@@ -205,6 +205,13 @@ export interface ForkSubagentOptions<T = unknown> {
    * rebuilds a caller-constructed provider for the fallback model; without
    * it a pre-built provider is reused only when it is the same family.
    */
+  /**
+   * When `true`, the child's identity preamble includes the yield-and-resume
+   * paragraph (Asking block format). Defaults to `false`. Set `true` only at
+   * foreground agent-tool and skill-fork call sites; compose/DAG nodes and
+   * background children must not yield (#4297 F-C2).
+   */
+  yieldEnabled?: boolean;
   modelFallback?: { model: string; buildProvider?: (model: string) => import('../provider.js').ModelProvider };
 }
 

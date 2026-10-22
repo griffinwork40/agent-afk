@@ -71,7 +71,7 @@ export interface LspSymbolResult {
 export type SymbolSubcommand = 'definition' | 'references';
 
 /** Default LSP server command — shared by `queryLspSymbol` and `handleCodeSymbols`. */
-export const DEFAULT_LSP_CMD: readonly string[] = ['typescript-language-server', '--stdio'];
+export const DEFAULT_LSP_CMD = Object.freeze(['typescript-language-server', '--stdio'] as const);
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 

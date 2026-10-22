@@ -73,6 +73,14 @@ export interface AssembleChildConfigArgs<T> {
    */
   parentRootSessionId: string | undefined;
   /**
+   * When `true`, the child's identity preamble includes the yield-and-resume
+   * paragraph explaining how to use an **Asking** block to yield a question to
+   * the parent. Set for foreground non-compose dispatches; `false`/absent for
+   * compose nodes (guarded by the DAG fail-fast) and background children
+   * (deferred to v2). Defaults to `false` when absent.
+   */
+  yieldEnabled?: boolean;
+  /**
    * The nested-dispatch allowlist for the CHILD being assembled. Derived from
    * `resolvedAccess.nestedAgentTypes` in `buildChildConfig` (child-config.ts)
    * and threaded here via `ForkSubagentOptions.nestedAgentAllowlist` so the
@@ -109,8 +117,8 @@ export type ParentForkFields = Pick<
  *   to {@link injectSubagentIdentityPreamble} so the child's preamble names
  *   the types it may dispatch. Single source: same value the executor enforces.
  */
-function applyForkPreambles(config: AgentConfig, nestedAgentAllowlist?: readonly string[]): AgentConfig {
-  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config, nestedAgentAllowlist));
+function applyForkPreambles(config: AgentConfig, nestedAgentAllowlist?: readonly string[], yieldEnabled?: boolean): AgentConfig {
+  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config, nestedAgentAllowlist, yieldEnabled));
 }
 
 /**
@@ -460,7 +468,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     ...(options.phaseRole === 'read-only'
       ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel, args.workspaceStore) }
       : {}),
-  }, args.nestedAgentAllowlist);
+  }, args.nestedAgentAllowlist, args.yieldEnabled);
 
   return applyWorkspacePreamble(assembled, args.workspaceStore, workspaceEntries);
 }
