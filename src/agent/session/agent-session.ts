@@ -301,7 +301,7 @@ export class AgentSession implements IAgentSession {
       getProviderQuery: () => this.providerQuery, isClosed: () => this.currentState === 'closed',
       abortSignal: this.abortController.signal, accounting: this.accounting, shutdown: this.shutdown,
       hookRegistry: this._hookRegistry,
-      queueFrameworkContext: (text) => this.queueFrameworkContext(text),
+      queueFrameworkContext: (text) => this.queueFrameworkContext(text), pushSidebandEvent: (event) => this.pushSidebandEvent(event),
     });
   }
 

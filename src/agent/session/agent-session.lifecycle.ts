@@ -20,7 +20,8 @@ import type { SessionStateManager } from './session-state.js';
 import type { HookRegistry } from '../hooks.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
 import type { QueryInputStream } from './input-iterable.js';
-import { buildMcpDisconnectNotice } from '../mcp/failure-notice.js';
+import { buildMcpDisconnectNotice, failedMcpServers, oauthPendingMcpServers } from '../mcp/failure-notice.js';
+import type { OutputEvent } from '../types/session-types.js';
 
 /** Mutable slots on AgentSession that `buildSessionRunner` reads and writes. */
 export interface SessionRunnerSlots {
@@ -124,6 +125,8 @@ export interface BuildInitPromiseOptions {
   shutdown: SessionShutdown;
   hookRegistry: HookRegistry | undefined;
   queueFrameworkContext: (text: string) => void;
+  /** Push a sideband OutputEvent into the broadcast channel (for mcp_server_status). */
+  pushSidebandEvent: (event: OutputEvent) => void;
   getRunner: () => TurnStreamRunner;
   stateManager: SessionStateManager;
 }
@@ -203,7 +206,34 @@ export function buildSessionInitPromise(opts: BuildInitPromiseOptions): Promise<
           existingOnServerError?.(serverName, reason);
           const notice = buildMcpDisconnectNotice(serverName, reason);
           opts.queueFrameworkContext(notice);
+          // #4064 item 3: emit output-stream event so embedders can update
+          // health UI without polling mcpServerStatus().
+          opts.pushSidebandEvent({
+            type: 'mcp_server_status',
+            serverName,
+            status: 'disconnected',
+            reason,
+          });
         };
+
+        // #4064 item 3: emit startup-snapshot events for every non-healthy
+        // server so a subscriber that attaches after init sees the initial state.
+        const states = mcpManager.getServerStates();
+        for (const { name, reason: failReason } of failedMcpServers(states)) {
+          opts.pushSidebandEvent({
+            type: 'mcp_server_status',
+            serverName: name,
+            status: 'error',
+            reason: failReason,
+          });
+        }
+        for (const { name } of oauthPendingMcpServers(states)) {
+          opts.pushSidebandEvent({
+            type: 'mcp_server_status',
+            serverName: name,
+            status: 'oauth_pending',
+          });
+        }
       }
 
       const initializer = new ProviderInitializer(

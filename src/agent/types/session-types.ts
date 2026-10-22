@@ -240,6 +240,26 @@ export type OutputEvent =
   | {
       type: 'plan_mode';
       mode: 'plan' | 'implement' | 'default';
+    }
+  // MCP server status change (#4064 item 3). Emitted when a configured
+  // server's status changes (startup failure, mid-session disconnect, or
+  // oauth_pending) so embedders can show accurate health UI without polling
+  // mcpServerStatus(). Also emitted at session-init for every non-healthy
+  // server so a subscriber that attaches after init still sees the snapshot.
+  | {
+      type: 'mcp_server_status';
+      /** Operator-assigned name (from .mcp.json / mcpServers config key). */
+      serverName: string;
+      /**
+       * Current server state as seen by the session layer:
+       * - 'error'         — failed to start or mid-session transport error
+       * - 'oauth_pending' — waiting for user to complete the OAuth flow
+       * - 'connected'     — healthy (emitted when a reconnect succeeds)
+       * - 'disconnected'  — transport closed, no reconnect will be attempted
+       */
+      status: 'error' | 'oauth_pending' | 'connected' | 'disconnected';
+      /** Raw error message (sanitised, secrets redacted). Present when status is 'error' or 'disconnected'. */
+      reason?: string;
     };
 
 /** Summary of in-flight subagent / task progress, emitted by the SDK. */
