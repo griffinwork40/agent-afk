@@ -64,6 +64,14 @@ export interface ChainRecord {
   initialUncharged: boolean;
   checkpoint: WorkspaceCheckpoint | undefined;
   lastEndReason: string | undefined;
+  /**
+   * Post-result bookkeeping (journal flush + workspace checkpoint) of the
+   * latest run, still running. The result is delivered before it finishes;
+   * in-flight stays true until it settles. Never rejects.
+   */
+  settling: Promise<void> | undefined;
+  /** A continuation call holds the admission reservation (awaiting settling / drift). */
+  admitting: boolean;
 }
 
 export type AdmissionResult =
@@ -127,7 +135,7 @@ export class ContinuationRegistry {
   private evictForInsert(): void {
     for (const [id, chain] of this.chains) {
       if (this.chains.size < this.maxChains) return;
-      if (!chain.inFlight) this.chains.delete(id);
+      if (!chain.inFlight && !chain.admitting) this.chains.delete(id);
     }
   }
 
@@ -148,6 +156,8 @@ export class ContinuationRegistry {
       initialUncharged: args.roundCap <= 0,
       checkpoint: undefined,
       lastEndReason: undefined,
+      settling: undefined,
+      admitting: false,
     };
     this.evictForInsert();
     this.chains.set(chainId, record);
@@ -163,11 +173,12 @@ export class ContinuationRegistry {
    * exhausted limits. On success charges the allowance, bumps the count, and
    * sets in-flight; `rollback()` undoes exactly that (fork-construction failure).
    */
-  admitContinuation(chainId: string, caller: string, requested: number | undefined, defaultAllowance: number): AdmissionResult {
+  admitContinuation(chainId: string, caller: string, requested: number | undefined, defaultAllowance: number, reserved = false): AdmissionResult {
     const chain = this.chains.get(chainId);
     if (chain === undefined) return { ok: false, reason: `unknown continuation chain "${chainId}" (chains are runtime-minted and in-memory only; they do not survive a restart or /resume)` };
     if (caller === '' || chain.owner !== caller) return { ok: false, reason: `continuation chain "${chainId}" is owned by another actor` };
     if (chain.inFlight) return { ok: false, reason: `a run on continuation chain "${chainId}" is still in flight` };
+    if (chain.admitting && !reserved) return { ok: false, reason: admittingReason(chainId) };
     if (chain.continuations >= chain.limits.maxContinuations) {
       return { ok: false, reason: `continuation limit reached (${chain.continuations}/${chain.limits.maxContinuations})` };
     }
@@ -190,6 +201,41 @@ export class ContinuationRegistry {
     return { ok: true, chain, allowance, index, rollback };
   }
 
+  /**
+   * Synchronous admission reservation, taken before any await (settling wait,
+   * drift git I/O) so a concurrent second call on the chain is refused at once
+   * without doing git work. Returns the release function, or a refusal reason.
+   * The holder passes `reserved: true` to admitContinuation, then releases.
+   */
+  reserveAdmission(chainId: string): { ok: true; release: () => void } | { ok: false; reason: string } {
+    const chain = this.chains.get(chainId);
+    if (chain === undefined) return { ok: false, reason: `unknown continuation chain "${chainId}"` };
+    if (chain.admitting) return { ok: false, reason: admittingReason(chainId) };
+    chain.admitting = true;
+    let released = false;
+    return { ok: true, release: () => { if (!released) { released = true; chain.admitting = false; } } };
+  }
+
+  /**
+   * D4, at the run's end (synchronously, before the result is delivered): an
+   * uncapped initial attempt is charged its runtime-counted rounds, so the
+   * delivered metadata/line already reflect the charge. Idempotent.
+   */
+  chargeInitialRounds(chainId: string, roundsUsed: number): void {
+    const chain = this.chains.get(chainId);
+    if (chain === undefined || !chain.initialUncharged) return;
+    chain.roundsCharged += Math.max(0, roundsUsed);
+    chain.initialUncharged = false;
+  }
+
+  /** Track the latest run's post-result bookkeeping; cleared once it settles. */
+  setSettling(chainId: string, settling: Promise<void>): void {
+    const chain = this.chains.get(chainId);
+    if (chain === undefined) return;
+    chain.settling = settling;
+    void settling.finally(() => { if (chain.settling === settling) chain.settling = undefined; }).catch(() => undefined);
+  }
+
   /** D9: called on every terminal outcome (foreground and background). */
   recordTerminal(chainId: string, update: TerminalUpdate): void {
     const chain = this.chains.get(chainId);
@@ -203,6 +249,10 @@ export class ContinuationRegistry {
     chain.checkpoint = update.checkpoint;
     chain.lastEndReason = update.endReason;
   }
+}
+
+function admittingReason(chainId: string): string {
+  return `a run on continuation chain "${chainId}" is still in flight (another continuation is already being admitted)`;
 }
 
 /** One-line machine-readable continuation note (D6). */

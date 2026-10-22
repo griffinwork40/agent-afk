@@ -116,6 +116,7 @@ export interface ChainTerminalArgs {
  * D9: record a terminal outcome. Never throws (terminal paths must not fail on
  * bookkeeping). The D5 workspace checkpoint is captured (async git) only for
  * write-capable chains: read-only chains never compare it, so they skip git.
+ * A capture that throws stores an `unavailable` checkpoint (drift fails closed).
  */
 export async function recordChainTerminal(args: ChainTerminalArgs): Promise<void> {
   const { registry, chain } = args;
@@ -126,7 +127,7 @@ export async function recordChainTerminal(args: ChainTerminalArgs): Promise<void
       ? await (args.capture ?? captureWorkspaceCheckpoint)(args.cwd)
       : undefined;
   } catch {
-    checkpoint = undefined;
+    checkpoint = args.cwd !== undefined ? { cwd: args.cwd, git: true, unavailable: true } : undefined;
   }
   registry.recordTerminal(chain.chainId, {
     childId: args.childId,
@@ -224,9 +225,10 @@ export function instrumentHandleForChain(
     journalUsable: () => boolean;
     /**
      * Drain the child's async journal queue before the terminal is recorded
-     * (and in-flight cleared), so a continuation issued right after the child
-     * returns folds the complete journal. Bounded by JOURNAL_FLUSH_TIMEOUT_MS;
-     * on timeout/failure the link does not advance (previous link kept).
+     * (and in-flight cleared). Runs AFTER the result is delivered, inside the
+     * chain's settling promise; a continuation admission awaits settling, so
+     * it folds the complete journal. Bounded by JOURNAL_FLUSH_TIMEOUT_MS; on
+     * timeout/failure the link does not advance (previous link kept).
      */
     flushJournal?: () => Promise<void>;
     /** Continuation: undo the admission charge when the child is torn down before it ever ran. */
@@ -237,13 +239,18 @@ export function instrumentHandleForChain(
 ): void {
   if (terminal.registry === undefined || terminal.chain === undefined) return;
   let done = false;
-  const record = async (r: import('../../subagent/result.js').SubagentResult | undefined, reason: string): Promise<void> => {
+  const { registry, chain } = terminal;
+  // Exactly once per run. The D4 charge lands synchronously (so the result
+  // delivered right after carries the final rounds); the journal flush + D5
+  // checkpoint + terminal record run AFTER delivery as the chain's `settling`
+  // promise (bounded, never rejects). In-flight stays true until it settles;
+  // a continuation admission awaits it.
+  const record: RecordFn = (r, reason) => {
     if (done) return;
     done = true;
-    const flushed = r === undefined && reason === 'not_started' ? true : await flushWithin(terminal.flushJournal, JOURNAL_FLUSH_TIMEOUT_MS);
-    let usable = false;
-    try { usable = flushed && terminal.journalUsable(); } catch { usable = false; }
-    await recordChainTerminal({ ...terminal, childId: handle.id, roundsUsed: runtimeRounds(handle, r), journalUsable: usable, endReason: reason });
+    const rounds = runtimeRounds(handle, r);
+    registry.chargeInitialRounds(chain.chainId, rounds);
+    registry.setSettling(chain.chainId, settleTerminal(terminal, handle.id, rounds, r === undefined && reason === 'not_started', reason));
   };
   const reasonOf = (r: import('../../subagent/result.js').SubagentResult): string =>
     r.incomplete === true ? (r.incompleteReason ?? 'incomplete') : r.status;
@@ -257,8 +264,8 @@ export function instrumentHandleForChain(
     promotedState.set(handle, true);
     if (delivered.result !== undefined) stampDeliveredResult(delivered.result, terminal.chain!, terminal.alwaysLine === true);
   });
-  const recordRun: RecordFn = async (r, reason) => {
-    await record(r, reason);
+  const recordRun: RecordFn = (r, reason) => {
+    record(r, reason);
     if (r === undefined) return;
     delivered.result = r;
     if (delivered.promoted) stampDeliveredResult(r, terminal.chain!, terminal.alwaysLine === true);
@@ -268,7 +275,7 @@ export function instrumentHandleForChain(
   wrapTeardownBeforeStart(h, started, () => {
     if (done) return;
     if (terminal.rollbackIfNotStarted !== undefined) { done = true; terminal.rollbackIfNotStarted(); return; }
-    void record(undefined, 'not_started');
+    record(undefined, 'not_started');
   });
 }
 
@@ -299,7 +306,29 @@ function runtimeRounds(handle: ChainHandle, r: Res | undefined): number {
   const counted = (handle as { _runtimeRoundsUsed?: unknown })._runtimeRoundsUsed;
   return Math.max(typeof counted === 'number' ? counted : 0, r?.roundsUsed ?? 0);
 }
-type RecordFn = (r: Res | undefined, reason: string) => Promise<void>;
+type RecordFn = (r: Res | undefined, reason: string) => void;
+
+/**
+ * Post-delivery terminal bookkeeping: drain the child journal (bounded by
+ * JOURNAL_FLUSH_TIMEOUT_MS; on timeout/failure the link does not advance),
+ * capture the checkpoint (git timeouts), record the terminal. Never rejects;
+ * any unexpected failure still clears in-flight without advancing the link.
+ */
+async function settleTerminal(
+  terminal: Omit<ChainTerminalArgs, 'childId' | 'roundsUsed' | 'endReason' | 'journalUsable'> & { journalUsable: () => boolean; flushJournal?: () => Promise<void> },
+  childId: string, roundsUsed: number, notStarted: boolean, endReason: string,
+): Promise<void> {
+  try {
+    const flushed = notStarted ? true : await flushWithin(terminal.flushJournal, JOURNAL_FLUSH_TIMEOUT_MS);
+    let usable = false;
+    try { usable = flushed && terminal.journalUsable(); } catch { usable = false; }
+    await recordChainTerminal({ ...terminal, childId, roundsUsed, journalUsable: usable, endReason });
+  } catch {
+    if (terminal.chain !== undefined) {
+      terminal.registry?.recordTerminal(terminal.chain.chainId, { childId, journalUsable: false, roundsUsed, checkpoint: undefined, endReason });
+    }
+  }
+}
 
 /** Upper bound on waiting for the child's journal queue to drain at a terminal. */
 export const JOURNAL_FLUSH_TIMEOUT_MS = 5_000;
@@ -325,9 +354,10 @@ function wrapRun(h: Record<string, unknown>, handle: ChainHandle, record: Record
   // `runToResult(prompt, sinkOverride)`; dropping the sink silences the
   // background registry's progress pipe (job log, heartbeat, transcript, touchedFiles).
   const origRun = handle.runToResult.bind(handle) as (...a: unknown[]) => Promise<import('../../subagent/result.js').SubagentResult>;
+  // The result is returned at once; terminal bookkeeping settles after (record).
   h['runToResult'] = (...a: unknown[]) => { started.value = true; return origRun(...a).then(
-    async (r) => { await record(r, reasonOf(r)); return r; },
-    async (err: unknown) => { await record(undefined, 'failed'); throw err; },
+    (r) => { record(r, reasonOf(r)); return r; },
+    (err: unknown) => { record(undefined, 'failed'); throw err; },
   ); };
 }
 
@@ -336,12 +366,11 @@ function wrapBackground(h: Record<string, unknown>, handle: ChainHandle, record:
   h['runInBackground'] = (p: unknown, cb?: (r: import('../../subagent/result.js').SubagentResult) => void, ...rest: unknown[]) => {
     started.value = true;
     return origBg(p, (r) => {
-      // Deliver only after the terminal is recorded (journal drained) so the
-      // delivered line/metadata reflect the final chain state.
-      void record(r, reasonOf(r)).catch(() => undefined).then(() => {
-        stampDeliveredResult(r, chain, always);
-        cb?.(r);
-      });
+      // Deliver at once: the D4 charge is already applied synchronously, so the
+      // line/metadata are final; journal flush + checkpoint settle after.
+      record(r, reasonOf(r));
+      stampDeliveredResult(r, chain, always);
+      cb?.(r);
     }, ...rest);
   };
 }

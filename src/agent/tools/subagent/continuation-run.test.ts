@@ -199,6 +199,7 @@ describe('D8 continuation through the agent executor', () => {
     const { run, registry, session } = await setup();
     const first = await run({ prompt: 'initial', max_tool_use_iterations: 5, cwd: repo });
     const chainId = first.continuation!.chainId;
+    await registry.get(chainId)!.settling;
     expect(registry.get(chainId)!.checkpoint?.git).toBe(true);
     writeFileSync(join(repo, 'new.txt'), 'drift');
     const refused = await run({ prompt: 'go', continuation_chain_id: chainId });
@@ -223,6 +224,30 @@ describe('D8 continuation through the agent executor', () => {
     const errors = [a, b].filter((r) => r.isError === true);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.content).toContain('still in flight');
+    await session.close();
+  }, 20000);
+
+  it('settling: a continuation issued right after the result waits for the slow journal flush, then succeeds with the full history', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const { JournalFileWriter } = await import('../../journal/journal-file.js');
+    const origFlush = JournalFileWriter.prototype.flush;
+    let delayed = 0;
+    vi.spyOn(JournalFileWriter.prototype, 'flush').mockImplementation(async function (this: InstanceType<typeof JournalFileWriter>) {
+      delayed++;
+      await new Promise((r) => setTimeout(r, 300));
+      return origFlush.call(this);
+    });
+    const { run, registry, session } = await setup();
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    const chain = registry.get(chainId)!;
+    expect(chain.settling).toBeDefined(); // result delivered while the flush is still pending
+    expect(chain.inFlight).toBe(true);
+    const second = await run({ prompt: 'immediately', continuation_chain_id: chainId });
+    expect(second.isError, second.content).not.toBe(true);
+    expect(delayed).toBeGreaterThan(0);
+    expect(seen[1]!.resumeMessages?.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
     await session.close();
   }, 20000);
 
@@ -259,6 +284,7 @@ describe('D8 continuation through the agent executor', () => {
     release();
     await pending;
     const chain = registry.get(chainId)!;
+    await chain.settling;
     expect(chain.inFlight).toBe(false);
     expect(chain.roundsCharged).toBe(9);
     expect(chain.continuations).toBe(1);

@@ -76,6 +76,7 @@ describe('continuation dispatch wiring', () => {
     expect(r.content).toContain(`[continuation: chain_id=${meta!.chainId}, rounds 7/150 used`);
     const chain = registry.get(meta!.chainId)!;
     expect(chain.owner).toBe(registry.rootActor);
+    await chain.settling; // journal flush + checkpoint settle after the result is returned
     expect(chain.inFlight).toBe(false);
     expect(chain.lastEndReason).toBe(CAPPED);
     expect(chain.checkpoint?.cwd).toBe(tmpdir()); // write-capable unnamed child: runtime cwd, non-git => git:false
@@ -101,6 +102,7 @@ describe('continuation dispatch wiring', () => {
     const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 0, inputs: { writeCapable: false } });
     instrumentHandleForChain(failing as never, { registry, chain, cwd: undefined, journalUsable: () => true });
     await expect((failing.runToResult as (p: string) => Promise<unknown>)('x')).rejects.toThrow('boom');
+    await chain.settling;
     expect(chain.inFlight).toBe(false);
     expect(chain.lastEndReason).toBe('failed');
     expect(chain.latestChildId).toBe('child-1');
@@ -117,7 +119,8 @@ describe('continuation dispatch wiring', () => {
     expect(chain.inFlight).toBe(true);
     const r = cappedResult();
     deliver(r);
-    await vi.waitFor(() => expect(onResult).toHaveBeenCalled());
+    expect(onResult).toHaveBeenCalledWith(r); // delivered at once, before bookkeeping settles
+    await chain.settling;
     expect(chain.inFlight).toBe(false);
     expect(chain.roundsCharged).toBe(7);
     expect(chain.latestChildId).toBeUndefined(); // journal unusable keeps the previous link
@@ -189,13 +192,37 @@ describe('continuation dispatch wiring', () => {
     const flushJournal = vi.fn(() => new Promise<void>((res) => { drain = res; }));
     const h = handleFor(cappedResult());
     instrumentHandleForChain(h as never, { registry, chain, cwd: undefined, journalUsable: () => true, flushJournal });
-    const p = (h.runToResult as (x: string) => Promise<unknown>)('x');
+    await (h.runToResult as (x: string) => Promise<unknown>)('x'); // the result does not wait for the flush
     await vi.waitFor(() => expect(flushJournal).toHaveBeenCalled());
     expect(chain.inFlight).toBe(true); // not cleared before the journal is on disk
+    expect(chain.settling).toBeDefined();
     drain();
-    await p;
+    await chain.settling;
     expect(chain.inFlight).toBe(false);
     expect(chain.latestChildId).toBe('child-1');
+  });
+
+  it('settling: an ordinary result is returned without waiting for a slow journal flush or checkpoint', async () => {
+    const registry = new ContinuationRegistry();
+    const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: true } });
+    let drain!: () => void;
+    let checkpointDone!: (c: { cwd: string; git: boolean }) => void;
+    const flushJournal = vi.fn(() => new Promise<void>((res) => { drain = res; }));
+    const capture = vi.fn(() => new Promise<{ cwd: string; git: boolean }>((res) => { checkpointDone = res; }));
+    const h = handleFor(cappedResult());
+    instrumentHandleForChain(h as never, { registry, chain, cwd: tmpdir(), journalUsable: () => true, flushJournal, capture });
+    const r = await (h.runToResult as (x: string) => Promise<SubagentResult>)('x');
+    expect(r.incomplete).toBe(true); // resolved while flush + checkpoint are still pending
+    expect(chain.inFlight).toBe(true);
+    expect(chain.settling).toBeDefined();
+    drain();
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledWith(tmpdir()));
+    expect(chain.inFlight).toBe(true); // checkpoint still running
+    checkpointDone({ cwd: tmpdir(), git: false });
+    await chain.settling;
+    expect(chain.inFlight).toBe(false);
+    expect(chain.latestChildId).toBe('child-1');
+    expect(chain.settling).toBeUndefined();
   });
 
   it('D9 journal flush timeout: the previous link is kept and in-flight still clears', async () => {
@@ -205,9 +232,9 @@ describe('continuation dispatch wiring', () => {
       const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: false } });
       const h = handleFor(cappedResult());
       instrumentHandleForChain(h as never, { registry, chain, cwd: undefined, journalUsable: () => true, flushJournal: () => new Promise<void>(() => {}) });
-      const p = (h.runToResult as (x: string) => Promise<unknown>)('x');
+      await (h.runToResult as (x: string) => Promise<unknown>)('x');
       await vi.advanceTimersByTimeAsync(JOURNAL_FLUSH_TIMEOUT_MS + 1);
-      await p;
+      await chain.settling;
       expect(chain.inFlight).toBe(false);
       expect(chain.latestChildId).toBeUndefined();
     } finally {
@@ -264,6 +291,7 @@ describe('continuation dispatch wiring', () => {
       const meta = (r as ToolResultWithChain & { continuation?: { continuable: boolean } }).continuation!;
       expect(meta.continuable).toBe(false);
       expect(r.content).not.toContain('[continuation:');
+      await registry.get(meta.chainId)!.settling;
       const admitted = registry.admitContinuation(meta.chainId, registry.rootActor, 5, 50);
       expect(admitted.ok).toBe(false);
       if (!admitted.ok) expect(admitted.reason).toMatch(/continuation limit reached \(0\/0\)/);
@@ -318,7 +346,7 @@ describe('continuation dispatch wiring', () => {
     const rw2 = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: true } });
     await recordChainTerminal({ registry, chain: rw2, childId: 'c', cwd: tmpdir(), roundsUsed: 1, journalUsable: true, endReason: 'x', capture: async () => { throw new Error('git'); } });
     expect(rw2.inFlight).toBe(false);
-    expect(rw2.checkpoint).toBeUndefined();
+    expect(rw2.checkpoint).toEqual({ cwd: tmpdir(), git: true, unavailable: true }); // drift check fails closed
   });
 
 });

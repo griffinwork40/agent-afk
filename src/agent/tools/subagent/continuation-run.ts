@@ -69,14 +69,42 @@ export function continuationNote(chain: ChainRecord, index: number, allowance: n
     `You have ${allowance} tool-use rounds for this run.]`;
 }
 
-/** Pre-charge checks (D3/D5); undefined to proceed. The registry's synchronous admission re-checks owner/in-flight after the drift await. */
-async function preAdmissionRefusal(chain: ChainRecord | undefined, id: string, caller: string, parsed: AgentInput): Promise<string | undefined> {
+/** Upper bound on waiting for the previous run's post-result bookkeeping (journal flush + checkpoint). */
+export const SETTLING_WAIT_MS = 15_000;
+
+/** Synchronous pre-checks (lookup, owner, D3 overrides); undefined to proceed. */
+function staticRefusal(chain: ChainRecord | undefined, id: string, caller: string, parsed: AgentInput): string | undefined {
   if (chain === undefined) {
     return `unknown continuation chain "${id}" (chains are runtime-minted and in-memory only; they do not survive a restart or /resume)`;
   }
   if (chain.owner !== caller) return `continuation chain "${id}" is owned by another actor`;
-  const override = checkContinuationOverrides(chain, parsed);
-  if (override !== undefined) return override;
+  return checkContinuationOverrides(chain, parsed);
+}
+
+/** True when `p` settled within `ms`. Never rejects. */
+async function settledWithin(p: Promise<void>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p.then(() => true, () => true),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ms); timer.unref?.(); }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Checks run while holding the admission reservation (D4/D5); undefined to
+ * proceed. A parent that continues right after receiving the result finds the
+ * previous run still settling (journal flush + checkpoint run after delivery):
+ * wait for it (bounded), then check in-flight, drift, and the resumable link.
+ */
+async function reservedRefusal(chain: ChainRecord, id: string): Promise<string | undefined> {
+  const settling = chain.settling;
+  if (settling !== undefined && !(await settledWithin(settling, SETTLING_WAIT_MS))) {
+    return `the previous run on continuation chain "${id}" is still finishing its bookkeeping (journal flush / workspace checkpoint); retry the continuation shortly`;
+  }
   if (chain.inFlight) return `a run on continuation chain "${id}" is still in flight`;
   const drift = await checkWorkspaceDrift(chain);
   if (drift !== undefined) return drift;
@@ -113,10 +141,22 @@ export async function admitContinuationCall(parsed: AgentInput, ctx: AdmitCtx): 
   const caller = actorIdentity(ctx);
   if (caller === undefined) return refuseContinuation('the calling actor has no identity yet, so it cannot own a continuation chain');
   const chain = registry.get(id);
-  const pre = await preAdmissionRefusal(chain, id, caller, parsed);
+  const pre = staticRefusal(chain, id, caller, parsed);
   if (pre !== undefined || chain === undefined) return refuseContinuation(pre ?? 'unknown chain');
-  const requested = parsed.max_tool_use_iterations_explicit ? parsed.max_tool_use_iterations : undefined;
-  const admitted = registry.admitContinuation(id, caller, requested, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS);
+  // Reserve synchronously BEFORE any await (settling wait, drift git I/O): a
+  // concurrent second call is refused at once, with no git work.
+  if (chain.inFlight && chain.settling === undefined) return refuseContinuation(`a run on continuation chain "${id}" is still in flight`);
+  const reservation = registry.reserveAdmission(id);
+  if (!reservation.ok) return refuseContinuation(reservation.reason);
+  let admitted: ReturnType<ContinuationRegistry['admitContinuation']>;
+  try {
+    const held = await reservedRefusal(chain, id);
+    if (held !== undefined) return refuseContinuation(held);
+    const requested = parsed.max_tool_use_iterations_explicit ? parsed.max_tool_use_iterations : undefined;
+    admitted = registry.admitContinuation(id, caller, requested, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS, true);
+  } finally {
+    reservation.release(); // admission (if any) set in-flight synchronously, which now guards the chain
+  }
   if (!admitted.ok) return refuseContinuation(admitted.reason);
   const previous = chain.latestChildId ?? '';
   let messages: ReturnType<typeof loadJournalMessages> = null;
