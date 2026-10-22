@@ -351,6 +351,9 @@ export class SubagentManager {
           event: 'SubagentStart',
           subagentId: id,
           parentSessionId: options.parent.sessionId,
+          ...(options.continuation !== undefined
+            ? { chainId: options.continuation.chainId, continuationIndex: options.continuation.continuationIndex }
+            : {}),
         },
         {
           signal: this.rootController.signal,
