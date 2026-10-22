@@ -19,13 +19,42 @@ const ABSENT = '000000';
  * Parse `diff-tree -r -z` raw output. Contract: each record is
  * `:<old> <new> <oldsha> <newsha> <status>\0<path>\0`; with `--no-renames`
  * there is never a second path. Returns null on malformed input.
+ *
+ * Invariant: the raw Buffer is split on NUL bytes BEFORE any UTF-8 decode so
+ * that non-UTF-8 bytes in a filename never corrupt adjacent fields. The header
+ * field is pure ASCII and always decoded safely. The path field is decoded with
+ * an explicit fatal check; if it contains invalid UTF-8 the entry is skipped
+ * and `onNonUtf8Path` is called with the raw Buffer so callers can emit a
+ * partial warning without silently checkpointing the wrong path.
  */
-export function parseRawDiff(buf: Buffer): RawEntry[] | null {
-  const fields = buf.toString('utf8').split('\0');
+export function parseRawDiff(
+  buf: Buffer,
+  onNonUtf8Path?: (rawPath: Buffer) => void,
+): RawEntry[] | null {
+  // Contract: split on the NUL byte (0x00) at the Buffer level — never decode
+  // the whole buffer first, which would replace invalid UTF-8 bytes with U+FFFD
+  // and cause recordPriorState to checkpoint a path that does not exist.
+  const NUL = 0x00;
+  const chunks: Buffer[] = [];
+  let start = 0;
+  for (let i = 0; i <= buf.length; i++) {
+    if (i === buf.length || buf[i] === NUL) {
+      chunks.push(buf.subarray(start, i));
+      start = i + 1;
+    }
+  }
   const out: RawEntry[] = [];
-  for (let i = 0; i + 1 < fields.length; i += 2) {
-    const head = fields[i] ?? '';
-    const gitPath = fields[i + 1] ?? '';
+  for (let i = 0; i + 1 < chunks.length; i += 2) {
+    // Header is pure ASCII — safe to decode as UTF-8.
+    const head = (chunks[i] ?? Buffer.alloc(0)).toString('utf8');
+    const pathBuf = chunks[i + 1] ?? Buffer.alloc(0);
+    // Decode the path with 'fatal' replacement detection: if the decoded string
+    // contains U+FFFD the bytes were not valid UTF-8 — skip and warn.
+    const gitPath = pathBuf.toString('utf8');
+    if (gitPath.includes('\uFFFD')) {
+      onNonUtf8Path?.(pathBuf);
+      continue;
+    }
     const m = /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) ([A-Z])\d*$/.exec(head);
     if (m === null || gitPath === '') return null;
     out.push({ oldMode: m[1] ?? '', newMode: m[2] ?? '', oldSha: m[3] ?? '', status: m[5] ?? '', gitPath });
@@ -143,7 +172,12 @@ export async function diffWithCtx(options: DiffOptions, ctx: GitCtx): Promise<Di
   const run = await runIn(ctx, cwd,
     ['diff-tree', '-r', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', options.before, options.after]);
   if (!isOk(run)) return classifyFailure(run, 'git diff-tree');
-  const entries = parseRawDiff(run.stdout);
+  const skipped: SkippedChange[] = [];
+  const entries = parseRawDiff(run.stdout, (rawPath) => {
+    // Non-UTF-8 filename: emit a partial warning with a hex repr so the caller
+    // knows a file was skipped without checkpointing a corrupted path.
+    skipped.push({ absPath: `<non-utf8:${rawPath.toString('hex')}>`, reason: 'non-UTF-8 filename' });
+  });
   if (entries === null) return { ok: false, reason: 'error', detail: 'git diff-tree: unparseable output' };
 
   const max = Math.max(0, Math.floor(options.maxFiles));
@@ -152,7 +186,6 @@ export async function diffWithCtx(options: DiffOptions, ctx: GitCtx): Promise<Di
   const truncated = entries.length > max;
   const kept = entries.slice(0, max);
   const changes: (TreeChange | null)[] = [];
-  const skipped: SkippedChange[] = [];
   const wanted: Wanted[] = [];
   for (const e of kept) {
     const absPath = toAbsPath(options.repoRoot, e.gitPath);
