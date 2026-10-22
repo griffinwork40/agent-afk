@@ -12,35 +12,26 @@
  *   - Silent degradation: any error → empty result, never an exception.
  *   - TypeScript only in this phase; Python (pyright) is a follow-up.
  *   - LSP server binary: `typescript-language-server --stdio` on PATH.
- *   - No persistent server process — each call spawns, queries, and exits.
- *     Lightweight for the opt-in / single-file phase; a persistent client is a
- *     follow-up when the feature proves valuable.
- *
- * LSP wire protocol (JSON-RPC 2.0 over stdio):
- *   Content-Length: <n>\r\n\r\n<json>
- *
- * Sequence:
- *   1. Send `initialize` request.
- *   2. Send `initialized` notification.
- *   3. Send `textDocument/didOpen` with the file content.
- *   4. Wait up to timeout for a `textDocument/publishDiagnostics` notification.
- *   5. Send `shutdown` request, then `exit` notification.
+ *   - Persistent server (#4272): the file is synced into the warm pooled
+ *     server for its workspace root (didOpen first, then didChange with
+ *     version++ on content change) and the handler waits for the
+ *     publishDiagnostics for that uri (version-matched when reported) within
+ *     the timeout. A cold start counts against the same budget.
  *
  * @module agent/tools/handlers/lsp-diagnostics
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { env } from '../../../config/env.js';
+import { getTimeoutMs } from './lsp-shared.js';
+import { awaitSyncDiagnostics, withPooledFile } from '../../lsp/query.js';
 import {
-  encodeMessage,
-  killProc,
-  parseMessages,
-  languageIdForExt,
-  getTimeoutMs,
-} from './lsp-shared.js';
+  DEFAULT_LSP_CMD,
+  TYPESCRIPT_SERVER_DEFINITION,
+  typescriptRootFor,
+  typescriptSpecFromCommand,
+} from '../../lsp/typescript-default.js';
 
 /** A single LSP diagnostic item (subset of the full LSP spec). */
 export interface LspDiagnostic {
@@ -84,147 +75,46 @@ export function isLspDiagnosticsEnabled(): boolean {
  */
 export async function queryLspDiagnostics(
   filePath: string,
-  serverCmd: readonly string[] = ['typescript-language-server', '--stdio'],
+  serverCmd: readonly string[] = DEFAULT_LSP_CMD,
 ): Promise<LspDiagnostic[]> {
-  const timeoutMs = getTimeoutMs();
-  const langId = languageIdForExt(path.extname(filePath));
-  if (!langId) return []; // unsupported extension — skip
+  if (!TYPESCRIPT_SERVER_DEFINITION.languageIds[path.extname(filePath).toLowerCase()]) return [];
+  let content: string;
+  try {
+    content = await readFile(filePath, 'utf8');
+  } catch {
+    return [];
+  }
+  const spec = typescriptSpecFromCommand(serverCmd);
+  try {
+    const published = await withPooledFile(
+      spec, filePath, content,
+      { root: typescriptRootFor(filePath), timeoutMs: getTimeoutMs() },
+      (ctx) => awaitSyncDiagnostics(ctx),
+    );
+    return published ? published.diagnostics.filter(isObject).map(toDiagnostic) : [];
+  } catch (err) {
+    if (env.AFK_DEBUG) process.stderr.write(`[afk:lsp-diagnostics] ${String(err)}\n`);
+    return [];
+  }
+}
 
-  // Invariant: `proc` is hoisted so that `done()` can kill it on every exit
-  // path (timeout, error, close, diagnostics received). Without this, a
-  // timed-out or errored query leaves an orphaned typescript-language-server.
-  let proc: ChildProcess | null = null;
+function isObject(d: unknown): d is object {
+  return typeof d === 'object' && d !== null;
+}
 
-  return new Promise<LspDiagnostic[]>((resolve) => {
-    let settled = false;
-    const done = (result: LspDiagnostic[]) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (proc) killProc(proc);
-      resolve(result);
-    };
-
-    // Hard timeout — never stall the edit.
-    const timer = setTimeout(() => done([]), timeoutMs);
-    timer.unref();
-
-    let fileContent = '';
-
-    // Read file content, then spawn server.
-    readFile(filePath, 'utf8')
-      .then((content) => {
-        fileContent = content;
-        if (settled) return;
-
-        const [cmd, ...args] = serverCmd as [string, ...string[]];
-        try {
-          // Invariant: on win32 npm-installed binaries are .cmd shims that
-          // spawn() cannot resolve without shell: true.  On POSIX shell is
-          // unnecessary for direct executables, but harmless.
-          proc = spawn(cmd, args, {
-            stdio: ['pipe', 'pipe', 'ignore'],
-            shell: process.platform === 'win32',
-          });
-        } catch {
-          done([]);
-          return;
-        }
-
-        proc.on('error', () => done([]));
-
-        const uri = pathToFileURL(filePath).toString();
-        let reqId = 0;
-        const chunks: Buffer[] = [];
-
-        const send = (msg: unknown) => {
-          try {
-            proc!.stdin!.write(encodeMessage(msg));
-          } catch {
-            // stdin closed — ignore
-          }
-        };
-
-        // 1. Initialize
-        send({
-          jsonrpc: '2.0',
-          id: ++reqId,
-          method: 'initialize',
-          params: {
-            processId: process.pid,
-            rootUri: null,
-            capabilities: {},
-          },
-        });
-
-        // 2. Initialized notification (sent after we receive the initialize result)
-        // 3. didOpen (sent after initialized)
-        // We send them together after a single read, relying on the server's
-        // sequential processing. This avoids a round-trip wait per step.
-        send({ jsonrpc: '2.0', method: 'initialized', params: {} });
-        send({
-          jsonrpc: '2.0',
-          method: 'textDocument/didOpen',
-          params: {
-            textDocument: {
-              uri,
-              languageId: langId,
-              version: 1,
-              text: fileContent,
-            },
-          },
-        });
-
-        proc.stdout!.on('data', (chunk: Buffer) => {
-          if (settled) return;
-          chunks.push(chunk);
-          const buf = Buffer.from(Buffer.concat(chunks));
-          const { messages, remaining } = parseMessages(buf);
-          // Reset chunks to just the unparsed remainder.
-          chunks.length = 0;
-          chunks.push(remaining);
-
-          for (const msg of messages) {
-            if (
-              typeof msg === 'object' &&
-              msg !== null &&
-              (msg as { method?: string }).method === 'textDocument/publishDiagnostics'
-            ) {
-              const params = (msg as { params?: { uri?: string; diagnostics?: unknown[] } }).params;
-              if (!params || params.uri !== uri) continue;
-
-              const raw = params.diagnostics ?? [];
-              const diags: LspDiagnostic[] = [];
-              for (const d of raw) {
-                if (typeof d !== 'object' || d === null) continue;
-                const dr = d as {
-                  severity?: number;
-                  message?: string;
-                  range?: { start?: { line?: number; character?: number } };
-                };
-                diags.push({
-                  severity: typeof dr.severity === 'number' ? dr.severity : 1,
-                  message: typeof dr.message === 'string' ? dr.message : '',
-                  line: (typeof dr.range?.start?.line === 'number' ? dr.range.start.line : 0) + 1,
-                  col: (typeof dr.range?.start?.character === 'number' ? dr.range.start.character : 0) + 1,
-                });
-              }
-
-              // Graceful shutdown — proc is killed by done() regardless,
-              // but try a clean exit first.
-              send({ jsonrpc: '2.0', id: ++reqId, method: 'shutdown', params: null });
-              send({ jsonrpc: '2.0', method: 'exit', params: null });
-
-              done(diags);
-              return;
-            }
-          }
-        });
-
-        proc.on('close', () => done([]));
-      })
-      .catch(() => done([]));
-  });
+/** Normalize one raw LSP diagnostic (0-based) to `LspDiagnostic` (1-based). */
+function toDiagnostic(d: object): LspDiagnostic {
+  const dr = d as {
+    severity?: number;
+    message?: string;
+    range?: { start?: { line?: number; character?: number } };
+  };
+  return {
+    severity: typeof dr.severity === 'number' ? dr.severity : 1,
+    message: typeof dr.message === 'string' ? dr.message : '',
+    line: (typeof dr.range?.start?.line === 'number' ? dr.range.start.line : 0) + 1,
+    col: (typeof dr.range?.start?.character === 'number' ? dr.range.start.character : 0) + 1,
+  };
 }
 
 /**
