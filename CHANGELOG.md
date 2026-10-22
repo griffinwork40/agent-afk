@@ -11,6 +11,16 @@ Entries in the [Unreleased] section may include a short commit hash suffix
 
 ## [Unreleased]
 
+### Added
+- web/CLI parity Stages 1-5: cross-surface slash commands, choices, lifecycle (/fork, /resume, /exit), structured /diff, session controls (#4295) (6a7043d2a)
+- /rewind conversation|files|both with cross-turn file restore (#4286) (2fd716087)
+
+### Fixed
+- remove write-only pending-question-store (#4299) (728d32c01)
+
+### Changed
+- stage 3 — use resolveChildModel in dispatchDagNode for model-resolution parity (#4288) (30b8993d7)
+
 ## [5.330.0] - 2026-10-22
 
 ### Added
