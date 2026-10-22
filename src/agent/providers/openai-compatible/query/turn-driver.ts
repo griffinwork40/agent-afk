@@ -210,7 +210,7 @@ async function* dispatchAndAppend(
  * shape is handled. When no injectable tool message exists, a
  * `round_cap_notice_dropped` trace event is emitted instead of dropping silently.
  */
-function injectRoundCapNotice(
+export function injectRoundCapNotice(
   priorTurns: OpenAIMessage[],
   round: number,
   maxIterations: number,

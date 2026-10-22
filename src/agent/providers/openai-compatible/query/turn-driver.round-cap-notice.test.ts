@@ -5,8 +5,8 @@
  *   1. String-content tool message: notice appended directly (integration via mock API).
  *   2. No notice on rounds before the notice threshold.
  *   3. round_cap_notice_dropped NOT emitted when notice successfully injected.
- *   4. round_cap_notice_dropped emitted (via emitSessionPhase mock) when no tool
- *      message exists — tested via unit inspection of the helper's observable effects.
+ *   4. round_cap_notice_dropped emitted (via emitSessionPhase mock) when no string-content tool
+ *      message exists: unit tests call the exported helper directly (#4261).
  *
  * Uses the real runTurnInner loop with a scripted mock OpenAI client
  * (same pattern as query.test.ts / date-rollover-system-payload.test.ts).
@@ -26,6 +26,7 @@ import type { ProviderEvent, ProviderUserTurn } from '../../../provider.js';
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { OpenAIChunk } from '../translate.js';
 import type { OpenAIMessage } from '../messages.js';
+import { injectRoundCapNotice } from './turn-driver.js';
 import {
   __setOpenAIClientFactory,
   buildQueryFromConfig,
@@ -284,5 +285,49 @@ describe('openai-compatible injectRoundCapNotice', () => {
     const noticeIdx = content.indexOf('[Budget notice:');
     const okIdx = content.indexOf('ok');
     expect(noticeIdx).toBeGreaterThan(okIdx);
+  });
+});
+
+// #4261: the drop branch cannot be reached through the loop (the notice is
+// injected only after a tool round appended tool messages), so the exported
+// helper is exercised directly.
+describe('injectRoundCapNotice drop path (unit)', () => {
+  const sink = {} as Parameters<typeof injectRoundCapNotice>[3];
+  const dropped = () => vi.mocked(emitSessionPhase).mock.calls.filter(
+    (c) => (c[1] as { phase?: string } | undefined)?.phase === 'round_cap_notice_dropped',
+  );
+
+  beforeEach(() => vi.mocked(emitSessionPhase).mockClear());
+
+  it('emits round_cap_notice_dropped when no tool message exists at the notice round', () => {
+    const turns: OpenAIMessage[] = [{ role: 'user', content: 'go' }];
+    injectRoundCapNotice(turns, 2, 5, sink);
+    expect(dropped()).toHaveLength(1);
+    expect(dropped()[0]![0]).toBe(sink);
+    expect(dropped()[0]![1]).toEqual({
+      phase: 'round_cap_notice_dropped',
+      metadata: { provider: 'openai-compatible', round: 2 },
+    });
+    expect(turns).toEqual([{ role: 'user', content: 'go' }]);
+  });
+
+  it('emits round_cap_notice_dropped when the last tool message has non-string content', () => {
+    const content = [{ type: 'text', text: 'result' }];
+    const turns = [{ role: 'tool', tool_call_id: 'c1', content }] as unknown as OpenAIMessage[];
+    injectRoundCapNotice(turns, 2, 5, sink);
+    expect(dropped()).toHaveLength(1);
+    expect(content).toEqual([{ type: 'text', text: 'result' }]);
+  });
+
+  it('appends to a string tool message and emits nothing', () => {
+    const turns: OpenAIMessage[] = [{ role: 'tool', tool_call_id: 'c1', content: 'result' }];
+    injectRoundCapNotice(turns, 2, 5, sink);
+    expect(dropped()).toHaveLength(0);
+    expect((turns[0] as { content: string }).content).toContain('Budget notice');
+  });
+
+  it('does nothing off the notice round, even with no tool message', () => {
+    injectRoundCapNotice([{ role: 'user', content: 'go' }], 1, 5, sink);
+    expect(vi.mocked(emitSessionPhase)).not.toHaveBeenCalled();
   });
 });
