@@ -35,6 +35,8 @@ export const SessionPhaseNameSchema = z.enum([
   'ttfb_timeout',
   'usage_limit_pause',
   'usage_limit_resume',
+  // Turn-start OAuth account adoption. See SessionPhaseName JSDoc in types.ts.
+  'credential_swap',
   // Mid-stream overload (529) exhaustion park/unpark. See SessionPhaseName
   // JSDoc in types.ts — wall-clock bounded, no reset deadline to key on.
   'overload_pause',

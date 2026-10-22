@@ -60,6 +60,7 @@ import { turnWithAuthRetry } from './auth-retry-tier.js';
 import { turnWithUsageLimitRetry } from './usage-limit-tier.js';
 import { turnWithOverloadPause } from './overload-pause-tier.js';
 import { adoptFreshClient } from './live-client.js';
+import { catchUpStaleCredential, storeAheadOfClient } from './usage-limit-catch-up.js';
 
 // Re-exported so the historical `from './retry-layer.js'` import paths stay
 // valid after the #824 split. `cli/quota-footer.ts` drift-tests against
@@ -311,6 +312,15 @@ export class RetryLayer {
   }
 
   /**
+   * Rebuild the client if the credential store has moved ahead of it, for
+   * callers that use {@link client} directly rather than through a turn
+   * (compaction). Same guard as the turn-start catch-up; a no-op otherwise.
+   */
+  async syncClientWithStore(): Promise<void> {
+    if (storeAheadOfClient(this.tierContext())) await this.forceClientRefresh();
+  }
+
+  /**
    * Run a single turn through every retry tier. `isClosed` is invoked
    * between events; when it returns true the generator short-circuits
    * so a concurrent `close()` cuts the turn off cleanly.
@@ -342,6 +352,13 @@ export class RetryLayer {
     if (this.credentialSnapshotStale) {
       await adoptFreshClient(ctx, runInput);
       this.credentialSnapshotStale = false;
+    } else if (!runInput.signal.aborted) {
+      // Contract: an account switch with NO error (`claude login` between
+      // turns) is adopted here, on every surface, instead of waiting for a
+      // 401 / usage-limit 429 or a manual `/reauth`. A no-op unless the store
+      // is the session's credential source and its token differs from the
+      // live client's; see `storeAheadOfClient` in usage-limit-catch-up.ts.
+      await catchUpStaleCredential(ctx, runInput, 'turn-start');
     }
     // Tier composition, outermost first: overload pause → usage limit → auth.
     // Each tier receives the next as an explicit parameter, preserving the

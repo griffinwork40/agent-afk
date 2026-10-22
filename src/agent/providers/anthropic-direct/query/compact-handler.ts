@@ -133,8 +133,18 @@ export async function compactHistory(
       initSessionId,
       randomUUID(),
     );
-    // Read `client` via the retry layer's getter so we always see the
-    // post-401-swap reference, never a stale snapshot.
+    // Compaction calls the client directly, outside any turn, so it never
+    // passes through the turn-start credential catch-up. Adopt an account
+    // switch here too, then read `client` via the retry layer's getter so we
+    // always see the post-swap reference, never a stale snapshot.
+    // Invariant: the sync is best-effort. A credential check must never be
+    // the reason a compaction fails, so any throw falls back to the client
+    // the session already holds.
+    try {
+      await retry.syncClientWithStore();
+    } catch {
+      /* keep the current client */
+    }
     const client = retry.client as unknown as AnthropicClientLike;
     const stream = (await Promise.resolve(
       client.messages.create(

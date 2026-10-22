@@ -27,16 +27,31 @@ const OAUTH_REFRESH_TIMEOUT_MS = 10_000;
 // security` on macOS. A 5-second window amortises that cost across the
 // hot re-resolve path (tool calls within one session) while staying well
 // inside any real-world token-rotation window (tokens expire in hours, not
-// seconds). The cache is intentionally per-process: subagents are separate
-// processes and must read the live store directly.
+// seconds). The cache is per-process and shared by every session in it,
+// including forked subagents (they are in-process `AgentSession`s, see
+// `subagent/fork-wiring.ts`); separate afk processes each read the live store.
 const READ_CACHE_TTL_MS = 5_000;
 let _readCacheValue: string | undefined;
 let _readCacheExpiresAt = 0;
+
+// Invariant: the macOS read is a SYNCHRONOUS subprocess, so it blocks the
+// event loop of the whole process (every Telegram chat / web session in it)
+// for as long as `security` runs. A locked keychain or an access prompt can
+// hold it indefinitely, so the read is bounded by KEYCHAIN_READ_TIMEOUT_MS,
+// and after a timeout further reads are skipped for KEYCHAIN_TIMEOUT_BACKOFF_MS
+// (they return `undefined`, the same as a failed read) instead of blocking
+// again on every turn. Only a TIMEOUT arms the backoff: a missing entry must
+// stay uncached so a `claude login` run while a daemon is live is picked up
+// on the very next read (see `loadClaudeCodeOauthToken`).
+const KEYCHAIN_READ_TIMEOUT_MS = 3_000;
+const KEYCHAIN_TIMEOUT_BACKOFF_MS = 30_000;
+let _readBackoffUntil = 0;
 
 /** @internal Exposed for tests that need hermetic control over the cache. */
 export function _resetKeychainReadCache(): void {
   _readCacheValue = undefined;
   _readCacheExpiresAt = 0;
+  _readBackoffUntil = 0;
 }
 
 /**
@@ -51,8 +66,13 @@ export function _resetKeychainReadCache(): void {
  * Returns `undefined` when the entry is missing, malformed, or the access
  * token is past its `expiresAt`. This sync variant does not attempt a refresh;
  * use {@link refreshClaudeCodeOauthToken} for async refresh on 401.
+ *
+ * Contract: `quiet: true` suppresses the stderr "token is expired" warning.
+ * Use it for background checks that run every turn (the turn-start credential
+ * catch-up), which would otherwise print that line once per turn and corrupt
+ * the REPL display while the stored token sits expired.
  */
-export function loadClaudeCodeOauthToken(): string | undefined {
+export function loadClaudeCodeOauthToken(opts: { quiet?: boolean } = {}): string | undefined {
   const now = Date.now();
   if (now < _readCacheExpiresAt) return _readCacheValue;
 
@@ -71,9 +91,11 @@ export function loadClaudeCodeOauthToken(): string | undefined {
   if (parsed === undefined) return undefined;
 
   if (parsed.expiresAt !== undefined && parsed.expiresAt <= now) {
-    process.stderr.write(
-      'agent-afk: Claude Code OAuth token in keychain is expired. Run `claude login` to refresh.\n',
-    );
+    if (opts.quiet !== true) {
+      process.stderr.write(
+        'agent-afk: Claude Code OAuth token in keychain is expired. Run `claude login` to refresh.\n',
+      );
+    }
     return undefined;
   }
   _readCacheValue = parsed.accessToken;
@@ -154,8 +176,18 @@ export async function refreshClaudeCodeOauthToken(): Promise<string | undefined>
   return refreshed.accessToken;
 }
 
+/**
+ * Contract: `execFileSync` with a `timeout` kills the child and throws the
+ * spawnSync error, whose `code` is `'ETIMEDOUT'`. Any other failure (entry
+ * missing → non-zero exit) is NOT a timeout and must not arm the backoff.
+ */
+function isTimeoutError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ETIMEDOUT';
+}
+
 function readCredentialsBlob(): string | undefined {
   if (process.platform === 'darwin') {
+    if (Date.now() < _readBackoffUntil) return undefined;
     try {
       // `-a` is required: macOS allows multiple keychain entries to share a
       // service name, and Claude Code's MCP-OAuth state shares this one. Without
@@ -169,10 +201,11 @@ function readCredentialsBlob(): string | undefined {
           '-a', userInfo().username,
           '-w',
         ],
-        { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf-8' },
+        { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf-8', timeout: KEYCHAIN_READ_TIMEOUT_MS },
       );
       return out.trim();
-    } catch {
+    } catch (err) {
+      if (isTimeoutError(err)) _readBackoffUntil = Date.now() + KEYCHAIN_TIMEOUT_BACKOFF_MS;
       return undefined;
     }
   }
