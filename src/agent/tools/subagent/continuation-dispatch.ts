@@ -136,27 +136,53 @@ function isContinuable(chain: ChainRecord): boolean {
   return chain.inputs.isolation !== 'worktree';
 }
 
-/**
- * D6: stamp chain metadata on every result; append the continuation line only
- * to incomplete/capped results of continuable chains. Mutates and returns `result`.
- */
-export function annotateChainResult<R extends ToolResult>(result: R, chain: ChainRecord | undefined, always = false): R & ContinuationResultFields {
-  const out = result as R & ContinuationResultFields;
-  if (chain === undefined) return out;
-  const continuable = isContinuable(chain);
-  out.continuation = {
+/** D6 structured chain metadata (snapshot of the chain's current state). */
+function chainMetadata(chain: ChainRecord): NonNullable<ContinuationResultFields['continuation']> {
+  return {
     chainId: chain.chainId,
     roundsCharged: chain.roundsCharged,
     maxRounds: chain.limits.maxRounds,
     continuations: chain.continuations,
     maxContinuations: chain.limits.maxContinuations,
-    continuable,
+    continuable: isContinuable(chain),
   };
-  if ((always || result.incomplete === true) && continuable) {
+}
+
+/**
+ * Handles whose foreground run was promoted to background. Their delivered
+ * result (via the background registry) carries the line instead, and the
+ * promotion payload (JSON text) is never annotated.
+ */
+const promotedHandles = new WeakMap<object, () => void>();
+const promotedState = new WeakMap<object, boolean>();
+
+/**
+ * Promotion hook (foreground -> background): mark the handle so the run's
+ * terminal stamps the DELIVERED result, and so annotateChainResult leaves the
+ * promotion payload's JSON text untouched.
+ */
+export function markChainPromoted(handle: object): void {
+  const onPromoted = promotedHandles.get(handle);
+  if (onPromoted !== undefined) onPromoted();
+}
+
+/**
+ * D6: stamp chain metadata on every result; append the continuation line only
+ * to incomplete/capped results of continuable chains. Mutates and returns `result`.
+ * When `handle` was promoted, the result is the promotion payload (JSON): only
+ * the structured field is set, the text is never touched.
+ */
+export function annotateChainResult<R extends ToolResult>(result: R, chain: ChainRecord | undefined, always = false, handle?: object): R & ContinuationResultFields {
+  const out = result as R & ContinuationResultFields;
+  if (chain === undefined) return out;
+  out.continuation = chainMetadata(chain);
+  if (handle !== undefined && promotedState.get(handle) === true) return out;
+  if ((always || result.incomplete === true) && out.continuation.continuable) {
     out.content = `${result.content}\n\n${formatContinuationLine(chain)}`;
   }
   return out;
 }
+
 
 /** End reason string for the registry from a tool result. */
 export function endReasonOf(result: ToolResult): string {
@@ -210,7 +236,21 @@ export function instrumentHandleForChain(
     r.incomplete === true ? (r.incompleteReason ?? 'incomplete') : r.status;
   const h = handle as unknown as Record<string, unknown>;
   const started = { value: false };
-  if (typeof handle.runToResult === 'function') wrapRun(h, handle, record, reasonOf, started);
+  // Promotion: stamp the delivered result (now or, if the run already
+  // settled, immediately on the recorded result).
+  const delivered: { result?: Res; promoted: boolean } = { promoted: false };
+  promotedHandles.set(handle, () => {
+    delivered.promoted = true;
+    promotedState.set(handle, true);
+    if (delivered.result !== undefined) stampDeliveredResult(delivered.result, terminal.chain!, terminal.alwaysLine === true);
+  });
+  const recordRun: RecordFn = async (r, reason) => {
+    await record(r, reason);
+    if (r === undefined) return;
+    delivered.result = r;
+    if (delivered.promoted) stampDeliveredResult(r, terminal.chain!, terminal.alwaysLine === true);
+  };
+  if (typeof handle.runToResult === 'function') wrapRun(h, handle, recordRun, reasonOf, started);
   if (typeof handle.runInBackground === 'function') wrapBackground(h, handle, record, reasonOf, terminal.chain, started, terminal.alwaysLine === true);
   wrapTeardownBeforeStart(h, started, () => {
     if (done) return;
@@ -286,16 +326,24 @@ function wrapBackground(h: Record<string, unknown>, handle: ChainHandle, record:
       // Deliver only after the terminal is recorded (journal drained) so the
       // delivered line/metadata reflect the final chain state.
       void record(r, reasonOf(r)).catch(() => undefined).then(() => {
-        appendLineToMessage(r, chain, always);
+        stampDeliveredResult(r, chain, always);
         cb?.(r);
       });
     }, ...rest);
   };
 }
 
-/** Background delivery: append the continuation line to a capped result's message (D6). */
-function appendLineToMessage(r: import('../../subagent/result.js').SubagentResult, chain: ChainRecord, always: boolean): void {
-  if ((!always && r.incomplete !== true) || !isContinuable(chain) || r.message === undefined) return;
+/**
+ * Background / promoted delivery (D6): stamp the structured chain metadata on
+ * the delivered SubagentResult, and append the continuation line to a capped
+ * (or continuation) result's message text. Idempotent per result.
+ */
+function stampDeliveredResult(r: Res, chain: ChainRecord, always: boolean): void {
+  const out = r as Res & ContinuationResultFields;
+  const alreadyStamped = out.continuation !== undefined;
+  out.continuation = chainMetadata(chain);
+  if (alreadyStamped) return;
+  if ((!always && r.incomplete !== true) || !isContinuable(chain) || typeof r.message?.content !== 'string') return;
   r.message.content = `${r.message.content}\n\n${formatContinuationLine(chain)}`;
 }
 

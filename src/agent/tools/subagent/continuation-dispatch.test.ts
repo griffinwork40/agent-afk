@@ -6,9 +6,10 @@ vi.mock('../../routing-telemetry.js', () => ({ appendRoutingDecision: vi.fn().mo
 import type { SubagentHandle, SubagentResult } from '../../subagent.js';
 import { SubagentExecutor, type SubagentExecutorContext } from '../subagent-executor.js';
 import { ContinuationRegistry } from '../../subagent/continuation-registry.js';
+import { BackgroundAgentRegistry } from '../../background-registry.js';
 import { agentTool, composeTool } from '../schemas.agent-tools.js';
 import { parseAgentInput } from './input-parse.js';
-import { instrumentHandleForChain, annotateChainResult, actorIdentity, JOURNAL_FLUSH_TIMEOUT_MS } from './continuation-dispatch.js';
+import { instrumentHandleForChain, annotateChainResult, actorIdentity, JOURNAL_FLUSH_TIMEOUT_MS, markChainPromoted } from './continuation-dispatch.js';
 import { admitContinuationCall } from './continuation-run.js';
 
 const CAPPED = 'tool_use_loop_capped';
@@ -213,4 +214,47 @@ describe('continuation dispatch wiring', () => {
       vi.useRealTimers();
     }
   });
+
+  it('D6 promotion: the delivered capped result carries the line + metadata; the promotion payload stays valid JSON', async () => {
+    const registry = new ContinuationRegistry();
+    const bg = new BackgroundAgentRegistry({});
+    let resolveRun!: (r: SubagentResult) => void;
+    const handle = { ...handleFor(cappedResult()), id: 'child-1' };
+    (handle.runToResult as ReturnType<typeof vi.fn>).mockReturnValue(new Promise<SubagentResult>((r) => { resolveRun = r; }));
+    const exec = new SubagentExecutor({
+      subagentManager: { forkSubagent: vi.fn().mockResolvedValue(handle) } as never,
+      parentSession: { sessionId: 'root-1', getInputStreamRef: vi.fn(), abortSignal: new AbortController().signal } as never,
+      defaultConfig: { apiKey: 'k', systemPrompt: 's' }, defaultSubagentModel: 'sonnet', depth: 0, cwd: tmpdir(),
+      continuationRegistry: registry, backgroundRegistry: bg,
+    });
+    const pending = exec.execute(call({ prompt: 'long work', max_tool_use_iterations: 7 }));
+    await new Promise((r) => setImmediate(r));
+    const promoted = await exec.promoteActiveForeground();
+    expect(promoted).toHaveLength(1);
+    const payloadResult = await pending as ToolResultWithChain;
+    const payload = JSON.parse(payloadResult.content as string) as { status: string };
+    expect(payload.status).toBe('running');
+    expect(payloadResult.continuation?.chainId).toMatch(/^chain_/);
+    const delivered = cappedResult();
+    resolveRun(delivered);
+    await vi.waitFor(() => expect(bg.get(promoted[0]!.jobId)?.status).toBe('completed'));
+    const chainId = payloadResult.continuation!.chainId;
+    expect(delivered.message!.content).toContain(`[continuation: chain_id=${chainId}`);
+    expect((delivered as ToolResultWithChain & SubagentResult).continuation?.chainId).toBe(chainId);
+  });
+
+  it('D6 promotion: a promoted continuation payload is never annotated in its text', () => {
+    const registry = new ContinuationRegistry();
+    const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: false } });
+    const handle = handleFor(cappedResult());
+    instrumentHandleForChain(handle as never, { registry, chain, cwd: undefined, journalUsable: () => true, alwaysLine: true });
+    markChainPromoted(handle);
+    const text = JSON.stringify({ status: 'running', jobId: 'bg-1' });
+    const r = annotateChainResult({ content: text }, chain, true, handle);
+    expect(r.content).toBe(text);
+    expect(() => JSON.parse(r.content as string)).not.toThrow();
+    expect(r.continuation?.chainId).toBe(chain.chainId);
+  });
 });
+
+type ToolResultWithChain = { content: unknown; continuation?: { chainId: string } };

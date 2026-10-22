@@ -28,7 +28,7 @@ import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
 import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
 import { prependSetupNotice } from '../worktree/worktree-setup.js';
-import { parseDispatchInput, wireDispatchChain, annotateChainResult } from './subagent/continuation-dispatch.js';
+import { parseDispatchInput, wireDispatchChain, annotateChainResult, markChainPromoted } from './subagent/continuation-dispatch.js';
 import { runContinuation, type ContinuationPlan } from './subagent/continuation-run.js';
 import {
   setupIsolationWorktree,
@@ -236,9 +236,10 @@ export async function executeOnce(
     activeForegroundHandles,
     ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
     ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
+    onPromoted: () => markChainPromoted(handle),
   });
   if (!promotionTookBudget.value) budgetRelease?.();
-  annotateChainResult(result, chain, plan !== undefined); // D6: chain metadata + line on capped/continuation results
+  annotateChainResult(result, chain, plan !== undefined, handle); // D6: chain metadata + line on capped/continuation results (structured only on a promotion payload)
   addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, ctx.traceWriter);
   prependSetupNotice(setupNotice, result);
   if (result.isError === true) {
