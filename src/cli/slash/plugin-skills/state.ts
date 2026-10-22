@@ -55,6 +55,43 @@ export function setState(next: PluginSkillsState): void {
   state = next;
 }
 
+// ---------------------------------------------------------------------------
+// Init barrier — lets the REPL await plugin registration when a slash command
+// is typed before autoRegisterPluginPassthroughs has completed.
+// ---------------------------------------------------------------------------
+let initBarrier: Promise<void> | null = null;
+
+/**
+ * Store the promise produced by the init + autoRegisterPluginPassthroughs
+ * chain. Cleared automatically when the promise settles (resolve or reject).
+ */
+export function setInitBarrier(promise: Promise<void>): void {
+  initBarrier = promise;
+  promise.then(
+    () => { initBarrier = null; },
+    () => { initBarrier = null; },
+  );
+}
+
+/** Whether plugin skill registration is still in flight. */
+export function isPluginInitPending(): boolean {
+  return initBarrier !== null;
+}
+
+/**
+ * Await plugin skill registration with a bounded timeout. Resolves
+ * immediately when init has already completed (or was never started).
+ */
+export async function awaitPluginInit(timeoutMs: number): Promise<void> {
+  if (initBarrier === null) return;
+  const timer = new Promise<void>((resolve) => {
+    const id = setTimeout(resolve, timeoutMs);
+    // Unref so the timer never keeps the process alive on teardown.
+    if (typeof id === 'object' && 'unref' in id) (id as NodeJS.Timeout).unref();
+  });
+  await Promise.race([initBarrier, timer]);
+}
+
 /** Strip the `<plugin>:` namespace prefix from a skill name. */
 export function bareName(name: string): string {
   return name.includes(':') ? name.split(':').pop()! : name;
