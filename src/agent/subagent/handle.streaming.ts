@@ -63,6 +63,7 @@ async function consumeStream<T>(
   let finalMessage: Message | undefined;
   let streamError: Error | undefined;
   const handoff = new CappedHandoffAccumulator();
+  let streamRounds = 0;
   // Snapshot current history length so finish() only walks messages from THIS run,
   // preventing cross-turn leakage when a handle is reused (Finding 1, PR #3176).
   handoff.setHistoryBaseline(handle.session.getHistory?.()?.length ?? 0);
@@ -137,6 +138,7 @@ async function consumeStream<T>(
       handle._pauseCeiling?.onEvent(event);
 
       handoff.onEvent(event);
+      streamRounds = countRuntimeRounds(handle, event, streamRounds);
       if (event.type === 'chunk') {
         processChunkEvent(handle, event.chunk);
       }
@@ -567,4 +569,17 @@ export async function dispatchStopAndRelease<T>(
   }
 
   handle._onTerminal();
+}
+
+/**
+ * Advance `handle._runtimeRoundsUsed` by the increase in this stream's
+ * `progress.roundsUsed` (per-turn, monotonic within a turn; a provider retry
+ * that restarts the count never double-charges). Returns the new stream max.
+ */
+function countRuntimeRounds<T>(handle: SubagentHandleImpl<T>, event: OutputEvent, streamMax: number): number {
+  if (event.type !== 'progress' || typeof event.progress.roundsUsed !== 'number') return streamMax;
+  const r = event.progress.roundsUsed;
+  if (r <= streamMax) return streamMax;
+  handle._runtimeRoundsUsed += r - streamMax;
+  return r;
 }

@@ -105,7 +105,7 @@ export interface ChainTerminalArgs {
   childId: string;
   /** Child's runtime-resolved cwd (never model text). */
   cwd: string | undefined;
-  /** Runtime-counted rounds (CappedHandoff.roundsUsed / handle counter); 0 when unknown. */
+  /** Runtime-counted rounds (handle counter, floored by CappedHandoff.roundsUsed); 0 when unknown. */
   roundsUsed: number | undefined;
   journalUsable: boolean;
   endReason: string;
@@ -174,7 +174,8 @@ type ChainHandle = {
  * D9 + D6 (background): wrap the handle's run entry points on THIS instance so
  * every terminal outcome (foreground, promoted, background; success, capped,
  * failure, abort/rejection) records into the chain exactly once. Runtime
- * rounds come from the SubagentResult's CappedHandoff.roundsUsed only.
+ * rounds come from the handle's runtime round counter (provider progress
+ * events), floored by CappedHandoff.roundsUsed.
  * Background capped results get the continuation line appended to the
  * delivered message text.
  */
@@ -203,7 +204,7 @@ export function instrumentHandleForChain(
     const flushed = r === undefined && reason === 'not_started' ? true : await flushWithin(terminal.flushJournal, JOURNAL_FLUSH_TIMEOUT_MS);
     let usable = false;
     try { usable = flushed && terminal.journalUsable(); } catch { usable = false; }
-    recordChainTerminal({ ...terminal, childId: handle.id, roundsUsed: r?.roundsUsed, journalUsable: usable, endReason: reason });
+    recordChainTerminal({ ...terminal, childId: handle.id, roundsUsed: runtimeRounds(handle, r), journalUsable: usable, endReason: reason });
   };
   const reasonOf = (r: import('../../subagent/result.js').SubagentResult): string =>
     r.incomplete === true ? (r.incompleteReason ?? 'incomplete') : r.status;
@@ -235,6 +236,16 @@ function wrapTeardownBeforeStart(h: Record<string, unknown>, started: { value: b
 }
 
 type Res = import('../../subagent/result.js').SubagentResult;
+
+/**
+ * D4: runtime-counted rounds for the terminal. The handle's own counter (fed by
+ * provider progress events on every run, capped or not) is authoritative; the
+ * capped result's `roundsUsed` is a floor. Never model-reported.
+ */
+function runtimeRounds(handle: ChainHandle, r: Res | undefined): number {
+  const counted = (handle as { _runtimeRoundsUsed?: unknown })._runtimeRoundsUsed;
+  return Math.max(typeof counted === 'number' ? counted : 0, r?.roundsUsed ?? 0);
+}
 type RecordFn = (r: Res | undefined, reason: string) => Promise<void>;
 
 /** Upper bound on waiting for the child's journal queue to drain at a terminal. */

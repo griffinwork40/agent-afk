@@ -41,7 +41,7 @@ interface Seen { resumeMessages: JournalMessage[] | undefined; turn: string; con
 const text = (t: string): { type: 'text'; text: string } => ({ type: 'text', text: t });
 
 /** Fake transport: every child runs one capped round (tool_use + tool_result) and journals it. */
-function installTransport(seen: Seen[], opts: { hold?: Promise<void>; cutFrom?: number; builds?: { n: number } } = {}): void {
+function installTransport(seen: Seen[], opts: { hold?: Promise<void>; cutFrom?: number; builds?: { n: number }; progressRounds?: number } = {}): void {
   let n = 0;
   transport.build = (args) => {
     const index = n++;
@@ -62,6 +62,10 @@ function installTransport(seen: Seen[], opts: { hold?: Promise<void>; cutFrom?: 
           async *[Symbol.asyncIterator]() {
             for await (const event of q) {
               if (event.type === 'assistant.message') {
+                // Provider loops emit one progress event per completed tool round (capped or not).
+                for (let r = 1; r <= (opts.progressRounds ?? 0); r++) {
+                  yield { type: 'progress', progress: { taskId: 't', description: 'Working', roundsUsed: r, totalTokens: 0, toolUses: r, durationMs: 1 } };
+                }
                 if (opts.hold !== undefined) await opts.hold;
                 const turn = seen.length; // unique per run
                 const prior = cfg.resumeMessages ?? [];
@@ -78,7 +82,7 @@ function installTransport(seen: Seen[], opts: { hold?: Promise<void>; cutFrom?: 
                 msgs.forEach((m, i) => cfg.messageJournal?.append(i, m));
                 await cfg.messageJournal?.flush();
               }
-              if (event.type === 'turn.completed') event.usage = { ...event.usage, stopReason: 'tool_use_loop_capped' };
+              if (event.type === 'turn.completed' && opts.progressRounds === undefined) event.usage = { ...event.usage, stopReason: 'tool_use_loop_capped' };
               yield event;
             }
           },
@@ -248,6 +252,19 @@ describe('D8 continuation through the agent executor', () => {
     expect(chain.inFlight).toBe(false);
     expect(chain.roundsCharged).toBe(9);
     expect(chain.continuations).toBe(1);
+    await session.close();
+  }, 20000);
+
+  it('D4: an uncapped initial run (no max_tool_use_iterations) is charged its runtime-counted rounds', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen, { progressRounds: 4 });
+    const { registry, run, session } = await setup();
+    const first = await run({ prompt: 'uncapped work' });
+    expect(first.isError, first.content).not.toBe(true);
+    expect(seen[0]!.config.maxToolUseIterations ?? 0).toBe(0); // genuinely uncapped
+    const chain = registry.get(first.continuation!.chainId)!;
+    expect(chain.initialUncharged).toBe(false);
+    expect(chain.roundsCharged).toBe(4);
     await session.close();
   }, 20000);
 

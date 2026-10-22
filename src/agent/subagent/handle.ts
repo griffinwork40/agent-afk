@@ -174,6 +174,13 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    */
   /** @internal */ _lastStreamedContent: string = '';
   /**
+   * Runtime-counted tool-use rounds across every stream this handle ran
+   * (summed per stream from provider `progress.roundsUsed` events, which the
+   * provider loops emit after each tool round whether or not a cap is set).
+   * Never model-reported. Read by continuation accounting (D4) for uncapped runs.
+   */
+  /** @internal */ _runtimeRoundsUsed = 0;
+  /**
    * Pause-aware extension policy for the CURRENT run's wall-clock ceiling.
    * Created in `run()` (which owns `withTimeout`) but fed from the stream loop
    * in `streamToFinalMessage`, so — like `lastStreamedContent` — it lives as an
