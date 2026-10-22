@@ -330,7 +330,9 @@ describe('D8 continuation through the agent executor', () => {
     const { run, registry, session } = await setup({ backgroundRegistry: bg });
     const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
     const chainId = first.continuation!.chainId;
+    await registry.get(chainId)!.settling;
     const before = registry.get(chainId)!.latestChildId;
+    expect(before).toBeDefined();
     const r = await run({ prompt: 'bg go', continuation_chain_id: chainId, mode: 'background' });
     expect(r.isError, r.content).not.toBe(true);
     await vi.waitFor(() => expect(registry.get(chainId)!.inFlight).toBe(false), { timeout: 5000 });
@@ -474,7 +476,9 @@ describe('D8 continuation through the agent executor', () => {
     const { run, registry, session } = await setup({ traceWriter: writer });
     const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
     const chainId = first.continuation!.chainId;
+    await registry.get(chainId)!.settling;
     const prev = registry.get(chainId)!.latestChildId;
+    expect(prev).toBeDefined();
     await run({ prompt: 'go', continuation_chain_id: chainId });
     const started = writer.events.filter((e) => e.kind === 'subagent_lifecycle' && (e.payload as { transition: string }).transition === 'started')
       .map((e) => e.payload as { chainId?: string; continuationOf?: string; continuationIndex?: number });

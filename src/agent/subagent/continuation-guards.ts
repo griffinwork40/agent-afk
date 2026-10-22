@@ -160,16 +160,26 @@ export async function captureWorkspaceCheckpoint(cwd: string, exec: CheckpointGi
   return { ...base, dirtyFingerprint: createHash('sha256').update(statusRaw.stdout).digest('hex') };
 }
 
-/** Refusal when a write-capable chain's checkpoint (prior or recaptured) is unavailable. */
+/** Refusal when the admission-time recapture is unavailable (transient: retrying can succeed). */
 export const CHECKPOINT_UNAVAILABLE_REASON =
   'workspace checkpoint unavailable (git status failed or timed out), so drift cannot be ruled out; retry the continuation';
+
+/**
+ * Refusal when the checkpoint stored at the chain's last run is unavailable.
+ * Permanent for this chain: without that baseline, drift since the run ended
+ * can never be ruled out, and only a new run on the chain would replace it.
+ * A recapture is deliberately NOT accepted as a substitute baseline (fail closed).
+ */
+export const PRIOR_CHECKPOINT_UNAVAILABLE_REASON =
+  "the workspace checkpoint from the chain's last run is unavailable (git status failed or timed out when it ended), " +
+  'so drift since then cannot be ruled out; this chain cannot be continued: dispatch a new subagent instead';
 
 /** D5: refuse on drift for write-capable chains; read-only and non-git skip. Unavailable (or deadline-expired) checkpoints fail closed. */
 export async function checkWorkspaceDrift(chain: ChainRecord, recapture: (cwd: string) => Promise<WorkspaceCheckpoint> = captureWorkspaceCheckpoint): Promise<string | undefined> {
   if (!chain.inputs.writeCapable) return undefined;
   const prior = chain.checkpoint;
   if (prior === undefined) return undefined;
-  if (prior.unavailable === true) return CHECKPOINT_UNAVAILABLE_REASON;
+  if (prior.unavailable === true) return PRIOR_CHECKPOINT_UNAVAILABLE_REASON;
   if (!prior.git) return undefined;
   // Bounded: a git that never exits must not leave the chain `admitting` forever.
   const now = await captureCheckpointWithin(prior.cwd, recapture);

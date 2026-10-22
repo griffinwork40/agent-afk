@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ContinuationRegistry } from './continuation-registry.js';
 import {
-  captureCheckpointWithin, captureWorkspaceCheckpoint, checkWorkspaceDrift, CHECKPOINT_CAPTURE_DEADLINE_MS, CHECKPOINT_GIT_GLOBAL_ARGS, CHECKPOINT_UNAVAILABLE_REASON, type CheckpointGitExec, type GitOutcome,
+  captureCheckpointWithin, captureWorkspaceCheckpoint, checkWorkspaceDrift, CHECKPOINT_CAPTURE_DEADLINE_MS, CHECKPOINT_GIT_GLOBAL_ARGS, CHECKPOINT_UNAVAILABLE_REASON, PRIOR_CHECKPOINT_UNAVAILABLE_REASON, type CheckpointGitExec, type GitOutcome,
 } from './continuation-guards.js';
 
 const ok = (stdout: string): GitOutcome => ({ ok: true, stdout });
@@ -54,7 +54,12 @@ describe('continuation workspace checkpoint (D5)', () => {
   it('drift check: a write-capable chain with an unavailable prior or recaptured checkpoint is refused', async () => {
     const chain = writeChain();
     chain.checkpoint = { cwd: '/repo', git: true, unavailable: true };
-    expect(await checkWorkspaceDrift(chain, async () => ({ cwd: '/repo', git: true, dirtyFingerprint: 'x' }))).toBe(CHECKPOINT_UNAVAILABLE_REASON);
+    // Prior baseline lost: permanent for the chain, and no recapture is attempted.
+    const recapture = vi.fn(async () => ({ cwd: '/repo', git: true, dirtyFingerprint: 'x' }));
+    expect(await checkWorkspaceDrift(chain, recapture)).toBe(PRIOR_CHECKPOINT_UNAVAILABLE_REASON);
+    expect(recapture).not.toHaveBeenCalled();
+    expect(PRIOR_CHECKPOINT_UNAVAILABLE_REASON).toContain('dispatch a new subagent');
+    expect(PRIOR_CHECKPOINT_UNAVAILABLE_REASON).not.toContain('retry');
     chain.checkpoint = { cwd: '/repo', git: true, branch: 'main', head: 'abc', dirtyFingerprint: 'x' };
     expect(await checkWorkspaceDrift(chain, async () => ({ cwd: '/repo', git: true, unavailable: true }))).toBe(CHECKPOINT_UNAVAILABLE_REASON);
     expect(await checkWorkspaceDrift(chain, async () => { throw new Error('boom'); })).toBe(CHECKPOINT_UNAVAILABLE_REASON);

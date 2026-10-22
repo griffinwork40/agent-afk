@@ -130,7 +130,10 @@ forked.` Reasons:
 - a run on the chain is still in flight (including another continuation
   call that is being admitted);
 - the previous run is still finishing its bookkeeping after the 15s wait
-  (retry the continuation);
+  (retry the continuation). A degraded settle can take up to about 30s (5s
+  journal flush plus the 25s checkpoint bound), so with a hung git the first
+  retry can be refused too; a second retry waits another 15s and covers the
+  rest;
 - the continuation limit or the aggregate round limit has been reached;
 - an inherited field (`agent_type`, `model`, `cwd`, `isolation`,
   `readRoots`, `writeRoots`) differs from the chain's value;
@@ -140,9 +143,12 @@ forked.` Reasons:
   Checked for write-capable chains only; read-only chains and non-git cwds
   skip this check;
 - the workspace checkpoint is unavailable: `git status` (or the repo probe)
-  failed or timed out (or the whole capture outlived its 25s bound) when the
-  checkpoint was taken or at the recheck, so
-  drift cannot be ruled out. Write-capable chains only (fail closed; retry);
+  failed or timed out, or the whole capture outlived its 25s bound, so drift
+  cannot be ruled out. Write-capable chains only (fail closed). Two cases:
+  - at the recheck during admission: transient, so retrying can succeed;
+  - when the chain's last run ended: permanent for that chain, because the
+    baseline is gone and a fresh recapture is deliberately not accepted in its
+    place. The refusal says to dispatch a new subagent instead;
 - the previous child left no usable journal, either because message
   journaling is disabled (`AFK_MESSAGE_JOURNAL_DISABLED`) or because its fold
   is missing or empty;
