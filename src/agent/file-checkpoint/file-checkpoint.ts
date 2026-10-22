@@ -15,6 +15,8 @@ import { isEnoent } from '../../utils/errors.js';
 export interface FileCheckpointRegistry {
   snapshotFile(absPath: string): Promise<void>;
   readonly turnId: string;
+  /** Paths whose pre-write snapshot was published this turn, in first-touch order. */
+  touchedPaths(): string[];
 }
 
 export interface FileSnapshot {
@@ -87,6 +89,7 @@ export function createFileCheckpointRegistry(
   const pending = new Map<string, Promise<void>>();
   return {
     turnId,
+    touchedPaths: () => [...seen],
     async snapshotFile(absPath) {
       if (seen.has(absPath)) return;
       let task = pending.get(absPath);

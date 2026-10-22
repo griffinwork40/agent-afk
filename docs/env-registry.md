@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**243 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**246 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -194,6 +194,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_DEBUG_CLIPBOARD` | boolean |  |  |  | Debug bracketed-paste and image-paste handling in the interactive REPL. |
 | `AFK_DEBUG_COMPOSITOR` | boolean |  |  |  | Gate compositor phase-boundary traces to stderr; any truthy value enables. |
 | `AFK_DUMP_PROMPT` | string |  |  | `/tmp/afk-prompt.txt` | Write the resolved system prompt to a file at startup. Accepts a path or 1 for default location. |
+| `AFK_FILE_CHECKPOINT_MAX_AGE_DAYS` | number |  | `14` |  | Evict a file-checkpoint session directory once its newest content is older than this many days. Default 14. |
+| `AFK_FILE_CHECKPOINT_MAX_BYTES` | number |  | `1073741824` |  | Aggregate byte cap for state/file-checkpoints/; oldest session directories are evicted first once exceeded. Default 1073741824 (1 GiB). |
+| `AFK_FILE_CHECKPOINT_RETENTION_DISABLE` | boolean |  |  | `1` | Disable the file-checkpoint retention sweep (state/file-checkpoints/), so no session checkpoint directory is ever evicted. |
 | `AFK_MESSAGE_JOURNAL_DISABLED` | boolean |  |  | `1` | Disable the per-session message journal (state/sessions/<id>/journal.jsonl + blobs/). The journal records the full conversation, including full tool results, and is the source for --resume and /fork. Set to 1 to skip journal writes; resume then falls back to the text-only sidecar history. |
 | `AFK_PREEXISTING_LEDGER_DISABLE` | boolean |  |  | `1` | Set to 1 to disable the pre-existing-defect SessionEnd hook. When set, the hook will not scan session turns or append records to ~/.afk/agent-framework/preexisting-ledger.jsonl. Useful in test environments or when the ledger is not desired. |
 | `AFK_RUN_RECEIPT_DISABLED` | boolean |  |  | `1` | Disable the post-session run receipt (state/receipts/<label>.json and .md). Set to 1 to skip receipt writes; the underlying witness trace is unaffected. Receipts are also implicitly off when AFK_TRACE_DISABLED=1 (no trace to summarize). |

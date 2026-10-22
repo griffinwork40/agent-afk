@@ -9,7 +9,7 @@ import {
 import type { CommandOutputBlock } from '@/types/command-wire';
 import { createElement } from 'react';
 
-const makeBlock = (overrides: Partial<CommandOutputBlock> = {}): CommandOutputBlock => ({
+const makeBlock = (overrides: Partial<Pick<CommandOutputBlock, 'ansi' | 'text'>> = {}): CommandOutputBlock => ({
   ansi: 'hello',
   text: 'hello',
   ...overrides,

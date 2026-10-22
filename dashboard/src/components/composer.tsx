@@ -19,6 +19,7 @@ import { AtFilePopover } from './at-file-popover';
 import { ModelSelector } from './model-selector';
 import { QueuePanel } from './queue-panel';
 import type { UseQueueResult } from '@/hooks/use-queue';
+import { useCommandControl } from '@/hooks/use-command-control';
 
 interface ComposerProps {
   sessionId: string;
@@ -26,14 +27,20 @@ interface ComposerProps {
   isBusy: boolean;
   /** Queue for mid-run message management. */
   queue?: UseQueueResult;
-  /** Called when the operator picks a model from the selector. */
+  /** Called with the authoritative model after a successful /model response. */
   onModelSelect?: (modelId: string) => void;
   /** Currently selected model id (shown in the selector). */
   currentModel?: string;
   /** Called with command output to insert a client-local transcript item. */
   onCommandOutput?: (input: string, response: CommandResponse) => void;
+  onCommandStart?: (input: string) => void;
   /** Called with a toast message (e.g. gated command reason). */
   onToast?: (message: string) => void;
+  /** Called when a /fork or /resume produces a navigate control. */
+  onNavigate?: (targetSessionId: string) => void;
+  /** Called when /exit marks the session as ended. */
+  onSessionEnded?: () => void;
+
 }
 
 /** Cached slash commands — cleared on page focus to pick up new skills. */
@@ -108,13 +115,23 @@ export function Composer({
   onModelSelect,
   currentModel,
   onCommandOutput,
+  onCommandStart,
   onToast,
+  onNavigate,
+  onSessionEnded,
+
 }: ComposerProps) {
   const [text, setText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [acActiveIdx, setAcActiveIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lifetimeRef = useRef({ active: true });
+  useEffect(() => {
+    const lifetime = { active: true };
+    lifetimeRef.current = lifetime;
+    return () => { lifetime.active = false; };
+  }, [sessionId]);
 
   const disabled = sessionMode === 'readonly';
   const slashQuery = getSlashQuery(text);
@@ -162,42 +179,47 @@ export function Composer({
     });
   }, [sessionId]);
 
+  const { handleControl } = useCommandControl({
+    sessionId,
+    setText,
+    onNavigate,
+    onSessionEnded,
+    onToast,
+  });
+
   /**
-   * POST to /commands and handle the A6 control result.
+   * POST to /commands and handle the CommandControl result via useCommandControl.
    * Returns true if the caller should clear the composer text (normal case),
    * false when the control itself manages the text (e.g. prefill).
    */
   const submitCommand = useCallback(async (input: string, depth = 0): Promise<boolean> => {
+    const lifetime = lifetimeRef.current;
+    onCommandStart?.(input);
+
     const response = await apiFetch<CommandResponse>(
       `/api/sessions/${sessionId}/commands`,
       { method: 'POST', body: JSON.stringify({ input }) },
     );
+    // Navigating away must not clear the newly selected session/queue when a
+    // delayed response from the old composer eventually arrives.
+    if (!lifetime.active) return false;
     onCommandOutput?.(input, response);
+    if (response.session?.model) onModelSelect?.(response.session.model);
+    return handleControl(response.control, input, depth);
+  }, [sessionId, onCommandStart, onCommandOutput, onModelSelect, handleControl]);
 
-    // A6 control handling
-    const { control } = response;
-    if (control.kind === 'continue') {
-      // no-op
-    } else if (control.kind === 'prefill') {
-      setText(control.message);
-      return false; // caller must NOT clear — we just set the text
-    } else if (control.kind === 'submit') {
-      await submitPrompt(control.message);
-    } else if (control.kind === 'rerun') {
-      // Re-POST to /commands with the rerun string — depth-guarded to prevent
-      // infinite recursion if a command keeps returning rerun controls.
-      if (depth >= 3) {
-        onToast?.('Command rerun limit reached');
-        return true;
-      }
-      await submitCommand(control.input, depth + 1);
-    } else if (control.kind === 'forward') {
-      await submitPrompt(input);
-    } else if (control.kind === 'exit') {
-      onToast?.('Session ended in REPL terms — no effect on web (Stage 4)');
+  const selectModel = useCallback(async (modelId: string) => {
+    if (disabled || submitting || isBusy || modelId === currentModel) return;
+    setSubmitting(true);
+    try {
+      await submitCommand(`/model ${modelId}`);
+    } catch (err) {
+      onToast?.(commandErrorMessage(err, '/model'));
+    } finally {
+      setSubmitting(false);
     }
-    return true;
-  }, [sessionId, onCommandOutput, onToast, submitPrompt]);
+  }, [disabled, submitting, isBusy, currentModel, submitCommand, onToast]);
+
 
   const submit = useCallback(async () => {
     const trimmed = text.trim();
@@ -222,7 +244,7 @@ export function Composer({
         }
 
         if (cmd?.kind === 'native' && cmd.web === 'gated') {
-          // Show gate reason locally — no network call
+          // Show gate reason locally — no network call.
           const reason = cmd.gateReason ?? `${normaliseName(cmd.name)} is not available on the web surface`;
           if (onToast) {
             onToast(reason);
@@ -346,8 +368,9 @@ export function Composer({
             <AtFilePopover onInsert={insertAtCursor} />
             {onModelSelect && (
               <ModelSelector
-                onSelect={onModelSelect}
+                onSelect={(model) => void selectModel(model)}
                 current={currentModel}
+                disabled={disabled || submitting || isBusy}
               />
             )}
           </div>

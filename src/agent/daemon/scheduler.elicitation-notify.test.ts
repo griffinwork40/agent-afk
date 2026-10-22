@@ -53,7 +53,6 @@ import {
 } from './scheduler.elicitation-notify.js';
 import { CronScheduler, type TelemetryRecord, type TaskCompletionDetails } from './scheduler.js';
 import { elicitationRouter } from '../elicitation-router.js';
-import { closeStore } from '../elicitation/pending-question-store.js';
 import type { AgentSession } from '../session/agent-session.js';
 import type { AgentConfig } from '../types.js';
 import type { ScheduledTask } from './triggers.js';
@@ -221,7 +220,6 @@ describe('CronScheduler cron elicitation notify', () => {
     if (savedProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
     else process.env['AFK_ALLOW_PROJECT_MCP'] = savedProjectMcp;
     restoreInstallForSession();
-    closeStore();
     rmSync(dir, { recursive: true, force: true });
   });
 

@@ -302,6 +302,10 @@ export interface RewindFilesResult {
   filesChanged?: string[];
   insertions?: number;
   deletions?: number;
+  /** Per-path restore failures (never silently partial). */
+  failures?: Array<{ path: string; error: string }>;
+  /** Paths changed outside the agent since the last recorded state. */
+  conflicts?: string[];
 }
 
 /** Agent SDK wrapper instance interface */
@@ -459,7 +463,7 @@ export interface IAgentSession {
   /** Rewind files to a prior user message (when file checkpointing is enabled). */
   rewindFiles?(
     userMessageId: string,
-    options?: { dryRun?: boolean }
+    options?: { dryRun?: boolean; overwriteConflicts?: boolean }
   ): Promise<RewindFilesResult>;
 
   /**

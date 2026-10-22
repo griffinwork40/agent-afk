@@ -11,9 +11,10 @@ Entries in the [Unreleased] section may include a short commit hash suffix
 
 ## [Unreleased]
 
-> 5.329.0 was tagged but never became installable: the npm registry left it stuck in staging (npm/cli#9889). This release is the first installable build of everything listed under 5.329.0, plus the changes below.
+## [5.330.0] - 2026-10-22
 
 ### Added
+- emphasise and colour bash command words in the REPL tool lane (#4275) (4ff66f8d9)
 - Stage 0 of web/CLI parity: run native slash commands in afk web (#4246) (12e9e6e58)
 
 ### Fixed

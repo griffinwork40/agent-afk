@@ -1,0 +1,275 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`original console bytes (color=0) > diff 1`] = `
+"
+Uncommitted changes
+────────────────────────────────────────────────────────────────────────────────
+  +1 -1  across 1 file
+
+  a.ts
+    index 123..456 100644
+    @@ -1,2 +1,2 @@
+    - old
+    + new
+      context
+
+"
+`;
+
+exports[`original console bytes (color=0) > help 1`] = `
+"
+Commands
+────────────────────────────────────────────────────────────────────────────────
+  /help     Show this help
+  /tokens   Token usage
+  /diff [file] Show changes
+
+  Tip: Ctrl+C interrupts a running turn; a second press exits.
+  Hidden: /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode
+
+"
+`;
+
+exports[`original console bytes (color=0) > mcp 1`] = `
+"
+MCP servers  (3)
+────────────────────────────────────────────────────────────────────────────────
+  ● search  (connected)
+  ● browser  (oauth_pending)
+  ● legacy
+
+  1 server(s) need OAuth — run "/mcp auth" to see authorization URLs.
+
+"
+`;
+
+exports[`original console bytes (color=0) > mcp-auth 1`] = `
+"
+MCP OAuth pending  (1)
+────────────────────────────────────────────────────────────────────────────────
+  ● browser  (2m ago)
+     https://example.test/oauth
+
+  Open each URL in a browser. After authorizing, paste the code with:
+    /mcp auth complete <serverName> <code>
+
+"
+`;
+
+exports[`original console bytes (color=0) > tokens-local 1`] = `
+"
+Token usage  (local stats — SDK breakdown unavailable)
+────────────────────────────────────────────────────────────────────────────────
+  input       1k
+  output      500
+  cache read  9k
+  total       1.5k
+  context     1% of 1m  (sonnet)
+
+"
+`;
+
+exports[`original console bytes (color=0) > tokens-sdk 1`] = `
+"
+Token usage  (SDK breakdown)
+────────────────────────────────────────────────────────────────────────────────
+  total         12k  of  200k  (6%)
+  compact at    180k
+
+  Last turn (API):
+    input       1k  (turn total)
+    output      500  (turn total)
+    cache read  9k  (last call)
+    cache creat 1k  (last call)
+    cache hit   90%  (of cached tokens, last call)
+    window      12k  (last call occupancy)
+
+  Top categories:
+    history            9k
+    system             3k
+
+  system tools  1 tools, 100 tokens
+  MCP tools     1 tools, 200 tokens
+  agents        1 loaded, 300 tokens
+  skills        2/3 included, 400 tokens
+  slash cmds    4/5 included, 500 tokens
+
+"
+`;
+
+exports[`original console bytes (color=0) > usage 1`] = `
+"
+Subscription usage
+────────────────────────────────────────────────────────────────────────────────
+  5-hour          42%
+  7-day           10%
+
+"
+`;
+
+exports[`original console bytes (color=0) > usage-empty 1`] = `
+"
+Subscription usage
+────────────────────────────────────────────────────────────────────────────────
+  No usage windows reported.
+
+"
+`;
+
+exports[`original console bytes (color=0) > usage-unavailable 1`] = `
+"
+Subscription usage
+────────────────────────────────────────────────────────────────────────────────
+⚠ No Claude subscription token found — run \`claude login\`, then try /usage again.
+
+"
+`;
+
+exports[`original console bytes (color=0) > worktree 1`] = `
+"
+Worktrees
+  PATH                                           OWNER         AGE    VERDICT                 PRUNE?
+→ /repo/.afk-worktrees/topic                     interactive   1h     active                  no
+→ /repo/.afk-worktrees/old                       diagnose      1d     stale-clean             warn
+
+  → this session
+
+"
+`;
+
+exports[`original console bytes (color=1) > diff 1`] = `
+"
+[1mUncommitted changes[22m
+[2m────────────────────────────────────────────────────────────────────────────────[22m
+  [32m+1[39m [31m-1[39m  [2macross 1 file[22m
+
+[1m  [33ma.ts[39m[22m
+[2m    index 123..456 100644[22m
+[90m    @@ -1,2 +1,2 @@[39m
+[31m    - old[39m
+[32m    + new[39m
+[2m      context[22m
+
+"
+`;
+
+exports[`original console bytes (color=1) > help 1`] = `
+"
+[1m[91mCommands[39m[22m
+[2m────────────────────────────────────────────────────────────────────────────────[22m
+  [33m/help[39m     [2mShow this help[22m
+  [33m/tokens[39m   [2mToken usage[22m
+  [33m/diff [file][39m [2mShow changes[22m
+
+[2m  Tip: Ctrl+C interrupts a running turn; a second press exits.[22m
+[2m  Hidden: /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode[22m
+
+"
+`;
+
+exports[`original console bytes (color=1) > mcp 1`] = `
+"
+[1mMCP servers  (3)[22m
+[2m────────────────────────────────────────────────────────────────────────────────[22m
+  [32m●[39m search[2m  (connected)[22m
+  [33m●[39m browser[2m  (oauth_pending)[22m
+  [33m●[39m legacy
+
+[2m  1 server(s) need OAuth — run "/mcp auth" to see authorization URLs.[22m
+
+"
+`;
+
+exports[`original console bytes (color=1) > mcp-auth 1`] = `
+"
+[1mMCP OAuth pending  (1)[22m
+[2m────────────────────────────────────────────────────────────────────────────────[22m
+  [33m●[39m browser  [2m(2m ago)[22m
+     [96mhttps://example.test/oauth[39m
+
+[2m  Open each URL in a browser. After authorizing, paste the code with:[22m
+[2m    /mcp auth complete <serverName> <code>[22m
+
+"
+`;
+
+exports[`original console bytes (color=1) > tokens-local 1`] = `
+"
+[1mToken usage[22m[2m  (local stats — SDK breakdown unavailable)[22m
+[2m────────────────────────────────────────────────────────────────────────────────[22m
+  input       [90m1k[39m
+  output      [90m500[39m
+  cache read  [90m9k[39m
+  total       [32m1.5k[39m
+  context     [90m1% of 1m  (sonnet)[39m
+
+"
+`;
+
+exports[`original console bytes (color=1) > tokens-sdk 1`] = `
+"
+[1mToken usage[22m[2m  (SDK breakdown)[22m
+[2m────────────────────────────────────────────────────────────────────────────────[22m
+  total         [32m12k[39m  of  [90m200k[39m  ([90m6%[39m)
+  compact at    [90m180k[39m
+
+[2m  Last turn (API):[22m
+    input       [90m1k[39m  [2m(turn total)[22m
+    output      [90m500[39m  [2m(turn total)[22m
+    cache read  [90m9k[39m  [2m(last call)[22m
+    cache creat [90m1k[39m  [2m(last call)[22m
+    cache hit   [90m90%[39m  [2m(of cached tokens, last call)[22m
+    window      [90m12k[39m  [2m(last call occupancy)[22m
+
+[2m  Top categories:[22m
+    [33mhistory           [39m [90m9k[39m
+    [33msystem            [39m [90m3k[39m
+
+[2m  system tools  1 tools, 100 tokens[22m
+[2m  MCP tools     1 tools, 200 tokens[22m
+[2m  agents        1 loaded, 300 tokens[22m
+[2m  skills        2/3 included, 400 tokens[22m
+[2m  slash cmds    4/5 included, 500 tokens[22m
+
+"
+`;
+
+exports[`original console bytes (color=1) > usage 1`] = `
+"
+[1mSubscription usage[22m
+[2m────────────────────────────────────────────────────────────────────────────────[22m
+  5-hour          [90m42%[39m
+  7-day           [90m10%[39m
+
+"
+`;
+
+exports[`original console bytes (color=1) > usage-empty 1`] = `
+"
+[1mSubscription usage[22m
+[2m────────────────────────────────────────────────────────────────────────────────[22m
+[2m  No usage windows reported.[22m
+
+"
+`;
+
+exports[`original console bytes (color=1) > usage-unavailable 1`] = `
+"
+[1mSubscription usage[22m
+[2m────────────────────────────────────────────────────────────────────────────────[22m
+[33m⚠ [39mNo Claude subscription token found — run \`claude login\`, then try /usage again.
+
+"
+`;
+
+exports[`original console bytes (color=1) > worktree 1`] = `
+"
+[1mWorktrees[22m
+[2m  PATH                                           OWNER         AGE    VERDICT                 PRUNE?[22m
+[91m→ [39m/repo/.afk-worktrees/topic                     interactive   1h     [2mactive                [22m  [2mno[22m
+[91m→ [39m/repo/.afk-worktrees/old                       diagnose      1d     [33mstale-clean           [39m  [33mwarn[39m
+
+[2m  → this session[22m
+
+"
+`;

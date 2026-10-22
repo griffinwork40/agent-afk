@@ -2,13 +2,13 @@
  * Model selector dropdown for the React dashboard.
  *
  * Fetches the model list from GET /api/models (with a static fallback) and
- * renders a styled <select>. Fires onSelect on mount and on every change.
+ * renders a controlled <select>. Fires onSelect only on deliberate changes.
  *
  * Port of src/web-server/frontend/model-selector.ts to React + Tailwind.
  * The badge helper is a bonus used by SessionCard.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import type { ModelInfo } from '@/types/api';
@@ -62,11 +62,11 @@ interface ModelSelectorProps {
   /** Currently selected model id. */
   current?: string;
   className?: string;
+  disabled?: boolean;
 }
 
-export function ModelSelector({ onSelect, current, className }: ModelSelectorProps) {
+export function ModelSelector({ onSelect, current, className, disabled }: ModelSelectorProps) {
   const [models, setModels] = useState<readonly ModelInfo[]>(DEFAULT_MODELS);
-  const initialFired = useRef(false);
 
   // Fetch the real model list once.
   useEffect(() => {
@@ -81,14 +81,8 @@ export function ModelSelector({ onSelect, current, className }: ModelSelectorPro
     return () => { cancelled = true; };
   }, []);
 
-  // Fire onSelect on mount with the initial value.
+  // Mounting or loading a session must not mutate its provider model.
   const selected = current ?? DEFAULT_MODEL_ID;
-  useEffect(() => {
-    if (!initialFired.current) {
-      initialFired.current = true;
-      onSelect(selected);
-    }
-  }, [onSelect, selected]);
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -101,6 +95,7 @@ export function ModelSelector({ onSelect, current, className }: ModelSelectorPro
     <div className={cn('relative inline-flex items-center', className)}>
       <select
         value={selected}
+        disabled={disabled}
         onChange={handleChange}
         aria-label="Model"
         className={cn(
@@ -109,6 +104,9 @@ export function ModelSelector({ onSelect, current, className }: ModelSelectorPro
           'cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring',
         )}
       >
+        {!models.some((m) => m.id === selected) && (
+          <option value={selected}>{selected}</option>
+        )}
         {models.map((m) => (
           <option key={m.id} value={m.id}>
             {m.label}

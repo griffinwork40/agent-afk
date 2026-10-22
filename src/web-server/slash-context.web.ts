@@ -11,6 +11,7 @@ import type { SlashContext, UiSurface } from '../cli/slash/types.js';
 import type { SessionRef } from '../agent/session-ref.js';
 import type { SessionStats } from '../cli/slash/types.js';
 import type { BufferingWriter } from './writer.buffer.js';
+import { webCapabilities } from '../cli/slash/capabilities.js';
 
 const NO_OP_UI: UiSurface = {
   clearScreen: () => {},
@@ -30,17 +31,21 @@ export function createWebSlashContext(
   stats: SessionStats,
   writer: BufferingWriter,
   cwd: string,
+  controls: Pick<SlashContext, 'fastMode' | 'getFastModeContext'> = {},
 ): SlashContext {
   // cwd lives on SessionStats, not SlashContext — populate it there so
   // commands that read ctx.stats.cwd (e.g. /tasks) see the correct path.
-  const enrichedStats: SessionStats = { ...stats, cwd };
+  stats.cwd = cwd;
   return {
+    capabilities: webCapabilities(),
     session: sessionRef,
-    stats: enrichedStats,
+    stats,
     out: writer.asWriterInterface(),
     ui: NO_OP_UI,
+    fastMode: controls.fastMode,
+    getFastModeContext: controls.getFastModeContext,
     // Intentionally absent: setSoftStopHandler, getCompositor, ledger,
-    // fastMode, getFastModeContext, requestResume, mcpManager, etc.
-    // Commands that require these fields must be in the gate list.
+    // requestResume, mcpManager, etc.
+    // Commands needing these integrations declare positive requirements.
   };
 }

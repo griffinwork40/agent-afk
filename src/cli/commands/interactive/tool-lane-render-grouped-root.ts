@@ -13,6 +13,7 @@ import {
 import type { ToolEntry } from './tool-lane-render.js';
 import { clampLineToTerminal, toolLaneWidth } from './tool-lane-render.js';
 import { outcomeTailWidth, pushOutcomeRows } from './tool-lane-outcome-rows.js';
+import { isBashToolName, styleBashCommand } from './tool-lane-format-bash.js';
 
 function groupedResultSuffix(
   entries: ToolEntry[],
@@ -86,17 +87,19 @@ export function formatGroupedToolResults(
     palette.dim(` ×${entries.length}`) +
     ' ';
   const suffix = groupedResultSuffix(entries, cols, homeDir);
-  const targets = entries
-    .map((entry) => shortenPaths(sanitizeLabel(entry.toolInput)).trim())
-    .join(', ');
+  const targetList = entries.map((entry) => shortenPaths(sanitizeLabel(entry.toolInput)).trim());
   const targetWidth = Math.max(0, cols - displayWidth(prefix) - displayWidth(suffix));
-  // Colorize BEFORE truncating: `palette.toolArg` is the same dim wrapper the
-  // single-entry path applies via formatToolLine, so grouped args must not
-  // render brighter than their ungrouped siblings. Wrapping first is safe
+  // Colorize BEFORE truncating: grouped args use the same styling the
+  // single-entry path applies via formatToolLine (`palette.toolArg`, plus
+  // command-word emphasis for bash), so grouped args never render brighter
+  // or flatter than their ungrouped siblings. Wrapping first is safe
   // because truncateDisplayWidth tokenizes ANSI — escapes cost zero width, so
   // the reserved `targetWidth` budget is unaffected — and it re-closes both
   // the OSC 8 span and the SGR state when the cut lands inside them.
-  const targetPreview = truncateDisplayWidth(palette.toolArg(targets), targetWidth);
+  const styledTargets = isBashToolName(toolName)
+    ? targetList.map(styleBashCommand).join(palette.toolArg(', '))
+    : palette.toolArg(targetList.join(', '));
+  const targetPreview = truncateDisplayWidth(styledTargets, targetWidth);
 
   return clampLineToTerminal(prefix + targetPreview + suffix, cols);
 }
