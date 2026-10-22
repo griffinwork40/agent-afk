@@ -12,6 +12,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
 import type { ChainDispatchInputs, ChainRecord, WorkspaceCheckpoint } from './continuation-registry.js';
+import { GIT_READ_GLOBAL_ARGS, buildGitReadEnv } from '../tools/handlers/git-read.js';
 
 /** Continuation-call fields that must be omitted or equal to the chain's. */
 export interface ContinuationOverrides {
@@ -54,11 +55,14 @@ export type GitOutcome = { ok: true; stdout: string } | { ok: false; timedOut: b
 export type CheckpointGitExec = (cwd: string, args: string[]) => Promise<GitOutcome>;
 
 /**
- * Global options on every checkpoint git call: `--no-optional-locks` keeps
- * `git status` from refreshing the index (taking index.lock) while the parent
- * or a sibling commits in the same worktree. Mirrors handlers/git-read.ts.
+ * Global options on every checkpoint git call: the hardened read-only set from
+ * handlers/git-read.ts. `--no-optional-locks` keeps `git status` from taking
+ * index.lock while the parent or a sibling commits in the same worktree, and
+ * `core.fsmonitor=false` (plus the pager/diff/gpg pins) stops a repo's own
+ * config from running a program during the checkpoint. The child env drops
+ * every inherited `GIT_*` override (no GIT_DIR redirection).
  */
-export const CHECKPOINT_GIT_GLOBAL_ARGS: readonly string[] = ['--no-optional-locks'];
+export const CHECKPOINT_GIT_GLOBAL_ARGS: readonly string[] = GIT_READ_GLOBAL_ARGS;
 
 /** Per-call timeout for checkpoint git calls. */
 export const CHECKPOINT_GIT_TIMEOUT_MS = 10_000;
@@ -68,7 +72,7 @@ const defaultGitExec: CheckpointGitExec = (cwd, args) => new Promise((resolve) =
   try {
     execFile('git', args, {
       cwd, encoding: 'utf8', timeout: CHECKPOINT_GIT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+      env: buildGitReadEnv(undefined),
     }, (err, stdout) => {
       if (err) resolve({ ok: false, timedOut: (err as { killed?: boolean }).killed === true });
       else resolve({ ok: true, stdout });

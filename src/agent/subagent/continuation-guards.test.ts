@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ContinuationRegistry } from './continuation-registry.js';
 import {
-  captureWorkspaceCheckpoint, checkWorkspaceDrift, CHECKPOINT_UNAVAILABLE_REASON, type CheckpointGitExec, type GitOutcome,
+  captureWorkspaceCheckpoint, checkWorkspaceDrift, CHECKPOINT_GIT_GLOBAL_ARGS, CHECKPOINT_UNAVAILABLE_REASON, type CheckpointGitExec, type GitOutcome,
 } from './continuation-guards.js';
 
 const ok = (stdout: string): GitOutcome => ({ ok: true, stdout });
@@ -10,7 +10,7 @@ const ok = (stdout: string): GitOutcome => ({ ok: true, stdout });
 /** Fake git: answers by subcommand; `status` outcome is configurable. */
 function fakeGit(status: GitOutcome): ReturnType<typeof vi.fn<CheckpointGitExec>> {
   return vi.fn<CheckpointGitExec>(async (_cwd, args) => {
-    const sub = args.filter((a) => !a.startsWith('--no-optional-locks'));
+    const sub = args.slice(CHECKPOINT_GIT_GLOBAL_ARGS.length);
     if (sub[0] === 'status') return status;
     if (sub.includes('--is-inside-work-tree')) return ok('true\n');
     if (sub.includes('--abbrev-ref')) return ok('main\n');
@@ -28,7 +28,11 @@ describe('continuation workspace checkpoint (D5)', () => {
     const exec = fakeGit(ok(''));
     await captureWorkspaceCheckpoint('/repo', exec);
     expect(exec).toHaveBeenCalledTimes(4);
-    for (const [, args] of exec.mock.calls) expect(args[0]).toBe('--no-optional-locks');
+    for (const [, args] of exec.mock.calls) {
+      expect(args.slice(0, CHECKPOINT_GIT_GLOBAL_ARGS.length)).toEqual([...CHECKPOINT_GIT_GLOBAL_ARGS]);
+      expect(args).toContain('--no-optional-locks');
+      expect(args).toContain('core.fsmonitor=false');
+    }
   });
 
   it('a failed or timed-out git status marks the checkpoint unavailable instead of hashing empty status', async () => {
