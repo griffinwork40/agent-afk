@@ -137,7 +137,7 @@ forked.` Reasons:
 - the continuation limit or the aggregate round limit has been reached;
 - an inherited field (`agent_type`, `model`, `cwd`, `isolation`,
   `readRoots`, `writeRoots`) differs from the chain's value;
-- the chain was `isolation: "worktree"`, or the call sets `host`;
+- the call sets `host` (remote dispatch);
 - the workspace drifted since the chain's last run: branch, HEAD, or
   uncommitted changes (`git status --porcelain` fingerprint) changed.
   Checked for write-capable chains only; read-only chains and non-git cwds
@@ -158,7 +158,19 @@ forked.` Reasons:
 
 - Chains live in memory only and are lost on process restart and on REPL
   `/resume`.
-- Worktree-isolated chains are minted (their metadata says
-  `continuable: false`) but cannot be continued.
 - Remote (`host`) dispatches never mint a chain. Compose nodes do not accept
   `continuation_chain_id`.
+
+## Worktree-isolated chains
+
+A chain minted with `isolation: "worktree"` is continuable. When the child
+ends and the chain still admits continuations, its worktree is **kept and
+git-locked** (reason: `afk: continuation-chain <id> (worktree kept between
+links)`) rather than torn down. The next continuation link runs in that same
+worktree (`cwd` is overridden with the kept path), so it sees uncommitted
+edits from the previous run.
+
+When the chain can no longer be continued (limits exhausted, evicted from the
+256-chain cap, or session end), the worktree is unlocked and handed back to
+the normal teardown sweep: removed if clean, preserved-and-relocked if dirty /
+commits-ahead / contains non-rebuildable ignored files.

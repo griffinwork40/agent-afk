@@ -137,12 +137,13 @@ describe('continuation dispatch wiring', () => {
     expect(r.message!.content).toContain(`chain_id=${chain.chainId}`);
   });
 
-  it('D3/D6: worktree-isolated chains carry metadata marked not continuable and no line', () => {
+  it('D6: worktree-isolated chains carry metadata marked continuable and get the continuation line (#4266)', () => {
     const registry = new ContinuationRegistry();
     const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: true, isolation: 'worktree' } });
     const r = annotateChainResult({ content: 'x', incomplete: true, incompleteReason: CAPPED }, chain);
-    expect(r.continuation?.continuable).toBe(false);
-    expect(r.content).toBe('x');
+    // Worktree chains are now continuable: the worktree is kept between links.
+    expect(r.continuation?.continuable).toBe(true);
+    expect(r.content).toContain(`[continuation: chain_id=${chain.chainId}`);
   });
 
   it('owner: the root continues its own chain when its session id was unassigned at mint', async () => {
