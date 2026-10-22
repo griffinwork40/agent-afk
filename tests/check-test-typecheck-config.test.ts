@@ -76,4 +76,34 @@ describe('check-test-typecheck fatal config CLI guard', () => {
       expect(writeBaseline).not.toHaveBeenCalled();
     },
   );
+
+  it('does NOT reject semantic TS1xxx codes (e.g. TS1064)', async () => {
+    // TS1064 (async return type) is a semantic diagnostic, not a parser error.
+    // It coexists with normal type errors and must pass through to the ratchet,
+    // not be routed through the fatal config-diagnostic path.
+    vi.resetModules();
+    const semanticTS1064 =
+      "src/foo.ts:1:1 - error TS1064: The return type of an async function or method must be the global Promise<T> type.";
+    const semanticTS2322 = "src/bar.ts:5:3 - error TS2322: Type 'number' is not assignable to type 'string'.";
+    vi.mocked(execFileSync).mockImplementation(() => {
+      throw Object.assign(new Error('tsc exited 2'), {
+        stdout: `${semanticTS1064}\n${semanticTS2322}`,
+        stderr: '',
+      });
+    });
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({ errors: 5 }));
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('CLI exit');
+    });
+    process.argv = ['node', scriptPath, '--check'];
+
+    await expect(import('../scripts/check-test-typecheck.js')).rejects.toThrow('CLI exit');
+
+    // Should NOT hit the config-diagnostic stderr path — it should reach the
+    // normal ratchet logic (exit 0 for pass or exit 1 for regression).
+    const stderrCalls = stderr.mock.calls.map(([arg]) => String(arg)).join('');
+    expect(stderrCalls).not.toContain('option/config diagnostics detected');
+  });
 });

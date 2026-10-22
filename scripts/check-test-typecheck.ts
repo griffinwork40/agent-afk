@@ -48,15 +48,18 @@ const ERROR_TS_RE = /^.*error TS\d+:/m;
  * TS18002 (empty files list) and TS18003 (no inputs) can hide the entire suite.
  * Do not match all TS18xxx: that range also contains ordinary semantic errors.
  *
- * TS1xxx are syntax / global-scope errors (e.g. TS1005 "';' expected",
- * TS1128 "Declaration or statement expected"). A single TS1xxx error causes tsc
- * to skip semantic analysis, so `measureErrors()` returns a tiny count (often 1)
- * that is far below the baseline. That looks like a massive shrink, lets the
- * check path exit 0, and — critically — lets `--update` lower the baseline to 1,
- * silently hiding every real type error. Treat TS1xxx the same as config
- * diagnostics: reject them before the count is used.
+ * Parser-emitted TS1xxx codes (TS1003, TS1005, TS1109, TS1110, TS1127, TS1128,
+ * TS1136, TS1138, TS1146, TS1161, TS1185, TS1351, TS1440) indicate broken syntax
+ * that can suppress semantic analysis in the affected file, yielding a misleadingly
+ * low error count. Only these parser codes are matched — other TS1xxx codes
+ * (e.g. TS1055, TS1058, TS1064) are semantic diagnostics that coexist with normal
+ * type errors and must not be rejected.
  */
-const CONFIG_DIAGNOSTIC_RE = /^.*error TS(?:1\d{3}|6\d+|18002|18003):/m;
+const PARSER_TS1_CODES = '1003|1005|1109|1110|1127|1128|1136|1138|1146|1161|1177|1178|1185|1351|1438|1440';
+const CONFIG_DIAGNOSTIC_RE = new RegExp(
+  `^.*error TS(?:${PARSER_TS1_CODES}|6\\d+|18002|18003):`,
+  'm',
+);
 
 /** Shared by the CLI and its tests; importing this script does not run main(). */
 export function detectConfigDiagnosticLines(output: string): string[] {
@@ -124,7 +127,7 @@ function measureErrors(): number {
   const configLines = detectConfigDiagnosticLines(output);
   if (configLines.length > 0) {
     process.stderr.write(
-      `\u2717 lint:tests — option/config diagnostics detected (TS6xxx, TS18002, TS18003).\n` +
+      `\u2717 lint:tests — option/config diagnostics detected (parser TS1xxx, TS6xxx, TS18002, TS18003).\n` +
         `  These errors can prevent semantic type-checking, making the gate blind.\n` +
         `  Fix the tsconfig.test.json configuration first:\n` +
         configLines
