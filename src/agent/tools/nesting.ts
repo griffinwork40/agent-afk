@@ -9,6 +9,7 @@
  */
 
 import { env } from '../../config/env.js';
+import { resolveDelegationProfile } from '../../config/delegation-profiles.js';
 import type { IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput, CanUseTool } from '../types.js';
@@ -65,14 +66,27 @@ export const MAX_NESTING_DEPTH_CEILING = 6;
  */
 export function resolveMaxNestingDepth(): number {
   const raw = env.AFK_MAX_NESTING_DEPTH;
-  if (raw === undefined) return DEFAULT_MAX_NESTING_DEPTH;
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) return DEFAULT_MAX_NESTING_DEPTH;
-  const n = Number(trimmed);
-  if (!Number.isInteger(n) || n < 0 || n > MAX_NESTING_DEPTH_CEILING) {
-    return DEFAULT_MAX_NESTING_DEPTH;
+  // Individual env var wins over any profile value.
+  if (raw !== undefined) {
+    const trimmed = raw.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const n = Number(trimmed);
+      if (Number.isInteger(n) && n >= 0 && n <= MAX_NESTING_DEPTH_CEILING) {
+        return n;
+      }
+    }
+    // Unparseable / out-of-range: fall through to profile / default below.
   }
-  return n;
+  // Consult the delegation profile when no explicit depth var is set.
+  const profile = resolveDelegationProfile(env.AFK_DELEGATION_PROFILE);
+  if (profile !== undefined) {
+    const profileDepth = profile.maxNestingDepth;
+    // Profile values are internally validated at definition time; clamp anyway.
+    if (profileDepth >= 0 && profileDepth <= MAX_NESTING_DEPTH_CEILING) {
+      return profileDepth;
+    }
+  }
+  return DEFAULT_MAX_NESTING_DEPTH;
 }
 
 export interface ChildProviderFactoryArgs {

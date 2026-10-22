@@ -21,6 +21,7 @@
  */
 
 import { env } from '../../config/env.js';
+import { resolveDelegationProfile } from '../../config/delegation-profiles.js';
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -76,6 +77,7 @@ function resolvePositiveInt(
  * `DelegationBudget` only when this returns a non-undefined config.
  */
 export function resolveDelegationBudgetConfig(): DelegationBudgetConfig | undefined {
+  // Individual env vars always win; profile values are the fallback defaults.
   const maxChildren = resolvePositiveInt(
     env.AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT,
     CEILING_CONCURRENT_CHILDREN_PER_AGENT,
@@ -88,13 +90,37 @@ export function resolveDelegationBudgetConfig(): DelegationBudgetConfig | undefi
     env.AFK_MAX_TOTAL_AGENTS,
     CEILING_TOTAL_AGENTS,
   );
-  if (maxChildren === undefined && maxConcurrent === undefined && maxTotal === undefined) {
+
+  // Consult the delegation profile for fields not set by individual vars.
+  const profile = resolveDelegationProfile(env.AFK_DELEGATION_PROFILE);
+
+  const effectiveChildren =
+    maxChildren ??
+    (profile?.maxConcurrentChildrenPerAgent !== undefined
+      ? resolvePositiveInt(String(profile.maxConcurrentChildrenPerAgent), CEILING_CONCURRENT_CHILDREN_PER_AGENT)
+      : undefined);
+  const effectiveConcurrent =
+    maxConcurrent ??
+    (profile?.maxConcurrentAgents !== undefined
+      ? resolvePositiveInt(String(profile.maxConcurrentAgents), CEILING_CONCURRENT_AGENTS)
+      : undefined);
+  const effectiveTotal =
+    maxTotal ??
+    (profile?.maxTotalAgents !== undefined
+      ? resolvePositiveInt(String(profile.maxTotalAgents), CEILING_TOTAL_AGENTS)
+      : undefined);
+
+  if (
+    effectiveChildren === undefined &&
+    effectiveConcurrent === undefined &&
+    effectiveTotal === undefined
+  ) {
     return undefined;
   }
   return {
-    ...(maxChildren !== undefined ? { maxConcurrentChildrenPerAgent: maxChildren } : {}),
-    ...(maxConcurrent !== undefined ? { maxConcurrentAgents: maxConcurrent } : {}),
-    ...(maxTotal !== undefined ? { maxTotalAgents: maxTotal } : {}),
+    ...(effectiveChildren !== undefined ? { maxConcurrentChildrenPerAgent: effectiveChildren } : {}),
+    ...(effectiveConcurrent !== undefined ? { maxConcurrentAgents: effectiveConcurrent } : {}),
+    ...(effectiveTotal !== undefined ? { maxTotalAgents: effectiveTotal } : {}),
   };
 }
 
