@@ -182,6 +182,13 @@ export function instrumentHandleForChain(
   handle: ChainHandle,
   terminal: Omit<ChainTerminalArgs, 'childId' | 'roundsUsed' | 'endReason' | 'journalUsable'> & {
     journalUsable: () => boolean;
+    /**
+     * Drain the child's async journal queue before the terminal is recorded
+     * (and in-flight cleared), so a continuation issued right after the child
+     * returns folds the complete journal. Bounded by JOURNAL_FLUSH_TIMEOUT_MS;
+     * on timeout/failure the link does not advance (previous link kept).
+     */
+    flushJournal?: () => Promise<void>;
     /** Continuation: undo the admission charge when the child is torn down before it ever ran. */
     rollbackIfNotStarted?: () => void;
     /** D6b: continuation results always carry the line. */
@@ -190,11 +197,12 @@ export function instrumentHandleForChain(
 ): void {
   if (terminal.registry === undefined || terminal.chain === undefined) return;
   let done = false;
-  const record = (r: import('../../subagent/result.js').SubagentResult | undefined, reason: string): void => {
+  const record = async (r: import('../../subagent/result.js').SubagentResult | undefined, reason: string): Promise<void> => {
     if (done) return;
     done = true;
+    const flushed = r === undefined && reason === 'not_started' ? true : await flushWithin(terminal.flushJournal, JOURNAL_FLUSH_TIMEOUT_MS);
     let usable = false;
-    try { usable = terminal.journalUsable(); } catch { usable = false; }
+    try { usable = flushed && terminal.journalUsable(); } catch { usable = false; }
     recordChainTerminal({ ...terminal, childId: handle.id, roundsUsed: r?.roundsUsed, journalUsable: usable, endReason: reason });
   };
   const reasonOf = (r: import('../../subagent/result.js').SubagentResult): string =>
@@ -206,7 +214,7 @@ export function instrumentHandleForChain(
   wrapTeardownBeforeStart(h, started, () => {
     if (done) return;
     if (terminal.rollbackIfNotStarted !== undefined) { done = true; terminal.rollbackIfNotStarted(); return; }
-    record(undefined, 'not_started');
+    void record(undefined, 'not_started');
   });
 }
 
@@ -227,26 +235,49 @@ function wrapTeardownBeforeStart(h: Record<string, unknown>, started: { value: b
 }
 
 type Res = import('../../subagent/result.js').SubagentResult;
+type RecordFn = (r: Res | undefined, reason: string) => Promise<void>;
 
-function wrapRun(h: Record<string, unknown>, handle: ChainHandle, record: (r: Res | undefined, reason: string) => void, reasonOf: (r: Res) => string, started: { value: boolean }): void {
+/** Upper bound on waiting for the child's journal queue to drain at a terminal. */
+export const JOURNAL_FLUSH_TIMEOUT_MS = 5_000;
+
+/** True when `flush` resolved within `ms`; false on timeout or rejection. Never throws. */
+async function flushWithin(flush: (() => Promise<void>) | undefined, ms: number): Promise<boolean> {
+  if (flush === undefined) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      flush().then(() => true, () => false),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ms); timer.unref?.(); }),
+    ]);
+  } catch {
+    return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function wrapRun(h: Record<string, unknown>, handle: ChainHandle, record: RecordFn, reasonOf: (r: Res) => string, started: { value: boolean }): void {
   // Forward EVERY argument: handle.streaming's runInBackground calls
   // `runToResult(prompt, sinkOverride)`; dropping the sink silences the
   // background registry's progress pipe (job log, heartbeat, transcript, touchedFiles).
   const origRun = handle.runToResult.bind(handle) as (...a: unknown[]) => Promise<import('../../subagent/result.js').SubagentResult>;
   h['runToResult'] = (...a: unknown[]) => { started.value = true; return origRun(...a).then(
-    (r) => { record(r, reasonOf(r)); return r; },
-    (err: unknown) => { record(undefined, 'failed'); throw err; },
+    async (r) => { await record(r, reasonOf(r)); return r; },
+    async (err: unknown) => { await record(undefined, 'failed'); throw err; },
   ); };
 }
 
-function wrapBackground(h: Record<string, unknown>, handle: ChainHandle, record: (r: Res | undefined, reason: string) => void, reasonOf: (r: Res) => string, chain: ChainRecord, started: { value: boolean }, always: boolean): void {
+function wrapBackground(h: Record<string, unknown>, handle: ChainHandle, record: RecordFn, reasonOf: (r: Res) => string, chain: ChainRecord, started: { value: boolean }, always: boolean): void {
   const origBg = handle.runInBackground.bind(handle) as (p: unknown, cb?: (r: import('../../subagent/result.js').SubagentResult) => void, ...rest: unknown[]) => unknown;
   h['runInBackground'] = (p: unknown, cb?: (r: import('../../subagent/result.js').SubagentResult) => void, ...rest: unknown[]) => {
     started.value = true;
     return origBg(p, (r) => {
-      record(r, reasonOf(r));
-      appendLineToMessage(r, chain, always);
-      cb?.(r);
+      // Deliver only after the terminal is recorded (journal drained) so the
+      // delivered line/metadata reflect the final chain state.
+      void record(r, reasonOf(r)).catch(() => undefined).then(() => {
+        appendLineToMessage(r, chain, always);
+        cb?.(r);
+      });
     }, ...rest);
   };
 }
@@ -281,6 +312,7 @@ export function wireDispatchChain(args: {
     registry: ctx.continuationRegistry, chain, cwd,
     // D9: advance the link only when the child journal holds messages.
     journalUsable: () => ((handle.session?.messageJournal as { length?: number } | undefined)?.length ?? 0) > 0,
+    flushJournal: async () => { await (handle.session?.messageJournal as { flush?: () => Promise<void> } | undefined)?.flush?.(); },
     ...(plan !== undefined ? { rollbackIfNotStarted: plan.rollback, alwaysLine: true } : {}),
   });
   if (plan !== undefined) plan.wired = true;

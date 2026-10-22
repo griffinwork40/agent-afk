@@ -8,7 +8,7 @@ import { SubagentExecutor, type SubagentExecutorContext } from '../subagent-exec
 import { ContinuationRegistry } from '../../subagent/continuation-registry.js';
 import { agentTool, composeTool } from '../schemas.agent-tools.js';
 import { parseAgentInput } from './input-parse.js';
-import { instrumentHandleForChain, annotateChainResult, actorIdentity } from './continuation-dispatch.js';
+import { instrumentHandleForChain, annotateChainResult, actorIdentity, JOURNAL_FLUSH_TIMEOUT_MS } from './continuation-dispatch.js';
 import { admitContinuationCall } from './continuation-run.js';
 
 const CAPPED = 'tool_use_loop_capped';
@@ -105,7 +105,7 @@ describe('continuation dispatch wiring', () => {
     expect(chain.latestChildId).toBe('child-1');
   });
 
-  it('D9 background: terminal callback updates the registry and appends the line to the delivered message', () => {
+  it('D9 background: terminal callback updates the registry and appends the line to the delivered message', async () => {
     const registry = new ContinuationRegistry();
     const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 0, inputs: { writeCapable: true } });
     let deliver!: (r: SubagentResult) => void;
@@ -116,6 +116,7 @@ describe('continuation dispatch wiring', () => {
     expect(chain.inFlight).toBe(true);
     const r = cappedResult();
     deliver(r);
+    await vi.waitFor(() => expect(onResult).toHaveBeenCalled());
     expect(chain.inFlight).toBe(false);
     expect(chain.roundsCharged).toBe(7);
     expect(chain.latestChildId).toBeUndefined(); // journal unusable keeps the previous link
@@ -178,5 +179,38 @@ describe('continuation dispatch wiring', () => {
     expect(refuse(aChain, anon)).toMatch(/has no identity/);
     expect(refuse(aChain, rootCtx)).toMatch(/owned by another actor/); // parent -> child's chain
     expect(() => registry.createChain({ owner: '', rootSessionId: 'r', roundCap: 1, inputs: { writeCapable: false } })).toThrow();
+  });
+
+  it('D9 journal flush: terminal waits for the child journal to drain before advancing the link', async () => {
+    const registry = new ContinuationRegistry();
+    const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: false } });
+    let drain!: () => void;
+    const flushJournal = vi.fn(() => new Promise<void>((res) => { drain = res; }));
+    const h = handleFor(cappedResult());
+    instrumentHandleForChain(h as never, { registry, chain, cwd: undefined, journalUsable: () => true, flushJournal });
+    const p = (h.runToResult as (x: string) => Promise<unknown>)('x');
+    await vi.waitFor(() => expect(flushJournal).toHaveBeenCalled());
+    expect(chain.inFlight).toBe(true); // not cleared before the journal is on disk
+    drain();
+    await p;
+    expect(chain.inFlight).toBe(false);
+    expect(chain.latestChildId).toBe('child-1');
+  });
+
+  it('D9 journal flush timeout: the previous link is kept and in-flight still clears', async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new ContinuationRegistry();
+      const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: false } });
+      const h = handleFor(cappedResult());
+      instrumentHandleForChain(h as never, { registry, chain, cwd: undefined, journalUsable: () => true, flushJournal: () => new Promise<void>(() => {}) });
+      const p = (h.runToResult as (x: string) => Promise<unknown>)('x');
+      await vi.advanceTimersByTimeAsync(JOURNAL_FLUSH_TIMEOUT_MS + 1);
+      await p;
+      expect(chain.inFlight).toBe(false);
+      expect(chain.latestChildId).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
