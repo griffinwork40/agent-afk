@@ -393,6 +393,19 @@ describe('planGitRead (#4227): count shorthand normalization', () => {
     expect(plan.ok && plan.argv?.some((t) => t.startsWith('--max-count='))).toBe(false);
   });
 
+  // F1: git grep -5 means "-C 5" (context lines), not --max-count=5.
+  // grep is excluded from count normalization even though it has --max-count= in policy.
+  it('security (F1): -5 on grep is NOT rewritten to --max-count=5 (grep has no -N flag)', () => {
+    // grep's policy does not list -5 as a flag, so checkToken rejects it.
+    expect(rejected({ subcommand: 'grep', pattern: 'foo', args: ['-5'] })).toContain('Rejected');
+  });
+
+  // F2: git grep -n5 is also NOT rewritten; -n is --line-number on grep, not a count prefix.
+  it('security (F2): -n5 on grep is NOT rewritten to --max-count=5', () => {
+    // -n5 is not a listed flag for grep, so checkToken rejects it.
+    expect(rejected({ subcommand: 'grep', pattern: 'foo', args: ['-n5'] })).toContain('Rejected');
+  });
+
   it('-n flag on shortlog is kept as a flag (shortlog lists -n as --numbered)', () => {
     // shortlog has -n in its flags list; normalization must not consume the next token.
     const plan = planGitRead({ subcommand: 'shortlog', args: ['-s', '-n'] }, CWD);
@@ -448,6 +461,35 @@ describe('planGitRead (#4227): echoed subcommand stripped from args', () => {
     // "commit" !== "log" so stripping does not apply; "commit" passes REV_RE
     // and is treated as a branch/ref name (valid for git log).
     const plan = planGitRead({ subcommand: 'log', args: ['commit'] }, CWD);
+    expect(plan.ok).toBe(true);
+  });
+
+  // F3: args:["show"] alone (no other token) must be rejected — "show" is a
+  // valid ref name, so silently stripping it changes meaning (runs bare git show
+  // against HEAD instead of showing the "show" branch).
+  it('correctness (F3): args:["show"] with subcommand "show" is rejected as ambiguous', () => {
+    expect(rejected({ subcommand: 'show', args: ['show'] })).toMatch(/[Aa]mbiguous/);
+  });
+
+  it('correctness (F3): args:["log"] with subcommand "log" is rejected as ambiguous', () => {
+    expect(rejected({ subcommand: 'log', args: ['log'] })).toMatch(/[Aa]mbiguous/);
+  });
+
+  // F4: partial echo — subcommand token appears at a non-zero position.
+  // args:["-5","log"] for subcommand "log": position-0 is "-5" so the leading-
+  // echo strip doesn't fire, but "log" at position 1 must still be caught.
+  it('correctness (F4): partial echo at non-zero position is rejected', () => {
+    expect(rejected({ subcommand: 'log', args: ['-5', 'log'] })).toMatch(/[Aa]mbiguous/);
+  });
+
+  it('correctness (F4): partial echo at position 2 is rejected', () => {
+    expect(rejected({ subcommand: 'log', args: ['--oneline', 'log'] })).toMatch(/[Aa]mbiguous/);
+  });
+
+  it('correctness (F4): valid branch named "main" is NOT caught by echo guard', () => {
+    // "main" !== "log", so no echo rejection fires.
+    const plan = planGitRead({ subcommand: 'log', args: ['-5', 'main'] }, CWD);
+    // -5 normalizes to --max-count=5; main is accepted as a rev.
     expect(plan.ok).toBe(true);
   });
 });

@@ -212,9 +212,18 @@ const COUNT_VALUE_RE = /^[1-9][0-9]*$/;
  * `-n` is only treated as a count shorthand when it is NOT already an exact
  * flag in the policy (e.g. shortlog and grep list `-n` as `--numbered` /
  * `--line-number` respectively; for those, `-n` passes through unchanged).
+ *
+ * IMPORTANT: `grep` is explicitly excluded even though it has `--max-count=`
+ * in its policy. In `git grep`, `-5` means `-C 5` (context lines), NOT a
+ * count limit. The compact `-n5` form is likewise ambiguous with `-n -5`.
+ * grep's own option token `-C`/`-A`/`-B` are not in the allowlist, so those
+ * forms are already rejected by checkToken; we must not silently rewrite them.
  */
-function normalizeCountArgs(args: string[], policy: SubcommandPolicy): string[] | string {
+function normalizeCountArgs(args: string[], policy: SubcommandPolicy, subcommand: GitReadSubcommand): string[] | string {
   if (!policy.valued.includes('--max-count=')) return args;
+  // grep: -N means context lines (-C N), not a count limit. Skip normalization
+  // entirely so the token reaches checkToken and is rejected (grep has no -N flag).
+  if (subcommand === 'grep') return args;
   // If `-n` is an exact flag in this policy, leave it alone (shortlog uses
   // `-n` as `--numbered`; we must not consume its following token).
   const nIsFlag = policy.flags.includes('-n');
@@ -270,12 +279,28 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   const paths = sep === -1 ? fieldPaths : [...fieldPaths, ...rawArgs.slice(sep + 1)];
   if (paths.length > MAX_ARGS) return { ok: false, error: `"paths" accepts at most ${MAX_ARGS} entries.` };
 
-  // Fix 3: strip an echoed subcommand from the front of args.
-  // Models sometimes repeat the subcommand as args[0] (e.g. args:["show","HEAD"]).
-  if (args.length > 0 && args[0] === subcommand) args = args.slice(1);
+  // Fix 3 & F4: strip echoed subcommand tokens from args.
+  // Models sometimes repeat the subcommand token as args[0] (e.g. args:["show","HEAD"]).
+  // F3: Only strip args[0] when args.length >= 2; a lone subcommand token (e.g.
+  //     args:["show"]) would silently change meaning — "show" could be a valid
+  //     same-name ref — so we reject it instead.
+  // F4: Also reject any token at a later position that equals the subcommand, because
+  //     e.g. args:["-5","log"] passes the position-0 guard but "log" would be
+  //     treated as a spurious revision by checkToken.
+  if (args.length >= 2 && args[0] === subcommand) {
+    args = args.slice(1);
+  } else if (args.length === 1 && args[0] === subcommand) {
+    return { ok: false, error: `Ambiguous args: ["${subcommand}"] — did you mean to pass a revision named "${subcommand}", or is this an echoed subcommand? Use args:[] for bare git ${subcommand}.` };
+  }
+  // After stripping a leading echo, reject any remaining token that equals the
+  // subcommand name (partial echo, e.g. args:["-5","log"] with subcommand "log").
+  const echoIdx = args.findIndex((t) => t === subcommand);
+  if (echoIdx !== -1) {
+    return { ok: false, error: `Ambiguous args: token at position ${echoIdx} equals the subcommand "${subcommand}". Pass the subcommand only in the "subcommand" field.` };
+  }
 
   // Fix 1: normalize -N / -n N / -nN count shorthands to --max-count=N.
-  const normalizedArgs = normalizeCountArgs(args, policy);
+  const normalizedArgs = normalizeCountArgs(args, policy, subcommand);
   if (typeof normalizedArgs === 'string') return { ok: false, error: normalizedArgs };
   args = normalizedArgs;
 
