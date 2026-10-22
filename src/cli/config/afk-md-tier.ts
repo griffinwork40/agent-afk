@@ -6,7 +6,9 @@
 // plugin-skills split).
 
 import { readFileSync, existsSync, realpathSync } from 'fs';
-import { estimateTokens } from '../../agent/memory/index.js';
+// Leaf import, not the `agent/memory` barrel: the barrel drags better-sqlite3
+// onto the config-load path and is routinely vi.mock'ed without this export.
+import { estimateTokens } from '../../agent/memory/estimate-tokens.js';
 import { getUserAfkMdPath, getProjectAfkMdPath } from '../../paths.js';
 
 /**
@@ -52,9 +54,41 @@ let afkMdCache: { cwd: string; value: AfkMdResult | null } | undefined;
  */
 const warnedAfkMdSize = new Set<string>();
 
-/** Test-only hook to reset the size warn-once tracker. Internal API. */
+/**
+ * Deferred-emission buffer. `null` = emit immediately to stderr (default);
+ * an array = hold warnings until the caller flushes them.
+ *
+ * Invariant: the REPL clears the viewport AND scrollback
+ * (`\x1b[3J\x1b[2J\x1b[H`) after bootstrap, while `index.ts` calls
+ * `loadConfig()` before `parseAsync()`. A warning written directly at that
+ * point is erased, and the warn-once set then suppresses every retry — so the
+ * pre-parse load runs deferred and the REPL flushes after the clear (via
+ * `drainBootWarnings`), while every other command flushes in a `preAction`
+ * hook before its own output.
+ */
+let deferredSizeWarnings: string[] | null = null;
+
+/** Test-only hook to reset the size warn-once tracker and deferral buffer. Internal API. */
 export function _resetAfkMdSizeWarnCache(): void {
   warnedAfkMdSize.clear();
+  deferredSizeWarnings = null;
+}
+
+/** Start buffering size warnings instead of writing them to stderr. Idempotent. */
+export function deferAfkMdSizeWarnings(): void {
+  deferredSizeWarnings ??= [];
+}
+
+/**
+ * Write every buffered size warning to stderr and END deferral, so any later
+ * warning (e.g. a new path set after `/afk-md reload`) prints immediately.
+ * A no-op when nothing was deferred.
+ */
+export function flushDeferredAfkMdSizeWarnings(): void {
+  const pending = deferredSizeWarnings ?? [];
+  deferredSizeWarnings = null;
+  // eslint-disable-next-line no-console -- one-shot operator UX warning
+  for (const msg of pending) console.warn(msg);
 }
 
 /**
@@ -116,14 +150,21 @@ const projectScopeHeader = (path: string): string =>
 
 /**
  * Emit a one-shot stderr warning when the composed AFK.md overlay exceeds
- * `OVERLAY_TOKEN_WARN_THRESHOLD` estimated tokens. Keyed on the joined path
- * string so a different file set re-warns (e.g. after `/afk-md reload`).
+ * `OVERLAY_TOKEN_WARN_THRESHOLD` estimated tokens (strictly greater, matching
+ * `/afk-md`). Keyed on the joined path string so a different file set re-warns
+ * (e.g. after `/afk-md reload`).
+ *
+ * Contract: call ONLY when the AFK.md tier actually supplies the prompt —
+ * `loadConfig()` does so in its tier-3 branch. `loadAfkMd()` itself never
+ * warns, because it is also used as a side-effect-free probe to report
+ * shadowed files that are NOT sent on any request.
  *
  * Uses `console.warn` (stderr) — never stdout — so one-shot `afk chat`
- * pipelines are not polluted. Warning only: content is never truncated.
+ * pipelines are not polluted; buffered instead while deferral is active.
+ * Warning only: content is never truncated.
  */
-function maybeWarnSize(result: AfkMdResult): void {
-  if (result.estimatedTokens < OVERLAY_TOKEN_WARN_THRESHOLD) return;
+export function warnIfAfkMdOversize(result: AfkMdResult): void {
+  if (result.estimatedTokens <= OVERLAY_TOKEN_WARN_THRESHOLD) return;
   const key = result.paths.join('\0');
   if (warnedAfkMdSize.has(key)) return;
   warnedAfkMdSize.add(key);
@@ -132,12 +173,16 @@ function maybeWarnSize(result: AfkMdResult): void {
     result.estimatedTokens < 1000
       ? `~${result.estimatedTokens}`
       : `~${(result.estimatedTokens / 1000).toFixed(1)}k`;
-  // eslint-disable-next-line no-console -- one-shot operator UX warning
-  console.warn(
+  const msg =
     `[afk] AFK.md overlay is large (${tokStr} est. tokens) and is sent on every API request.\n` +
-      `      Path(s):\n${pathList}\n` +
-      `      Run \`/afk-md\` to inspect and trim, or move detail to HOT.md / the fact archive.`,
-  );
+    `      Path(s):\n${pathList}\n` +
+    `      Run \`/afk-md\` to inspect and trim, or move detail to HOT.md / the fact archive.`;
+  if (deferredSizeWarnings !== null) {
+    deferredSizeWarnings.push(msg);
+    return;
+  }
+  // eslint-disable-next-line no-console -- one-shot operator UX warning
+  console.warn(msg);
 }
 
 /**
@@ -167,9 +212,9 @@ function maybeWarnSize(result: AfkMdResult): void {
  * `# Operator configuration` header — never delivered as a separate
  * synthetic user-turn message the way Claude Code delivers CLAUDE.md.
  *
- * When the composed overlay exceeds `OVERLAY_TOKEN_WARN_THRESHOLD` estimated
- * tokens, a one-shot warning is emitted to stderr naming the path(s) and
- * token estimate. Content is never truncated.
+ * Side-effect-free apart from the memo: the result carries `estimatedTokens`
+ * but this function never warns (see `warnIfAfkMdOversize`). Content is never
+ * truncated.
  *
  * Memoized via `afkMdCache` — see the cache block above for the
  * invalidation contract.
@@ -214,8 +259,6 @@ export function loadAfkMd(cwd: string = process.cwd()): AfkMdResult | null {
   } else {
     result = null;
   }
-
-  if (result !== null) maybeWarnSize(result);
 
   afkMdCache = { cwd, value: result };
   return afkMdCache.value;
