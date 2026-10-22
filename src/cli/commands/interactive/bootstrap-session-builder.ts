@@ -69,6 +69,8 @@ export interface BuildAgentSessionDeps {
   autoResumeOnUsageLimit: boolean | undefined;
   /** Initial session permission mode (e.g. 'bypassPermissions'). Omit for 'default'. */
   permissionMode?: PermissionMode;
+  /** Per-turn file checkpoints for /rewind (#4271). REPL default on; `fileCheckpoints: false` opts out. */
+  enableFileCheckpointing?: boolean;
   baseUrl?: string;
   /** Sampling temperature when explicitly set by the user. */
   temperature?: number;
@@ -130,6 +132,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
       : {}),
     ...(deps.baseUrl !== undefined ? { baseUrl: deps.baseUrl } : {}),
+    ...(deps.enableFileCheckpointing !== undefined ? { enableFileCheckpointing: deps.enableFileCheckpointing } : {}),
     providerFactory: deps.providerFactory,
   }))), deps.traceWriter);
 }
@@ -193,6 +196,8 @@ export function buildSharedDeps(a: {
     cwd: a.effectiveCwd,
     maxTurns: parseInt(a.maxTurns, 10),
     autoResumeOnUsageLimit: a.cliConfig.autoResumeOnUsageLimit,
+    // REPL default-on with an opt-out (#4271); other surfaces never set it.
+    enableFileCheckpointing: a.cliConfig.fileCheckpoints !== false,
     ...(a.initialPermissionMode !== undefined ? { permissionMode: a.initialPermissionMode } : {}),
     ...(a.explicitProvider !== undefined ? { explicitProvider: a.explicitProvider } : {}),
   };

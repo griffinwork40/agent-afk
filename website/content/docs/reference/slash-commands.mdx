@@ -405,6 +405,18 @@ Hint: Use when AFK_PEER_INBOUND=hold: /inbox to list, /inbox accept &lt;prefix\|
 
 Flags: None
 
+### `/info`
+
+Show session identity, model, permissions, and recorded usage
+
+Usage: `/info`
+
+Aliases: None
+
+Hint: None
+
+Flags: None
+
 ### `/init`
 
 Scan project and generate AFK.md
@@ -575,13 +587,13 @@ Flags: None
 
 ### `/rewind`
 
-Edit a previous message (rewind the conversation)
+Rewind the conversation, files, or both to a previous message
 
 Usage: `/rewind`
 
 Aliases: None
 
-Hint: When you want to go back and re-ask an earlier prompt — pick a message, the conversation rewinds to it, and its text loads into the input to edit and resend. (Also: press Esc twice at an empty prompt.)
+Hint: When you want to go back to an earlier prompt — pick a message, then choose conversation (its text loads into the input to edit and resend), files (restore files to how they were before it), or both. A file restore is always previewed first. `/rewind conversation\|files\|both` skips the mode menu. (Also: press Esc twice at an empty prompt for a conversation-only rewind.)
 
 Flags: None
 

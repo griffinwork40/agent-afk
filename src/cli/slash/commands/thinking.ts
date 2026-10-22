@@ -21,8 +21,7 @@
 import type { ThinkingUiMode } from '../types.js';
 import type { SlashCommand } from '../types.js';
 import { palette } from '../../palette.js';
-
-const VALID_MODES: readonly ThinkingUiMode[] = ['summary', 'live', 'digest', 'off'];
+import { THINKING_MODES, getSessionThinking, setSessionThinking } from '../../../agent/session-control/index.js';
 
 const MODE_DESCRIPTIONS: Record<ThinkingUiMode, string> = {
   live: 'streaming preview + finalize summary',
@@ -49,22 +48,20 @@ export const thinkingCmd: SlashCommand = {
 
     // No args → show current mode.
     if (!target) {
-      const current = ctx.stats.thinkingUi ?? 'live';
+      const current = getSessionThinking(ctx.stats);
       ctx.out.info(`Thinking display: ${palette.brand(current)} (${MODE_DESCRIPTIONS[current]})`);
       return 'continue';
     }
 
     // Validate.
-    if (!VALID_MODES.includes(target)) {
+    const result = setSessionThinking(ctx.stats, target);
+    if (!result.ok) {
       ctx.out.warn(
-        `Invalid mode: "${target}". Valid modes: ${VALID_MODES.join(', ')}`,
+        `Invalid mode: "${target}". Valid modes: ${THINKING_MODES.join(', ')}`,
       );
       return 'continue';
     }
 
-    // Mutate the shared stats object — the REPL loop reads
-    // `ctx.stats.thinkingUi` at the top of the next turn.
-    ctx.stats.thinkingUi = target;
     ctx.out.success(
       `Thinking display set to ${palette.brand(target)} (${MODE_DESCRIPTIONS[target]}). ` +
       `Takes effect on the next turn. (display only — thinking still runs; cost and latency are unaffected.)`,

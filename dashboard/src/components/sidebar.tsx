@@ -1,35 +1,15 @@
 import { cn } from '@/lib/utils';
 import type { SessionSummary } from '@/types/api';
 import { SessionCard } from './session-card';
-import {
-  MessageSquare,
-  Brain,
-  Calendar,
-  Briefcase,
-  Settings,
-  PanelLeftClose,
-  PanelLeft,
-  Bell,
-} from 'lucide-react';
-
-type NavItem = 'sessions' | 'memory' | 'schedules' | 'jobs' | 'handoffs' | 'settings';
-
-const navItems: { id: NavItem; label: string; icon: React.ReactNode }[] = [
-  { id: 'sessions', label: 'Sessions', icon: <MessageSquare className="size-4" /> },
-  { id: 'memory', label: 'Memory', icon: <Brain className="size-4" /> },
-  { id: 'schedules', label: 'Schedules', icon: <Calendar className="size-4" /> },
-  { id: 'jobs', label: 'Jobs', icon: <Briefcase className="size-4" /> },
-  { id: 'handoffs', label: 'Handoffs', icon: <Bell className="size-4" /> },
-  { id: 'settings', label: 'Settings', icon: <Settings className="size-4" /> },
-];
-
-export type { NavItem };
+import { PanelLeftClose, PanelLeft } from 'lucide-react';
+import { listNavItems } from '@/lib/nav-registry';
 
 export function Sidebar({
   sessions,
   pendingSessionIds,
   selectedSessionId,
   onSelectSession,
+  onResumeSession,
   activeNav,
   onNavChange,
   collapsed,
@@ -39,8 +19,10 @@ export function Sidebar({
   pendingSessionIds: Set<string>;
   selectedSessionId: string | null;
   onSelectSession: (id: string) => void;
-  activeNav: NavItem;
-  onNavChange: (nav: NavItem) => void;
+  /** Called when user clicks Resume on a readonly session card. */
+  onResumeSession?: (sessionId: string) => void;
+  activeNav: string;
+  onNavChange: (nav: string) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
 }) {
@@ -74,7 +56,7 @@ export function Sidebar({
 
       {/* Navigation */}
       <nav className="flex flex-col gap-0.5 p-2">
-        {navItems.map((item) => (
+        {listNavItems().map((item) => (
           <button
             key={item.id}
             onClick={() => onNavChange(item.id)}
@@ -85,8 +67,10 @@ export function Sidebar({
                 : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
             )}
             title={collapsed ? item.label : undefined}
+            aria-label={item.label}
+            aria-current={activeNav === item.id ? 'page' : undefined}
           >
-            {item.icon}
+            <item.icon className="size-4" aria-hidden="true" />
             {!collapsed && <span>{item.label}</span>}
           </button>
         ))}
@@ -108,6 +92,7 @@ export function Sidebar({
                   pendingSessionIds={pendingSessionIds}
                   selected={selectedSessionId === s.id}
                   onSelect={onSelectSession}
+                  onResume={onResumeSession}
                 />
               ))}
             </div>

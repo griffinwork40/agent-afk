@@ -52,6 +52,8 @@ import { ensureError } from '../../../../utils/errors.js';
 
 /** Live accessors the iteration driver needs from the owning query instance. */
 export interface IterationContext {
+  /** File-checkpoint linker for the pushed user turn; absent in tests and when unwired. */
+  readonly checkpoint?: { linkUserTurn(message: object, messageIndex: number): void };
   /** Current model id — mutable between turns via setModel. */
   readonly currentModel: string;
   /** Current permission mode — mutable via setPermissionMode. */
@@ -115,12 +117,18 @@ export function* finishTurn(
 export function pushUserTurn(
   ctx: IterationContext,
   content: import('../../../provider.js').ProviderUserTurn['content'],
+  linkCheckpoint = true,
 ): void {
   const vision = supportsVision(ctx.currentModel);
-  ctx.priorTurns.push({
+  const message: OpenAIMessage = {
     role: 'user',
     content: buildUserContent(content, { vision, model: ctx.currentModel }),
-  });
+  };
+  ctx.priorTurns.push(message);
+  // Tie this prompt to its file checkpoint for /rewind (#4271). Stop-hook
+  // continuation messages are NOT linked: rewinding "to" one would restore
+  // files to the start of the whole turn while keeping its earlier segment.
+  if (linkCheckpoint) ctx.checkpoint?.linkUserTurn(message, ctx.priorTurns.length - 1);
 }
 
 /**

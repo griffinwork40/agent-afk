@@ -220,6 +220,64 @@ describe('combineV2 rule 4: two or more minor negatives', () => {
     expect(r.label).not.toBe('failed');
   });
 
+  it('many fix_of_fix votes alone count once → not failed (design: fof never flips alone)', () => {
+    const fof = (n: number): Vote =>
+      makeVote('fix_of_fix', -1, 'weak', { severity: 'minor', evidence: `PR #${n} mentions it` });
+    const r = combineV2({
+      votes: [fof(1), fof(2), fof(3), fof(4)],
+      selfReport: 'done',
+      artifacts: withArtifacts,
+      settleWindowPassed: true,
+    });
+    // Collapsed to one minor negative → rule 7, not rule 4
+    expect(r.label).toBe('succeeded');
+    expect(r.confidence).toBe(0.3);
+    expect(r.basis).toBe('no_bad_signals');
+  });
+
+  it('N fix_of_fix votes + strong positive → same confidence as one fix_of_fix', () => {
+    const fof = (n: number): Vote =>
+      makeVote('fix_of_fix', -1, 'weak', { severity: 'minor', evidence: `PR #${n} mentions it` });
+    const pos = makeVote('pr_fate', 1, 'strong');
+    const one = combineV2({ votes: [pos, fof(1)], selfReport: 'done', artifacts: withArtifacts });
+    const many = combineV2({
+      votes: [pos, ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map(fof)],
+      selfReport: 'done',
+      artifacts: withArtifacts,
+    });
+    expect(one.label).toBe('succeeded');
+    expect(one.basis).toBe('proven');
+    expect(many.label).toBe('succeeded');
+    expect(many.basis).toBe('proven');
+    expect(one.confidence).toBe(0.92);
+    expect(many.confidence).toBe(one.confidence);
+  });
+
+  it('one fix_of_fix plus a different minor negative → still failed', () => {
+    const r = combineV2({
+      votes: [
+        makeVote('fix_of_fix', -1, 'weak', { severity: 'minor', evidence: 'PR #1' }),
+        makeVote('fix_of_fix', -1, 'weak', { severity: 'minor', evidence: 'PR #2' }),
+        makeVote('budget_cap', -1, 'weak', { severity: 'minor' }),
+      ],
+      selfReport: 'none',
+      artifacts: withArtifacts,
+    });
+    expect(r.label).toBe('failed');
+  });
+
+  it('two red-CI votes from the same ci LF still count twice → failed', () => {
+    const r = combineV2({
+      votes: [
+        makeVote('ci', -1, 'weak', { evidence: 'gh pr checks PR-1: failed' }),
+        makeVote('ci', -1, 'weak', { evidence: 'gh pr checks PR-2: failed' }),
+      ],
+      selfReport: 'none',
+      artifacts: withArtifacts,
+    });
+    expect(r.label).toBe('failed');
+  });
+
   it('strength-mapped minor (weak without severity) counted for rule 4', () => {
     const r = combineV2({
       votes: [

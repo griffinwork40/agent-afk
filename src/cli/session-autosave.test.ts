@@ -28,7 +28,7 @@ describe('createSessionAutosaver', () => {
     const saver = createSessionAutosaver({ model: 'sonnet', source: 'web', cwd: '/w', sessionId: 's-web' });
     saver.saveTurn('fix the login bug please', 'done', { totalCostUsd: 0.1, durationMs: 5 });
     const sc = readSidecar('s-web');
-    expect(sc).toMatchObject({ sessionId: 's-web', source: 'web', cwd: '/w', name: 'fix-the-login-bug-please', totalTurns: 1 });
+    expect(sc).toMatchObject({ sessionId: 's-web', source: 'web', cwd: '/w', name: 'fix-login-bug-please', totalTurns: 1 });
     expect(typeof sc['savedAt']).toBe('number');
     expect(sc['model']).toBe('sonnet');
   });

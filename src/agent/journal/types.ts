@@ -126,7 +126,14 @@ export type JournalMarkLabel =
   | 'resume'
   | 'fork'
   | 'model_switch'
-  | 'suggestion';
+  | 'suggestion'
+  /**
+   * A file-checkpointed user turn began (#4271). `detail`:
+   * `{ checkpointTurnId, messageIndex }`, where `messageIndex` is the user
+   * message's index in the provider-native history at turn start. Durable
+   * provenance tying a prompt to its file checkpoint across restarts.
+   */
+  | 'checkpoint';
 
 /**
  * `detail` of a `suggestion` mark: one AI-generated REPL suggestion event

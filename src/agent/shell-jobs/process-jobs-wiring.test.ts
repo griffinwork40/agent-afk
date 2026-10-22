@@ -75,4 +75,15 @@ describe('ProcessJobRegistry production wiring', () => {
     });
     expect(deps.processJobs).toBe(reg);
   });
+
+  it('buildSharedDeps turns file checkpoints on by default and honours fileCheckpoints:false (#4271)', () => {
+    const base = {
+      sessionModel: 'claude-sonnet-4-5', resumeConfig: {}, systemPrompt: undefined, systemPromptSource: undefined,
+      thinking: undefined, effort: undefined, maxOutputTokens: undefined, maxToolUseIterations: undefined,
+      maxBudgetUsd: undefined, providerFactory: (() => {}) as any, hookRegistry: { register: () => {} } as any,
+      traceWriter: undefined, effectiveCwd: undefined, maxTurns: '0', initialPermissionMode: undefined,
+    };
+    expect(buildSharedDeps({ ...base, cliConfig: {} as any }).enableFileCheckpointing).toBe(true);
+    expect(buildSharedDeps({ ...base, cliConfig: { fileCheckpoints: false } as any }).enableFileCheckpointing).toBe(false);
+  });
 });

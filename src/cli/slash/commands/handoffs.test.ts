@@ -299,6 +299,16 @@ describe('/handoffs:answer', () => {
     expect(mockAnswer).not.toHaveBeenCalled();
   });
 
+  it('accepts number equal to min bound', async () => {
+    mockList.mockResolvedValue([makePendingRecord({
+      question: { type: 'number', message: 'Rate:', min: 1, max: 10 },
+    })]);
+    mockAnswer.mockResolvedValue(true);
+    const { ctx } = makeCtx();
+    await handoffsAnswerCmd.handler(ctx, 'q-1234567890-abcdef 1');
+    expect(mockAnswer).toHaveBeenCalledWith('q-1234567890-abcdef', { value: 1 }, 'repl', undefined, 'repl');
+  });
+
   it('validates number answer against max bound', async () => {
     mockList.mockResolvedValue([makePendingRecord({
       question: { type: 'number', message: 'Rate:', min: 1, max: 10 },
@@ -307,6 +317,16 @@ describe('/handoffs:answer', () => {
     await handoffsAnswerCmd.handler(ctx, 'q-1234567890-abcdef 11');
     expect(output.errors[0]).toMatch(/<= 10/);
     expect(mockAnswer).not.toHaveBeenCalled();
+  });
+
+  it('accepts number equal to max bound', async () => {
+    mockList.mockResolvedValue([makePendingRecord({
+      question: { type: 'number', message: 'Rate:', min: 1, max: 10 },
+    })]);
+    mockAnswer.mockResolvedValue(true);
+    const { ctx } = makeCtx();
+    await handoffsAnswerCmd.handler(ctx, 'q-1234567890-abcdef 10');
+    expect(mockAnswer).toHaveBeenCalledWith('q-1234567890-abcdef', { value: 10 }, 'repl', undefined, 'repl');
   });
 
   it('accepts custom value for choice with allowCustom', async () => {
@@ -319,6 +339,20 @@ describe('/handoffs:answer', () => {
     expect(mockAnswer).toHaveBeenCalledWith(
       'q-1234567890-abcdef',
       { value: null, custom_value: 'something-custom' },
+      'repl', undefined, 'repl',
+    );
+  });
+
+  it('allowCustom with input matching a listed choice sends canonical { value }, not custom_value', async () => {
+    mockList.mockResolvedValue([makePendingRecord({
+      question: { type: 'choice', message: 'Pick:', choices: ['alpha', 'beta'], allowCustom: true },
+    })]);
+    mockAnswer.mockResolvedValue(true);
+    const { ctx } = makeCtx();
+    await handoffsAnswerCmd.handler(ctx, 'q-1234567890-abcdef alpha');
+    expect(mockAnswer).toHaveBeenCalledWith(
+      'q-1234567890-abcdef',
+      { value: 'alpha' },
       'repl', undefined, 'repl',
     );
   });

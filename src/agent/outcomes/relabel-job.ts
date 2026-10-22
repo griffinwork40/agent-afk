@@ -417,10 +417,25 @@ export interface RescoreOptions {
   limit?: number;
   dryRun?: boolean;
   outcomesDir?: string;
+  /**
+   * Also re-combine settled 'failed' records (default false). Records carrying
+   * an explicit_feedback vote (/good, /bad) are always skipped on this path:
+   * the rescore does not pass explicit_feedback to the combiner, and an
+   * operator verdict must never be re-derived.
+   */
+  includeFailed?: boolean;
+}
+
+function isRescoreCandidate(rec: VerifiedOutcome, includeFailed: boolean): boolean {
+  if (rec.state !== 'settled') return false;
+  if (rec.label === 'unknown') return true;
+  if (!includeFailed || rec.label !== 'failed') return false;
+  return !rec.votes.some((v) => v.lf === 'explicit_feedback');
 }
 
 /**
- * Re-apply combiner v2 to settled records whose label is 'unknown'.
+ * Re-apply combiner v2 to settled records whose label is 'unknown' (and,
+ * with includeFailed, settled 'failed' records without explicit feedback).
  *
  * This is the backfill for the 564 records produced by combiner v1 that could
  * not be labeled because v1 required strong positive proof. Combiner v2 adds
@@ -439,6 +454,7 @@ export async function rescoreSettledUnknown(
   const limit = opts.limit ?? 200;
   const dryRun = opts.dryRun ?? false;
   const outcomesDir = opts.outcomesDir;
+  const includeFailed = opts.includeFailed ?? false;
 
   const result: RescoreResult = { scanned: 0, relabeled: 0, skipped: 0, errors: 0 };
 
@@ -454,7 +470,7 @@ export async function rescoreSettledUnknown(
   for (const id of allIds) {
     try {
       const rec = readRecord(id, outcomesDir);
-      if (rec && rec.state === 'settled' && rec.label === 'unknown') {
+      if (rec && isRescoreCandidate(rec, includeFailed)) {
         candidates.push(id);
       }
       if (candidates.length >= limit) break;
@@ -469,7 +485,7 @@ export async function rescoreSettledUnknown(
   for (const id of candidates) {
     try {
       const rec = readRecord(id, outcomesDir);
-      if (!rec || rec.state !== 'settled' || rec.label !== 'unknown') {
+      if (!rec || !isRescoreCandidate(rec, includeFailed)) {
         result.skipped++;
         continue;
       }
@@ -508,7 +524,11 @@ export async function rescoreSettledUnknown(
         basis,
         history: [
           ...rec.history,
-          { at: nowStr, label, reason: 'rescore-settled: combiner v2 good-by-default' },
+          {
+            at: nowStr,
+            label,
+            reason: `rescore-settled: combiner v2 re-applied (was ${rec.label})`,
+          },
         ],
       };
       writeRecord(updated, outcomesDir);

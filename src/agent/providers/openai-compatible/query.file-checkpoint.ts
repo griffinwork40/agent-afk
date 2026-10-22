@@ -11,13 +11,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import {
-  createFileCheckpointRegistry,
-  type FileCheckpointRegistry,
-} from '../../file-checkpoint/file-checkpoint.js';
+import type { FileCheckpointRegistry } from '../../file-checkpoint/file-checkpoint.js';
+import { beginCheckpointTurn, endCheckpointTurn, linkCheckpointTurn } from '../../file-checkpoint/turn-lifecycle.js';
 import { rewindFiles } from '../../file-checkpoint/rewind-files.js';
 import type { ToolHandlerContext } from '../../tools/types.js';
-import type { ProviderEvent, ProviderRewindResult } from '../../provider.js';
+import type { ProviderEvent, ProviderRewindResult, RewindFilesOptions } from '../../provider.js';
+import type { MessageJournal } from '../../journal/types.js';
 
 interface CheckpointWiringHost {
   fileCheckpointWiring: { set: (r: FileCheckpointRegistry | undefined) => void };
@@ -35,9 +34,12 @@ function wiringOf(dispatcher: object | undefined): CheckpointWiringHost['fileChe
  */
 export class FileCheckpointState {
   private currentTurnId: string | undefined;
+  private registry: FileCheckpointRegistry | undefined;
+  private markedTurnId: string | undefined;
   constructor(
     private readonly enabled: boolean,
     private readonly sessionId: string,
+    private readonly journal?: MessageJournal,
   ) {}
 
   /** Wire a fresh registry for a new turn; stores the generated turnId. */
@@ -47,14 +49,32 @@ export class FileCheckpointState {
     if (wiring === undefined) return;
     const turnId = userMessageId ?? randomUUID();
     this.currentTurnId = turnId;
-    wiring.set(createFileCheckpointRegistry(this.sessionId, turnId));
+    this.registry = beginCheckpointTurn(this.sessionId, turnId);
+    wiring.set(this.registry);
     return turnId;
   }
 
-  /** Clear the per-turn registry (called from the turn's finally block). */
+  /**
+   * Link the user message pushed for the current turn to its checkpoint
+   * (called from `pushUserTurn`, which runs after {@link begin}). A token
+   * refresh retry re-pushes a fresh message object; it is linked too, and the
+   * journal mark is written once per turn.
+   */
+  linkUserTurn(message: object, messageIndex: number): void {
+    const turnId = this.currentTurnId;
+    if (turnId === undefined) return;
+    linkCheckpointTurn(message, turnId);
+    if (this.markedTurnId === turnId) return;
+    this.markedTurnId = turnId;
+    this.journal?.mark('checkpoint', { checkpointTurnId: turnId, messageIndex });
+  }
+
+  /** Clear the per-turn registry (called on completion and from the turn's finally block). */
   end(dispatcher: object | undefined): void {
     if (!this.enabled) return;
     wiringOf(dispatcher)?.set(undefined);
+    endCheckpointTurn(this.sessionId, this.registry);
+    this.registry = undefined;
     this.currentTurnId = undefined;
   }
 
@@ -72,7 +92,7 @@ export class FileCheckpointState {
   }
 
   /** Delegate rewindFiles for the enclosing provider query. */
-  rewind(userMessageId: string, options?: { dryRun?: boolean }, writePolicy?: ToolHandlerContext): Promise<ProviderRewindResult> {
+  rewind(userMessageId: string, options?: RewindFilesOptions, writePolicy?: ToolHandlerContext): Promise<ProviderRewindResult> {
     if (this.currentTurnId !== undefined) {
       return Promise.resolve({ canRewind: false, error: 'Cannot rewind files while a turn is in flight.' });
     }

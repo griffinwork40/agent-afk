@@ -17,6 +17,10 @@ import {
   DEFAULT_SLOT_BINDINGS,
   DIRECT_MODEL_ALIASES,
   getSlotBindings,
+  GPT_ASTRA_ID,
+  GPT_LUNA_ID,
+  GPT_SOL_ID,
+  GPT_TERRA_ID,
   MAX_CONTEXT_WINDOW_OVERRIDE,
   MODEL_ALIASES_HINT,
   OPENAI_MODEL_HINTS,
@@ -197,6 +201,44 @@ describe('fixed-identity Claude aliases (sonnet/opus/haiku decoupled from tiers,
   });
 });
 
+describe('OpenAI family aliases (sol/luna/astra/terra)', () => {
+  it('exposes each family alias via the direct-alias table', () => {
+    expect(DIRECT_MODEL_ALIASES['sol']).toBe(GPT_SOL_ID);
+    expect(DIRECT_MODEL_ALIASES['luna']).toBe(GPT_LUNA_ID);
+    expect(DIRECT_MODEL_ALIASES['astra']).toBe(GPT_ASTRA_ID);
+    expect(DIRECT_MODEL_ALIASES['terra']).toBe(GPT_TERRA_ID);
+  });
+
+  it('resolves each family alias to its pinned wire id (case-insensitive)', () => {
+    expect(resolveModelInput('sol')).toBe('gpt-6.1-sol');
+    expect(resolveModelInput('SOL')).toBe('gpt-6.1-sol');
+    expect(resolveModelInput('Luna')).toBe('gpt-6-luna');
+    expect(resolveModelInput('  astra  ')).toBe('gpt-6-astra');
+    expect(resolveBinding('terra')).toEqual({ id: 'gpt-5.6-terra' });
+  });
+
+  it('stays pinned regardless of tier rebindings', () => {
+    const rebound = makeSlots({ medium: 'claude-sonnet-4-6', large: 'claude-opus-5-5' });
+    expect(resolveModelInput('sol', rebound)).toBe('gpt-6.1-sol');
+    expect(resolveModelInput('luna', rebound)).toBe('gpt-6-luna');
+  });
+
+  it('is not a capability tier (slotForInput returns undefined)', () => {
+    expect(slotForInput('sol')).toBeUndefined();
+    expect(slotForInput('luna')).toBeUndefined();
+    expect(slotForInput('astra')).toBeUndefined();
+    expect(slotForInput('terra')).toBeUndefined();
+  });
+});
+
+describe('MODEL_ALIASES_HINT contains all DIRECT_MODEL_ALIASES keys (cross-check)', () => {
+  it('every key in DIRECT_MODEL_ALIASES appears in MODEL_ALIASES_HINT', () => {
+    for (const key of Object.keys(DIRECT_MODEL_ALIASES)) {
+      expect(MODEL_ALIASES_HINT, `missing DIRECT_MODEL_ALIASES key: ${key}`).toContain(key);
+    }
+  });
+});
+
 describe('OPENAI_MODEL_HINTS', () => {
   it('contains the curated OpenAI wire ids', () => {
     expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-sol');
@@ -218,8 +260,9 @@ describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', ()
     expect(MODEL_ALIASES_HINT).toEqual([
       // Capability tiers (SLOT_NAMES)
       'local', 'small', 'medium', 'large',
-      // Fixed-identity Claude/xAI aliases (DIRECT_MODEL_ALIASES)
+      // Fixed-identity Claude/xAI/OpenAI aliases (DIRECT_MODEL_ALIASES)
       'opus', 'opus_1m', 'opus-5.5', 'opus-5.5_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable', 'grok',
+      'sol', 'luna', 'astra', 'terra',
       // Curated OpenAI wire ids (OPENAI_MODEL_HINTS)
       'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna',
       'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',

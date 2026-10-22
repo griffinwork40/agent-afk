@@ -480,3 +480,143 @@ describe('/resume — conversation preview (view-mode)', () => {
     expect(flat).toContain('Esc');
   });
 });
+
+// ---------------------------------------------------------------------------
+// repo-root filter logic
+// ---------------------------------------------------------------------------
+
+describe('/resume — repo-root filtering', () => {
+  it('includes a session whose repoRoot matches the current repoRoot', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/repo/main';
+    (stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/repo';
+    recordTurn(stats, 'work', 'done', { sessionId: 'sdk-rr-match', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    stats.name = 'session-rr-match';
+    saveSession(stats);
+
+    const otherStats = createSessionStats('sonnet');
+    otherStats.cwd = '/other-project/main';
+    (otherStats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/other-project';
+    recordTurn(otherStats, 'other', 'done', { sessionId: 'sdk-rr-other', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    otherStats.name = 'session-rr-other';
+    saveSession(otherStats);
+
+    const { ctx, lines } = makeCtx(undefined);
+    ctx.stats.cwd = '/repo/main';
+    // Inject repoRoot directly — avoids running git in the test environment.
+    (ctx.stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/repo';
+    await resumeCmd.handler(ctx, '');
+
+    const text = lines.join('\n');
+    expect(text).toContain('session-rr-match');
+    expect(text).not.toContain('session-rr-other');
+  });
+
+  it('includes a worktree session with different cwd but same repoRoot', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/repo/.afk-worktrees/my-branch';
+    (stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/repo';
+    recordTurn(stats, 'wt work', 'done', { sessionId: 'sdk-wt', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    stats.name = 'session-worktree';
+    saveSession(stats);
+
+    const { ctx, lines } = makeCtx(undefined);
+    ctx.stats.cwd = '/repo/main';
+    (ctx.stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/repo';
+    await resumeCmd.handler(ctx, '');
+
+    expect(lines.join('\n')).toContain('session-worktree');
+  });
+
+  it('excludes a session from a different project', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/different-project/src';
+    (stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/different-project';
+    recordTurn(stats, 'diff work', 'done', { sessionId: 'sdk-diff', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    stats.name = 'session-different-project';
+    saveSession(stats);
+
+    const { ctx, lines } = makeCtx(undefined);
+    ctx.stats.cwd = '/my-project/src';
+    (ctx.stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/my-project';
+    await resumeCmd.handler(ctx, '');
+
+    // No local sessions → falls back to global list.
+    const text = lines.join('\n');
+    // The global fallback shows all sessions, so session-different-project appears
+    // but the header indicates none are local.
+    expect(text).toMatch(/Saved sessions — all \(none in this directory\)/);
+  });
+
+  it('excludes daemon sessions from the picker', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/repo/main';
+    stats.source = 'daemon';
+    (stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/repo';
+    recordTurn(stats, 'daemon work', 'done', { sessionId: 'sdk-daemon', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    stats.name = 'session-daemon';
+    saveSession(stats);
+
+    const cliStats = createSessionStats('sonnet');
+    cliStats.cwd = '/repo/main';
+    (cliStats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/repo';
+    recordTurn(cliStats, 'cli work', 'done', { sessionId: 'sdk-cli', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    cliStats.name = 'session-cli';
+    saveSession(cliStats);
+
+    const { ctx, lines } = makeCtx(undefined);
+    ctx.stats.cwd = '/repo/main';
+    (ctx.stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/repo';
+    await resumeCmd.handler(ctx, '');
+
+    const text = lines.join('\n');
+    expect(text).toContain('session-cli');
+    expect(text).not.toContain('session-daemon');
+  });
+
+  it('legacy session without repoRoot or cwd falls through to global fallback', async () => {
+    // Legacy sidecar: no cwd, no repoRoot — only appears when no local sessions.
+    const stats = createSessionStats('sonnet');
+    // Deliberately omit stats.cwd and stats.repoRoot.
+    recordTurn(stats, 'legacy work', 'done', { sessionId: 'sdk-legacy', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    stats.name = 'session-legacy';
+    saveSession(stats);
+
+    const { ctx, lines } = makeCtx(undefined);
+    ctx.stats.cwd = '/my-project/src';
+    (ctx.stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/my-project';
+    await resumeCmd.handler(ctx, '');
+
+    // No local sessions → global fallback shows legacy session.
+    const text = lines.join('\n');
+    expect(text).toMatch(/Saved sessions — all \(none in this directory\)/);
+    expect(text).toContain('session-legacy');
+  });
+
+  it('hiddenCount is computed correctly and shown in header', async () => {
+    // Two sessions in the current repo, one in another project.
+    const save = (name: string, repoRoot: string, sdkId: string): void => {
+      const s = createSessionStats('sonnet');
+      s.cwd = repoRoot + '/src';
+      (s as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = repoRoot;
+      recordTurn(s, 'work', 'done', { sessionId: sdkId, totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+      s.name = name;
+      saveSession(s);
+    };
+    save('local-1', '/myrepo', 'sdk-hc-1');
+    save('local-2', '/myrepo', 'sdk-hc-2');
+    save('foreign', '/other', 'sdk-hc-3');
+
+    const { ctx, lines } = makeCtx(undefined);
+    ctx.stats.cwd = '/myrepo/src';
+    (ctx.stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/myrepo';
+    await resumeCmd.handler(ctx, '');
+
+    const text = lines.join('\n');
+    // Header should mention 1 hidden session.
+    expect(text).toContain('1 from other projects hidden');
+    expect(text).toContain('local-1');
+    expect(text).toContain('local-2');
+    expect(text).not.toContain('foreign');
+  });
+});

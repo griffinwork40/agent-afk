@@ -70,6 +70,9 @@ export interface LspSymbolResult {
 /** Subcommand accepted by the `code_symbols` tool. */
 export type SymbolSubcommand = 'definition' | 'references';
 
+/** Default LSP server command — shared by `queryLspSymbol` and `handleCodeSymbols`. */
+export const DEFAULT_LSP_CMD = Object.freeze(['typescript-language-server', '--stdio'] as const);
+
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 /** Parse an LSP Location or LocationLink into an LspLocation. */
@@ -139,7 +142,7 @@ export async function queryLspSymbol(
   line: number,
   col: number,
   rootDir?: string,
-  serverCmd: readonly string[] = ['typescript-language-server', '--stdio'],
+  serverCmd: readonly string[] = DEFAULT_LSP_CMD,
   signal?: AbortSignal,
 ): Promise<LspSymbolResult> {
   if (signal?.aborted) return { locations: [], error: 'Aborted' };
@@ -153,9 +156,15 @@ export async function queryLspSymbol(
 
   return new Promise<LspSymbolResult>((resolve) => {
     let settled = false;
+
+    // Declared before `done` so the closure inside `done` can reference it.
+    // Registered on the signal after `done` is defined.
+    const onAbort = () => done({ locations: [], error: 'Aborted' }); // eslint-disable-line @typescript-eslint/no-use-before-define
+
     const done = (result: LspSymbolResult) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', onAbort);
       clearTimeout(timer);
       if (proc) killProc(proc);
       resolve(result);
@@ -170,7 +179,6 @@ export async function queryLspSymbol(
     timer.unref();
 
     // Honour abort signal: resolve immediately if the caller cancels.
-    const onAbort = () => done({ locations: [], error: 'Aborted' });
     signal?.addEventListener('abort', onAbort, { once: true });
 
     readFile(filePath, 'utf8')
@@ -363,7 +371,7 @@ export async function handleCodeSymbols(
     const rootDir = context?.resolveBase ?? cwd;
     const result = await queryLspSymbol(
       resolvedPath, input.subcommand, input.line, input.col, rootDir,
-      serverCmd ?? ['typescript-language-server', '--stdio'],
+      serverCmd ?? DEFAULT_LSP_CMD,
       signal,
     );
     return formatSymbolResult(input.file_path, input.subcommand, input.line, input.col, result);

@@ -464,17 +464,15 @@ export class AgentSession implements IAgentSession {
   getContextUsage(): Promise<SDKControlGetContextUsageResponse> { return this.providerQuery.getContextUsage().then(toContextUsageResponse); }
   mcpServerStatus(): Promise<McpServerStatus[]> { return this.providerQuery.mcpServerStatus().then((ms) => ms.map(toMcpServerStatus)); }
   accountInfo(): Promise<AccountInfo> { return this.providerQuery.accountInfo(); }
-  rewindFiles(userMessageId: string, options?: { dryRun?: boolean }): Promise<RewindFilesResult> { return this.providerQuery.rewindFiles(userMessageId, options); }
+  rewindFiles(userMessageId: string, options?: { dryRun?: boolean; overwriteConflicts?: boolean }): Promise<RewindFilesResult> { return this.providerQuery.rewindFiles(userMessageId, options); }
   compact(): Promise<ProviderCompactResult> { return compact.compactSession(this.makeCompactDeps()); }
   listRewindTargets(): RewindTarget[] { return compact.listRewindTargets(this.makeCompactDeps()); }
   rewindConversation(turnIndex: number): Promise<ProviderRewindConversationResult> { return compact.rewindConversation(turnIndex, this.makeCompactDeps()); }
+  /** Idle surface projection replacement: flush the old inode and re-arm the lazy writer. */
+  sealEventLedger(): Promise<void> { return this.ledger.seal('reset'); }
 
   private makeCompactDeps() {
-    return {
-      getState: () => this.currentState,
-      setState: (s: SessionState) => { this.currentState = s; },
-      getProviderQuery: () => this.providerQuery,
-    };
+    return compact.makeCompactDeps(() => this.currentState, (s) => { this.currentState = s; }, () => this.providerQuery);
   }
 
   getLastResponseMetadata(): ResponseMetadata | null { return this.lastResponseMetadata; }

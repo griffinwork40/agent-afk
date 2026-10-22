@@ -6,12 +6,16 @@
  *   1. interrupted: closure=abort and no artifacts → interrupted
  *   2. blocked: self_report == blocked → blocked
  *   3. critical or major negative not outweighed by a later strong positive → failed
- *   4. Two or more minor negatives → failed
+ *   4. Two or more minor negatives → failed (fix_of_fix counted at most once)
  *   5. Strong positive and no major/critical negative → succeeded (proven)
  *   6. Good-by-default: past settle window, normal closure, no negatives
  *      → succeeded (no_bad_signals) with lower confidence
  *   7. Exactly one minor negative (past settle window) → succeeded (0.3)
  *   8. Otherwise → unknown
+ *
+ * fix_of_fix votes are collapsed to one (collapseSingleCountVotes) before ANY
+ * rule or confidence calculation sees them, so repeated mentions neither
+ * satisfy rule 4 nor stack confidence penalties.
  *
  * Backward compatibility: votes without `severity` are back-mapped via strength:
  *   strong → major, weak → minor
@@ -84,6 +88,29 @@ function hasClosureAbort(votes: Vote[]): boolean {
   return votes.some((v) => v.lf === 'closure' && v.vote === -1);
 }
 
+/**
+ * Labeling functions whose minor negatives count at most once per session.
+ *
+ * Invariant: fix_of_fix emits one weak vote per later PR that mentions the
+ * session's PR (lf-fof.ts). Those mentions are mostly review follow-ups or
+ * pasted changelogs, so repetition is not stronger evidence, and the design
+ * rule is that fix_of_fix alone can never flip a session to failed. Counting
+ * each mention would let two mentions satisfy rule 4 by themselves. lf-ci is
+ * deliberately NOT listed: one red-CI vote per PR is independent evidence.
+ */
+const SINGLE_COUNT_LFS: ReadonlySet<string> = new Set(['fix_of_fix']);
+
+/** Keep the first minor negative from each SINGLE_COUNT_LFS labeling function. */
+export function collapseSingleCountVotes(votes: Vote[]): Vote[] {
+  const seen = new Set<string>();
+  return votes.filter((v) => {
+    if (!SINGLE_COUNT_LFS.has(v.lf)) return true;
+    if (seen.has(v.lf)) return false;
+    seen.add(v.lf);
+    return true;
+  });
+}
+
 function hasArtifacts(artifacts: Artifacts): boolean {
   return artifacts.commits.length > 0 || artifacts.prs.length > 0;
 }
@@ -147,7 +174,7 @@ export function computeConfidenceV2(
 // ---------------------------------------------------------------------------
 
 export function combineV2(input: CombinerV2Input): CombinerV2Result {
-  const { votes, selfReport, artifacts, settleWindowPassed, normalClosure = true } = input;
+  const { selfReport, artifacts, settleWindowPassed, normalClosure = true } = input;
 
   // Rule 0: Explicit feedback overrides everything
   if (input.explicit_feedback === 'good') {
@@ -157,6 +184,9 @@ export function combineV2(input: CombinerV2Input): CombinerV2Result {
     return { label: 'failed', confidence: 1.0, basis: 'proven' };
   }
 
+  // Collapse once so every rule AND every computeConfidenceV2 call sees the
+  // same vote list: fix_of_fix counts at most once for labels and penalties.
+  const votes = collapseSingleCountVotes(input.votes);
   const negVotes = negativeVotes(votes);
 
   // Rule 1: abort closure + no artifacts → interrupted

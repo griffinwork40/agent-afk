@@ -23,6 +23,7 @@ See [editing configuration](/configuration/editing-config) for file locations an
 | `enablePluginHooks` | boolean |  | human | Enable Claude Code plugin-contributed hooks (trust gate for third-party plugin hooks.json; independent of enableShellHooks). |
 | `enableShellHooks` | boolean |  | human | Enable shell hooks (trust gate). |
 | `enforceDoneEvidence` | boolean |  | human | Opt-in AFK terminal-state enforcement gate: in autonomous mode a turn that self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) gets a framework correction injected into the next turn, which must substantiate or downgrade the claim (issue #237). Human-tier: a self-honesty check the agent must not be able to disable on its own config, same rationale as telegram.verifyDone. Sibling of telegram.verifyDone (which only relabels the Telegram push; this one bounces the turn). |
+| `fileCheckpoints` | boolean |  | human | Per-turn file checkpoints behind /rewind → files/both in the interactive REPL (#4271); default on, false opts out. Human-tier: it disables the operator's undo of agent file edits, which the agent must not be able to switch off on its own config. |
 | `interactive.suggestGhost` | boolean |  | agent | Ghost-text suggestions in the REPL. |
 | `interactive.thinkingUi` | enum | `summary`, `live`, `digest`, `off` | agent | Default REPL thinking-display mode. |
 | `interactive.worktreeAutoname` | boolean |  | agent | Auto-name worktrees. |

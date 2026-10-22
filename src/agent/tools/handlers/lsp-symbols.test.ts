@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
-import { writeFile, mkdir, rm } from 'fs/promises';
+import { writeFile, mkdir, rm, stat } from 'fs/promises';
 import { writeFileSync } from 'node:fs';
 import os from 'os';
 import path from 'path';
@@ -18,6 +18,7 @@ import {
   handleCodeSymbols,
   isLspSymbolsEnabled,
   parseLocation,
+  DEFAULT_LSP_CMD,
   type LspLocation,
 } from './lsp-symbols.js';
 import { createCodeSymbolsHandler } from '../lsp-symbols-surface.js';
@@ -214,10 +215,9 @@ describe('parseLocation', () => {
     });
     // os.tmpdir() exists but is a directory — parseLocation only cares that
     // realpathSafe resolves it and decidePathAccess allows it.
-    if (loc !== null) {
-      expect(loc.line).toBe(5);
-      expect(loc.col).toBe(3);
-    }
+    expect(loc).not.toBeNull();
+    expect(loc!.line).toBe(5);
+    expect(loc!.col).toBe(3);
     void tempFile; // suppress unused warning
   });
 
@@ -228,10 +228,9 @@ describe('parseLocation', () => {
       targetUri: `file://${os.tmpdir().replace(/\\/g, '/')}`,
       targetRange: { start: { line: 1, character: 0 } },
     });
-    if (loc !== null) {
-      expect(loc.line).toBe(2);
-      expect(loc.col).toBe(1);
-    }
+    expect(loc).not.toBeNull();
+    expect(loc!.line).toBe(2);
+    expect(loc!.col).toBe(1);
   });
 });
 
@@ -394,4 +393,85 @@ describe('handleCodeSymbols', () => {
       vi.unstubAllEnvs();
     }
   }, 5_000);
+});
+
+// ── AbortSignal ───────────────────────────────────────────────────────────
+
+describe('queryLspSymbol — AbortSignal', () => {
+  it('returns Aborted immediately when signal is pre-aborted', async () => {
+    const filePath = await makeTsFile('abort-pre.ts');
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await queryLspSymbol(
+      filePath, 'definition', 1, 1, undefined,
+      ['/nonexistent-binary-afk-lsp-sym-test-abort'],
+      controller.signal,
+    );
+    expect(result.locations).toEqual([]);
+    expect(result.error).toBe('Aborted');
+  }, 5_000);
+
+  it('returns Aborted when signal fires mid-flight (slow server)', async () => {
+    vi.stubEnv('AFK_LSP_SYMBOLS_TIMEOUT_MS', '3000');
+    try {
+      await mkdir(tempDir, { recursive: true });
+      const filePath = await makeTsFile('abort-mid.ts');
+      const sentinelPath = path.join(tempDir, 'abort-mid-spawned.flag');
+      const scriptPath = path.join(tempDir, 'fake-silent-abort-server.js');
+
+      // Fake server writes a sentinel file the moment it is spawned, then
+      // parks on stdin.  The test aborts as soon as it sees the sentinel,
+      // eliminating any dependency on wall-clock delays.
+      writeFileSync(
+        scriptPath,
+        `const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(sentinelPath)}, '1');
+process.stdin.resume();
+`,
+        'utf8',
+      );
+
+      const controller = new AbortController();
+
+      // Poll for the sentinel file (written by the fake server on spawn),
+      // then abort immediately — no fixed wall-clock delay needed.
+      const abortOnSpawn = (async () => {
+        const deadline = Date.now() + 5_000;
+        while (Date.now() < deadline) {
+          try {
+            await stat(sentinelPath);
+            controller.abort();
+            return;
+          } catch {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+        }
+        // Safety valve: abort anyway so the test does not hang.
+        controller.abort();
+      })();
+
+      const result = await queryLspSymbol(
+        filePath, 'definition', 1, 1, undefined,
+        nodeCmd(scriptPath),
+        controller.signal,
+      );
+      await abortOnSpawn; // ensure the polling loop is settled
+      expect(result.locations).toEqual([]);
+      expect(result.error).toBe('Aborted');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 5_000);
+});
+
+// ── DEFAULT_LSP_CMD ───────────────────────────────────────────────────────
+
+describe('DEFAULT_LSP_CMD', () => {
+  it('is a frozen array with typescript-language-server as the binary', () => {
+    expect(Array.isArray(DEFAULT_LSP_CMD)).toBe(true);
+    expect(Object.isFrozen(DEFAULT_LSP_CMD)).toBe(true);
+    expect(DEFAULT_LSP_CMD[0]).toBe('typescript-language-server');
+    expect(DEFAULT_LSP_CMD[1]).toBe('--stdio');
+  });
 });

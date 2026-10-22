@@ -63,7 +63,7 @@ const SUPPORTED_OPUS = /^claude-opus-(?:5(?:-5)?|4-8)(?:-[a-z0-9][a-z0-9-]*)?$/;
  * service tier is eligible regardless of this regex.
  */
 export const OPENAI_FAST_MODEL_FALLBACK =
-  /^(?:gpt-5\.5|gpt-5\.6-[a-z]+|gpt-6-[a-z]+|gpt-reserve)(?:-[a-z0-9][a-z0-9-]*)?$/;
+  /^(?:gpt-5\.5|gpt-5\.6-[a-z]+|gpt-6(?:\.[0-9]+)?-[a-z]+|gpt-reserve)(?:-[a-z0-9][a-z0-9-]*)?$/;
 
 /**
  * Check whether a resolved model id is eligible for OpenAI fast mode.

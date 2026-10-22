@@ -69,7 +69,8 @@ export const agentTool: AnthropicToolDef = {
           'Model for the agent. Defaults to parent session model. Override per-call ' +
           'to right-size cost vs. capability — `haiku` (cheapest/fastest), `sonnet` ' +
           '(general-use), `opus` (most capable). Append `_1m` (e.g. `sonnet_1m`) for ' +
-          '1M-context variants. Full model IDs are also accepted.',
+          '1M-context variants. OpenAI family aliases: `sol`, `luna`, `astra`, `terra` ' +
+          '(pinned to a concrete flagship in each family). Full model IDs are also accepted.',
       },
       max_turns: {
         type: 'number',

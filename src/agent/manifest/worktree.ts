@@ -17,6 +17,7 @@ const AFK_WORKTREES = '/.afk-worktrees/';
  * checks work correctly on native Windows paths (e.g. `C:\repo\.afk-worktrees\slug`).
  */
 function normalizeSeps(p: string): string {
+  if (!p.includes('\\')) return p;
   return p.replace(/\\/g, '/');
 }
 

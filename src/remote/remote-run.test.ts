@@ -124,4 +124,59 @@ describe('runRemoteAgent', () => {
     expect(out).toEqual({ kind: 'aborted', pid: 4242 });
     expect(f.calls.some((c) => c.kind === 'cancel' && c.script.includes('kill "$pid"'))).toBe(true);
   });
+
+  /**
+   * Abort-race test (deferred item 4 of #3865, issue #3956).
+   *
+   * Scenario: the `done` event and an abort signal arrive on the same loop
+   * iteration. In `remote-run.ts` the abort check (`if (signal.aborted)`)
+   * runs *after* `await runner.stream(...)` returns, so whichever branch is
+   * reached first wins. This test drives the race by aborting the controller
+   * inside the `onLine` callback — at the exact moment the done line is
+   * delivered — so both `signal.aborted` and a terminal `done` event are true
+   * when the post-stream checks run.
+   *
+   * The function must return a deterministic outcome (either `done` or
+   * `aborted`) without throwing or looping. Both are acceptable since the race
+   * is real; what matters is that neither branch crashes and neither prevents
+   * the cancel call from running when `aborted` wins.
+   */
+  it('abort-race: done event and abort signal arrive simultaneously', async () => {
+    const ac = new AbortController();
+    const calls: { kind: string }[] = [];
+
+    const runner: SshRunner = {
+      async exec(_target, script) {
+        if (script.includes(PID_MARKER)) {
+          calls.push({ kind: 'launch' });
+          return { code: 0, stdout: `${PID_MARKER} 9999\n`, stderr: '' };
+        }
+        // cancel or errtail
+        calls.push({ kind: script.includes('tail -c 2000') ? 'errtail' : 'cancel' });
+        return { code: 0, stdout: '', stderr: '' };
+      },
+      async stream(_target, _script, o) {
+        // Deliver the done event, then abort — both are visible to the
+        // post-stream checks in the same synchronous turn.
+        o.onLine(MSG('race result'));
+        o.onLine(DONE);
+        ac.abort();
+        return { code: 0, stdout: '', stderr: '' };
+      },
+    };
+
+    const out = await runRemoteAgent(REQ, ac.signal, { runner, sleep: noSleep });
+
+    // Must resolve to one of the two valid outcomes without throwing.
+    expect(['done', 'aborted']).toContain(out.kind);
+
+    if (out.kind === 'aborted') {
+      // When abort wins, the cancel script must have been sent.
+      expect(calls.some((c) => c.kind === 'cancel')).toBe(true);
+    }
+    if (out.kind === 'done') {
+      // When done wins, the message must be the last delivered message.
+      expect(out.message).toBe('race result');
+    }
+  });
 });

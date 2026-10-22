@@ -12,6 +12,7 @@
 
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { estimateTokens } from '../../../../agent/memory/index.js';
+import { OVERLAY_TOKEN_WARN_THRESHOLD as _THRESHOLD } from '../../../config/afk-md-tier.js';
 import { getProjectAfkMdPath, getUserAfkMdPath } from '../../../../paths.js';
 import { palette } from '../../../palette.js';
 
@@ -38,8 +39,13 @@ export interface AfkMdTarget {
   duplicate: boolean;
 }
 
-/** Warn above this estimated token count for the composed overlay. */
-export const OVERLAY_TOKEN_WARN_THRESHOLD = 10_000;
+/**
+ * Warn above this estimated token count for the composed overlay.
+ * Re-exported from `cli/config/afk-md-tier.ts` — the loader is the
+ * authoritative home of this constant so both the startup warning and
+ * the `/afk-md` overview always reflect the same threshold.
+ */
+export const OVERLAY_TOKEN_WARN_THRESHOLD = _THRESHOLD;
 
 function isSameFile(a: string, b: string): boolean {
   if (a === b) return true;

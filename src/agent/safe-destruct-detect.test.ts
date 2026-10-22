@@ -333,6 +333,8 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
       'git stash list',
       'git stash show',
       'git stash show stash@{0}',
+      'git stash show -p',
+      'git stash show stash@{1} -- src/foo.ts',
       'git stash create',
     ])('allows read-only stash op %j inside a worktree', (cmd) => {
       const h = createSafeDestructDetect(WORKTREE_CWD);

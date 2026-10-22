@@ -48,6 +48,8 @@ const _DIRECT_ALIAS_KEYS = [
   'haiku',
   'fable',
   'grok',
+  // OpenAI family aliases (sol/luna/astra/terra → latest flagship per family).
+  'sol', 'luna', 'astra', 'terra',
 ] as const;
 
 /**
