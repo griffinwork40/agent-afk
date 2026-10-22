@@ -141,7 +141,7 @@ export function endReasonOf(result: ToolResult): string {
 
 type ChainHandle = {
   readonly id: string;
-  runToResult(prompt: never): Promise<import('../../subagent/result.js').SubagentResult>;
+  runToResult(prompt: never, ...rest: never[]): Promise<import('../../subagent/result.js').SubagentResult>;
   runInBackground(prompt: never, onResult?: (r: import('../../subagent/result.js').SubagentResult) => void, ...rest: never[]): unknown;
 };
 
@@ -204,8 +204,11 @@ function wrapTeardownBeforeStart(h: Record<string, unknown>, started: { value: b
 type Res = import('../../subagent/result.js').SubagentResult;
 
 function wrapRun(h: Record<string, unknown>, handle: ChainHandle, record: (r: Res | undefined, reason: string) => void, reasonOf: (r: Res) => string, started: { value: boolean }): void {
-  const origRun = handle.runToResult.bind(handle) as (p: unknown) => Promise<import('../../subagent/result.js').SubagentResult>;
-  h['runToResult'] = (p: unknown) => { started.value = true; return origRun(p).then(
+  // Forward EVERY argument: handle.streaming's runInBackground calls
+  // `runToResult(prompt, sinkOverride)`; dropping the sink silences the
+  // background registry's progress pipe (job log, heartbeat, transcript, touchedFiles).
+  const origRun = handle.runToResult.bind(handle) as (...a: unknown[]) => Promise<import('../../subagent/result.js').SubagentResult>;
+  h['runToResult'] = (...a: unknown[]) => { started.value = true; return origRun(...a).then(
     (r) => { record(r, reasonOf(r)); return r; },
     (err: unknown) => { record(undefined, 'failed'); throw err; },
   ); };

@@ -26,6 +26,7 @@ import { wireExecutors } from '../../session/wire-executors.js';
 import { AgentSession } from '../../session.js';
 import { createMockProvider } from '../../__fixtures__/mock-provider.js';
 import { BackgroundAgentRegistry } from '../../background-registry.js';
+import { BgJobLogWriter } from '../../bg-job-log.js';
 import type { ContinuationRegistry } from '../../subagent/continuation-registry.js';
 import type { ToolResult } from '../types.js';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
@@ -247,6 +248,22 @@ describe('D8 continuation through the agent executor', () => {
     expect(chain.inFlight).toBe(false);
     expect(chain.roundsCharged).toBe(9);
     expect(chain.continuations).toBe(1);
+    await session.close();
+  }, 20000);
+
+  it('background dispatch with a continuation registry still pipes progress into the BackgroundAgentRegistry', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const bg = new BackgroundAgentRegistry();
+    const { run, session } = await setup({ backgroundRegistry: bg });
+    const write = vi.spyOn(BgJobLogWriter.prototype, 'write');
+    const r = await run({ prompt: 'bg ordinary', mode: 'background' });
+    expect(r.isError, r.content).not.toBe(true);
+    const job = bg.list()[0]!;
+    await vi.waitFor(() => expect(bg.get(job.jobId)!.status).not.toBe('running'), { timeout: 5000 });
+    // The instrumented runToResult must forward runInBackground's sink override:
+    // every progress event reaches the registry's onProgress -> job log writer.
+    expect(write).toHaveBeenCalled();
     await session.close();
   }, 20000);
 
