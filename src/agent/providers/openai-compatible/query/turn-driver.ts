@@ -48,12 +48,12 @@ import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import { dispatchAndAppendToolCalls } from './dispatch-append.js';
 import { buildVitalsNote, type VitalsInput } from '../../shared/vitals.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
-import type { TraceSink } from '../../../trace/index.js';
+import type { TraceSink } from '../../../trace/writer.js';
 import type { OpenAIMessage } from '../messages.js';
 import type { OpenAIJournalWiring } from './journal-wiring.js';
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { OpenAIAuthResolution } from '../auth.js';
-import { emitQueuedUserMessage } from '../../../trace/emit.js';
+import { emitQueuedUserMessage, emitSessionPhase } from '../../../trace/emit.js';
 import { emitTurnTerminal } from './turn-driver.emit-terminal.js';
 import { windDownFinalText } from './wind-down-final.js';
 
@@ -204,15 +204,36 @@ async function* dispatchAndAppend(
  * Inject a round-cap delivery notice into the last tool-result message so the
  * model sees the budget reminder before its next reply.  Extracted from
  * `runTurnInner` to keep it under the 200-line function ceiling.
+ *
+ * Handles two OpenAI tool-message shapes:
+ *   - string content: append directly (original path).
+ *   - array content (some OAI-compatible backends): push a text part.
+ * When neither shape matches, emits a trace event rather than silently dropping.
  */
-function injectRoundCapNotice(priorTurns: OpenAIMessage[], round: number, maxIterations: number): void {
+function injectRoundCapNotice(
+  priorTurns: OpenAIMessage[],
+  round: number,
+  maxIterations: number,
+  traceWriter: TraceSink | undefined,
+): void {
   const notice = roundDeliveryNotice(round, maxIterations);
-  if (notice) {
-    const lastTool = [...priorTurns].reverse().find(m => m.role === 'tool');
-    if (lastTool && typeof lastTool.content === 'string') {
+  if (!notice) return;
+  const lastTool = [...priorTurns].reverse().find(m => m.role === 'tool');
+  if (lastTool) {
+    if (typeof lastTool.content === 'string') {
       lastTool.content += '\n\n' + notice;
+      return;
+    }
+    if (Array.isArray(lastTool.content)) {
+      (lastTool.content as Array<{ type: string; text: string }>).push({ type: 'text', text: notice });
+      return;
     }
   }
+  // No injectable tool message found — emit an observable signal.
+  void emitSessionPhase(traceWriter, {
+    phase: 'round_cap_notice_dropped',
+    metadata: { provider: 'openai-compatible', round },
+  });
 }
 
 /**
@@ -437,7 +458,7 @@ export async function* runTurnInner(
         continue;
       }
 
-      injectRoundCapNotice(ctx.priorTurns, round, maxIterations);
+      injectRoundCapNotice(ctx.priorTurns, round, maxIterations, ctx.traceWriter);
       const roundsSpent = shouldWindDown(round, maxIterations);
       const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
       if (roundsSpent || timeSpent) {

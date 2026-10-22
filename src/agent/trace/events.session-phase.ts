@@ -136,6 +136,10 @@ export const SessionPhaseNameSchema = z.enum([
   // (subagent/handle.model-fallback.ts). metadata: { subagentId, fromModel,
   // toModel, reason }. Must mirror types.session-phase.ts.
   'subagent_model_fallback',
+  // Round-cap delivery notice silently dropped — tail message shape did not
+  // allow injection. See SessionPhaseName JSDoc in types.session-phase.ts.
+  // metadata: { provider, round }
+  'round_cap_notice_dropped',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({
