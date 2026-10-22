@@ -1,6 +1,6 @@
 import { join } from 'path';
 
-import { getAfkCacheDir } from './paths.js';
+import { getAfkCacheDir, getAfkStateDir } from './paths.js';
 
 /**
  * Language-server install paths (#4272). Servers AFK installs on the user's
@@ -30,4 +30,14 @@ export function getLspLanguageInstallDir(language: string): string {
 export function getLspInstalledBinPath(language: string, binName: string): string {
   const bin = process.platform === 'win32' ? `${binName}.cmd` : binName;
   return join(getLspLanguageInstallDir(language), 'node_modules', '.bin', bin);
+}
+
+/**
+ * Path to the per-language install-grant store.
+ *
+ * Stored under state/ (not cache/) because grants are policy — user decisions
+ * that must survive a cache wipe. One JSON file for all languages.
+ */
+export function getLspGrantsPath(): string {
+  return join(getAfkStateDir(), 'lsp-install-grants.json');
 }
