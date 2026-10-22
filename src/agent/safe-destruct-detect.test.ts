@@ -229,13 +229,14 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
   });
 
   // ── hint text: actionable alternatives in blockReason ────────────────────
-  it('git-reset-hard blockReason names rescue-branch and git switch -C alternative', () => {
+  it('git-reset-hard blockReason names rescue-branch and git switch -C alternative (no stash suggestion)', () => {
     const decision = hook(preCtx('git reset --hard HEAD~3'));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('rescue branch');
-    expect(decision.reason).toContain('git stash push --include-untracked');
     expect(decision.reason).toContain('git switch -C');
     expect(decision.reason).toContain('deliberate');
+    // The reset-hard reason must NOT suggest stash (stash is itself blocked in worktrees).
+    expect(decision.reason).not.toContain('git stash push --include-untracked');
     // Never recommend staging everything: `git add -A` can commit secrets.
     expect(decision.reason).not.toContain('git add -A');
   });
@@ -264,6 +265,116 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
     expect(decision.reason).toContain('new branch');
     expect(decision.reason).toContain('--force-with-lease');
     expect(decision.reason).toContain('deliberate');
+  });
+
+  // ── git-stash-mutating: cwd-scoped block ─────────────────────────────────
+  describe('git-stash-mutating (worktree-scoped)', () => {
+    const WORKTREE_CWD = '/repo/.afk-worktrees/my-branch';
+    const ROOT_CWD = '/repo';
+
+    // Blocked forms inside a worktree
+    it.each([
+      'git stash',
+      'git stash push',
+      'git stash push --include-untracked',
+      'git stash pop',
+      'git stash apply',
+      'git stash drop',
+      'git stash clear',
+      'git stash save "wip"',
+      'git -C /tmp stash pop',
+      'git --work-tree=/tmp stash push',
+      // Implicit push: bare `stash` followed by a shell operator or by push flags.
+      'git stash && pnpm test',
+      'git stash; pnpm test',
+      'git stash\npnpm test',
+      'git stash -u',
+      'git stash --include-untracked',
+      'git stash list && git stash pop',
+      // store and branch mutate refs/stash — must be blocked despite superficial
+      // similarity to read-only ops:
+      //   store: writes directly to refs/stash
+      //   branch: drops the stash entry on success
+      'git stash store -m "msg" abc1234',
+      'git stash branch new-branch',
+    ])('blocks %j when cwd is inside a worktree', (cmd) => {
+      const h = createSafeDestructDetect(WORKTREE_CWD);
+      const d = h(preCtx(cmd));
+      expect(d.decision).toBe('block');
+      expect(d.reason).toContain('git-stash-mutating');
+      expect(d.reason).toContain('refs/stash');
+      expect(d.injectContext).toBe(SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT);
+    });
+
+    // Compound command: stash AND another destructive op — BLOCK wins
+    it('blocks compound git stash && git stash pop inside worktree', () => {
+      const h = createSafeDestructDetect(WORKTREE_CWD);
+      const d = h(preCtx('git stash && pnpm test; git stash pop'));
+      expect(d.decision).toBe('block');
+      expect(d.reason).toContain('git-stash-mutating');
+    });
+
+    // context.cwd override takes precedence over sessionCwd
+    it('blocks when context.cwd is a worktree path even if sessionCwd is not', () => {
+      const h = createSafeDestructDetect(ROOT_CWD);
+      const ctx: HookContext = {
+        event: 'PreToolUse',
+        toolName: 'bash',
+        input: { command: 'git stash pop' },
+        cwd: WORKTREE_CWD,
+      } as unknown as HookContext;
+      const d = h(ctx);
+      expect(d.decision).toBe('block');
+      expect(d.reason).toContain('git-stash-mutating');
+    });
+
+    // Allowed forms: read-only stash operations
+    it.each([
+      'git stash list',
+      'git stash show',
+      'git stash show stash@{0}',
+      'git stash show -p',
+      'git stash show stash@{1} -- src/foo.ts',
+      'git stash create',
+    ])('allows read-only stash op %j inside a worktree', (cmd) => {
+      const h = createSafeDestructDetect(WORKTREE_CWD);
+      // detectDestructiveCommands should not match these
+      const ids = detectDestructiveCommands(cmd);
+      expect(ids).not.toContain('git-stash-mutating');
+      // And the hook should not block
+      const d = h(preCtx(cmd));
+      expect(d.decision).not.toBe('block');
+    });
+
+    // OBSERVE (not block) when not in a worktree — no sessionCwd
+    it('does NOT block git stash pop when no sessionCwd is set (root-session use)', () => {
+      const h = createSafeDestructDetect();
+      const d = h(preCtx('git stash pop'));
+      // Should be observe (approve), not block
+      expect(d.decision).toBe('approve');
+      expect(d.decision).not.toBe('block');
+    });
+
+    // OBSERVE when sessionCwd is a non-worktree path
+    it('does NOT block git stash pop when sessionCwd is a normal repo root', () => {
+      const h = createSafeDestructDetect(ROOT_CWD);
+      const d = h(preCtx('git stash pop'));
+      expect(d.decision).toBe('approve');
+      expect(d.decision).not.toBe('block');
+    });
+
+    // OBSERVE when context.cwd is a non-worktree path
+    it('does NOT block git stash pop when context.cwd is a normal path', () => {
+      const h = createSafeDestructDetect(WORKTREE_CWD);
+      const ctx: HookContext = {
+        event: 'PreToolUse',
+        toolName: 'bash',
+        input: { command: 'git stash pop' },
+        cwd: ROOT_CWD,
+      } as unknown as HookContext;
+      const d = h(ctx);
+      expect(d.decision).toBe('approve');
+    });
   });
 
   // ── classification levels unchanged ──────────────────────────────────────

@@ -198,6 +198,22 @@ export interface SubagentDAGOptions {
    * absent. Seeded by the compose executor from its own `currentCwd`.
    */
   anchorCwd?: string;
+  /**
+   * Session-level default child model (tier 3 of {@link resolveChildModel}).
+   * When a node's `model` field is absent, this beats the hardcoded `'sonnet'`
+   * floor — matching the precedence chain the agent-tool and compose paths use.
+   * Seeded by the compose executor from its own `ctx.defaultSubagentModel`.
+   * Direct {@link runSubagentDAG} callers (skills, mint phases) should forward
+   * their own `defaultSubagentModel`; omitting it falls through to the floor.
+   */
+  defaultSubagentModel?: AgentModelInput;
+  /**
+   * Parent session model — safety net for the model-resolution chain (tier 4
+   * of {@link resolveChildModel}). When both `defaultSubagentModel` and the
+   * node's own `model` are absent, the parent model is preferred over the
+   * hardcoded `'sonnet'` floor. Seeded by compose from `ctx.defaultModel`.
+   */
+  defaultModel?: AgentModelInput;
 }
 
 type PartialNode = DAGRunResult['partial'][number];

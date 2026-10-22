@@ -195,6 +195,10 @@ export interface SubagentStartContext {
   event: 'SubagentStart';
   subagentId: string;
   parentSessionId?: string;
+  /** Continuation chain id (docs/subagent-continuation.md); set only on continuation forks. */
+  chainId?: string;
+  /** 1-based continuation index within the chain; set only on continuation forks. */
+  continuationIndex?: number;
 }
 
 export interface SubagentStopContext {

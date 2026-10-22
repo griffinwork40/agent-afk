@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { agentTool } from '../src/agent/tools/schemas.agent-tools.js';
+import { agentTool, composeTool } from '../src/agent/tools/schemas.agent-tools.js';
 
 function propDesc(propName: string): string {
   const schema = agentTool.input_schema as {
@@ -44,5 +44,42 @@ describe('agentTool readRoots/writeRoots confinement descriptions', () => {
     expect(desc).toContain('Grandchildren must be re-granted');
     // Unlike writeRoots, compatible with worktree isolation
     expect(desc).toContain('NOT mutually exclusive with isolation:"worktree"');
+  });
+});
+
+/**
+ * Pins the per-node readRoots/writeRoots descriptions in composeTool schema.
+ *
+ * The compose tool's per-node confinement descriptions can drift silently from
+ * the agentTool equivalents. CI must catch any drift. (#4203, #3794)
+ */
+function composeNodePropDesc(propName: string): string {
+  const schema = composeTool.input_schema as unknown as {
+    properties: {
+      nodes: {
+        items: {
+          properties: Record<string, { description?: string }>;
+        };
+      };
+    };
+  };
+  const desc = schema.properties.nodes.items.properties[propName]?.description;
+  if (!desc) throw new Error(`composeTool node has no property "${propName}"`);
+  return desc;
+}
+
+describe('composeTool per-node readRoots/writeRoots confinement descriptions', () => {
+  it('writeRoots description pins confinement semantics', () => {
+    const desc = composeNodePropDesc('writeRoots');
+    expect(desc).toContain('confined sessions');
+    expect(desc).toContain('child cwd');
+    expect(desc).toContain('no effect and do not request confinement');
+  });
+
+  it('readRoots description pins confinement semantics', () => {
+    const desc = composeNodePropDesc('readRoots');
+    expect(desc).toContain('confined sessions');
+    expect(desc).toContain('Grandchildren must be re-granted');
+    expect(desc).toContain('no effect and do not request confinement');
   });
 });

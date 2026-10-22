@@ -261,6 +261,12 @@ export interface CliConfig {
    */
   enforceDoneEvidence?: boolean;
   /**
+   * Per-turn file checkpoints for `/rewind` → files/both (#4271). Default ON in
+   * the interactive REPL; set `false` to opt out. Other surfaces (chat,
+   * Telegram, daemon) have no rewind UI and never checkpoint. Human-tier.
+   */
+  fileCheckpoints?: boolean;
+  /**
    * When true, the REPL constructs a BackgroundSummarizer that periodically
    * asks Haiku to summarize each running background subagent job's transcript
    * tail. Summaries appear in `/bgsub:list` on an indented second line.
@@ -420,6 +426,8 @@ export interface ConfigFileSchema {
   autoResumeOnUsageLimit?: boolean;
   /** Opt-in AFK terminal-state enforcement gate; default off. See `CliConfig.enforceDoneEvidence`. */
   enforceDoneEvidence?: boolean;
+  /** REPL file checkpoints for /rewind; default on. See `CliConfig.fileCheckpoints`. */
+  fileCheckpoints?: boolean;
   bgSummaries?: boolean;
   maxSummaryCallsPerSession?: number;
   hooks?: RawHooksConfig;

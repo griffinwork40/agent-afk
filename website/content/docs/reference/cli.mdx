@@ -2046,7 +2046,7 @@ Guide: [self-improvement](/guides/self-improvement)
 | `proposals` | Inspect improvement proposals on disk |
 | `eval-gen` | Generate a replay-mode eval-case from a failure card. Slices a byte-identical fixture from the source witness trace. |
 | `eval-cases` | Inspect replay-mode eval-cases on disk |
-| `eval-run` | Run the smallest deterministic validation contract for an eval-case's pattern.   Validates guardrails (no LLM, no patch/apply). Known contracts: repeat-loop-circuit-breaker, skill-max-depth-recovery-hint, tool-failure-density-enabled, closure-abort-recovery-hint. |
+| `eval-run` | Run the smallest deterministic validation contract for an eval-case's pattern.   Validates guardrails (no LLM, no patch/apply). Known contracts: repeat-loop-circuit-breaker, subagent-hook-block-detector, tool-failure-density-enabled, closure-abort-recovery-hint. |
 | `approve` | Mark a proposal or eval-case as approved. Pass the proposal id (from `proposals list`) or eval-case id (from `eval-cases list`). |
 
 ## `afk improve scan`
@@ -2332,7 +2332,7 @@ Guide: [self-improvement](/guides/self-improvement)
 
 ## `afk improve eval-run`
 
-Run the smallest deterministic validation contract for an eval-case's pattern.   Validates guardrails (no LLM, no patch/apply). Known contracts: repeat-loop-circuit-breaker, skill-max-depth-recovery-hint, tool-failure-density-enabled, closure-abort-recovery-hint.
+Run the smallest deterministic validation contract for an eval-case's pattern.   Validates guardrails (no LLM, no patch/apply). Known contracts: repeat-loop-circuit-breaker, subagent-hook-block-detector, tool-failure-density-enabled, closure-abort-recovery-hint.
 
 Usage: `afk improve eval-run [options] <evalCaseIdOrCardSlug>`
 

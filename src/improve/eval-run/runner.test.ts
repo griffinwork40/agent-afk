@@ -215,8 +215,35 @@ describe('decideStatus precedence', () => {
     expect(decideStatus({ hasContract: false, contractThrew: false, checks: [passCheck] })).toBe('unsupported');
   });
 
-  it('pass when a contract ran and every check passed', () => {
-    expect(decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck] })).toBe('pass');
+  it('pass when a contract ran, every check passed, and the replay conclusively drove the guardrail', () => {
+    // `pass` requires replayHandlerExists=true AND replayDrove=true — a
+    // guardrail-presence contract alone is not card-specific behavioural proof.
+    expect(
+      decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck], replayHandlerExists: true, replayDrove: true }),
+    ).toBe('pass');
+  });
+
+  it('unsupported when a contract ran but no replay handler exists (pattern-absent not executed)', () => {
+    // A guardrail-presence contract passing does not prove the card's failure is
+    // fixed — only the replay layer does. Without a handler the pattern-absent
+    // assertion was never checked.
+    expect(
+      decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck], replayHandlerExists: false }),
+    ).toBe('unsupported');
+  });
+
+  it('unsupported when a replay handler exists but did not conclusively drive (replayDrove=false)', () => {
+    expect(
+      decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck], replayHandlerExists: true, replayDrove: false }),
+    ).toBe('unsupported');
+  });
+
+  it('unsupported when replayHandlerExists=true but replayDrove is omitted', () => {
+    // Coupling: supplying replayHandlerExists without replayDrove is treated as
+    // "handler existed but never drove" — must not surface as `pass`.
+    expect(
+      decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck], replayHandlerExists: true }),
+    ).toBe('unsupported');
   });
 
   it('replayInconclusive forces unsupported even with a contract and passing checks', () => {
@@ -231,6 +258,19 @@ describe('decideStatus precedence', () => {
     expect(
       decideStatus({ hasContract: true, contractThrew: false, checks: [failCheck], replayInconclusive: true }),
     ).toBe('fail');
+  });
+
+  it('a real failure beats no-replay-handler (unsupported demote overridden by fail)', () => {
+    expect(
+      decideStatus({ hasContract: true, contractThrew: false, checks: [failCheck], replayHandlerExists: false }),
+    ).toBe('fail');
+  });
+
+  it('legacy path: omitting replayHandlerExists with a contract and passing checks still yields pass', () => {
+    // Invariant: call-sites that predate replayHandlerExists (e.g. direct unit
+    // tests) must not be silently broken — omission is treated as "handler
+    // drove" for backward compatibility.
+    expect(decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck] })).toBe('pass');
   });
 });
 
@@ -321,11 +361,14 @@ describe('runEvalCase', () => {
     expect(run.checks.filter((c) => c.name !== 'fixture-integrity').every((c) => c.status === 'pass')).toBe(true);
   });
 
-  it('validates the subagent-block (skill depth hint) contract end to end', async () => {
+  it('validates the subagent-block (hook-block detector) contract end to end', async () => {
+    // subagent-block has a guardrail-presence contract but no replay handler, so
+    // replayHandlerExists=false → decideStatus returns `unsupported` (not `pass`).
+    // A guardrail-presence pass alone is not card-specific behavioural proof.
     const run = await runEvalCase(makeEvalCase({ pattern: 'subagent-block' }), { ...baseCtx, clockMs: stubClock([1, 2]) });
-    expect(run.status).toBe('pass');
-    expect(run.contract).toBe('skill-max-depth-recovery-hint');
-    expect(run.checks.some((c) => c.name === 'recovery-hint-present' && c.status === 'pass')).toBe(true);
+    expect(run.status).toBe('unsupported');
+    expect(run.contract).toBe('subagent-hook-block-detector');
+    expect(run.checks.some((c) => c.name === 'emits-card-on-recurring-subagent-block' && c.status === 'pass')).toBe(true);
   });
 
   it('honours the resolveFixtureAbsPath seam', async () => {
@@ -340,7 +383,8 @@ describe('runEvalCase', () => {
       clockMs: stubClock([1, 2]),
       resolveFixtureAbsPath: () => customAbs,
     });
-    expect(run.status).toBe('pass');
+    // tool-failure-density has no replay handler → pattern-absent not executed → unsupported.
+    expect(run.status).toBe('unsupported');
     expect(run.checks.find((c) => c.name === 'fixture-integrity')?.status).toBe('pass');
   });
 });

@@ -117,8 +117,8 @@ function clickFormCancel() {
 /** Count POST /api/schedules calls in mock history. */
 function postCalls() {
   return mockApiFetch.mock.calls.filter(
-    ([, opts]: [string, RequestInit | undefined]) =>
-      opts?.method?.toUpperCase() === 'POST',
+    (call: unknown[]) =>
+      (call[1] as RequestInit | undefined)?.method?.toUpperCase() === 'POST',
   );
 }
 

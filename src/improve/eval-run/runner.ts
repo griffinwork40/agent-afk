@@ -234,11 +234,18 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
   // `hasContract` gates the `unsupported` verdict; a replay that ran is itself
   // a validation, so it must suppress `unsupported` even for a pattern with no
   // guardrail-presence contract.
+  //
+  // `replayHandlerExists` is passed separately from `replayRan` so decideStatus
+  // can distinguish "no handler registered for this pattern" (the pattern-absent
+  // assertion was never executed — guardrail-presence only → unsupported) from
+  // "handler registered and ran" (card-specific behaviour verified → pass/fail).
   const status = decideStatus({
     hasContract: contract !== undefined || replayRan,
     contractThrew,
     checks,
     replayInconclusive,
+    replayHandlerExists: replayHandler !== undefined,
+    replayDrove,
   });
   const durationMs = Math.max(0, Math.round(clock() - t0));
 
@@ -269,11 +276,24 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
  *
  * Precedence (highest wins): `error` > `fail` > `unsupported` > `pass`.
  *
- * `unsupported` is reached two ways: when no validation ran (`!hasContract`),
- * or when a fixture-replay was EXPECTED but could not conclusively run
- * (`replayInconclusive`). The latter is load-bearing: a skipped replay must
- * never surface as `pass`, or a guardrail-presence-only result would be
- * mistaken for card-specific behavioural proof.
+ * `unsupported` is reached three ways:
+ *   1. No validation ran at all (`!hasContract`).
+ *   2. A fixture-replay was EXPECTED but could not conclusively run
+ *      (`replayInconclusive`): a skipped replay must never surface as `pass`,
+ *      or a guardrail-presence-only result would be mistaken for card-specific
+ *      behavioural proof.
+ *   3. No replay handler is registered for the pattern (`replayHandlerExists`
+ *      is false), meaning the guardrail-presence contract ran but the eval-case's
+ *      `pattern-absent` assertion — "is this card's recorded failure fixed?" —
+ *      was never actually checked. A guardrail-presence pass alone is not
+ *      card-specific behavioural proof; it must not surface as `pass`.
+ *
+ * `pass` therefore requires — in addition to a non-throwing contract
+ * (`!contractThrew`) and no failing checks — a replay handler to exist AND to
+ * have conclusively driven the guardrail (`replayDrove`). When
+ * `replayHandlerExists` is omitted (e.g. in direct unit tests of
+ * `decideStatus` that predate this field), the old behaviour is preserved for
+ * backward compatibility with those call-sites.
  */
 export function decideStatus(args: {
   hasContract: boolean;
@@ -285,10 +305,42 @@ export function decideStatus(args: {
    * the card-specific behaviour was NOT proven. Forces a non-`pass` verdict.
    */
   replayInconclusive?: boolean;
+  /**
+   * True when a replay handler is registered for the pattern. When false (no
+   * handler), only guardrail-presence was checked — the eval-case's
+   * `pattern-absent` assertion was never executed — so `pass` is not reachable
+   * even when the guardrail-presence contract itself passes. Omit to preserve
+   * legacy `decideStatus` behaviour (treated as `true` so existing call-sites
+   * that do not supply it are not broken).
+   */
+  replayHandlerExists?: boolean;
+  /**
+   * True when a replay conclusively drove the guardrail (a neutralise check is
+   * present in `checks`). Only meaningful when `replayHandlerExists` is true.
+   *
+   * Coupling: when `replayHandlerExists` is `true` and this field is omitted or
+   * `false`, the function returns `unsupported` — the handler existed but the
+   * recorded loop did not produce a neutralise check, so no card-specific
+   * behavioural proof was obtained. Callers that supply `replayHandlerExists`
+   * must also supply this field to distinguish "drove but failed" from "never
+   * drove at all".
+   */
+  replayDrove?: boolean;
 }): EvalRunStatus {
   if (args.contractThrew) return 'error';
   if (args.checks.some((c) => c.status === 'fail')) return 'fail';
-  if (!args.hasContract || args.replayInconclusive === true) return 'unsupported';
+  // A handler exists but the recorded loop did not reproduce — skipped replay.
+  if (args.replayInconclusive === true) return 'unsupported';
+  // No validation ran at all.
+  if (!args.hasContract) return 'unsupported';
+  // `replayHandlerExists` is omitted by legacy call-sites that predate this
+  // field. Treat omission as "handler exists but drove" (backward compat) so
+  // those call-sites are not silently broken. When the field IS supplied, it
+  // must be true AND replayDrove must be true to reach `pass`.
+  if (args.replayHandlerExists !== undefined) {
+    // Caller supplied the new field — apply the stricter rule.
+    if (!args.replayHandlerExists || !args.replayDrove) return 'unsupported';
+  }
   return 'pass';
 }
 

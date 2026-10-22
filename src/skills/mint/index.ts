@@ -415,8 +415,15 @@ async function handler(
         'mint: no paused spec found for this session to continue. Run /mint <idea> first, then /mint --continue approved.',
       );
     }
-    const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore, ctx?.delegationBudget);
-    return finalizeAfterSpec(parentSessionId, result);
+    try {
+      const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore, ctx?.delegationBudget);
+      return finalizeAfterSpec(parentSessionId, result);
+    } finally {
+      // Guard: clean up fallbackBySession on throw so daemon processes do not
+      // accumulate stale entries. finalizeAfterSpec handles the success path;
+      // calling setMintModelFallback(…, undefined) twice is a no-op. (#4203)
+      setMintModelFallback(parentSessionId, undefined);
+    }
   }
 
   if (!mintInput.idea) {
@@ -455,8 +462,13 @@ async function handler(
     return pausedResult;
   }
 
-  const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore, ctx?.delegationBudget);
-  return finalizeAfterSpec(parentSessionId, result);
+  try {
+    const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore, ctx?.delegationBudget);
+    return finalizeAfterSpec(parentSessionId, result);
+  } finally {
+    // Guard: clean up fallbackBySession on throw. (#4203)
+    setMintModelFallback(parentSessionId, undefined);
+  }
 }
 
 const mintSkill: SkillMetadata = {

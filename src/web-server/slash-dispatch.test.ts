@@ -7,18 +7,22 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Mock } from 'vitest';
+
+/** Untyped call-through mock; the precise signature is irrelevant to these tests. */
+type AnyMock = Mock<(...args: unknown[]) => unknown>;
 
 // Stubs set per-test.
-let mockParse: ReturnType<typeof vi.fn>;
-let mockLookup: ReturnType<typeof vi.fn>;
-let mockSuggest: ReturnType<typeof vi.fn>;
-let mockRegisterAll: ReturnType<typeof vi.fn>;
-let mockRegisterPluginSkillsForWeb: ReturnType<typeof vi.fn>;
-let mockBuildSkillInvocationMessage: ReturnType<typeof vi.fn>;
-let mockGetPreflight: ReturnType<typeof vi.fn>;
-let mockRunPreflight: ReturnType<typeof vi.fn>;
-let mockGetSkillPreflightDir: ReturnType<typeof vi.fn>;
-let mockGetSkill: ReturnType<typeof vi.fn>;
+let mockParse: AnyMock;
+let mockLookup: AnyMock;
+let mockSuggest: AnyMock;
+let mockRegisterAll: AnyMock;
+let mockRegisterPluginSkillsForWeb: AnyMock;
+let mockBuildSkillInvocationMessage: AnyMock;
+let mockGetPreflight: AnyMock;
+let mockRunPreflight: AnyMock;
+let mockGetSkillPreflightDir: AnyMock;
+let mockGetSkill: AnyMock;
 
 vi.mock('../cli/slash/index.js', () => ({
   registerAll: (...args: unknown[]) => mockRegisterAll(...args),
@@ -88,30 +92,27 @@ describe('classifySlashInput', () => {
 
   it('returns repl-only for terminal-only commands', async () => {
     // Fix 5: REPL_ONLY is now checked after lookup using the resolved cmd.name.
-    // For /clear, lookup must return a cmd with name: '/clear'.
-    mockParse.mockReturnValue({ name: '/clear', args: '' });
-    mockLookup.mockReturnValue({ name: '/clear', summary: 'clear', handler: vi.fn() });
-    const result = await classifySlashInput('/clear', '/tmp', undefined);
-    expect(result).toEqual({ kind: 'repl-only', command: '/clear' });
+    // /clear is now native; /editor still requires a terminal.
+    mockParse.mockReturnValue({ name: '/editor', args: '' });
+    mockLookup.mockReturnValue({ name: '/editor', summary: 'editor', handler: vi.fn() });
+    const result = await classifySlashInput('/editor', '/tmp', undefined);
+    expect(result).toEqual({ kind: 'repl-only', command: '/editor' });
   });
 
-  it('returns repl-only for /exit', async () => {
-    // Fix 5: lookup returns cmd with canonical name '/exit'.
+  it('Stage 4: returns native for /exit (un-gated in Stage 4)', async () => {
+    // /exit was previously repl-only but is now a native web command in Stage 4.
     mockParse.mockReturnValue({ name: '/exit', args: '' });
     mockLookup.mockReturnValue({ name: '/exit', summary: 'exit', handler: vi.fn() });
     const result = await classifySlashInput('/exit', '/tmp', undefined);
-    expect(result).toEqual({ kind: 'repl-only', command: '/exit' });
+    expect(result).toEqual({ kind: 'native' });
   });
 
-  it('returns repl-only via alias resolution (Fix 5)', async () => {
-    // Simulate /quit alias resolving to /exit canonical name.
-    // Before Fix 5, /quit would not be in REPL_ONLY (by raw name) and would
-    // fall through to passthrough. After Fix 5, the resolved cmd.name '/exit'
-    // IS in REPL_ONLY, so it returns repl-only.
+  it('Stage 4: returns native for /quit alias of /exit (un-gated in Stage 4)', async () => {
+    // /quit resolves to /exit canonical name; both are native on web in Stage 4.
     mockParse.mockReturnValue({ name: '/quit', args: '' });
     mockLookup.mockReturnValue({ name: '/exit', summary: 'exit', handler: vi.fn() });
     const result = await classifySlashInput('/quit', '/tmp', undefined);
-    expect(result).toEqual({ kind: 'repl-only', command: '/exit' });
+    expect(result).toEqual({ kind: 'native' });
   });
 
   it('returns unknown with suggestion for unrecognised command', async () => {
@@ -139,7 +140,7 @@ describe('classifySlashInput', () => {
       // No acceptsAttachments — native command, not a skill.
     });
     const result = await classifySlashInput('/help', '/tmp', undefined);
-    expect(result.kind).toBe('passthrough');
+    expect(result.kind).toBe('native');
   });
 
   it('returns skill with built message for skill commands', async () => {

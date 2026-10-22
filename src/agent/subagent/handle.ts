@@ -174,6 +174,13 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    */
   /** @internal */ _lastStreamedContent: string = '';
   /**
+   * Runtime-counted tool-use rounds across every stream this handle ran
+   * (summed per stream from provider `progress.roundsUsed` events, which the
+   * provider loops emit after each tool round whether or not a cap is set).
+   * Never model-reported. Read by continuation accounting (D4) for uncapped runs.
+   */
+  /** @internal */ _runtimeRoundsUsed = 0;
+  /**
    * Pause-aware extension policy for the CURRENT run's wall-clock ceiling.
    * Created in `run()` (which owns `withTimeout`) but fed from the stream loop
    * in `streamToFinalMessage`, so — like `lastStreamedContent` — it lives as an
@@ -518,9 +525,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       transition: 'cancelled',
       subagentId: this.id,
       source: 'explicit',
-      // Unreported spend accrued before the cancel (#3878): rolls up the delta,
-      // stamps the cumulative total; `{}` when all of it was already reported.
-      // May undercount spend that lands later — the rollup is authoritative.
+      // Unreported spend accrued before the cancel (#3878): stamps the
+      // cumulative total fields (not a delta); `{}` when all spend was already
+      // reported. May undercount spend that lands later — the rollup is authoritative.
       ...settleUnreportedBilling(this, 'cancelled'),
     });
 

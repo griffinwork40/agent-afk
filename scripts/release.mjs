@@ -12,7 +12,7 @@
  *   5. Rewrite CHANGELOG: rename `[Unreleased]` → `[X.Y.Z] - YYYY-MM-DD`, insert fresh empty `[Unreleased]` block above it.
  *   6. git add + commit `chore(release): vX.Y.Z`.
  *   7. git tag vX.Y.Z.
- *   8. git push origin <branch> --follow-tags.
+ *   8. git push --atomic origin <branch> refs/tags/<tag>.
  *
  * The existing .github/workflows/publish.yml fires on the tag push and handles
  * lint, test, npm publish (with provenance), and GitHub Release creation.
@@ -138,8 +138,8 @@ sh(`git commit -m "chore(release): ${tag}"`, { mutates: true, inherit: true });
 // 7. Tag
 sh(`git tag -a ${tag} -m "${tag}"`, { mutates: true, inherit: true });
 
-// 8. Push
-sh(`git push origin ${branch} --follow-tags`, { mutates: true, inherit: true });
+// 8. Push (--atomic needs a remote that advertises atomic capability)
+sh(`git push --atomic origin ${branch} refs/tags/${tag}`, { mutates: true, inherit: true });
 
 console.log(`\n✓ Released ${tag}`);
 console.log(`  → CI: https://github.com/griffinwork40/agent-afk/actions`);

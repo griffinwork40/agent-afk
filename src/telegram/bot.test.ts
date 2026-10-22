@@ -52,6 +52,8 @@ class MockAgentSession implements IAgentSession {
   async reset() {
     this.messageQueue = [];
   }
+
+  async setModel(): Promise<void> { /* live switch no-op */ }
 }
 
 // Mock Telegraf context
@@ -137,10 +139,11 @@ describe('TelegramBot', () => {
       expect(message).toContain('Welcome');
     });
 
+    // Stage 5: shared commands run through the 'text' handler + shared registry.
     test('should handle /clear command (SDK /clear)', async () => {
       const ctx = createMockContext(12345, '/clear');
 
-      await (bot as any).handleClear(ctx);
+      await (bot as any).handleMessage(ctx);
 
       expect(ctx.reply).toHaveBeenCalled();
       const message = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -150,7 +153,7 @@ describe('TelegramBot', () => {
     test('should handle /model command without args', async () => {
       const ctx = createMockContext(12345, '/model');
       
-      await (bot as any).handleModelSwitch(ctx);
+      await (bot as any).handleMessage(ctx);
 
       expect(ctx.reply).toHaveBeenCalled();
       const [message, options] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string, unknown];
@@ -168,7 +171,7 @@ describe('TelegramBot', () => {
 
       try {
         const ctx = createMockContext(12345, '/model');
-        await (bot as any).handleModelSwitch(ctx);
+        await (bot as any).handleMessage(ctx);
 
         const [, options] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [
           string,
@@ -196,7 +199,7 @@ describe('TelegramBot', () => {
     test('should handle /model command with valid model', async () => {
       const ctx = createMockContext(12345, '/model opus');
       
-      await (bot as any).handleModelSwitch(ctx);
+      await (bot as any).handleMessage(ctx);
 
       expect(ctx.reply).toHaveBeenCalled();
       const message = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -206,22 +209,22 @@ describe('TelegramBot', () => {
     test('should reject invalid model', async () => {
       const ctx = createMockContext(12345, '/model invalid');
       
-      await (bot as any).handleModelSwitch(ctx);
+      await (bot as any).handleMessage(ctx);
 
       expect(ctx.reply).toHaveBeenCalled();
       const message = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(message).toContain('Invalid model');
+      expect(message).toContain('Unknown model');
     });
 
     test('should handle /help command', async () => {
       const ctx = createMockContext(12345, '/help');
 
-      await (bot as any).handleHelp(ctx);
+      await (bot as any).handleMessage(ctx);
 
       expect(ctx.reply).toHaveBeenCalled();
       const message = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(message).toContain('/help');
-      expect(message).toContain('CLI');
+      expect(message).toContain('Commands');
     });
   });
 

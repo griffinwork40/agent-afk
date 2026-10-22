@@ -89,7 +89,7 @@ function HandoffCard({
   // so the handoff is still answerable. type='select'/'choice' with no choices
   // must NOT match isConfirm either — it falls to the free-text branch.
   const isSelectLike = hasChoices;
-  const isConfirm = !isSelectLike && type === 'confirm' && type !== 'select' && type !== 'choice';
+  const isConfirm = !isSelectLike && type === 'confirm';
 
   const relativeTime = (() => {
     try {

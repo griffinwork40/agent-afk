@@ -263,7 +263,7 @@ describe('routing', () => {
 
     const retried = await fetch(api(h, '/api/commands'), { headers });
     expect(retried.status).toBe(200);
-    expect(await retried.json()).toEqual({ commands: [{ name: '/help' }] });
+    expect(await retried.json()).toEqual({ commands: [expect.objectContaining({ name: '/help' })] });
     expect(loader).toHaveBeenCalledTimes(2);
   });
 
@@ -302,8 +302,8 @@ describe('routing', () => {
     const responses = await Promise.all([first, second]);
     expect(responses.map((res) => res.status)).toEqual([200, 200]);
     expect(await Promise.all(responses.map((res) => res.json()))).toEqual([
-      { commands: [{ name: '/help' }] },
-      { commands: [{ name: '/help' }] },
+      { commands: [expect.objectContaining({ name: '/help' })] },
+      { commands: [expect.objectContaining({ name: '/help' })] },
     ]);
   });
 

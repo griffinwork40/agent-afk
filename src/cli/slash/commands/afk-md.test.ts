@@ -45,10 +45,13 @@ vi.mock('../../../paths.js', async (importOriginal) => {
 });
 
 vi.mock('../../config/afk-md-tier.js', () => ({
+  OVERLAY_TOKEN_WARN_THRESHOLD: 10_000,
   resetAfkMdCache: (): void => { callLog.push('bust'); },
-  loadAfkMd: (): { content: string; paths: string[] } | null => {
+  loadAfkMd: (): { content: string; paths: string[]; estimatedTokens: number } | null => {
     callLog.push('read');
-    return overlayContent === null ? null : { content: overlayContent, paths: [] };
+    return overlayContent === null
+      ? null
+      : { content: overlayContent, paths: [], estimatedTokens: 0 };
   },
 }));
 

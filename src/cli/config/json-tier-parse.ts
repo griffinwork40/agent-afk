@@ -126,6 +126,10 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     config.enforceDoneEvidence = json.enforceDoneEvidence;
   }
 
+  if (typeof json.fileCheckpoints === 'boolean') {
+    config.fileCheckpoints = json.fileCheckpoints;
+  }
+
   if (typeof json.bgSummaries === 'boolean') {
     config.bgSummaries = json.bgSummaries;
   }

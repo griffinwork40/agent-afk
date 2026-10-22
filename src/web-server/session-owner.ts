@@ -28,9 +28,14 @@ import type { AgentConfig } from '../agent/types.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
 import type { McpManager } from '../agent/mcp/index.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
-import { createSessionAutosaver, type SessionAutosaver } from '../cli/session-autosave.js';
+import type { SessionAutosaver } from '../cli/session-autosave.js';
+import { FastModeController } from '../agent/fast-mode.js';
+import { WebSessionControl, type SessionControlResult } from './session-owner.control.js';
+import type { SlashCommand, SlashContext } from '../cli/slash/types.js';
 import { drainAndPersistTurn } from './session-owner.autosave.js';
 import { errorMessage } from '../utils/errors.js';
+import { initSessionStats, getStats } from './session-owner.slash.js';
+
 
 export interface CreateSessionRequest {
   /** Working directory. Ignored unless `allowArbitraryCwd` — see the guard. */
@@ -43,6 +48,7 @@ export interface OwnedSessionInfo {
   cwd: string;
   model: string;
   createdAt: string;
+  name?: string;
 }
 
 export interface SessionOwnerOptions {
@@ -93,6 +99,13 @@ export class SessionOwner {
   private readonly pending = new Map<string, number>();
   /** Per-session sidecar autosave, so web sessions show up in `/resume`. */
   private readonly autosavers = new Map<string, SessionAutosaver>();
+  private readonly controls = new Map<string, WebSessionControl>();
+  private cancelChoices?: (sessionId: string) => void;
+
+  /** Web-server instance owns the broker; no process-wide singleton. */
+  setChoiceCancellation(cancel: ((sessionId: string) => void) | undefined): void {
+    this.cancelChoices = cancel;
+  }
 
   constructor(private readonly options: SessionOwnerOptions) {}
 
@@ -100,8 +113,15 @@ export class SessionOwner {
     return this.options.cwd ?? process.cwd();
   }
 
-  /** Construct a session, wait for its id, and register it as drivable. */
-  async create(request: CreateSessionRequest = {}): Promise<OwnedSessionInfo> {
+  /**
+   * Construct a session, wait for its id, and register it as drivable.
+   *
+   * @param resumeConfig - Optional partial AgentConfig injected for /resume and
+   *   /fork paths. Only resume-specific fields (resumeMessages, resumeHistory,
+   *   resume, sessionId) are safe to merge here; all other config comes from
+   *   wiring + options. Lifecycle callers obtain this via resumeConfigFor().
+   */
+  async create(request: CreateSessionRequest = {}, resumeConfig: Partial<import('../agent/types.js').AgentConfig> = {}): Promise<OwnedSessionInfo> {
     const cwd = this.options.allowArbitraryCwd === true ? (request.cwd ?? this.baseCwd) : this.baseCwd;
     const model = request.model ?? this.options.model;
     const apiKey = getApiKeyForModel(model);
@@ -123,8 +143,9 @@ export class SessionOwner {
     }
 
     // Full executor + trace + MCP wiring (mirrors REPL/Telegram Anthropic).
+    const fastModeController = new FastModeController();
     const wiring = await wireWebSession({
-      model, apiKey, cwd, rawPrompt, rawPromptSource, operatorOverlay,
+      model, apiKey, cwd, rawPrompt, rawPromptSource, operatorOverlay, fastModeController,
     }) as WebSessionWiringInternal;
 
     // Hook registry with the shared memory store so session-end writes land in
@@ -149,6 +170,11 @@ export class SessionOwner {
       ...(wiring.systemPrompt !== undefined ? { systemPrompt: wiring.systemPrompt } : {}),
       ...(wiring.systemPromptSource !== undefined ? { systemPromptSource: wiring.systemPromptSource } : {}),
       ...(wiring.traceWriter !== undefined ? { traceWriter: wiring.traceWriter } : {}),
+      // Resume/fork fields — only safe resume-specific keys merged here.
+      ...(resumeConfig.resume !== undefined ? { resume: resumeConfig.resume } : {}),
+      ...(resumeConfig.sessionId !== undefined ? { sessionId: resumeConfig.sessionId } : {}),
+      ...(resumeConfig.resumeMessages !== undefined ? { resumeMessages: resumeConfig.resumeMessages } : {}),
+      ...(resumeConfig.resumeHistory !== undefined ? { resumeHistory: resumeConfig.resumeHistory } : {}),
     };
 
     const session = new AgentSession(config, wiring.traceWriter);
@@ -156,9 +182,11 @@ export class SessionOwner {
     // Keep them alive through SessionEnd hooks and child draining, even when
     // close rejects; coalesce repeated/concurrent closes into one teardown.
     const close = session.close.bind(session);
+    let ownedId: string | undefined;
     let closing: Promise<void> | undefined;
     session.close = () => closing ??= (async () => {
       try { await close(); } finally {
+        if (ownedId !== undefined) this.cancelChoices?.(ownedId);
         try { wiring.memoryStore.close(); } finally { wiring.workspaceStore.close(); }
       }
     })();
@@ -191,6 +219,7 @@ export class SessionOwner {
       throw error;
     });
     const id = metadata.sessionId ?? session.sessionId;
+    ownedId = id;
     if (id === undefined) {
       await session.close().catch(() => {});
       throw new Error('session initialized without an id');
@@ -203,11 +232,19 @@ export class SessionOwner {
       createdAt: new Date().toISOString(),
     };
     this.sessions.set(id, session);
+    initSessionStats(id, model);
     this.info.set(id, record);
     this.owned.add(id);
-    this.autosavers.set(id, createSessionAutosaver({
-      model, cwd, source: 'web', sessionId: id,
-      onError: (err) => { console.error(`[afk web] session ${id} autosave failed; it may not be resumable:`, err); },
+    const stats = getStats(id)!;
+    stats.cwd = cwd;
+    const control = new WebSessionControl(id, session, stats, (meta) => {
+      record.model = meta.model;
+      if (meta.name) record.name = meta.name;
+      else delete record.name;
+    }, fastModeController, false, this);
+    this.controls.set(id, control);
+    this.autosavers.set(id, control.autosaver((err) => {
+      console.error(`[afk web] session ${id} autosave failed; it may not be resumable:`, err);
     }));
     if (wiring.mcpManager !== undefined) this.mcpManagers.set(id, wiring.mcpManager);
     return record;
@@ -269,7 +306,8 @@ export class SessionOwner {
           // The ledger is written as a side effect of the turn; the SSE route
           // tails it. Draining runs the turn to completion, then the completed
           // turn is saved to the session sidecar.
-          await drainAndPersistTurn(session, message, this.autosavers.get(sessionId));
+          await drainAndPersistTurn(session, message, this.autosavers.get(sessionId), this.controls.has(sessionId) ? undefined : sessionId);
+
         } finally {
           const remaining = (this.pending.get(sessionId) ?? 1) - 1;
           if (remaining > 0) this.pending.set(sessionId, remaining);
@@ -339,12 +377,29 @@ export class SessionOwner {
   async interrupt(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`session ${sessionId} is not owned by this process`);
+    this.cancelChoices?.(sessionId);
     await session.interrupt();
   }
 
   list(): OwnedSessionInfo[] {
     return [...this.info.values()];
   }
+
+  /**
+   * Look up a single owned session by id.
+   * Returns the AgentSession, or undefined if not found.
+   */
+  getSession(id: string): import('../agent/session/agent-session.js').AgentSession | undefined {
+    return this.sessions.get(id);
+  }
+
+  /** Route has already acquired the single busy reservation. */
+  executeSessionControl(id: string, cmd: SlashCommand, ctx: SlashContext, args: string): Promise<SessionControlResult> {
+    const control = this.controls.get(id);
+    if (!control) throw new Error(`session ${id} has no control adapter`);
+    return control.execute(cmd, ctx, args);
+  }
+
 
   /**
    * Close every owned session.
@@ -354,8 +409,11 @@ export class SessionOwner {
    * is strictly worse than best-effort teardown.
    */
   async closeAll(): Promise<void> {
+    for (const id of this.sessions.keys()) this.cancelChoices?.(id);
     const all = [...this.sessions.values()];
     const mcps = [...this.mcpManagers.values()];
+    const controls = [...this.controls.values()];
+    this.controls.clear();
     this.sessions.clear();
     this.info.clear();
     this.owned.clear();
@@ -366,6 +424,7 @@ export class SessionOwner {
     // Sessions close BEFORE MCP disconnect: a closing session may raise a final
     // tool call that needs the MCP transport alive.
     await Promise.all(all.map((s) => s.close().catch(() => {})));
+    await Promise.all(controls.map((c) => c.close().catch(() => {})));
     await Promise.all(mcps.map((m) => m.disconnectAll().catch(() => {})));
   }
 }

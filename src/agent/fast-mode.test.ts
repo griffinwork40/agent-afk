@@ -66,7 +66,7 @@ describe('FastModeController — OpenAI', () => {
 
   it.each([
     'gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
-    'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-reserve',
+    'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-reserve',
     'gpt-5.5-20260901', 'gpt-6-sol-2026-09-01',
   ])('accepts OpenAI fast-eligible model %s', (model) => {
     expect(resolveFastModeStatus('on', { ...eligibleOpenAI, resolvedModelId: model }).effective).toBe(true);
@@ -115,7 +115,7 @@ describe('FastModeController — OpenAI', () => {
 describe('OPENAI_FAST_MODEL_FALLBACK regex', () => {
   it.each([
     'gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
-    'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-reserve',
+    'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-reserve',
     'gpt-5.5-20260901', 'gpt-6-sol-2026-09-01',
   ])('matches %s', (m) => expect(OPENAI_FAST_MODEL_FALLBACK.test(m)).toBe(true));
 

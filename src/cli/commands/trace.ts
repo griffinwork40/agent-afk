@@ -333,8 +333,7 @@ export function registerTraceCommand(program: Command): void {
         // Live push: --endpoint flag takes precedence over AFK_OTLP_ENDPOINT.
         const pushUrl = options.endpoint ?? env.AFK_OTLP_ENDPOINT;
         if (pushUrl) {
-          const rawHeaders = env.AFK_OTLP_HEADERS ?? '';
-          const headers = rawHeaders ? parseOtlpHeaders(rawHeaders) : {};
+          const headers = parseOtlpHeaders(env.AFK_OTLP_HEADERS ?? '');
           const result = await pushOtlpHttp(payload, { endpoint: pushUrl, headers });
           if (result.ok) {
             process.stderr.write(`[otlp] pushed to ${pushUrl} → HTTP ${result.status}\n`);

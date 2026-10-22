@@ -100,7 +100,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*reset\s+--hard\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; preserve it first with "git stash push --include-untracked" or by committing the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.',
+      'safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   // git clean -f: BLOCK — removes untracked files with no recovery path.
   {
@@ -119,7 +119,62 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     blockReason:
       'safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
-  // Invariant: git branch -D stays OBSERVE because only the ref is deleted —
+  // ── git stash (mutating): BLOCK when cwd is inside a linked worktree ───────
+  //
+  // refs/stash is stored in the COMMON git dir and is shared by every worktree
+  // of a repo. A mutating stash operation (push/save/pop/apply/drop/clear, or
+  // bare `git stash`) run inside a linked worktree (.afk-worktrees/<slug>/) can
+  // silently consume or corrupt stashes created in other worktrees or the main
+  // checkout. The canonical 2026-10-21 incident: a worktree-isolated subagent
+  // ran `git stash && ...; git stash pop`, which applied a 5-day-old stash from
+  // another context and dropped a sibling agent's stash entirely.
+  //
+  // Read-only operations (list, show, create) are safe and are
+  // explicitly excluded from this pattern. Bare `git stash` with no subcommand
+  // is equivalent to `git stash push` and is therefore blocked.
+  //
+  // CWD SCOPING: the block is conditional on the session cwd being inside a
+  // linked worktree. The `createSafeDestructDetect` factory accepts an optional
+  // `sessionCwd` and checks it with `isWorktreeCwd` from
+  // `src/agent/manifest/worktree.ts`. When `sessionCwd` is absent (e.g. a
+  // top-level root session), the hook falls back to OBSERVE so normal
+  // `git stash` use in a main checkout is not blocked. See `safe-destruct-detect.ts`
+  // for the conditional-block mechanism — the pattern itself is always BLOCK-tier
+  // here; the detector gates it on cwd. This avoids the pattern table needing
+  // runtime state and keeps patterns purely declarative.
+  //
+  // The pattern is an allowlist: ANY `git stash` invocation blocks unless the
+  // next word is a read-only subcommand. This catches implicit pushes too
+  // (`git stash && x`, `git stash; x`, `git stash -u`). Matches include:
+  //   git stash                       (bare — equivalent to push)
+  //   git stash push [opts]           (write new stash entry)
+  //   git stash save [opts]           (deprecated alias for push)
+  //   git stash pop [opts]            (apply + drop)
+  //   git stash apply [opts]          (apply without dropping)
+  //   git stash drop [opts]           (delete a stash entry)
+  //   git stash clear                 (delete all stash entries)
+  //   git -C <path> stash pop         (global option before stash)
+  // Excluded (safe read-only): list, show, create
+  // store and branch are NOT excluded — both mutate refs/stash:
+  //   `git stash store` updates the stash ref directly;
+  //   `git stash branch` drops the selected stash entry on success.
+  //
+  // Alternatives: `git diff > <file>` / `git apply <file>` to move changes
+  // within the worktree, or commit to a rescue branch.
+  {
+    id: 'git-stash-mutating',
+    re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*stash(?![\w-])(?!\s+(?:list|show|create)\b)/i,
+    // Note: the lookahead checks only the FIRST word after `stash`, so a
+    // malformed invocation like `git stash --flag list` is blocked (the word
+    // after `stash` is `--flag`, not `list`). This false positive is accepted
+    // on invalid syntax — well-formed read-only calls always put the subcommand
+    // first (e.g. `git stash list`, `git stash show -p`).
+    tier: 'block',
+    blockReason:
+      'safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with `git diff > <file-in-worktree>` and restore with `git apply <file>`, or commit to a rescue branch (`git switch -c rescue-<name> && git add <paths> && git commit`). `git stash list`, `git stash show`, and `git stash create` are still fine; `store` and `branch` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.',
+  },
+
+  // ── git branch -D stays OBSERVE because only the ref is deleted —
   // the commit objects survive in the reflog for at least 30 days by default.
   // Recovery: `git reflog` + `git checkout -b <name> <sha>`. Measured at 13
   // firings in 5 weeks; promoting to BLOCK would have been the #2 largest

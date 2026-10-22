@@ -89,6 +89,12 @@ const darkPaletteDef = {
   syntaxString: chalk.italic.hex('#8AB07A'),
   /** Tool argument — dim white, for `(args)` after the tool name. */
   toolArg: chalk.dim.white,
+  /** Tool verb — the `toolArg` tone at full intensity, for the command word(s) in a bash row (`cat`, `curl`, `rm`) so verbs stand out from their dim arguments. */
+  toolVerb: chalk.white,
+  /** Network verb — sage, the `web` tool-category hue (`curl` reads like `web_request`), for bash command words that reach other machines (`curl`, `ssh`, `gh`). Known limit: on a 16-colour terminal this desaturated hue rounds to the same ANSI white as `toolVerb`; it is distinct at 256 colours and truecolor. */
+  toolVerbNetwork: chalk.hex('#A0C4C0'),
+  /** Danger verb — bold black on an amber chip, for bash command words the risk classifier rates high (`rm`, `sudo`, forced pushes). A BACKGROUND, because no other lane role uses one, so it never collides with a category hue; amber, never red, because red means "this tool failed". */
+  toolVerbDanger: chalk.bold.black.bgHex('#E8913A'),
   /** Thinking tone — dusty rose italic, for extended thinking blocks. Shifted from mauve (h=304°) to rose (h=9°) to separate from `plan` (lavender, h=307°, ΔE was 12.8); the warm rose reads as "contemplative inner monologue" without echoing the plan-card purple. */
   thinking: chalk.italic.hex('#B5888F'),
   /** Success tone — green check marks, confirmation messages. */
@@ -187,6 +193,12 @@ const lightPaletteDef: ThemePalette = {
   syntaxString: chalk.italic.hex('#3F7A3F'),
   /** Mid grey — dim-white washes out on white, so use an explicit legible grey. */
   toolArg: chalk.hex('#6B7280'),
+  /** Near-black slate — bash command words, a clear step darker than the mid-grey `toolArg` they sit among. */
+  toolVerb: chalk.hex('#1F2937'),
+  /** Deep sage — network verbs; the pale dark-theme sage washes out on white. */
+  toolVerbNetwork: chalk.hex('#3F6F69'),
+  /** Bold white on burnt amber — danger-verb chip, darkened so white text holds contrast. */
+  toolVerbDanger: chalk.bold.white.bgHex('#B85C10'),
   /** Dark dusty-rose italic — thinking blocks on white. Hue-matched to the dark theme's `#B5888F`. */
   thinking: chalk.italic.hex('#8A5D64'),
   /** Dark green — success on white. */
@@ -283,6 +295,12 @@ const umberPaletteDef: ThemePalette = {
   syntaxString: chalk.italic.hex('#96C182'),
   /** ansi7 white, dimmed — the faithful translation of the dark theme's `chalk.dim.white`. */
   toolArg: chalk.dim.hex('#D3CDC5'),
+  /** ansi7 white, undimmed — the `toolArg` tone at full intensity, mirroring the dark theme's `chalk.white` for bash command words. */
+  toolVerb: chalk.hex('#D3CDC5'),
+  /** Sage — network verbs, the dark theme's web-category hue (reads well on `#19120D`). */
+  toolVerbNetwork: chalk.hex('#A0C4C0'),
+  /** Umber-black on Umber amber — danger-verb chip using the signature `#FF9B5A`. */
+  toolVerbDanger: chalk.bold.hex('#19120D').bgHex('#FF9B5A'),
   /** Warm dusty-rose italic — no Umber analogue; warm-shifted from the dark theme's `#B5888F`. */
   thinking: chalk.italic.hex('#C4929A'),
   /** ansi2 green — the faithful translation of `chalk.green`. */

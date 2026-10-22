@@ -177,6 +177,66 @@
   }
 }
 
+/*
+ * ANSI terminal color classes — used by ansi-renderer.ts.
+ * Named colors reference design tokens where possible; bright variants
+ * use fixed values so they remain vivid regardless of theme.
+ * Theme-aware: standard colors adapt to light/dark; bright colors are fixed.
+ */
+@layer base {
+  /* Standard foreground — adapt to light/dark */
+  .ansi-fg-black       { color: #1a1a1a; }
+  .ansi-fg-red         { color: #c0392b; }
+  .ansi-fg-green       { color: #27ae60; }
+  .ansi-fg-yellow      { color: #d4ac0d; }
+  .ansi-fg-blue        { color: #2980b9; }
+  .ansi-fg-magenta     { color: #8e44ad; }
+  .ansi-fg-cyan        { color: #16a085; }
+  .ansi-fg-white       { color: #d0d0d0; }
+
+  /* Standard background */
+  .ansi-bg-black       { background-color: #1a1a1a; }
+  .ansi-bg-red         { background-color: #c0392b; }
+  .ansi-bg-green       { background-color: #27ae60; }
+  .ansi-bg-yellow      { background-color: #d4ac0d; }
+  .ansi-bg-blue        { background-color: #2980b9; }
+  .ansi-bg-magenta     { background-color: #8e44ad; }
+  .ansi-bg-cyan        { background-color: #16a085; }
+  .ansi-bg-white       { background-color: #d0d0d0; }
+
+  /* Bright foreground — fixed vivid values */
+  .ansi-fg-bright-black   { color: #555555; }
+  .ansi-fg-bright-red     { color: #e74c3c; }
+  .ansi-fg-bright-green   { color: #2ecc71; }
+  .ansi-fg-bright-yellow  { color: #f1c40f; }
+  .ansi-fg-bright-blue    { color: #3498db; }
+  .ansi-fg-bright-magenta { color: #9b59b6; }
+  .ansi-fg-bright-cyan    { color: #1abc9c; }
+  .ansi-fg-bright-white   { color: #ffffff; }
+
+  /* Bright background */
+  .ansi-bg-bright-black   { background-color: #555555; }
+  .ansi-bg-bright-red     { background-color: #e74c3c; }
+  .ansi-bg-bright-green   { background-color: #2ecc71; }
+  .ansi-bg-bright-yellow  { background-color: #f1c40f; }
+  .ansi-bg-bright-blue    { background-color: #3498db; }
+  .ansi-bg-bright-magenta { background-color: #9b59b6; }
+  .ansi-bg-bright-cyan    { background-color: #1abc9c; }
+  .ansi-bg-bright-white   { background-color: #ffffff; }
+
+  /* Dark-mode overrides for standard colors */
+  .dark .ansi-fg-black   { color: #4d4d4d; }
+  .dark .ansi-fg-white   { color: #e8e8e8; }
+  .dark .ansi-bg-black   { background-color: #0d0d0d; }
+  .dark .ansi-bg-white   { background-color: #e8e8e8; }
+
+  /* SGR text decorations */
+  .ansi-bold      { font-weight: bold; }
+  .ansi-dim       { opacity: 0.6; }
+  .ansi-italic    { font-style: italic; }
+  .ansi-underline { text-decoration: underline; }
+}
+
 @layer utilities {
   .animate-slide-in-right {
     animation: slide-in-right 0.2s ease-out;

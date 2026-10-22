@@ -112,6 +112,17 @@ export function classifyError(err: unknown): ClassifiedError {
     };
   }
 
+  // 5a. Anthropic PermissionDeniedError (seat removed, subscription inactive)
+  if (err instanceof Error && err.name === 'PermissionDeniedError') {
+    return {
+      kind: 'auth',
+      userMessage: 'Access denied (HTTP 403). Your account seat may have been removed or subscription access is inactive.',
+      hint: 'Check your subscription at https://console.anthropic.com/settings/billing, or switch accounts with `afk login`.',
+      exitCode: 1,
+      raw: err,
+    };
+  }
+
   // 5b. Usage limit. Above the generic 429 branch so a provider-labeled
   // usage limit never reads as an "Anthropic rate limit". Matches a raw
   // ChatGPT body even with no status (a mid-stream error).

@@ -22,6 +22,7 @@ import { divider } from '../../render.js';
 import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 import { env } from '../../../config/env.js';
 import type { SlashCommand } from '../types.js';
+import { writeDiff, writeKeyValue } from '../output-blocks.js';
 
 /**
  * Maximum diff body lines rendered before eliding. Enough to show a typical
@@ -29,6 +30,44 @@ import type { SlashCommand } from '../types.js';
  * ("+N -M across K hunks") is always rendered — it doesn't count against this.
  */
 const MAX_DIFF_BODY_LINES = 60;
+
+function diffBodyLimit(): number {
+  const configuredLimit = Number.parseInt(env.AFK_DIFF_LINES ?? '', 10);
+  return configuredLimit === 0
+    ? Number.POSITIVE_INFINITY
+    : configuredLimit > 0 ? configuredLimit : MAX_DIFF_BODY_LINES;
+}
+
+/** Keep raw file/hunk headers, but spend the shared cap only on hunk body lines. */
+function boundedDiff(raw: string): string {
+  let inHunk = false;
+  const lines = raw.split('\n').map((text) => {
+    if (text.startsWith('diff --git ')) inHunk = false;
+    if (text.startsWith('@@ ')) inHunk = true;
+    const body = inHunk && /^[+ -]/.test(text);
+    return { text, body };
+  });
+  const total = lines.filter((line) => line.body).length;
+  const limit = diffBodyLimit();
+  if (total <= limit) return raw;
+
+  const visible: string[] = [];
+  let pending: string[] = [];
+  let shown = 0;
+  for (const line of lines) {
+    if (line.body) {
+      if (shown >= limit) break;
+      visible.push(...pending, line.text);
+      pending = [];
+      shown++;
+    } else {
+      // Hold headers until their body is included: no dangling next-file/hunk header.
+      pending.push(line.text);
+    }
+  }
+  visible.push(`… ${total - shown} more diff lines (set AFK_DIFF_LINES=0 or pipe to git diff for full output)`);
+  return visible.join('\n') + '\n';
+}
 
 /** Parse raw unified-diff text (from git) into a structured hunk list. */
 interface RawHunk {
@@ -128,10 +167,7 @@ function renderParsedDiff(
 
   let bodyLines = 0;
   let truncated = false;
-  const configuredLimit = Number.parseInt(env.AFK_DIFF_LINES ?? '', 10);
-  const bodyLimit = configuredLimit === 0
-    ? Number.POSITIVE_INFINITY
-    : configuredLimit > 0 ? configuredLimit : MAX_DIFF_BODY_LINES;
+  const bodyLimit = diffBodyLimit();
   const totalBodyLines = parsed.filePairs.reduce(
     (total, file) => total + file.hunks.reduce((count, hunk) => count + hunk.lines.length, 0),
     0,
@@ -262,15 +298,30 @@ export const diffCmd: SlashCommand = {
       return 'continue';
     }
 
-    // Header label
-    out.line();
-    const modeLabel = staged ? 'Staged changes' : 'Uncommitted changes';
-    const fileLabel = file ? `  ${palette.dim(`— ${sanitizeForDisplay(file)}`)}` : '';
-    out.line(palette.bold(`${modeLabel}${fileLabel}`));
-    out.line(divider());
-
     const parsed = parseDiff(result.stdout);
-    renderParsedDiff(out, parsed);
+    const modeLabel = staged ? 'Staged changes' : 'Uncommitted changes';
+    // Scope and full-change counts precede the bounded preview on structured surfaces.
+    writeKeyValue(out, {
+      title: modeLabel,
+      entries: [
+        ...(file ? [{ key: 'Path', value: sanitizeForDisplay(file) }] : []),
+        { key: 'Files', value: String(parsed.filePairs.length) },
+        { key: 'Additions', value: String(parsed.totalAdded) },
+        { key: 'Deletions', value: String(parsed.totalRemoved) },
+      ],
+    }, () => {});
+    writeDiff(out, {
+      diff: out.block ? boundedDiff(result.stdout) : result.stdout,
+      ...(file ? { fileName: file } : {}),
+    }, () => {
+      // Header label
+      out.line();
+      const fileLabel = file ? `  ${palette.dim(`— ${sanitizeForDisplay(file)}`)}` : '';
+      out.line(palette.bold(`${modeLabel}${fileLabel}`));
+      out.line(divider());
+
+      renderParsedDiff(out, parsed);
+    });
 
     return 'continue';
   },

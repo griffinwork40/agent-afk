@@ -15,6 +15,8 @@ export interface BgJobMeta {
   endedAt?: number;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   parentSessionId?: string;
+  /** PID of the owning process — present when the job was started by a live session. */
+  ownerPid?: number;
   /**
    * Terminal SubagentResult.stopReason — only present on failed/cancelled jobs
    * written after the field was added. Optional and additive.

@@ -578,7 +578,10 @@ export type EvalRunEvidenceRef = z.infer<typeof EvalRunEvidenceRefSchema>;
  * Top-line run outcome:
  *   - `pass`        — a contract ran and every check passed.
  *   - `fail`        — a contract ran and at least one check failed.
- *   - `unsupported` — no deterministic contract is registered for the pattern.
+ *   - `unsupported` — no card-specific behavioural proof was obtained: no
+ *                     contract is registered, no replay handler exists, or a
+ *                     replay handler exists but ran inconclusively (fixture
+ *                     intact yet the recorded loop did not reproduce).
  *   - `error`       — the contract threw unexpectedly mid-run.
  */
 export const EvalRunStatusSchema = z.enum(['pass', 'fail', 'unsupported', 'error']);

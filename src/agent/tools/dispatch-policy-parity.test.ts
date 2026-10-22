@@ -82,6 +82,15 @@ export const POLICIES = [
   'child-peer-tool-block',
   /** A scoped agent's `Agent(x)` grant limits what it may dispatch. */
   'nested-agent-allowlist',
+  /**
+   * Stage 3 (#4042): model resolution follows the full four-tier chain
+   * (callSite > namedAgent > defaultSubagentModel > defaultModel > 'sonnet')
+   * on every dispatch path. Before this fix, dispatchDagNode used
+   * `spec.model ?? 'sonnet'`, skipping tiers 3 and 4 for nodes whose
+   * spec.model was absent (direct runSubagentDAG callers; compose always
+   * pre-resolves via buildComposeDagNode so was unaffected in practice).
+   */
+  'model-resolution',
 ] as const;
 export type DispatchPolicy = (typeof POLICIES)[number];
 
@@ -134,6 +143,14 @@ export const DISPATCH_POLICY_MATRIX: Record<DispatchPolicy, Record<DispatchCalle
       na: 'intentional (#2848): skill forks carry no Agent(x) grant from a type definition, so there is ' +
         'no caller allowlist to forward (fork-dispatch.ts runForkedSkillToResult)',
     },
+  },
+  'model-resolution': {
+    // Stage 3 (#4042): all three paths use resolveChildModel so the full
+    // four-tier chain (callSite > namedAgent > defaultSubagentModel >
+    // defaultModel > 'sonnet') is honoured everywhere.
+    agent: 'enforced',
+    compose: 'enforced',
+    'skill-fork': 'enforced',
   },
 };
 
@@ -413,6 +430,86 @@ const PROBES: Partial<Record<CellKey, () => Promise<void>>> = {
       { nestedAgentAllowlist: ['git-investigator'] },
     );
     expectRefusedWithoutFork(r, 'research-agent');
+  },
+
+  // model-resolution (Stage 3, #4042)
+  // Agent path: resolveChildModel is already the single source of truth in
+  // child-config.helpers.ts. Probe: defaultSubagentModel='haiku' and no
+  // call-site model override → fork receives 'haiku', not 'sonnet'.
+  'model-resolution:agent': async () => {
+    const executor = new SubagentExecutor({
+      subagentManager: new SubagentManager({ cwd: tmp }),
+      parentSession: {
+        sessionId: 'parent-session',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal: new AbortController().signal,
+      } as never,
+      defaultConfig: { apiKey: 'test-key', systemPrompt: 'base prompt' },
+      defaultSubagentModel: 'haiku',
+      depth: 0,
+      childProviderFactory: createChildProviderFactory(),
+      agentRegistry: builtinAgents(),
+      parentModel: 'sonnet',
+      cwd: tmp,
+    });
+    // No `model` in input — must pick up defaultSubagentModel='haiku'.
+    const r = await executor.execute(call('agent', { prompt: 'inspect' }));
+    expect(r.isError).toBeFalsy();
+    expect(forkCalls).toHaveLength(1);
+    expect(forkCalls[0]?.config.model).toBe('haiku');
+  },
+
+  // Compose path: node has no explicit model, but defaultSubagentModel='haiku'
+  // is set on the context. Before the fix dispatchDagNode used
+  // `spec.model ?? 'sonnet'`; now it uses resolveChildModel.
+  // Note: compose pre-resolves spec.model via buildComposeDagNode, so the fork
+  // receives the resolved model directly. This probe verifies that the resolved
+  // model reaches the fork config correctly end-to-end.
+  'model-resolution:compose': async () => {
+    const executor = new ComposeExecutor({
+      parentSession: { sessionId: 'parent-session', abortSignal: new AbortController().signal },
+      apiKey: 'test-key',
+      systemPrompt: 'base prompt',
+      agentRegistry: builtinAgents(),
+      defaultSubagentModel: 'haiku',
+      resolveApiKeyForModel: () => 'test-key',
+      cwd: tmp,
+    });
+    // No `model` on the node — must pick up defaultSubagentModel='haiku'.
+    await executor.execute(
+      call('compose', { nodes: [{ id: 'a', prompt: 'inspect the module' }] }),
+    );
+    expect(forkCalls).toHaveLength(1);
+    expect(forkCalls[0]?.config.model).toBe('haiku');
+  },
+
+  // Skill-fork path: resolveChildModel is used in fork-dispatch.ts.
+  // Probe: defaultSubagentModel='haiku' and no SKILL.md model override →
+  // fork receives 'haiku', not 'sonnet'.
+  'model-resolution:skill-fork': async () => {
+    registerSkill({
+      name: 'parity-model-skill',
+      description: 'model resolution parity probe skill',
+      context: 'fork',
+      handler: vi.fn(),
+    });
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'parent-session',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal: new AbortController().signal,
+      },
+      defaultModel: 'sonnet',
+      defaultSubagentModel: 'haiku',
+      apiKey: 'test-key',
+      cwd: tmp,
+      childProviderFactory: createChildProviderFactory(),
+      depth: 0,
+    });
+    const r = await executor.execute(call('skill', { name: 'parity-model-skill' }));
+    expect(r.isError).toBeFalsy();
+    expect(forkCalls).toHaveLength(1);
+    expect(forkCalls[0]?.config.model).toBe('haiku');
   },
 };
 

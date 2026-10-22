@@ -13,11 +13,14 @@ import {
   BgJobItem,
 } from './message-row';
 import type { TranscriptItem } from '@/lib/ledger-adapter';
+import type { ThinkingUiMode } from '@/types/command-wire';
 import type { SessionTotals } from './session-meter';
 import { TranscriptSessionContext } from '@/hooks/use-full-tool-result';
 
 interface TranscriptViewProps {
   items: TranscriptItem[];
+  /** Rendering preference only: the original items remain intact for re-enabling. */
+  thinkingUi?: ThinkingUiMode;
   totals?: SessionTotals;
   /** When true, render execution blocks as topology spine trees. */
   spineMode?: boolean;
@@ -25,6 +28,8 @@ interface TranscriptViewProps {
   turnActive?: boolean;
   /** Session being rendered; enables lazy-loading full tool results. */
   sessionId?: string;
+  /** Suppress the "No transcript items yet." placeholder (command outputs fill the view). */
+  hideEmptyState?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,9 +110,14 @@ export function TranscriptView({ sessionId, ...rest }: TranscriptViewProps) {
   );
 }
 
-function TranscriptBody({ items, totals, spineMode = true, turnActive = false }: Omit<TranscriptViewProps, 'sessionId'>) {
-  const flatSlots = useMemo(() => groupItems(items), [items]);
-  const spineSlots = useSpineSlots(items);
+function TranscriptBody({ items, totals, thinkingUi = 'live', spineMode = true, turnActive = false, hideEmptyState = false }: Omit<TranscriptViewProps, 'sessionId'>) {
+  // Filter only the render projection, before either grouping path. Never mutate
+  // the ledger-backed array: toggling back on restores old and new thinking.
+  const visibleItems = useMemo(() => thinkingUi === 'off'
+    ? items.filter((item) => item.kind !== 'thinking') : items, [items, thinkingUi]);
+  const flatSlots = useMemo(() => groupItems(visibleItems), [visibleItems]);
+  const spineSlots = useSpineSlots(visibleItems);
+
 
   // Find the id of the last assistant item — only that one gets streaming animation.
   const lastAssistantId = useMemo(() => {
@@ -141,7 +151,7 @@ function TranscriptBody({ items, totals, spineMode = true, turnActive = false }:
           className="sticky top-0 z-10 mb-4 rounded-md border border-border bg-card px-3 py-1.5"
         />
       )}
-      {items.length === 0 ? (
+      {items.length === 0 && hideEmptyState ? null : items.length === 0 ? (
         <p className="py-12 text-center text-sm text-muted-foreground">
           No transcript items yet.
         </p>

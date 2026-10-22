@@ -86,6 +86,8 @@ export interface BgJobMeta {
   label: string;
   model: string;
   startedAt: number;
+  /** PID of the owning process — present when the job was started by a live session */
+  ownerPid?: number;
   endedAt?: number;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   parentSessionId?: string;
@@ -123,6 +125,12 @@ export interface SlashCommand {
   name: string;
   summary: string;
   hint?: string;
+  /** 'skill' = dispatched as a structured invocation; 'native' = runs via /commands route */
+  kind: 'skill' | 'native';
+  /** Whether the command is available on the web surface */
+  web: 'ok' | 'gated';
+  /** Human-readable reason when web === 'gated' */
+  gateReason?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +149,10 @@ export interface PendingApproval {
     type?: 'text' | 'confirm' | 'choice' | 'multi_choice' | 'number';
     choices?: string[];
     questionDefault?: string | boolean | number;
+    /** Inclusive lower bound for number-type elicitations. */
+    questionMin?: number;
+    /** Inclusive upper bound for number-type elicitations. */
+    questionMax?: number;
   };
 }
 

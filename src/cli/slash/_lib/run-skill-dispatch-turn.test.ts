@@ -634,7 +634,7 @@ describe('runSkillDispatchTurn — sidecar autosave', () => {
     expect(saveSession).toHaveBeenCalledTimes(1);
     expect(saveSession).toHaveBeenCalledWith(ctx.stats);
     // The auto-derived name is what /resume and the web list show.
-    expect(ctx.stats.name).toBe('god-ship-it');
+    expect(ctx.stats.name).toBe('ship');
   });
 
   it('does not save an interrupted skill turn (no done event)', async () => {

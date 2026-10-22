@@ -155,6 +155,15 @@ export const CLAUDE_FABLE_5_1_ID = 'claude-fable-5-1';
  */
 export const GROK_FLAGSHIP_ID = 'grok-4.5';
 
+// OpenAI family flagship constants — the concrete target for each family
+// short alias (sol/luna/astra/terra). Same discipline as the Claude constants
+// above: bump one line when a new flagship ships; the alias table, `/model`
+// picker, and provider routing all follow from these definitions.
+export const GPT_SOL_ID = 'gpt-6.1-sol';
+export const GPT_LUNA_ID = 'gpt-6-luna';
+export const GPT_ASTRA_ID = 'gpt-6-astra';
+export const GPT_TERRA_ID = 'gpt-5.6-terra';
+
 /**
  * Default tier bindings — an unconfigured install behaves identically to the
  * pre-slots `MODEL_MAP`. `model-resolution.ts` derives its `MODEL_MAP` from the
@@ -207,6 +216,13 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // GROK_FLAGSHIP_ID so upgrading the default Grok model is a one-line
   // change. Not a capability tier: `grok` always resolves to one pinned id.
   grok: GROK_FLAGSHIP_ID,
+  // OpenAI family aliases — stable short handles that track the GPT_*_ID
+  // constants above. Same pattern as the Claude aliases: each names ONE
+  // concrete model and is never rebound by user slot config.
+  sol: GPT_SOL_ID,
+  luna: GPT_LUNA_ID,
+  astra: GPT_ASTRA_ID,
+  terra: GPT_TERRA_ID,
 };
 
 // Curated picker hint lists live in the sibling file to keep this file within

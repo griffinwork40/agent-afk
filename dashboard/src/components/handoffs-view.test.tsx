@@ -103,8 +103,8 @@ function setupApiFetch(handoffs: ReturnType<typeof makeHandoff>[]) {
 /** Collect POST /api/handoffs/* calls. */
 function postCalls() {
   return mockApiFetch.mock.calls.filter(
-    ([, opts]: [string, RequestInit | undefined]) =>
-      (opts?.method?.toUpperCase() ?? 'GET') === 'POST',
+    (call: unknown[]) =>
+      ((call[1] as RequestInit | undefined)?.method?.toUpperCase() ?? 'GET') === 'POST',
   );
 }
 
@@ -421,7 +421,7 @@ describe('HandoffsView', () => {
 
   it('shows "no longer active" error when POST returns a 409-like error', async () => {
     mockApiFetch.mockImplementation(
-      async (path: string, options?: RequestInit) => {
+      async (_path: string, options?: RequestInit) => {
         const method = options?.method?.toUpperCase() ?? 'GET';
         if (method === 'GET') {
           return { handoffs: [makeHandoff({ questionType: 'confirm' })] };
@@ -462,7 +462,7 @@ describe('HandoffsView', () => {
     // arrives while the first is still in-flight.
     let resolvePost!: (v: unknown) => void;
     mockApiFetch.mockImplementation(
-      async (path: string, options?: RequestInit) => {
+      async (_path: string, options?: RequestInit) => {
         const method = options?.method?.toUpperCase() ?? 'GET';
         if (method === 'GET') {
           return { handoffs: [makeHandoff({ taskId: 'q-dbl', questionType: 'confirm' })] };
@@ -552,7 +552,7 @@ describe('HandoffsView', () => {
   it('clears the text input after a successful free-text answer', async () => {
     // Block the POST so the card stays mounted long enough to check the input.
     let resolvePost!: (v: unknown) => void;
-    mockApiFetch.mockImplementation(async (path: string, opts?: RequestInit) => {
+    mockApiFetch.mockImplementation(async (_path: string, opts?: RequestInit) => {
       const method = opts?.method?.toUpperCase() ?? 'GET';
       if (method === 'GET') {
         return { handoffs: [makeHandoff({ taskId: 'q-clear', questionType: 'text' })] };

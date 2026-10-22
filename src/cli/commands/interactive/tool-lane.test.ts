@@ -14,6 +14,7 @@ import chalk from 'chalk';
 import { ToolLane } from './tool-lane.js';
 import { displayWidth, stripAnsi } from '../../display.js';
 import { palette } from '../../palette.js';
+import { styleBashCommand } from './tool-lane-format-bash.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { OutputEvent, SubagentProgressMeta } from '../../../agent/types.js';
 import type { DiffPayload } from '../../../utils/diff.js';
@@ -721,7 +722,9 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
 
         const row = lane.flush().join('\n');
         expect(stripAnsi(row)).toContain('bash ×3');
-        expect(row).toContain(palette.toolArg(commands.join(', ')));
+        // Same styling the single-entry path applies: dim toolArg with the
+        // bash command words emphasised (tool-lane-format-bash.ts).
+        expect(row).toContain(commands.map(styleBashCommand).join(palette.toolArg(', ')));
       } finally {
         chalk.level = originalLevel;
       }

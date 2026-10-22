@@ -122,6 +122,8 @@ export interface BuildChildConfigArgs {
    * the chain holds to maxDepth. See SubagentExecutorContext.workspaceStore.
    */
   workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: import('../../tools/delegation-budget.js').DelegationBudget;
+  /** Root-session continuation chains (D2); nested executors share the root's. */
+  continuationRegistry?: import('../../subagent/continuation-registry.js').ContinuationRegistry;
   /**
    * Hook registry (#3442) for the depth-2+ child {@link SubagentManager}
    * (whose stub parent carries none) and the recursive child executor's ctx,

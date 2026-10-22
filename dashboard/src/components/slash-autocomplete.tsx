@@ -95,8 +95,19 @@ export function handleAutocompleteKey(
   setActiveIdx: (i: number) => void,
   onConfirm: (idx: number) => void,
   onClose: () => void,
+  activeIsExact = false,
 ): boolean {
   if (!visible || filteredCount === 0) return false;
+
+  // Contract: Tab always completes. Enter completes only while the typed
+  // token is a partial match; once it already equals the active suggestion
+  // (e.g. the user typed `/help` in full), Enter falls through so the
+  // composer submits, matching the REPL where Enter on a complete command runs it.
+  if (e.key === 'Tab') {
+    onConfirm(activeIdx);
+    return true;
+  }
+  if (e.key === 'Enter' && activeIsExact) return false;
 
   if (e.key === 'ArrowDown') {
     setActiveIdx((activeIdx + 1) % filteredCount);

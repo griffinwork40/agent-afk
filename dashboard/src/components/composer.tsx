@@ -7,17 +7,19 @@ import {
 } from 'react';
 import { Send, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, ApiError } from '@/lib/api';
 import {
   formatSlashCommandName,
   slashCommandMatchesQuery,
 } from '@/lib/slash-command';
 import type { SlashCommand } from '@/types/api';
+import type { CommandResponse } from '@/types/command-wire';
 import { SlashAutocomplete, handleAutocompleteKey } from './slash-autocomplete';
 import { AtFilePopover } from './at-file-popover';
 import { ModelSelector } from './model-selector';
 import { QueuePanel } from './queue-panel';
 import type { UseQueueResult } from '@/hooks/use-queue';
+import { useCommandControl } from '@/hooks/use-command-control';
 
 interface ComposerProps {
   sessionId: string;
@@ -25,10 +27,20 @@ interface ComposerProps {
   isBusy: boolean;
   /** Queue for mid-run message management. */
   queue?: UseQueueResult;
-  /** Called when the operator picks a model from the selector. */
+  /** Called with the authoritative model after a successful /model response. */
   onModelSelect?: (modelId: string) => void;
   /** Currently selected model id (shown in the selector). */
   currentModel?: string;
+  /** Called with command output to insert a client-local transcript item. */
+  onCommandOutput?: (input: string, response: CommandResponse) => void;
+  onCommandStart?: (input: string) => void;
+  /** Called with a toast message (e.g. gated command reason). */
+  onToast?: (message: string) => void;
+  /** Called when a /fork or /resume produces a navigate control. */
+  onNavigate?: (targetSessionId: string) => void;
+  /** Called when /exit marks the session as ended. */
+  onSessionEnded?: () => void;
+
 }
 
 /** Cached slash commands — cleared on page focus to pick up new skills. */
@@ -46,10 +58,52 @@ async function fetchCommands(): Promise<SlashCommand[]> {
   return commandsCache;
 }
 
+/**
+ * Normalise a command name to always include the leading slash.
+ * Server data already has it; test fixtures may or may not.
+ */
+/** True when the typed first token already names the active suggestion. */
+function isActiveSuggestionExact(text: string, activeName: string | undefined): boolean {
+  if (activeName === undefined) return false;
+  const token = text.trimStart().split(/\s+/)[0] ?? '';
+  return normaliseName(token) === normaliseName(activeName);
+}
+
+function normaliseName(name: string): string {
+  return name.startsWith('/') ? name : `/${name}`;
+}
+
+/** Look up a slash token (e.g. "/cost") against the command list. */
+function findCommand(cmds: SlashCommand[], token: string): SlashCommand | undefined {
+  const needle = normaliseName(token);
+  return cmds.find((c) => normaliseName(c.name) === needle);
+}
+
 function getSlashQuery(text: string): string | null {
   if (!text.startsWith('/')) return null;
   const space = text.indexOf(' ');
   return space === -1 ? text.slice(1) : null; // only before first space
+}
+
+/** Human-readable error message from a failed /commands POST. */
+function commandErrorMessage(err: unknown, token: string): string {
+  if (!(err instanceof ApiError)) return String(err);
+  const body = err.body;
+  const errorCode = typeof body?.error === 'string' ? body.error : '';
+  if (errorCode === 'command_gated') {
+    const reason = typeof body?.reason === 'string' ? body.reason : '';
+    return reason || (typeof body?.message === 'string' ? body.message : err.message);
+  }
+  if (errorCode === 'unknown_command') {
+    const suggestion = typeof body?.suggestion === 'string' ? body.suggestion : '';
+    return suggestion
+      ? `Unknown command ${token}. Did you mean ${suggestion}?`
+      : `Unknown command ${token}.`;
+  }
+  if (errorCode === 'session_busy') {
+    return 'Session is busy — try again when the turn finishes.';
+  }
+  return typeof body?.message === 'string' ? body.message : err.message;
 }
 
 /** Main prompt composer — textarea + send/stop controls. */
@@ -60,16 +114,28 @@ export function Composer({
   queue,
   onModelSelect,
   currentModel,
+  onCommandOutput,
+  onCommandStart,
+  onToast,
+  onNavigate,
+  onSessionEnded,
+
 }: ComposerProps) {
   const [text, setText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [acActiveIdx, setAcActiveIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lifetimeRef = useRef({ active: true });
+  useEffect(() => {
+    const lifetime = { active: true };
+    lifetimeRef.current = lifetime;
+    return () => { lifetime.active = false; };
+  }, [sessionId]);
 
   const disabled = sessionMode === 'readonly';
   const slashQuery = getSlashQuery(text);
-  const acVisible = slashQuery !== null && commands.length > 0;
+  const acVisible = slashQuery !== null && (commands?.length ?? 0) > 0;
   const acFiltered = acVisible
     ? commands
         .filter((c) => slashCommandMatchesQuery(c.name, slashQuery))
@@ -98,26 +164,116 @@ export function Composer({
   // Fetch commands when user first types '/'
   useEffect(() => {
     if (slashQuery !== null) {
-      fetchCommands().then(setCommands).catch(() => undefined);
+      let cancelled = false;
+      fetchCommands()
+        .then((cmds) => { if (!cancelled) setCommands(cmds ?? []); })
+        .catch(() => undefined);
+      return () => { cancelled = true; };
     }
   }, [slashQuery]);
+
+  const submitPrompt = useCallback(async (trimmed: string) => {
+    await apiFetch(`/api/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      body: JSON.stringify({ text: trimmed }),
+    });
+  }, [sessionId]);
+
+  const { handleControl } = useCommandControl({
+    sessionId,
+    setText,
+    onNavigate,
+    onSessionEnded,
+    onToast,
+  });
+
+  /**
+   * POST to /commands and handle the CommandControl result via useCommandControl.
+   * Returns true if the caller should clear the composer text (normal case),
+   * false when the control itself manages the text (e.g. prefill).
+   */
+  const submitCommand = useCallback(async (input: string, depth = 0): Promise<boolean> => {
+    const lifetime = lifetimeRef.current;
+    onCommandStart?.(input);
+
+    const response = await apiFetch<CommandResponse>(
+      `/api/sessions/${sessionId}/commands`,
+      { method: 'POST', body: JSON.stringify({ input }) },
+    );
+    // Navigating away must not clear the newly selected session/queue when a
+    // delayed response from the old composer eventually arrives.
+    if (!lifetime.active) return false;
+    onCommandOutput?.(input, response);
+    if (response.session?.model) onModelSelect?.(response.session.model);
+    return handleControl(response.control, input, depth);
+  }, [sessionId, onCommandStart, onCommandOutput, onModelSelect, handleControl]);
+
+  const selectModel = useCallback(async (modelId: string) => {
+    if (disabled || submitting || isBusy || modelId === currentModel) return;
+    setSubmitting(true);
+    try {
+      await submitCommand(`/model ${modelId}`);
+    } catch (err) {
+      onToast?.(commandErrorMessage(err, '/model'));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [disabled, submitting, isBusy, currentModel, submitCommand, onToast]);
+
 
   const submit = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed || submitting || disabled) return;
     setSubmitting(true);
     try {
-      await apiFetch(`/api/sessions/${sessionId}/prompt`, {
-        method: 'POST',
-        body: JSON.stringify({ text: trimmed }),
-      });
+      if (trimmed.startsWith('/')) {
+        const cmds = await fetchCommands();
+        const token = trimmed.split(/\s+/)[0]!;
+        const cmd = findCommand(cmds, token);
+
+        if (cmd?.kind === 'skill') {
+          // Skill commands go to /prompt; when a turn is in flight, enqueue
+          // instead of submitting immediately (mirrors the Enter handler).
+          if (isBusy && queue) {
+            queue.enqueue(trimmed);
+          } else {
+            await submitPrompt(trimmed);
+          }
+          setText('');
+          return;
+        }
+
+        if (cmd?.kind === 'native' && cmd.web === 'gated') {
+          // Show gate reason locally — no network call.
+          const reason = cmd.gateReason ?? `${normaliseName(cmd.name)} is not available on the web surface`;
+          if (onToast) {
+            onToast(reason);
+          } else {
+            console.warn('[composer] gated command dismissed:', reason);
+          }
+          return;
+        }
+
+        // Known native ok, alias, or unknown — let the server resolve it
+        try {
+          const shouldClear = await submitCommand(trimmed);
+          if (shouldClear) setText('');
+        } catch (err) {
+          onToast?.(commandErrorMessage(err, token));
+          // Leave text intact so user can retry
+        }
+        return;
+      }
+
+      // Plain text — send to /prompt
+      await submitPrompt(trimmed);
       setText('');
     } catch {
       // Leave text intact so user can retry
     } finally {
       setSubmitting(false);
     }
-  }, [text, submitting, disabled, sessionId]);
+  }, [text, submitting, disabled, submitPrompt, submitCommand, onToast]);
 
   const interrupt = useCallback(async () => {
     try {
@@ -146,6 +302,7 @@ export function Composer({
           if (cmd) selectCommand(cmd.name);
         },
         () => setText((t) => t), // keep text, just close (slashQuery will become null)
+        isActiveSuggestionExact(text, acFiltered[acActiveIdx]?.name),
       );
       if (consumed) { e.preventDefault(); return; }
 
@@ -211,8 +368,9 @@ export function Composer({
             <AtFilePopover onInsert={insertAtCursor} />
             {onModelSelect && (
               <ModelSelector
-                onSelect={onModelSelect}
+                onSelect={(model) => void selectModel(model)}
                 current={currentModel}
+                disabled={disabled || submitting || isBusy}
               />
             )}
           </div>

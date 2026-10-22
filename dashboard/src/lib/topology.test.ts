@@ -29,7 +29,7 @@ function makeTool(overrides: Partial<ToolCallItem> & { id: string; name: string 
     name: overrides.name,
     toolUseId: overrides.toolUseId ?? `use-${overrides.id}`,
     status: overrides.status ?? 'ok',
-    inputPreview: overrides.inputPreview,
+    inputPreview: overrides.inputPreview ?? '',
     durationMs: overrides.durationMs,
   };
 }

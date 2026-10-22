@@ -45,9 +45,11 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup pnpm
+        # No `version:` here: package.json#packageManager pins pnpm exactly.
+        # Setting both makes pnpm/action-setup v6 fail with "Multiple versions
+        # of pnpm specified" (same convention as ci.yml / validate-action.yml).
         uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js

@@ -19,74 +19,22 @@
  */
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
-
-/**
- * Commands that drive terminal-only machinery and cannot act on the web
- * surface. Server-side mirror of the frontend's REPL_ONLY set.
- *
- * Invariant: this makes a NEGATIVE claim only. Presence means "verified
- * REPL-only"; absence does not promise the command works here.
- */
-const REPL_ONLY: ReadonlySet<string> = new Set([
-  '/clear',
-  '/compact',
-  '/editor',
-  '/exit',
-  '/fast',
-  '/font-size',
-  '/fork',
-  '/keys',
-  '/model',
-  '/reauth',
-  '/resume',
-  '/rewind',
-  '/sh',
-  '/theme',
-  '/thinking',
-]);
+import { ensureSlashRegistry, resetSlashRegistry } from './slash-registry.js';
+import { isGated } from './command-gate.js';
 
 export type SlashDispatchResult =
   | { kind: 'passthrough' }
+  | { kind: 'native' }
   | { kind: 'skill'; message: ContentBlockParam[] }
   | { kind: 'repl-only'; command: string }
   | { kind: 'unknown'; command: string; suggestion?: string };
 
 /**
- * Module-scope memoization guard: `registerAll()` + `registerPluginSkillsForWeb()`
- * runs once per process. This mirrors the `commandUniverseInitialization` guard
- * in `routes.ts`. The promise is cleared on failure so the next call retries
- * rather than permanently caching a transient error.
+ * Test seam: kept as a thin wrapper over the shared resetSlashRegistry()
+ * so existing tests that import this name continue to work without changes.
  */
-let registrationDone = false;
-let registrationPromise: Promise<void> | null = null;
-
-/** Test seam: drop the memo so a case can re-observe registration. */
 export function resetSlashDispatchRegistration(): void {
-  registrationDone = false;
-  registrationPromise = null;
-}
-
-async function ensureRegistered(): Promise<void> {
-  if (registrationDone) return;
-
-  registrationPromise ??= (async () => {
-    const [{ registerAll }, { registerPluginSkillsForWeb }] = await Promise.all([
-      import('../cli/slash/index.js'),
-      import('./register-plugin-skills.js'),
-    ]);
-    registerAll();
-    // Invariant: registerAll() calls resetRegistry(), wiping any prior plugin
-    // registrations. Re-register plugin skills so lookup() resolves them.
-    await registerPluginSkillsForWeb();
-    registrationDone = true;
-  })().finally(() => {
-    // Clear the in-flight promise so a failure allows retry on next call.
-    // (registrationDone is only set to true on success, so a failure leaves
-    // it false and the next call will retry via a fresh promise.)
-    registrationPromise = null;
-  });
-
-  await registrationPromise;
+  resetSlashRegistry();
 }
 
 /**
@@ -111,40 +59,39 @@ export async function classifySlashInput(
   // pattern -- keeps the cli/slash import tree off the server's startup).
   // Registration is memoized: registerAll() resets the process-global registry,
   // so concurrent calls without memoization would race and wipe each other.
-  await ensureRegistered();
+  await ensureSlashRegistry();
 
   const registry = await import('../cli/slash/registry.js');
 
   const parsed = registry.parse(text);
   if (!parsed) return { kind: 'passthrough' };
 
-  // Fix 5: Look up the command first, then check REPL_ONLY on the RESOLVED
+  // Look up the command first, then check the gate list on the RESOLVED
   // canonical name (cmd.name) rather than the raw parsed token. This ensures
   // aliases (e.g. /quit -> /exit) are correctly caught: the alias resolves to
-  // a cmd whose canonical name IS in REPL_ONLY even though the alias itself
-  // is not.
+  // a cmd whose canonical name IS gated even though the alias itself is not.
   const cmd = registry.lookup(parsed.name);
   if (!cmd) {
-    // For unknown commands, check the raw parsed name against REPL_ONLY
+    // For unknown commands, check the raw parsed name against the gate list
     // (they can't resolve to an alias-target anyway).
-    if (REPL_ONLY.has(parsed.name)) {
+    if (isGated(parsed.name)) {
       return { kind: 'repl-only', command: parsed.name };
     }
     const suggestion = registry.suggest(parsed.name) ?? undefined;
     return { kind: 'unknown', command: parsed.name, suggestion };
   }
 
-  // Check the RESOLVED canonical name against REPL_ONLY.
-  if (REPL_ONLY.has(cmd.name)) {
+  // Check the RESOLVED canonical name against the gate list.
+  if (isGated(cmd.name)) {
     return { kind: 'repl-only', command: cmd.name };
   }
 
   // Native commands that aren't REPL-only but also aren't skill dispatches
-  // (e.g. /help, /cost) -- let them pass through as text so the model can
-  // respond naturally. Only skill commands (those with acceptsAttachments)
-  // get the structured invocation treatment.
+  // (e.g. /help, /cost) -- route to the command execution API on the web
+  // surface. Only skill commands (those with acceptsAttachments) get the
+  // structured invocation treatment.
   if (!cmd.acceptsAttachments) {
-    return { kind: 'passthrough' };
+    return { kind: 'native' };
   }
 
   // Fix 3: Use the FULL resolved command name (minus leading `/`) for

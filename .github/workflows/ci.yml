@@ -524,6 +524,12 @@ jobs:
       - name: Install dependencies
         run: cd dashboard && pnpm install --frozen-lockfile
 
+      # Typecheck was not gated before, and it rotted unnoticed (a removed
+      # `baseUrl` option failed the whole config, masking ~80 test typing
+      # errors). Keep it blocking now that it is green.
+      - name: Typecheck
+        run: cd dashboard && pnpm typecheck
+
       - name: Test
         run: cd dashboard && pnpm test
 

@@ -32,7 +32,7 @@ import {
   oneShotChatCompletionWithStop,
   __setOpenAIOneShotClientFactory,
 } from '../openai-compatible/oneshot.js';
-import { completeWithWire, type CompleteWireClientOptions } from '../openai-compatible/complete-wire.js';
+import { completeWithWireWithStop, type CompleteWireClientOptions } from '../openai-compatible/complete-wire.js';
 import { type AuthResolverDeps } from '../openai-compatible/auth.js';
 
 const execFile = promisify(execFileCb);
@@ -234,12 +234,12 @@ describe('oneShotChatCompletionWithStop — OpenAI client receives h1ModelFetch'
   });
 });
 
-describe('completeWithWire — Responses-wire client factory receives h1ModelFetch', () => {
+describe('completeWithWireWithStop — Responses-wire client factory receives h1ModelFetch', () => {
   it('passes h1ModelFetch to the client factory on the Responses path', async () => {
-    // Non-tautological proof: we exercise completeWithWire end-to-end by
+    // Non-tautological proof: we exercise completeWithWireWithStop end-to-end by
     // supplying injected auth deps that resolve to chatgpt-oauth — the only
     // auth source that routes through the Responses wire.  The clientFactory
-    // seam captures whatever opts completeWithWire actually builds and passes
+    // seam captures whatever opts completeWithWireWithStop actually builds and passes
     // to `new OpenAI(...)`.  Removing the `fetch: h1ModelFetch` line from
     // complete-wire.ts will make capturedFetch undefined, failing this test.
     //
@@ -284,10 +284,10 @@ describe('completeWithWire — Responses-wire client factory receives h1ModelFet
       } as never;
     };
 
-    // Drive the full Responses-wire code path inside completeWithWire.
+    // Drive the full Responses-wire code path inside completeWithWireWithStop.
     // forceChatgptOAuth:true activates Tier 0 in resolveOpenAIAuth which uses
     // the injected readFile — no env flag required.
-    await completeWithWire(
+    await completeWithWireWithStop(
       { model: 'gpt-4o', system: 's', user: 'u', forceChatgptOAuth: true },
       responsesFactory,
       authDeps,

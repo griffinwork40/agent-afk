@@ -14,6 +14,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentSession } from '../agent/session/agent-session.js';
 import { extractUserContent, isPreamble } from '../agent/session/preamble-strip.js';
 import { createTurnCollector, type SessionAutosaver } from '../cli/session-autosave.js';
+import { onTurnDrained } from './session-owner.slash.js';
 
 /**
  * The `userInput` recorded for a turn: the prompt text itself, or for a skill
@@ -38,11 +39,16 @@ export async function drainAndPersistTurn(
   session: AgentSession,
   content: string | ContentBlockParam[],
   autosaver: SessionAutosaver | undefined,
+  sessionId?: string,
 ): Promise<void> {
   const collector = createTurnCollector();
   for await (const event of session.sendMessageStream(content)) collector.observe(event);
   const turn = collector.result();
   if (turn.completed && autosaver) {
-    autosaver.saveTurn(webTurnLabel(content), turn.assistantText, turn.metadata, turn.toolEvents);
+    const label = webTurnLabel(content);
+    autosaver.saveTurn(label, turn.assistantText, turn.metadata, turn.toolEvents);
+    if (sessionId) {
+      onTurnDrained(sessionId, label, turn.assistantText, turn.metadata);
+    }
   }
 }

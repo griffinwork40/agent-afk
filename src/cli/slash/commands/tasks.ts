@@ -319,6 +319,14 @@ export const tasksCmd: SlashCommand = {
       });
     } else {
       // ── Stdin fallback: attach directly when no compositor is available ──────
+      // Guard: non-TTY environments (web command route, piped stdin) cannot
+      // drive the interactive picker. Return early with a hint.
+      // Allow through when setSoftStopHandler is present — that indicates a
+      // real CLI session that can drive stdin interactively even without a compositor.
+      if (!process.stdin.isTTY && !ctx.setSoftStopHandler) {
+        ctx.out.line?.('Use /tasks:view <id> to inspect a specific subagent.');
+        return 'continue';
+      }
       // Render the initial list here — the compositor path uses its own
       // renderRows() inside enterPickerMode, so renderList() is only needed
       // for the raw-stdin branch.

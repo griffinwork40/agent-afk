@@ -20,6 +20,7 @@ vi.mock('./loop-iteration.hooks.js', () => ({
 vi.mock('./version-notice.js', () => ({ createVersionNotice: () => () => undefined }));
 vi.mock('../../slash/plugin-skills.js', () => ({
   autoRegisterPluginPassthroughs: vi.fn(), getPluginShadowingNoticeLines: () => [],
+  setInitBarrier: vi.fn(),
 }));
 vi.mock('./loop-iteration.slash-branch.js', () => ({
   handleSlashCommand: async (text: string) => text === '/queued'

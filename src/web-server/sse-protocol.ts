@@ -23,6 +23,7 @@
  */
 
 import { jsonDateReplacer } from '../cli/json-date-replacer.js';
+export type { ChoiceRequest, ChoiceProgressEvent, ChoiceSsePayload } from './shared/choice-wire.js';
 
 /** One SSE frame to write to the wire. */
 export interface SseFrame {

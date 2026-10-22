@@ -240,6 +240,30 @@ export type OutputEvent =
   | {
       type: 'plan_mode';
       mode: 'plan' | 'implement' | 'default';
+    }
+  // MCP server status change (#4064 item 3). Emitted when a configured
+  // server's status changes (startup failure, mid-session disconnect, or
+  // oauth_pending) so embedders can show accurate health UI without polling
+  // mcpServerStatus(). Also emitted at session-init for every non-healthy
+  // server — but OutputBroadcast has no replay, so getOutputStream() must
+  // be subscribed BEFORE awaiting waitForInitialization() to observe the
+  // startup snapshot. Late subscribers should poll mcpServerStatus() instead.
+  | {
+      type: 'mcp_server_status';
+      /** Operator-assigned name (from .mcp.json / mcpServers config key). */
+      serverName: string;
+      /**
+       * Current server state as seen by the session layer:
+       * - 'error'         — failed to start or mid-session transport error
+       * - 'oauth_pending' — waiting for user to complete the OAuth flow
+       * - 'disconnected'  — transport closed, no reconnect will be attempted
+       *
+       * Reserved (not yet emitted by any code path):
+       * - 'connected'     — healthy (intended for future reconnect-success events)
+       */
+      status: 'error' | 'oauth_pending' | 'connected' | 'disconnected';
+      /** Raw error message (sanitised, secrets redacted). Present when status is 'error' or 'disconnected'. */
+      reason?: string;
     };
 
 /** Summary of in-flight subagent / task progress, emitted by the SDK. */
@@ -278,6 +302,10 @@ export interface RewindFilesResult {
   filesChanged?: string[];
   insertions?: number;
   deletions?: number;
+  /** Per-path restore failures (never silently partial). */
+  failures?: Array<{ path: string; error: string }>;
+  /** Paths changed outside the agent since the last recorded state. */
+  conflicts?: string[];
 }
 
 /** Agent SDK wrapper instance interface */
@@ -435,7 +463,7 @@ export interface IAgentSession {
   /** Rewind files to a prior user message (when file checkpointing is enabled). */
   rewindFiles?(
     userMessageId: string,
-    options?: { dryRun?: boolean }
+    options?: { dryRun?: boolean; overwriteConflicts?: boolean }
   ): Promise<RewindFilesResult>;
 
   /**

@@ -70,6 +70,7 @@ export interface UseSseStreamResult {
   events: unknown[];
   status: StreamStatus;
   error: string | null;
+  generation: number;
 }
 
 /**
@@ -78,8 +79,15 @@ export interface UseSseStreamResult {
  * When sessionId changes the old connection is torn down and a new one opens.
  * Passing null disconnects without opening anything.
  */
-export function useSseStream(sessionId: string | null): UseSseStreamResult {
-  const [events, setEvents] = useState<unknown[]>([]);
+export function useSseStream(
+  sessionId: string | null,
+  revision = 0,
+  onReset?: () => void,
+): UseSseStreamResult {
+  const streamKey = `${sessionId ?? ''}:${revision}`;
+  const [snapshot, setSnapshot] = useState<{ key: string; events: unknown[]; generation: number }>({ key: streamKey, events: [], generation: 0 });
+  const onResetRef = useRef(onReset);
+  onResetRef.current = onReset;
   const [status, setStatus] = useState<StreamStatus>('connecting');
   const [error, setError] = useState<string | null>(null);
 
@@ -88,12 +96,15 @@ export function useSseStream(sessionId: string | null): UseSseStreamResult {
   const abortRef = useRef<AbortController | undefined>(undefined);
   const lastEventIdRef = useRef<string | undefined>(undefined);
   const attemptRef = useRef(0);
-  const stoppedRef = useRef(false);
 
   useEffect(() => {
+    // Local cancellation prevents an old reader/retry becoming live again
+    // when a new effect opens the replacement stream after clear/navigation.
+    let stopped = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     if (sessionId === null) {
       // No session selected — stay silent, don't mark as closed.
-      setEvents([]);
+      setSnapshot({ key: streamKey, events: [], generation: 0 });
       setStatus('connecting');
       setError(null);
       return;
@@ -103,16 +114,21 @@ export function useSseStream(sessionId: string | null): UseSseStreamResult {
     const sid: string = sessionId;
 
     // Reset state for the new session.
-    setEvents([]);
+    setSnapshot({ key: streamKey, events: [], generation: 0 });
     setError(null);
-    stoppedRef.current = false;
     lastEventIdRef.current = undefined;
     attemptRef.current = 0;
 
     async function connect(): Promise<void> {
-      if (stoppedRef.current) return;
+      if (stopped) return;
 
       setStatus(attemptRef.current === 0 ? 'connecting' : 'reconnecting');
+      // Ephemeral choices/progress cannot use the ledger cursor. A reconnect
+      // invalidates the previous connection's sidebands; the server snapshots
+      // currently pending choices to the new subscriber after attachment.
+      if (attemptRef.current > 0) {
+        setSnapshot((prev) => ({ ...prev, events: [...prev.events, { type: 'choice_stream_boundary' }] }));
+      }
 
       let ended = false;
       const controller = new AbortController();
@@ -131,10 +147,11 @@ export function useSseStream(sessionId: string | null): UseSseStreamResult {
           { headers, signal: controller.signal },
         );
 
+        if (stopped) return;
         // Permanent errors — stop and surface, do not retry.
         if (!res.ok) {
           if (res.status === 401 || res.status === 403 || res.status === 404) {
-            stoppedRef.current = true;
+            stopped = true;
             const reason =
               res.status === 401
                 ? 'unauthorized'
@@ -160,7 +177,7 @@ export function useSseStream(sessionId: string | null): UseSseStreamResult {
           const { done, value } = await reader.read();
           // Guard: the effect may have been torn down while we were awaiting;
           // discard this frame rather than forwarding it to a new session.
-          if (stoppedRef.current) break;
+          if (stopped) break;
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           const { events: frames, remainder } = parseSseChunk(buffer);
@@ -181,11 +198,19 @@ export function useSseStream(sessionId: string | null): UseSseStreamResult {
             // to callers, matching the behaviour in the original sse-client.ts.
             if (isSseEndFrame(payload)) {
               ended = true;
-              stoppedRef.current = true;
+              stopped = true;
               break outer;
             }
 
-            setEvents((prev) => [...prev, payload]);
+            if (typeof payload === 'object' && payload !== null &&
+                (payload as { reset?: unknown }).reset === true) {
+              // Reset is nonterminal; IDs are opaque and generation-qualified.
+              lastEventIdRef.current = frame.id;
+              onResetRef.current?.();
+              setSnapshot((prev) => ({ key: streamKey, events: [], generation: prev.generation + 1 }));
+              continue;
+            }
+            setSnapshot((prev) => ({ ...prev, key: streamKey, events: [...prev.events, payload] }));
           }
         }
       } catch (err) {
@@ -196,9 +221,9 @@ export function useSseStream(sessionId: string | null): UseSseStreamResult {
         // Other errors fall through to reconnect.
       }
 
-      // Contract: stoppedRef is set by explicit stop (cleanup) OR by the
+      // Contract: stopped is set by explicit stop (cleanup) OR by the
       // terminal frame above. Both paths skip the reconnect.
-      if (stoppedRef.current) {
+      if (stopped) {
         if (ended) setStatus('ended');
         return;
       }
@@ -208,17 +233,18 @@ export function useSseStream(sessionId: string | null): UseSseStreamResult {
       const jitter = 0.75 + Math.random() * 0.5;
       const delay =
         Math.min(BASE_BACKOFF_MS * 2 ** (attemptRef.current - 1), MAX_BACKOFF_MS) * jitter;
-      setTimeout(() => void connect(), delay);
+      retryTimer = setTimeout(() => void connect(), delay);
     }
 
     void connect();
 
     return () => {
-      stoppedRef.current = true;
+      stopped = true;
+      clearTimeout(retryTimer);
       abortRef.current?.abort();
-      setStatus('closed');
     };
-  }, [sessionId]);
+  }, [sessionId, revision, streamKey]);
 
-  return { events, status, error };
+  return { events: snapshot.key === streamKey ? snapshot.events : [], status, error,
+    generation: snapshot.key === streamKey ? snapshot.generation : 0 };
 }
