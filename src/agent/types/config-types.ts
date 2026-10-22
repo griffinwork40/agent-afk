@@ -412,8 +412,11 @@ export interface AgentConfig {
   env?: Record<string, string>;
 
   /**
-   * Enable file checkpointing for rewind. NOT currently consumed by any
-   * provider (reserved for future SDK V2 support); has no effect today.
+   * Snapshot files before write_file / edit_file / patch_apply mutate them,
+   * per user turn, so `rewindFiles` and `/rewind` → files/both can restore
+   * them. Consumed by both the anthropic-direct and openai-compatible
+   * providers. Default off; the interactive REPL turns it on unless
+   * `fileCheckpoints: false` is configured (#4271).
    */
   enableFileCheckpointing?: boolean;
 

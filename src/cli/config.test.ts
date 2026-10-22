@@ -1062,6 +1062,16 @@ describe('Config Loader', () => {
       mockConfig({ enforceDoneEvidence: 'yes' });
       expect(loadConfig().enforceDoneEvidence).toBeUndefined();
     });
+
+    it('parses fileCheckpoints: false (#4271 REPL opt-out)', () => {
+      mockConfig({ fileCheckpoints: false });
+      expect(loadConfig().fileCheckpoints).toBe(false);
+    });
+
+    it('ignores a non-boolean fileCheckpoints (REPL default stays on)', () => {
+      mockConfig({ fileCheckpoints: 'no' });
+      expect(loadConfig().fileCheckpoints).toBeUndefined();
+    });
   });
 
   describe('theme (afk.config.json parsing)', () => {

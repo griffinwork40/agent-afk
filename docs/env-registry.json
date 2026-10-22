@@ -356,6 +356,30 @@
       "category": "daemon"
     },
     {
+      "name": "AFK_FILE_CHECKPOINT_MAX_AGE_DAYS",
+      "description": "Evict a file-checkpoint session directory once its newest content is older than this many days. Default 14.",
+      "type": "number",
+      "required": false,
+      "default": "14",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_MAX_BYTES",
+      "description": "Aggregate byte cap for state/file-checkpoints/; oldest session directories are evicted first once exceeded. Default 1073741824 (1 GiB).",
+      "type": "number",
+      "required": false,
+      "default": "1073741824",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_RETENTION_DISABLE",
+      "description": "Disable the file-checkpoint retention sweep (state/file-checkpoints/), so no session checkpoint directory is ever evicted.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
       "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
       "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even to tool calls whose context carries no grant manager. Every production provider wires itself as the grant manager on every surface (REPL, Telegram, afk chat, daemon, subagents), so there the denylist is already active; without one it fails open. Set to 1 to force it on for those contexts too. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off.",
       "type": "boolean",
