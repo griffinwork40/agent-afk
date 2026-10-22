@@ -233,7 +233,7 @@ const editFileImpl = async (
       occurrences === 1
         ? `Replaced 1 occurrence in ${file_path}`
         : `Replaced ${occurrences} occurrences in ${file_path}`;
-    const lspSuffix = await appendLspDiagnostics(writeTarget);
+    const lspSuffix = await appendLspDiagnostics(writeTarget, undefined, context?.resolveBase ?? cwd);
     const resultMsg = snapshotWarning
       ? `${baseMsg}\nWARNING: ${snapshotWarning}${lspSuffix}`
       : `${baseMsg}${lspSuffix}`;

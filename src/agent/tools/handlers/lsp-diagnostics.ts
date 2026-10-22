@@ -10,8 +10,8 @@
  * Design constraints:
  *   - Hard timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS, default 1500 ms).
  *   - Silent degradation: any error → empty result, never an exception.
- *   - TypeScript only in this phase; Python (pyright) is a follow-up.
- *   - LSP server binary: `typescript-language-server --stdio` on PATH.
+ *   - Shared language-server registry, with session-bounded nearest roots.
+ *   - Passive diagnostics never install a server or prompt for consent.
  *   - Persistent server (#4272): the file is synced into the warm pooled
  *     server for its workspace root (didOpen first, then didChange with
  *     version++ on content change) and the handler waits for the
@@ -25,12 +25,7 @@ import path from 'node:path';
 import { env } from '../../../config/env.js';
 import { getTimeoutMs, readLspSource } from './lsp-shared.js';
 import { awaitSyncDiagnostics, withPooledFile } from '../../lsp/query.js';
-import {
-  DEFAULT_LSP_CMD,
-  TYPESCRIPT_SERVER_DEFINITION,
-  typescriptRootFor,
-  typescriptSpecFromCommand,
-} from '../../lsp/typescript-default.js';
+import { resolveLspServer } from './lsp-server.js';
 
 /** A single LSP diagnostic item (subset of the full LSP spec). */
 export interface LspDiagnostic {
@@ -64,13 +59,14 @@ export function isLspDiagnosticsEnabled(): boolean {
 }
 
 /**
- * Query typescript-language-server for diagnostics on `filePath`.
+ * Query the registered language server for diagnostics on `filePath`.
  *
  * Returns an empty array on any error (server not found, timeout, parse
  * failure). Never throws.
  *
  * @param filePath - Absolute path to the file to diagnose.
  * @param serverCmd - LSP server binary + args (injectable for tests).
+ * @param sessionRoot - Session cwd bounding nearest-marker workspace detection.
  */
 export async function queryLspDiagnostics(
   filePath: string,
@@ -86,7 +82,6 @@ export async function queryLspDiagnostics(
   } catch {
     return [];
   }
-  const spec = typescriptSpecFromCommand(serverCmd);
   try {
     // F4: subtract the time spent reading the file so the withPooledFile
     // deadline covers the full budget, not just what remains after the read.

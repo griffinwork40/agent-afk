@@ -63,7 +63,7 @@ export function createPlanModeGate(
     // External constraint (semantic invariant): any tool categorized as 'write'
     // persists state to disk or memory. Block all of them — write_file,
     // edit_file, memory_update, procedure_write, config_set, terminal_font_size.
-    if (categorizeTool(toolName) === 'write') {
+    if (categorizeTool(toolName, context.input) === 'write') {
       return {
         decision: 'block',
         reason: `plan mode: ${toolName} is refused. Use /plan off to exit plan mode.`,

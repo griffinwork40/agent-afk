@@ -42,6 +42,7 @@ export function buildQueryDispatcher(args: {
     runtimeStateSource,
     ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
     ...interactivityOpts(config),
+    // lspInstallAllowed forwarded via interactivityOpts (it reads config.lspInstallAllowed).
     ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
     ...(config.planExitControls !== undefined ? { planExitControls: config.planExitControls } : {}),
   });

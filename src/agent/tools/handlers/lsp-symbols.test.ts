@@ -300,7 +300,8 @@ describe('queryLspSymbol', () => {
   }, 10_000);
 
   it('returns error for unsupported extension', async () => {
-    const result = await queryLspSymbol('/some/file.py', 'definition', 1, 1);
+    const filePath = await makeTsFile('unsupported.txt');
+    const result = await queryLspSymbol(filePath, 'definition', 1, 1);
     expect(result.locations).toEqual([]);
     expect(result.error).toContain('Unsupported file type');
   }, 5_000);

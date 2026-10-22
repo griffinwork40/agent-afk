@@ -93,6 +93,10 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     // User-facing surface for trace `origin` attribution. The REPL is a CLI
     // entrypoint → 'cli'. (Mid-session swap reuses this helper, also 'cli'.)
     surface: 'cli',
+    // Trusted top-level interactive REPL: LSP install consent prompts are
+    // reachable. The dispatcher enforces the rest of the predicate (no parent
+    // session, no subagent id, not non-interactive) structurally.
+    lspInstallAllowed: true,
     // Resolve the credential for the ACTUAL session model + explicit
     // `--provider` (if any), not the env-derived default alone. Without
     // explicit hints, `afk i --provider xai` with a Claude model would inject
