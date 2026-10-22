@@ -47,8 +47,16 @@ const ERROR_TS_RE = /^.*error TS\d+:/m;
  * Option/config diagnostics invalidate the semantic error count. Besides TS6xxx,
  * TS18002 (empty files list) and TS18003 (no inputs) can hide the entire suite.
  * Do not match all TS18xxx: that range also contains ordinary semantic errors.
+ *
+ * TS1xxx are syntax / global-scope errors (e.g. TS1005 "';' expected",
+ * TS1128 "Declaration or statement expected"). A single TS1xxx error causes tsc
+ * to skip semantic analysis, so `measureErrors()` returns a tiny count (often 1)
+ * that is far below the baseline. That looks like a massive shrink, lets the
+ * check path exit 0, and — critically — lets `--update` lower the baseline to 1,
+ * silently hiding every real type error. Treat TS1xxx the same as config
+ * diagnostics: reject them before the count is used.
  */
-const CONFIG_DIAGNOSTIC_RE = /^.*error TS(?:6\d+|18002|18003):/m;
+const CONFIG_DIAGNOSTIC_RE = /^.*error TS(?:1\d{3}|6\d+|18002|18003):/m;
 
 /** Shared by the CLI and its tests; importing this script does not run main(). */
 export function detectConfigDiagnosticLines(output: string): string[] {
