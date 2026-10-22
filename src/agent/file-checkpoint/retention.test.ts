@@ -47,9 +47,11 @@ describe('sweepFileCheckpoints', () => {
     expect(existsSync(path.join(root, 'd-grace'))).toBe(true);
   });
 
-  it('skips a session holding a rewind lock', async () => {
+  it('skips a session holding a rewind lock from a live process', async () => {
     const dir = session('locked', 30 * DAY);
-    writeFileSync(path.join(dir, '.rewind-lock'), '1\n');
+    // A pid that is really alive on every platform: pid 1 does not exist on
+    // Windows, so a literal '1' only passed on POSIX.
+    writeFileSync(path.join(dir, '.rewind-lock'), `${process.pid}\n`);
     const lockTime = (NOW - 30 * DAY) / 1000;
     utimesSync(path.join(dir, '.rewind-lock'), lockTime, lockTime);
     const result = await sweepFileCheckpoints({ root, now: NOW, force: true });
