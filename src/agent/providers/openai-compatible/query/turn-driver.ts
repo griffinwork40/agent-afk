@@ -205,10 +205,10 @@ async function* dispatchAndAppend(
  * model sees the budget reminder before its next reply.  Extracted from
  * `runTurnInner` to keep it under the 200-line function ceiling.
  *
- * Handles two OpenAI tool-message shapes:
- *   - string content: append directly (original path).
- *   - array content (some OAI-compatible backends): push a text part.
- * When neither shape matches, emits a trace event rather than silently dropping.
+ * Every producer of `role:'tool'` messages emits string content (see the
+ * invariant on `OpenAIToolResultMessage` in `../loop.ts`), so only the string
+ * shape is handled. When no injectable tool message exists, a
+ * `round_cap_notice_dropped` trace event is emitted instead of dropping silently.
  */
 function injectRoundCapNotice(
   priorTurns: OpenAIMessage[],
@@ -219,15 +219,9 @@ function injectRoundCapNotice(
   const notice = roundDeliveryNotice(round, maxIterations);
   if (!notice) return;
   const lastTool = [...priorTurns].reverse().find(m => m.role === 'tool');
-  if (lastTool) {
-    if (typeof lastTool.content === 'string') {
-      lastTool.content += '\n\n' + notice;
-      return;
-    }
-    if (Array.isArray(lastTool.content)) {
-      (lastTool.content as Array<{ type: string; text: string }>).push({ type: 'text', text: notice });
-      return;
-    }
+  if (lastTool && typeof lastTool.content === 'string') {
+    lastTool.content += '\n\n' + notice;
+    return;
   }
   // No injectable tool message found — emit an observable signal.
   void emitSessionPhase(traceWriter, {

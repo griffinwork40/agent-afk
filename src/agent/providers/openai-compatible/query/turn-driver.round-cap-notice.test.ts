@@ -209,11 +209,7 @@ describe('openai-compatible injectRoundCapNotice', () => {
     const toolMsgs = round2.filter((m) => m.role === 'tool');
     const hasNotice = toolMsgs.some((m) => {
       const c = m.content;
-      return (
-        (typeof c === 'string' && c.includes('Budget notice')) ||
-        (Array.isArray(c) &&
-          (c as Array<{ text?: string }>).some((p) => p.text?.includes('Budget notice')))
-      );
+      return typeof c === 'string' && c.includes('Budget notice');
     });
     expect(hasNotice).toBe(false);
   });
