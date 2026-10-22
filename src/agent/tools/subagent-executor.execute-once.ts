@@ -127,15 +127,7 @@ export async function executeOnce(
   { const r = await checkAndRunRemoteDispatch(parsed, call.signal, budgetReceipt, call.id, updateCurrentWaveUnit); if (r !== undefined) return r; }
   const usageNotice = await evaluateDispatchUsageForModel(ctx.parentModel, ctx.traceWriter);
 
-  const childScopeInputs = ctx.subagentManager.getReadScopeInputs?.() ?? {
-    parentReadRoots: undefined,
-    parentCwd: undefined,
-  };
-  const childInheritedReadRoots = computeInheritedReadRoots({
-    parentReadRoots: childScopeInputs.parentReadRoots,
-    parentCwd: childScopeInputs.parentCwd,
-    childCwd: parsed.cwd ?? currentCwd,
-  });
+  const { childScopeInputs, childInheritedReadRoots } = resolveChildReadScope(ctx, parsed.cwd ?? currentCwd);
 
   // Phase 1: build base config (model, tools, budgets, credential) without
   // nesting wiring. Nesting is deferred until after isolation setup so depth-2+
@@ -262,4 +254,21 @@ export async function executeOnce(
     updateCurrentWaveUnit(call.id, 'done');
   }
   return result;
+}
+
+/** Resolve the child's read scope inputs and inherited read roots from the parent context. */
+function resolveChildReadScope(
+  ctx: SubagentExecutorContext,
+  childCwd: string | undefined,
+): { childScopeInputs: { parentReadRoots: string[] | undefined; parentCwd: string | undefined }; childInheritedReadRoots: string[] | undefined } {
+  const childScopeInputs = ctx.subagentManager.getReadScopeInputs?.() ?? {
+    parentReadRoots: undefined,
+    parentCwd: undefined,
+  };
+  const childInheritedReadRoots = computeInheritedReadRoots({
+    parentReadRoots: childScopeInputs.parentReadRoots,
+    parentCwd: childScopeInputs.parentCwd,
+    childCwd,
+  });
+  return { childScopeInputs, childInheritedReadRoots };
 }
