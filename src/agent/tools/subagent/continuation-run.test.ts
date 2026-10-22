@@ -28,6 +28,7 @@ import { createMockProvider } from '../../__fixtures__/mock-provider.js';
 import { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { ContinuationRegistry } from '../../subagent/continuation-registry.js';
 import type { ToolResult } from '../types.js';
+import { InMemoryTraceWriter } from '../../trace/writer.js';
 
 interface Seen { resumeMessages: JournalMessage[] | undefined; turn: string; config: AgentConfig }
 
@@ -75,7 +76,7 @@ function installTransport(seen: Seen[], opts: { hold?: Promise<void> } = {}): vo
   };
 }
 
-async function setup(extra: { backgroundRegistry?: BackgroundAgentRegistry } = {}) {
+async function setup(extra: { backgroundRegistry?: BackgroundAgentRegistry; traceWriter?: InMemoryTraceWriter } = {}) {
   const session = new AgentSession({ model: 'sonnet', apiKey: 'test-key', provider: createMockProvider() });
   await session.waitForInitialization();
   await session.sendMessage?.('hello').catch(() => undefined);
@@ -83,6 +84,7 @@ async function setup(extra: { backgroundRegistry?: BackgroundAgentRegistry } = {
     surface: 'cli', parentSession: session, apiKey: 'test-key', model: 'sonnet', managerParentModel: 'sonnet',
     defaultSubagentModel: 'sonnet', resolveApiKeyForModel: () => 'test-key', pluginConfigs: [],
     ...(extra.backgroundRegistry !== undefined ? { backgroundRegistry: extra.backgroundRegistry } : {}),
+    ...(extra.traceWriter !== undefined ? { traceWriter: extra.traceWriter, skillTraceWriter: extra.traceWriter } : {}),
   });
   const registry = (wired.subagentExecutor as unknown as { ctx: { continuationRegistry: ContinuationRegistry } }).ctx.continuationRegistry;
   let c = 0;
@@ -271,6 +273,38 @@ describe('D8 continuation through the agent executor', () => {
     expect(r.isError).toBe(true);
     const chains = [...(registry as unknown as { chains: Map<string, { inFlight: boolean }> }).chains.values()];
     expect(chains.every((c) => !c.inFlight)).toBe(true);
+    await session.close();
+  }, 20000);
+
+  it('non-owner and worktree-isolated chains are refused before any fork', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const { run, registry, session } = await setup();
+    const foreign = registry.createChain({ owner: 'someone-else', rootSessionId: 'x', roundCap: 5, inputs: { writeCapable: false } });
+    registry.recordTerminal(foreign.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
+    expect((await run({ prompt: 'x', continuation_chain_id: foreign.chainId })).content).toContain('owned by another actor');
+    const owner = (session as unknown as { sessionId?: string }).sessionId ?? '';
+    const iso = registry.createChain({ owner, rootSessionId: owner, roundCap: 5, inputs: { writeCapable: true, isolation: 'worktree' } });
+    registry.recordTerminal(iso.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
+    expect((await run({ prompt: 'x', continuation_chain_id: iso.chainId })).content).toContain('`isolation: "worktree"` chain is not supported');
+    expect(seen).toHaveLength(0);
+    await session.close();
+  }, 20000);
+
+  it('D10: the continuation started event carries chainId / continuationOf / continuationIndex', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const writer = new InMemoryTraceWriter();
+    const { run, registry, session } = await setup({ traceWriter: writer });
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    const prev = registry.get(chainId)!.latestChildId;
+    await run({ prompt: 'go', continuation_chain_id: chainId });
+    const started = writer.events.filter((e) => e.kind === 'subagent_lifecycle' && (e.payload as { transition: string }).transition === 'started')
+      .map((e) => e.payload as { chainId?: string; continuationOf?: string; continuationIndex?: number });
+    expect(started).toHaveLength(2);
+    expect(started[0]!.chainId).toBeUndefined();
+    expect(started[1]).toMatchObject({ chainId, continuationOf: prev, continuationIndex: 1 });
     await session.close();
   }, 20000);
 });

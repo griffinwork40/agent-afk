@@ -70,8 +70,6 @@ Chains are in memory only: they do not survive a process restart or REPL `/resum
 
 ## Not yet done
 
-`docs/subagent-tool-budget.md` update and the AFK.md pointer; executor-level
-tests for the non-owner and worktree-chain refusals (covered at the
-registry/guard level only). Worktree-isolated chains are refused in v1.
+`docs/subagent-tool-budget.md` update and the AFK.md pointer. Worktree-isolated chains are refused in v1.
 OpenAI-compatible providers' handling of a dangling tool_use on an aborted
 link was not verified (spike note).
