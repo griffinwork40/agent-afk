@@ -78,6 +78,7 @@ import {
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
 import { FileCheckpointState } from './query.file-checkpoint.js';
+import { withCheckpointTurnIds } from '../../file-checkpoint/turn-lifecycle.js';
 import { currentWritePolicy } from '../../file-checkpoint/write-policy.js';
 import { HookBlockedError, ensureError } from '../../../utils/errors.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
@@ -237,8 +238,8 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
    */
   private readonly autoCompactThreshold: number | undefined;
 
-  /** File-checkpoint state: enabled flag + current turn id + begin/end/rewind helpers. */
-  private readonly checkpoint: FileCheckpointState;
+  /** @internal File-checkpoint state (begin/end/link/rewind); read by `pushUserTurn` via IterationContext. */
+  readonly checkpoint: FileCheckpointState;
 
   constructor(opts: OpenAICompatibleQueryOptions) {
     this.opts = opts;
@@ -253,7 +254,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.traceWriter = opts.traceWriter;
     this.fastTier = new FastTierSession(opts.fastTier);
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
-    this.checkpoint = new FileCheckpointState(opts.config.enableFileCheckpointing ?? false, opts.synthesizedSessionId);
+    this.checkpoint = new FileCheckpointState(opts.config.enableFileCheckpointing ?? false, opts.synthesizedSessionId, opts.config.messageJournal);
 
     this.openAITools = dispatcherCatalog(this.toolDispatcher);
 
@@ -485,7 +486,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   }
 
   listRewindTargets(): import('../../provider.js').RewindTarget[] {
-    return listOpenAIUserTurns(this.priorTurns);
+    return withCheckpointTurnIds(listOpenAIUserTurns(this.priorTurns), this.priorTurns);
   }
 
   async rewindConversation(turnIndex: number): Promise<import('../../provider.js').ProviderRewindConversationResult> {
@@ -497,7 +498,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
       // Sync the journal immediately so a crash between now and the next model
       // request does not resurrect the discarded turns — mirrors the anthropic-direct
       // rewind path (anthropic-direct/query/rewind-conversation.ts).
-      this.journal.sync(this.priorTurns);
+      this.journal.syncRewind(this.priorTurns, turnIndex);
     }
     return result;
   }
@@ -547,7 +548,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     return { authSource: this.opts.auth.source };
   }
 
-  async rewindFiles(userMessageId: string, options?: { dryRun?: boolean }): Promise<ProviderRewindResult> {
+  async rewindFiles(userMessageId: string, options?: import('../../provider.js').RewindFilesOptions): Promise<ProviderRewindResult> {
     return this.checkpoint.rewind(userMessageId, options, currentWritePolicy(this.toolDispatcher, { resolveBase: this.opts.config.cwd ?? process.cwd() }));
   }
 

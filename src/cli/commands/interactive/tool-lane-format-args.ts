@@ -7,6 +7,7 @@ import {
 import { truncateDisplayWidth, displayWidth } from '../../display.js';
 import { fileHyperlink, hyperlinksEnabled } from '../../hyperlink.js';
 import { sanitizeLabel } from './tool-lane-format-sanitize.js';
+import { isBashToolName, styleBashCommand } from './tool-lane-format-bash.js';
 
 /**
  * Collapse absolute filesystem paths with 3+ segments to their basename
@@ -361,8 +362,14 @@ export function formatToolLine(content: string, maxWidth?: number): string {
       const argsMaxWidth = Math.max(1, maxWidth - fixedWidth);
       args = bracketPairAwareTruncate(args, argsMaxWidth);
     }
-    args = sanitizePrefixString(args);
-    const head = color(glyph + ' ') + color.bold(name) + palette.toolArg(args);
+    // Invariant: styling runs AFTER truncation, on the final visible text, so
+    // the width budget above is measured on plain text. Bash rows are styled
+    // BEFORE newline flattening so a newline still counts as a command
+    // separator when command words are located (tool-lane-format-bash.ts).
+    const styledArgs = isBashToolName(name)
+      ? sanitizePrefixString(styleBashCommand(args))
+      : palette.toolArg(sanitizePrefixString(args));
+    const head = color(glyph + ' ') + color.bold(name) + styledArgs;
     return dispatchTag ? head + palette.dim(tagSuffix) : head;
   }
   // Use `chrome` (slate grey), not `tool` — the bullet here is structural

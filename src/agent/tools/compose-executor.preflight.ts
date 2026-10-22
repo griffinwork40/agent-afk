@@ -148,6 +148,13 @@ export function startComposeDag(args: StartComposeDagArgs): ReturnType<typeof ru
     nodeTimeoutMs: parsed.node_timeout_ms,
     ...(ctx.delegationBudget !== undefined ? { delegationBudget: ctx.delegationBudget } : {}),
     ...(currentCwd !== undefined ? { anchorCwd: currentCwd } : {}),
+    // Stage 3 (#4042): seed model-resolution tiers 3 and 4 so dispatchDagNode
+    // can apply the full resolveChildModel chain for any node whose spec.model
+    // is absent (direct library callers that omit per-node model fields).
+    // Compose pre-resolves spec.model for every node it builds, so these fields
+    // are a no-op for compose nodes but keep the DAG layer consistent.
+    ...(ctx.defaultSubagentModel !== undefined ? { defaultSubagentModel: ctx.defaultSubagentModel } : {}),
+    ...(ctx.defaultModel !== undefined ? { defaultModel: ctx.defaultModel } : {}),
   });
 }
 

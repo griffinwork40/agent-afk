@@ -743,7 +743,8 @@ export class InputSurface {
     this.pendingReadReject = null;
     this.pendingReadResolve = null;
     this.compositor?.setOnIdleEscape(null);
-    resolve({ text: '/rewind', attachments: [] });
+    // Esc-Esc keeps the conversation-only rewind; `/rewind` alone offers files too (#4271).
+    resolve({ text: '/rewind conversation', attachments: [] });
     return true;
   }
 

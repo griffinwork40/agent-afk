@@ -8,6 +8,7 @@ import { teardownBackgroundWorktree } from './tools/handlers/worktree-managed.ba
 import { debugLog } from '../utils/debug.js';
 import { isTooBroadRoot, ungatedSensitiveRoot } from './tools/subagent/root-validation.js';
 import { realpathSafe } from './tools/handlers/_cwd-utils.js';
+import { resolveChildModel } from './subagent/resolve-child-model.js';
 
 /**
  * Invariant: validate that a DAG node's `cwd`, `readRoots`, and `writeRoots` pass the
@@ -122,12 +123,26 @@ export async function dispatchDagNode(
     spec = iso.spec;
   }
 
+  // Stage 3 (#4042): resolve the node model through the shared four-tier chain
+  // (callSite → namedAgent → defaultSubagentModel → defaultModel → 'sonnet')
+  // instead of the inline `spec.model ?? 'sonnet'` that skipped tiers 3 and 4.
+  // Compose pre-resolves spec.model via resolveChildModel before building the
+  // DAG node, so callSiteModel here is always set for compose nodes. Direct
+  // library callers (skills, mint phases) that omit spec.model now honour
+  // options.defaultSubagentModel and options.defaultModel instead of silently
+  // falling to 'sonnet'.
+  const resolvedNodeModel = resolveChildModel({
+    callSiteModel: typeof spec.model === 'string' ? spec.model : undefined,
+    defaultSubagentModel: typeof options.defaultSubagentModel === 'string' ? options.defaultSubagentModel : undefined,
+    defaultModel: typeof options.defaultModel === 'string' ? options.defaultModel : undefined,
+  });
+
   let handle: Awaited<ReturnType<typeof manager.forkSubagent>>;
   try {
     handle = await manager.forkSubagent({
       parent: { sessionId: parentSession.sessionId, messageJournal: parentSession.messageJournal },
       config: {
-        model: spec.model ?? 'sonnet',
+        model: resolvedNodeModel,
         systemPrompt: spec.systemPrompt,
         ...(spec.canUseTool !== undefined ? { canUseTool: spec.canUseTool } : {}),
         ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
