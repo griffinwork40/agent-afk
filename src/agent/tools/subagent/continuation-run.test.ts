@@ -1,0 +1,276 @@
+/**
+ * D8 executor-level continuation tests (docs/subagent-continuation.md).
+ * Real wireExecutors / SubagentManager / AgentSession / message journal; only
+ * the model transport is faked. The fake writes each child's conversation into
+ * its own journal (as the real providers' JournalSync does) and records what
+ * every provider query received (seeded history, user turn, config).
+ */
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ModelProvider } from '../../provider.js';
+import type { ChildProviderFactoryArgs } from '../nesting.js';
+import type { AgentConfig } from '../../types.js';
+import type { JournalMessage } from '../../journal/types.js';
+
+const transport = vi.hoisted(() => ({ build: undefined as unknown as (args: ChildProviderFactoryArgs) => ModelProvider }));
+vi.mock('../nesting.js', async (original) => ({
+  ...await original<typeof import('../nesting.js')>(),
+  createChildProviderFactory: () => (args: ChildProviderFactoryArgs) => transport.build(args),
+}));
+vi.mock('../../routing-telemetry.js', () => ({ appendRoutingDecision: vi.fn().mockResolvedValue(undefined) }));
+
+import { wireExecutors } from '../../session/wire-executors.js';
+import { AgentSession } from '../../session.js';
+import { createMockProvider } from '../../__fixtures__/mock-provider.js';
+import { BackgroundAgentRegistry } from '../../background-registry.js';
+import type { ContinuationRegistry } from '../../subagent/continuation-registry.js';
+import type { ToolResult } from '../types.js';
+
+interface Seen { resumeMessages: JournalMessage[] | undefined; turn: string; config: AgentConfig }
+
+const text = (t: string): JournalMessage['content'][number] => ({ type: 'text', text: t });
+
+/** Fake transport: every child runs one capped round (tool_use + tool_result) and journals it. */
+function installTransport(seen: Seen[], opts: { hold?: Promise<void> } = {}): void {
+  let n = 0;
+  transport.build = (args) => {
+    const index = n++;
+    const base = createMockProvider({ sessionId: `child-${index}` });
+    return {
+      ...base,
+      query(queryArgs) {
+        const q = base.query(queryArgs);
+        const cfg = queryArgs.config;
+        return {
+          ...q,
+          async *[Symbol.asyncIterator]() {
+            for await (const event of q) {
+              if (event.type === 'assistant.message') {
+                if (opts.hold !== undefined) await opts.hold;
+                const turn = seen.length; // unique per run
+                const prior = cfg.resumeMessages ?? [];
+                const userText = String(event.text).replace(/^Echo: /, '');
+                seen.push({ resumeMessages: cfg.resumeMessages, turn: userText, config: cfg });
+                const id = `tu-${turn}`;
+                const msgs: JournalMessage[] = [
+                  ...prior,
+                  { role: 'user', content: [text(userText)] },
+                  { role: 'assistant', content: [text(`run ${turn}`), { type: 'tool_use', id, name: 'bash', input: { command: `step ${turn}` } }] },
+                  { role: 'user', content: [{ type: 'tool_result', toolUseId: id, content: [text(`out ${turn}`)] }] },
+                  { role: 'assistant', content: [text(`wind-down ${turn}`)] },
+                ];
+                msgs.forEach((m, i) => cfg.messageJournal?.append(i, m));
+                await cfg.messageJournal?.flush();
+              }
+              if (event.type === 'turn.completed') event.usage = { ...event.usage, stopReason: 'tool_use_loop_capped' };
+              yield event;
+            }
+          },
+        };
+      },
+    };
+  };
+}
+
+async function setup(extra: { backgroundRegistry?: BackgroundAgentRegistry } = {}) {
+  const session = new AgentSession({ model: 'sonnet', apiKey: 'test-key', provider: createMockProvider() });
+  await session.waitForInitialization();
+  await session.sendMessage?.('hello').catch(() => undefined);
+  const wired = wireExecutors({
+    surface: 'cli', parentSession: session, apiKey: 'test-key', model: 'sonnet', managerParentModel: 'sonnet',
+    defaultSubagentModel: 'sonnet', resolveApiKeyForModel: () => 'test-key', pluginConfigs: [],
+    ...(extra.backgroundRegistry !== undefined ? { backgroundRegistry: extra.backgroundRegistry } : {}),
+  });
+  const registry = (wired.subagentExecutor as unknown as { ctx: { continuationRegistry: ContinuationRegistry } }).ctx.continuationRegistry;
+  let c = 0;
+  const run = (input: Record<string, unknown>, signal = new AbortController().signal): Promise<ToolResult & { continuation?: { chainId: string } }> =>
+    wired.subagentExecutor.execute({ id: `call-${c++}`, name: 'agent', signal, input });
+  return { session, wired, registry, run };
+}
+
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+describe('D8 continuation through the agent executor', () => {
+  it('two-link chain resumes full history, then refuses at the continuation limit', async () => {
+    vi.stubEnv('AFK_SUBAGENT_CONTINUATION_MAX_CONTINUATIONS', '2');
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const { registry, run, session } = await setup();
+    const first = await run({ prompt: 'initial task', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    expect(first.content).toContain(`[continuation: chain_id=${chainId}`);
+    expect(registry.get(chainId)!.latestChildId).toBeDefined();
+
+    const second = await run({ prompt: 'keep going', continuation_chain_id: chainId, max_tool_use_iterations: 7 });
+    expect(second.isError, second.content).not.toBe(true);
+    const s1 = seen[1]!;
+    expect(s1.resumeMessages?.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    expect(JSON.stringify(s1.resumeMessages)).toContain('"toolUseId":"tu-0"');
+    expect(s1.turn).toMatch(/^\[Continuation 1 of chain chain_[0-9a-f]+: your previous run ended \(tool_use_loop_capped\)\. You have 7 tool-use rounds for this run\.\]\n\nkeep going$/);
+    expect(s1.config.autoCompact).toBe(true);
+    expect(s1.config.maxToolUseIterations).toBe(7);
+    expect(seen[0]!.config.autoCompact).toBeUndefined();
+    expect(second.content).toContain(`[continuation: chain_id=${chainId}, rounds 12/150 used, continuations 1/2 used`);
+    expect(second.continuation!.chainId).toBe(chainId); // same chain, not a new mint
+
+    await run({ prompt: 'and more', continuation_chain_id: chainId, max_tool_use_iterations: 3 });
+    const s2 = seen[2]!;
+    const twoLink = JSON.stringify(s2.resumeMessages);
+    expect(twoLink).toContain('"toolUseId":"tu-0"'); // history from run 1
+    expect(twoLink).toContain('"toolUseId":"tu-1"'); // and run 2
+    expect(s2.resumeMessages).toHaveLength(8);
+
+    const refused = await run({ prompt: 'again', continuation_chain_id: chainId });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain('continuation limit reached (2/2)');
+    expect(seen).toHaveLength(3);
+    expect(registry.get(chainId)!.inFlight).toBe(false);
+    await session.close();
+  }, 20000);
+
+  it('round limit: allowance clipped to the remainder, then refused', async () => {
+    vi.stubEnv('AFK_SUBAGENT_CONTINUATION_MAX_ROUNDS', '8');
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const { run, session } = await setup();
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    await run({ prompt: 'more', continuation_chain_id: chainId, max_tool_use_iterations: 50 });
+    expect(seen[1]!.config.maxToolUseIterations).toBe(3);
+    const refused = await run({ prompt: 'more', continuation_chain_id: chainId });
+    expect(refused.content).toContain('aggregate round limit reached (8/8)');
+    await session.close();
+  }, 20000);
+
+  it('override conflict and model-invented ids are refused before any fork', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const { run, session } = await setup();
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    const conflict = await run({ prompt: 'x', continuation_chain_id: chainId, model: 'haiku' });
+    expect(conflict.content).toContain('continuation inherits model from the chain');
+    const invented = await run({ prompt: 'x', continuation_chain_id: 'chain_deadbeef' });
+    expect(invented.content).toContain('unknown continuation chain');
+    expect(seen).toHaveLength(1);
+    await session.close();
+  }, 20000);
+
+  it('drift: refused for a write-capable chain, allowed once the chain is read-only', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'afk-cont-drift-'));
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, stdio: 'ignore' });
+    git('init', '-q'); git('-c', 'user.email=a@b', '-c', 'user.name=a', 'commit', '-q', '--allow-empty', '-m', 'init');
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const { run, registry, session } = await setup();
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5, cwd: repo });
+    const chainId = first.continuation!.chainId;
+    expect(registry.get(chainId)!.checkpoint?.git).toBe(true);
+    writeFileSync(join(repo, 'new.txt'), 'drift');
+    const refused = await run({ prompt: 'go', continuation_chain_id: chainId });
+    expect(refused.content).toContain('workspace drifted');
+    expect(refused.content).toContain('uncommitted changes');
+    registry.get(chainId)!.inputs.writeCapable = false; // read-only chains skip the check
+    const ok = await run({ prompt: 'go', continuation_chain_id: chainId });
+    expect(ok.isError, ok.content).not.toBe(true);
+    await session.close();
+  }, 20000);
+
+  it('concurrent continuation: exactly one is admitted', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const { run, session } = await setup();
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    const [a, b] = await Promise.all([
+      run({ prompt: 'a', continuation_chain_id: chainId }),
+      run({ prompt: 'b', continuation_chain_id: chainId }),
+    ]);
+    const errors = [a, b].filter((r) => r.isError === true);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.content).toContain('still in flight');
+    await session.close();
+  }, 20000);
+
+  it('construction failure rolls back the charge and in-flight', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const { run, registry, session, wired } = await setup();
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    vi.spyOn(wired.rootManager, 'forkSubagent').mockRejectedValueOnce(new Error('construction boom'));
+    const r = await run({ prompt: 'go', continuation_chain_id: chainId, max_tool_use_iterations: 4 });
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('construction boom');
+    const chain = registry.get(chainId)!;
+    expect(chain.inFlight).toBe(false);
+    expect(chain.continuations).toBe(0);
+    expect(chain.roundsCharged).toBe(5);
+    await session.close();
+  }, 20000);
+
+  it('abort mid-continuation clears in-flight and keeps the charge', async () => {
+    const seen: Seen[] = [];
+    let release!: () => void;
+    const hold = new Promise<void>((r) => { release = r; });
+    installTransport(seen);
+    const { run, registry, session } = await setup();
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    installTransport(seen, { hold });
+    const ac = new AbortController();
+    const pending = run({ prompt: 'go', continuation_chain_id: chainId, max_tool_use_iterations: 4 }, ac.signal);
+    await vi.waitFor(() => expect(registry.get(chainId)!.continuations).toBe(1));
+    ac.abort();
+    release();
+    await pending;
+    const chain = registry.get(chainId)!;
+    expect(chain.inFlight).toBe(false);
+    expect(chain.roundsCharged).toBe(9);
+    expect(chain.continuations).toBe(1);
+    await session.close();
+  }, 20000);
+
+  it('background continuation updates the same chain on terminal', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const bg = new BackgroundAgentRegistry();
+    const { run, registry, session } = await setup({ backgroundRegistry: bg });
+    const first = await run({ prompt: 'initial', max_tool_use_iterations: 5 });
+    const chainId = first.continuation!.chainId;
+    const before = registry.get(chainId)!.latestChildId;
+    const r = await run({ prompt: 'bg go', continuation_chain_id: chainId, mode: 'background' });
+    expect(r.isError, r.content).not.toBe(true);
+    await vi.waitFor(() => expect(registry.get(chainId)!.inFlight).toBe(false), { timeout: 5000 });
+    const chain = registry.get(chainId)!;
+    expect(chain.latestChildId).not.toBe(before);
+    expect(chain.continuations).toBe(1);
+    await session.close();
+  }, 20000);
+
+  it('stuck-chain: an attachment error after the fork clears in-flight', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const { run, registry, session } = await setup();
+    const r = await run({ prompt: 'initial', attachments: [join(tmpdir(), 'afk-missing-attachment.png')] });
+    expect(r.isError).toBe(true);
+    const chains = [...(registry as unknown as { chains: Map<string, { inFlight: boolean }> }).chains.values()];
+    expect(chains.length).toBe(1);
+    expect(chains[0]!.inFlight).toBe(false);
+    await session.close();
+  }, 20000);
+
+  it('stuck-chain: background dispatch with no registry clears in-flight', async () => {
+    const seen: Seen[] = [];
+    installTransport(seen);
+    const { run, registry, session } = await setup();
+    const r = await run({ prompt: 'initial', mode: 'background' });
+    expect(r.isError).toBe(true);
+    const chains = [...(registry as unknown as { chains: Map<string, { inFlight: boolean }> }).chains.values()];
+    expect(chains.every((c) => !c.inFlight)).toBe(true);
+    await session.close();
+  }, 20000);
+});
