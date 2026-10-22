@@ -77,11 +77,11 @@ export type SessionPhaseName =
   // 2-hour cap surfacing the error) — so a lone `usage_limit_pause` is expected.
   | 'usage_limit_pause'
   | 'usage_limit_resume'
-  // The SDK client was rebuilt at the start of a turn because the credential
-  // store held a different OAuth token than the live client (the operator ran
-  // `claude login`, or another process rotated the shared entry). Single event,
-  // no duration; metadata carries `source: 'turn-start'`, `accountId`, and
-  // `oldAccountId`. Emitted only on an actual token change, never per turn.
+  // The SDK client was rebuilt because the credential store held a different
+  // OAuth token than the live client (the operator ran `claude login`, or
+  // another process rotated the shared entry). Single event, no duration;
+  // metadata carries `source` ('turn-start' | 'compaction'), `accountId`, and
+  // `oldAccountId`. Emitted only on an actual token change (swapped === true).
   | 'credential_swap'
   // Mid-stream overload (529) exhaustion park/unpark (#762). Distinct from
   // `usage_limit_pause` — that brackets an OAuth subscription window with an

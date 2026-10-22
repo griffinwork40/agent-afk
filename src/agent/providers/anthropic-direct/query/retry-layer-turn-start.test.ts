@@ -21,7 +21,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { ProviderEvent } from '../../../provider.js';
 import type { RunTurnInput } from '../types.js';
 
-const loadClaudeCodeOauthTokenMock = vi.hoisted(() => vi.fn<[unknown?], string | undefined>());
+const loadClaudeCodeOauthTokenMock = vi.hoisted(() => vi.fn<(opts?: { quiet?: boolean }) => string | undefined>());
 const emitSessionPhaseMock = vi.hoisted(() => vi.fn());
 const seenClients = vi.hoisted(() => [] as unknown[]);
 
@@ -108,7 +108,7 @@ describe('RetryLayer.turnWithRetries — turn-start credential catch-up', () => 
     expect(refresher).toHaveBeenCalledTimes(1);
     expect(seenClients).toEqual([{ id: 'client-tok-b' }]);
     expect(layer.client).toEqual({ id: 'client-tok-b' });
-    expect(loadClaudeCodeOauthTokenMock).toHaveBeenCalledWith({ quiet: true });
+    expect(loadClaudeCodeOauthTokenMock).toHaveBeenCalledWith({ quiet: true, background: true });
     expect(emitSessionPhaseMock).toHaveBeenCalledWith(undefined, expect.objectContaining({
       phase: 'credential_swap',
       metadata: expect.objectContaining({ source: 'turn-start', accountId: 'acct:tok-b', oldAccountId: 'acct:tok-a' }),
@@ -152,23 +152,52 @@ describe('RetryLayer.turnWithRetries — turn-start credential catch-up', () => 
   });
 });
 
+describe('RetryLayer — credentialFromStore: false (explicit non-store credential)', () => {
+  it('never swaps a session whose credential was NOT sourced from the store', async () => {
+    // Simulate a slot-pinned OAuth key (AFK_MODEL_<TIER>_API_KEY set to an
+    // OAuth token): authMode is 'oauth' but credentialFromStore is false.
+    loadClaudeCodeOauthTokenMock.mockReturnValueOnce('slot-tok'); // constructor snapshot
+    const refresher = vi.fn(async () => client('client-new'));
+    const layer = new RetryLayer({
+      client: client('client-slot-tok'),
+      authMode: 'oauth',
+      initSessionId: 's1',
+      autoResumeOnUsageLimit: true,
+      tokenRefresher: refresher,
+      credentialFromStore: false,
+    });
+    // Store has a different token — but credential is pinned, so no swap.
+    loadClaudeCodeOauthTokenMock.mockReturnValue('store-tok');
+
+    await drain(layer.turnWithRetries(makeInput(layer), () => false));
+
+    expect(refresher).not.toHaveBeenCalled();
+    expect(emitSessionPhaseMock).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ phase: 'credential_swap' }),
+    );
+  });
+});
+
 describe('RetryLayer.syncClientWithStore — compaction path', () => {
   it('rebuilds the client when the store moved ahead of it', async () => {
     const { layer, refresher } = makeLayer('tok-a');
     loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b');
 
-    await layer.syncClientWithStore();
+    const result = await layer.syncClientWithStore();
 
     expect(refresher).toHaveBeenCalledTimes(1);
     expect(layer.client).toEqual({ id: 'client-tok-b' });
+    expect(result).toMatchObject({ swapped: true });
   });
 
   it('is a no-op when the store matches', async () => {
     const { layer, refresher } = makeLayer('tok-a');
     loadClaudeCodeOauthTokenMock.mockReturnValue('tok-a');
 
-    await layer.syncClientWithStore();
+    const result = await layer.syncClientWithStore();
 
     expect(refresher).not.toHaveBeenCalled();
+    expect(result).toBeNull();
   });
 });

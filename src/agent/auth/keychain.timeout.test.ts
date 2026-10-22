@@ -2,10 +2,14 @@
  * The macOS keychain read is a synchronous `security` subprocess, so a locked
  * keychain or an access prompt would block the whole process. Covered here:
  *
- *  - the read passes a `timeout` to execFileSync;
- *  - a TIMEOUT arms a backoff: further reads skip the subprocess until reset;
+ *  - background reads pass a `timeout` to execFileSync and honour the backoff;
+ *  - a TIMEOUT on a background read arms the backoff: further background reads
+ *    skip the subprocess until reset;
  *  - a non-timeout failure (entry missing) does NOT arm the backoff, so a
  *    `claude login` run while a daemon is live is seen on the next read;
+ *  - foreground reads (no `background` option) pass no timeout and ignore an
+ *    armed backoff, so the OS unlock dialog is never dismissed prematurely;
+ *  - a successful foreground read clears the backoff for background callers;
  *  - `quiet: true` suppresses the "token is expired" stderr warning that a
  *    per-turn background check would otherwise print every turn.
  *
@@ -48,22 +52,60 @@ describe('keychain read on darwin: timeout, backoff, quiet', () => {
     vi.restoreAllMocks();
   });
 
-  it('bounds the security subprocess with a timeout', () => {
+  it('background read passes a timeout to the security subprocess', () => {
     execFileSyncMock.mockReturnValue(blob(Date.now() + 3_600_000));
-    expect(loadClaudeCodeOauthToken()).toBe('tok-a');
+    expect(loadClaudeCodeOauthToken({ background: true })).toBe('tok-a');
     const opts = execFileSyncMock.mock.calls[0]?.[2] as { timeout?: number };
     expect(opts.timeout).toBeGreaterThan(0);
   });
 
-  it('after a timeout, skips the subprocess until the backoff is reset', () => {
+  it('foreground read passes no timeout to the security subprocess', () => {
+    execFileSyncMock.mockReturnValue(blob(Date.now() + 3_600_000));
+    expect(loadClaudeCodeOauthToken()).toBe('tok-a');
+    const opts = execFileSyncMock.mock.calls[0]?.[2] as { timeout?: number };
+    expect(opts.timeout).toBeUndefined();
+  });
+
+  it('after a background timeout, background reads skip the subprocess until reset', () => {
     execFileSyncMock.mockImplementation(() => { throw timeoutError(); });
-    expect(loadClaudeCodeOauthToken()).toBeUndefined();
-    expect(loadClaudeCodeOauthToken()).toBeUndefined();
+    expect(loadClaudeCodeOauthToken({ background: true })).toBeUndefined();
+    expect(loadClaudeCodeOauthToken({ background: true })).toBeUndefined();
     expect(execFileSyncMock).toHaveBeenCalledTimes(1);
 
     _resetKeychainReadCache();
     execFileSyncMock.mockReturnValue(blob(Date.now() + 3_600_000));
+    expect(loadClaudeCodeOauthToken({ background: true })).toBe('tok-a');
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('foreground read ignores an armed backoff', () => {
+    // Arm the backoff via a background timeout.
+    execFileSyncMock.mockImplementationOnce(() => { throw timeoutError(); });
+    expect(loadClaudeCodeOauthToken({ background: true })).toBeUndefined();
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+
+    // Subsequent background read is still blocked.
+    expect(loadClaudeCodeOauthToken({ background: true })).toBeUndefined();
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+
+    // Foreground read bypasses the backoff and reaches the subprocess.
+    execFileSyncMock.mockReturnValue(blob(Date.now() + 3_600_000));
     expect(loadClaudeCodeOauthToken()).toBe('tok-a');
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a successful foreground read clears the backoff for background callers', () => {
+    // Arm the backoff.
+    execFileSyncMock.mockImplementationOnce(() => { throw timeoutError(); });
+    expect(loadClaudeCodeOauthToken({ background: true })).toBeUndefined();
+
+    // Foreground read succeeds and clears the backoff.
+    execFileSyncMock.mockReturnValue(blob(Date.now() + 3_600_000));
+    expect(loadClaudeCodeOauthToken()).toBe('tok-a');
+
+    // Background read now reaches the subprocess (cache hit returns tok-a directly).
+    expect(loadClaudeCodeOauthToken({ background: true })).toBe('tok-a');
+    // Only 2 subprocess calls total (the foreground one populated the cache).
     expect(execFileSyncMock).toHaveBeenCalledTimes(2);
   });
 
@@ -71,10 +113,10 @@ describe('keychain read on darwin: timeout, backoff, quiet', () => {
     execFileSyncMock.mockImplementationOnce(() => {
       throw Object.assign(new Error('exit 44'), { status: 44 });
     });
-    expect(loadClaudeCodeOauthToken()).toBeUndefined();
+    expect(loadClaudeCodeOauthToken({ background: true })).toBeUndefined();
 
     execFileSyncMock.mockReturnValue(blob(Date.now() + 3_600_000));
-    expect(loadClaudeCodeOauthToken()).toBe('tok-a');
+    expect(loadClaudeCodeOauthToken({ background: true })).toBe('tok-a');
     expect(execFileSyncMock).toHaveBeenCalledTimes(2);
   });
 

@@ -46,6 +46,13 @@ export interface RetryTierContext {
   readonly autoResumeOnUsageLimit: boolean;
   /** Read LIVE — tests install this after construction. */
   readonly tokenRefresher: (() => Promise<Anthropic | null>) | undefined;
+  /**
+   * True when the session's OAuth credential came from the credential STORE
+   * (keychain / `.credentials.json`). See {@link RetryLayerOptions.credentialFromStore}.
+   * `undefined` means the flag was not supplied (legacy/test helpers): fall
+   * back to the env-var guard in `storeAheadOfClient`.
+   */
+  readonly credentialFromStore?: boolean;
   /** Latest client reference, post-swap. */
   getClient(): Anthropic;
   /**

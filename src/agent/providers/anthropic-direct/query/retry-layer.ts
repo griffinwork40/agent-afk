@@ -95,6 +95,22 @@ export interface RetryLayerOptions {
    * is treated as non-interactive (fail fast), which is the safe default.
    */
   surface?: string;
+  /**
+   * True when the session's OAuth credential was sourced from the credential
+   * STORE (macOS keychain / `~/.claude/.credentials.json`) rather than from an
+   * env var (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`) or an explicit
+   * slot key (`AFK_MODEL_<TIER>_API_KEY`).
+   *
+   * Contract: only sessions whose credential came from the store should be
+   * auto-swapped at turn-start, on compaction sync, and on the usage-limit
+   * 429 catch-up. A session pinned to an explicit credential must never be
+   * silently moved onto whatever account the keychain holds.
+   *
+   * When absent (undefined), `storeAheadOfClient` falls back to the legacy
+   * env-var guard — safe default for test helpers that do not pass this field.
+   * Production callers (query-runtime.ts) must always supply it explicitly.
+   */
+  credentialFromStore?: boolean;
 }
 
 /**
@@ -124,6 +140,7 @@ export class RetryLayer {
   private readonly tokenRefresher?: () => Promise<Anthropic | null>;
   private readonly autoResumeOnUsageLimit: boolean;
   private readonly surface?: string;
+  private readonly _credentialFromStore: boolean | undefined;
 
   private refreshPromise: Promise<Anthropic | null> | null = null;
   private usageLimitWaitPromise: Promise<UsageLimitWaitResult> | null = null;
@@ -157,6 +174,7 @@ export class RetryLayer {
     this.tokenRefresher = opts.tokenRefresher;
     this.autoResumeOnUsageLimit = opts.autoResumeOnUsageLimit;
     if (opts.surface !== undefined) this.surface = opts.surface;
+    this._credentialFromStore = opts.credentialFromStore;
   }
 
   /**
@@ -211,6 +229,9 @@ export class RetryLayer {
       },
       get tokenRefresher() {
         return layer.tokenRefresher;
+      },
+      get credentialFromStore() {
+        return layer._credentialFromStore;
       },
       getClient: () => layer._client,
       getClientToken: () => layer._clientToken,
@@ -315,9 +336,15 @@ export class RetryLayer {
    * Rebuild the client if the credential store has moved ahead of it, for
    * callers that use {@link client} directly rather than through a turn
    * (compaction). Same guard as the turn-start catch-up; a no-op otherwise.
+   *
+   * Returns the refresh result so callers can emit observability events when
+   * a swap actually occurred (e.g. the compaction path emits `credential_swap`
+   * with `source: 'compaction'`). Returns `null` when no refresh was needed or
+   * the refresh failed.
    */
-  async syncClientWithStore(): Promise<void> {
-    if (storeAheadOfClient(this.tierContext())) await this.forceClientRefresh();
+  async syncClientWithStore(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
+    if (!storeAheadOfClient(this.tierContext())) return null;
+    return this.forceClientRefresh();
   }
 
   /**

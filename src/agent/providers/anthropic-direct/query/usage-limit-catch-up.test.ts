@@ -15,7 +15,7 @@ import type { ProviderEvent } from '../../../provider.js';
 import type { RetryTierContext, TierGenerator } from './retry-context.js';
 import type { RunTurnInput } from '../types.js';
 
-const loadClaudeCodeOauthTokenMock = vi.hoisted(() => vi.fn<[], string | undefined>());
+const loadClaudeCodeOauthTokenMock = vi.hoisted(() => vi.fn<() => string | undefined>());
 const emitSessionPhaseMock = vi.hoisted(() => vi.fn());
 const usageLimitResetPauseMock = vi.hoisted(() => vi.fn());
 
@@ -47,7 +47,7 @@ interface FakeCtx extends RetryTierContext {
   _refresh: ReturnType<typeof vi.fn>;
 }
 
-function makeCtx(opts: { clientToken: string | undefined; authMode?: 'oauth' | 'api-key'; refreshOk?: boolean }): FakeCtx {
+function makeCtx(opts: { clientToken: string | undefined; authMode?: 'oauth' | 'api-key'; refreshOk?: boolean; credentialFromStore?: boolean }): FakeCtx {
   const ctx = {
     authMode: opts.authMode ?? 'oauth',
     surface: 'repl',
@@ -55,6 +55,7 @@ function makeCtx(opts: { clientToken: string | undefined; authMode?: 'oauth' | '
     tokenRefresher: undefined,
     _clientToken: opts.clientToken,
     _client: { id: 'client-a' },
+    credentialFromStore: opts.credentialFromStore,
     getClient: () => ctx._client as never,
     getClientToken: () => ctx._clientToken,
     rotateHeaders: () => ({ 'x-rotated': '1' }),
@@ -172,7 +173,7 @@ describe('catchUpStaleCredential', () => {
   it('reads the store quietly (no per-turn expired-token warning)', async () => {
     loadClaudeCodeOauthTokenMock.mockReturnValue('tok-a');
     await catchUpStaleCredential(makeCtx({ clientToken: 'tok-a' }), makeInput(), 'turn-start');
-    expect(loadClaudeCodeOauthTokenMock).toHaveBeenCalledWith({ quiet: true });
+    expect(loadClaudeCodeOauthTokenMock).toHaveBeenCalledWith({ quiet: true, background: true });
   });
 
   it('returns false and keeps the old client when the refresh fails', async () => {
@@ -181,6 +182,28 @@ describe('catchUpStaleCredential', () => {
     const input = makeInput();
     await expect(catchUpStaleCredential(ctx, input)).resolves.toBe(false);
     expect(input.client).toEqual({ id: 'client-a' });
+  });
+
+  it('never swaps when credentialFromStore is explicitly false (slot-pinned OAuth key)', async () => {
+    // An AFK_MODEL_<TIER>_API_KEY that happens to be an OAuth token still has
+    // authMode='oauth' but credentialFromStore=false. The catch-up must not
+    // silently move the session onto the keychain account.
+    loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b');
+    const ctx = makeCtx({ clientToken: 'tok-a', credentialFromStore: false });
+    const input = makeInput();
+    await expect(catchUpStaleCredential(ctx, input)).resolves.toBe(false);
+    expect(ctx._refresh).not.toHaveBeenCalled();
+    expect(input.client).toEqual({ id: 'client-a' });
+  });
+
+  it('also defers to the 429 catch-up when credentialFromStore is false', async () => {
+    // Same provenance guard applies on the usage-limit path.
+    loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b');
+    const ctx = makeCtx({ clientToken: 'tok-a', credentialFromStore: false });
+    const input = makeInput();
+    // Pass explicit 'usage-limit' source to confirm the guard fires on that path too.
+    await expect(catchUpStaleCredential(ctx, input, 'usage-limit')).resolves.toBe(false);
+    expect(ctx._refresh).not.toHaveBeenCalled();
   });
 });
 

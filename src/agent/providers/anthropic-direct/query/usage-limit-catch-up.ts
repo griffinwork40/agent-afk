@@ -35,6 +35,13 @@
  * network call (`refreshClaudeCodeOauthToken` returns a non-near-expiry token
  * as-is) and leaves the session on a valid token for the same account.
  *
+ * Cadence note: the store read in {@link storeAheadOfClient} sits behind the
+ * 5-second read cache in `keychain.ts` (`READ_CACHE_TTL_MS = 5_000`). A token
+ * change written to the store is therefore visible to the catch-up at most
+ * `max(turn_interval, 5s)` after it lands — in practice on the first turn that
+ * starts ≥ 5 s after the last cached read. High-frequency back-to-back turns
+ * may not see the new token until the cache window expires.
+ *
  * @module agent/providers/anthropic-direct/query/usage-limit-catch-up
  */
 
@@ -56,19 +63,35 @@ export type CatchUpSource = 'usage-limit' | 'turn-start';
  * source. Credential precedence is `ANTHROPIC_API_KEY` →
  * `CLAUDE_CODE_OAUTH_TOKEN` → store (`credential-resolver.ts`), and the
  * token refresher always rebuilds from the store (`client-setup.ts`). A
- * session authenticated by either env var must therefore never be "caught
- * up": that would silently move it off the operator's pinned credential onto
- * whatever account the keychain holds.
+ * session authenticated by either an env var OR an explicit slot key
+ * (e.g. `AFK_MODEL_<TIER>_API_KEY` written into `config.apiKey` by
+ * `slot-credentials.ts`) must never be "caught up": that would silently move
+ * it off the operator's pinned credential onto whatever account the keychain
+ * holds.
  *
- * The store read is `quiet` because the turn-start caller runs every turn: an
- * expired stored token would otherwise print its stderr warning each time.
+ * Guard precedence (applied in order, first match wins):
+ *   1. `credentialFromStore === false` (explicit provenance flag) → never swap.
+ *   2. `credentialFromStore === true`  (explicit provenance flag) → env-var
+ *      guard is still applied as a cheap defence-in-depth check.
+ *   3. `credentialFromStore === undefined` (legacy / test helpers that do not
+ *      supply the flag) → fall back to the env-var guard alone.
+ *
+ * The store read is `background: true` so it is bounded by the keychain
+ * timeout and honours the process-wide backoff (no unlock dialog on this path).
+ * It is also `quiet` because the turn-start caller runs every turn.
  */
 export function storeAheadOfClient(
-  ctx: Pick<RetryTierContext, 'authMode' | 'getClientToken'>,
+  ctx: Pick<RetryTierContext, 'authMode' | 'getClientToken' | 'credentialFromStore'>,
 ): boolean {
   if (ctx.authMode !== 'oauth') return false;
+  // Explicit provenance flag: false means the credential came from an env var
+  // or an explicit slot key — never swap regardless of what the store holds.
+  if (ctx.credentialFromStore === false) return false;
+  // Env-var guard: defence-in-depth for both the explicit-true and the
+  // legacy-undefined paths. A session using either env var must not be swapped
+  // even if credentialFromStore was somehow set true.
   if (env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN) return false;
-  const storeToken = loadClaudeCodeOauthToken({ quiet: true });
+  const storeToken = loadClaudeCodeOauthToken({ quiet: true, background: true });
   return storeToken !== undefined && storeToken !== ctx.getClientToken();
 }
 
