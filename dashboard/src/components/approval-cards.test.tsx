@@ -66,6 +66,62 @@ describe('ApprovalCards — number type', () => {
   });
 });
 
+describe('ApprovalCards — number type with min/max', () => {
+  it('renders with min and max attributes', () => {
+    render(
+      <ApprovalCards
+        approvals={[makeApproval({ type: 'number', questionMin: 1, questionMax: 10, questionDefault: '5' })]}
+      />,
+    );
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    expect(input.min).toBe('1');
+    expect(input.max).toBe('10');
+  });
+
+  it('submit button is disabled when value is below questionMin', () => {
+    render(
+      <ApprovalCards
+        approvals={[makeApproval({ type: 'number', questionMin: 5, questionDefault: '3' })]}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: /submit/i });
+    expect(btn).toHaveProperty('disabled', true);
+  });
+
+  it('submit button is disabled when value is above questionMax', () => {
+    render(
+      <ApprovalCards
+        approvals={[makeApproval({ type: 'number', questionMax: 10, questionDefault: '15' })]}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: /submit/i });
+    expect(btn).toHaveProperty('disabled', true);
+  });
+
+  it('submit button is enabled when value is within bounds', () => {
+    render(
+      <ApprovalCards
+        approvals={[makeApproval({ type: 'number', questionMin: 1, questionMax: 10, questionDefault: '5' })]}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: /submit/i });
+    expect(btn).toHaveProperty('disabled', false);
+  });
+
+  it('does not submit when value is out of bounds', async () => {
+    render(
+      <ApprovalCards
+        approvals={[makeApproval({ type: 'number', questionMin: 1, questionMax: 10, questionDefault: '0' })]}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: /submit/i });
+    fireEvent.click(btn);
+    // apiFetch should not be called for an out-of-bounds value
+    await new Promise((r) => setTimeout(r, 50));
+    expect(api.apiFetch).not.toHaveBeenCalled();
+  });
+});
+
 describe('ApprovalCards — confirm type', () => {
   it('renders Yes and No buttons', () => {
     render(<ApprovalCards approvals={[makeApproval({ type: 'confirm' })]} />);

@@ -107,6 +107,20 @@ after each turn drains in `session-owner.autosave.ts`. This allows slash handler
 `ctx.stats` (e.g. `/cost`, `/tokens`) to return accurate data without coupling the route to
 the autosave internals.
 
+## POST /prompt — 422 responses for slash commands
+
+`POST /api/sessions/:id/prompt` returns **422** when the submitted text is a slash command
+that cannot be handled as a skill prompt:
+
+| `error` code | Condition | Recommended action |
+|---|---|---|
+| `native_command` | The command is a native CLI command — use `POST /api/sessions/:id/commands` instead | Redirect to `/commands` endpoint |
+| `repl_only_command` | The command requires REPL terminal machinery not available on the web surface | Show error to user |
+| `unknown_command` | The slash token is not recognised by the registry | Show "unknown command" error |
+
+The dashboard composer handles these 422s by inspecting the `error` field and routing
+native commands to the `/commands` endpoint automatically (via `dispatchSlashForWeb`).
+
 ## Known Limitations (Stage 0)
 
 - **No cancel route**: background job cancel requires a cross-process signal channel.

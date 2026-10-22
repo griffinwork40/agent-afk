@@ -149,6 +149,10 @@ export interface PendingApproval {
     type?: 'text' | 'confirm' | 'choice' | 'multi_choice' | 'number';
     choices?: string[];
     questionDefault?: string | boolean | number;
+    /** Inclusive lower bound for number-type elicitations. */
+    questionMin?: number;
+    /** Inclusive upper bound for number-type elicitations. */
+    questionMax?: number;
   };
 }
 

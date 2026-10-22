@@ -11,6 +11,9 @@ Entries in the [Unreleased] section may include a short commit hash suffix
 
 ## [Unreleased]
 
+### Changed
+- `POST /api/sessions/:id/prompt` now returns 422 for native slash commands (use `POST /api/sessions/:id/commands` instead), REPL-only commands, and unknown commands (#4246)
+
 ## [5.328.2] - 2026-10-20
 
 ### Fixed

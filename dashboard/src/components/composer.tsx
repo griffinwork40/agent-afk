@@ -167,7 +167,7 @@ export function Composer({
    * Returns true if the caller should clear the composer text (normal case),
    * false when the control itself manages the text (e.g. prefill).
    */
-  const submitCommand = useCallback(async (input: string): Promise<boolean> => {
+  const submitCommand = useCallback(async (input: string, depth = 0): Promise<boolean> => {
     const response = await apiFetch<CommandResponse>(
       `/api/sessions/${sessionId}/commands`,
       { method: 'POST', body: JSON.stringify({ input }) },
@@ -184,8 +184,13 @@ export function Composer({
     } else if (control.kind === 'submit') {
       await submitPrompt(control.message);
     } else if (control.kind === 'rerun') {
-      // Re-POST to /commands with the rerun string
-      await submitCommand(control.input);
+      // Re-POST to /commands with the rerun string — depth-guarded to prevent
+      // infinite recursion if a command keeps returning rerun controls.
+      if (depth >= 3) {
+        onToast?.('Command rerun limit reached');
+        return true;
+      }
+      await submitCommand(control.input, depth + 1);
     } else if (control.kind === 'forward') {
       await submitPrompt(input);
     } else if (control.kind === 'exit') {
@@ -205,15 +210,25 @@ export function Composer({
         const cmd = findCommand(cmds, token);
 
         if (cmd?.kind === 'skill') {
-          // Skill commands always go to /prompt
-          await submitPrompt(trimmed);
+          // Skill commands go to /prompt; when a turn is in flight, enqueue
+          // instead of submitting immediately (mirrors the Enter handler).
+          if (isBusy && queue) {
+            queue.enqueue(trimmed);
+          } else {
+            await submitPrompt(trimmed);
+          }
           setText('');
           return;
         }
 
         if (cmd?.kind === 'native' && cmd.web === 'gated') {
           // Show gate reason locally — no network call
-          onToast?.(cmd.gateReason ?? `${normaliseName(cmd.name)} is not available on the web surface`);
+          const reason = cmd.gateReason ?? `${normaliseName(cmd.name)} is not available on the web surface`;
+          if (onToast) {
+            onToast(reason);
+          } else {
+            console.warn('[composer] gated command dismissed:', reason);
+          }
           return;
         }
 
