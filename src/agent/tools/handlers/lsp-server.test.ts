@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveServer, resolveServerWith } from '../../lsp/registry.js';
 import { ensureServerInstalled } from '../../lsp/install.js';
 import { resolveLspServer } from './lsp-server.js';
+import { getLspInstalledBinPath } from '../../../paths.lsp.js';
 import type { EnsureInstalledResult } from '../../lsp/server-spec.js';
 
 vi.mock('../../lsp/registry.js', async (original) => ({
@@ -66,15 +67,46 @@ describe('shared LSP registry wiring', () => {
     expect(ensureServerInstalled).not.toHaveBeenCalled();
   });
 
-  it('returns installed command with registry args/root and full Python settings', async () => {
-    vi.mocked(ensureServerInstalled).mockResolvedValue({ kind: 'installed', command: '/afk/pyright', freshInstall: true });
+  it.each([false, true])('re-resolves installed binary with the same bounded root (external=%s)', async external => {
+    let installedBin: string | undefined;
+    vi.mocked(resolveServer).mockImplementation(resolveServerWith({
+      fsStat: p => p === installedBin || (p.startsWith(root + path.sep) && existsSync(p)),
+      pathLookup: () => undefined,
+    }));
+    vi.mocked(ensureServerInstalled).mockImplementation(async definition => {
+      installedBin = getLspInstalledBinPath(definition.language, definition.binName);
+      // Deliberately different: the resolver, not the install receipt, owns the spec.
+      return { kind: 'installed', command: '/receipt/not-authoritative', freshInstall: true };
+    });
+    file('pyproject.toml');
+    file('session/package/pyproject.toml');
+    const source = file(external ? 'external/a.py' : 'session/package/src/a.py');
+    const sessionRoot = path.join(root, 'session');
+    const boundary = external ? path.dirname(source) : sessionRoot;
+    const expectedRoot = external ? path.dirname(source) : path.join(root, 'session/package');
     const installContext = { interactive: true, askConsent: vi.fn() };
-    const result = await resolveLspServer(file('a.py'), { sessionRoot: root, installContext });
-    expect(result).toMatchObject({ kind: 'resolved', root, spec: {
-      command: '/afk/pyright', args: ['--stdio'], source: 'afk-install',
+    const result = await resolveLspServer(source, { sessionRoot, installContext });
+    expect(result).toMatchObject({ kind: 'resolved', root: expectedRoot, spec: {
+      command: installedBin, args: ['--stdio'], source: 'afk-install',
       definition: { settings: { 'python.analysis': { diagnosticMode: 'openFilesOnly' } } },
     } });
-    expect(ensureServerInstalled).toHaveBeenCalledWith(expect.objectContaining({ language: 'python' }), installContext);
+    expect(resolveServer).toHaveBeenCalledTimes(2);
+    expect(resolveServer).toHaveBeenNthCalledWith(1, source, boundary);
+    expect(resolveServer).toHaveBeenNthCalledWith(2, source, boundary);
+    expect(ensureServerInstalled).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ language: 'python' }), installContext);
+  });
+
+  it.each(['missing', 'unsupported'] as const)('fails clearly if post-install resolution is %s', async kind => {
+    vi.mocked(ensureServerInstalled).mockImplementation(async () => {
+      if (kind === 'unsupported') vi.mocked(resolveServer).mockResolvedValue({ kind: 'unsupported' });
+      return { kind: 'installed', command: '/afk/pyright', freshInstall: true };
+    });
+    const source = file('a.py');
+    expect(await resolveLspServer(source, { sessionRoot: root, installContext: { interactive: true } }))
+      .toMatchObject({ kind: 'unavailable', error: expect.stringContaining(kind === 'missing' ? 'still missing' : 'unsupported') });
+    expect(resolveServer).toHaveBeenCalledTimes(2);
+    expect(resolveServer).toHaveBeenNthCalledWith(2, source, root);
+    expect(ensureServerInstalled).toHaveBeenCalledOnce();
   });
 
   it.each<EnsureInstalledResult>([

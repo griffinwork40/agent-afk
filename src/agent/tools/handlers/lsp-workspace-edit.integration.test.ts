@@ -7,7 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { LspClient } from '../../lsp/client.js';
 import { TYPESCRIPT_SERVER_DEFINITION } from '../../lsp/typescript-default.js';
 import { writeFakeLspServer, messagesWithMethod } from '../../lsp/__test-utils__/fake-lsp-server.js';
-import { createFileCheckpointRegistry, listTurnSnapshots } from '../../file-checkpoint/file-checkpoint.js';
+import { listTurnSnapshots } from '../../file-checkpoint/file-checkpoint.js';
+import { beginCheckpointTurn, endCheckpointTurn } from '../../file-checkpoint/turn-lifecycle.js';
 import { rewindFiles } from '../../file-checkpoint/rewind-files.js';
 import { realpathSafe } from './_cwd-utils.js';
 import { applyWorkspaceEdit } from './lsp-workspace-edit.js';
@@ -43,7 +44,7 @@ describe('LSP WorkspaceEdit integration', () => {
     for (const p of paths) await client.syncFile(p);
     const response = await client.request('textDocument/rename', { textDocument: { uri: uri(paths[0]!) }, position: { line: 0, character: 6 }, newName: 'longName' }, { timeoutMs: 5000 });
     const state = join(root, 'state');
-    const context: ToolHandlerContext = { resolveBase: root, writeRoots: [root], fileCheckpoint: createFileCheckpointRegistry('session', 'turn', state) };
+    const context: ToolHandlerContext = { resolveBase: root, writeRoots: [root], fileCheckpoint: beginCheckpointTurn('session', 'turn', state) };
     const apply = vi.spyOn(engine, 'applyPatch');
     const result = await applyWorkspaceEdit(response, { cwd: root, context, client,
       documentVersion: (u) => client!.documentVersion(u), expectedContents: new Map(paths.map((p, i) => [uri(p), contents[i]!])),
@@ -65,7 +66,30 @@ describe('LSP WorkspaceEdit integration', () => {
       expect(sync?.params.textDocument.version).toBe(2);
       expect(sync?.params.contentChanges[0].text).toBe(contents[i]!.replace('foo', 'longName'));
     }
-    expect((await rewindFiles({ sessionId: 'session', enableFileCheckpointing: true, _stateDir: state, writePolicy: context }, 'turn')).canRewind).toBe(true);
+    endCheckpointTurn('session', context.fileCheckpoint, state);
+    // A later turn touches one renamed file and a previously untouched file.
+    // Rewinding the rename turn must fold BOTH turns, retaining earliest snapshots.
+    const laterPath = join(root, 'later.ts');
+    await writeFile(laterPath, 'before\n');
+    const later = { ...context, fileCheckpoint: beginCheckpointTurn('session', 'later-turn', state) };
+    const laterResult = await applyWorkspaceEdit({ changes: {
+      [uri(paths[1]!)]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 8 } }, newText: 'finalName' }],
+      [uri(laterPath)]: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } }, newText: 'after' }],
+    } }, { cwd: root, context: later, client });
+    expect(laterResult.isError).toBe(false);
+    endCheckpointTurn('session', later.fileCheckpoint, state);
+    const deps = { sessionId: 'session', enableFileCheckpointing: true, _stateDir: state, writePolicy: context };
+    const preview = await rewindFiles(deps, 'turn', { dryRun: true });
+    expect(preview.canRewind).toBe(true);
+    expect(preview.filesChanged?.sort()).toEqual([...paths, laterPath].sort());
+    expect(await readFile(paths[1]!, 'utf8')).toBe('finalName();\n');
+    expect(await readFile(laterPath, 'utf8')).toBe('after\n');
+    const restored = await rewindFiles(deps, 'turn');
+    expect(restored.canRewind).toBe(true);
+    expect(restored.failures).toBeUndefined();
+    expect(restored.conflicts).toBeUndefined();
+    expect(restored.filesChanged?.sort()).toEqual([...paths, laterPath].sort());
     expect(await Promise.all(paths.map((p) => readFile(p, 'utf8')))).toEqual(contents);
+    expect(await readFile(laterPath, 'utf8')).toBe('before\n');
   }, 15_000);
 });

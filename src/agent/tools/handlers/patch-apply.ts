@@ -16,6 +16,7 @@
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { validatePatchChanges, type PatchFileChange } from './patch-validate.js';
 import { applyPatch } from './patch-apply-engine.js';
+import { capturePatchGuard } from './patch-apply-guard.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { isBlankInput } from '../subagent/optional-input.js';
 import { validatedWriteTarget } from '../../file-checkpoint/write-policy.js';
@@ -222,13 +223,22 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
       };
     }
 
-    // Snapshot only validated physical destinations, immediately before apply.
-    if (context?.fileCheckpoint && !dry_run) {
-      await Promise.all(
-        Array.from(validation.fileContents.keys()).map((resolvedPath) =>
-          context.fileCheckpoint!.snapshotFile(resolvedPath),
-        ),
-      );
+    // Pin identities before yielding to checkpoint callbacks, then validate the
+    // entire transaction again before allowing even the first temp-file write.
+    let guard: ((path: string) => Promise<void>) | undefined;
+    if (!dry_run) {
+      try {
+        guard = await capturePatchGuard(validation.fileContents, context, resolveBase);
+        if (context?.fileCheckpoint) {
+          await Promise.all(Array.from(validation.fileContents.keys()).map((resolvedPath) =>
+            context.fileCheckpoint!.snapshotFile(resolvedPath),
+          ));
+        }
+        for (const path of validation.fileContents.keys()) await guard(path);
+      } catch (err) {
+        return { content: JSON.stringify({ status: 'validation_failed', diff: '', files_changed: [],
+          errors: [{ error: (err as NodeJS.ErrnoException).code ?? 'path_containment', detail: errorMessage(err) }] }), isError: true };
+      }
     }
 
     // Apply (or dry-run).
@@ -237,6 +247,7 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
       validation.fileContents,
       resolveBase,
       dry_run,
+      guard,
     );
 
     const isError =

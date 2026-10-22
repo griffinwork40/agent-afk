@@ -55,12 +55,13 @@ import {
 } from './dispatcher.core-exec.js';
 import type { CoreExecDeps } from './dispatcher.core-exec.js';
 import { resolveMcpServerStates, resolveMaxOutputBytes, type GetMcpServerStates } from './dispatcher.mcp-states.js';
-import { isYieldableTool, type UserAttention } from './user-yield.js';
-import { isDetachableTool, type DetachableToolRegistry } from './detach-bash.js';
+import type { UserAttention } from './user-yield.js';
+import type { DetachableToolRegistry } from './detach-bash.js';
 import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
 import { filterBackgroundToolDefs } from './process-job-tools.js';
 import { FileCheckpointWiring } from './dispatcher.file-checkpoint.js';
 import { isPeerToolBlocked } from './peer-tool-gate.js';
+import { callHandlerContext } from './dispatcher.handler-context.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -515,35 +516,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
     };
   }
 
-  /**
-   * Returns a per-call handler context that augments the base `handlerContext`
-   * with the tool-call-specific fields (`toolUseId`, `traceWriter`, and
-   * the per-call bash output tail callback when the reporter factory is set).
-   */
   private callHandlerContext(call: ToolCall): ToolHandlerContext {
-    const tailCallback =
-      call.name === 'bash' && this.bashOutputTailReporter !== undefined && call.id
-        ? this.bashOutputTailReporter(call.id)
-        : undefined;
-    return {
-      ...this.handlerContext,
-      toolUseId: call.id,
-      ...(this.traceWriter !== undefined ? { traceWriter: this.traceWriter } : {}),
-      ...(tailCallback !== undefined ? { onBashOutputTail: tailCallback } : {}),
-      // Yield contract: ONLY opted-in tools may observe the operator's queue,
-      // so a non-yieldable tool (bash) can never be told to stop early.
-      ...(this.userAttention !== undefined && isYieldableTool(call.name)
-        ? { userAttention: this.userAttention }
-        : {}),
-      // Detach contract (#2542): inject the registry into handler-backed detachable
-      // tools (bash) so Ctrl+B can free the model's turn while the underlying
-      // operation keeps running. `compose` is detachable but bypasses this path —
-      // it receives detachRegistry via coreExecDeps() → executeCompose() instead.
-      ...(this.detachRegistry !== undefined && isDetachableTool(call.name)
-        ? { detachRegistry: this.detachRegistry }
-        : {}),
-      ...(this.processJobs !== undefined && call.name === 'bash' ? { processJobs: this.processJobs } : {}),
-    };
+    return callHandlerContext(this.handlerContext, call, {
+      bashOutputTailReporter: this.bashOutputTailReporter, traceWriter: this.traceWriter,
+      userAttention: this.userAttention, detachRegistry: this.detachRegistry, processJobs: this.processJobs,
+    });
   }
 
   // ---------------------------------------------------------------------------

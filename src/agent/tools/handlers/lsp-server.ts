@@ -36,7 +36,8 @@ function missingMessage(result: Extract<ResolveResult, { kind: 'missing' }>): st
 /** Registry roots/specs are shared by every query, including command overrides. */
 export async function resolveLspServer(filePath: string, options: LspServerOptions = {}): Promise<LspServerResult> {
   if (options.installContext?.signal?.aborted) return { kind: 'unavailable', error: 'Aborted' };
-  const result = await resolveServer(filePath, boundedRoot(filePath, options.sessionRoot));
+  const root = boundedRoot(filePath, options.sessionRoot);
+  const result = await resolveServer(filePath, root);
   if (result.kind === 'unsupported') {
     return { kind: 'unavailable', error: `Unsupported file type: ${path.extname(filePath)}` };
   }
@@ -51,10 +52,16 @@ export async function resolveLspServer(filePath: string, options: LspServerOptio
   const installed = await ensureServerInstalled(definition, options.installContext);
   if (options.installContext.signal?.aborted) return { kind: 'unavailable', error: 'Aborted' };
   switch (installed.kind) {
-    case 'installed':
-      return { kind: 'resolved', root: result.root, spec: {
-        definition, command: installed.command, args: definition.args, source: 'afk-install',
-      } };
+    case 'installed': {
+      // Installation success is not resolution: rediscover the binary and root
+      // through the registry, retaining the original filesystem boundary.
+      const resolved = await resolveServer(filePath, root);
+      if (options.installContext.signal?.aborted) return { kind: 'unavailable', error: 'Aborted' };
+      if (resolved.kind === 'resolved') return resolved;
+      return { kind: 'unavailable', error: resolved.kind === 'missing'
+        ? `Language server installation completed, but ${resolved.definition.binName} is still missing.`
+        : `Language server installation completed, but file type is unsupported: ${path.extname(filePath)}` };
+    }
     case 'declined': return { kind: 'unavailable', error: 'Language server installation declined' };
     case 'refused-unattended': return { kind: 'unavailable', error: `Language server installation requires human consent. ${missingMessage(result)}` };
     case 'no-recipe': return { kind: 'unavailable', error: missingMessage(result) };

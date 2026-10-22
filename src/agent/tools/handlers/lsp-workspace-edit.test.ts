@@ -189,7 +189,7 @@ describe('WorkspaceEdit safe application', () => {
   it('fails closed before mutation when the normal checkpoint callback throws', async () => {
     const p = await file('a.ts');
     const apply = vi.spyOn(engine, 'applyPatch');
-    options.context!.fileCheckpoint = { turnId: 'turn', snapshotFile: async () => { throw new Error('checkpoint unavailable'); } };
+    options.context!.fileCheckpoint = { turnId: 'turn', touchedPaths: () => [], snapshotFile: async () => { throw new Error('checkpoint unavailable'); } };
     const result = await applyWorkspaceEdit(changes(p), options);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('checkpoint unavailable');
@@ -213,7 +213,7 @@ describe('WorkspaceEdit safe application', () => {
       const secret = join(outside, 'secret.ts');
       await writeFile(secret, 'SECRET');
       await symlink(target, link);
-      options.context!.fileCheckpoint = { turnId: 'turn', snapshotFile: async () => {
+      options.context!.fileCheckpoint = { turnId: 'turn', touchedPaths: () => [], snapshotFile: async () => {
         await unlink(link);
         await symlink(secret, link);
       } };
