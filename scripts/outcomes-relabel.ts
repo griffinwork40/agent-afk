@@ -100,6 +100,12 @@ async function main(): Promise<void> {
     process.stdout.write('outcomes-relabel: dry-run mode — no writes\n');
   }
 
+  if (includeFailed && !rescoreSettled) {
+    process.stderr.write(
+      'outcomes-relabel: warning: --include-failed has no effect without --rescore-settled\n',
+    );
+  }
+
   if (rescoreSettled) {
     // Backfill path: re-apply combiner v2 to settled unknown records
     process.stdout.write('outcomes-relabel: --rescore-settled active — backfilling settled unknown records\n');

@@ -235,6 +235,24 @@ describe('combineV2 rule 4: two or more minor negatives', () => {
     expect(r.basis).toBe('no_bad_signals');
   });
 
+  it('N fix_of_fix votes + strong positive → same confidence as one fix_of_fix', () => {
+    const fof = (n: number): Vote =>
+      makeVote('fix_of_fix', -1, 'weak', { severity: 'minor', evidence: `PR #${n} mentions it` });
+    const pos = makeVote('pr_fate', 1, 'strong');
+    const one = combineV2({ votes: [pos, fof(1)], selfReport: 'done', artifacts: withArtifacts });
+    const many = combineV2({
+      votes: [pos, ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map(fof)],
+      selfReport: 'done',
+      artifacts: withArtifacts,
+    });
+    expect(one.label).toBe('succeeded');
+    expect(one.basis).toBe('proven');
+    expect(many.label).toBe('succeeded');
+    expect(many.basis).toBe('proven');
+    expect(one.confidence).toBe(0.92);
+    expect(many.confidence).toBe(one.confidence);
+  });
+
   it('one fix_of_fix plus a different minor negative → still failed', () => {
     const r = combineV2({
       votes: [
