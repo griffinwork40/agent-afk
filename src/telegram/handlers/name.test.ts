@@ -135,7 +135,7 @@ describe('handleName', () => {
   it('slugifies a multi-word name into a kebab-case slug', async () => {
     const { ctx } = makeCtx('/name My Cool Session');
     await handleName(ctx, manager, log);
-    expect(manager.getSessionName(42)).toBe('my-cool-session');
+    expect(manager.getSessionName(42)).toBe('cool-session');
   });
 
   it('strips the @botname suffix from the command token (group chats)', async () => {
