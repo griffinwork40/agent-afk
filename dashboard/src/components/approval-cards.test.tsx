@@ -67,7 +67,7 @@ describe('ApprovalCards — number type', () => {
 });
 
 describe('ApprovalCards — number type with min/max', () => {
-  it('renders with min and max attributes', () => {
+  it('renders with min and max attributes on the input', () => {
     render(
       <ApprovalCards
         approvals={[makeApproval({ type: 'number', questionMin: 1, questionMax: 10, questionDefault: '5' })]}
@@ -108,7 +108,7 @@ describe('ApprovalCards — number type with min/max', () => {
     expect(btn).toHaveProperty('disabled', false);
   });
 
-  it('does not submit when value is out of bounds', async () => {
+  it('does not call apiFetch when value is out of bounds on click', async () => {
     render(
       <ApprovalCards
         approvals={[makeApproval({ type: 'number', questionMin: 1, questionMax: 10, questionDefault: '0' })]}
@@ -116,7 +116,6 @@ describe('ApprovalCards — number type with min/max', () => {
     );
     const btn = screen.getByRole('button', { name: /submit/i });
     fireEvent.click(btn);
-    // apiFetch should not be called for an out-of-bounds value
     await new Promise((r) => setTimeout(r, 50));
     expect(api.apiFetch).not.toHaveBeenCalled();
   });

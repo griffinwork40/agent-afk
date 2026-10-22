@@ -92,30 +92,27 @@ describe('classifySlashInput', () => {
 
   it('returns repl-only for terminal-only commands', async () => {
     // Fix 5: REPL_ONLY is now checked after lookup using the resolved cmd.name.
-    // For /clear, lookup must return a cmd with name: '/clear'.
-    mockParse.mockReturnValue({ name: '/clear', args: '' });
-    mockLookup.mockReturnValue({ name: '/clear', summary: 'clear', handler: vi.fn() });
-    const result = await classifySlashInput('/clear', '/tmp', undefined);
-    expect(result).toEqual({ kind: 'repl-only', command: '/clear' });
+    // /clear is now native; /editor still requires a terminal.
+    mockParse.mockReturnValue({ name: '/editor', args: '' });
+    mockLookup.mockReturnValue({ name: '/editor', summary: 'editor', handler: vi.fn() });
+    const result = await classifySlashInput('/editor', '/tmp', undefined);
+    expect(result).toEqual({ kind: 'repl-only', command: '/editor' });
   });
 
-  it('returns repl-only for /exit', async () => {
-    // Fix 5: lookup returns cmd with canonical name '/exit'.
+  it('Stage 4: returns native for /exit (un-gated in Stage 4)', async () => {
+    // /exit was previously repl-only but is now a native web command in Stage 4.
     mockParse.mockReturnValue({ name: '/exit', args: '' });
     mockLookup.mockReturnValue({ name: '/exit', summary: 'exit', handler: vi.fn() });
     const result = await classifySlashInput('/exit', '/tmp', undefined);
-    expect(result).toEqual({ kind: 'repl-only', command: '/exit' });
+    expect(result).toEqual({ kind: 'native' });
   });
 
-  it('returns repl-only via alias resolution (Fix 5)', async () => {
-    // Simulate /quit alias resolving to /exit canonical name.
-    // Before Fix 5, /quit would not be in REPL_ONLY (by raw name) and would
-    // fall through to passthrough. After Fix 5, the resolved cmd.name '/exit'
-    // IS in REPL_ONLY, so it returns repl-only.
+  it('Stage 4: returns native for /quit alias of /exit (un-gated in Stage 4)', async () => {
+    // /quit resolves to /exit canonical name; both are native on web in Stage 4.
     mockParse.mockReturnValue({ name: '/quit', args: '' });
     mockLookup.mockReturnValue({ name: '/exit', summary: 'exit', handler: vi.fn() });
     const result = await classifySlashInput('/quit', '/tmp', undefined);
-    expect(result).toEqual({ kind: 'repl-only', command: '/exit' });
+    expect(result).toEqual({ kind: 'native' });
   });
 
   it('returns unknown with suggestion for unrecognised command', async () => {

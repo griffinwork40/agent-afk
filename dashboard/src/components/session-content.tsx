@@ -10,6 +10,7 @@ import type { CommandOutputItem } from '@/hooks/use-command-outputs';
 import type { SessionSummary } from '@/types/api';
 import type { TranscriptItem } from '@/lib/ledger-adapter';
 import type { SessionTotals } from './session-meter';
+import type { ThinkingUiMode } from '@/types/command-wire';
 
 export function SessionContent({
   loading,
@@ -20,6 +21,7 @@ export function SessionContent({
   totals,
   status,
   turnActive,
+  thinkingUi,
 }: {
   loading: boolean;
   sessions: SessionSummary[];
@@ -29,6 +31,7 @@ export function SessionContent({
   totals: SessionTotals;
   status: string;
   turnActive: boolean;
+  thinkingUi?: ThinkingUiMode;
 }) {
   if (loading && !sessions.length) {
     return (
@@ -58,6 +61,7 @@ export function SessionContent({
         cmdItems={cmdItems}
         totals={totals}
         turnActive={turnActive}
+        thinkingUi={thinkingUi}
       />
     );
   }
@@ -97,12 +101,14 @@ function TranscriptWithCommands({
   cmdItems,
   totals,
   turnActive,
+  thinkingUi,
 }: {
   sessionId: string;
   items: TranscriptItem[];
   cmdItems: CommandOutputItem[];
   totals: SessionTotals;
   turnActive: boolean;
+  thinkingUi?: ThinkingUiMode;
 }) {
   // Contract: outputs render at their anchor (see interleave-commands), and
   // only the first transcript segment carries the session meter.
@@ -122,6 +128,7 @@ function TranscriptWithCommands({
             {...(i === 0 ? { totals } : {})}
             turnActive={turnActive && i === segments.length - 1}
             hideEmptyState
+            thinkingUi={thinkingUi}
           />
         ) : (
           <div key={`c-${seg.item.key}`} className="px-2 py-3">

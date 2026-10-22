@@ -53,9 +53,9 @@ const NON_COMMAND_KEYWORDS = new Set(['for', 'case', 'select', 'function', 'done
  * `sudo -u root rm` highlights `rm`, not `root`.
  */
 const WRAPPERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['sudo', new Set(['-u', '-g', '-C', '-p', '-h', '-U', '-D'])],
+  ['sudo', new Set(['-u', '-g', '-C', '-p', '-h', '-U', '-D', '--user', '--group', '--chdir', '--prompt', '--host', '--other-user', '--login-class'])],
   ['doas', new Set(['-u', '-C'])],
-  ['env', new Set(['-u', '-C', '-S'])],
+  ['env', new Set(['-u', '-C', '-S', '--unset', '--chdir', '--split-string'])],
   ['nohup', new Set<string>()],
   ['exec', new Set(['-a'])],
   ['command', new Set<string>()],
@@ -246,6 +246,12 @@ export function findCommandWordSpans(s: string): Span[] {
     }
     if (c === '|' || c === '&' || c === ';' || c === '(') {
       closeSegment(i);
+      // Consume `|&` atomically: it is a pipe (stdout+stderr), not `|` then `&`.
+      if (c === '|' && s[i + 1] === '&') {
+        i += 2;
+        toCommandPosition(true);
+        continue;
+      }
       const singlePipe = c === '|' && s[i + 1] !== '|' && s[i - 1] !== '|';
       i++;
       toCommandPosition(singlePipe);
@@ -283,6 +289,8 @@ export function findCommandWordSpans(s: string): Span[] {
     }
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) return;
     if (wrapper !== undefined && (word.startsWith('-') || /^\d/.test(word))) {
+      // `--opt=value` is self-contained; never consumes the next word.
+      if (word.includes('=')) { return; }
       skipWrapperValue = wrapper.has(word);
       return;
     }

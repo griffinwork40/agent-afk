@@ -24,6 +24,7 @@ import { demandLoadSidecar } from './session-manager.demand-load.js';
 import { loadSessionsFromDisk, saveSessionsToDisk } from './session-manager.disk-io.js';
 import { listChatSessionsImpl, switchToSessionImpl } from './session-manager.switcher.js';
 import { buildAndRegisterSession } from './session-manager.session-builder.js';
+import { beginConversationResetImpl, finishConversationResetImpl, resetSessionImpl } from './session-manager.reset.js';
 
 /**
  * Public methods that used to take a bare `chatId: number` now take a route
@@ -493,29 +494,52 @@ export class SessionManager {
     const data = this.sessionData.get(key); if (data) delete data.sessionId;
   }
 
+  /** Live accumulating stats for a route (shared slash-command context). */
+  getStats(target: RouteTarget): SessionStats { return this._getOrCreateStats(toRoute(target)); }
+
+  /** Record a live model change so restarts/rebuilds keep it (no session teardown). */
+  noteModel(target: RouteTarget, model: AgentModelInput): void {
+    const data = this.sessionData.get(routeKey(toRoute(target)));
+    if (data) data.model = model;
+  }
+
+  /**
+   * Contract: chat-level lifecycle around the shared reset-in-place /clear
+   * (session-control clearConversation). Call before the reset (it reads the
+   * old sessionId) and {@link finishConversationReset} after it. The
+   * bookkeeping lives in session-manager.reset.ts.
+   */
+  beginConversationReset(target: RouteTarget): void {
+    beginConversationResetImpl(routeKey(toRoute(target)), {
+      sessionStats: this.sessionStats,
+      sessionData: this.sessionData,
+      pendingResume: this.pendingResume,
+      autosaveFailureLogged: this.autosaveFailureLogged,
+      registry: this.options.registry ?? sessionRegistry,
+    });
+  }
+
+  /** Re-point persisted identity at the reset session's (possibly not yet minted) id. */
+  finishConversationReset(target: RouteTarget): void {
+    finishConversationResetImpl(toRoute(target), {
+      sessionData: this.sessionData,
+      sessions: this.sessions,
+      ensureRegistryHandle: (r, d) => this._ensureRegistryHandle(r, d),
+    });
+  }
+
   /**
    * Reset a route's session (clear history).
    *
    * @param target - Route (chat + optional topic) or a bare chatId (General topic)
    */
   async resetSession(target: RouteTarget): Promise<void> {
-    const route = toRoute(target);
-    const key = routeKey(route);
-    // Archive the registry handle FIRST so the stale handle is freed before
-    // _resetStats clears the sessionId. Best-effort: non-fatal if never registered.
-    try { archiveRegistryHandle(this.options.registry ?? sessionRegistry, key); } catch { /* best-effort */ }
-    const oldSession = this.sessions.get(key);
-    if (oldSession) {
-      await oldSession.close();
-      this.sessions.delete(key);
-    }
-    // New conversation → drop accumulated stats + stale sessionId so the
-    // rebuilt session is recorded as a fresh sidecar, not appended to the old.
-    this._resetStats(key);
-
-    // Keep session data but create new session on next request
-    const data = this.sessionData.get(key);
-    if (data) data.lastActivity = new Date().toISOString();
+    await resetSessionImpl(routeKey(toRoute(target)), {
+      registry: this.options.registry ?? sessionRegistry,
+      sessions: this.sessions,
+      sessionData: this.sessionData,
+      resetStats: (key) => this._resetStats(key),
+    });
   }
 
   /**

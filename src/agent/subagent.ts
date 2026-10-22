@@ -431,6 +431,10 @@ export class SubagentManager {
         childController,
         ...this.parentForkFields(),
         workspaceStore: this.workspaceStore, ...(options.nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist: options.nestedAgentAllowlist } : {}),
+        // Yield: forward the caller's opt-in flag (default false). Only foreground
+        // agent-tool and skill-fork call sites set yieldEnabled: true; compose/DAG
+        // nodes and background children omit it (#4297 F-C2).
+        ...(options.yieldEnabled === true ? { yieldEnabled: true } : {}),
       });
       childConfig = applyContinuationSeed(childConfig, options); // D8: no-op unless a continuation
 

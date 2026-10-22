@@ -256,7 +256,9 @@ export function instrumentHandleForChain(
     registry.setSettling(chain.chainId, settleTerminal(terminal, handle.id, rounds, r === undefined && reason === 'not_started', reason));
   };
   const reasonOf = (r: import('../../subagent/result.js').SubagentResult): string =>
-    r.incomplete === true ? (r.incompleteReason ?? 'incomplete') : r.status;
+    r.needsInput !== undefined ? 'asking'
+    : r.incomplete === true ? (r.incompleteReason ?? 'incomplete')
+    : r.status;
   const h = handle as unknown as Record<string, unknown>;
   const started = { value: false };
   // Promotion: stamp the delivered result (now or, if the run already

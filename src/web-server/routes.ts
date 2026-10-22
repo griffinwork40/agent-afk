@@ -25,6 +25,8 @@ export interface RouteContext {
   /** Session ids created inside THIS process — the only ones we can drive. */
   owned: Set<string>;
   bridge: WebElicitationBridge;
+  /** Per-server ephemeral interactive choice broker. */
+  choiceBroker?: import('./choice-broker.js').ChoiceBroker;
   /** Submit a prompt to an owned session. */
   submitPrompt: (sessionId: string, text: string) => void;
   /** Submit a pre-built skill-invocation message (ContentBlockParam[]). */
@@ -58,11 +60,21 @@ export interface RouteContext {
    * Used by the command route to build a SessionRef without unsafe casts.
    */
   getSession?: (id: string) => import('../agent/session/agent-session.js').AgentSession | undefined;
+  /** Owner accounting/fast-mode adapter; route owns reservation exactly once. */
+  executeSessionControl?: (
+    id: string,
+    command: import('../cli/slash/types.js').SlashCommand,
+    context: import('../cli/slash/types.js').SlashContext,
+    args: string,
+  ) => Promise<import('./session-owner.control.js').SessionControlResult>;
+
   /**
    * Start a new session in this process. Absent when the server was started
    * without an owner, in which case the surface is attach-only.
    */
   createSession?: (request: CreateSessionRequest) => Promise<OwnedSessionInfo>;
+  /** Resume a stored session as a new owned session; null when none matches. */
+  resumeSession?: (pastSessionId: string) => Promise<import('./session-owner.lifecycle.js').ResumeByIdResult>;
   /** Soft-interrupt an in-flight turn on an owned session. */
   interrupt?: (sessionId: string) => Promise<void>;
 }
@@ -495,6 +507,7 @@ export async function handleInterrupt(
     return;
   }
   try {
+    ctx.choiceBroker?.cancelSession(sessionId);
     await ctx.interrupt(sessionId);
     sendJson(res, 200, { ok: true });
   } catch (error) {

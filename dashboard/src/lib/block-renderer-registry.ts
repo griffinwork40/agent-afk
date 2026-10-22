@@ -10,6 +10,11 @@
 import { createElement, type ReactElement } from 'react';
 import { renderAnsi } from './ansi-renderer';
 import type { CommandOutputBlock } from '@/types/command-wire';
+import { renderTable } from '@/renderers/table';
+import { renderKeyValue } from '@/renderers/key-value';
+import { renderDiff } from '@/renderers/diff';
+import { renderList } from '@/renderers/list';
+import { renderLink } from '@/renderers/link';
 
 export type BlockRenderer = (block: CommandOutputBlock) => ReactElement;
 
@@ -22,12 +27,14 @@ export function registerBlockRenderer(kind: string, fn: BlockRenderer): void {
 
 /** Retrieve a renderer for a block kind, falling back to the text renderer. */
 export function getBlockRenderer(kind: string): BlockRenderer {
-  return registry.get(kind) ?? textRenderer;
+  return registry.get(kind) ?? plainTextRenderer;
 }
 
 // ---------------------------------------------------------------------------
 // Built-in text renderer (registered at module load)
 // ---------------------------------------------------------------------------
+
+const plainTextRenderer: BlockRenderer = (block) => createElement('span', null, block.text);
 
 const textRenderer: BlockRenderer = (block) => {
   try {
@@ -38,3 +45,8 @@ const textRenderer: BlockRenderer = (block) => {
 };
 
 registerBlockRenderer('text', textRenderer);
+registerBlockRenderer('table', renderTable);
+registerBlockRenderer('keyValue', renderKeyValue);
+registerBlockRenderer('diff', renderDiff);
+registerBlockRenderer('list', renderList);
+registerBlockRenderer('link', renderLink);

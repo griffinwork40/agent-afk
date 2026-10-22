@@ -14,8 +14,7 @@
  */
 
 import { palette } from '../../palette.js';
-import { saveSession } from '../../session-store.js';
-import { slugifySessionName } from '../../session-name.js';
+import { setSessionName } from '../../../agent/session-control/index.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import type { SlashCommand } from '../types.js';
 import { errorMessage } from '../../../utils/errors.js';
@@ -50,31 +49,20 @@ export const nameCmd: SlashCommand = {
       return 'continue';
     }
 
-    const slug = slugifySessionName(raw);
-    if (!slug) {
+    const result = setSessionName(ctx.stats, raw, {
+      onName: (name) => { void peerNotifierRef?.setName(name); },
+    });
+    if (!result.ok) {
       ctx.out.warn('Invalid name — use letters, numbers, spaces, or hyphens.');
       return 'continue';
     }
 
-    ctx.stats.name = slug;
-
-    // Propagate the new name to the peer-presence file so peer discovery
-    // (list_sessions, /peers) shows the updated label immediately. Fire-and-
-    // forget: the presence write is best-effort and must not block the REPL.
-    void peerNotifierRef?.setName(slug);
-
-    // Persist now if there's something to save; otherwise the name rides
-    // along on the first per-turn autosave. saveSession keys on sessionId,
-    // not the name, so no duplicate sidecar is created.
-    if (ctx.stats.totalTurns > 0) {
-      try {
-        // Mid-session rename: no closeTime.
-        saveSession(ctx.stats);
-        ctx.out.success(palette.success('Named') + palette.dim(`  ${slug}`));
-        ctx.out.line(palette.dim(`  Resume:  ${formatResumeCommand(slug, ctx.stats.model)}`));
-      } catch (err) {
-        ctx.out.error(`Named "${slug}" but save failed: ${errorMessage(err)}`);
-      }
+    const slug = result.name;
+    if ('saveError' in result) {
+      ctx.out.error(`Named "${slug}" but save failed: ${errorMessage(result.saveError)}`);
+    } else if (result.saved) {
+      ctx.out.success(palette.success('Named') + palette.dim(`  ${slug}`));
+      ctx.out.line(palette.dim(`  Resume:  ${formatResumeCommand(slug, ctx.stats.model)}`));
     } else {
       ctx.out.success(palette.success('Named') + palette.dim(`  ${slug}  (saves on first turn)`));
     }

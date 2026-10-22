@@ -54,3 +54,9 @@ A foreground subagent can be promoted to background mid-flight via **Ctrl+B**.
 Once promoted, it becomes steerable through the model-owned domain
 (`send_message_to_agent`). This bridges the two domains when a user decides
 mid-run that they want model-level steering of a child that started foreground.
+
+## Child-to-parent (proposed)
+
+Both domains above flow from parent or human down to the child. The reverse
+direction, a foreground child yielding a question to its parent model, is
+designed but not implemented: see [`subagent-yield.md`](subagent-yield.md).

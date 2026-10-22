@@ -7,7 +7,11 @@
  * to keep looping, exit, or re-run another command.
  */
 
+import type { OutputBlock } from './output-blocks.js';
+import type { Choose, ProgressEvent } from './interaction.js';
 import type { SessionRef } from '../../agent/session-ref.js';
+import type { SurfaceCapability } from './capabilities.js';
+export type { SurfaceCapability } from './capabilities.js';
 import type { ElicitationHandler } from '../../agent/elicitation-router.js';
 import type { AgentModelInput } from '../../agent/types.js';
 import type { TraceActor } from '../../agent/session/session-identity.js';
@@ -186,6 +190,8 @@ export interface SessionStats {
 
 /** Minimal console writer passed to handlers — thin wrapper around chalk output. */
 export interface Writer {
+  /** Optional structured output; terminal writers retain their existing renderers. */
+  block?(block: OutputBlock): void;
   line(text?: string): void;
   raw(text: string): void;
   success(text: string): void;
@@ -202,6 +208,11 @@ export interface UiSurface {
 
 /** What the handler sees when invoked. */
 export interface SlashContext {
+  /** Explicit surface support. Absent on legacy contexts during migration. */
+  capabilities?: ReadonlySet<SurfaceCapability>;
+  /** Surface adapters own presentation and cancellation; handlers use JSON-safe messages. */
+  choose?: Choose;
+  progress?: (event: ProgressEvent) => void;
   session: SessionRef;
   stats: SessionStats;
   out: Writer;
@@ -336,6 +347,8 @@ export type SlashResult =
 
 /** A registered slash command. */
 export interface SlashCommand {
+  /** Positive surface requirements; omitted/empty means portable. */
+  requires?: readonly SurfaceCapability[];
   /** Canonical name, including leading slash, e.g. "/cost". */
   name: string;
   /** Optional aliases, each with leading slash. */

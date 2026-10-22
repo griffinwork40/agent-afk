@@ -457,9 +457,14 @@ describe('createBashRestrictionHook — quoted heredoc data (#3850)', () => {
     `git commit -F - <<EOF\n${mention}\nEOF`,
     // Consumer executes stdin.
     `sh <<'EOF'\ngit commit -F - <<'INNER'\n${mention}\nINNER\nEOF`,
-    // Single-quoted -c: quote style must not affect fail-closed boundary.
-    `bash -c 'cat ${mention}/Google/Chrome/Default/Login\\ Data' <<'EOF'\nignored body\nEOF`,
   ])('keeps unsafe git-commit heredoc variants blocked: %s', (command) => {
+    expect(hook(ctx(command)).decision).toBe('block');
+  });
+
+  it('blocks bash -c credential-theft (quote style must not affect fail-closed boundary)', () => {
+    // This is a direct credential-read via bash -c, not a git-commit heredoc.
+    // It belongs outside the git-commit suite to make its distinct threat model clear.
+    const command = `bash -c 'cat ${mention}/Google/Chrome/Default/Login\\ Data' <<'EOF'\nignored body\nEOF`;
     expect(hook(ctx(command)).decision).toBe('block');
   });
 });

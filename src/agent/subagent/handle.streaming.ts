@@ -30,6 +30,7 @@ import {
   type SubagentResult,
   type SubagentStatus,
 } from './result.js';
+
 import { buildEmptyBufferError, synthesizeEmptyBufferPartial, synthesizeTimeoutPartial } from './empty-buffer-partial.js';
 import type { SubagentHandleImpl } from './handle.js';
 import { CappedHandoffAccumulator } from './capped-handoff.js';

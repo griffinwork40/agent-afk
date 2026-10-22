@@ -206,6 +206,7 @@ export async function forkAndCheckCancel(
       parent: ctx.parentSession,
       parentId: callId,
       config: childConfig,
+      yieldEnabled: true, // foreground agent-tool dispatch (#4297 F-C2)
       idPrefix: parsed.id_prefix,
       agentType:
         namedAgent !== undefined

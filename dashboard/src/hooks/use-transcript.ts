@@ -13,8 +13,10 @@
  * useSseStream if they need to e.g. visually separate replay from live.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSseStream } from '@/hooks/use-sse-stream';
+import { useChoiceProgress } from '@/hooks/use-choice-progress';
+import type { ChoiceRequest, CommandProgress } from '@/hooks/use-choice-progress';
 import type { StreamStatus } from '@/hooks/use-sse-stream';
 import {
   accumulateTotals,
@@ -49,10 +51,17 @@ export interface UseTranscriptResult {
    * the initial replay burst on session load.
    */
   liveTurns: number;
+  choices: ChoiceRequest[];
+  progress: CommandProgress[];
+  /** Drop the old generation and refetch from the server's clear boundary. */
+  clear: () => void;
 }
 
-export function useTranscript(sessionId: string | null): UseTranscriptResult {
-  const { events, status, error } = useSseStream(sessionId);
+export function useTranscript(sessionId: string | null, onReset?: () => void): UseTranscriptResult {
+  const [revisions, setRevisions] = useState<Record<string, number>>({});
+  const revision = sessionId ? revisions[sessionId] ?? 0 : 0;
+  const { events, status, error, generation } = useSseStream(sessionId, revision, onReset);
+  const { choices, progress } = useChoiceProgress(events);
 
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [totals, setTotals] = useState<SessionTotals>(EMPTY_TOTALS);
@@ -65,21 +74,29 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
   const toolIndexRef = useRef<ToolIndex>(new Map());
   const subagentIndexRef = useRef<SubagentIndex>(new Map());
 
-  // Reset transcript state when the session changes.
+  const processedCountRef = useRef(0);
+  const clear = useCallback(() => {
+    if (!sessionId) return;
+    // Server replaces the web transcript projection before returning clear.
+    // Positional SSE IDs belong to the old projection and must not be reused.
+    setRevisions((prev) => ({ ...prev, [sessionId]: (prev[sessionId] ?? 0) + 1 }));
+  }, [sessionId]);
+
+  // Reset transcript state before feeding events from the replacement stream.
   useEffect(() => {
     resetIdCounter();
+    processedCountRef.current = 0;
     toolIndexRef.current = new Map();
     subagentIndexRef.current = new Map();
     setItems([]);
     setTotals(EMPTY_TOTALS);
     setTurnActive(false);
     setLiveTurns(0);
-  }, [sessionId]);
+  }, [sessionId, revision, generation]);
 
   // Feed new SSE events into the transcript incrementally. We track how many
   // events we have processed via a ref to avoid depending on items/totals as
   // effect deps (which would cause infinite re-renders).
-  const processedCountRef = useRef(0);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- processedCountRef is intentionally a ref; adding it would cause infinite re-renders
   useEffect(() => {
@@ -96,7 +113,10 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
 
     for (const raw of newEvents) {
       // Each SSE frame is { record: LedgerRecordLike, replay: boolean }.
-      const frame = raw as { record?: unknown; replay?: boolean };
+      const frame = raw as { record?: unknown; replay?: boolean; type?: string };
+      // Sideband choice/progress frames are not ledger records.
+      if (frame.type === 'choice_request' || frame.type === 'choice_settled' ||
+          frame.type === 'choice_stream_boundary' || frame.type === 'progress') continue;
       const record = (frame.record ?? raw) as LedgerRecordLike;
       const isReplay = frame.replay === true;
 
@@ -156,12 +176,7 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
     if (liveTurnsDelta > 0) {
       setLiveTurns((prev) => prev + liveTurnsDelta);
     }
-  }, [events]);
+  }, [events, generation]);
 
-  // Reset processed count on session change (after items/totals are cleared).
-  useEffect(() => {
-    processedCountRef.current = 0;
-  }, [sessionId]);
-
-  return { items, totals, status, error, turnActive, liveTurns };
+  return { items, totals, status, error, turnActive, liveTurns, clear, choices, progress };
 }

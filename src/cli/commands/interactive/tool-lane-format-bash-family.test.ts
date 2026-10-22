@@ -44,6 +44,11 @@ describe('verbFamily', () => {
       ['curl', 'network'],
       ['bash', 'danger'],
     ]);
+    // `|&` (stdout+stderr pipe) is also a pipe-to-shell trigger.
+    expect(families('curl x |& bash')).toEqual([
+      ['curl', 'network'],
+      ['bash', 'danger'],
+    ]);
     // `||` is not a pipe: a bare `bash` after it is not pipe-to-shell.
     expect(families('false || bash run.sh')).toEqual([
       ['false', 'default'],
@@ -54,6 +59,9 @@ describe('verbFamily', () => {
   it('bare or truncated dangerous verbs still read as danger', () => {
     expect(families('rm')).toEqual([['rm', 'danger']]);
     expect(families('ls && eval')).toEqual([['ls', 'default'], ['eval', 'danger']]);
+    // Width-truncated forms: trailing ellipsis (…) must still floor to danger.
+    expect(families('rm…')).toEqual([['rm…', 'danger']]);
+    expect(families('dd… if=/dev/zero of=/dev/sda')).toEqual([['dd…', 'danger']]);
   });
 
   it('wrappers of a dangerous command are dangerous too', () => {

@@ -25,6 +25,44 @@ beforeEach(() => {
 });
 
 describe('BufferingWriter', () => {
+  it('returns no blocks when nothing was emitted', () => {
+    const bw = new BufferingWriter();
+    bw.rawFn('');
+    expect(bw.toOutputBlocks()).toEqual([]);
+  });
+
+  it('flushes raw/line text around blocks in order and strips ANSI only in text fallback', () => {
+    const bw = new BufferingWriter();
+    bw.rawFn('\x1b[31mred\x1b[0m');
+    bw.fn(' line');
+    bw.asWriterInterface().block!({ kind: 'link', label: 'Docs', url: 'https://example.com', text: 'Docs\n', ansi: 'Docs\n' });
+    bw.rawFn('tail');
+    bw.fn(' end');
+    const blocks = bw.toOutputBlocks();
+    expect(blocks).toEqual([
+      { kind: 'text', ansi: '\x1b[31mred\x1b[0m line\n', text: 'red line\n' },
+      { kind: 'link', label: 'Docs', url: 'https://example.com', text: 'Docs\n', ansi: 'Docs\n' },
+      { kind: 'text', ansi: 'tail end\n', text: 'tail end\n' },
+    ]);
+    expect(JSON.parse(JSON.stringify(blocks))).toEqual(blocks);
+    expect(bw.toOutputBlocks()).toEqual(blocks);
+    expect(bw.toOutputBlock().text).toBe('red line\nDocs\ntail end\n');
+  });
+
+  it('keeps adjacent blocks separate and snapshots independent of caller mutation', () => {
+    const bw = new BufferingWriter();
+    const block = { kind: 'table' as const, columns: ['A'], rows: [['B']], text: 'A\nB\n', ansi: 'A\nB\n' };
+    bw.block(block);
+    bw.block(block);
+    block.rows[0]!.push('mutation');
+    const first = bw.toOutputBlocks();
+    expect(first).toHaveLength(2);
+    if (first[0]?.kind === 'table') first[0].rows.push(['mutation']);
+    expect(bw.toOutputBlocks()[0]).toMatchObject({ rows: [['B']] });
+    bw.fn('later');
+    expect(bw.toOutputBlocks()).toHaveLength(3);
+  });
+
   it('captures fn() calls with newline appended', () => {
     const bw = new BufferingWriter();
     bw.fn('hello');
@@ -58,7 +96,8 @@ describe('BufferingWriter', () => {
     const bw = new BufferingWriter();
     const w = bw.asWriterInterface();
     expect(mockCreateConsoleWriter).toHaveBeenCalledWith(bw);
-    expect(w).toBe(FAKE_WRITER);
+    expect(w).toMatchObject(FAKE_WRITER);
+    expect(w.block).toEqual(expect.any(Function));
   });
 
   it('toOutputBlock returns ansi = joined chunks', () => {

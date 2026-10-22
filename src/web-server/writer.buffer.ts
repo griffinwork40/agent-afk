@@ -1,57 +1,58 @@
-/**
- * BufferingWriter — a WriterSink that captures all output for HTTP responses.
- *
- * Slash-command handlers write through a `Writer` interface. On the web
- * surface we cannot print to a terminal; instead we buffer every write and
- * return the accumulated output as a `CommandOutputBlock` in the JSON
- * response.
- *
- * Usage:
- *   const bw = new BufferingWriter();
- *   const ctx = createWebSlashContext(ref, stats, bw, cwd);
- *   await cmd.handler(ctx, args);
- *   const block = bw.toOutputBlock(); // { ansi, text }
- */
-
+/** Buffers text and structured command output in emission order for HTTP. */
 import { stripVTControlCharacters } from 'node:util';
 import { createConsoleWriter } from '../cli/slash/writer.js';
 import type { WriterSink } from '../cli/slash/writer.js';
 import type { Writer } from '../cli/slash/types.js';
+import type { OutputBlock } from '../cli/slash/output-blocks.js';
 import type { CommandOutputBlock } from './shared/command-wire.js';
 
 export class BufferingWriter implements WriterSink {
-  private readonly chunks: string[] = [];
+  private readonly entries: Array<string | OutputBlock> = [];
 
-  /** WriterSink.fn — called for every line() / success() / info() / warn() / error() write. */
+  /** WriterSink.fn appends a newline; rawFn preserves the original bytes. */
   fn(line: string): void {
-    this.chunks.push(line + '\n');
+    this.entries.push(line + '\n');
   }
 
-  /** WriterSink.rawFn — called for every raw() write (no trailing newline). */
   rawFn(text: string): void {
-    this.chunks.push(text);
+    this.entries.push(text);
   }
 
-  /** All captured chunks in write order. */
+  block(block: OutputBlock): void {
+    this.entries.push(structuredClone(block));
+  }
+
+  /** Legacy flattened view, including structured blocks' fallback text. */
   getChunks(): string[] {
-    return [...this.chunks];
+    return this.entries.map((entry) => typeof entry === 'string' ? entry : entry.ansi);
   }
 
-  /** Wrap this sink in the full Writer interface via createConsoleWriter. */
   asWriterInterface(): Writer {
-    return createConsoleWriter(this);
+    return { ...createConsoleWriter(this), block: (block) => this.block(block) };
   }
 
-  /**
-   * Produce a CommandOutputBlock from the accumulated output.
-   * `ansi` is the raw ANSI-escaped output; `text` has all VT control
-   * characters stripped (safe for plain-text display).
-   */
-  toOutputBlock(): CommandOutputBlock {
-    const ansi = this.chunks.join('');
-    return {
-      ansi,
-      text: stripVTControlCharacters(ansi),
+  /** Read-only snapshot: flush adjacent text around each structured block. */
+  toOutputBlocks(): CommandOutputBlock[] {
+    const blocks: CommandOutputBlock[] = [];
+    let ansi = '';
+    const flush = (): void => {
+      if (ansi !== '') blocks.push({ kind: 'text', ansi, text: stripVTControlCharacters(ansi) });
+      ansi = '';
     };
+    for (const entry of this.entries) {
+      if (typeof entry === 'string') ansi += entry;
+      else {
+        flush();
+        blocks.push(structuredClone(entry));
+      }
+    }
+    flush();
+    return blocks;
+  }
+
+  /** Compatibility for callers expecting one legacy text block (even if empty). */
+  toOutputBlock(): CommandOutputBlock {
+    const ansi = this.getChunks().join('');
+    return { ansi, text: stripVTControlCharacters(ansi) };
   }
 }

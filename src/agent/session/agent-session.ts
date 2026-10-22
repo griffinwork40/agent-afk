@@ -468,13 +468,11 @@ export class AgentSession implements IAgentSession {
   compact(): Promise<ProviderCompactResult> { return compact.compactSession(this.makeCompactDeps()); }
   listRewindTargets(): RewindTarget[] { return compact.listRewindTargets(this.makeCompactDeps()); }
   rewindConversation(turnIndex: number): Promise<ProviderRewindConversationResult> { return compact.rewindConversation(turnIndex, this.makeCompactDeps()); }
+  /** Idle surface projection replacement: flush the old inode and re-arm the lazy writer. */
+  sealEventLedger(): Promise<void> { return this.ledger.seal('reset'); }
 
   private makeCompactDeps() {
-    return {
-      getState: () => this.currentState,
-      setState: (s: SessionState) => { this.currentState = s; },
-      getProviderQuery: () => this.providerQuery,
-    };
+    return compact.makeCompactDeps(() => this.currentState, (s) => { this.currentState = s; }, () => this.providerQuery);
   }
 
   getLastResponseMetadata(): ResponseMetadata | null { return this.lastResponseMetadata; }

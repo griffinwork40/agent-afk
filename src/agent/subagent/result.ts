@@ -13,6 +13,7 @@ import type { BillingUsage } from '../provider.js';
 import { cappedHandoffFields, type CappedHandoff } from './capped-handoff.js';
 import { extractStructuredOutput } from '../output-extractor.js';
 import { parseSignal, type Signal } from '../signal-block.js';
+import { parseTerminalState } from '../outcomes/terminal-state.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 import { CONTEXT_PRESSURE_WIND_DOWN } from '../providers/shared/context-pressure.js';
@@ -288,11 +289,47 @@ export interface SubagentResult<T = unknown> extends Partial<CappedHandoff> {
    * for `outputSchema` nodes and failed/cancelled nodes (#3660).
    */
   setupNotice?: string;
+  /**
+   * Set when the child ended its turn with an **Asking** terminal state,
+   * yielding a question to the parent instead of completing. The parent should
+   * answer and either continue the chain (via `continuation_chain_id`) or
+   * re-dispatch a fresh agent with the child's summary and the answer.
+   */
+  needsInput?: {
+    question: string;
+    summary?: string;
+    assumption?: string;
+    onceAnswered?: string;
+  };
+}
+
+/**
+ * Parse the Asking terminal-state block from message content, if present.
+ * Returns a `needsInput` value or `undefined`. Pure helper; exported for tests.
+ */
+export function detectNeedsInput(
+  content: string,
+): SubagentResult['needsInput'] | undefined {
+  const ts = parseTerminalState(content);
+  if (ts?.kind !== 'asking') return undefined;
+  // SEC-2: require a parsed Question bullet. rawBody is child-controlled free
+  // text (~8 KB) that would be injected into the parent's tool_result as an
+  // authoritative question. Treat a missing Question bullet as a malformed
+  // yield — return undefined so the caller sees no yield (#4297).
+  if (ts.question === undefined) return undefined;
+  return {
+    question: ts.question,
+    ...(ts.assumption !== undefined && { assumption: ts.assumption }),
+    ...(ts.followup !== undefined && { onceAnswered: ts.followup }),
+  };
 }
 
 /**
  * Build a SubagentResult from a successful message.
  * If an outputSchema is provided, attempts extraction and parsing.
+ * When the message ends with an Asking terminal-state block the result is
+ * tagged with `needsInput` and schema validation is bypassed (a yielding child
+ * cannot also satisfy a schema).
  */
 export function buildResultFromMessage<T>(
   id: string,
@@ -305,7 +342,21 @@ export function buildResultFromMessage<T>(
   const sig = parseSignal(message.content);
   const signal = sig.ok ? sig.signal : undefined;
 
-  if (!outputSchema) {
+  // Detect Asking terminal state before schema validation: a yielding child
+  // cannot satisfy an outputSchema, so skip validation when needsInput is set.
+  // Invariant: extract text blocks rather than JSON.stringify — parseTerminalState
+  // splits on '\n', and JSON.stringify produces single-line JSON that collapses
+  // every block into one line, silently breaking detection for extended-thinking
+  // models whose content is ContentBlock[] (#4297 SEC-1/F-C3).
+  const contentStr = typeof message.content === 'string'
+    ? message.content
+    : (message.content as Array<{ type: string; text?: string }>)
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text ?? '')
+        .join('\n');
+  const needsInput = detectNeedsInput(contentStr);
+
+  if (!outputSchema || needsInput !== undefined) {
     return {
       id,
       status,
@@ -314,6 +365,7 @@ export function buildResultFromMessage<T>(
       trace,
       ...(signal !== undefined && { signal }),
       ...(stopReason !== undefined && { stopReason }),
+      ...(needsInput !== undefined && { needsInput }),
     };
   }
 

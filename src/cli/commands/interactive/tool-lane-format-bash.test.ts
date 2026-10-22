@@ -26,6 +26,7 @@ describe('findCommandWordSpans', () => {
     ['pnpm lint && pnpm test || echo failed', ['pnpm', 'pnpm', 'echo']],
     ['cd repo; ls -la', ['cd', 'ls']],
     ['sleep 1 & curl x', ['sleep', 'curl']],
+    ['curl x |& bash', ['curl', 'bash']],
     ['(cd a && make) | tee log', ['cd', 'make', 'tee']],
     ['echo $(date +%s)', ['echo', 'date']],
     ['ls\nrm -rf build', ['ls', 'rm']],
@@ -36,6 +37,10 @@ describe('findCommandWordSpans', () => {
   it.each([
     ['sudo rm -rf /', ['sudo', 'rm']],
     ['sudo -u root rm x', ['sudo', 'rm']],
+    ['sudo --user root rm x', ['sudo', 'rm']],
+    ['env --unset FOO curl x', ['env', 'curl']],
+    ['sudo --user=root rm x', ['sudo', 'rm']],
+    ['env --unset=FOO curl x', ['env', 'curl']],
     ['env -i FOO=1 BAR=2 node app.js', ['env', 'node']],
     ['FOO=1 node app.js', ['node']],
     ['timeout 30 curl x', ['timeout', 'curl']],
@@ -155,7 +160,8 @@ describe('formatToolLine bash integration', () => {
 
   it('emphasises verbs in bash rows', () => {
     const line = formatToolLine('bash curl -sS x | jq .');
-    expect(line).toContain(palette.toolVerb('curl'));
+    // curl is in the network family — assert the correct role, not toolVerb.
+    expect(line).toContain(palette.toolVerbNetwork('curl'));
     expect(line).toContain(palette.toolVerb('jq'));
     expect(stripAnsi(line)).toContain('bash curl -sS x | jq .');
   });

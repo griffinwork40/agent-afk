@@ -19,14 +19,14 @@ import type { ServerResponse } from 'node:http';
 import { sendJson, requireValidSessionId } from './routes.js';
 import type { RouteContext } from './routes.js';
 import type { AgentSession } from '../agent/session/agent-session.js';
-import type { SlashResult } from '../cli/slash/types.js';
-import type { CommandControl } from './shared/command-wire.js';
 import { ensureSlashRegistry } from './slash-registry.js';
 import { parse, lookup, suggest } from '../cli/slash/registry.js';
 import { isGated, gateReason } from './command-gate.js';
 import { BufferingWriter } from './writer.buffer.js';
 import { getStats, buildSessionRef, buildOptionalSessionRef } from './session-owner.slash.js';
 import { createWebSlashContext } from './slash-context.web.js';
+import { normalizeSlashResult } from './slash-result.web.js';
+export { normalizeSlashResult } from './slash-result.web.js';
 
 /**
  * Poll owner.getSession up to 2s (40 × 50ms) before giving up.
@@ -46,20 +46,6 @@ async function waitForSessionReady(
   return false;
 }
 
-/** Normalise any SlashResult variant into the wire CommandControl shape. */
-export function normalizeSlashResult(result: SlashResult): CommandControl {
-  if (result === 'continue') return { kind: 'continue' };
-  if (result === 'exit') return { kind: 'exit' };
-  if (result === 'forward') return { kind: 'forward' };
-  if (typeof result === 'object' && result !== null) {
-    // 'rerun' is the discriminant for { rerun: string } — no cast needed after narrowing.
-    if ('rerun' in result) return { kind: 'rerun', input: result.rerun };
-    // 'kind' discriminates { kind: 'submit' | 'prefill'; message: string }.
-    if ('kind' in result && result.kind === 'submit') return { kind: 'submit', message: result.message };
-    if ('kind' in result && result.kind === 'prefill') return { kind: 'prefill', message: result.message };
-  }
-  return { kind: 'continue' };
-}
 
 export async function handleCommand(
   ctx: RouteContext,
@@ -127,6 +113,11 @@ export async function handleCommand(
 
   // 8. Reserve turn synchronously (no await between readiness check and this call).
   ctx.reserveTurn(sessionId);
+  // IncomingMessage.close also fires after the POST body is consumed; only the
+  // response's premature close means the waiting browser command went away.
+  const disconnected = new AbortController();
+  const onDisconnect = (): void => { if (!res.writableEnded) disconnected.abort(); };
+  res.on?.('close', onDisconnect);
 
   try {
     // Look up command in registry.
@@ -185,20 +176,33 @@ export async function handleCommand(
       : buildOptionalSessionRef(undefined);
     const writer = new BufferingWriter();
     const slashCtx = createWebSlashContext(sessionRef, stats, writer, cwd);
+    if (ctx.choiceBroker) {
+      const broker = ctx.choiceBroker;
+      slashCtx.choose = (request) => broker.choose(sessionId, request, disconnected.signal);
+      slashCtx.progress = (event) => { broker.progress(sessionId, event); };
+    }
 
+    // The owner wraps canonical handlers with persistent accounting and a
+    // provider-backed fast controller. This route alone owns the reservation.
     // Execute handler — bounded to 15 s to prevent runaway commands from
     // holding the turn reservation open indefinitely.
     const HANDLER_TIMEOUT_MS = 15_000;
-    const result = await Promise.race([
-      cmd.handler(slashCtx, parsed.args ?? ''),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('command_timeout')), HANDLER_TIMEOUT_MS),
-      ),
-    ]);
-    const block = writer.toOutputBlock();
-    const control = normalizeSlashResult(result);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('command_timeout')), HANDLER_TIMEOUT_MS);
+    });
+    let execution;
+    try {
+      execution = ctx.executeSessionControl
+        ? await Promise.race([ctx.executeSessionControl(sessionId, cmd, slashCtx, parsed.args ?? ''), timeout])
+        : { result: await Promise.race([cmd.handler(slashCtx, parsed.args ?? ''), timeout]) };
+    } finally {
+      clearTimeout(timer);
+    }
+    const blocks = writer.toOutputBlocks();
+    const control = execution.control ?? normalizeSlashResult(execution.result);
 
-    sendJson(res, 200, { blocks: [block], control });
+    sendJson(res, 200, { blocks, control, ...(execution.session ? { session: execution.session } : {}) });
   } catch (err) {
     if (err instanceof Error && err.message === 'command_timeout') {
       console.error('[web] command handler timed out after 15000ms');
@@ -208,6 +212,7 @@ export async function handleCommand(
       sendJson(res, 500, { error: 'command_execution_failed', message: 'An internal error occurred while executing the command.' });
     }
   } finally {
+    res.off?.('close', onDisconnect);
     // Invariant: releaseTurn fires for ALL return paths inside the try block
     // (including gated 409, session_not_ready 503, and thrown exceptions).
     // The 501/400/409 pre-try early returns do not call reserveTurn, so they

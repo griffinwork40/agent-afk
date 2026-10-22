@@ -11,24 +11,22 @@
  * referenced in each other's output.
  */
 
+import { randomUUID } from 'node:crypto';
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { formatCost, formatTokens } from '../../format-utils.js';
-import { cacheHitRate } from '../../commands/trace-usage-format.js';
-import { contextLimitFor, MODEL_CONTEXT_LIMITS } from '../../model-limits.js';
+import { MODEL_CONTEXT_LIMITS } from '../../model-limits.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { isModelAvailable } from '../../../agent/auth/model-availability.js';
-import { fetchSubscriptionUsage, type UsageWindow } from '../../../agent/subscription-usage.js';
-import {
-  MODEL_ALIASES_HINT,
-  unconfiguredSlotError,
-} from '../../../agent/session/model-slots.js';
-import { isValidModelArg } from '../../../agent/session/model-validate.js';
+import { MODEL_ALIASES_HINT } from '../../../agent/session/model-slots.js';
+import { setSessionModel } from '../../../agent/session-control/index.js';
 import { runPicker } from '../../render/picker.js';
 import { historyCmd } from './info.history.js';
 import { mcpCmd } from './info.mcp.js';
+import { usageCmd } from './info.usage.js';
+import { tokensCmd } from './info.tokens.js';
+import { infoCmd } from './info.session.js';
 import type { SlashCommand, SlashContext } from '../types.js';
-import type { AgentModelInput } from '../../../agent/types.js';
 import { errorMessage } from '../../../utils/errors.js';
 
 const costCmd: SlashCommand = {
@@ -60,214 +58,15 @@ const costCmd: SlashCommand = {
   },
 };
 
-/** Render a single usage window as a percentage plus reset time when present. */
-function formatUsageWindowLine(label: string, w: UsageWindow): string {
-  const pct = `${Math.round(w.utilization * 100)}%`;
-  const resets = w.resetsAt ? palette.dim(`  (resets ${w.resetsAt.toLocaleString()})`) : '';
-  return `  ${label.padEnd(16)}${palette.meta(pct)}${resets}`;
-}
-
-const usageCmd: SlashCommand = {
-  name: '/usage',
-  summary: 'Show Claude subscription usage (5h / 7d windows)',
-  hint: 'When you want to know how close you are to hitting your Claude subscription\'s rolling usage limits — distinct from /cost, which is session-local spend.',
-  async handler(ctx) {
-    const { out } = ctx;
-    const result = await fetchSubscriptionUsage();
-    out.line();
-    if (result.kind === 'unavailable') {
-      out.line(palette.bold('Subscription usage'));
-      out.line(divider());
-      if (result.reason === 'no-token') {
-        out.warn('No Claude subscription token found — run `claude login`, then try /usage again.');
-      } else {
-        out.warn(`Usage unavailable (${result.reason}): ${result.detail}`);
-      }
-      out.line();
-      return 'continue';
-    }
-
-    const windows: Array<[string, UsageWindow | undefined]> = [
-      ['5-hour', result.fiveHour],
-      ['7-day', result.sevenDay],
-      ['7-day (Sonnet)', result.sevenDaySonnet],
-      ['7-day (Opus)', result.sevenDayOpus],
-    ];
-    const available = windows.filter((entry): entry is [string, UsageWindow] => entry[1] !== undefined);
-
-    out.line(palette.bold('Subscription usage'));
-    out.line(divider());
-    if (available.length === 0) {
-      out.line(palette.dim('  No usage windows reported.'));
-    } else {
-      for (const [label, w] of available) {
-        out.line(formatUsageWindowLine(label, w));
-      }
-    }
-    out.line();
-    return 'continue';
-  },
-};
-
-/** Render token usage using SDK's getContextUsage breakdown when available. */
-function renderSdkBreakdown(
-  out: import('../types.js').Writer,
-  usage: Awaited<ReturnType<import('../../../agent/session.js').AgentSession['getContextUsage']>>,
-): void {
-  const api = usage.apiUsage;
-  const input = api?.input_tokens ?? 0;
-  const output = api?.output_tokens ?? 0;
-  const cacheRead = api?.cache_read_input_tokens ?? 0;
-  const cacheCreate = api?.cache_creation_input_tokens ?? 0;
-  // Contract: never sum the four fields above (mixed basis, double-counts
-  // prior rounds). `totalTokens` and `context_window_tokens` both hold the
-  // SAME last-round footprint (buildContextUsageFields, auto-compact.ts), so
-  // neither is a cumulative total. Precedence matches context-sampler.ts's
-  // resolveUsedTokens (status line) — arbitrary today per that docstring.
-  const lastTurnTotal = usage.totalTokens ?? api?.context_window_tokens ?? 0;
-  const hitRate = cacheHitRate(cacheRead, cacheCreate);
-
-  out.line();
-  out.line(palette.bold('Token usage') + palette.dim('  (SDK breakdown)'));
-  out.line(divider());
-
-  // Cumulative context vs model max — the authoritative numbers.
-  out.line(`  total         ${palette.success(formatTokens(usage.totalTokens ?? 0))}  of  ${palette.meta(formatTokens(usage.maxTokens ?? 0))}  (${palette.meta(`${usage.percentage !== undefined ? Math.round(usage.percentage * 100) / 100 : '?'}%`)})`);
-  if (usage.autoCompactThreshold && usage.isAutoCompactEnabled) {
-    out.line(`  compact at    ${palette.meta(formatTokens(usage.autoCompactThreshold))}`);
-  }
-
-  // Last-turn API usage (what Anthropic billed for the most recent call).
-  out.line();
-  out.line(palette.dim('  Last turn (API):'));
-  out.line(`    input       ${palette.meta(formatTokens(input))}  ${palette.dim('(turn total)')}`);
-  out.line(`    output      ${palette.meta(formatTokens(output))}  ${palette.dim('(turn total)')}`);
-  out.line(`    cache read  ${palette.meta(formatTokens(cacheRead))}  ${palette.dim('(last call)')}`);
-  out.line(`    cache creat ${palette.meta(formatTokens(cacheCreate))}  ${palette.dim('(last call)')}`);
-  if (hitRate !== undefined) {
-    out.line(`    cache hit   ${palette.meta(`${hitRate}%`)}  ${palette.dim('(of cached tokens, last call)')}`);
-  }
-  out.line(`    window      ${palette.meta(formatTokens(lastTurnTotal))}  ${palette.dim('(last call occupancy)')}`);
-
-  // Top categories by tokens.
-  const cats = usage.categories ?? [];
-  if (cats.length > 0) {
-    const top = [...cats].sort((a, b) => b.tokens - a.tokens).slice(0, 5);
-    out.line();
-    out.line(palette.dim('  Top categories:'));
-    for (const c of top) {
-      out.line(`    ${palette.warning(c.name.padEnd(18))} ${palette.meta(formatTokens(c.tokens))}`);
-    }
-  }
-
-  // Tools detail (system + MCP).
-  const systemTools = usage.systemTools ?? [];
-  const mcpTools = usage.mcpTools ?? [];
-  if (systemTools.length > 0 || mcpTools.length > 0) {
-    out.line();
-    const sysTotal = systemTools.reduce((s, t) => s + t.tokens, 0);
-    const mcpTotal = mcpTools.reduce((s, t) => s + t.tokens, 0);
-    if (systemTools.length > 0) {
-      out.line(palette.dim(`  system tools  ${systemTools.length} tools, ${formatTokens(sysTotal)} tokens`));
-    }
-    if (mcpTools.length > 0) {
-      out.line(palette.dim(`  MCP tools     ${mcpTools.length} tools, ${formatTokens(mcpTotal)} tokens`));
-    }
-  }
-
-  // Agents + skills + slash commands summary lines.
-  const agents = usage.agents ?? [];
-  if (agents.length > 0) {
-    const agentsTotal = agents.reduce((s, a) => s + a.tokens, 0);
-    out.line(palette.dim(`  agents        ${agents.length} loaded, ${formatTokens(agentsTotal)} tokens`));
-  }
-  if (usage.skills) {
-    const skills = usage.skills;
-    out.line(palette.dim(`  skills        ${skills.includedSkills}/${skills.totalSkills} included, ${formatTokens(skills.tokens)} tokens`));
-  }
-  if (usage.slashCommands) {
-    const sc = usage.slashCommands;
-    out.line(palette.dim(`  slash cmds    ${sc.includedCommands}/${sc.totalCommands} included, ${formatTokens(sc.tokens)} tokens`));
-  }
-
-  out.line();
-}
-
-/** Render token usage from local SessionStats when SDK data unavailable. */
-function renderLocalFallback(
-  out: import('../types.js').Writer,
-  stats: import('../types.js').SessionStats,
-): void {
-  const sumInput = stats.turnTokens.reduce((s, t) => s + t.input, 0);
-  const sumOutput = stats.turnTokens.reduce((s, t) => s + t.output, 0);
-  const sumCache = stats.turnTokens.reduce((s, t) => s + t.cache, 0);
-  const total = sumInput + sumOutput;
-  const limit = contextLimitFor(stats.model);
-  // Context fill = the LAST turn's footprint, not a sum across turns. Each
-  // turn's `cache` is the whole prior conversation read from cache, so summing
-  // it across turns multiplies the conversation by the turn count and can blow
-  // past 100%. The latest turn's footprint already reflects the full window.
-  const lastTurn = stats.turnTokens[stats.turnTokens.length - 1];
-  const contextUsed = lastTurn
-    ? lastTurn.footprint ?? lastTurn.input + lastTurn.output + lastTurn.cache
-    : 0;
-  const pct = limit > 0 ? Math.round((contextUsed / limit) * 100) : 0;
-
-  out.line();
-  out.line(palette.bold('Token usage') + palette.dim('  (local stats — SDK breakdown unavailable)'));
-  out.line(divider());
-  out.line(`  input       ${palette.meta(formatTokens(sumInput))}`);
-  out.line(`  output      ${palette.meta(formatTokens(sumOutput))}`);
-  out.line(`  cache read  ${palette.meta(formatTokens(sumCache))}`);
-  out.line(`  total       ${palette.success(formatTokens(total))}`);
-  out.line(`  context     ${palette.meta(`${pct}% of ${formatTokens(limit)}  (${stats.model})`)}`);
-  out.line();
-}
-
-const tokensCmd: SlashCommand = {
-  name: '/tokens',
-  aliases: ['/ctx'],
-  summary: 'Show token usage (SDK breakdown with local-stats fallback)',
-  hint: 'When you want to know how full the context window is — input/output/cache breakdown plus % of the model\'s limit used.',
-  async handler(ctx) {
-    try {
-      const usage = await ctx.session.current.getContextUsage();
-      renderSdkBreakdown(ctx.out, usage);
-    } catch {
-      // SDK subprocess may not be up yet (init timing) or the call may
-      // fail under unusual conditions. Fall back to the locally-tracked
-      // stats so the user still sees something useful.
-      renderLocalFallback(ctx.out, ctx.stats);
-    }
-    return 'continue';
-  },
-};
-
 /**
  * Validate + apply a model target (mid-session, live). Shared by the text-arg
  * path (`/model <name>`) and the interactive picker (bare `/model` on a TTY).
  * Writes all user-facing output via ctx.out; never throws.
  */
 async function switchModel(ctx: SlashContext, target: string): Promise<void> {
-  // Accept slot tier names / configured custom names, the built-in identity
-  // aliases (claude-*, grok-*, gpt-*, org/model HF ids, …). Bare unknown
-  // strings (e.g. typos) are rejected — they'd silently fall through to a
-  // provider and produce an unhelpful API error at turn time.
-  if (!isValidModelArg(target)) {
-    ctx.out.warn(`Unknown model: ${target}. Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or a full model id)`);
-    return;
-  }
-  // Reject an unconfigured capability tier (e.g. an empty `local` slot) at the
-  // point of selection — otherwise the empty id reaches the provider as an
-  // opaque empty-model error or a silent cloud fallback.
-  const unconfigured = unconfiguredSlotError(target);
-  if (unconfigured) {
-    ctx.out.warn(unconfigured);
-    return;
-  }
   try {
-    await ctx.session.current.setModel(target as AgentModelInput);
-    ctx.stats.model = target as AgentModelInput;
+    const result = await setSessionModel(ctx.session.current, ctx.stats, target);
+    if (!result.ok) { ctx.out.warn(result.message); return; }
     ctx.ui.repaintStatusLine();
     ctx.out.success(`Model switched to ${palette.brand(target)}`);
   } catch (err) {
@@ -281,9 +80,25 @@ const modelCmd: SlashCommand = {
   summary: 'Switch the active model mid-session',
   hint: 'Switch the capability tier (local/small/medium/large — or your configured names) or pass a full model id. Bare `/model` opens an interactive picker on a TTY. Upgrade to large for a hard problem, downshift to small for cheap iteration — context carries over. Also accepts HuggingFace-style ids (e.g. mlx-community/Qwen3-30B-A3B-4bit).',
   async handler(ctx, args) {
-    const target = args.trim().toLowerCase();
+    const target = args.trim();
     if (target) {
       await switchModel(ctx, target);
+      return 'continue';
+    }
+
+    if (ctx.choose) {
+      const options = MODEL_ALIASES_HINT.map((alias) => ({
+        value: alias,
+        label: isModelAvailable(alias) ? alias : `${alias} (needs sign-in)`,
+      }));
+      const choice = await ctx.choose({
+        corrId: randomUUID(), title: 'Switch model', options,
+        default: String(ctx.stats.model), cancellable: true,
+      });
+      // Surface adapters should validate too; never trust an unrecognized reply.
+      if (choice !== null && options.some((option) => option.value === choice)) {
+        await switchModel(ctx, choice);
+      }
       return 'continue';
     }
 
@@ -390,5 +205,5 @@ const debugCmd: SlashCommand = {
 };
 
 export const infoCommands: SlashCommand[] = [
-  costCmd, tokensCmd, historyCmd, modelCmd, toolsCmd, mcpCmd, limitsCmd, debugCmd, usageCmd,
+  costCmd, tokensCmd, historyCmd, modelCmd, toolsCmd, mcpCmd, limitsCmd, debugCmd, usageCmd, infoCmd,
 ];

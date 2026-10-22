@@ -18,6 +18,7 @@
  * @module cli/slash/commands/core.rewind
  */
 
+import { randomUUID } from 'node:crypto';
 import { renderSelector } from '../../input/selectors.js';
 import type { SlashCommand, SlashContext } from '../types.js';
 import type { RewindTarget } from '../../../agent/provider.js';
@@ -29,11 +30,21 @@ const MODES: readonly RewindMode[] = ['conversation', 'files', 'both'];
 const MODE_LABELS = ['Conversation only (edit and resend the prompt)', 'Files only (keep the conversation)', 'Conversation and files'];
 
 /**
- * renderSelector drives raw stdin directly, so release the persistent
+ * Ask the operator to pick one of `choices`. Surfaces with a correlated choice
+ * channel (`ctx.choose`: the web picker, Telegram buttons, the REPL adapter)
+ * use it; a cancel maps to ':cancel'. Otherwise fall back to the raw terminal
+ * selector, which drives stdin directly, so release the persistent
  * compositor's keypress listener first and re-arm it after (the selector
  * contract, see input/selectors.ts). getCompositor is null on non-TTY.
  */
-async function pick(ctx: SlashContext, choices: string[]): Promise<number | ':cancel' | null> {
+async function pick(ctx: SlashContext, choices: string[], title = 'Rewind'): Promise<number | ':cancel' | null> {
+  if (ctx.choose) {
+    const options = choices.map((label, index) => ({ value: String(index), label }));
+    const selected = await ctx.choose({ corrId: randomUUID(), title, options, cancellable: true });
+    if (selected === null) return ':cancel';
+    const index = options.findIndex((option) => option.value === selected);
+    return index < 0 ? ':cancel' : index;
+  }
   const compositor = ctx.getCompositor?.() ?? null;
   compositor?.suspendInput();
   try {
@@ -46,7 +57,7 @@ async function pick(ctx: SlashContext, choices: string[]): Promise<number | ':ca
 async function chooseMode(ctx: SlashContext, target: RewindTarget): Promise<RewindMode | undefined> {
   // No checkpoint for this prompt: conversation is the only meaningful mode.
   if (target.checkpointTurnId === undefined) return 'conversation';
-  const choice = await pick(ctx, [...MODE_LABELS]);
+  const choice = await pick(ctx, [...MODE_LABELS], 'What should be rewound?');
   return typeof choice === 'number' ? MODES[choice] : undefined;
 }
 
@@ -76,7 +87,7 @@ async function restoreFiles(ctx: SlashContext, session: Session, checkpointTurnI
   const choices = conflicts.size > 0
     ? ['Restore all, overwriting changes made outside the agent', 'Restore, but keep files changed outside the agent', 'Cancel']
     : ['Restore these files', 'Cancel'];
-  const choice = await pick(ctx, choices);
+  const choice = await pick(ctx, choices, 'Restore files?');
   if (choice !== 0 && !(conflicts.size > 0 && choice === 1)) {
     ctx.out.info('Rewind cancelled; nothing changed.');
     return false;
@@ -123,6 +134,7 @@ async function rewindConversation(ctx: SlashContext, session: Session, target: R
 
 export const rewindCmd: SlashCommand = {
   name: '/rewind',
+  requires: ['sessionControl', 'choose'],
   summary: 'Rewind the conversation, files, or both to a previous message',
   hint: 'When you want to go back to an earlier prompt — pick a message, then choose conversation (its text loads into the input to edit and resend), files (restore files to how they were before it), or both. A file restore is always previewed first. `/rewind conversation|files|both` skips the mode menu. (Also: press Esc twice at an empty prompt for a conversation-only rewind.)',
   async handler(ctx, args) {
@@ -137,7 +149,7 @@ export const rewindCmd: SlashCommand = {
       ctx.out.info('Nothing to rewind to — no earlier messages in this conversation.');
       return 'continue';
     }
-    const choice = await pick(ctx, targets.map((t) => t.preview));
+    const choice = await pick(ctx, targets.map((t) => t.preview), 'Rewind to a message');
     if (choice === null) {
       ctx.out.info('Rewind requires an interactive terminal.');
       return 'continue';
