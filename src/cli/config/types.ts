@@ -366,6 +366,12 @@ export interface ConfigFileSchema {
     small?: string | ModelSlotConfigEntry;
     medium?: string | ModelSlotConfigEntry;
     large?: string | ModelSlotConfigEntry;
+    /** Default model for dispatched subagents. When configured, overrides the
+     * `medium` tier fallback for `agent`/`skill`/`compose` forks. Accepts a bare
+     * id, a slot alias, or a `{ id, provider, name }` object. Use with
+     * `AFK_MODEL_SUBAGENT_BASE_URL` / `_API_KEY` env vars to route subagent
+     * inference to a different provider (e.g. Together, Fireworks, Groq). */
+    subagent?: string | ModelSlotConfigEntry;
   };
   maxTokens?: number;
   temperature?: number;

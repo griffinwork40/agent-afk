@@ -71,10 +71,10 @@ afterEach(() => {
 });
 
 describe('SLOT_NAMES', () => {
-  it('has four entries with local first', () => {
-    expect(SLOT_NAMES).toHaveLength(4);
+  it('has five entries with local first and subagent last', () => {
+    expect(SLOT_NAMES).toHaveLength(5);
     expect(SLOT_NAMES[0]).toBe('local');
-    expect(SLOT_NAMES).toEqual(['local', 'small', 'medium', 'large']);
+    expect(SLOT_NAMES).toEqual(['local', 'small', 'medium', 'large', 'subagent']);
   });
 });
 

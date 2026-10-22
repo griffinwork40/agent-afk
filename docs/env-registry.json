@@ -806,6 +806,30 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_SUBAGENT",
+      "description": "Bind the \"subagent\" routing slot to a model id/alias. When set, all dispatched subagents (agent/skill/compose forks without an explicit model) use this model instead of the medium tier. Use with AFK_MODEL_SUBAGENT_BASE_URL to route subagent inference to a different provider (Together, Fireworks, Groq, or self-hosted vLLM/SGLang). Overrides afk.config.json models.subagent.",
+      "type": "string",
+      "required": false,
+      "example": "Qwen/Qwen3-32B",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_SUBAGENT_API_KEY",
+      "description": "Per-slot API key for the \"subagent\" routing slot. Overrides global credentials for subagent forks only.",
+      "type": "string",
+      "required": false,
+      "category": "model",
+      "secret": true
+    },
+    {
+      "name": "AFK_MODEL_SUBAGENT_BASE_URL",
+      "description": "Per-slot endpoint base URL for the \"subagent\" routing slot. Point at Together (https://api.together.xyz/v1), Fireworks, Groq, or a self-hosted vLLM/SGLang endpoint to route subagent inference off Anthropic.",
+      "type": "string",
+      "required": false,
+      "example": "https://api.together.xyz/v1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_TTFB_TIMEOUT_MS",
       "description": "Per-ROUND time-to-first-token budget (ms) for the anthropic-direct streaming loop. Bounds how long a round may stall BEFORE its first streamed CONTENT token (a text/thinking delta or tool_use); the connection-level message_start and keep-alive pings do NOT count. Once a content token streams, the timer is cleared and the rest of the response is governed instead by the progress-aware AFK_MODEL_STALL_TIMEOUT_MS window, so a normal slow call (below the bound) and any actively-streaming extended-thinking response are never aborted. The budget is divided into 3 shorter first-byte ATTEMPTS (each ~2/3 of this value, so the worst-case wall time per round is unchanged from the previous 2-attempt regime while a transient stall gets 3 chances instead of 2). NOTE: a request whose FIRST token takes longer than the per-attempt bound — e.g. a very large opus_1m prefill — is aborted and re-driven, then surfaces as an error once the budget is spent (raise this value or set 0 for such workloads); this trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. Default 180000 (180s ≈ 2× the measured p99 ttfb), i.e. 3 × 120s. Set to 0 to disable.",
       "type": "number",
