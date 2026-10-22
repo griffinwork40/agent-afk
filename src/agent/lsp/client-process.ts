@@ -109,11 +109,32 @@ export function killServerTree(proc: ChildProcess, platform: NodeJS.Platform = p
 
 /**
  * Invariant: after recorded termination a numeric PID may name an unrelated
- * process. Apply the guard on POSIX too: surviving members reserve the pgid,
- * but we cannot prove that any remain, so an empty group could be reused.
+ * process, so every DEFERRED kill (dispose, eviction, timeouts) is skipped
+ * once termination is recorded. Surviving helpers of a root that died first
+ * are reaped by `reapGroupOnRootExit` at the moment the exit is observed.
  */
 function hasTerminated(proc: ChildProcess): boolean {
   return proc.exitCode !== null || proc.signalCode !== null;
+}
+
+/**
+ * Reap helpers that outlive a server root which exited on its own (crash,
+ * EOF). Call ONLY synchronously from the child's `exit` event.
+ *
+ * Invariant: on POSIX the server leads its own process group (spawned
+ * `detached`). A process-group id cannot be reallocated while any member of
+ * the group is alive, so signalling `-pid` at exit-observation time reaches
+ * exactly the surviving helpers; with no survivors it fails with ESRCH (and a
+ * fresh process reusing the pid inside that same tick would also have to make
+ * itself a group leader to be hit). That is why this one call is exempt from
+ * the `hasTerminated` guard while deferred kills are not. win32 has no
+ * process groups and `taskkill /T` cannot walk from a dead root, so this is a
+ * no-op there.
+ */
+export function reapGroupOnRootExit(proc: ChildProcess, platform: NodeJS.Platform = process.platform): void {
+  if (platform === 'win32') return;
+  const pid = proc.pid;
+  if (pid !== undefined && pid > 0) killProcessGroup(pid, 'SIGKILL', { platform });
 }
 
 /** Await the tree walk before giving an EOF-exiting root permission to exit. */

@@ -30,7 +30,7 @@ import type { ServerSpec } from './server-spec.js';
 import { answerServerRequest, CLIENT_CAPABILITIES } from './client-handlers.js';
 import { DocumentSync, type SyncResult } from './document-sync.js';
 import { DiagnosticsStore } from './diagnostics-store.js';
-import { exitPromise, forceKillRoot, killServerTree, killServerTreeAndWait, spawnServer, waitForExit } from './client-process.js';
+import { exitPromise, forceKillRoot, killServerTree, killServerTreeAndWait, reapGroupOnRootExit, spawnServer, waitForExit } from './client-process.js';
 
 /** Failure kinds surfaced to handlers so they can map to their error strings. */
 export type LspFailureKind = 'timeout' | 'aborted' | 'exited' | 'spawn' | 'response';
@@ -87,7 +87,11 @@ export class LspClient {
     this.exited = exitPromise(proc);
     proc.stdin?.on('error', () => this.markDead('stdin error'));
     proc.on('error', () => this.markDead('spawn error', 'spawn'));
-    proc.on('exit', () => this.markDead('process exited'));
+    proc.on('exit', () => {
+      // Invariant: must run synchronously in the exit event (see reapGroupOnRootExit).
+      reapGroupOnRootExit(proc);
+      this.markDead('process exited');
+    });
     this.conn = createMessageConnection(
       new StreamMessageReader(proc.stdout!),
       new StreamMessageWriter(proc.stdin!),
