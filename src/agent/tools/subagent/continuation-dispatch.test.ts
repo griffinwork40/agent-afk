@@ -9,7 +9,7 @@ import { ContinuationRegistry } from '../../subagent/continuation-registry.js';
 import { BackgroundAgentRegistry } from '../../background-registry.js';
 import { agentTool, composeTool } from '../schemas.agent-tools.js';
 import { parseAgentInput } from './input-parse.js';
-import { instrumentHandleForChain, annotateChainResult, actorIdentity, JOURNAL_FLUSH_TIMEOUT_MS, markChainPromoted } from './continuation-dispatch.js';
+import { instrumentHandleForChain, annotateChainResult, actorIdentity, JOURNAL_FLUSH_TIMEOUT_MS, markChainPromoted, recordChainTerminal } from './continuation-dispatch.js';
 import { admitContinuationCall } from './continuation-run.js';
 
 const CAPPED = 'tool_use_loop_capped';
@@ -78,7 +78,7 @@ describe('continuation dispatch wiring', () => {
     expect(chain.owner).toBe(registry.rootActor);
     expect(chain.inFlight).toBe(false);
     expect(chain.lastEndReason).toBe(CAPPED);
-    expect(chain.checkpoint?.cwd).toBe(tmpdir()); // runtime cwd, non-git => git:false
+    expect(chain.checkpoint?.cwd).toBe(tmpdir()); // write-capable unnamed child: runtime cwd, non-git => git:false
   });
 
   it('D6: a completed child gets chain metadata but no continuation line', async () => {
@@ -148,14 +148,14 @@ describe('continuation dispatch wiring', () => {
     expect(chain.owner).toBe(registry.rootActor);
     expect(chain.owner).not.toBe('');
     parentSession.sessionId = 'root-1'; // provider assigned the id after the first turn
-    const admitted = admitContinuationCall(parseAgentInput({ prompt: 'more', continuation_chain_id: chainId }), { ...ctx, parentSession });
+    const admitted = await admitContinuationCall(parseAgentInput({ prompt: 'more', continuation_chain_id: chainId }), { ...ctx, parentSession });
     // Ownership passes; the (mock) child wrote no journal, so seeding is what refuses.
     expect('error' in admitted && admitted.error.content).not.toMatch(/owned by another actor/);
     expect('error' in admitted && admitted.error.content).toMatch(/could not seed/);
     expect(chain.inFlight).toBe(false); // seed refusal rolled back
   });
 
-  it('owner: a child cannot continue its parent\'s or a sibling\'s chain; identities are never empty', () => {
+  it('owner: a child cannot continue its parent\'s or a sibling\'s chain; identities are never empty', async () => {
     const registry = new ContinuationRegistry();
     const rootCtx = { depth: 0, continuationRegistry: registry, parentSession: { sessionId: undefined } };
     const childA = { depth: 1, continuationRegistry: registry, parentSession: { sessionId: 'sub-a' } };
@@ -171,14 +171,14 @@ describe('continuation dispatch wiring', () => {
     };
     const rootChain = mk(actorIdentity(rootCtx)!);
     const aChain = mk(actorIdentity(childA)!);
-    const refuse = (id: string, ctx: typeof rootCtx | typeof childA) => {
-      const r = admitContinuationCall(parseAgentInput({ prompt: 'x', continuation_chain_id: id }), ctx);
+    const refuse = async (id: string, ctx: typeof rootCtx | typeof childA) => {
+      const r = await admitContinuationCall(parseAgentInput({ prompt: 'x', continuation_chain_id: id }), ctx);
       return 'error' in r ? r.error.content : '';
     };
-    expect(refuse(rootChain, childA)).toMatch(/owned by another actor/); // child -> parent's chain
-    expect(refuse(aChain, childB)).toMatch(/owned by another actor/); // sibling
-    expect(refuse(aChain, anon)).toMatch(/has no identity/);
-    expect(refuse(aChain, rootCtx)).toMatch(/owned by another actor/); // parent -> child's chain
+    expect(await refuse(rootChain, childA)).toMatch(/owned by another actor/); // child -> parent's chain
+    expect(await refuse(aChain, childB)).toMatch(/owned by another actor/); // sibling
+    expect(await refuse(aChain, anon)).toMatch(/has no identity/);
+    expect(await refuse(aChain, rootCtx)).toMatch(/owned by another actor/); // parent -> child's chain
     expect(() => registry.createChain({ owner: '', rootSessionId: 'r', roundCap: 1, inputs: { writeCapable: false } })).toThrow();
   });
 
@@ -300,6 +300,25 @@ describe('continuation dispatch wiring', () => {
     expect(delivered.continuation?.chainId).toMatch(/^chain_[0-9a-f]+$/);
     expect(delivered.continuation?.continuable).toBe(true);
     expect(delivered.message!.content).toBe('done'); // completed: metadata only, no line
+  });
+
+
+  it('D5: terminal checkpoint capture runs only for write-capable chains', async () => {
+    const registry = new ContinuationRegistry();
+    const capture = vi.fn(async (cwd: string) => ({ cwd, git: false }));
+    const ro = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: false } });
+    await recordChainTerminal({ registry, chain: ro, childId: 'c', cwd: tmpdir(), roundsUsed: 1, journalUsable: true, endReason: 'x', capture });
+    expect(capture).not.toHaveBeenCalled();
+    expect(ro.checkpoint).toBeUndefined();
+    const rw = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: true } });
+    await recordChainTerminal({ registry, chain: rw, childId: 'c', cwd: tmpdir(), roundsUsed: 1, journalUsable: true, endReason: 'x', capture });
+    expect(capture).toHaveBeenCalledWith(tmpdir());
+    expect(rw.checkpoint).toEqual({ cwd: tmpdir(), git: false });
+    // A failing capture is fail-safe: the terminal still records, without a checkpoint.
+    const rw2 = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: true } });
+    await recordChainTerminal({ registry, chain: rw2, childId: 'c', cwd: tmpdir(), roundsUsed: 1, journalUsable: true, endReason: 'x', capture: async () => { throw new Error('git'); } });
+    expect(rw2.inFlight).toBe(false);
+    expect(rw2.checkpoint).toBeUndefined();
   });
 
 });

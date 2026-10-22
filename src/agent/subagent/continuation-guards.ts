@@ -8,7 +8,7 @@
  * @module agent/subagent/continuation-guards
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
 import type { ChainDispatchInputs, ChainRecord, WorkspaceCheckpoint } from './continuation-registry.js';
@@ -47,31 +47,41 @@ export function checkContinuationOverrides(chain: ChainRecord, call: Continuatio
   return undefined;
 }
 
-function git(cwd: string, args: string[]): string | undefined {
-  try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 });
-  } catch {
-    return undefined;
-  }
+/** Async git (never blocks the event loop); undefined on any failure or the 10s timeout. Never rejects. */
+function git(cwd: string, args: string[]): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    try {
+      execFile('git', args, { cwd, encoding: 'utf8', timeout: 10_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
+        resolve(err ? undefined : stdout);
+      });
+    } catch {
+      resolve(undefined);
+    }
+  });
 }
 
-/** D5: capture {cwd, branch, HEAD, dirty fingerprint}; non-git cwd => `git: false`. */
-export function captureWorkspaceCheckpoint(cwd: string): WorkspaceCheckpoint {
-  const inside = git(cwd, ['rev-parse', '--is-inside-work-tree']);
+/** D5: capture {cwd, branch, HEAD, dirty fingerprint}; non-git cwd => `git: false`. Never rejects. */
+export async function captureWorkspaceCheckpoint(cwd: string): Promise<WorkspaceCheckpoint> {
+  const inside = await git(cwd, ['rev-parse', '--is-inside-work-tree']);
   if (inside?.trim() !== 'true') return { cwd, git: false };
-  const branch = git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])?.trim();
-  const head = git(cwd, ['rev-parse', 'HEAD'])?.trim();
-  const status = git(cwd, ['status', '--porcelain=v1', '-z']) ?? '';
+  const [branchRaw, headRaw, statusRaw] = await Promise.all([
+    git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    git(cwd, ['rev-parse', 'HEAD']),
+    git(cwd, ['status', '--porcelain=v1', '-z']),
+  ]);
+  const branch = branchRaw?.trim();
+  const head = headRaw?.trim();
+  const status = statusRaw ?? '';
   const dirtyFingerprint = createHash('sha256').update(status).digest('hex');
   return { cwd, git: true, ...(branch !== undefined ? { branch } : {}), ...(head !== undefined ? { head } : {}), dirtyFingerprint };
 }
 
 /** D5: refuse on drift for write-capable chains; read-only and non-git skip. */
-export function checkWorkspaceDrift(chain: ChainRecord, recapture: (cwd: string) => WorkspaceCheckpoint = captureWorkspaceCheckpoint): string | undefined {
+export async function checkWorkspaceDrift(chain: ChainRecord, recapture: (cwd: string) => Promise<WorkspaceCheckpoint> = captureWorkspaceCheckpoint): Promise<string | undefined> {
   if (!chain.inputs.writeCapable) return undefined;
   const prior = chain.checkpoint;
   if (prior === undefined || !prior.git) return undefined;
-  const now = recapture(prior.cwd);
+  const now = await recapture(prior.cwd);
   const drifted: string[] = [];
   if (!now.git) drifted.push('git repository');
   if (now.branch !== prior.branch) drifted.push(`branch (${prior.branch ?? '?'} -> ${now.branch ?? '?'})`);

@@ -96,20 +96,20 @@ describe('continuation guards', () => {
     expect(checkContinuationOverrides(iso, {})).toMatch(/worktree/);
   });
 
-  it('refuses drift for write-capable chains and allows it for read-only ones', () => {
+  it('refuses drift for write-capable chains and allows it for read-only ones', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-cont-drift-'));
     try {
       execFileSync('git', ['init', '-q'], { cwd: dir });
       const reg = new ContinuationRegistry();
       const write = initialChain(reg);
-      write.checkpoint = captureWorkspaceCheckpoint(dir);
+      write.checkpoint = await captureWorkspaceCheckpoint(dir);
       expect(write.checkpoint.git).toBe(true);
-      expect(checkWorkspaceDrift(write)).toBeUndefined();
+      expect(await checkWorkspaceDrift(write)).toBeUndefined();
       fs.writeFileSync(path.join(dir, 'new.txt'), 'x');
-      expect(checkWorkspaceDrift(write)).toMatch(/uncommitted changes/);
+      expect(await checkWorkspaceDrift(write)).toMatch(/uncommitted changes/);
       const ro = reg.createChain({ owner: 'root', rootSessionId: 's', inputs: { ...inputs, writeCapable: false }, roundCap: 10 });
       ro.checkpoint = write.checkpoint;
-      expect(checkWorkspaceDrift(ro)).toBeUndefined();
+      expect(await checkWorkspaceDrift(ro)).toBeUndefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -69,8 +69,8 @@ export function continuationNote(chain: ChainRecord, index: number, allowance: n
     `You have ${allowance} tool-use rounds for this run.]`;
 }
 
-/** Pre-charge checks (D3/D5); undefined to proceed. */
-function preAdmissionRefusal(chain: ChainRecord | undefined, id: string, caller: string, parsed: AgentInput): string | undefined {
+/** Pre-charge checks (D3/D5); undefined to proceed. The registry's synchronous admission re-checks owner/in-flight after the drift await. */
+async function preAdmissionRefusal(chain: ChainRecord | undefined, id: string, caller: string, parsed: AgentInput): Promise<string | undefined> {
   if (chain === undefined) {
     return `unknown continuation chain "${id}" (chains are runtime-minted and in-memory only; they do not survive a restart or /resume)`;
   }
@@ -78,7 +78,7 @@ function preAdmissionRefusal(chain: ChainRecord | undefined, id: string, caller:
   const override = checkContinuationOverrides(chain, parsed);
   if (override !== undefined) return override;
   if (chain.inFlight) return `a run on continuation chain "${id}" is still in flight`;
-  const drift = checkWorkspaceDrift(chain);
+  const drift = await checkWorkspaceDrift(chain);
   if (drift !== undefined) return drift;
   if (chain.latestChildId === undefined) {
     return 'the chain has no resumable child journal (message journaling disabled, or the previous run wrote none)';
@@ -106,14 +106,14 @@ function continuationInput(parsed: AgentInput, chain: ChainRecord, prompt: strin
 }
 
 /** Admission (check + charge + in-flight) and seed. Fail closed: nothing is forked on refusal (incl. a missing/empty child fold). */
-export function admitContinuationCall(parsed: AgentInput, ctx: AdmitCtx): { plan: ContinuationPlan; input: Record<string, unknown> } | { error: ToolResult } {
+export async function admitContinuationCall(parsed: AgentInput, ctx: AdmitCtx): Promise<{ plan: ContinuationPlan; input: Record<string, unknown> } | { error: ToolResult }> {
   const id = parsed.continuation_chain_id ?? '';
   const registry = ctx.continuationRegistry;
   if (registry === undefined) return refuseContinuation('continuation is not available in this session');
   const caller = actorIdentity(ctx);
   if (caller === undefined) return refuseContinuation('the calling actor has no identity yet, so it cannot own a continuation chain');
   const chain = registry.get(id);
-  const pre = preAdmissionRefusal(chain, id, caller, parsed);
+  const pre = await preAdmissionRefusal(chain, id, caller, parsed);
   if (pre !== undefined || chain === undefined) return refuseContinuation(pre ?? 'unknown chain');
   const requested = parsed.max_tool_use_iterations_explicit ? parsed.max_tool_use_iterations : undefined;
   const admitted = registry.admitContinuation(id, caller, requested, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS);
@@ -150,7 +150,7 @@ export async function runContinuation(
   ctx: AdmitCtx,
   dispatch: (call: ToolCall, plan: ContinuationPlan) => Promise<ToolResult>,
 ): Promise<ToolResult> {
-  const admitted = admitContinuationCall(parsed, ctx);
+  const admitted = await admitContinuationCall(parsed, ctx);
   if ('error' in admitted) return admitted.error;
   const { plan, input } = admitted;
   try {

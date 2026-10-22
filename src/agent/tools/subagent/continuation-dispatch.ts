@@ -109,16 +109,22 @@ export interface ChainTerminalArgs {
   roundsUsed: number | undefined;
   journalUsable: boolean;
   endReason: string;
-  capture?: (cwd: string) => WorkspaceCheckpoint;
+  capture?: (cwd: string) => Promise<WorkspaceCheckpoint>;
 }
 
-/** D9: record a terminal outcome. Never throws (terminal paths must not fail on bookkeeping). */
-export function recordChainTerminal(args: ChainTerminalArgs): void {
+/**
+ * D9: record a terminal outcome. Never throws (terminal paths must not fail on
+ * bookkeeping). The D5 workspace checkpoint is captured (async git) only for
+ * write-capable chains: read-only chains never compare it, so they skip git.
+ */
+export async function recordChainTerminal(args: ChainTerminalArgs): Promise<void> {
   const { registry, chain } = args;
   if (registry === undefined || chain === undefined) return;
   let checkpoint: WorkspaceCheckpoint | undefined;
   try {
-    checkpoint = args.cwd !== undefined ? (args.capture ?? captureWorkspaceCheckpoint)(args.cwd) : undefined;
+    checkpoint = args.cwd !== undefined && chain.inputs.writeCapable
+      ? await (args.capture ?? captureWorkspaceCheckpoint)(args.cwd)
+      : undefined;
   } catch {
     checkpoint = undefined;
   }
@@ -237,7 +243,7 @@ export function instrumentHandleForChain(
     const flushed = r === undefined && reason === 'not_started' ? true : await flushWithin(terminal.flushJournal, JOURNAL_FLUSH_TIMEOUT_MS);
     let usable = false;
     try { usable = flushed && terminal.journalUsable(); } catch { usable = false; }
-    recordChainTerminal({ ...terminal, childId: handle.id, roundsUsed: runtimeRounds(handle, r), journalUsable: usable, endReason: reason });
+    await recordChainTerminal({ ...terminal, childId: handle.id, roundsUsed: runtimeRounds(handle, r), journalUsable: usable, endReason: reason });
   };
   const reasonOf = (r: import('../../subagent/result.js').SubagentResult): string =>
     r.incomplete === true ? (r.incompleteReason ?? 'incomplete') : r.status;
