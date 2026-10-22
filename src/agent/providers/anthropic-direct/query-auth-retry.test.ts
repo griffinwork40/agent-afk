@@ -382,6 +382,111 @@ describe('AnthropicDirectProvider — OAuth token refresh retry', () => {
     expect(errorEvents.length).toBe(0);
   });
 
+  it('403 error → successful refresh → retry succeeds (seat swap happy path)', async () => {
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) {
+        const err = new Error('Permission denied');
+        (err as unknown as { status: number }).status = 403;
+        throw err;
+      }
+      return fromArray(makeTextStream('Success after seat swap'));
+    });
+
+    let refresherCalled = false;
+    const mockRefresher = vi.fn(async (): Promise<Anthropic | null> => {
+      refresherCalled = true;
+      return new MockAnthropic({ authToken: 'sk-ant-oat01-fresh' }) as unknown as Anthropic;
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
+    });
+
+    const queryAny = query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } };
+    queryAny.retry.tokenRefresher = mockRefresher;
+
+    const events = await collect(query);
+
+    expect(refresherCalled).toBe(true);
+    expect(mockRefresher).toHaveBeenCalledOnce();
+    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+
+    const completed = events.find((e) => e.type === 'turn.completed');
+    expect(completed).toBeDefined();
+
+    const message = events.find((e) => e.type === 'assistant.message');
+    expect(message).toBeDefined();
+    if (message?.type === 'assistant.message') {
+      expect(message.text).toBe('Success after seat swap');
+    }
+
+    const errorEvents = events.filter((e) => e.type === 'error');
+    expect(errorEvents.length).toBe(0);
+  });
+
+  it('403 error → refresher returns null (api-key mode) → original 403 surfaces', async () => {
+    const err403 = new Error('Permission denied');
+    (err403 as unknown as { status: number }).status = 403;
+    messagesCreateMock.mockImplementation(() => {
+      throw err403;
+    });
+
+    let refresherCalled = false;
+    const mockRefresher = vi.fn(async (): Promise<Anthropic | null> => {
+      refresherCalled = true;
+      return null;
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
+    });
+
+    const queryAny = query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } };
+    queryAny.retry.tokenRefresher = mockRefresher;
+
+    const events = await collect(query);
+
+    expect(refresherCalled).toBe(true);
+    expect(messagesCreateMock).toHaveBeenCalledTimes(1);
+
+    const errorEvents = events.filter((e) => e.type === 'error');
+    expect(errorEvents.length).toBe(1);
+    if (errorEvents[0]?.type === 'error') {
+      expect((errorEvents[0].error as unknown as { status: number }).status).toBe(403);
+    }
+  });
+
+  it('403 without tokenRefresher (api-key mode) → no refresh, error surfaces', async () => {
+    const err403 = new Error('Permission denied');
+    (err403 as unknown as { status: number }).status = 403;
+    messagesCreateMock.mockImplementation(() => {
+      throw err403;
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('test'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
+    });
+
+    // Intentionally do NOT wire a tokenRefresher — simulates api-key mode.
+    const events = await collect(query);
+
+    expect(messagesCreateMock).toHaveBeenCalledTimes(1);
+
+    const errorEvents = events.filter((e) => e.type === 'error');
+    expect(errorEvents.length).toBe(1);
+    if (errorEvents[0]?.type === 'error') {
+      expect((errorEvents[0].error as unknown as { status: number }).status).toBe(403);
+    }
+  });
+
   it('retried turn preserves message history and carries tool-use results forward', async () => {
     let callIdx = 0;
     messagesCreateMock.mockImplementation(() => {

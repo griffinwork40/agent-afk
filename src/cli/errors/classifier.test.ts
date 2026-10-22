@@ -34,6 +34,26 @@ describe('classifyError — auth', () => {
     expect(result.kind).toBe('auth');
     expect(result.exitCode).toBe(1);
   });
+
+  it('classifies HTTP 403 as auth with seat-removal guidance', () => {
+    const err = Object.assign(new Error('Permission denied'), { status: 403 });
+    const result = classifyError(err);
+    expect(result.kind).toBe('auth');
+    expect(result.exitCode).toBe(1);
+    expect(result.userMessage).toContain('403');
+    expect(result.userMessage).toContain('seat');
+    expect(result.hint).toContain('afk login');
+    // Must not leak raw SDK text
+    expect(result.userMessage).not.toContain('Permission denied');
+  });
+
+  it('classifies PermissionDeniedError by name as auth', () => {
+    const err = Object.assign(new Error('some sdk message'), { name: 'PermissionDeniedError' });
+    const result = classifyError(err);
+    expect(result.kind).toBe('auth');
+    expect(result.exitCode).toBe(1);
+    expect(result.userMessage).toContain('403');
+  });
 });
 
 // ─── rate_limit ───────────────────────────────────────────────────────────────
