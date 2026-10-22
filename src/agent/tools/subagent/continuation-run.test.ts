@@ -1,9 +1,10 @@
 /**
  * D8 executor-level continuation tests (docs/subagent-continuation.md).
  * Real wireExecutors / SubagentManager / AgentSession / message journal; only
- * the model transport is faked. The fake writes each child's conversation into
- * its own journal (as the real providers' JournalSync does) and records what
- * every provider query received (seeded history, user turn, config).
+ * the model transport is faked. The fake journals only its own run through the
+ * real anthropic-direct session state (createSessionState + JournalSync), so the
+ * seeded history reaches each child's journal via the provider's own
+ * resumeMessages seeding, and records what every provider query received.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -35,6 +36,8 @@ import type OpenAI from 'openai';
 import { OpenAICompatibleProvider } from '../../providers/openai-compatible/index.js';
 import { __setOpenAIClientFactory } from '../../providers/openai-compatible/query/client.js';
 import { INTERRUPTED_TOOL_RESULT } from '../../providers/openai-compatible/journal-adapter.js';
+import { createSessionState } from '../../providers/anthropic-direct/query/session-state.js';
+import { anthropicJournalAdapter } from '../../providers/anthropic-direct/journal-adapter.js';
 
 interface Seen { resumeMessages: JournalMessage[] | undefined; turn: string; config: AgentConfig }
 
@@ -68,19 +71,26 @@ function installTransport(seen: Seen[], opts: { hold?: Promise<void>; cutFrom?: 
                 }
                 if (opts.hold !== undefined) await opts.hold;
                 const turn = seen.length; // unique per run
-                const prior = cfg.resumeMessages ?? [];
                 const userText = String(event.text).replace(/^Echo: /, '');
                 seen.push({ resumeMessages: cfg.resumeMessages, turn: userText, config: cfg });
                 const id = `tu-${turn}`;
-                const msgs: JournalMessage[] = [
-                  ...prior,
+                // The REAL anthropic-direct seeding path: initialMessages from
+                // resumeMessages (provider-query-build) -> createSessionState,
+                // whose JournalSync.seed() writes the seeded history into the
+                // child's journal. The fake only appends THIS run's messages.
+                const state = createSessionState({
+                  model: 'claude-sonnet-4-5', permissionMode: 'default', userSystem: null, toolDispatcher: {} as never,
+                  ...(cfg.resumeMessages !== undefined && cfg.resumeMessages.length > 0
+                    ? { initialMessages: anthropicJournalAdapter.fromJournalMessages(cfg.resumeMessages) } : {}),
+                  ...(cfg.messageJournal !== undefined ? { messageJournal: cfg.messageJournal } : {}),
+                });
+                state.messages.push(
                   { role: 'user', content: [text(userText)] },
                   { role: 'assistant', content: [text(`run ${turn}`), { type: 'tool_use', id, name: 'bash', input: { command: `step ${turn}` } }] },
-                  { role: 'user', content: [{ type: 'tool_result', toolUseId: id, content: [text(`out ${turn}`)] }] },
+                  { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: [text(`out ${turn}`)] }] },
                   { role: 'assistant', content: [text(`wind-down ${turn}`)] },
-                ];
-                msgs.forEach((m, i) => cfg.messageJournal?.append(i, m));
-                await cfg.messageJournal?.flush();
+                );
+                state.journalSync.sync(state.messages);
               }
               if (event.type === 'turn.completed' && opts.progressRounds === undefined) event.usage = { ...event.usage, stopReason: 'tool_use_loop_capped' };
               yield event;
