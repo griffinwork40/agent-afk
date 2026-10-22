@@ -42,14 +42,19 @@ describe('symbols and diagnostics registry integration', () => {
     vi.mocked(elicitationRouter.route).mockResolvedValue({ action: 'accept', content: { value: true } });
     vi.mocked(ensureServerInstalled).mockImplementation(async (_definition, ctx) => {
       expect(ctx.interactive).toBe(true);
-      return await ctx.askConsent!('Install pyright?')
-        ? { kind: 'installed', command: '/afk/pyright', freshInstall: true }
-        : { kind: 'declined' };
+      if (!await ctx.askConsent!('Install pyright?')) return { kind: 'declined' };
+      vi.mocked(resolveServer).mockResolvedValue({ kind: 'resolved', root, spec: {
+        definition: python, command: '/afk/pyright', args: ['--stdio'], source: 'afk-install',
+      } });
+      return { kind: 'installed', command: '/afk/pyright', freshInstall: true };
     });
     vi.mocked(withPooledFile).mockResolvedValue([]);
     const result = await handleCodeSymbols(input(), { resolveBase: root, lspInstallAllowed: true, sessionId: 'repl' });
     expect(result).toContain('no locations found');
     expect(elicitationRouter.route).toHaveBeenCalledOnce();
+    expect(resolveServer).toHaveBeenCalledTimes(2);
+    expect(resolveServer).toHaveBeenNthCalledWith(1, source, root);
+    expect(resolveServer).toHaveBeenNthCalledWith(2, source, root);
     expect(withPooledFile).toHaveBeenCalledWith(expect.objectContaining({
       command: '/afk/pyright', definition: python,
     }), source, 'x = 1\n', expect.objectContaining({ root }), expect.any(Function));
