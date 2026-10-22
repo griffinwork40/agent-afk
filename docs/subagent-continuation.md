@@ -45,6 +45,18 @@ inherited from the chain. Omit them, or pass exactly the chain's values.
   nested executors. Each chain records its owner, stored dispatch inputs,
   latest child id, rounds charged, continuation count, in-flight flag,
   workspace checkpoint, and last end reason.
+  - **Owner** is the dispatching actor's runtime identity (`actorIdentity` in
+    `continuation-dispatch.ts`): a per-registry root token for the root
+    session (stable even before the provider assigns a session id), or
+    `subagent:<id>` for a nested subagent. It is never empty, and only the
+    owner can continue a chain, so a child cannot continue its parent's or a
+    sibling's chain.
+  - The registry holds at most 256 chains and evicts the oldest chains that
+    are not in flight. An evicted chain is refused as unknown.
+  - Before a terminal outcome clears in-flight, the runtime waits (at most
+    5s) for the child's message journal to flush, so an immediate
+    continuation never folds a truncated journal. On timeout the previous
+    link is kept.
 - `src/agent/tools/subagent/continuation-dispatch.ts`: mints a chain for
   every local initial dispatch and wraps the child handle so that every
   terminal outcome records into the chain exactly once (foreground, promoted,
