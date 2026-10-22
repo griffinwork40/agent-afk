@@ -280,6 +280,28 @@ describe('continuation dispatch wiring', () => {
     expect(r.content).toBe('x');
   });
 
+
+  it('D6 background: a COMPLETED background result carries the chain id structurally (no line)', async () => {
+    const registry = new ContinuationRegistry();
+    const bg = new BackgroundAgentRegistry({});
+    const ok = { id: 'child-1', status: 'succeeded', message: { role: 'assistant', content: 'done', timestamp: new Date() } } as SubagentResult;
+    const handle = { ...handleFor(ok), runInBackground: vi.fn((_p: string, cb?: (r: SubagentResult) => void) => { void Promise.resolve().then(() => cb?.(ok)); }) };
+    const exec = new SubagentExecutor({
+      subagentManager: { forkSubagent: vi.fn().mockResolvedValue(handle) } as never,
+      parentSession: { sessionId: 'root-1', getInputStreamRef: vi.fn(), abortSignal: new AbortController().signal } as never,
+      defaultConfig: { apiKey: 'k', systemPrompt: 's' }, defaultSubagentModel: 'sonnet', depth: 0, cwd: tmpdir(),
+      continuationRegistry: registry, backgroundRegistry: bg,
+    });
+    const r = await exec.execute(call({ prompt: 'bg', mode: 'background' }));
+    expect(r.isError, String(r.content)).not.toBe(true);
+    const job = bg.list()[0]!;
+    await vi.waitFor(() => expect(bg.get(job.jobId)?.status).toBe('completed'));
+    const delivered = bg.get(job.jobId)!.result!;
+    expect(delivered.continuation?.chainId).toMatch(/^chain_[0-9a-f]+$/);
+    expect(delivered.continuation?.continuable).toBe(true);
+    expect(delivered.message!.content).toBe('done'); // completed: metadata only, no line
+  });
+
 });
 
 type ToolResultWithChain = { content: unknown; continuation?: { chainId: string } };

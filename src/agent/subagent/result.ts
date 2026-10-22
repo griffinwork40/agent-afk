@@ -264,6 +264,20 @@ export interface SubagentResult<T = unknown> extends Partial<CappedHandoff> {
    */
   stopReason?: string;
   /**
+   * D6 continuation chain metadata, stamped by the `agent` tool's chain wiring
+   * on results delivered through the background registry (background and
+   * promoted runs), so `join()` / registry readers see the chain id
+   * structurally. Absent for runs dispatched without a continuation registry.
+   */
+  continuation?: {
+    chainId: string;
+    roundsCharged: number;
+    maxRounds: number;
+    continuations: number;
+    maxContinuations: number;
+    continuable: boolean;
+  };
+  /**
    * Human-readable notice describing a worktree setup step that failed or was
    * skipped for this node (e.g. a repo-declared setup script that exited
    * non-zero). Set by `dispatchDagNode` when the node ran with
