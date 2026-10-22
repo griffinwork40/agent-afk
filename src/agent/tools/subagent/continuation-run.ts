@@ -34,7 +34,7 @@
 import type { ToolCall, ToolResult } from '../types.js';
 import type { AgentInput } from './input-parse.js';
 import type { ForkSubagentOptions } from '../../subagent/fork-types.js';
-import type { ChainRecord, ContinuationRegistry } from '../../subagent/continuation-registry.js';
+import type { ChainRecord, ContinuationRegistry, WorkspaceCheckpoint } from '../../subagent/continuation-registry.js';
 import { checkContinuationOverrides, checkWorkspaceDrift } from '../../subagent/continuation-guards.js';
 import { loadJournalMessages } from '../../journal/index.js';
 import { SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../../subagent/constants.js';
@@ -56,6 +56,8 @@ interface AdmitCtx {
   continuationRegistry?: ContinuationRegistry;
   parentSession: { sessionId?: string | undefined };
   parentRootSessionId?: string;
+  /** Test seam: drift recapture (defaults to the real git checkpoint). Always deadline-bounded. */
+  recaptureCheckpoint?: (cwd: string) => Promise<WorkspaceCheckpoint>;
 }
 
 /** Tool error for a refused continuation; the text names the reason (D10). */
@@ -100,13 +102,14 @@ async function settledWithin(p: Promise<void>, ms: number): Promise<boolean> {
  * previous run still settling (journal flush + checkpoint run after delivery):
  * wait for it (bounded), then check in-flight, drift, and the resumable link.
  */
-async function reservedRefusal(chain: ChainRecord, id: string): Promise<string | undefined> {
+async function reservedRefusal(chain: ChainRecord, id: string, recapture?: (cwd: string) => Promise<WorkspaceCheckpoint>): Promise<string | undefined> {
   const settling = chain.settling;
   if (settling !== undefined && !(await settledWithin(settling, SETTLING_WAIT_MS))) {
     return `the previous run on continuation chain "${id}" is still finishing its bookkeeping (journal flush / workspace checkpoint); retry the continuation shortly`;
   }
   if (chain.inFlight) return `a run on continuation chain "${id}" is still in flight`;
-  const drift = await checkWorkspaceDrift(chain);
+  // Bounded (CHECKPOINT_CAPTURE_DEADLINE_MS): a hung git refuses as unavailable, never wedges `admitting`.
+  const drift = await checkWorkspaceDrift(chain, recapture);
   if (drift !== undefined) return drift;
   if (chain.latestChildId === undefined) {
     return 'the chain has no resumable child journal (message journaling disabled, or the previous run wrote none)';
@@ -150,7 +153,7 @@ export async function admitContinuationCall(parsed: AgentInput, ctx: AdmitCtx): 
   if (!reservation.ok) return refuseContinuation(reservation.reason);
   let admitted: ReturnType<ContinuationRegistry['admitContinuation']>;
   try {
-    const held = await reservedRefusal(chain, id);
+    const held = await reservedRefusal(chain, id, ctx.recaptureCheckpoint);
     if (held !== undefined) return refuseContinuation(held);
     const requested = parsed.max_tool_use_iterations_explicit ? parsed.max_tool_use_iterations : undefined;
     admitted = registry.admitContinuation(id, caller, requested, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS, true);

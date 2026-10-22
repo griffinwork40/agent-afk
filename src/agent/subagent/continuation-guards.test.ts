@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ContinuationRegistry } from './continuation-registry.js';
 import {
-  captureWorkspaceCheckpoint, checkWorkspaceDrift, CHECKPOINT_GIT_GLOBAL_ARGS, CHECKPOINT_UNAVAILABLE_REASON, type CheckpointGitExec, type GitOutcome,
+  captureCheckpointWithin, captureWorkspaceCheckpoint, checkWorkspaceDrift, CHECKPOINT_CAPTURE_DEADLINE_MS, CHECKPOINT_GIT_GLOBAL_ARGS, CHECKPOINT_UNAVAILABLE_REASON, type CheckpointGitExec, type GitOutcome,
 } from './continuation-guards.js';
 
 const ok = (stdout: string): GitOutcome => ({ ok: true, stdout });
@@ -62,5 +62,31 @@ describe('continuation workspace checkpoint (D5)', () => {
     chain.inputs.writeCapable = false; // read-only chains never compare
     chain.checkpoint = { cwd: '/repo', git: true, unavailable: true };
     expect(await checkWorkspaceDrift(chain)).toBeUndefined();
+  });
+
+  it('captureCheckpointWithin: a capture that never resolves yields unavailable at the deadline; a rejection too', async () => {
+    vi.useFakeTimers();
+    try {
+      const p = captureCheckpointWithin('/repo', () => new Promise<never>(() => {}));
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_CAPTURE_DEADLINE_MS + 1);
+      expect(await p).toEqual({ cwd: '/repo', git: true, unavailable: true });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await captureCheckpointWithin('/repo', async () => { throw new Error('git'); })).toEqual({ cwd: '/repo', git: true, unavailable: true });
+    expect(await captureCheckpointWithin('/repo', async () => ({ cwd: '/repo', git: false }))).toEqual({ cwd: '/repo', git: false });
+  });
+
+  it('drift check: a recapture that never resolves refuses as unavailable at the deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const chain = writeChain();
+      chain.checkpoint = { cwd: '/repo', git: true, branch: 'main', head: 'abc', dirtyFingerprint: 'x' };
+      const p = checkWorkspaceDrift(chain, () => new Promise<never>(() => {}));
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_CAPTURE_DEADLINE_MS + 1);
+      expect(await p).toBe(CHECKPOINT_UNAVAILABLE_REASON);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

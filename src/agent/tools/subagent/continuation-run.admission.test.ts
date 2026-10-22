@@ -17,6 +17,7 @@ vi.mock('node:child_process', async (original) => {
 import { ContinuationRegistry } from '../../subagent/continuation-registry.js';
 import { parseAgentInput } from './input-parse.js';
 import { admitContinuationCall, SETTLING_WAIT_MS } from './continuation-run.js';
+import { CHECKPOINT_CAPTURE_DEADLINE_MS, CHECKPOINT_UNAVAILABLE_REASON } from '../../subagent/continuation-guards.js';
 
 function settlingChain() {
   const registry = new ContinuationRegistry();
@@ -58,6 +59,29 @@ describe('continuation admission reservation', () => {
       const r = await pending;
       expect('error' in r && r.error.content).toMatch(/still finishing its bookkeeping.*retry/);
       expect(chain.admitting).toBe(false);
+      expect(chain.continuations).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a drift recapture that never resolves (hung git) refuses as unavailable and releases the reservation', async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new ContinuationRegistry();
+      const chain = registry.createChain({ owner: registry.rootActor, rootSessionId: 'root', roundCap: 5, inputs: { writeCapable: true } });
+      registry.recordTerminal(chain.chainId, { childId: 'child-1', journalUsable: true, roundsUsed: 5, checkpoint: { cwd: '/repo', git: true, branch: 'main', head: 'abc', dirtyFingerprint: 'x' }, endReason: 'tool_use_loop_capped' });
+      const recaptureCheckpoint = vi.fn(() => new Promise<never>(() => {}));
+      const ctx = { depth: 0, continuationRegistry: registry, parentSession: { sessionId: 'root' }, recaptureCheckpoint };
+      const pending = admitContinuationCall(input(chain.chainId), ctx);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(chain.admitting).toBe(true); // reservation held while the recapture hangs
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_CAPTURE_DEADLINE_MS + 1);
+      const r = await pending;
+      expect(recaptureCheckpoint).toHaveBeenCalledWith('/repo');
+      expect('error' in r && r.error.content).toContain(CHECKPOINT_UNAVAILABLE_REASON);
+      expect(chain.admitting).toBe(false);
+      expect(chain.inFlight).toBe(false);
       expect(chain.continuations).toBe(0);
     } finally {
       vi.useRealTimers();

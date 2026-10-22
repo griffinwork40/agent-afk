@@ -64,23 +64,75 @@ export type CheckpointGitExec = (cwd: string, args: string[]) => Promise<GitOutc
  */
 export const CHECKPOINT_GIT_GLOBAL_ARGS: readonly string[] = GIT_READ_GLOBAL_ARGS;
 
-/** Per-call timeout for checkpoint git calls. */
+/** Per-call timeout for checkpoint git calls (execFile kills with SIGKILL on expiry). */
 export const CHECKPOINT_GIT_TIMEOUT_MS = 10_000;
 
-/** Async git (never blocks the event loop); never rejects. */
+/**
+ * Grace after the per-call timeout before the call is abandoned outright.
+ * execFile's callback fires only once the child exits AND its stdio closes; a
+ * git that survives the kill (or a descendant holding the pipes open) would
+ * otherwise never resolve. At the hard bound the child is SIGKILLed again and
+ * the call resolves as timed out regardless.
+ */
+export const CHECKPOINT_GIT_KILL_GRACE_MS = 1_000;
+
+/**
+ * Overall bound on one checkpoint capture (repo probe + the parallel
+ * branch/HEAD/status calls), applied around the capture in post-result
+ * settling and around the drift recapture in admission. On expiry the
+ * checkpoint is treated as unavailable (drift fails closed). Sized above the
+ * two sequential per-call hard bounds so a slow-but-live git still completes.
+ */
+export const CHECKPOINT_CAPTURE_DEADLINE_MS = 25_000;
+
+/** Async git (never blocks the event loop); never rejects, always settles within the hard bound. */
 const defaultGitExec: CheckpointGitExec = (cwd, args) => new Promise((resolve) => {
+  let settled = false;
+  let hard: ReturnType<typeof setTimeout> | undefined;
+  const finish = (outcome: GitOutcome): void => {
+    if (settled) return;
+    settled = true;
+    if (hard !== undefined) clearTimeout(hard);
+    resolve(outcome);
+  };
   try {
-    execFile('git', args, {
-      cwd, encoding: 'utf8', timeout: CHECKPOINT_GIT_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
+    const child = execFile('git', args, {
+      cwd, encoding: 'utf8', timeout: CHECKPOINT_GIT_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024,
       env: buildGitReadEnv(undefined),
     }, (err, stdout) => {
-      if (err) resolve({ ok: false, timedOut: (err as { killed?: boolean }).killed === true });
-      else resolve({ ok: true, stdout });
+      if (err) finish({ ok: false, timedOut: (err as { killed?: boolean }).killed === true });
+      else finish({ ok: true, stdout });
     });
+    hard = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      finish({ ok: false, timedOut: true });
+    }, CHECKPOINT_GIT_TIMEOUT_MS + CHECKPOINT_GIT_KILL_GRACE_MS);
+    hard.unref?.();
   } catch {
-    resolve({ ok: false, timedOut: false });
+    finish({ ok: false, timedOut: false });
   }
 });
+
+/**
+ * Run `capture(cwd)` under {@link CHECKPOINT_CAPTURE_DEADLINE_MS}. Expiry or
+ * rejection yields an `unavailable` checkpoint (fail closed). Never rejects.
+ */
+export async function captureCheckpointWithin(
+  cwd: string,
+  capture: (cwd: string) => Promise<WorkspaceCheckpoint> = captureWorkspaceCheckpoint,
+  ms: number = CHECKPOINT_CAPTURE_DEADLINE_MS,
+): Promise<WorkspaceCheckpoint> {
+  const unavailable: WorkspaceCheckpoint = { cwd, git: true, unavailable: true };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => capture(cwd)).catch(() => unavailable),
+      new Promise<WorkspaceCheckpoint>((resolve) => { timer = setTimeout(() => resolve(unavailable), ms); timer.unref?.(); }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 /**
  * D5: capture {cwd, branch, HEAD, dirty fingerprint}; non-git cwd => `git: false`.
@@ -112,15 +164,15 @@ export async function captureWorkspaceCheckpoint(cwd: string, exec: CheckpointGi
 export const CHECKPOINT_UNAVAILABLE_REASON =
   'workspace checkpoint unavailable (git status failed or timed out), so drift cannot be ruled out; retry the continuation';
 
-/** D5: refuse on drift for write-capable chains; read-only and non-git skip. Unavailable checkpoints fail closed. */
+/** D5: refuse on drift for write-capable chains; read-only and non-git skip. Unavailable (or deadline-expired) checkpoints fail closed. */
 export async function checkWorkspaceDrift(chain: ChainRecord, recapture: (cwd: string) => Promise<WorkspaceCheckpoint> = captureWorkspaceCheckpoint): Promise<string | undefined> {
   if (!chain.inputs.writeCapable) return undefined;
   const prior = chain.checkpoint;
   if (prior === undefined) return undefined;
   if (prior.unavailable === true) return CHECKPOINT_UNAVAILABLE_REASON;
   if (!prior.git) return undefined;
-  let now: WorkspaceCheckpoint;
-  try { now = await recapture(prior.cwd); } catch { return CHECKPOINT_UNAVAILABLE_REASON; }
+  // Bounded: a git that never exits must not leave the chain `admitting` forever.
+  const now = await captureCheckpointWithin(prior.cwd, recapture);
   if (now.unavailable === true) return CHECKPOINT_UNAVAILABLE_REASON;
   const drifted: string[] = [];
   if (!now.git) drifted.push('git repository');

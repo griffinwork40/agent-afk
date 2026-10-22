@@ -11,6 +11,7 @@ import { agentTool, composeTool } from '../schemas.agent-tools.js';
 import { parseAgentInput } from './input-parse.js';
 import { instrumentHandleForChain, annotateChainResult, actorIdentity, JOURNAL_FLUSH_TIMEOUT_MS, markChainPromoted, recordChainTerminal } from './continuation-dispatch.js';
 import { admitContinuationCall } from './continuation-run.js';
+import { CHECKPOINT_CAPTURE_DEADLINE_MS } from '../../subagent/continuation-guards.js';
 
 const CAPPED = 'tool_use_loop_capped';
 
@@ -226,6 +227,28 @@ describe('continuation dispatch wiring', () => {
     expect(chain.inFlight).toBe(false);
     expect(chain.latestChildId).toBe('child-1');
     expect(chain.settling).toBeUndefined();
+  });
+
+  it('settling: a checkpoint capture that never resolves (git ignoring SIGTERM) is bounded and stored unavailable', async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new ContinuationRegistry();
+      const chain = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: true } });
+      const h = handleFor(cappedResult());
+      const capture = vi.fn(() => new Promise<never>(() => {}));
+      instrumentHandleForChain(h as never, { registry, chain, cwd: tmpdir(), journalUsable: () => true, capture });
+      await (h.runToResult as (x: string) => Promise<unknown>)('x');
+      expect(chain.inFlight).toBe(true);
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_CAPTURE_DEADLINE_MS + 1);
+      await chain.settling;
+      expect(capture).toHaveBeenCalledWith(tmpdir());
+      expect(chain.inFlight).toBe(false);
+      expect(chain.settling).toBeUndefined();
+      expect(chain.checkpoint).toEqual({ cwd: tmpdir(), git: true, unavailable: true }); // drift fails closed
+      expect(chain.latestChildId).toBe('child-1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('D9 journal flush timeout: the previous link is kept and in-flight still clears', async () => {

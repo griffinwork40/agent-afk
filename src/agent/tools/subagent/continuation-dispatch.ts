@@ -19,7 +19,7 @@ import {
   type ContinuationRegistry,
   type WorkspaceCheckpoint,
 } from '../../subagent/continuation-registry.js';
-import { captureWorkspaceCheckpoint } from '../../subagent/continuation-guards.js';
+import { captureCheckpointWithin, captureWorkspaceCheckpoint } from '../../subagent/continuation-guards.js';
 import { randomBytes } from 'node:crypto';
 import type { ContinuationPlan } from './continuation-run.js';
 
@@ -116,19 +116,17 @@ export interface ChainTerminalArgs {
  * D9: record a terminal outcome. Never throws (terminal paths must not fail on
  * bookkeeping). The D5 workspace checkpoint is captured (async git) only for
  * write-capable chains: read-only chains never compare it, so they skip git.
- * A capture that throws stores an `unavailable` checkpoint (drift fails closed).
+ * The capture is bounded by CHECKPOINT_CAPTURE_DEADLINE_MS; a capture that
+ * throws or outlives the deadline stores an `unavailable` checkpoint (drift
+ * fails closed), so a git that never exits cannot wedge settling.
+ * Returns the stored checkpoint.
  */
-export async function recordChainTerminal(args: ChainTerminalArgs): Promise<void> {
+export async function recordChainTerminal(args: ChainTerminalArgs): Promise<WorkspaceCheckpoint | undefined> {
   const { registry, chain } = args;
-  if (registry === undefined || chain === undefined) return;
-  let checkpoint: WorkspaceCheckpoint | undefined;
-  try {
-    checkpoint = args.cwd !== undefined && chain.inputs.writeCapable
-      ? await (args.capture ?? captureWorkspaceCheckpoint)(args.cwd)
-      : undefined;
-  } catch {
-    checkpoint = args.cwd !== undefined ? { cwd: args.cwd, git: true, unavailable: true } : undefined;
-  }
+  if (registry === undefined || chain === undefined) return undefined;
+  const checkpoint = args.cwd !== undefined && chain.inputs.writeCapable
+    ? await captureCheckpointWithin(args.cwd, args.capture ?? captureWorkspaceCheckpoint)
+    : undefined;
   registry.recordTerminal(chain.chainId, {
     childId: args.childId,
     journalUsable: args.journalUsable,
@@ -136,6 +134,7 @@ export async function recordChainTerminal(args: ChainTerminalArgs): Promise<void
     checkpoint,
     endReason: args.endReason,
   });
+  return checkpoint;
 }
 
 /**

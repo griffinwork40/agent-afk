@@ -57,7 +57,9 @@ inherited from the chain. Omit them, or pass exactly the chain's values.
     delivered (background) as soon as the child finishes. The terminal
     bookkeeping runs after that: the child's message journal flush (at most
     5s) and, for write-capable chains, the workspace checkpoint (git, 10s
-    timeout per call). That bookkeeping is the chain's `settling` promise,
+    timeout per call, killed with SIGKILL and abandoned 1s later if it still
+    has not exited; the whole capture is bounded at 25s, after which the
+    checkpoint is stored as unavailable). That bookkeeping is the chain's `settling` promise,
     which never rejects. In-flight stays true until it settles. An
     uncapped initial run's round charge is applied before the result is
     delivered, so the delivered metadata is final. If the flush times out,
@@ -135,7 +137,8 @@ forked.` Reasons:
   Checked for write-capable chains only; read-only chains and non-git cwds
   skip this check;
 - the workspace checkpoint is unavailable: `git status` (or the repo probe)
-  failed or timed out when the checkpoint was taken or at the recheck, so
+  failed or timed out (or the whole capture outlived its 25s bound) when the
+  checkpoint was taken or at the recheck, so
   drift cannot be ruled out. Write-capable chains only (fail closed; retry);
 - the previous child left no usable journal, either because message
   journaling is disabled (`AFK_MESSAGE_JOURNAL_DISABLED`) or because its fold
