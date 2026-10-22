@@ -36,6 +36,8 @@ export interface FakeServerConfig {
   publishDelays?: Record<string, number>;
   /** Spawn a long-lived grandchild at startup and log its pid as `grandchild`. */
   spawnGrandchild?: boolean;
+  /** Definition result echoes this file's open copy, falling back to disk. */
+  readFileUri?: string;
 }
 
 /** Write the fake server script to `scriptPath`. */
@@ -83,6 +85,11 @@ const handle = (m) => {
     if (cfg.crashOnRequest) process.exit(1);
     if (cfg.hangRequests) return;
     if (cfg.requestError) return send({ id: m.id, error: { code: -32601, message: 'nope' } });
+    if (cfg.readFileUri) {
+      const text = texts.has(cfg.readFileUri) ? texts.get(cfg.readFileUri)
+        : fs.readFileSync(require('url').fileURLToPath(cfg.readFileUri), 'utf8');
+      return send({ id: m.id, result: [{ text }] });
+    }
     return send({ id: m.id, result: cfg.locations || [] });
   }
 };

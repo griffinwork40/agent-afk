@@ -22,10 +22,13 @@ interface DocState { version: number; text: string }
 
 export class DocumentSync {
   private readonly docs = new Map<string, DocState>();
+  // Invariant: closing releases text, not version identity. A delayed publish
+  // from a prior open must never match a later reopen in this client lifetime.
+  private readonly versions = new Map<string, number>();
 
-  /** Current version for `uri`, or undefined when never opened. */
+  /** Last assigned version for `uri`, including closed docs; undefined if never opened. */
   version(uri: string): number | undefined {
-    return this.docs.get(uri)?.version;
+    return this.versions.get(uri);
   }
 
   /** Uris currently open (tests / diagnostics). */
@@ -54,18 +57,21 @@ export class DocumentSync {
   sync(uri: string, languageId: string, text: string): SyncResult {
     const prev = this.docs.get(uri);
     if (!prev) {
-      this.docs.set(uri, { version: 1, text });
+      const version = (this.versions.get(uri) ?? 0) + 1;
+      this.versions.set(uri, version);
+      this.docs.set(uri, { version, text });
       return {
-        version: 1,
+        version,
         changed: true,
         notification: {
           method: 'textDocument/didOpen',
-          params: { textDocument: { uri, languageId, version: 1, text } },
+          params: { textDocument: { uri, languageId, version, text } },
         },
       };
     }
     if (prev.text === text) return { version: prev.version, changed: false, notification: null };
     const version = prev.version + 1;
+    this.versions.set(uri, version);
     this.docs.set(uri, { version, text });
     return {
       version,

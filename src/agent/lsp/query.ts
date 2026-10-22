@@ -55,14 +55,17 @@ export async function withPooledFile<T>(
   const releaseDoc = client.useDocument(pathToFileURL(filePath).toString());
   let syncedUri: string | null = null;
   try {
+    // Invariant: inactive open copies must be closed BEFORE the request, so
+    // cross-file answers use disk rather than another route's stale edit.
+    // useDocument holds preserve any documents concurrent queries still need.
+    client.closeOthers(pathToFileURL(filePath).toString());
     const seqBeforeSync = client.diagnostics.seq;
     const sync = await client.syncFile(filePath, content);
     if (!sync) throw new LspClientError('response', 'Unsupported file type');
     syncedUri = sync.uri;
     return await fn({ client, sync, seqBeforeSync, remainingMs });
   } finally {
-    // Close every other open document so a file later edited by another
-    // route is re-read from disk on its next query (#4293 review C-2).
+    // Also prune documents whose concurrent query holds have now released.
     releaseDoc();
     if (syncedUri !== null) client.closeOthers(syncedUri);
     release();

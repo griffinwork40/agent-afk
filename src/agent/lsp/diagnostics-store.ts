@@ -3,13 +3,13 @@
  * lets callers wait for a publish newer than a given point (and matching a
  * document version when the server reports one).
  *
- * Invariant (#4293 review C-3): a versioned publish is matched exactly and
- * returned at once. An UNVERSIONED publish cannot be tied to an edit, so a
- * late publish for an earlier edit could otherwise be reported as the
- * current edit's diagnostics: after the first unversioned match the waiter
- * holds for a short settle window and then returns the NEWEST publish for
- * the uri. The settle never extends past the caller's timeout — on timeout
- * the newest candidate (if any) is returned instead of null.
+ * Invariant (#4293 review C-3): the client advertises versionSupport so
+ * compliant servers supply versions, which are matched exactly and returned
+ * at once. UNVERSIONED diagnostics are explicitly best-effort: attribution
+ * to an edit is impossible. Each matching publish restarts a quiet-window
+ * debounce and the newest candidate is returned once the stream settles.
+ * The caller's original timeout is never reset: on timeout the newest
+ * candidate (if any) is returned instead of null.
  *
  * @module agent/lsp/diagnostics-store
  */
@@ -93,7 +93,7 @@ export class DiagnosticsStore {
       const offer = (p: PublishedDiagnostics) => {
         if (p.version !== undefined) return finish(p);
         if (!candidate || p.seq > candidate.seq) candidate = p;
-        if (settleTimer) return;
+        if (settleTimer) clearTimeout(settleTimer);
         settleTimer = setTimeout(() => finish(candidate), this.settleMs);
         settleTimer.unref();
       };

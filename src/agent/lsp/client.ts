@@ -30,7 +30,7 @@ import type { ServerSpec } from './server-spec.js';
 import { answerServerRequest, CLIENT_CAPABILITIES } from './client-handlers.js';
 import { DocumentSync, type SyncResult } from './document-sync.js';
 import { DiagnosticsStore } from './diagnostics-store.js';
-import { exitPromise, forceKillRoot, killServerTree, spawnServer, waitForExit } from './client-process.js';
+import { exitPromise, forceKillRoot, killServerTree, killServerTreeAndWait, spawnServer, waitForExit } from './client-process.js';
 
 /** Failure kinds surfaced to handlers so they can map to their error strings. */
 export type LspFailureKind = 'timeout' | 'aborted' | 'exited' | 'spawn' | 'response';
@@ -274,7 +274,7 @@ export class LspClient {
 
   /**
    * didClose every open document except `uri` and any document an in-flight
-   * query is using (call after a query on `uri`). See
+   * query is using (call before and after a query on `uri`). See
    * DocumentSync.closeAllExcept for why.
    */
   closeOthers(uri: string): void {
@@ -310,9 +310,11 @@ export class LspClient {
     if (!this.dead && this.initialized) {
       try { await this.request('shutdown', null, { timeoutMs: 1000 }); } catch { /* best effort */ }
     }
+    // Invariant: await taskkill's tree walk before stdin EOF can make the
+    // root exit. Waiting only for root exit does not prove its children died.
     this.markDead('disposed');
+    await killServerTreeAndWait(this.proc, DISPOSE_EXIT_TIMEOUT_MS);
     try { this.proc.stdin?.end(); } catch { /* ignore */ }
-    killServerTree(this.proc);
     await waitForExit(this.exited, DISPOSE_EXIT_TIMEOUT_MS);
     if (this.proc.exitCode === null && this.proc.signalCode === null) {
       forceKillRoot(this.proc);

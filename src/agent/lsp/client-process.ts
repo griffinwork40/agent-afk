@@ -21,7 +21,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { killProcessGroup } from '../../utils/kill-process-group.js';
+import { killProcessGroup, killProcessGroupAndWait } from '../../utils/kill-process-group.js';
 import { findOnPath } from './registry.js';
 
 /** Executable + argv for `spawn` (never run through a shell). */
@@ -101,8 +101,32 @@ export function exitPromise(proc: ChildProcess): Promise<void> {
  * its children. `forceKillRoot` is the fallback once the bounded wait fails.
  */
 export function killServerTree(proc: ChildProcess, platform: NodeJS.Platform = process.platform): void {
+  if (hasTerminated(proc)) return;
   const pid = proc.pid;
   if (pid !== undefined && pid > 0) killProcessGroup(pid, 'SIGKILL', { platform });
+  if (platform !== 'win32') forceKillRoot(proc);
+}
+
+/**
+ * Invariant: after recorded termination a numeric PID may name an unrelated
+ * process. Apply the guard on POSIX too: surviving members reserve the pgid,
+ * but we cannot prove that any remain, so an empty group could be reused.
+ */
+function hasTerminated(proc: ChildProcess): boolean {
+  return proc.exitCode !== null || proc.signalCode !== null;
+}
+
+/** Await the tree walk before giving an EOF-exiting root permission to exit. */
+export async function killServerTreeAndWait(
+  proc: ChildProcess,
+  timeoutMs: number,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  if (hasTerminated(proc)) return;
+  const pid = proc.pid;
+  if (pid !== undefined && pid > 0) {
+    await killProcessGroupAndWait(pid, 'SIGKILL', { platform }, timeoutMs);
+  }
   if (platform !== 'win32') forceKillRoot(proc);
 }
 

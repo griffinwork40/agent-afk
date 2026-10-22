@@ -48,20 +48,7 @@ export function killProcessGroup(
     if ((deps.platform ?? process.platform) === 'win32') {
       // /T is best-effort: MSYS2 children may be absent from the Windows tree.
       // Never block the event loop (or abort/settle timers) waiting for taskkill.
-      const killer = (deps.spawn ?? spawn)('taskkill', ['/F', '/T', '/PID', String(pid)], {
-        stdio: 'ignore',
-        timeout: 5_000,
-        windowsHide: true,
-      });
-      killer.on('error', (err) => {
-        // ESRCH: process already dead — expected and silent.
-        // Anything else (taskkill timeout, binary unavailable, etc.) gets a
-        // diagnostic so operators can observe unexpected kill failures rather
-        // than absorbing them silently (finding #3210).
-        if (!isErrnoCode(err, 'ESRCH')) {
-          console.warn(`[kill-process-group] taskkill error (pid=${pid}):`, err.message);
-        }
-      });
+      const killer = launchTaskkill(pid, deps);
       killer.unref();
     } else {
       process.kill(-pid, signal);
@@ -69,4 +56,50 @@ export function killProcessGroup(
   } catch {
     // Process (group) already dead; swallow ESRCH / exit-code-128 / EINVAL.
   }
+}
+
+/** Start the shell-free Windows tree walk with the same diagnostics in both APIs. */
+function launchTaskkill(pid: number, deps: KillProcessGroupDeps) {
+  const killer = (deps.spawn ?? spawn)('taskkill', ['/F', '/T', '/PID', String(pid)], {
+    stdio: 'ignore', timeout: 5_000, windowsHide: true,
+  });
+  killer.on('error', (err) => {
+    if (!isErrnoCode(err, 'ESRCH')) {
+      console.warn(`[kill-process-group] taskkill error (pid=${pid}):`, err.message);
+    }
+  });
+  return killer;
+}
+
+/**
+ * Await the Windows tree walk, not merely the root's exit. Always bounded and
+ * never throws; callers must keep the root alive (including its stdin) until
+ * this settles. POSIX signalling is synchronous and needs no separate wait.
+ */
+export async function killProcessGroupAndWait(
+  pid: number,
+  signal: NodeJS.Signals = 'SIGKILL',
+  deps: KillProcessGroupDeps = {},
+  timeoutMs = 5_000,
+): Promise<void> {
+  if (pid <= 0) return;
+  if ((deps.platform ?? process.platform) !== 'win32') {
+    killProcessGroup(pid, signal, deps);
+    return;
+  }
+  try {
+    const killer = launchTaskkill(pid, deps);
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        killer.removeListener('close', finish);
+        killer.removeListener('error', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      killer.once('close', finish);
+      killer.once('error', finish);
+    });
+    killer.unref();
+  } catch { /* unavailable / already gone */ }
 }
