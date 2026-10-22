@@ -572,14 +572,19 @@ export async function dispatchStopAndRelease<T>(
 }
 
 /**
- * Advance `handle._runtimeRoundsUsed` by the increase in this stream's
- * `progress.roundsUsed` (per-turn, monotonic within a turn; a provider retry
- * that restarts the count never double-charges). Returns the new stream max.
+ * Advance `handle._runtimeRoundsUsed` from this stream's `progress.roundsUsed`
+ * values and return the new baseline (the last value seen). A positive delta
+ * adds the delta; a value equal to the baseline (a retry-tier replay that
+ * re-emits the same count, e.g. anthropic-direct's turnState survives retries)
+ * adds nothing; a value BELOW the baseline is a new segment (openai-compatible
+ * resets its round counter when a blocking Stop hook restarts the turn), so the
+ * whole value is added. Example: 1,2,3 then 1,2 counts 5.
+ * @internal exported for tests.
  */
-function countRuntimeRounds<T>(handle: SubagentHandleImpl<T>, event: OutputEvent, streamMax: number): number {
-  if (event.type !== 'progress' || typeof event.progress.roundsUsed !== 'number') return streamMax;
+export function countRuntimeRounds<T>(handle: Pick<SubagentHandleImpl<T>, '_runtimeRoundsUsed'>, event: OutputEvent, last: number): number {
+  if (event.type !== 'progress' || typeof event.progress.roundsUsed !== 'number') return last;
   const r = event.progress.roundsUsed;
-  if (r <= streamMax) return streamMax;
-  handle._runtimeRoundsUsed += r - streamMax;
+  if (r === last) return last;
+  handle._runtimeRoundsUsed += r > last ? r - last : Math.max(0, r);
   return r;
 }
