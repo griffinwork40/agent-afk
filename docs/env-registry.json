@@ -701,6 +701,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_LARGE_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"large\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_LOCAL",
       "description": "Bind the \"local\" capability tier (cheapest/fastest, user-configured) to a model id. Overrides afk.config.json models.local. Point at a local Ollama, LM Studio, or any OpenAI-compatible shim.",
       "type": "string",
@@ -722,6 +730,14 @@
       "type": "string",
       "required": false,
       "example": "http://localhost:11434/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_LOCAL_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"local\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously (shared with any other slot targeting the same baseUrl). Useful for single-request local servers (Ollama, LM Studio, MLX). Unset = unlimited. Accepted range 1-32; out-of-range or unparseable input is ignored. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
       "category": "model"
     },
     {
@@ -749,6 +765,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_MEDIUM_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"medium\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_SMALL",
       "description": "Bind the \"small\" capability tier (cheap/fast) to a model id/alias. Overrides afk.config.json models.small.",
       "type": "string",
@@ -770,6 +794,14 @@
       "type": "string",
       "required": false,
       "example": "http://localhost:8080/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_SMALL_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"small\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
       "category": "model"
     },
     {

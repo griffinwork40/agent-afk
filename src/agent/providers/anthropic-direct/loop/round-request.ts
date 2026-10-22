@@ -35,6 +35,7 @@ import type { RoundRetryBudget } from './retry-budget.js';
 import { connectionRetryMetadata } from './connection-error.js';
 import { createWithRetry, ConnectionOverloadExhaustedError, type ConnectionRetryInfo, type ConnectionLifecycleInfo } from './connection-create.js';
 import { awaitCreateWithThrottleSignals } from './throttle-signals.js';
+import { getEndpointSemaphore } from '../../../../config/endpoint-semaphore.js';
 import { dumpThinkingDiagnostic } from './thinking-diagnostic.js';
 import { isNonDefaultSamplingForbiddenModel } from '../resolve-params.js';
 import { buildSignatureRetryMessages, isInvalidSignatureError } from './signature-retry.js';
@@ -63,6 +64,34 @@ export function toWireTool(tool: AnthropicToolDef): WireToolDef {
 }
 
 export { createWithRetry, type ConnectionRetryInfo } from './connection-create.js';
+
+/**
+ * Acquire the per-endpoint semaphore (if configured for this turn's baseUrl),
+ * call `createWithRetry`, release the semaphore as soon as the connection
+ * promise settles, then return the resolved stream.
+ *
+ * Holding the slot only for the connection phase (not the full stream) means a
+ * second waiter is unblocked once the first request has been accepted by the
+ * server — the right serialisation point for a prefill-heavy single-request
+ * local server (Ollama, LM Studio, MLX). Part of #3886.
+ *
+ * @param turnInput - The turn-level input carrying `baseUrl` and
+ *   `endpointConcurrency`; used only for semaphore key resolution, never
+ *   forwarded to `createWithRetry`.
+ */
+async function createWithEndpointSemaphore(
+  turnInput: RunTurnInput,
+  ...args: Parameters<typeof createWithRetry>
+): ReturnType<typeof createWithRetry> {
+  const sem = getEndpointSemaphore(turnInput.baseUrl, turnInput.endpointConcurrency);
+  if (sem === null) return createWithRetry(...args);
+  await sem.acquire();
+  try {
+    return await createWithRetry(...args);
+  } finally {
+    sem.release();
+  }
+}
 
 function traceConnectionLifecycle(input: RunTurnInput): (info: ConnectionLifecycleInfo) => void {
   return (info) => { void emitSessionPhase(input.traceWriter, { ...info, resolvedModel: input.model }); };
@@ -184,7 +213,7 @@ async function* attemptSignatureRetry(
   const retryStall = armStreamStallWatchdog(retryTtfb.signal, stallTimeoutMs, traceStreamStall(input));
   try {
     const retryEvents = yield* awaitCreateWithThrottleSignals(
-      createWithRetry(input.client, retryParams, input.headers, retryStall.signal, input.signal, traceConnectionRetry(input), traceConnectionLifecycle(input)),
+      createWithEndpointSemaphore(input, input.client, retryParams, input.headers, retryStall.signal, input.signal, traceConnectionRetry(input), traceConnectionLifecycle(input)),
       input,
       extendOnThrottle(retryTtfb),
     );
@@ -372,7 +401,8 @@ export async function* openRound({
     // value is the resolved stream iterable; a create rejection propagates here
     // exactly as a direct await would.
     const events = yield* awaitCreateWithThrottleSignals(
-      createWithRetry(
+      createWithEndpointSemaphore(
+        input,
         input.client,
         params,
         input.headers,

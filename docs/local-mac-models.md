@@ -94,17 +94,29 @@ one request at a time. In one measurement, letting the server take 2 requests at
 once made a 5-subagent fan-out 1.67x slower. Set the server's maximum concurrent
 requests to 1.
 
-You can also cap afk's own parallelism:
+**Preferred: per-slot concurrency cap (#3886).** Set `maxConcurrency` on the
+`local` slot so only requests to the local endpoint are serialised — cloud-tier
+fan-outs and parallel read/grep/web calls stay fully parallel:
+
+```jsonc
+// afk.config.json
+{ "models": { "local": { "id": "qwen3.6b", "maxConcurrency": 1 } } }
+```
+
+Or via env (wins over config):
+
+```bash
+export AFK_MODEL_LOCAL_MAX_CONCURRENCY=1
+```
+
+**Alternative: process-global caps** (use only when the local model is the only
+model in the session — these also serialise cloud-tier subagents and parallel
+read/grep/web tool calls):
 
 ```bash
 export AFK_MAX_CONCURRENT_SUBAGENT_CALLS=1
 export AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS=1
 ```
-
-> **Warning:** both knobs are process-global. They also serialise cloud-tier
-> subagents and parallel read/grep/web tool calls. Use them only when the local
-> model is the only model in the session. Per-slot caps are tracked in
-> [#3886](https://github.com/griffinwork40/agent-afk/issues/3886).
 
 **Model choice: one data point.** On one Apple Silicon MacBook Pro (M5 Max,
 128 GB) we ran 15 agent-shaped tasks x 2 runs:
