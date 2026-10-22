@@ -168,16 +168,26 @@ export function instrumentHandleForChain(
   const reasonOf = (r: import('../../subagent/result.js').SubagentResult): string =>
     r.incomplete === true ? (r.incompleteReason ?? 'incomplete') : r.status;
   const h = handle as unknown as Record<string, unknown>;
+  if (typeof handle.runToResult === 'function') wrapRun(h, handle, record, reasonOf);
+  if (typeof handle.runInBackground === 'function') wrapBackground(h, handle, record, reasonOf, terminal.chain);
+}
+
+type Res = import('../../subagent/result.js').SubagentResult;
+
+function wrapRun(h: Record<string, unknown>, handle: ChainHandle, record: (r: Res | undefined, reason: string) => void, reasonOf: (r: Res) => string): void {
   const origRun = handle.runToResult.bind(handle) as (p: unknown) => Promise<import('../../subagent/result.js').SubagentResult>;
   h['runToResult'] = (p: unknown) => origRun(p).then(
     (r) => { record(r, reasonOf(r)); return r; },
     (err: unknown) => { record(undefined, 'failed'); throw err; },
   );
+}
+
+function wrapBackground(h: Record<string, unknown>, handle: ChainHandle, record: (r: Res | undefined, reason: string) => void, reasonOf: (r: Res) => string, chain: ChainRecord): void {
   const origBg = handle.runInBackground.bind(handle) as (p: unknown, cb?: (r: import('../../subagent/result.js').SubagentResult) => void, ...rest: unknown[]) => unknown;
   h['runInBackground'] = (p: unknown, cb?: (r: import('../../subagent/result.js').SubagentResult) => void, ...rest: unknown[]) =>
     origBg(p, (r) => {
       record(r, reasonOf(r));
-      appendLineToMessage(r, terminal.chain!);
+      appendLineToMessage(r, chain);
       cb?.(r);
     }, ...rest);
 }
