@@ -114,4 +114,21 @@ describe('continuation guards', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('caps held chains: evicts the oldest non-in-flight chain, which is then refused as unknown', () => {
+    const reg = new ContinuationRegistry({ maxRounds: 150, maxContinuations: 3 }, 3);
+    const done = (c: { chainId: string }) => reg.recordTerminal(c.chainId, { childId: 'c', journalUsable: true, roundsUsed: 1, checkpoint: undefined, endReason: 'capped' });
+    const a = reg.createChain({ owner: 'root', rootSessionId: 's', inputs, roundCap: 5 }); // stays in flight
+    const b = reg.createChain({ owner: 'root', rootSessionId: 's', inputs, roundCap: 5 }); done(b);
+    const c = reg.createChain({ owner: 'root', rootSessionId: 's', inputs, roundCap: 5 }); done(c);
+    const d = reg.createChain({ owner: 'root', rootSessionId: 's', inputs, roundCap: 5 });
+    expect(reg.size).toBe(3);
+    expect(reg.get(a.chainId)).toBeDefined(); // in flight: never evicted
+    expect(reg.get(b.chainId)).toBeUndefined(); // oldest settled: evicted
+    expect(reg.get(c.chainId)).toBeDefined();
+    expect(reg.get(d.chainId)).toBeDefined();
+    const refused = reg.admitContinuation(b.chainId, 'root', 5, 50);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.reason).toMatch(/unknown continuation chain/);
+  });
 });

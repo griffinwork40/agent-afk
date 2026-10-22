@@ -93,7 +93,11 @@ export function resolveContinuationLimits(): ContinuationLimits {
   };
 }
 
+/** Max chains held per registry; beyond it the oldest non-in-flight chains are evicted (then refused as unknown). */
+export const MAX_CHAINS = 256;
+
 export class ContinuationRegistry {
+  /** Insertion-ordered: iteration yields the oldest chain first. */
   private readonly chains = new Map<string, ChainRecord>();
   /**
    * Per-registry identity of the depth-0 (root) session. The root session's
@@ -102,7 +106,28 @@ export class ContinuationRegistry {
    */
   readonly rootActor = `root_${randomBytes(12).toString('hex')}`;
 
-  constructor(private readonly limits: ContinuationLimits = resolveContinuationLimits()) {}
+  constructor(
+    private readonly limits: ContinuationLimits = resolveContinuationLimits(),
+    private readonly maxChains: number = MAX_CHAINS,
+  ) {}
+
+  /** Number of chains currently held. */
+  get size(): number {
+    return this.chains.size;
+  }
+
+  /**
+   * Bound memory: evict oldest chains that are not in flight until a new one
+   * fits under the cap. In-flight chains are never evicted (their terminal
+   * must still find them), so the map may briefly exceed the cap when every
+   * held chain is in flight.
+   */
+  private evictForInsert(): void {
+    for (const [id, chain] of this.chains) {
+      if (this.chains.size < this.maxChains) return;
+      if (!chain.inFlight) this.chains.delete(id);
+    }
+  }
 
   /** Mint a chain for an initial dispatch; `roundCap` 0 means uncapped. */
   createChain(args: { owner: string; rootSessionId: string | undefined; inputs: ChainDispatchInputs; roundCap: number }): ChainRecord {
@@ -122,6 +147,7 @@ export class ContinuationRegistry {
       checkpoint: undefined,
       lastEndReason: undefined,
     };
+    this.evictForInsert();
     this.chains.set(chainId, record);
     return record;
   }
