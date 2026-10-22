@@ -342,9 +342,9 @@ describe('session-store — naming', () => {
     const stats = createSessionStats('sonnet');
     // recordTurn derives the name from the first user message.
     recordTurn(stats, 'Help me fix the Telegram resume bug', 'ok', { sessionId: 'sdk-auto' });
-    expect(stats.name).toBe('help-me-fix-the-telegram-resume');
+    expect(stats.name).toBe('help-me-fix-telegram-resume-bug');
     const path = saveSession(stats);
-    expect(loadSession(path)!.name).toBe('help-me-fix-the-telegram-resume');
+    expect(loadSession(path)!.name).toBe('help-me-fix-telegram-resume-bug');
   });
 
   it('does not overwrite an explicitly set name on later turns', () => {
@@ -418,7 +418,7 @@ describe('session-store — naming', () => {
   it('saving and renaming a session never forks a duplicate sidecar', () => {
     const stats = createSessionStats('sonnet');
     recordTurn(stats, 'hello world', 'hi', { sessionId: 'sdk-dup' });
-    expect(stats.name).toBe('hello-world');
+    expect(stats.name).toBe('world'); // 'hello' is a stop word
     const path = saveSession(stats);
     const dir = sessionsDirOf(path);
 

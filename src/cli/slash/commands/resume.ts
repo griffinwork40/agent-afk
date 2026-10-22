@@ -23,6 +23,7 @@
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { findSession, listSessions } from '../../session-store.js';
+import { resolveRepoRoot } from '../../git-repo-root.js';
 import { formatCost } from '../../format-utils.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import { runPicker } from '../../render/picker.js';
@@ -106,10 +107,6 @@ function uniquePickLabels(entries: readonly SessionEntry[]): string[] {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Conversation preview (interactive REPL only)
-// ---------------------------------------------------------------------------
-
 /** Maximum number of stored turns to render in the preview. */
 const PREVIEW_TURN_LIMIT = 10;
 
@@ -135,16 +132,9 @@ async function showResumePreview(
   const stored = found.data;
   const turns = stored.turns ?? [];
 
-  // Build the rendered conversation lines as an array.
   const previewLines: string[] = [];
-  const lineWriter = {
-    line: (t = ''): void => { previewLines.push(t); },
-    raw: (t: string): void => { previewLines.push(t); },
-    success: (t: string): void => { previewLines.push(t); },
-    info: (t: string): void => { previewLines.push(t); },
-    warn: (t: string): void => { previewLines.push(t); },
-    error: (t: string): void => { previewLines.push(t); },
-  };
+  const push = (t = ''): void => { previewLines.push(t); };
+  const lineWriter = { line: push, raw: push, success: push, info: push, warn: push, error: push };
 
   // Render header.
   lineWriter.line(renderResumeViewHeader({
@@ -289,20 +279,29 @@ export const resumeCmd: SlashCommand = {
       return 'continue';
     }
     const currentCwd = ctx.stats.cwd ?? process.cwd();
-    const localEntries = entries.filter((e) => e.cwd === currentCwd);
+    const currentRepoRoot = resolveRepoRoot(currentCwd);
+    const localEntries = entries.filter((e) => {
+      if (e.source === 'daemon') return false;
+      if (currentRepoRoot) {
+        if (e.repoRoot) return e.repoRoot === currentRepoRoot;
+        if (e.cwd) return resolveRepoRoot(e.cwd) === currentRepoRoot;
+      }
+      return e.cwd === currentCwd;
+    });
+    const hiddenCount = entries.length - localEntries.length;
     const isFiltered = localEntries.length > 0;
     const displayEntries = isFiltered ? localEntries : entries;
+    const hiddenNote = hiddenCount > 0 ? ` (${hiddenCount} from other projects hidden)` : '';
 
     // Interactive picker on a TTY: select a session to resume it directly.
     const compositor = ctx.getCompositor?.() ?? null;
     if (compositor) {
-      // No cap — virtual scroll in the picker handles the viewport.
       const shown = displayEntries;
       const options = uniquePickLabels(shown);
       const picked = await runPicker(compositor, {
         header: [
           palette.bold(`Resume a session  (${shown.length})`),
-          palette.dim(isFiltered ? 'saved in this directory' : 'all directories (none saved here)'),
+          palette.dim(isFiltered ? `saved in this repo${hiddenNote}` : 'all directories (none saved here)'),
           '',
         ],
         options,
@@ -323,7 +322,7 @@ export const resumeCmd: SlashCommand = {
 
     // Non-TTY fallback: read-only table + the manual resume hint.
     const header = isFiltered
-      ? palette.bold(`Saved sessions  (${displayEntries.length})`)
+      ? palette.bold(`Saved sessions  (${displayEntries.length})${hiddenNote}`)
       : palette.bold(`Saved sessions — all (none in this directory)`);
     ctx.out.line();
     ctx.out.line(header);

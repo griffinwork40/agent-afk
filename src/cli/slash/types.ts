@@ -163,6 +163,13 @@ export interface SessionStats {
    */
   cwd?: string;
   /**
+   * Shared git repository root, resolved via `git rev-parse --git-common-dir`
+   * at session start. Identical for the main checkout and all linked worktrees
+   * of the same repo, so `/resume` can include worktree sessions in the local
+   * filter rather than hiding them behind an exact-cwd mismatch.
+   */
+  repoRoot?: string;
+  /**
    * Origin surface of the session. Persisted to the shared session store so a
    * resumer can tell where a session came from. Undefined is treated as 'cli'
    * (the default surface); the Telegram bot sets 'telegram' so CLI `/resume`

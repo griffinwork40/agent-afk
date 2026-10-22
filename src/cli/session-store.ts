@@ -79,6 +79,9 @@ export interface StoredSession {
    * to filter the list to sessions from the current directory. Absent on
    * legacy sidecars — those surface only in the global fallback view. */
   cwd?: string;
+  /** Shared git repo root (dirname of git-common-dir). Same for main checkout
+   * and all linked worktrees; lets /resume include worktree sessions. */
+  repoRoot?: string;
   /** Session-registry handle id. Absent on pre-registry sidecars → the
    *  sidecar's on-disk id is used as the stable handle id (see storedToHandle). */
   handleId?: string;
@@ -103,6 +106,7 @@ export interface SessionListEntry {
   totalTurns: number;
   totalCostUsd: number;
   cwd?: string;
+  repoRoot?: string;
 }
 
 export interface FoundSession {
@@ -191,6 +195,7 @@ export function saveSession(
     ...(stats.actor ? { actor: stats.actor } : {}),
     ...(stats.telegramChatId !== undefined ? { telegramChatId: stats.telegramChatId } : {}),
     ...(stats.cwd ? { cwd: stats.cwd } : {}),
+    ...(stats.repoRoot ? { repoRoot: stats.repoRoot } : {}),
     model: stats.model,
     startedAt: stats.sessionStartTime,
     savedAt: now,
@@ -243,10 +248,10 @@ export function forkStoredSession(
     totalTokens: stats.totalTokens,
     totalDurationMs: stats.totalDurationMs,
     turns: [...stats.turns],
-    // Preserve the session's cwd so a forked sidecar records where it was
-    // running (e.g. an `afk --worktree` session). Without this, resuming the
-    // fork lands in the launch cwd instead of the worktree. Mirrors saveSession.
+    // Preserve the session's cwd and repoRoot so a forked sidecar records
+    // where it was running (e.g. an `afk --worktree` session). Mirrors saveSession.
     ...(stats.cwd ? { cwd: stats.cwd } : {}),
+    ...(stats.repoRoot ? { repoRoot: stats.repoRoot } : {}),
     ...(stats.sessionId ? { forkedFrom: stats.sessionId } : {}),
     forkedAt: Date.now(),
   };
@@ -362,6 +367,7 @@ export function listSessions(): SessionListEntry[] {
         totalTurns: loaded.totalTurns,
         totalCostUsd: loaded.totalCostUsd,
         cwd: loaded.cwd,
+        repoRoot: loaded.repoRoot,
       });
     } catch {
       // skip corrupted files

@@ -22,6 +22,7 @@ import type { AgentModelInput, OutputEvent } from '../agent/types.js';
 import { createSessionStats, recordTurn } from './slash/session-stats.js';
 import { saveSession } from './session-store.js';
 import type { SessionStats, ToolEvent } from './slash/types.js';
+import { resolveRepoRoot } from './git-repo-root.js';
 
 export interface SessionAutosaverOptions {
   model: AgentModelInput;
@@ -49,7 +50,10 @@ export interface SessionAutosaver {
 export function createSessionAutosaver(opts: SessionAutosaverOptions): SessionAutosaver {
   const stats = createSessionStats(opts.model);
   stats.source = opts.source;
-  if (opts.cwd !== undefined) stats.cwd = opts.cwd;
+  if (opts.cwd !== undefined) {
+    stats.cwd = opts.cwd;
+    stats.repoRoot = resolveRepoRoot(opts.cwd);
+  }
   if (opts.sessionId !== undefined) stats.sessionId = opts.sessionId;
   if (opts.name !== undefined) stats.name = opts.name;
   let reported = false;

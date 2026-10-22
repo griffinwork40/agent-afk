@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { resolveRepoRoot } from '../../git-repo-root.js';
 import { StatusLine } from '../../status-line.js';
 import { GitStatusSampler } from '../../git-status-sampler.js';
 import { createConsoleWriter } from '../../slash/writer.js';
@@ -81,6 +82,7 @@ export function createReplSurface(a: {
   // `process.cwd()`. Captured once at bootstrap — sessions don't `chdir`
   // mid-run, and the status line treats this as a fixed identity field.
   stats.cwd = a.effectiveCwd ?? process.cwd();
+  stats.repoRoot = resolveRepoRoot(stats.cwd);
 
   // Trace was opened earlier (before the executor) so the
   // BackgroundAgentRegistry could be constructed with the writer. Surface
