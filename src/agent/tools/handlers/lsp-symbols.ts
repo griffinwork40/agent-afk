@@ -144,6 +144,7 @@ export async function queryLspSymbol(
   if (!TYPESCRIPT_SERVER_DEFINITION.languageIds[ext.toLowerCase()]) {
     return { locations: [], error: `Unsupported file type: ${ext}` };
   }
+  const t0 = Date.now();
   let content: string;
   try {
     content = await readFile(filePath, 'utf8');
@@ -153,8 +154,12 @@ export async function queryLspSymbol(
   const spec = typescriptSpecFromCommand(serverCmd);
   const root = rootDir ?? typescriptRootFor(filePath);
   const lspMethod = subcommand === 'definition' ? 'textDocument/definition' : 'textDocument/references';
+  // F4: subtract the time spent reading the file so the withPooledFile
+  // deadline covers the full budget, not just what remains after the read.
+  const elapsed = Date.now() - t0;
+  const timeoutMs = Math.max(0, getSymbolsTimeoutMs() - elapsed);
   try {
-    const raw = await withPooledFile(spec, filePath, content, { root, timeoutMs: getSymbolsTimeoutMs(), signal }, (ctx) => {
+    const raw = await withPooledFile(spec, filePath, content, { root, timeoutMs, signal }, (ctx) => {
       const params: Record<string, unknown> = {
         textDocument: { uri: ctx.sync.uri },
         // LSP uses 0-based positions.

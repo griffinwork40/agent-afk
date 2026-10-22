@@ -243,7 +243,24 @@ export function getLspPool(): LspServerPool {
   if (!pool) {
     const created = new LspServerPool();
     pool = created;
+    // Async cleanup for graceful shutdown (SIGTERM / normal exit with drain).
     registerCleanup(() => created.disposeAll());
+    // Synchronous process.on('exit') fires even on daemon crash / SIGKILL-after-
+    // exit-event. We cannot await here (synchronous context) but calling
+    // disposeAll() schedules the async disposal chain. What matters on a hard
+    // exit is that each LspClient calls killServerTree() synchronously via its
+    // own 'exit' handler registered in dispose(). This hook ensures the pool
+    // iterates all live entries and triggers those kills even when the async
+    // cleanup above never had a chance to run.
+    process.on('exit', () => {
+      for (const entry of created['entries'].values()) {
+        const client = entry.client;
+        if (client) {
+          // Best-effort synchronous kill; errors are silently swallowed on exit.
+          try { void client.dispose(); } catch { /* ignore */ }
+        }
+      }
+    });
   }
   return pool;
 }

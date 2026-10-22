@@ -68,7 +68,21 @@ export function buildSpawnCommand(
   if (!rel || !SCRIPT_EXT.test(rel)) {
     throw new Error(`Refusing to run ${path.win32.basename(resolved)} through a shell: not an npm shim`);
   }
-  const entry = path.win32.join(path.win32.dirname(resolved), rel);
+  const shimDir = path.win32.dirname(resolved);
+  const entry = path.win32.join(shimDir, rel);
+  // Security (F3): assert the resolved entry stays inside the node_modules
+  // tree (parent of .bin). A crafted shim with many `..` components could
+  // otherwise escape the npm install prefix and reach arbitrary paths.
+  // Legitimate npm shims use exactly one `..` step: `.bin\..\pkg\cli.js`.
+  // We normalise and check containment against the node_modules directory
+  // (dirname of .bin), which is the broadest legitimate boundary.
+  const allowedRoot = path.win32.normalize(path.win32.dirname(shimDir)) + path.win32.sep;
+  const normalEntry = path.win32.normalize(entry);
+  if (!normalEntry.startsWith(allowedRoot)) {
+    throw new Error(
+      `Refusing to run ${path.win32.basename(resolved)}: shim entry escapes package directory (path traversal)`,
+    );
+  }
   return { file: deps.execPath ?? process.execPath, args: [entry, ...args] };
 }
 

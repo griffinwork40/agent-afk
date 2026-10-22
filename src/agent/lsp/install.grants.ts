@@ -15,6 +15,11 @@
 import { readFile } from 'node:fs/promises';
 import { getLspGrantsPath } from '../../paths.lsp.js';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { MutexRegistry } from './async-mutex.js';
+
+// One mutex per grants-file path so concurrent ensureInstalledSafe calls for
+// different languages never race on the same read-modify-write cycle.
+const grantsMutexes = new MutexRegistry();
 
 // ---------------------------------------------------------------------------
 // Types
@@ -82,17 +87,25 @@ export function createGrantStore(grantsPath?: string): GrantStore {
     },
 
     async persistGrant(language: string, packages: readonly string[]): Promise<void> {
-      const file = await readGrantsFile(path);
-      const grant: LspInstallGrant = {
-        language,
-        packages,
-        grantedAt: new Date().toISOString(),
-      };
-      const updated: GrantsFile = {
-        v: 1,
-        grants: { ...file.grants, [language]: grant },
-      };
-      await atomicWriteFileAsync(path, JSON.stringify(updated, null, 2));
+      // Invariant: serialise read-modify-write on a per-path mutex so two
+      // concurrent ensureInstalledSafe calls for different languages both read
+      // the latest snapshot before writing — last-writer-wins is prevented.
+      const release = await grantsMutexes.get(path).acquire();
+      try {
+        const file = await readGrantsFile(path);
+        const grant: LspInstallGrant = {
+          language,
+          packages,
+          grantedAt: new Date().toISOString(),
+        };
+        const updated: GrantsFile = {
+          v: 1,
+          grants: { ...file.grants, [language]: grant },
+        };
+        await atomicWriteFileAsync(path, JSON.stringify(updated, null, 2));
+      } finally {
+        release();
+      }
     },
   };
 }

@@ -26,6 +26,12 @@ export interface LspLanguageFootprint {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Bounded-concurrency queue cap for directory traversal.
+ * Prevents unbounded Promise.all fan-out on deep node_modules trees.
+ */
+const DIR_BYTES_CONCURRENCY = 32;
+
 /** Recursively sum byte sizes under `dir`. Returns 0 on any error. */
 async function dirBytes(dir: string): Promise<number> {
   let total = 0;
@@ -35,8 +41,13 @@ async function dirBytes(dir: string): Promise<number> {
   } catch {
     return 0;
   }
-  await Promise.all(
-    entries.map(async (name) => {
+  // Bounded concurrency: cap simultaneous stat/readdir calls to avoid
+  // opening thousands of file descriptors on deep node_modules trees.
+  let index = 0;
+  async function worker(): Promise<void> {
+    while (index < entries.length) {
+      const name = entries[index++];
+      if (name === undefined) break;
       const child = join(dir, name);
       try {
         const st = await stat(child);
@@ -48,8 +59,13 @@ async function dirBytes(dir: string): Promise<number> {
       } catch {
         // Ignore permission / race errors.
       }
-    }),
+    }
+  }
+  const workers = Array.from(
+    { length: Math.min(DIR_BYTES_CONCURRENCY, entries.length) },
+    () => worker(),
   );
+  await Promise.all(workers);
   return total;
 }
 

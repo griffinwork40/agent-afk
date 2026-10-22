@@ -78,6 +78,7 @@ export async function queryLspDiagnostics(
   serverCmd: readonly string[] = DEFAULT_LSP_CMD,
 ): Promise<LspDiagnostic[]> {
   if (!TYPESCRIPT_SERVER_DEFINITION.languageIds[path.extname(filePath).toLowerCase()]) return [];
+  const t0 = Date.now();
   let content: string;
   try {
     content = await readFile(filePath, 'utf8');
@@ -86,9 +87,12 @@ export async function queryLspDiagnostics(
   }
   const spec = typescriptSpecFromCommand(serverCmd);
   try {
+    // F4: subtract the time spent reading the file so the withPooledFile
+    // deadline covers the full budget, not just what remains after the read.
+    const elapsed = Date.now() - t0;
     const published = await withPooledFile(
       spec, filePath, content,
-      { root: typescriptRootFor(filePath), timeoutMs: getTimeoutMs() },
+      { root: typescriptRootFor(filePath), timeoutMs: Math.max(0, getTimeoutMs() - elapsed) },
       (ctx) => awaitSyncDiagnostics(ctx),
     );
     return published ? published.diagnostics.filter(isObject).map(toDiagnostic) : [];

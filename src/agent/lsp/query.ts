@@ -15,6 +15,21 @@ import { LspClient, LspClientError, type FileSync } from './client.js';
 import { getLspPool, type LspServerPool } from './pool.js';
 import type { PublishedDiagnostics } from './diagnostics-store.js';
 import type { ServerSpec } from './server-spec.js';
+import { MutexRegistry } from './async-mutex.js';
+
+// Invariant: concurrent withPooledFile calls for the same (client, uri) must
+// serialise the syncFile+fn pair so two didChange notifications cannot race
+// and overwrite each other's content on the server.
+const syncLocks = new MutexRegistry();
+
+// Stable numeric IDs for LspClient instances (no id property on the class).
+const clientIds = new WeakMap<LspClient, number>();
+let nextClientId = 1;
+function clientId(c: LspClient): number {
+  let id = clientIds.get(c);
+  if (id === undefined) { id = nextClientId++; clientIds.set(c, id); }
+  return id;
+}
 
 export interface PooledQueryOptions {
   /** Workspace root the server is keyed and spawned on. */
@@ -53,6 +68,11 @@ export async function withPooledFile<T>(
   const client = await pool.acquire(spec, opts.root, { timeoutMs: remainingMs(), signal: opts.signal });
   const release = client.hold();
   const releaseDoc = client.useDocument(pathToFileURL(filePath).toString());
+  // Invariant: per-(client, uri) mutex serialises the syncFile+fn pair so
+  // concurrent queries (e.g. diagnostics + symbols for the same file) cannot
+  // interleave didChange notifications and corrupt the server's buffer state.
+  const syncKey = `${clientId(client)}:${pathToFileURL(filePath).toString()}`;
+  const releaseSyncLock = await syncLocks.get(syncKey).acquire();
   let syncedUri: string | null = null;
   try {
     // Invariant: inactive open copies must be closed BEFORE the request, so
@@ -65,6 +85,7 @@ export async function withPooledFile<T>(
     syncedUri = sync.uri;
     return await fn({ client, sync, seqBeforeSync, remainingMs });
   } finally {
+    releaseSyncLock();
     // Also prune documents whose concurrent query holds have now released.
     releaseDoc();
     if (syncedUri !== null) client.closeOthers(syncedUri);
