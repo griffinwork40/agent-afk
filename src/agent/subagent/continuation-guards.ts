@@ -30,11 +30,10 @@ function sameList(a: string[] | undefined, b: string[] | undefined): boolean {
   return b !== undefined && a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-/** D3: inherited fields are not overridable; worktree chains and remote host refused. */
+/** D3: inherited fields are not overridable; remote host refused. */
 export function checkContinuationOverrides(chain: ChainRecord, call: ContinuationOverrides): string | undefined {
   if (call.host !== undefined) return 'continuation is not supported for remote (`host`) dispatch';
   const stored: ChainDispatchInputs = chain.inputs;
-  if (stored.isolation === 'worktree') return 'continuation of an `isolation: "worktree"` chain is not supported (v1)';
   const conflicts: string[] = [];
   if (call.agent_type !== undefined && call.agent_type !== stored.agent_type) conflicts.push('agent_type');
   if (call.model !== undefined && call.model !== stored.model) conflicts.push('model');
