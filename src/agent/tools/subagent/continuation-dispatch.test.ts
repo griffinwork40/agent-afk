@@ -8,7 +8,8 @@ import { SubagentExecutor, type SubagentExecutorContext } from '../subagent-exec
 import { ContinuationRegistry } from '../../subagent/continuation-registry.js';
 import { agentTool, composeTool } from '../schemas.agent-tools.js';
 import { parseAgentInput } from './input-parse.js';
-import { instrumentHandleForChain, annotateChainResult } from './continuation-dispatch.js';
+import { instrumentHandleForChain, annotateChainResult, actorIdentity } from './continuation-dispatch.js';
+import { admitContinuationCall } from './continuation-run.js';
 
 const CAPPED = 'tool_use_loop_capped';
 
@@ -73,7 +74,7 @@ describe('continuation dispatch wiring', () => {
     expect(meta?.continuable).toBe(true);
     expect(r.content).toContain(`[continuation: chain_id=${meta!.chainId}, rounds 7/150 used`);
     const chain = registry.get(meta!.chainId)!;
-    expect(chain.owner).toBe('root-1');
+    expect(chain.owner).toBe(registry.rootActor);
     expect(chain.inFlight).toBe(false);
     expect(chain.lastEndReason).toBe(CAPPED);
     expect(chain.checkpoint?.cwd).toBe(tmpdir()); // runtime cwd, non-git => git:false
@@ -128,5 +129,54 @@ describe('continuation dispatch wiring', () => {
     const r = annotateChainResult({ content: 'x', incomplete: true, incompleteReason: CAPPED }, chain);
     expect(r.continuation?.continuable).toBe(false);
     expect(r.content).toBe('x');
+  });
+
+  it('owner: the root continues its own chain when its session id was unassigned at mint', async () => {
+    const registry = new ContinuationRegistry();
+    const parentSession = { sessionId: undefined as string | undefined, getInputStreamRef: vi.fn(), abortSignal: new AbortController().signal };
+    const ctx: SubagentExecutorContext = {
+      subagentManager: { forkSubagent: vi.fn().mockResolvedValue({ ...handleFor(cappedResult()), session: { messageJournal: { length: 4 } } }) } as never,
+      parentSession: parentSession as never,
+      defaultConfig: { apiKey: 'k', systemPrompt: 's' }, defaultSubagentModel: 'sonnet', depth: 0, cwd: tmpdir(),
+      continuationRegistry: registry,
+    };
+    const r = await new SubagentExecutor(ctx).execute(call({ prompt: 'work', max_tool_use_iterations: 7 }));
+    const chainId = (r as { continuation?: { chainId: string } }).continuation!.chainId;
+    const chain = registry.get(chainId)!;
+    expect(chain.owner).toBe(registry.rootActor);
+    expect(chain.owner).not.toBe('');
+    parentSession.sessionId = 'root-1'; // provider assigned the id after the first turn
+    const admitted = admitContinuationCall(parseAgentInput({ prompt: 'more', continuation_chain_id: chainId }), { ...ctx, parentSession });
+    // Ownership passes; the (mock) child wrote no journal, so seeding is what refuses.
+    expect('error' in admitted && admitted.error.content).not.toMatch(/owned by another actor/);
+    expect('error' in admitted && admitted.error.content).toMatch(/could not seed/);
+    expect(chain.inFlight).toBe(false); // seed refusal rolled back
+  });
+
+  it('owner: a child cannot continue its parent\'s or a sibling\'s chain; identities are never empty', () => {
+    const registry = new ContinuationRegistry();
+    const rootCtx = { depth: 0, continuationRegistry: registry, parentSession: { sessionId: undefined } };
+    const childA = { depth: 1, continuationRegistry: registry, parentSession: { sessionId: 'sub-a' } };
+    const childB = { depth: 1, continuationRegistry: registry, parentSession: { sessionId: 'sub-b' } };
+    const anon = { depth: 1, continuationRegistry: registry, parentSession: { sessionId: undefined } };
+    expect(actorIdentity(rootCtx)).toBe(registry.rootActor);
+    expect(actorIdentity(childA)).toBe('subagent:sub-a');
+    expect(actorIdentity(anon)).toBeUndefined();
+    const mk = (owner: string) => {
+      const c = registry.createChain({ owner, rootSessionId: 'r', roundCap: 5, inputs: { writeCapable: false } });
+      registry.recordTerminal(c.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: CAPPED });
+      return c.chainId;
+    };
+    const rootChain = mk(actorIdentity(rootCtx)!);
+    const aChain = mk(actorIdentity(childA)!);
+    const refuse = (id: string, ctx: typeof rootCtx | typeof childA) => {
+      const r = admitContinuationCall(parseAgentInput({ prompt: 'x', continuation_chain_id: id }), ctx);
+      return 'error' in r ? r.error.content : '';
+    };
+    expect(refuse(rootChain, childA)).toMatch(/owned by another actor/); // child -> parent's chain
+    expect(refuse(aChain, childB)).toMatch(/owned by another actor/); // sibling
+    expect(refuse(aChain, anon)).toMatch(/has no identity/);
+    expect(refuse(aChain, rootCtx)).toMatch(/owned by another actor/); // parent -> child's chain
+    expect(() => registry.createChain({ owner: '', rootSessionId: 'r', roundCap: 1, inputs: { writeCapable: false } })).toThrow();
   });
 });

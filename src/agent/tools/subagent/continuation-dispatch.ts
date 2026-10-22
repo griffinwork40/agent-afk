@@ -20,6 +20,7 @@ import {
   type WorkspaceCheckpoint,
 } from '../../subagent/continuation-registry.js';
 import { captureWorkspaceCheckpoint } from '../../subagent/continuation-guards.js';
+import { randomBytes } from 'node:crypto';
 import type { ContinuationPlan } from './continuation-run.js';
 
 /** Structured chain fields carried on the tool result (D6 metadata). */
@@ -43,6 +44,29 @@ export function parseDispatchInput(input: unknown): { parsed: AgentInput } | { e
   }
 }
 
+/** Executor-context fields that determine the dispatching actor. */
+export interface ActorCtx {
+  depth: number;
+  continuationRegistry?: ContinuationRegistry;
+  parentSession: { sessionId?: string | undefined };
+}
+
+/**
+ * Stable, non-empty identity of the actor issuing an `agent` call. Same value
+ * at mint and at continuation for the same actor; differs across actors.
+ * - depth 0 (root session): the registry's per-root token. The root's provider
+ *   session id may be unassigned during its first turn, so it is never used.
+ * - depth >= 1 (a subagent dispatching): that subagent's handle id, which
+ *   executeOnce backfills onto the nested executor's stub parent session right
+ *   after the fork, before the child runs.
+ * Undefined when no identity is available: nothing can be continued then.
+ */
+export function actorIdentity(ctx: ActorCtx): string | undefined {
+  if (ctx.depth === 0) return ctx.continuationRegistry?.rootActor;
+  const id = ctx.parentSession.sessionId;
+  return id !== undefined && id !== '' ? `subagent:${id}` : undefined;
+}
+
 export interface MintChainArgs {
   registry: ContinuationRegistry | undefined;
   owner: string | undefined;
@@ -59,8 +83,9 @@ export function mintDispatchChain(args: MintChainArgs): ChainRecord | undefined 
   const { registry, parsed } = args;
   if (registry === undefined || parsed.host !== undefined) return undefined;
   return registry.createChain({
-    owner: args.owner ?? '',
-    rootSessionId: args.rootSessionId ?? args.owner ?? '',
+    // No identity: an unmatchable per-chain owner (never '', so id-less actors never collide).
+    owner: args.owner ?? `unattributed_${randomBytes(12).toString('hex')}`,
+    rootSessionId: args.rootSessionId !== '' ? args.rootSessionId : undefined,
     roundCap: args.roundCap ?? 0,
     inputs: {
       ...(parsed.agent_type !== undefined ? { agent_type: parsed.agent_type } : {}),
@@ -234,7 +259,7 @@ function appendLineToMessage(r: import('../../subagent/result.js').SubagentResul
 
 /** executeOnce entry: mint (D2) + instrument terminal hooks (D9). One call keeps executeOnce under its ceiling. */
 export function wireDispatchChain(args: {
-  ctx: { continuationRegistry?: ContinuationRegistry; parentSession: { sessionId?: string | undefined }; parentRootSessionId?: string };
+  ctx: ActorCtx & { parentRootSessionId?: string };
   parsed: AgentInput;
   handle: ChainHandle & { session?: { messageJournal?: unknown } };
   childConfig: { model?: string; cwd?: string; maxToolUseIterations?: number };
@@ -247,7 +272,7 @@ export function wireDispatchChain(args: {
   const cwd = childConfig.cwd ?? args.currentCwd;
   const chain = plan !== undefined ? plan.chain : mintDispatchChain({
     registry: ctx.continuationRegistry,
-    owner: ctx.parentSession.sessionId,
+    owner: actorIdentity(ctx),
     rootSessionId: ctx.parentRootSessionId ?? ctx.parentSession.sessionId,
     parsed, model: childConfig.model, cwd, writeCapable: args.writeCapable,
     roundCap: childConfig.maxToolUseIterations,

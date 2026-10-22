@@ -38,6 +38,7 @@ import type { ChainRecord, ContinuationRegistry } from '../../subagent/continuat
 import { checkContinuationOverrides, checkWorkspaceDrift } from '../../subagent/continuation-guards.js';
 import { loadJournalMessages } from '../../journal/index.js';
 import { SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../../subagent/constants.js';
+import { actorIdentity } from './continuation-dispatch.js';
 
 /** Admitted continuation state threaded through the normal dispatch path. */
 export interface ContinuationPlan {
@@ -51,8 +52,10 @@ export interface ContinuationPlan {
 }
 
 interface AdmitCtx {
+  depth: number;
   continuationRegistry?: ContinuationRegistry;
   parentSession: { sessionId?: string | undefined };
+  parentRootSessionId?: string;
 }
 
 /** Tool error for a refused continuation; the text names the reason (D10). */
@@ -107,7 +110,8 @@ export function admitContinuationCall(parsed: AgentInput, ctx: AdmitCtx): { plan
   const id = parsed.continuation_chain_id ?? '';
   const registry = ctx.continuationRegistry;
   if (registry === undefined) return refuseContinuation('continuation is not available in this session');
-  const caller = ctx.parentSession.sessionId ?? '';
+  const caller = actorIdentity(ctx);
+  if (caller === undefined) return refuseContinuation('the calling actor has no identity yet, so it cannot own a continuation chain');
   const chain = registry.get(id);
   const pre = preAdmissionRefusal(chain, id, caller, parsed);
   if (pre !== undefined || chain === undefined) return refuseContinuation(pre ?? 'unknown chain');
@@ -117,7 +121,9 @@ export function admitContinuationCall(parsed: AgentInput, ctx: AdmitCtx): { plan
   const previous = chain.latestChildId ?? '';
   let messages: ReturnType<typeof loadJournalMessages> = null;
   try {
-    messages = loadJournalMessages(chain.rootSessionId, { subagentId: previous });
+    // Root id may have been unassigned at mint (root's first turn): resolve it now.
+    const rootSessionId = chain.rootSessionId ?? ctx.parentRootSessionId ?? ctx.parentSession.sessionId;
+    messages = rootSessionId !== undefined && rootSessionId !== '' ? loadJournalMessages(rootSessionId, { subagentId: previous }) : null;
   } catch {
     messages = null;
   }

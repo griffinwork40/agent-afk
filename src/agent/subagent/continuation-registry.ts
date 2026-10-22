@@ -48,8 +48,10 @@ export interface ContinuationLimits {
 
 export interface ChainRecord {
   chainId: string;
+  /** Stable non-empty actor identity (see continuation-dispatch actorIdentity). Never ''. */
   owner: string;
-  rootSessionId: string;
+  /** Root session id the child journals live under; undefined when unassigned at mint (resolved at admission). */
+  rootSessionId: string | undefined;
   latestChildId: string | undefined;
   inputs: ChainDispatchInputs;
   roundsCharged: number;
@@ -93,11 +95,18 @@ export function resolveContinuationLimits(): ContinuationLimits {
 
 export class ContinuationRegistry {
   private readonly chains = new Map<string, ChainRecord>();
+  /**
+   * Per-registry identity of the depth-0 (root) session. The root session's
+   * provider id can be unassigned during its first turn, so ownership never
+   * keys off it: one registry exists per root session (wire-executors).
+   */
+  readonly rootActor = `root_${randomBytes(12).toString('hex')}`;
 
   constructor(private readonly limits: ContinuationLimits = resolveContinuationLimits()) {}
 
   /** Mint a chain for an initial dispatch; `roundCap` 0 means uncapped. */
-  createChain(args: { owner: string; rootSessionId: string; inputs: ChainDispatchInputs; roundCap: number }): ChainRecord {
+  createChain(args: { owner: string; rootSessionId: string | undefined; inputs: ChainDispatchInputs; roundCap: number }): ChainRecord {
+    if (args.owner === '') throw new Error('continuation chain owner must be a non-empty actor identity');
     const chainId = `chain_${randomBytes(12).toString('hex')}`;
     const record: ChainRecord = {
       chainId,
@@ -129,7 +138,7 @@ export class ContinuationRegistry {
   admitContinuation(chainId: string, caller: string, requested: number | undefined, defaultAllowance: number): AdmissionResult {
     const chain = this.chains.get(chainId);
     if (chain === undefined) return { ok: false, reason: `unknown continuation chain "${chainId}" (chains are runtime-minted and in-memory only; they do not survive a restart or /resume)` };
-    if (chain.owner !== caller) return { ok: false, reason: `continuation chain "${chainId}" is owned by another actor` };
+    if (caller === '' || chain.owner !== caller) return { ok: false, reason: `continuation chain "${chainId}" is owned by another actor` };
     if (chain.inFlight) return { ok: false, reason: `a run on continuation chain "${chainId}" is still in flight` };
     if (chain.continuations >= chain.limits.maxContinuations) {
       return { ok: false, reason: `continuation limit reached (${chain.continuations}/${chain.limits.maxContinuations})` };

@@ -314,8 +314,8 @@ describe('D8 continuation through the agent executor', () => {
     const foreign = registry.createChain({ owner: 'someone-else', rootSessionId: 'x', roundCap: 5, inputs: { writeCapable: false } });
     registry.recordTerminal(foreign.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
     expect((await run({ prompt: 'x', continuation_chain_id: foreign.chainId })).content).toContain('owned by another actor');
-    const owner = (session as unknown as { sessionId?: string }).sessionId ?? '';
-    const iso = registry.createChain({ owner, rootSessionId: owner, roundCap: 5, inputs: { writeCapable: true, isolation: 'worktree' } });
+    const owner = registry.rootActor;
+    const iso = registry.createChain({ owner, rootSessionId: 'x', roundCap: 5, inputs: { writeCapable: true, isolation: 'worktree' } });
     registry.recordTerminal(iso.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
     expect((await run({ prompt: 'x', continuation_chain_id: iso.chainId })).content).toContain('`isolation: "worktree"` chain is not supported');
     expect(seen).toHaveLength(0);
