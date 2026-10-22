@@ -232,8 +232,9 @@ jobs:
           - os: windows-2022
             test-cmd: pnpm test
     # Windows setup (~4-6 min) + test run (~9 min) fits comfortably in 30 min.
-    # ubuntu/macos keep 15 min (unchanged).
-    timeout-minutes: ${{ matrix.os == 'windows-2022' && 30 || 15 }}
+    # macOS runners are ~1.5× slower than ubuntu; recent runs hit 9-13 min and
+    # occasionally cancel at the 15-min wall. Raise to 25 min to give headroom.
+    timeout-minutes: ${{ matrix.os == 'windows-2022' && 30 || matrix.os == 'macos-latest' && 25 || 15 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7

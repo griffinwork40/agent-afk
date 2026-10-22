@@ -1116,12 +1116,13 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         },
       ]),
     );
+    let h: DaemonHandle | null = null;
     try {
       // Isolation assertion: getAfkHome() must resolve to tmpHome so the store
       // module reads from our temp dir, not ~/.afk.  Verifies that vi.stubEnv
       // is active before the daemon is spun up and getSchedule() is called.
       expect(getAfkHome()).toBe(tmpHome);
-      const h = await spinDaemon();
+      h = await spinDaemon();
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1137,6 +1138,8 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       const task = h.scheduler.list().find((t) => t.taskId === 'shell-live');
       expect(task?.executor).toBe('shell');
     } finally {
+      await h?.stop();
+      handle = null;
       vi.unstubAllEnvs();
       // Isolation assertion: after unstub the store path must no longer resolve
       // to tmpHome, so a subsequent test in any order cannot inherit this dir.
@@ -1165,12 +1168,13 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         },
       ]),
     );
+    let h: DaemonHandle | null = null;
     try {
       // Isolation assertion: getAfkHome() must resolve to tmpHome so the store
       // module reads from our temp dir, not ~/.afk.  Verifies that vi.stubEnv
       // is active before the daemon is spun up and getSchedule() is called.
       expect(getAfkHome()).toBe(tmpHome);
-      const h = await spinDaemon();
+      h = await spinDaemon();
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1185,6 +1189,8 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       expect(res.status).toBe(400);
       expect(h.scheduler.list().some((t) => t.taskId === 'shell-live')).toBe(false);
     } finally {
+      await h?.stop();
+      handle = null;
       vi.unstubAllEnvs();
       // Isolation assertion: after unstub the store path must no longer resolve
       // to tmpHome, so a subsequent test in any order cannot inherit this dir.
@@ -1219,9 +1225,10 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         },
       ]),
     );
+    let h: DaemonHandle | null = null;
     try {
       expect(getAfkHome()).toBe(tmpHome);
-      const h = await spinDaemon();
+      h = await spinDaemon();
       // Request carries explicit notifyOn: 'failure' — must match the omitted store value.
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',
@@ -1239,6 +1246,8 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       const task = h.scheduler.list().find((t) => t.taskId === 'shell-notify');
       expect(task?.executor).toBe('shell');
     } finally {
+      await h?.stop();
+      handle = null;
       vi.unstubAllEnvs();
       expect(getAfkHome()).not.toBe(tmpHome);
       rmSync(tmpHome, { recursive: true, force: true });
@@ -1268,9 +1277,10 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         },
       ]),
     );
+    let h: DaemonHandle | null = null;
     try {
       expect(getAfkHome()).toBe(tmpHome);
-      const h = await spinDaemon();
+      h = await spinDaemon();
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1286,6 +1296,8 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       expect(res.status).toBe(400);
       expect(h.scheduler.list().find((t) => t.taskId === 'shell-notify-bad')).toBeUndefined();
     } finally {
+      await h?.stop();
+      handle = null;
       vi.unstubAllEnvs();
       expect(getAfkHome()).not.toBe(tmpHome);
       rmSync(tmpHome, { recursive: true, force: true });
@@ -1317,9 +1329,10 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         },
       ]),
     );
+    let h: DaemonHandle | null = null;
     try {
       expect(getAfkHome()).toBe(tmpHome);
-      const h = await spinDaemon();
+      h = await spinDaemon();
       // Request carries explicit notifyOn: null — must be treated as absent
       // and match the store entry whose notifyOn is also omitted.
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
@@ -1338,6 +1351,8 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       const task = h.scheduler.list().find((t) => t.taskId === 'shell-null-notify');
       expect(task?.executor).toBe('shell');
     } finally {
+      await h?.stop();
+      handle = null;
       vi.unstubAllEnvs();
       expect(getAfkHome()).not.toBe(tmpHome);
       rmSync(tmpHome, { recursive: true, force: true });
