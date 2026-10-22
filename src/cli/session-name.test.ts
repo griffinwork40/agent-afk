@@ -86,8 +86,9 @@ describe('slugifySessionName', () => {
 
   // --- slash-command handling ---
 
-  it('/pr-triage --limit 10 --auto-merge → pr-triage', () => {
-    expect(slugifySessionName('/pr-triage --limit 10 --auto-merge')).toBe('pr-triage');
+  it('/pr-triage --limit 10 --auto-merge → pr-triage-10', () => {
+    // --limit and --auto-merge are stripped; bare value '10' is not a flag and survives.
+    expect(slugifySessionName('/pr-triage --limit 10 --auto-merge')).toBe('pr-triage-10');
   });
 
   it('/god audit the codebase for issues → audit-codebase-issues', () => {
@@ -102,5 +103,19 @@ describe('slugifySessionName', () => {
 
   it('/tackle-issues 10 → tackle-issues-10', () => {
     expect(slugifySessionName('/tackle-issues 10')).toBe('tackle-issues-10');
+  });
+
+  it('/god --continue implement authentication → implement-authentication', () => {
+    // --continue is a boolean flag with no attached value; must not consume 'implement'.
+    expect(slugifySessionName('/god --continue implement authentication')).toBe(
+      'implement-authentication',
+    );
+  });
+
+  it('/pr-triage --auto-merge fix flaky tests → pr-triage-fix-flaky-tests', () => {
+    // --auto-merge is a boolean flag; 'fix', 'flaky', 'tests' must all survive.
+    expect(slugifySessionName('/pr-triage --auto-merge fix flaky tests')).toBe(
+      'pr-triage-fix-flaky-tests',
+    );
   });
 });

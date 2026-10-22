@@ -22,7 +22,7 @@ import type { AgentModelInput, OutputEvent } from '../agent/types.js';
 import { createSessionStats, recordTurn } from './slash/session-stats.js';
 import { saveSession } from './session-store.js';
 import type { SessionStats, ToolEvent } from './slash/types.js';
-import { resolveRepoRoot } from './git-repo-root.js';
+import { resolveRepoRootSync } from '../utils/git.js';
 
 export interface SessionAutosaverOptions {
   model: AgentModelInput;
@@ -52,7 +52,7 @@ export function createSessionAutosaver(opts: SessionAutosaverOptions): SessionAu
   stats.source = opts.source;
   if (opts.cwd !== undefined) {
     stats.cwd = opts.cwd;
-    stats.repoRoot = resolveRepoRoot(opts.cwd);
+    try { stats.repoRoot = resolveRepoRootSync({ cwd: opts.cwd, mode: 'git-common-dir' }); } catch { /* not a git repo */ }
   }
   if (opts.sessionId !== undefined) stats.sessionId = opts.sessionId;
   if (opts.name !== undefined) stats.name = opts.name;

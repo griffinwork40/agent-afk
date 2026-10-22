@@ -23,7 +23,7 @@
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { findSession, listSessions } from '../../session-store.js';
-import { resolveRepoRoot } from '../../git-repo-root.js';
+import { resolveRepoRootSync } from '../../../utils/git.js';
 import { formatCost } from '../../format-utils.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import { runPicker } from '../../render/picker.js';
@@ -279,18 +279,27 @@ export const resumeCmd: SlashCommand = {
       return 'continue';
     }
     const currentCwd = ctx.stats.cwd ?? process.cwd();
-    const currentRepoRoot = resolveRepoRoot(currentCwd);
-    const localEntries = entries.filter((e) => {
-      if (e.source === 'daemon') return false;
+    let currentRepoRoot: string | undefined;
+    try { currentRepoRoot = resolveRepoRootSync({ cwd: currentCwd, mode: 'git-common-dir' }); } catch { /* not a git repo */ }
+    const nonDaemon = entries.filter((e) => e.source !== 'daemon');
+    const repoRootCache = new Map<string, string | undefined>();
+    const cachedRepoRoot = (cwd: string): string | undefined => {
+      if (repoRootCache.has(cwd)) return repoRootCache.get(cwd);
+      let root: string | undefined;
+      try { root = resolveRepoRootSync({ cwd, mode: 'git-common-dir' }); } catch { /* not a git repo */ }
+      repoRootCache.set(cwd, root);
+      return root;
+    };
+    const localEntries = nonDaemon.filter((e) => {
       if (currentRepoRoot) {
         if (e.repoRoot) return e.repoRoot === currentRepoRoot;
-        if (e.cwd) return resolveRepoRoot(e.cwd) === currentRepoRoot;
+        if (e.cwd) return cachedRepoRoot(e.cwd) === currentRepoRoot;
       }
       return e.cwd === currentCwd;
     });
-    const hiddenCount = entries.length - localEntries.length;
+    const hiddenCount = nonDaemon.length - localEntries.length;
     const isFiltered = localEntries.length > 0;
-    const displayEntries = isFiltered ? localEntries : entries;
+    const displayEntries = isFiltered ? localEntries : nonDaemon;
     const hiddenNote = hiddenCount > 0 ? ` (${hiddenCount} from other projects hidden)` : '';
 
     // Interactive picker on a TTY: select a session to resume it directly.

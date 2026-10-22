@@ -11,8 +11,6 @@ Entries in the [Unreleased] section may include a short commit hash suffix
 
 ## [Unreleased]
 
-## [5.331.0] - 2026-10-22
-
 ### Added
 - web/CLI parity Stages 1-5: cross-surface slash commands, choices, lifecycle (/fork, /resume, /exit), structured /diff, session controls (#4295) (6a7043d2a)
 - /rewind conversation|files|both with cross-turn file restore (#4286) (2fd716087)
@@ -22,7 +20,6 @@ Entries in the [Unreleased] section may include a short commit hash suffix
 - remove write-only pending-question-store (#4299) (728d32c01)
 - address remaining advisory findings from 2026-10-19 evening triage (#4301) (a82a9aaac)
 - bash lexer long wrapper options, pipe-ampersand, truncated verbs (#4303) (9c0037771)
-- enable GitHub security features + CodeQL workflow (#4311) (3bbfd581d)
 
 ### Changed
 - stage 3 — use resolveChildModel in dispatchDagNode for model-resolution parity (#4288) (30b8993d7)
