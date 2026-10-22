@@ -48,12 +48,14 @@ describe('classifyError — auth', () => {
     expect(result.userMessage).not.toContain('Permission denied');
   });
 
-  it('classifies PermissionDeniedError by name as auth', () => {
-    const err = Object.assign(new Error('some sdk message'), { name: 'PermissionDeniedError' });
+  it('PermissionDeniedError without status (non-Anthropic error) → falls through to unknown', () => {
+    // Branch 5a requires BOTH name === 'PermissionDeniedError' AND status === 403.
+    // A plain error with only the name (no HTTP status) must NOT be classified as
+    // auth with Anthropic-specific seat-removal guidance — it falls through.
+    const err = Object.assign(new Error('some non-anthropic error'), { name: 'PermissionDeniedError' });
     const result = classifyError(err);
-    expect(result.kind).toBe('auth');
+    expect(result.kind).toBe('unknown');
     expect(result.exitCode).toBe(1);
-    expect(result.userMessage).toContain('403');
   });
 });
 

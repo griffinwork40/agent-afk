@@ -25,6 +25,8 @@ import {
 } from './index.js';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
 import { FastModeController } from '../../fast-mode.js';
+import { isRefreshablePermissionDenied } from './query/auth-retry-tier.js';
+import type { RetryTierContext } from './query/retry-context.js';
 
 // --- Mock SDK plumbing ---
 
@@ -160,12 +162,55 @@ function makeTextStream(text: string): RawMessageStreamEvent[] {
   ];
 }
 
+/** Create a 403 error object with an optional Anthropic SDK error_code. */
+function make403Error(errorCode?: string): Error {
+  const error = new Error('Permission denied');
+  (error as unknown as { status: number }).status = 403;
+  if (errorCode !== undefined) {
+    (error as unknown as { error: { error_code: string } }).error = { error_code: errorCode };
+  }
+  return error;
+}
+
 /** Create a 401 error object matching the SDK's shape. */
 function make401Error(): Error {
   const error = new Error('Unauthorized');
   (error as unknown as { status: number }).status = 401;
   return error;
 }
+
+// --- Unit tests for isRefreshablePermissionDenied ---
+
+describe('isRefreshablePermissionDenied — 403 error_code blocklist', () => {
+  const baseCtx = {
+    authMode: 'oauth',
+    tokenRefresher: async () => null,
+  } as unknown as RetryTierContext;
+
+  it('credit_balance_too_low → returns false (not refreshable)', () => {
+    expect(isRefreshablePermissionDenied(baseCtx, make403Error('credit_balance_too_low'))).toBe(false);
+  });
+
+  it('billing_not_active → returns false (not refreshable)', () => {
+    expect(isRefreshablePermissionDenied(baseCtx, make403Error('billing_not_active'))).toBe(false);
+  });
+
+  it('organization_quota_exceeded → returns false (not refreshable)', () => {
+    expect(isRefreshablePermissionDenied(baseCtx, make403Error('organization_quota_exceeded'))).toBe(false);
+  });
+
+  it('workspace_quota_exceeded → returns false (not refreshable)', () => {
+    expect(isRefreshablePermissionDenied(baseCtx, make403Error('workspace_quota_exceeded'))).toBe(false);
+  });
+
+  it('oauth_not_allowed_for_organization → returns false (not refreshable)', () => {
+    expect(isRefreshablePermissionDenied(baseCtx, make403Error('oauth_not_allowed_for_organization'))).toBe(false);
+  });
+
+  it('403 with no error_code (seat removal) → returns true (still refreshable)', () => {
+    expect(isRefreshablePermissionDenied(baseCtx, make403Error())).toBe(true);
+  });
+});
 
 // --- Tests ---
 

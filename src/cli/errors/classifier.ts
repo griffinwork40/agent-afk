@@ -112,8 +112,11 @@ export function classifyError(err: unknown): ClassifiedError {
     };
   }
 
-  // 5a. Anthropic PermissionDeniedError (seat removed, subscription inactive)
-  if (err instanceof Error && err.name === 'PermissionDeniedError') {
+  // 5a. Anthropic SDK PermissionDeniedError (seat removed, subscription inactive).
+  // Both conditions required: name guards against non-Anthropic errors that
+  // happen to share the class name; status===403 guards against SDK errors
+  // that use the same name for non-HTTP failures.
+  if (err instanceof Error && err.name === 'PermissionDeniedError' && errObj['status'] === 403) {
     return {
       kind: 'auth',
       userMessage: 'Access denied (HTTP 403). Your account seat may have been removed or subscription access is inactive.',
