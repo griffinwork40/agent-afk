@@ -73,25 +73,25 @@ describe('resolveDelegationProfile', () => {
 
 describe('DELEGATION_PROFILES invariants', () => {
   it('normal has no budget limits (all undefined)', () => {
-    const p = DELEGATION_PROFILES['normal'];
+    const p = DELEGATION_PROFILES['normal']!;
     expect(p.maxConcurrentChildrenPerAgent).toBeUndefined();
     expect(p.maxConcurrentAgents).toBeUndefined();
     expect(p.maxTotalAgents).toBeUndefined();
   });
 
   it('deep depth is within the accepted ceiling (0–6)', () => {
-    expect(DELEGATION_PROFILES['deep'].maxNestingDepth).toBeGreaterThanOrEqual(0);
-    expect(DELEGATION_PROFILES['deep'].maxNestingDepth).toBeLessThanOrEqual(6);
+    expect(DELEGATION_PROFILES['deep']!.maxNestingDepth).toBeGreaterThanOrEqual(0);
+    expect(DELEGATION_PROFILES['deep']!.maxNestingDepth).toBeLessThanOrEqual(6);
   });
 
   it('shallow depth is within the accepted ceiling (0–6)', () => {
-    expect(DELEGATION_PROFILES['shallow'].maxNestingDepth).toBeGreaterThanOrEqual(0);
-    expect(DELEGATION_PROFILES['shallow'].maxNestingDepth).toBeLessThanOrEqual(6);
+    expect(DELEGATION_PROFILES['shallow']!.maxNestingDepth).toBeGreaterThanOrEqual(0);
+    expect(DELEGATION_PROFILES['shallow']!.maxNestingDepth).toBeLessThanOrEqual(6);
   });
 
   it('deep has more budget than shallow', () => {
-    const deep = DELEGATION_PROFILES['deep'];
-    const shallow = DELEGATION_PROFILES['shallow'];
+    const deep = DELEGATION_PROFILES['deep']!;
+    const shallow = DELEGATION_PROFILES['shallow']!;
     expect(deep.maxNestingDepth).toBeGreaterThan(shallow.maxNestingDepth);
     expect((deep.maxConcurrentAgents ?? 0)).toBeGreaterThan(shallow.maxConcurrentAgents ?? 0);
     expect((deep.maxTotalAgents ?? 0)).toBeGreaterThan(shallow.maxTotalAgents ?? 0);
