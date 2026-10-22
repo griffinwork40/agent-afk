@@ -11,7 +11,8 @@
  */
 
 import type { ToolResult } from '../types.js';
-import type { AgentInput } from './input-parse.js';
+import { parseAgentInput, type AgentInput } from './input-parse.js';
+import { errorMessage } from '../../../utils/errors.js';
 import {
   formatContinuationLine,
   type ChainRecord,
@@ -40,6 +41,18 @@ export function refuseUnwiredContinuation(parsed: AgentInput): ToolResult | unde
       'Dispatch a fresh subagent instead.',
     isError: true,
   };
+}
+
+/** Parse agent input, then apply the D7 continuation gate. */
+export function parseDispatchInput(input: unknown): { parsed: AgentInput } | { error: ToolResult } {
+  let parsed: AgentInput;
+  try {
+    parsed = parseAgentInput(input);
+  } catch (err) {
+    return { error: { content: `Agent tool input validation failed: ${errorMessage(err)}`, isError: true } };
+  }
+  const refusal = refuseUnwiredContinuation(parsed);
+  return refusal !== undefined ? { error: refusal } : { parsed };
 }
 
 export interface MintChainArgs {

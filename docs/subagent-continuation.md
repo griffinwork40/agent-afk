@@ -19,9 +19,27 @@ Design: `.afk/plans/2811-continuation-design.md` (decisions D1-D10). Supersedes 
 
 Chains are in memory only: they do not survive a process restart or REPL `/resume`.
 
+## Landed: dispatch-side wiring
+
+- `continuation_chain_id` on the `agent` tool schema and `parseAgentInput`
+  (compose nodes do not get it). Until the D8 fork path lands, a call passing
+  it is refused with "continuation not yet wired" (`TODO(continuation-d8)` in
+  `src/agent/tools/subagent/continuation-dispatch.ts`).
+- One `ContinuationRegistry` per root session (`wire-executors.ts`), threaded
+  through `SubagentExecutorContext.continuationRegistry` to nested executors.
+- `continuation-dispatch.ts`: every local initial dispatch mints a chain
+  (remote `host` dispatches do not; worktree-isolated ones do, marked
+  `continuable: false`); the handle's `runToResult` / `runInBackground` are
+  wrapped so every terminal outcome (foreground, promoted, background; success,
+  capped, failure, rejection) calls `recordTerminal` once with the runtime
+  `roundsUsed` and a checkpoint from the child's runtime cwd. Results carry a
+  `continuation` metadata field; capped results of continuable chains get the
+  `[continuation: ...]` line (foreground tool result and background delivered
+  message).
+
 ## Not yet done
 
-Executor wiring (`continuation_chain_id` schema/parse, registry construction in
-`wire-executors.ts`, seed + `resume=<seedId>` fork with `autoCompact`, terminal
-hooks on foreground and background paths, lifecycle event fields), env-registry
-limits, and the executor-level test list. Worktree-isolated chains are refused in v1.
+D8 continuation fork path (seed + `resume=<seedId>` + `autoCompact` + runtime
+note, admission/guards/rollback), D10 lifecycle event fields, env-registry
+limits (D4), and the D8 executor-level test list. Worktree-isolated chains are
+refused in v1.

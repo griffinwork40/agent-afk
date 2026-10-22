@@ -14,7 +14,6 @@ import type { ToolCall, ToolResult } from './types.js';
 import { resolveMaxNestingDepth } from './nesting.js';
 import type { RegisteredAgent } from '../agents/index.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
-import { parseAgentInput, type AgentInput } from './subagent/input-parse.js';
 import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
 import { backgroundTarget } from './subagent/background-delivery.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
@@ -26,11 +25,10 @@ import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budget.js';
 import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
-import { errorMessage } from '../../utils/errors.js';
 import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
 import { prependSetupNotice } from '../worktree/worktree-setup.js';
-import { refuseUnwiredContinuation, wireDispatchChain, annotateChainResult } from './subagent/continuation-dispatch.js';
+import { parseDispatchInput, wireDispatchChain, annotateChainResult } from './subagent/continuation-dispatch.js';
 import {
   setupIsolationWorktree,
   forkAndCheckCancel,
@@ -75,13 +73,10 @@ export async function executeOnce(
     return { content: 'Agent tool call aborted', isError: true };
   }
 
-  let parsed: AgentInput;
-  try {
-    parsed = parseAgentInput(call.input);
-  } catch (err) {
-    return { content: `Agent tool input validation failed: ${errorMessage(err)}`, isError: true };
-  }
-  { const r = refuseUnwiredContinuation(parsed); if (r !== undefined) return r; } // TODO(continuation-d8): replace with the continuation fork path.
+  // Parse + D7 continuation gate. TODO(continuation-d8): the gate becomes the continuation fork path.
+  const parsedOrError = parseDispatchInput(call.input);
+  if ('error' in parsedOrError) return parsedOrError.error;
+  const { parsed } = parsedOrError;
 
   // Named-agent resolution. A miss fails fast with the available list.
   let namedAgent: RegisteredAgent | undefined;
