@@ -65,6 +65,9 @@ inherited from the chain. Omit them, or pass exactly the chain's values.
     delivered, so the delivered metadata is final. If the flush times out,
     the previous link is kept, so a continuation never folds a truncated
     journal.
+    A degraded settle (flush timeout, unavailable checkpoint, or an
+    unexpected error) emits a `continuation_settle_degraded` session_phase
+    trace event with `{chainId, childId, reason}`.
   - Checkpoint git calls pass `--no-optional-locks` (and set
     `GIT_OPTIONAL_LOCKS=0`), so `git status` never takes `index.lock` while
     the parent or a sibling commits in the same worktree.

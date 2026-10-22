@@ -140,6 +140,9 @@ export const SessionPhaseNameSchema = z.enum([
   // allow injection. See SessionPhaseName JSDoc in types.session-phase.ts.
   // metadata: { provider, round }
   'round_cap_notice_dropped',
+  // Continuation chain settling ended degraded (continuation-dispatch.ts).
+  // metadata: { chainId, childId, reason }. Must mirror types.session-phase.ts.
+  'continuation_settle_degraded',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

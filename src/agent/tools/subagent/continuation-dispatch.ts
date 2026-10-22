@@ -22,6 +22,8 @@ import {
 import { captureCheckpointWithin, captureWorkspaceCheckpoint } from '../../subagent/continuation-guards.js';
 import { randomBytes } from 'node:crypto';
 import type { ContinuationPlan } from './continuation-run.js';
+import { emitSessionPhase } from '../../trace/emit.js';
+import type { TraceSink } from '../../trace/writer.js';
 
 /** Structured chain fields carried on the tool result (D6 metadata). */
 export interface ContinuationResultFields {
@@ -110,6 +112,8 @@ export interface ChainTerminalArgs {
   journalUsable: boolean;
   endReason: string;
   capture?: (cwd: string) => Promise<WorkspaceCheckpoint>;
+  /** Witness trace for `continuation_settle_degraded` (settling only). */
+  traceWriter?: TraceSink | undefined;
 }
 
 /**
@@ -307,25 +311,39 @@ function runtimeRounds(handle: ChainHandle, r: Res | undefined): number {
 }
 type RecordFn = (r: Res | undefined, reason: string) => void;
 
+/** Why a chain's settling ended degraded (trace `continuation_settle_degraded`). */
+export type SettleDegradedReason = 'flush_timeout' | 'checkpoint_unavailable' | 'error';
+
+/** Record a degraded settle on the witness trace. Fire-and-forget; never throws. */
+function emitSettleDegraded(w: TraceSink | undefined, chainId: string, childId: string, reason: SettleDegradedReason): void {
+  void emitSessionPhase(w, { phase: 'continuation_settle_degraded', metadata: { chainId, childId, reason } });
+}
+
 /**
  * Post-delivery terminal bookkeeping: drain the child journal (bounded by
  * JOURNAL_FLUSH_TIMEOUT_MS; on timeout/failure the link does not advance),
- * capture the checkpoint (git timeouts), record the terminal. Never rejects;
- * any unexpected failure still clears in-flight without advancing the link.
+ * capture the checkpoint (bounded by CHECKPOINT_CAPTURE_DEADLINE_MS), record
+ * the terminal. Never rejects; any unexpected failure still clears in-flight
+ * without advancing the link. Every degraded outcome (flush timeout/failure,
+ * unavailable checkpoint, catch-all) emits a `continuation_settle_degraded`
+ * session_phase so the chain's state change is never silent.
  */
 async function settleTerminal(
   terminal: Omit<ChainTerminalArgs, 'childId' | 'roundsUsed' | 'endReason' | 'journalUsable'> & { journalUsable: () => boolean; flushJournal?: () => Promise<void> },
   childId: string, roundsUsed: number, notStarted: boolean, endReason: string,
 ): Promise<void> {
+  const chainId = terminal.chain?.chainId;
+  if (chainId === undefined) return;
   try {
     const flushed = notStarted ? true : await flushWithin(terminal.flushJournal, JOURNAL_FLUSH_TIMEOUT_MS);
+    if (!flushed) emitSettleDegraded(terminal.traceWriter, chainId, childId, 'flush_timeout');
     let usable = false;
     try { usable = flushed && terminal.journalUsable(); } catch { usable = false; }
-    await recordChainTerminal({ ...terminal, childId, roundsUsed, journalUsable: usable, endReason });
+    const checkpoint = await recordChainTerminal({ ...terminal, childId, roundsUsed, journalUsable: usable, endReason });
+    if (checkpoint?.unavailable === true) emitSettleDegraded(terminal.traceWriter, chainId, childId, 'checkpoint_unavailable');
   } catch {
-    if (terminal.chain !== undefined) {
-      terminal.registry?.recordTerminal(terminal.chain.chainId, { childId, journalUsable: false, roundsUsed, checkpoint: undefined, endReason });
-    }
+    terminal.registry?.recordTerminal(chainId, { childId, journalUsable: false, roundsUsed, checkpoint: undefined, endReason });
+    emitSettleDegraded(terminal.traceWriter, chainId, childId, 'error');
   }
 }
 
@@ -390,7 +408,7 @@ function stampDeliveredResult(r: Res, chain: ChainRecord, always: boolean): void
 
 /** executeOnce entry: mint (D2) + instrument terminal hooks (D9). One call keeps executeOnce under its ceiling. */
 export function wireDispatchChain(args: {
-  ctx: ActorCtx & { parentRootSessionId?: string };
+  ctx: ActorCtx & { parentRootSessionId?: string; traceWriter?: TraceSink | undefined };
   parsed: AgentInput;
   handle: ChainHandle & { session?: { messageJournal?: unknown } };
   childConfig: { model?: string; cwd?: string; maxToolUseIterations?: number };
@@ -409,7 +427,7 @@ export function wireDispatchChain(args: {
     roundCap: childConfig.maxToolUseIterations,
   });
   instrumentHandleForChain(handle, {
-    registry: ctx.continuationRegistry, chain, cwd,
+    registry: ctx.continuationRegistry, chain, cwd, traceWriter: ctx.traceWriter,
     // D9: advance the link only when the child journal holds messages.
     journalUsable: () => ((handle.session?.messageJournal as { length?: number } | undefined)?.length ?? 0) > 0,
     flushJournal: async () => { await (handle.session?.messageJournal as { flush?: () => Promise<void> } | undefined)?.flush?.(); },

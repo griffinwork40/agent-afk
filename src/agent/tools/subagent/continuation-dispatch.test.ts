@@ -12,6 +12,11 @@ import { parseAgentInput } from './input-parse.js';
 import { instrumentHandleForChain, annotateChainResult, actorIdentity, JOURNAL_FLUSH_TIMEOUT_MS, markChainPromoted, recordChainTerminal } from './continuation-dispatch.js';
 import { admitContinuationCall } from './continuation-run.js';
 import { CHECKPOINT_CAPTURE_DEADLINE_MS } from '../../subagent/continuation-guards.js';
+import { InMemoryTraceWriter } from '../../trace/writer.js';
+
+const degraded = (w: InMemoryTraceWriter) => w.events
+  .filter((e) => e.kind === 'session_phase' && (e.payload as { phase: string }).phase === 'continuation_settle_degraded')
+  .map((e) => (e.payload as { metadata?: Record<string, unknown> }).metadata);
 
 const CAPPED = 'tool_use_loop_capped';
 
@@ -249,6 +254,58 @@ describe('continuation dispatch wiring', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('observability: a degraded settle emits continuation_settle_degraded (flush_timeout / checkpoint_unavailable / error)', async () => {
+    vi.useFakeTimers();
+    try {
+      // flush timeout
+      const registry = new ContinuationRegistry();
+      const w1 = new InMemoryTraceWriter();
+      const c1 = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: false } });
+      const h1 = handleFor(cappedResult());
+      instrumentHandleForChain(h1 as never, { registry, chain: c1, cwd: undefined, journalUsable: () => true, flushJournal: () => new Promise<void>(() => {}), traceWriter: w1 });
+      await (h1.runToResult as (x: string) => Promise<unknown>)('x');
+      await vi.advanceTimersByTimeAsync(JOURNAL_FLUSH_TIMEOUT_MS + 1);
+      await c1.settling;
+      await vi.waitFor(() => expect(degraded(w1)).toEqual([{ chainId: c1.chainId, childId: 'child-1', reason: 'flush_timeout' }]));
+
+      // checkpoint unavailable (hung capture)
+      const w2 = new InMemoryTraceWriter();
+      const c2 = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: true } });
+      const h2 = handleFor(cappedResult());
+      instrumentHandleForChain(h2 as never, { registry, chain: c2, cwd: tmpdir(), journalUsable: () => true, capture: () => new Promise<never>(() => {}), traceWriter: w2 });
+      await (h2.runToResult as (x: string) => Promise<unknown>)('x');
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_CAPTURE_DEADLINE_MS + 1);
+      await c2.settling;
+      await vi.waitFor(() => expect(degraded(w2)).toEqual([{ chainId: c2.chainId, childId: 'child-1', reason: 'checkpoint_unavailable' }]));
+      expect(c2.inFlight).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // catch-all: the first terminal record throws; the fallback record still clears in-flight
+    const registry = new ContinuationRegistry();
+    const w3 = new InMemoryTraceWriter();
+    const c3 = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: false } });
+    const real = registry.recordTerminal.bind(registry);
+    vi.spyOn(registry, 'recordTerminal').mockImplementationOnce(() => { throw new Error('boom'); }).mockImplementation(real);
+    const h3 = handleFor(cappedResult());
+    instrumentHandleForChain(h3 as never, { registry, chain: c3, cwd: undefined, journalUsable: () => true, traceWriter: w3 });
+    await (h3.runToResult as (x: string) => Promise<unknown>)('x');
+    await c3.settling;
+    expect(c3.inFlight).toBe(false);
+    expect(c3.latestChildId).toBeUndefined();
+    await vi.waitFor(() => expect(degraded(w3)).toEqual([{ chainId: c3.chainId, childId: 'child-1', reason: 'error' }]));
+
+    // a clean settle emits nothing
+    const w4 = new InMemoryTraceWriter();
+    const c4 = registry.createChain({ owner: 'o', rootSessionId: 'o', roundCap: 5, inputs: { writeCapable: false } });
+    const h4 = handleFor(cappedResult());
+    instrumentHandleForChain(h4 as never, { registry, chain: c4, cwd: undefined, journalUsable: () => true, flushJournal: async () => {}, traceWriter: w4 });
+    await (h4.runToResult as (x: string) => Promise<unknown>)('x');
+    await c4.settling;
+    expect(degraded(w4)).toEqual([]);
   });
 
   it('D9 journal flush timeout: the previous link is kept and in-flight still clears', async () => {
