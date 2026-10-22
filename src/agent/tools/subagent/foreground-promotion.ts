@@ -121,6 +121,8 @@ export interface RunForegroundArgs {
    * the slot itself (`true` → registry owns it; `false` → caller releases).
    */
   promotionTookBudget?: { value: boolean };
+  /** Called synchronously once the run is adopted by the background registry (continuation stamping, D6). */
+  onPromoted?: () => void;
 }
 
 /**
@@ -194,6 +196,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           // Invariant: adoption is synchronous after the lock await; ownership flips in this continuation.
           const job = adoptForegroundRun({ handle, backgroundPrompt, model, parentSessionId, budgetRelease }, registry, runPromise, isoTd);
           promoted = true;
+          args.onPromoted?.();
           // Item 4: signal the caller that the registry owns budgetRelease now.
           if (promotionTookBudget !== undefined && budgetRelease !== undefined) {
             promotionTookBudget.value = true;

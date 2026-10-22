@@ -56,6 +56,7 @@
 import type { HookContext, HookDecision } from './hooks.js';
 import { maskHookCommandData } from './hook-command-data.js';
 import { DESTRUCTIVE_PATTERNS } from './safe-destruct-patterns.js';
+import { isWorktreeCwd } from './manifest/worktree.js';
 
 /**
  * Stable prefix on OBSERVE reason strings. Exported so telemetry, tests, and
@@ -84,6 +85,18 @@ export const SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT =
   'genuinely required, stop and ask the operator to run it manually.';
 
 /**
+ * Ids of patterns whose block is conditional on the session cwd being inside
+ * a linked afk worktree. When the cwd is absent or not inside `.afk-worktrees/`,
+ * these patterns are downgraded from BLOCK to OBSERVE so that the same command
+ * in a normal root checkout is not blocked.
+ *
+ * Invariant: must stay in sync with the pattern ids in DESTRUCTIVE_PATTERNS.
+ * Only patterns whose hazard is specific to shared git state across worktrees
+ * belong here; unconditionally dangerous patterns must NOT be added.
+ */
+export const WORKTREE_SCOPED_BLOCK_IDS: ReadonlySet<string> = new Set(['git-stash-mutating']);
+
+/**
  * Return the ids of every destructive pattern the command matches.
  * Returns an empty array when none match.
  *
@@ -103,10 +116,21 @@ export function detectDestructiveCommands(command: string): string[] {
 /**
  * Create the two-tier safe-destruct PreToolUse hook.
  *
+ * Accepts an optional `sessionCwd` so that worktree-scoped BLOCK patterns
+ * (see {@link WORKTREE_SCOPED_BLOCK_IDS}) are enforced only when the session is
+ * running inside a linked afk worktree (`.afk-worktrees/<slug>/`). When
+ * `sessionCwd` is absent or points to a non-worktree path, those patterns are
+ * downgraded to OBSERVE so normal root-session use is not blocked.
+ *
+ * The hook also reads `context.cwd` (per-call worktree override set by the
+ * dispatcher) and prefers that over `sessionCwd` when both are present, so a
+ * forked subagent whose per-call cwd was explicitly set to a worktree path is
+ * correctly guarded even if `sessionCwd` was not threaded.
+ *
  * Stateless (no dedup): every destructive attempt is a distinct data point —
  * an agent looping on `rm -rf x` is the signal the shadow window wants to see.
  */
-export function createSafeDestructDetect(): (context: HookContext) => HookDecision {
+export function createSafeDestructDetect(sessionCwd?: string): (context: HookContext) => HookDecision {
   return function safeDestructDetect(context: HookContext): HookDecision {
     if (context.event !== 'PreToolUse') return {};
     if (context.toolName !== 'bash') return {};
@@ -114,6 +138,12 @@ export function createSafeDestructDetect(): (context: HookContext) => HookDecisi
     const input = context.input as Record<string, unknown> | undefined;
     const command = typeof input?.['command'] === 'string' ? input['command'] : '';
     if (!command) return {};
+
+    // Resolve effective cwd: prefer the per-call override (set by the dispatcher
+    // for forked children) over the factory-time sessionCwd.
+    const effectiveCwd =
+      (context as { cwd?: string }).cwd ?? sessionCwd;
+    const inWorktree = effectiveCwd !== undefined && isWorktreeCwd(effectiveCwd);
 
     const matchedIds = detectDestructiveCommands(command);
     if (matchedIds.length === 0) return {};
@@ -127,10 +157,16 @@ export function createSafeDestructDetect(): (context: HookContext) => HookDecisi
     // blockReason is reported. This is deliberate: the pattern table is ordered
     // by importance (most dangerous operations first), so the first hit is the
     // highest-priority signal and the most actionable reason for the agent.
+    //
+    // Worktree-scoped patterns: BLOCK_IDS in WORKTREE_SCOPED_BLOCK_IDS are
+    // treated as OBSERVE when the session is not inside a linked worktree.
     const patternMap = new Map(DESTRUCTIVE_PATTERNS.map((p) => [p.id, p]));
     for (const id of matchedIds) {
       const pattern = patternMap.get(id);
       if (pattern?.tier === 'block') {
+        // Downgrade to OBSERVE when the pattern is worktree-scoped and we are
+        // not inside a linked worktree — fall through to the OBSERVE branch.
+        if (WORKTREE_SCOPED_BLOCK_IDS.has(id) && !inWorktree) continue;
         return {
           decision: 'block',
           reason: pattern.blockReason,
@@ -139,7 +175,8 @@ export function createSafeDestructDetect(): (context: HookContext) => HookDecisi
       }
     }
 
-    // All matched patterns are OBSERVE-tier: record the attempt, allow through.
+    // All matched patterns are OBSERVE-tier (or worktree-scoped BLOCK downgraded
+    // to OBSERVE because we are not in a worktree): record the attempt, allow through.
     return {
       decision: 'approve',
       reason: `${SAFE_DESTRUCT_DETECT_REASON_PREFIX} [${matchedIds.join(', ')}]`,

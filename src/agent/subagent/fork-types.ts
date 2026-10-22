@@ -17,7 +17,7 @@ import type { SubagentProgressSink, OutputEvent } from '../types/session-types.j
 import type { TraceSink } from '../trace/index.js';
 import type { Surface } from '../awareness/types.js';
 import type { PhaseRole } from '../tools/nesting.js';
-import type { MessageJournal } from '../journal/index.js';
+import type { MessageJournal, JournalMessage } from '../journal/index.js';
 
 export interface ForkParent {
   sessionId?: string;
@@ -134,6 +134,19 @@ export interface ForkSubagentOptions<T = unknown> {
    * overridden by a deeper `denyElicitations: true`.
    */
   denyElicitations?: boolean;
+
+  /**
+   * Subagent continuation (docs/subagent-continuation.md, D1/D8/D10). When
+   * set, the child starts from `messages` (the fold of the chain's latest
+   * child journal, applied as `resumeMessages`). It still resumes the
+   * parent's session id like every fork. Absent on every ordinary fork.
+   */
+  continuation?: {
+    messages: JournalMessage[];
+    chainId: string;
+    continuationOf: string;
+    continuationIndex: number;
+  };
 
   /**
    * When true, the child's tool surface gains the `emit_progress` tool,

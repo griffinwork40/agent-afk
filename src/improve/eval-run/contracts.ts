@@ -17,7 +17,12 @@
  * A contract validates the *fix* — the guardrail the pattern maps to:
  *
  *   - `repeated-tool-use`    -> the repeat-loop circuit breaker (PR #80).
- *   - `subagent-block`       -> the skill max-depth recovery hint (PR #80).
+ *   - `subagent-block`       -> the SubagentStart hook-block detector
+ *                              (`detectSubagentBlock` in
+ *                              `scan/detectors/subagent-block.ts`; aggregates
+ *                              `hook_decision { hookEvent:'SubagentStart',
+ *                              decision:'block' }` events and fires once the
+ *                              min-occurrences threshold is met).
  *   - `tool-failure-density` -> that detector being enabled by default (PR #80).
  *   - `closure-anomaly`      -> the closure recovery hint (`session/closure-guidance.ts`;
  *                              abort + truncated subtypes).
@@ -44,10 +49,6 @@ import {
 } from '../../agent/tools/dispatcher.js';
 import type { ToolCall, ToolHandler, ToolResult } from '../../agent/tools/types.js';
 import {
-  SKILL_MAX_DEPTH_RECOVERY_HINT,
-  buildSkillMaxDepthRefusal,
-} from '../../agent/tools/skill-depth-message.js';
-import {
   CLOSURE_ABORT_RECOVERY_HINT,
   CLOSURE_TRUNCATED_RECOVERY_HINT,
   buildClosureGuidance,
@@ -55,6 +56,7 @@ import {
 import type { EvalCheck, EvalRunEvidenceRef, FailurePattern } from '../schemas.js';
 import { makeCheck, snapshot, type ContractProbeResult, type EvalContract } from './contracts.types.js';
 import { runToolFailureDensityContract } from './contracts.tfd.js';
+import { runSubagentHookBlockDetector } from './contracts.sab.js';
 
 // Re-export the shared surface so callers that import from this module path
 // continue to resolve without change.
@@ -167,75 +169,8 @@ async function runRepeatLoopCircuitBreaker(): Promise<ContractProbeResult> {
   return { checks, evidence };
 }
 
-// ---------------------------------------------------------------------------
-// Contract: subagent-block -> skill max-depth recovery hint (PR #80)
-// ---------------------------------------------------------------------------
-
-// KNOWN MISMAPPING — do NOT add a fixture-replay for `subagent-block` against
-// this guardrail. The `subagent-block` DETECTOR fires on `hook_decision` events
-// with `hookEvent:'SubagentStart'` + `decision:'block'`
-// (src/improve/scan/detectors/subagent-block.ts), emitted by a user/plugin hook
-// via `dispatchSubagentStart` (src/agent/subagent-hooks.ts). This contract
-// instead validates the skill MAX-DEPTH refusal (`buildSkillMaxDepthRefusal`),
-// which fires inside skill-executor.ts BEFORE `forkSubagent` and emits a
-// `delegation.skipped` routing row — NOT the `hook_decision` event the detector
-// reads. So this contract proves a guardrail the detector never observes, and
-// no runtime guardrail neutralises a recurring SubagentStart block. The mapping
-// must be resolved before `subagent-block` gets a fixture-replay; left intact in
-// this slice (see contracts.test.ts and the recon plan for the full write-up).
-
-/**
- * Assert the skill-tool max-depth refusal carries the actionable recovery
- * hint. Validates the same builder {@link SkillExecutor.execute} returns, so a
- * regression that drops the hint is caught — without firing the executor's
- * `delegation.skipped` routing telemetry as a side effect.
- */
-async function runSkillMaxDepthRecoveryHint(): Promise<ContractProbeResult> {
-  const depth = 3;
-  const maxDepth = 3;
-  const message = buildSkillMaxDepthRefusal(depth, maxDepth);
-
-  const checks: EvalCheck[] = [
-    makeCheck({
-      name: 'refusal-states-depth',
-      description: 'Refusal reports the depth that was hit and the max',
-      pass: message.includes(`nesting depth ${depth} (max ${maxDepth})`),
-      expected: `mentions "nesting depth ${depth} (max ${maxDepth})"`,
-      actual: message,
-    }),
-    makeCheck({
-      name: 'recovery-hint-present',
-      description: 'Refusal carries the recovery hint clause',
-      pass: message.includes(SKILL_MAX_DEPTH_RECOVERY_HINT),
-      expected: 'contains SKILL_MAX_DEPTH_RECOVERY_HINT',
-      actual: message,
-    }),
-    makeCheck({
-      name: 'hint-directs-inline-work',
-      description: 'Hint tells the model to work inline instead of delegating further',
-      pass:
-        /perform the work inline/i.test(SKILL_MAX_DEPTH_RECOVERY_HINT) &&
-        /skill\/agent\/compose/i.test(SKILL_MAX_DEPTH_RECOVERY_HINT),
-      expected: 'hint mentions "perform the work inline" and "skill/agent/compose"',
-      actual: SKILL_MAX_DEPTH_RECOVERY_HINT,
-    }),
-  ];
-
-  const evidence: EvalRunEvidenceRef[] = [
-    {
-      kind: 'source-symbol',
-      ref: 'src/agent/tools/skill-depth-message.ts#buildSkillMaxDepthRefusal',
-      detail: message,
-    },
-    {
-      kind: 'source-symbol',
-      ref: 'src/agent/tools/skill-executor.ts (execute: depth >= maxDepth branch)',
-      detail: 'returns buildSkillMaxDepthRefusal(depth, maxDepth)',
-    },
-  ];
-
-  return { checks, evidence };
-}
+// The subagent-block contract implementation lives in
+// {@link ./contracts.sab} to keep each file under the 350 code-line ceiling.
 
 // ---------------------------------------------------------------------------
 // Contract: closure-anomaly -> actionable recovery hint on abort closures
@@ -324,10 +259,10 @@ const CONTRACTS: readonly EvalContract[] = Object.freeze([
     run: runRepeatLoopCircuitBreaker,
   },
   {
-    id: 'skill-max-depth-recovery-hint',
+    id: 'subagent-hook-block-detector',
     patternId: 'subagent-block',
-    title: 'Skill max-depth refusal carries an actionable recovery hint',
-    run: runSkillMaxDepthRecoveryHint,
+    title: 'SubagentStart hook-block detector fires on recurring hook_decision blocks and respects the min-occurrences threshold',
+    run: runSubagentHookBlockDetector,
   },
   {
     id: 'tool-failure-density-enabled',

@@ -14,9 +14,10 @@
  */
 
 import type { Context } from 'telegraf';
-import { aggregateAll } from '../../insights/index.js';
-import { evaluateRecommendations } from '../../insights/index.js';
+import { aggregateAll, evaluateRecommendations } from '../../insights/index.js';
 import { escapeHtml, splitLongMessage } from '../formatter.js';
+
+type LogFn = (...args: unknown[]) => void;
 
 // ---------------------------------------------------------------------------
 // Severity emoji
@@ -38,8 +39,11 @@ const SEVERITY_EMOJI: Record<string, string> = {
  * Optional argument: number of lookback days (default 30, max 90).
  * Sends one or more Telegram HTML messages with top-level metrics and the
  * full recommendation list (or "All clear" when there are none).
+ *
+ * @param ctx - Telegraf context
+ * @param log - Server-side logger (mirrors handleUsage pattern)
  */
-export async function handleInsights(ctx: Context): Promise<void> {
+export async function handleInsights(ctx: Context, log: LogFn): Promise<void> {
   // Parse optional days argument from "/insights [N]"
   const text: string =
     typeof ctx.message === 'object' &&
@@ -59,6 +63,7 @@ export async function handleInsights(ctx: Context): Promise<void> {
   try {
     agg = await aggregateAll({ days });
   } catch (err) {
+    log('Insights command error:', err);
     const msg = err instanceof Error ? err.message : String(err);
     await ctx.reply(
       `❌ Failed to aggregate insights: <code>${escapeHtml(msg)}</code>`,
@@ -72,11 +77,13 @@ export async function handleInsights(ctx: Context): Promise<void> {
   // ---------------------------------------------------------------------------
   // Header: top-level metrics
   // ---------------------------------------------------------------------------
+  const rawCost = agg.sessions.totalCostUsd;
+  const costStr = Number.isFinite(rawCost) ? rawCost.toFixed(2) : '—';
   const lines: string[] = [
     `<b>📊 AFK Insights — last ${days} day${days !== 1 ? 's' : ''}</b>`,
     '',
     `Sessions: <b>${agg.sessions.totalSessions}</b>`,
-    `Cost: <b>$${agg.sessions.totalCostUsd.toFixed(2)}</b>`,
+    `Cost: <b>$${costStr}</b>`,
     `Tokens: <b>${agg.sessions.totalTokens.toLocaleString()}</b>`,
     `Daemon runs: <b>${agg.daemon.totalRuns}</b>`,
   ];
@@ -102,4 +109,5 @@ export async function handleInsights(ctx: Context): Promise<void> {
   for (const chunk of splitLongMessage(fullText)) {
     await ctx.reply(chunk, { parse_mode: 'HTML' });
   }
+  log('Insights command completed:', { days, recs: recs.length });
 }

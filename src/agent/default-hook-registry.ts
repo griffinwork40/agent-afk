@@ -388,8 +388,10 @@ export function createDefaultHookRegistry(
   // Ask-question gate: blocks unanswerable questions on headless surfaces.
   registry.register('PreToolUse', createAskQuestionGate());
   registerChildMemoryGuard(registry);
-  // Safe-destruct detector (two-tier, ALL surfaces).
-  registry.register('PreToolUse', createSafeDestructDetect());
+  // Safe-destruct detector (two-tier, ALL surfaces). Pass the session cwd so
+  // worktree-scoped BLOCK patterns (git-stash-mutating) fire only inside
+  // .afk-worktrees/<slug>/ and leave root-session use unblocked.
+  registry.register('PreToolUse', createSafeDestructDetect(agentOptions?.cwd));
   // Release-boundary detector (two-tier, ALL surfaces).
   registry.register('PreToolUse', createReleaseBoundaryDetect());
   // Shadow-git detector: log-only (approve) for --no-verify and identity

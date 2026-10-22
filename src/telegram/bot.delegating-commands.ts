@@ -1,6 +1,6 @@
 /**
  * Telegram commands that delegate straight to a handler with no routing or
- * queueing logic of their own (/model, /cd, /name, /good, /bad, /afk, /usage).
+ * queueing logic of their own (/model, /cd, /name, /good, /bad, /afk, /usage, /insights).
  *
  * Extracted from TelegramBot.setupHandlers() (200-line function ceiling).
  * Registration order is preserved exactly from the original inline block.
@@ -56,6 +56,6 @@ export function registerDelegatingCommands(
   // recommendations. Reuses aggregateAll + evaluateRecommendations from
   // src/insights/ with no new aggregation logic; no HTML file, no browser.
   bot.command('insights', (ctx) =>
-    handleInsights(ctx)
+    handleInsights(ctx, log)
   );
 }

@@ -39,7 +39,7 @@ import { assembleChildConfig, type ParentForkFields } from './subagent/fork-chil
 import { buildForkModelFallback } from './subagent/fork-model-fallback.js';
 import { emitForkStarted, appendForkTelemetry, emitSubagentStartedEvent } from './subagent/fork-lifecycle.js';
 import { SubagentHandleImpl, type SubagentHandle } from './subagent/handle.js';
-import { resolveForkInputs } from './subagent/fork-resolution.js';
+import { resolveForkInputs, applyContinuationSeed } from './subagent/fork-resolution.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
 import { CompletedCache } from './subagent/completed-cache.js';
 import { armForkOccupancy, constructForkHandle, rollbackFailedFork, type ConstructedFork } from './subagent/fork-wiring.js';
@@ -351,6 +351,9 @@ export class SubagentManager {
           event: 'SubagentStart',
           subagentId: id,
           parentSessionId: options.parent.sessionId,
+          ...(options.continuation !== undefined
+            ? { chainId: options.continuation.chainId, continuationIndex: options.continuation.continuationIndex }
+            : {}),
         },
         {
           signal: this.rootController.signal,
@@ -429,6 +432,7 @@ export class SubagentManager {
         ...this.parentForkFields(),
         workspaceStore: this.workspaceStore, ...(options.nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist: options.nestedAgentAllowlist } : {}),
       });
+      childConfig = applyContinuationSeed(childConfig, options); // D8: no-op unless a continuation
 
       // Occupancy touch + heartbeat, armed BEFORE session construction so every
       // exit path holds the stop handle (#759). See armForkOccupancy.
@@ -482,6 +486,7 @@ export class SubagentManager {
       promptHead: options.promptHead,
       effectiveAgentType,
       effectiveResolvedAgentType,
+      continuation: options.continuation,
     });
     await appendForkTelemetry({
       modelString,

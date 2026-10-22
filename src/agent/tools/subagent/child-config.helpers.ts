@@ -276,6 +276,7 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
       ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
       ...nestedExecutorInherits(args),
       ...(args.delegationBudget !== undefined ? { delegationBudget: args.delegationBudget } : {}),
+      ...(args.continuationRegistry !== undefined ? { continuationRegistry: args.continuationRegistry } : {}),
       ...(args.allowedTools !== undefined ? { allowedTools: args.allowedTools } : {}),
       ...(args.readOnlyBash ? { readOnlyBash: true } : {}),
       ...(args.agentRegistry !== undefined ? { agentRegistry: args.agentRegistry } : {}),
