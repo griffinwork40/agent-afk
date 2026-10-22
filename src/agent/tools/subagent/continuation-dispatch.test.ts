@@ -35,6 +35,7 @@ function executorWith(handle: Partial<SubagentHandle>, registry: ContinuationReg
     subagentManager: { forkSubagent: vi.fn().mockResolvedValue(handle) } as never,
     parentSession: { sessionId: 'root-1', getInputStreamRef: vi.fn(), abortSignal: new AbortController().signal } as never,
     defaultConfig: { apiKey: 'k', systemPrompt: 's' },
+    defaultSubagentModel: 'sonnet',
     depth: 0,
     cwd: tmpdir(),
     ...(registry !== undefined ? { continuationRegistry: registry } : {}),

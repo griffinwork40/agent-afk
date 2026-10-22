@@ -31,7 +31,7 @@ import type { ToolResult } from '../types.js';
 
 interface Seen { resumeMessages: JournalMessage[] | undefined; turn: string; config: AgentConfig }
 
-const text = (t: string): JournalMessage['content'][number] => ({ type: 'text', text: t });
+const text = (t: string): { type: 'text'; text: string } => ({ type: 'text', text: t });
 
 /** Fake transport: every child runs one capped round (tool_use + tool_result) and journals it. */
 function installTransport(seen: Seen[], opts: { hold?: Promise<void> } = {}): void {
