@@ -84,6 +84,29 @@ function hasClosureAbort(votes: Vote[]): boolean {
   return votes.some((v) => v.lf === 'closure' && v.vote === -1);
 }
 
+/**
+ * Labeling functions whose minor negatives count at most once per session.
+ *
+ * Invariant: fix_of_fix emits one weak vote per later PR that mentions the
+ * session's PR (lf-fof.ts). Those mentions are mostly review follow-ups or
+ * pasted changelogs, so repetition is not stronger evidence, and the design
+ * rule is that fix_of_fix alone can never flip a session to failed. Counting
+ * each mention would let two mentions satisfy rule 4 by themselves. lf-ci is
+ * deliberately NOT listed: one red-CI vote per PR is independent evidence.
+ */
+const SINGLE_COUNT_LFS: ReadonlySet<string> = new Set(['fix_of_fix']);
+
+/** Keep the first minor negative from each SINGLE_COUNT_LFS labeling function. */
+export function collapseSingleCountVotes(votes: Vote[]): Vote[] {
+  const seen = new Set<string>();
+  return votes.filter((v) => {
+    if (!SINGLE_COUNT_LFS.has(v.lf)) return true;
+    if (seen.has(v.lf)) return false;
+    seen.add(v.lf);
+    return true;
+  });
+}
+
 function hasArtifacts(artifacts: Artifacts): boolean {
   return artifacts.commits.length > 0 || artifacts.prs.length > 0;
 }
@@ -181,7 +204,9 @@ export function combineV2(input: CombinerV2Input): CombinerV2Result {
     const sev = effectiveSeverity(v);
     return sev === 'critical' || sev === 'major';
   });
-  const minorNeg = negVotes.filter((v) => effectiveSeverity(v) === 'minor');
+  const minorNeg = collapseSingleCountVotes(
+    negVotes.filter((v) => effectiveSeverity(v) === 'minor'),
+  );
 
   // Rule 3: critical or major negative not outweighed by a later strong positive → failed
   const unoutweighedCritMaj = critOrMajNeg.filter(
