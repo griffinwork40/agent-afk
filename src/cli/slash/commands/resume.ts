@@ -280,17 +280,17 @@ export const resumeCmd: SlashCommand = {
     }
     const currentCwd = ctx.stats.cwd ?? process.cwd();
     const currentRepoRoot = resolveRepoRoot(currentCwd);
-    const localEntries = entries.filter((e) => {
-      if (e.source === 'daemon') return false;
+    const nonDaemon = entries.filter((e) => e.source !== 'daemon');
+    const localEntries = nonDaemon.filter((e) => {
       if (currentRepoRoot) {
         if (e.repoRoot) return e.repoRoot === currentRepoRoot;
         if (e.cwd) return resolveRepoRoot(e.cwd) === currentRepoRoot;
       }
       return e.cwd === currentCwd;
     });
-    const hiddenCount = entries.length - localEntries.length;
+    const hiddenCount = nonDaemon.length - localEntries.length;
     const isFiltered = localEntries.length > 0;
-    const displayEntries = isFiltered ? localEntries : entries;
+    const displayEntries = isFiltered ? localEntries : nonDaemon;
     const hiddenNote = hiddenCount > 0 ? ` (${hiddenCount} from other projects hidden)` : '';
 
     // Interactive picker on a TTY: select a session to resume it directly.

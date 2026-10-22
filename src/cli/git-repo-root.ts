@@ -1,25 +1,29 @@
 /**
- * Resolve the shared git repository root for a given working directory.
+ * Resolve the shared git common-dir path for a given working directory.
  *
  * Uses `git rev-parse --git-common-dir` (NOT `--show-toplevel`) so that both
- * the main checkout and any linked worktrees resolve to the same root. For a
- * worktree at `/repo/.afk-worktrees/my-branch`, `--git-common-dir` returns
- * `/repo/.git`, whose dirname is `/repo` — the shared repo root. Results are
- * memoized by cwd string so repeated calls (e.g. per-entry in /resume
+ * the main checkout and any linked worktrees resolve to the same identity. For
+ * a worktree at `/repo/.afk-worktrees/my-branch`, `--git-common-dir` returns
+ * `/repo/.git` — the shared common dir path used as the repo identity. Results
+ * are memoized by cwd string so repeated calls (e.g. per-entry in /resume
  * filtering) pay the execFileSync cost at most once per directory.
  */
 
 import { execFileSync } from 'child_process';
-import { dirname, resolve } from 'path';
+import { resolve } from 'path';
 
 const cache = new Map<string, string | undefined>();
 
 /**
- * Return the shared git repo root for `cwd` (defaults to `process.cwd()`),
- * or `undefined` when the directory is not inside a git repository.
+ * Return the resolved git common-dir path for `cwd` (defaults to
+ * `process.cwd()`), or `undefined` when the directory is not inside a git
+ * repository.
  *
- * Result is the absolute path of the directory that *contains* the `.git`
- * common dir — i.e. the repo root shared by main checkout and all worktrees.
+ * Result is the absolute path of the git common dir itself (e.g.
+ * `/repo/.git`), shared by the main checkout and all worktrees. This value
+ * is used as a stable repo identity: two cwds belong to the same repo when
+ * their resolved common-dir paths are equal. Note: this is NOT the repo root
+ * directory — it is the `.git` dir (or equivalent for separate-git-dir repos).
  */
 export function resolveRepoRoot(cwd?: string): string | undefined {
   const dir = cwd ?? process.cwd();
@@ -31,7 +35,7 @@ export function resolveRepoRoot(cwd?: string): string | undefined {
       stdio: ['pipe', 'pipe', 'pipe'],
       encoding: 'utf8',
     }).trim();
-    const root = dirname(resolve(dir, raw));
+    const root = resolve(dir, raw);
     cache.set(dir, root);
     return root;
   } catch {

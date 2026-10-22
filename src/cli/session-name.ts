@@ -49,7 +49,7 @@ export function slugifySessionName(text: string): string {
     // Remove only --double-dash flags (with optional value). Single-char flags
     // (-f) are intentionally excluded because they share the `-` char with
     // hyphenated command names like `pr-triage` and would corrupt them.
-    src = src.replace(/--[\w-]+(?:=\S+|\s+\S+)?/g, ' ').trim();
+    src = src.replace(/--[\w-]+(?:=\S+)?/g, ' ').trim();
     // For /god, strip the leading "god" word so we name after the task.
     src = src.replace(/^god\b\s*/i, '');
   }
