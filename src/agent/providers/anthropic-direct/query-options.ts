@@ -114,6 +114,12 @@ export interface AnthropicDirectQueryOptions {
   systemPrefix: ContentBlockParam[] | null;
   /** When set, called on 401 to obtain a fresh SDK client. Retry once. */
   tokenRefresher?: () => Promise<Anthropic | null>;
+  /**
+   * True when the session's OAuth credential was sourced from the credential
+   * store (macOS keychain / `~/.claude/.credentials.json`) rather than an env
+   * var or an explicit slot key. Forwarded to {@link RetryLayerOptions}.
+   */
+  credentialFromStore?: boolean;
   /** Extended thinking configuration forwarded to `messages.create`. */
   thinking?: import('@anthropic-ai/sdk/resources').ThinkingConfigParam;
   /**

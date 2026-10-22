@@ -27,16 +27,49 @@ const OAUTH_REFRESH_TIMEOUT_MS = 10_000;
 // security` on macOS. A 5-second window amortises that cost across the
 // hot re-resolve path (tool calls within one session) while staying well
 // inside any real-world token-rotation window (tokens expire in hours, not
-// seconds). The cache is intentionally per-process: subagents are separate
-// processes and must read the live store directly.
+// seconds). The cache is per-process and shared by every session in it,
+// including forked subagents (they are in-process `AgentSession`s, see
+// `subagent/fork-wiring.ts`); separate afk processes each read the live store.
 const READ_CACHE_TTL_MS = 5_000;
 let _readCacheValue: string | undefined;
 let _readCacheExpiresAt = 0;
+
+// Invariant: the macOS read is a SYNCHRONOUS subprocess, so it blocks the
+// event loop of the whole process (every Telegram chat / web session in it)
+// for as long as `security` runs. A locked keychain or an access prompt can
+// hold it indefinitely.
+//
+// CONTRACT — two read modes, controlled by the `background` option on
+// `loadClaudeCodeOauthToken`:
+//
+//   background: true  (per-turn catch-up, compaction sync, usage-limit pollers)
+//     The subprocess is bounded by KEYCHAIN_READ_TIMEOUT_MS (3 s). A timeout
+//     arms the backoff: further background reads skip the subprocess for
+//     KEYCHAIN_TIMEOUT_BACKOFF_MS (30 s) and return `undefined` instead.
+//     A successful background read clears the backoff.
+//
+//   background: false / absent  (startup, fork-time, /reauth, refresh/write-back)
+//     No timeout is passed to execFileSync; the OS shows its unlock dialog if
+//     the keychain is locked, and the user can interact with it. The backoff is
+//     also ignored: foreground callers must always reach the live store. A
+//     successful foreground read clears the backoff.
+//
+// Only a TIMEOUT arms the backoff: a missing entry must stay uncached so a
+// `claude login` run while a daemon is live is picked up on the very next read.
+//
+// NOTE: the backoff state (_readBackoffUntil) is process-wide — it is shared
+// by every session running in the same process (Telegram chats, daemon tasks,
+// forked subagents). A single locked-keychain timeout blocks ALL background
+// reads across every concurrent session for KEYCHAIN_TIMEOUT_BACKOFF_MS.
+const KEYCHAIN_READ_TIMEOUT_MS = 3_000;
+const KEYCHAIN_TIMEOUT_BACKOFF_MS = 30_000;
+let _readBackoffUntil = 0;
 
 /** @internal Exposed for tests that need hermetic control over the cache. */
 export function _resetKeychainReadCache(): void {
   _readCacheValue = undefined;
   _readCacheExpiresAt = 0;
+  _readBackoffUntil = 0;
 }
 
 /**
@@ -51,8 +84,23 @@ export function _resetKeychainReadCache(): void {
  * Returns `undefined` when the entry is missing, malformed, or the access
  * token is past its `expiresAt`. This sync variant does not attempt a refresh;
  * use {@link refreshClaudeCodeOauthToken} for async refresh on 401.
+ *
+ * Contract: two option flags govern macOS subprocess behaviour (see the
+ * KEYCHAIN_READ_TIMEOUT_MS block comment for the full two-mode spec):
+ *
+ *   `background: true` — the subprocess is bounded by KEYCHAIN_READ_TIMEOUT_MS
+ *     and the process-wide backoff is honoured and armed on timeout. Use for
+ *     per-turn catch-up, compaction sync, and usage-limit pollers.
+ *
+ *   `background: false` / absent — no timeout; the OS may show an unlock
+ *     dialog; the backoff is ignored. Use for startup, fork-time, /reauth,
+ *     and refresh/write-back paths where the user can interact.
+ *
+ *   `quiet: true` — suppresses the stderr "token is expired" warning.
+ *     Always combine with `background: true` for per-turn callers, which
+ *     would otherwise print that warning once per turn.
  */
-export function loadClaudeCodeOauthToken(): string | undefined {
+export function loadClaudeCodeOauthToken(opts: { quiet?: boolean; background?: boolean } = {}): string | undefined {
   const now = Date.now();
   if (now < _readCacheExpiresAt) return _readCacheValue;
 
@@ -64,16 +112,18 @@ export function loadClaudeCodeOauthToken(): string | undefined {
   _readCacheValue = undefined;
   _readCacheExpiresAt = 0;
 
-  const blob = readCredentialsBlob();
+  const blob = readCredentialsBlob(opts.background === true);
   if (blob === undefined) return undefined;
 
   const parsed = parseCredentials(blob);
   if (parsed === undefined) return undefined;
 
   if (parsed.expiresAt !== undefined && parsed.expiresAt <= now) {
-    process.stderr.write(
-      'agent-afk: Claude Code OAuth token in keychain is expired. Run `claude login` to refresh.\n',
-    );
+    if (opts.quiet !== true) {
+      process.stderr.write(
+        'agent-afk: Claude Code OAuth token in keychain is expired. Run `claude login` to refresh.\n',
+      );
+    }
     return undefined;
   }
   _readCacheValue = parsed.accessToken;
@@ -154,8 +204,21 @@ export async function refreshClaudeCodeOauthToken(): Promise<string | undefined>
   return refreshed.accessToken;
 }
 
-function readCredentialsBlob(): string | undefined {
+/**
+ * Contract: `execFileSync` with a `timeout` kills the child and throws the
+ * spawnSync error, whose `code` is `'ETIMEDOUT'`. Any other failure (entry
+ * missing → non-zero exit) is NOT a timeout and must not arm the backoff.
+ */
+function isTimeoutError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ETIMEDOUT';
+}
+
+function readCredentialsBlob(background = false): string | undefined {
   if (process.platform === 'darwin') {
+    // Contract: background reads honour and arm the process-wide backoff and
+    // pass a timeout to execFileSync. Foreground reads skip the backoff check
+    // and pass no timeout so the OS unlock dialog can be shown.
+    if (background && Date.now() < _readBackoffUntil) return undefined;
     try {
       // `-a` is required: macOS allows multiple keychain entries to share a
       // service name, and Claude Code's MCP-OAuth state shares this one. Without
@@ -169,10 +232,16 @@ function readCredentialsBlob(): string | undefined {
           '-a', userInfo().username,
           '-w',
         ],
-        { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf-8' },
+        background
+          ? { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf-8', timeout: KEYCHAIN_READ_TIMEOUT_MS }
+          : { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf-8' },
       );
+      // A successful read (foreground or background) clears the backoff so
+      // a subsequent background caller sees the live store again.
+      _readBackoffUntil = 0;
       return out.trim();
-    } catch {
+    } catch (err) {
+      if (background && isTimeoutError(err)) _readBackoffUntil = Date.now() + KEYCHAIN_TIMEOUT_BACKOFF_MS;
       return undefined;
     }
   }

@@ -55,7 +55,7 @@ import {
   contextWindowTokensUsed,
 } from '../../shared/auto-compact.js';
 import { autoCompactLimitFor } from '../../../model-limits.js';
-import { emitCompaction } from '../../../trace/emit.js';
+import { emitCompaction, emitSessionPhase } from '../../../trace/emit.js';
 import { traceTransientRetry, traceExhaustedRetry } from '../../shared/transient-retry.trace.js';
 import { DEFAULT_TRANSIENT_MAX_RETRIES } from '../../shared/transient-retry.js';
 import { resolveModelId } from '../../../session/model-resolution.js';
@@ -133,8 +133,28 @@ export async function compactHistory(
       initSessionId,
       randomUUID(),
     );
-    // Read `client` via the retry layer's getter so we always see the
-    // post-401-swap reference, never a stale snapshot.
+    // Compaction calls the client directly, outside any turn, so it never
+    // passes through the turn-start credential catch-up. Adopt an account
+    // switch here too, then read `client` via the retry layer's getter so we
+    // always see the post-swap reference, never a stale snapshot.
+    // Invariant: the sync is best-effort. A credential check must never be
+    // the reason a compaction fails, so any throw falls back to the client
+    // the session already holds.
+    try {
+      const swapResult = await retry.syncClientWithStore();
+      if (swapResult?.swapped) {
+        void emitSessionPhase(traceWriter, {
+          phase: 'credential_swap',
+          metadata: {
+            source: 'compaction',
+            accountId: swapResult.accountId,
+            oldAccountId: swapResult.oldAccountId,
+          },
+        });
+      }
+    } catch {
+      /* keep the current client */
+    }
     const client = retry.client as unknown as AnthropicClientLike;
     const stream = (await Promise.resolve(
       client.messages.create(
