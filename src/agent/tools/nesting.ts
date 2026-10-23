@@ -79,7 +79,11 @@ export function resolveMaxNestingDepth(): number {
       // Return the default immediately rather than falling through.
       return DEFAULT_MAX_NESTING_DEPTH;
     }
-    // Unparseable (non-decimal, NaN, etc.): fall through to profile / default below.
+    // Unparseable (non-decimal, NaN, etc.): the env var was explicitly set but
+    // is not a valid value. Return the default immediately — do NOT fall through
+    // to the profile, because "individual env vars always override profile values".
+    // A set-but-broken var must win over any profile, same as the out-of-range path above.
+    return DEFAULT_MAX_NESTING_DEPTH;
   }
   // Consult the delegation profile when no explicit depth var is set.
   const profile = resolveDelegationProfile(env.AFK_DELEGATION_PROFILE);
