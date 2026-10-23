@@ -39,6 +39,7 @@ import { executeForkedRegistrySkill, executePluginSkill } from './skill-executor
 import { errorMessage } from '../../utils/errors.js';
 import { skillAllowlistRefusal } from './skill-executor/allowlist.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
+import { runWithPluginSessionContext } from '../plugins/plugin-session-context.js';
 
 export type { SkillExecutorContext } from './skill-executor/types.js';
 
@@ -357,7 +358,7 @@ export class SkillExecutor {
     let handlerError: unknown = undefined;
     let result: unknown;
     try {
-      result = await skill.handler(
+      result = await runWithPluginSessionContext(this.ctx.parentSession.sessionId, () => skill.handler(
         args && args.length > 0 ? args : undefined,
         this.ctx.parentSession as IAgentSession,
         {
@@ -396,7 +397,7 @@ export class SkillExecutor {
             ? { workspaceStore: this.ctx.workspaceStore }
             : {}),
         },
-      );
+      ));
     } catch (err) {
       handlerError = err;
     } finally {

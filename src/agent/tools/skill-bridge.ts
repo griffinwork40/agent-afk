@@ -22,6 +22,7 @@ import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
 import { loadPluginEntrypoints, registerPluginHook } from '../plugins/load-entrypoints.js';
+import { buildStateApiClosures, buildPeerApiClosures } from '../plugins/plugin-runtime-api.js';
 import { extractPluginSkills, resolveKnownToolNames } from '../plugins/tool-injector.js';
 import { extractPluginCommands } from '../plugins/command-files.js';
 import { readPluginManifest } from '../plugins/plugin-manifest.js';
@@ -598,12 +599,10 @@ export function scanAllPluginRoots(opts?: CollectSkillEntriesOptions): SdkPlugin
 export async function ensurePluginEntrypointsLoaded(): Promise<void> {
   // Inject the host's runtime API so a code-backed plugin's default-export
   // entrypoint (a) registers against THIS process's singleton registry, and
-  // (b) can reach core runtime values (env, SubagentManager, describeFailure,
-  // discoverPluginSkillBodies, the session-facet substrate, the paths getters) WITHOUT a bare
-  // `import 'agent-afk'` — which a marketplace-cloned plugin (no node_modules)
-  // cannot resolve at all. See PluginApi for the full rationale.
-  //
-  // Declarations are installed on each session registry when it is created.
+  // (b) can reach core runtime values without a bare `import 'agent-afk'` —
+  // which a marketplace-cloned plugin (no node_modules) cannot resolve.
+  // State and peer API closures live in plugin-runtime-api.ts to keep this
+  // module near its prior size and avoid circular imports through load-entrypoints.
   await loadPluginEntrypoints(scanAllPluginRoots(), {
     pluginApi: {
       registerSkill,
@@ -622,6 +621,8 @@ export async function ensurePluginEntrypointsLoaded(): Promise<void> {
       deriveSessionFacet,
       loadStoredSession,
       registerHook: registerPluginHook,
+      ...buildStateApiClosures(),
+      ...buildPeerApiClosures(),
     },
   });
 }

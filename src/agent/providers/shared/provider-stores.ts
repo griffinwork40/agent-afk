@@ -25,3 +25,21 @@ export function makeDefaultMemoryStore(): MemoryStore {
 export function makeDefaultStateStore(): StateStore {
   return new StateStore(getStateDatabasePath());
 }
+
+// Invariant: one SQLite handle per process for the shared plugin-API state store.
+// Using a separate factory function (makeDefaultStateStore) per call would open
+// a new Database handle on every surface startup, leaking handles and breaking
+// compare-and-swap atomicity across the plugin injection and the provider layer.
+let _sharedPluginStateStore: StateStore | undefined;
+
+/**
+ * Return the process-wide shared StateStore used for plugin API injection.
+ *
+ * The same instance is returned on every call, so the plugin layer and the
+ * provider layer share one SQLite handle rather than opening two separate
+ * connections to the same file. Created lazily on first call.
+ */
+export function getSharedPluginStateStore(): StateStore {
+  _sharedPluginStateStore ??= new StateStore(getStateDatabasePath());
+  return _sharedPluginStateStore;
+}
