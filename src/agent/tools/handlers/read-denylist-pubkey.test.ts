@@ -10,6 +10,7 @@
  * pure gate functions.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { _resetFsCaseCacheForTests } from '../fs-case.js';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,11 +25,13 @@ beforeEach(() => {
   delete process.env['AFK_READ_DENYLIST'];
   delete process.env['AFK_HOME'];
   _resetReadDenylistCacheForTests();
+  _resetFsCaseCacheForTests();
 });
 afterEach(() => {
   delete process.env['AFK_READ_DENYLIST'];
   delete process.env['AFK_HOME'];
   _resetReadDenylistCacheForTests();
+  _resetFsCaseCacheForTests();
 });
 
 describe('isReadDenied — SSH public keys', () => {
@@ -78,6 +81,17 @@ describe('isReadDenied — SSH public keys', () => {
     expect(isReadDenied(join(ssh, 'afk', 'config', 'mcp.json')).denied).toBe(true);
     expect(isReadDenied(join(ssh, 'afk', 'config', 'x.pub')).denied).toBe(true);
     expect(isReadDenied(join(ssh, 'id_rsa')).denied).toBe(true);
+  });
+
+  it('a top-level ~/.ssh/*.pub stays allowed when AFK_HOME is under ~/.ssh', () => {
+    // Regression guard: a *.pub key at the top level of ~/.ssh must remain
+    // allowed even when AFK_HOME is relocated into a subdirectory of ~/.ssh.
+    // The AFK config derived-root gate must not accidentally gate the pub-key
+    // carve-out for the ~/.ssh entry itself.
+    process.env['AFK_HOME'] = join(ssh, 'afk');
+    _resetReadDenylistCacheForTests();
+    expect(isReadDenied(join(ssh, 'id_ed25519.pub')).denied).toBe(false);
+    expect(isReadDenied(join(ssh, 'id_rsa.pub')).denied).toBe(false);
   });
 });
 

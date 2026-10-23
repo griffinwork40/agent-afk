@@ -218,5 +218,9 @@ export function isSshPubKeyChild(real: string, sshDir: string): boolean {
   // when the filesystem is confirmed case-insensitive. We need EQUALITY (not
   // containment), so we check both directions explicitly rather than calling
   // pathIsWithin (which is an ancestor-or-equal check, not pure equality).
+  // Note: isCaseInsensitiveFs returns true on indeterminate probes (fail-closed
+  // in the deny-more direction), so an indeterminate probe allows the
+  // case-insensitive comparison to run — which may over-allow on edge-case
+  // filesystems, but is safer than silently blocking on Windows CI.
   return isCaseInsensitiveFs(sshDir) && parent.toLowerCase() === sshDir.toLowerCase();
 }

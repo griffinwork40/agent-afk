@@ -23,6 +23,9 @@ export function killProc(proc: ChildProcess): void {
   try { proc.stdin?.end(); } catch { /* ignore */ }
   try {
     // On win32, proc.kill() calls TerminateProcess on the direct child only.
+    // When shell: true, the direct child is cmd.exe; TerminateProcess on
+    // cmd.exe does NOT reliably tear down its child tree — the grandchild
+    // typescript-language-server may briefly orphan until stdin closes it.
     // On POSIX, SIGTERM to the direct child is sufficient.
     proc.kill();
   } catch { /* ignore */ }

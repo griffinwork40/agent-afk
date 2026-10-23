@@ -185,7 +185,8 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
       }
       if (outcome.kind === 'error' || outcome.kind === 'lost') {
         this._status = 'failed';
-        throw new Error(outcome.reason);
+        const detail = outcome.remoteDetail ? `: ${outcome.remoteDetail}` : '';
+        throw new Error(`${outcome.reason}${detail}`);
       }
       // kind === 'done'
       this._status = 'succeeded';
@@ -252,6 +253,7 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
   runInBackground(
     prompt: string,
     onResult?: (result: SubagentResult<string>) => void,
+    _onProgress?: (event: import('../agent/types/session-types.js').OutputEvent) => void,
   ): void {
     void this.runToResult(prompt).then((result) => {
       onResult?.(result);
@@ -268,7 +270,7 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
     this._controller.abort('cancelled');
   }
 
-  async teardown(): Promise<void> {
+  async teardown(_options?: { deferInjectContextToCaller?: boolean }): Promise<void> {
     // For a remote handle, teardown is a no-op — there is no local session
     // to close. If the handle is still running, cancel it.
     if (this._status === 'running') await this.cancel();

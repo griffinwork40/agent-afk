@@ -9,8 +9,9 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { gateDerivedCarveOuts } from './read-denylist-carveout.js';
+import { gateDerivedCarveOuts, gateStaticCarveOuts } from './read-denylist-carveout.js';
 import { isReadDenied, READ_ALLOWLIST_REL } from './read-denylist.js';
+import { safeRealpath } from './write-denylist.js';
 
 /** A builtin-denied credential root other than the AFK home. */
 const OTHER_DENIED_ROOT = join(homedir(), '.gnupg');
@@ -120,6 +121,42 @@ describe('read denylist — relocated AFK_HOME under a denied root (#779)', () =
 // of silently shipping denied.
 // Windows: TODO needs native equivalent — homedir() 8.3 short-path vs safeRealpath long-path mismatch
 // means BUILTIN_READ_ALLOWLIST entries don't match join(homedir(), rel) paths on Windows.
+describe('gateStaticCarveOuts — same resolved root, different sources (win32 HOME/USERPROFILE)', () => {
+  // Regression guard for #4036: on win32, BUILTIN_READ_DENYLIST has both a
+  // forward-slash ${HOME}/.ssh entry and a backslash ${USERPROFILE}\.ssh entry
+  // whose sources differ but whose resolved roots are identical. A source-only
+  // filter would retain the USERPROFILE duplicate as a gate root and silently
+  // drop the .ssh carve-outs. gateStaticCarveOuts must deduplicate by resolved
+  // root so the carve-out is kept, not gated out.
+  it('keeps a carve-out when two denylist entries with different sources resolve to the same root', () => {
+    const home = safeRealpath(homedir());
+    const sshRoot = join(home, '.ssh');
+    // Simulate the win32 situation: two source strings, one canonical root.
+    const resolvedBuiltinEntries = [
+      { source: `${home}/.ssh`, root: sshRoot },
+      { source: `${home}\\.ssh`, root: sshRoot },
+      { source: `${home}/.gnupg`, root: join(home, '.gnupg') },
+    ];
+    const entries = [{ rel: '.ssh/config', resolved: join(sshRoot, 'config') }];
+    const result = gateStaticCarveOuts(entries, resolvedBuiltinEntries);
+    expect(result).toEqual([join(sshRoot, 'config')]);
+  });
+
+  it('still gates a carve-out that falls under a genuinely different root', () => {
+    const home = safeRealpath(homedir());
+    const sshRoot = join(home, '.ssh');
+    const gnupgRoot = join(home, '.gnupg');
+    const resolvedBuiltinEntries = [
+      { source: `${home}/.ssh`, root: sshRoot },
+      { source: `${home}/.gnupg`, root: gnupgRoot },
+    ];
+    // A derived entry that sits under .gnupg should be gated out.
+    const entries = [{ rel: '.ssh/config', resolved: join(gnupgRoot, 'config') }];
+    const result = gateStaticCarveOuts(entries, resolvedBuiltinEntries);
+    expect(result).toEqual([]);
+  });
+});
+
 describe.skipIf(process.platform === 'win32')('read denylist — every static carve-out survives its own gate', () => {
   it('keeps every READ_ALLOWLIST_REL entry allowed under the default AFK_HOME', () => {
     for (const rel of READ_ALLOWLIST_REL) {
