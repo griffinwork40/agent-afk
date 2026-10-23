@@ -288,10 +288,18 @@ function resolveStreamResult<T>(
     // provider-stream close, or a provider that ended without a final
     // message). Mark the run non-clean so `runToResult` surfaces it as an
     // incomplete partial (via `stopReason`) instead of a silent success —
-    // consumers prepend a parent-visible marker (annotateIfIncomplete). Use
-    // `??=` so a real terminal stopReason (if one somehow arrived) is never
-    // clobbered; reaching here implies none did.
-    handle._lastStopReason ??= STREAM_INCOMPLETE;
+    // consumers prepend a parent-visible marker (annotateIfIncomplete).
+    //
+    // Use unconditional assignment (`=`, not `??=`): a stale tool-stop reason
+    // (`tool_use` / `tool_calls`) from the PREVIOUS completed round survives
+    // on `_lastStopReason` when an abort lands in the NEXT round before any
+    // `done` event is emitted. The `??=` guard preserved that stale reason,
+    // causing the run to report `succeeded` and `annotateIfIncomplete` to
+    // never fire (#3965). Any genuine terminal reason (end_turn / max_tokens /
+    // wind-down) that arrived would have produced a `message` event and exited
+    // via the `if (finalMessage) return finalMessage` branch above, so nothing
+    // worth preserving can reach here.
+    handle._lastStopReason = STREAM_INCOMPLETE;
     return { role: 'assistant', content: handle._lastStreamedContent, timestamp: new Date() };
   }
   // Invariant: both wind-down triggers return incomplete partials, never opaque
