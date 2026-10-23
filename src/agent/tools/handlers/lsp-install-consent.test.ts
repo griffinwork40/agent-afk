@@ -20,7 +20,9 @@ describe('LSP install human consent', () => {
     vi.mocked(elicitationRouter.hasHandler).mockImplementation(key => key === 'other');
     expect(lspInstallContext({ lspInstallAllowed: true, sessionId: 'mine' }).interactive).toBe(false);
     expect(lspInstallContext({ lspInstallAllowed: true }).interactive).toBe(false);
-    expect(elicitationRouter.hasHandler).toHaveBeenLastCalledWith('');
+    // Without a sessionId the sentinel is unique per call — never collides with
+    // another session's '' key (S1 fix).
+    expect(elicitationRouter.hasHandler).toHaveBeenLastCalledWith(expect.stringMatching(/^__no-session-/));
   });
 
   it.each([

@@ -4,6 +4,7 @@ import type { ToolHandlerContext, ToolResult } from '../types.js';
 import { applyWorkspaceEdit } from './lsp-workspace-edit.js';
 import type { LspRefactorInput } from './lsp-refactor-input.js';
 import { record } from './lsp-refactor-symbols.js';
+import { awaitSyncDiagnostics } from '../../lsp/query.js';
 
 export interface RefactorEnvironment {
   context?: ToolHandlerContext;
@@ -21,9 +22,19 @@ export async function codeActions(input: LspRefactorInput, ctx: QueryContext, en
   const range = { start, end: { line: (input.end_line ?? input.line ?? 1) - 1,
     character: (input.end_col ?? input.col ?? 1) - 1 } };
   const options = () => ({ timeoutMs: ctx.remainingMs(), signal: env.signal });
+  // Invariant: diagnostic-dependent quick fixes (e.g. auto-import, spelling)
+  // are only available when publishDiagnostics has arrived for this version.
+  // Without awaiting, the diagnostics array is empty and those actions are
+  // silently omitted. Best-effort: wait up to half the remaining budget (capped
+  // at 2 s) so non-diagnostic code actions are never blocked by a slow server.
+  const diagBudgetMs = Math.min(ctx.remainingMs() / 2, 2000);
+  const published = diagBudgetMs > 50
+    ? await awaitSyncDiagnostics({ ...ctx, remainingMs: () => diagBudgetMs }, env.signal)
+    : null;
+  const diagnostics = published?.diagnostics ?? ctx.client.diagnostics.current(ctx.sync.uri, ctx.sync.version);
   const raw = await ctx.client.request<unknown>('textDocument/codeAction', {
     textDocument: { uri: ctx.sync.uri }, range,
-    context: { diagnostics: ctx.client.diagnostics.current(ctx.sync.uri, ctx.sync.version) },
+    context: { diagnostics },
   }, options());
   const actions = (Array.isArray(raw) ? raw : []).map(record)
     .filter((a): a is Record<string, unknown> => !!a && typeof a['title'] === 'string');
@@ -37,9 +48,13 @@ export async function codeActions(input: LspRefactorInput, ctx: QueryContext, en
   let selected = matches[0]!;
   if (selected['disabled']) return error('Selected code action is disabled');
   const provider = record(ctx.client.serverCapabilities['codeActionProvider']);
-  if (!selected['edit'] && typeof selected['command'] !== 'string' && provider?.['resolveProvider'] === true) {
+  if (!selected['edit'] && !selected['command'] && provider?.['resolveProvider'] === true) {
+    const originalTitle = selected['title'];
     const resolved = record(await ctx.client.request('codeAction/resolve', selected, options()));
     if (!resolved) return error('Invalid resolved code action');
+    // Contract: the resolved action must match the originally selected title;
+    // a server that substitutes a different action through resolve is rejected.
+    if (resolved['title'] !== originalTitle) return error(`Resolved action title mismatch: expected ${JSON.stringify(originalTitle)}, got ${JSON.stringify(resolved['title'])}`);
     selected = resolved;
   }
   if (selected['disabled']) return error('Selected code action is disabled');
