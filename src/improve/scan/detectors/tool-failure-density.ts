@@ -73,6 +73,7 @@ import type { SessionRead } from '../reader.js';
 import type { ToolFailureClass } from '../../../agent/trace/types.js';
 import { clampExcerpt, MAX_EVIDENCE_PER_CARD } from './_lib.js';
 import { BENIGN_FAILURE_CLASSES } from '../../../agent/trace/types.js';
+import { clusterErrorHeads, type ErrorCluster } from './tool-failure-density.normalize.js';
 
 /**
  * Failure classes that mean "the system correctly said no" or "the human did
@@ -127,6 +128,8 @@ interface FailureSighting {
   truncated: boolean;
   /** Coarse failure class from the trace event, when present. */
   failureClass?: ToolFailureClass;
+  /** First ≤200 chars of error text from the trace event, when present. */
+  errorHead?: string;
 }
 
 /** Aggregated stats per tool name across all sessions. */
@@ -193,6 +196,7 @@ export function detectToolFailureDensity(
           durationMs: ev.payload.durationMs,
           truncated: ev.payload.truncated,
           ...(failureClass !== undefined ? { failureClass } : {}),
+          ...(ev.payload.errorHead !== undefined ? { errorHead: ev.payload.errorHead } : {}),
         });
         stats.affectedSessions.add(session.sessionId);
         if (ev.payload.truncated) stats.truncatedFailureCount += 1;
@@ -241,6 +245,9 @@ function buildResult(stats: ToolStats, rate: number): DetectorResult {
     annotation: `isError=true${f.failureClass ? ` · class=${f.failureClass}` : ''} · resultBytes=${f.resultBytes} · durationMs=${f.durationMs}${f.truncated ? ' · truncated' : ''}`,
   }));
 
+  // Cluster failures by normalized errorHead so the card names the actual cause.
+  const errorClusters: ErrorCluster[] = clusterErrorHeads(stats.failures.map((f) => f.errorHead));
+
   const totalDuration = stats.failures.reduce((acc, f) => acc + f.durationMs, 0);
   const avgFailureDurationMs = totalDuration / stats.failures.length;
 
@@ -263,7 +270,7 @@ function buildResult(stats: ToolStats, rate: number): DetectorResult {
     observedAt,
     evidence,
     detail: {
-      detector: 'tool-failure-density@v2',
+      detector: 'tool-failure-density@v3',
       toolName: stats.toolName,
       totalCalls: stats.totalCalls,
       failureCount: stats.failures.length,
@@ -273,6 +280,7 @@ function buildResult(stats: ToolStats, rate: number): DetectorResult {
       avgFailureDurationMs: round2(avgFailureDurationMs),
       failureClassBreakdown,
       excludedByClass,
+      errorClusters,
       sessionIds: Array.from(stats.affectedSessions),
       seqs: stats.failures.map((f) => f.seq),
     },
