@@ -259,15 +259,13 @@ describe('cross-classifier: remaining divergences to fix in #3846', () => {
    *
    * #3846: pin current behaviour; expect this test to flip when unified.
    */
-  it.fails(
-    'git push origin main → classifiers agree on mutation level (#3846)',
-    () => {
-      // classifyRisk says 'medium'; classifyBashCommand says mutating:true.
-      // After unification both should agree: high (irreversible push).
-      // Current: classifyRisk returns 'medium', NOT 'high' — fails.
-      expect(classifyRisk('bash', { command: 'git push origin main' }, CTX)).toBe('high');
-    },
-  );
+  // TODO(#3846): classifyRisk currently returns 'medium' (not 'high') — pin divergent value.
+  it('git push origin main → classifiers agree on mutation level (#3846)', () => {
+    // classifyRisk under-gates at 'medium'; classifyBashCommand says mutating:true.
+    // After unification (#3846) both should agree: high (irreversible push).
+    expect(classifyRisk('bash', { command: 'git push origin main' }, CTX)).toBe('medium');
+    expect(classifyBashCommand('git push origin main').mutating).toBe(true);
+  });
 
   /**
    * `git log --grep="git push" --oneline`
@@ -285,15 +283,13 @@ describe('cross-classifier: remaining divergences to fix in #3846', () => {
    *
    * #3846: pin current behaviour; unified classifier should return 'safe'.
    */
-  it.fails(
-    'git log --grep="git push" --oneline → classifyRisk should not fire medium on grep arg (#3846)',
-    () => {
-      // classifyRisk fires 'medium' due to substring match of 'git push' in the --grep arg.
-      // After unification it should be 'safe' (read-only log query).
-      expect(classifyRisk('bash', { command: 'git log --grep="git push" --oneline' }, CTX)).toBe('safe');
-      expect(classifyBashCommand('git log --grep="git push" --oneline').mutating).toBe(false);
-    },
-  );
+  // TODO(#3846): classifyRisk currently fires 'medium' (false positive) — pin divergent value.
+  it('git log --grep="git push" --oneline → classifyRisk should not fire medium on grep arg (#3846)', () => {
+    // classifyRisk fires 'medium' due to substring match of 'git push' inside --grep arg.
+    // After unification (#3846) it should return 'safe' (read-only log query).
+    expect(classifyRisk('bash', { command: 'git log --grep="git push" --oneline' }, CTX)).toBe('medium');
+    expect(classifyBashCommand('git log --grep="git push" --oneline').mutating).toBe(false);
+  });
 
   /**
    * `grep -rn "cp " src/`
@@ -310,16 +306,14 @@ describe('cross-classifier: remaining divergences to fix in #3846', () => {
    *
    * #3846: pin current behaviour; unified classifier should return 'safe'.
    */
-  it.fails(
-    'grep -rn "cp " src/ → classifyRisk should not fire medium on quoted arg (#3846)',
-    () => {
-      // classifyRisk fires 'medium' due to raw 'cp ' substring hit in the arg string.
-      // classifyBashCommand correctly returns non-mutating.
-      // After unification both should agree: 'safe'.
-      expect(classifyRisk('bash', { command: 'grep -rn "cp " src/' }, CTX)).toBe('safe');
-      expect(classifyBashCommand('grep -rn "cp " src/').mutating).toBe(false);
-    },
-  );
+  // TODO(#3846): classifyRisk currently fires 'medium' (false positive) — pin divergent value.
+  it('grep -rn "cp " src/ → classifyRisk should not fire medium on quoted arg (#3846)', () => {
+    // classifyRisk fires 'medium' due to raw 'cp ' substring hit in the quoted grep pattern.
+    // classifyBashCommand correctly returns non-mutating (data-string stripper removes it).
+    // After unification (#3846) both should agree: 'safe'.
+    expect(classifyRisk('bash', { command: 'grep -rn "cp " src/' }, CTX)).toBe('medium');
+    expect(classifyBashCommand('grep -rn "cp " src/').mutating).toBe(false);
+  });
 
   /**
    * `git stash list`
@@ -336,16 +330,14 @@ describe('cross-classifier: remaining divergences to fix in #3846', () => {
    *
    * #3846: pin current behaviour; unified classifier should return 'safe'.
    */
-  it.fails(
-    'git stash list → classifyRisk should not fire medium on read-only stash subcommand (#3846)',
-    () => {
-      // classifyRisk fires 'medium' due to raw 'git stash' substring match.
-      // classifyBashCommand correctly returns non-mutating (list is read-only).
-      // After unification both should agree: 'safe'.
-      expect(classifyRisk('bash', { command: 'git stash list' }, CTX)).toBe('safe');
-      expect(classifyBashCommand('git stash list').mutating).toBe(false);
-    },
-  );
+  // TODO(#3846): classifyRisk currently fires 'medium' (false positive) — pin divergent value.
+  it('git stash list → classifyRisk should not fire medium on read-only stash subcommand (#3846)', () => {
+    // classifyRisk fires 'medium' due to raw 'git stash' substring match without checking subcommand.
+    // classifyBashCommand correctly returns non-mutating ('list' is read-only).
+    // After unification (#3846) both should agree: 'safe'.
+    expect(classifyRisk('bash', { command: 'git stash list' }, CTX)).toBe('medium');
+    expect(classifyBashCommand('git stash list').mutating).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
