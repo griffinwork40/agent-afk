@@ -14,6 +14,7 @@ import { sendToSessionTool } from './schemas.peer.js';
 import { createScheduleTool, updateScheduleTool } from './schemas.schedule.js';
 import { TASK_MAX_ATTEMPTS_LIMIT, TASK_RETRY_DELAY_MAX_MS, TASK_RETRY_DELAY_MIN_MS } from '../daemon/task-retry.js';
 import { cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
+import { filterBackgroundToolDefs } from './process-job-tools.js';
 import type { AnthropicToolDef } from './types.js';
 
 describe('builtinToolSchemas', () => {
@@ -425,6 +426,40 @@ describe('prefix-cache stability: invariant core prefix (#4198)', () => {
     const prefix = schemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
     const coreNames = builtinToolSchemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
     expect(prefix).toEqual(coreNames);
+  });
+});
+
+describe('prefix-cache stability: filterBackgroundToolDefs (#4235)', () => {
+  it('invariant core prefix is intact after filterBackgroundToolDefs(false, false)', () => {
+    // subagentBackground=false, processJobs=false → all three bg tools removed
+    const filtered = filterBackgroundToolDefs([...builtinToolSchemas], false, false);
+    const prefix = filtered.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    const coreNames = builtinToolSchemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    expect(prefix).toEqual(coreNames);
+  });
+
+  it('invariant core prefix is intact after filterBackgroundToolDefs(false, true)', () => {
+    // subagentBackground=false, processJobs=true → only send_message_to_agent removed
+    const filtered = filterBackgroundToolDefs([...builtinToolSchemas], false, true);
+    const prefix = filtered.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    const coreNames = builtinToolSchemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    expect(prefix).toEqual(coreNames);
+  });
+
+  it('filterBackgroundToolDefs(false, false) removes all three bg tools', () => {
+    const filtered = filterBackgroundToolDefs([...builtinToolSchemas], false, false);
+    const names = filtered.map((t) => t.name);
+    expect(names).not.toContain('cancel_background_job');
+    expect(names).not.toContain('send_message_to_agent');
+    expect(names).not.toContain('get_background_job_health');
+  });
+
+  it('filterBackgroundToolDefs(false, true) removes only send_message_to_agent', () => {
+    const filtered = filterBackgroundToolDefs([...builtinToolSchemas], false, true);
+    const names = filtered.map((t) => t.name);
+    expect(names).not.toContain('send_message_to_agent');
+    expect(names).toContain('cancel_background_job');
+    expect(names).toContain('get_background_job_health');
   });
 });
 
