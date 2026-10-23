@@ -6,7 +6,7 @@ description: "Read and edit ~/.afk config and env vars from the CLI or from the 
 Change settings from the CLI when you need persistent behavior, or let the agent tune non-sensitive keys with `config_set`. Credentials and trust gates require a human-controlled CLI action. There are three ways to change AFK's configuration, writing to files under `~/.afk/config/`:
 
 - **`afk login`** — the guided wizard for Anthropic credentials (see [API Keys](/configuration/api-keys)).
-- **`afk config …`** — CLI subcommands for any non-credential setting, plus masked entry for secrets.
+- **`afk config`** — CLI subcommands for any non-credential setting, plus masked entry for secrets.
 - **`config_get` / `config_set`** — built-in tools the **agent** can call to read and edit its own config.
 
 All writes are validated and atomic. The agent path is deliberately narrower
@@ -68,6 +68,10 @@ its own API key would have an unbounded blast radius. These stay behind a human
 running the CLI. The pre-existing write-denylist on `~/.afk/config` (which blocks
 the generic `write_file`/`edit_file` tools) is left fully intact — `config_set`
 is a separate, validated path that writes only the two canonical config files.
+
+### Behavioral settings by name
+
+`autoRouting.interactive`, `autoRouting.chat`, and `autoRouting.telegram` control automatic model routing for their respective surfaces. `interactive.thinkingUi` selects `summary`, `live`, `digest`, or `off` for the REPL thinking display. `maxSummaryCallsPerSession` caps background summarizer calls (1 to 500); `maxTokens` is deprecated and inert, so use `AFK_MAX_OUTPUT_TOKENS` or `--max-output-tokens` for the response output limit instead.
 
 ## Agent tools
 

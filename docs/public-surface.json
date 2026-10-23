@@ -1,0 +1,4620 @@
+{
+  "version": 1,
+  "symbols": [
+    {
+      "kind": "command",
+      "name": "afk",
+      "source": "src/cli/index.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk acp",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk bg",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk bg list",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk bg replay",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk bg tail",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk branch",
+      "source": "src/cli/commands/branch.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk branch prune",
+      "source": "src/cli/commands/branch.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk browser",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk browser connect",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk browser disconnect",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk browser login",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk browser profiles",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk captures",
+      "source": "src/cli/commands/captures.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk captures list",
+      "source": "src/cli/commands/captures.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk chat",
+      "source": "src/cli/commands/chat.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk completion",
+      "source": "src/cli/commands/completion.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk config",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk config env",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk config env get",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk config env set",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk config env unset",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk config get",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk config set",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk config unset",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk daemon",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk defects",
+      "source": "src/cli/commands/defects.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk doctor",
+      "source": "src/cli/commands/doctor.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk events",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk events github",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk farm",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve",
+      "source": "src/cli/commands/improve/index.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve approve",
+      "source": "src/cli/commands/improve/approve.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve cards",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve cards list",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve cards show",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve cards triage",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve eval-cases",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve eval-cases list",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve eval-cases show",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve eval-gen",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve eval-run",
+      "source": "src/cli/commands/improve/eval-run.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve proposals",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve proposals list",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve proposals show",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve propose",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk improve scan",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk insights",
+      "source": "src/cli/commands/insights.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk interactive",
+      "source": "src/cli/commands/interactive.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk login",
+      "source": "src/cli/commands/login-command.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk marketplace",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk marketplace install",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk marketplace install-plugin",
+      "source": "src/cli/commands/marketplace.subcommands.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk marketplace list",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk marketplace plugins",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk marketplace remove",
+      "source": "src/cli/commands/marketplace.subcommands.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk marketplace update",
+      "source": "src/cli/commands/marketplace.subcommands.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk migrate",
+      "source": "src/cli/commands/migrate.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk plugin",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk plugin config",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk plugin disable",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk plugin enable",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk plugin install",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk plugin list",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk plugin remove",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk plugin update",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk provider",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk provider auth",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk provider auth diagnose",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk provider auth xai",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk provider auth xai login",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk provider auth xai logout",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk queue",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk queue add",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk queue clear",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk queue list",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk queue remove",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk restart",
+      "source": "src/cli/commands/restart.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk schedule",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk schedule add",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk schedule disable",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk schedule enable",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk schedule list",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk schedule logs",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk schedule remove",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk service",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk service install",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk service list",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk service restart",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk service status",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk service uninstall",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk service upgrade",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk shell-init",
+      "source": "src/cli/commands/shell-init.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk status",
+      "source": "src/cli/commands/status.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk telegram",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk telegram check-token",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk telegram discover-chat",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk telegram logs",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk telegram restart",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk telegram set-allowed-chat",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk telegram setup",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk telegram start",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk telegram status",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk telegram stop",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk trace",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk trace export-otlp",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk trace list",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk trace show",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk transcript",
+      "source": "src/cli/commands/transcript.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk transcript reindex",
+      "source": "src/cli/commands/transcript.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk transcript search",
+      "source": "src/cli/commands/transcript.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk update",
+      "source": "src/cli/commands/update.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk usage",
+      "source": "src/cli/commands/usage.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk web",
+      "source": "src/cli/commands/web.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk whatif",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk witness",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk witness read",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk witness search",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk worktree",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk worktree list",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk worktree prune",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "config",
+      "name": "autoResumeOnUsageLimit",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "autoRouting.chat",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "autoRouting.interactive",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "autoRouting.telegram",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "bgSummaries",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "daemon.task",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "daemon.taskId",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "daemon.verifyDone",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "disabledPluginHooks",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "enablePluginHooks",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "enableShellHooks",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "enforceDoneEvidence",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "interactive.suggestGhost",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "interactive.thinkingUi",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "interactive.worktreeAutoname",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "interactive.worktreeBase",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "interactive.worktreeBranchPrefix",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "interactive.worktreeOnExit",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "maxSummaryCallsPerSession",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "maxTokens",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "model",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "models.large",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "models.local",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "models.medium",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "models.small",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "permissionMode",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "pluginHookEnv",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "skills.hidden",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "systemPrompt",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "telegram.notify.mode",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "telegram.notify.primaryChatId",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "telegram.notify.targets",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "telegram.tagOnlyChats",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "telegram.verifyDone",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "temperature",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "theme",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
+      "name": "updatePolicy",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_ALLOW_PROJECT_MCP",
+      "source": "src/config/env.mcp.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_AUTO_ROUTING",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BANNER_PLAIN",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BASH_PREVIEW_HEAD_LINES",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BASH_PREVIEW_TAIL_LINES",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BG_AUTO_DELIVER",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BROWSER_ALLOWED_DOMAINS",
+      "source": "src/config/env.browser.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BROWSER_BACKEND",
+      "source": "src/config/env.browser.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BROWSER_BLOCKED_DOMAINS",
+      "source": "src/config/env.browser.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BROWSER_CONFIG",
+      "source": "src/config/env.browser.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BROWSER_DEFAULT_PROFILE",
+      "source": "src/config/env.browser.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BROWSER_DOM_SNAPSHOTS",
+      "source": "src/config/env.browser.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BROWSER_HEADLESS",
+      "source": "src/config/env.browser.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_CENTER_CONTENT",
+      "source": "src/config/env.display.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_COMPACT_KEEP_LAST_TURNS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_COMPACT_MODEL",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_COMPACT_SHRINK_FRACTION",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_COMPANION_PRIMER",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_CONNECT_RETRY_BUDGET_MS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_CONTEXT_GUARD_DISABLE",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_CONTEXT_GUARD_PCT",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DAEMON_BUDGET_GATE_DISABLED",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DAEMON_BUDGET_SKIP_PCT",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DAEMON_CWD",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DAEMON_HOST",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DAEMON_SHELL_TIMEOUT_MS",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DAEMON_TASK",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DAEMON_TASK_ID",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DEBUG",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DEBUG_CLIPBOARD",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DEBUG_COMPOSITOR",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DEFAULT_SUBAGENT_MODEL",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DEMO_CLEAN",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DIFF_LINES",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DISABLE_BASH_INTERPRETER_GUARD",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DISABLE_PATH_APPROVAL",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DISABLE_PROMPT_CACHE",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DISABLE_SPINE_UPDATE",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_DUMP_PROMPT",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_EFFORT",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_EVAL_STALENESS_DAYS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_EVENTS_GITHUB_POLL_MS",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_FRAMEWORK_DIR",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_FRAMEWORK_PROMPT_FILE",
+      "source": "src/config/env.whatif.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_GOBLIN_MASCOT",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_GOBLIN_SPINNER",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_HOME",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_IMAGE_ALLOW_DAEMON",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_IMAGE_API_KEY",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_IMAGE_SESSION_LIMIT",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_INTERNAL",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LEASE_TTL_MS",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LOCAL_API_KEY",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LOCAL_BASE_URL",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LSP_DIAGNOSTICS",
+      "source": "src/config/env.tools.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LSP_DIAGNOSTICS_TIMEOUT_MS",
+      "source": "src/config/env.tools.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_BUDGET_USD",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_AGENTS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_BACKGROUND_JOBS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_NESTING_DEPTH",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_OUTPUT_TOKENS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_TOKENS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_TOOL_USE_ITERATIONS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_TOTAL_AGENTS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MCP_HEALTHCHECK",
+      "source": "src/config/env.mcp.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MEMORY_EVIDENCE_GATE",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MEMORY_GC_MIN_AGE_DAYS",
+      "source": "src/config/env.memory-gc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MEMORY_GC_SWEEP_ENABLE",
+      "source": "src/config/env.memory-gc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MESSAGE_JOURNAL_DISABLED",
+      "source": "src/config/env.session-storage.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MICROCOMPACT_DELEGATION_BYTES",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MICROCOMPACT_KEEP_LAST",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MICROCOMPACT_TOOL_RESULT_BYTES",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_LARGE",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_LARGE_API_KEY",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_LARGE_BASE_URL",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_LOCAL",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_LOCAL_API_KEY",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_LOCAL_BASE_URL",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_MEDIUM",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_MEDIUM_API_KEY",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_MEDIUM_BASE_URL",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_SMALL",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_SMALL_API_KEY",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_SMALL_BASE_URL",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_STALL_TIMEOUT_MS",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_TTFB_TIMEOUT_MS",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_NOTIFY",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_OPENAI_BASE_URL",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_OPENAI_USE_RESPONSES",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_OTLP_ENDPOINT",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_OTLP_HEADERS",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_OVERLOAD_PAUSE_MS",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_PEER_INBOUND",
+      "source": "src/config/env.peer.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_PEER_POLL_MS",
+      "source": "src/config/env.peer.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_PLAIN_OUTPUT",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_PREEXISTING_LEDGER_DISABLE",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_PROMPT_CACHE_TTL",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_PROSE_MEASURE",
+      "source": "src/config/env.display.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_PROVIDER",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_RATE_LIMIT_ADMISSION_DISABLED",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_RATE_LIMIT_STAGGER_MAX_MS",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_READONLY_GIT_TOOL",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_READ_DENYLIST",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_REMOTE_DEPTH",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_RUN_RECEIPT_DISABLED",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SDK_SURFACE_WARN",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SESSIONSTART_COOLDOWN_MS",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SESSION_ID",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SESSION_LEDGER_DISABLED",
+      "source": "src/config/env.session-storage.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SESSION_MAX_AGE_DAYS",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SESSION_MAX_COUNT",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SESSION_RETENTION_DISABLE",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SESSION_TMPDIR_DISABLE",
+      "source": "src/config/env.session-tmpdir.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SHELL_PASSTHROUGH",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SHELL_WRAPPER",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SHOW_DIFFS",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SKILL_STREAM_VERBOSE",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SMOKE_TEXT",
+      "source": "src/config/env.display.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SPINNER_TIPS",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_STATE_DIR",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_STEER_MODE",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_STOP_HOOK_MAX_CONTINUATIONS",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_STREAM_BUFFER_MS",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUBAGENT_IDLE_TIMEOUT_MS",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUBAGENT_LOG",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUBAGENT_RESULT_CAP_BYTES",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUBAGENT_TIMEOUT_MS",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUGGEST_ENABLED",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUGGEST_GHOST",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUGGEST_MODEL",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUGGEST_PROMPT",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SYSTEM_PROMPT",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TASK_BUDGET",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TELEGRAM_ALLOWED_CHAT_IDS",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TELEGRAM_BOT_TOKEN",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TELEGRAM_CWD",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TELEGRAM_NOTIFY_MODE",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TELEGRAM_PRIMARY_CHAT_ID",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TELEGRAM_SESSION_IDLE_MS",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TELEGRAM_TAG_ONLY_CHAT_IDS",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TELEGRAM_TRACE",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TEMPERATURE",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TERM_TITLE",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TEXT_MEASURE",
+      "source": "src/config/env.display.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_THEME",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_THINKING",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_THINKING_UI",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TIMEOUT_MS",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TOOL_HEALTH_DISABLE",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRACE_DISABLED",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_API_KEY",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_API_URL",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_MODEL",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_TIMEOUT_MS",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TURN_SEPARATOR",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_UNPROVEN_DIAGNOSIS_GATE",
+      "source": "src/config/env.hooks.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_USAGE_LEDGER_DISABLED",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_USER_CARD_MAX_ROWS",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_VISION_MODELS",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_VITALS",
+      "source": "src/config/env.vitals.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WAVE_MANIFEST_DISABLED",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WAVE_MANIFEST_TTL_HOURS",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WAVE_RESUME_UNATTENDED",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WEB_ALLOW_PRIVATE_HOSTS",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WEB_HOST",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WEB_PORT",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WEB_TOKEN",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WHATIF_ALLOW_MCP",
+      "source": "src/config/env.whatif.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WHATIF_EPISODE",
+      "source": "src/config/env.whatif.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WHATIF_KEEP_CONTEXT_HOOKS",
+      "source": "src/config/env.whatif.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WHATIF_TOOL_LOG",
+      "source": "src/config/env.whatif.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WITNESS_MAX_AGE_DAYS",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WITNESS_MAX_BYTES",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WITNESS_RETENTION_DISABLE",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WORKSPACE_DISABLED",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WORKTREE_AUTONAME",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WORKTREE_BASE",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WORKTREE_BOOT_PRUNE",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WORKTREE_BRANCH_PREFIX",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WORKTREE_MAX_AGE_CLEAN",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WORKTREE_MAX_AGE_DIRTY",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WORKTREE_ON_EXIT",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WORKTREE_PRUNE_DISABLE",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WORKTREE_SWEEP_ROOT",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WRITE_DENYLIST",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_WRITE_DIFF",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_XAI_BASE_URL",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_XAI_GROK_CLIENT_VERSION",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_XAI_OAUTH_BASE_URL",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AGENT_AFK_ASCII",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AGENT_SURFACE",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "ANTHROPIC_API_KEY",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "APPDATA",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "ASCIINEMA_REC",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "CHROME_CONFIG_HOME",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "CI",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "CLAUDE_CODE_OAUTH_TOKEN",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "CLAUDE_MODEL",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "CODEX_API_KEY",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "CODEX_HOME",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "COLORFGBG",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "COLORTERM",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "DEBUG",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "EDITOR",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "EXA_API_KEY",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "FORCE_COLOR",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "HOME",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "LOCALAPPDATA",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "MSYSTEM",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "NODE_ENV",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "NO_COLOR",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "NO_UPDATE_NOTIFIER",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "OPENAI_API_KEY",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "OPENAI_BASE_URL",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "PAGER",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "PATH",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "SCRIPT",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "SHELL",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "SystemRoot",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "TELEGRAM_BOT_TOKEN",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "TELEGRAM_DATA_DIR",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "TELEGRAM_VERBOSE",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "TMUX",
+      "source": "src/config/env.peer.ts"
+    },
+    {
+      "kind": "env",
+      "name": "TMUX_PANE",
+      "source": "src/config/env.peer.ts"
+    },
+    {
+      "kind": "env",
+      "name": "USER",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "USERNAME",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "USERPROFILE",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "VISUAL",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "VITEST",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "XAI_API_KEY",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "XDG_CONFIG_HOME",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
+      "name": "__CFBundleIdentifier",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk --help",
+      "source": "src/cli/index.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk --no-update-check",
+      "source": "src/cli/index.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk --version",
+      "source": "src/cli/index.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --dangerously-skip-permissions",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --help",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --max-turns",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --model",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk bg --help",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk bg list --help",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk bg list --max",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk bg replay --help",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk bg tail --from-start",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk bg tail --help",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk bg tail --no-follow",
+      "source": "src/cli/commands/bg.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk branch --help",
+      "source": "src/cli/commands/branch.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk branch prune --base",
+      "source": "src/cli/commands/branch.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk branch prune --execute",
+      "source": "src/cli/commands/branch.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk branch prune --help",
+      "source": "src/cli/commands/branch.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk branch prune --prefix",
+      "source": "src/cli/commands/branch.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk branch prune --remote",
+      "source": "src/cli/commands/branch.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk browser --help",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk browser connect --channel",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk browser connect --help",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk browser connect --no-open",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk browser disconnect --help",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk browser login --help",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk browser login --profile",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk browser profiles --help",
+      "source": "src/cli/commands/browser.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk captures --help",
+      "source": "src/cli/commands/captures.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk captures list --help",
+      "source": "src/cli/commands/captures.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk captures list --json",
+      "source": "src/cli/commands/captures.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk captures list --limit",
+      "source": "src/cli/commands/captures.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk captures list --session",
+      "source": "src/cli/commands/captures.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --continue",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --dangerously-skip-permissions",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --dump-prompt",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --effort",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --format",
+      "source": "src/cli/commands/chat.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --help",
+      "source": "src/cli/commands/chat.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --max-budget-usd",
+      "source": "src/cli/commands/chat.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --max-output-tokens",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --max-turns",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --mcp-config",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --model",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --permission-mode",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --post",
+      "source": "src/cli/commands/chat.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --post-pr",
+      "source": "src/cli/commands/chat.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --provider",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --resume",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --session-id",
+      "source": "src/cli/commands/chat.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --stream",
+      "source": "src/cli/commands/chat.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --task-budget",
+      "source": "src/cli/commands/chat.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --theme",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --thinking",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --worktree",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk chat --worktree-base",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk completion --help",
+      "source": "src/cli/commands/completion.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config --format",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config --help",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config env --help",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config env get --all",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config env get --help",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config env get --json",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config env set --help",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config env set --json",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config env set --stdin",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config env unset --help",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config env unset --json",
+      "source": "src/cli/commands/config-command.env.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config get --help",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config get --json",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config set --help",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config set --json",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config unset --help",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk config unset --json",
+      "source": "src/cli/commands/config-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --cron",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --dump-prompt",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --effort",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --help",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --host",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --once",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --port",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --sessionstart-cooldown-ms",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --task",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --task-id",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --thinking",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --timeout-ms",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk daemon --trigger",
+      "source": "src/cli/commands/daemon.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk defects --days",
+      "source": "src/cli/commands/defects.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk defects --help",
+      "source": "src/cli/commands/defects.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk defects --json",
+      "source": "src/cli/commands/defects.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk defects --top",
+      "source": "src/cli/commands/defects.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk doctor --format",
+      "source": "src/cli/commands/doctor.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk doctor --help",
+      "source": "src/cli/commands/doctor.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events --help",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --command",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --help",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --interval",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --on",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --once",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --repo",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --base-ref",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --branches",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --cwd",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --fail-fast",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --help",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --labels",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --model",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --no-digest",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --no-memory",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --no-score",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --score-timeout",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk farm --task-slug",
+      "source": "src/cli/commands/farm.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve --help",
+      "source": "src/cli/commands/improve/index.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve approve --by",
+      "source": "src/cli/commands/improve/approve.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve approve --force",
+      "source": "src/cli/commands/improve/approve.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve approve --help",
+      "source": "src/cli/commands/improve/approve.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve approve --json",
+      "source": "src/cli/commands/improve/approve.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards --help",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards list --help",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards list --json",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards list --pattern",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards list --regressed",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards list --severity",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards list --status",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards show --help",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards show --json",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards triage --help",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards triage --json",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards triage --note",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve cards triage --status",
+      "source": "src/cli/commands/improve/cards.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-cases --help",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-cases list --card",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-cases list --help",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-cases list --json",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-cases list --pattern",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-cases list --status",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-cases list --triage",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-cases show --help",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-cases show --json",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-gen --evidence-row",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-gen --force",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-gen --help",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-gen --id",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-gen --json",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-gen --no-write",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-gen --proposal",
+      "source": "src/cli/commands/improve/eval-gen.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-run --help",
+      "source": "src/cli/commands/improve/eval-run.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-run --id",
+      "source": "src/cli/commands/improve/eval-run.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-run --json",
+      "source": "src/cli/commands/improve/eval-run.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve eval-run --no-write",
+      "source": "src/cli/commands/improve/eval-run.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve proposals --help",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve proposals list --card",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve proposals list --help",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve proposals list --json",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve proposals list --risk",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve proposals list --status",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve proposals list --triage",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve proposals show --help",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve proposals show --json",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve propose --force",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve propose --help",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve propose --id",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve propose --json",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve propose --no-write",
+      "source": "src/cli/commands/improve/propose.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --block-min-occurrences",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --closure-min-occurrences",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --help",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --include-disabled",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --min-repeats",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --only",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --read-denial-min-occurrences",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --since",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --tool-failure-min-failures",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --tool-failure-min-rate",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk improve scan --write",
+      "source": "src/cli/commands/improve/scan.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk insights --days",
+      "source": "src/cli/commands/insights.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk insights --help",
+      "source": "src/cli/commands/insights.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk insights --no-open",
+      "source": "src/cli/commands/insights.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk insights --output",
+      "source": "src/cli/commands/insights.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --continue",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --dangerously-skip-permissions",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --debug",
+      "source": "src/cli/commands/interactive.register-helpers.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --dump-prompt",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --effort",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --help",
+      "source": "src/cli/commands/interactive.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --max-output-tokens",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --max-turns",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --mcp-config",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --model",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --no-shell-passthrough",
+      "source": "src/cli/commands/interactive.register-helpers.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --no-worktree-autoname",
+      "source": "src/cli/commands/interactive.register-helpers.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --permission-mode",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --plain",
+      "source": "src/cli/commands/interactive.register-helpers.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --provider",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --resume",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --theme",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --thinking",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --thinking-ui",
+      "source": "src/cli/commands/interactive.register-helpers.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --worktree",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --worktree-base",
+      "source": "src/cli/commands/shared-command-options.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk interactive --worktree-on-exit",
+      "source": "src/cli/commands/interactive.register-helpers.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk login --force",
+      "source": "src/cli/commands/login-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk login --help",
+      "source": "src/cli/commands/login-command.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace --help",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace install --force",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace install --help",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace install --ref",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace install-plugin --force",
+      "source": "src/cli/commands/marketplace.subcommands.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace install-plugin --help",
+      "source": "src/cli/commands/marketplace.subcommands.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace install-plugin --ref",
+      "source": "src/cli/commands/marketplace.subcommands.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace install-plugin --yes",
+      "source": "src/cli/commands/marketplace.subcommands.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace list --format",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace list --help",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace plugins --format",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace plugins --help",
+      "source": "src/cli/commands/marketplace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace remove --help",
+      "source": "src/cli/commands/marketplace.subcommands.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace update --help",
+      "source": "src/cli/commands/marketplace.subcommands.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk marketplace update --ref",
+      "source": "src/cli/commands/marketplace.subcommands.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk migrate --dry-run",
+      "source": "src/cli/commands/migrate.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk migrate --from",
+      "source": "src/cli/commands/migrate.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk migrate --help",
+      "source": "src/cli/commands/migrate.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk migrate --mcp",
+      "source": "src/cli/commands/migrate.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk migrate --yes",
+      "source": "src/cli/commands/migrate.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin --help",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin config --help",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin config --unset",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin disable --help",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin enable --help",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin install --force",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin install --help",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin install --ref",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin install --yes",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin list --format",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin list --help",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin remove --help",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin update --help",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk plugin update --ref",
+      "source": "src/cli/commands/plugin.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider --help",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider auth --help",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider auth diagnose --family",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider auth diagnose --format",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider auth diagnose --help",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider auth diagnose --slot",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider auth xai --help",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider auth xai login --browser",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider auth xai login --device-code",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider auth xai login --help",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk provider auth xai logout --help",
+      "source": "src/cli/commands/provider.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk queue --help",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk queue add --help",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk queue add --notify-on",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk queue clear --help",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk queue clear --yes",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk queue list --help",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk queue remove --help",
+      "source": "src/cli/commands/queue.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk restart --help",
+      "source": "src/cli/commands/restart.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule add --command",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule add --cron",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule add --cwd",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule add --disabled",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule add --executor",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule add --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule add --name",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule add --notify",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule add --trigger",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule disable --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule enable --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule list --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule logs --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule logs --limit",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk schedule remove --help",
+      "source": "src/cli/commands/schedule.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk service --help",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk service install --dry-run",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk service install --help",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk service install --no-watch",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk service list --help",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk service restart --help",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk service status --help",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk service uninstall --help",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk service upgrade --help",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk service upgrade --no-watch",
+      "source": "src/cli/commands/service.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk shell-init --help",
+      "source": "src/cli/commands/shell-init.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk status --format",
+      "source": "src/cli/commands/status.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk status --help",
+      "source": "src/cli/commands/status.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram --help",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram check-token --help",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram discover-chat --help",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram discover-chat --timeout-sec",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram logs --follow",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram logs --help",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram logs --lines",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram restart --help",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram set-allowed-chat --help",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram setup --help",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram start --help",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram status --help",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk telegram stop --help",
+      "source": "src/cli/commands/telegram.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace --help",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace export-otlp --endpoint",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace export-otlp --help",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace export-otlp --out",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace list --help",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace list --max",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace show --all",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace show --evasion",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace show --evasion-window",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace show --help",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace show --json",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace show --limit",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace show --results",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace show --results-lines",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk transcript --help",
+      "source": "src/cli/commands/transcript.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk transcript reindex --help",
+      "source": "src/cli/commands/transcript.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk transcript search --help",
+      "source": "src/cli/commands/transcript.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk transcript search --limit",
+      "source": "src/cli/commands/transcript.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk update --check",
+      "source": "src/cli/commands/update.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk update --help",
+      "source": "src/cli/commands/update.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk update --no-restart",
+      "source": "src/cli/commands/update.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk update --pin",
+      "source": "src/cli/commands/update.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk usage --help",
+      "source": "src/cli/commands/usage.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk usage --json",
+      "source": "src/cli/commands/usage.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk web --bypass-permissions",
+      "source": "src/cli/commands/web.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk web --help",
+      "source": "src/cli/commands/web.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk web --host",
+      "source": "src/cli/commands/web.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk web --model",
+      "source": "src/cli/commands/web.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk web --no-open",
+      "source": "src/cli/commands/web.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk web --port",
+      "source": "src/cli/commands/web.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk web --token",
+      "source": "src/cli/commands/web.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --aa",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --agent-model",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --analyst-model",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --append",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --append-project",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --concurrency",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --disable-plugin",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --disable-skill",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --effort",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --env",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --file",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --force",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --help",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --hot",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --json",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --judge",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --keep-sandboxes",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --max-predictions",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --max-turns",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --max-usd",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --memory-add",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --memory-category",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --memory-remove",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --model",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --no-baseline-sample",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --predict",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --probes",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --quick",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --samples",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --spec",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --timeout",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --turns",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --verify",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk whatif --yes",
+      "source": "src/cli/commands/whatif.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness --help",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness read --errors",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness read --help",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness read --json",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness read --kinds",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness read --limit",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness read --tool",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness search --help",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness search --json",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness search --kinds",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness search --sessions",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk witness search --since",
+      "source": "src/cli/commands/witness.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk worktree --help",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk worktree list --help",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk worktree prune --apply",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk worktree prune --help",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk worktree prune --max-age-days-clean",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk worktree prune --max-age-days-dirty",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk worktree prune --scope",
+      "source": "src/cli/commands/worktree.ts"
+    },
+    {
+      "kind": "hook",
+      "name": "PostToolUse",
+      "source": "src/agent/hooks.ts"
+    },
+    {
+      "kind": "hook",
+      "name": "PostToolUseFailure",
+      "source": "src/agent/hooks.ts"
+    },
+    {
+      "kind": "hook",
+      "name": "PreCompact",
+      "source": "src/agent/hooks.ts"
+    },
+    {
+      "kind": "hook",
+      "name": "PreToolUse",
+      "source": "src/agent/hooks.ts"
+    },
+    {
+      "kind": "hook",
+      "name": "SessionEnd",
+      "source": "src/agent/hooks.ts"
+    },
+    {
+      "kind": "hook",
+      "name": "SessionStart",
+      "source": "src/agent/hooks.ts"
+    },
+    {
+      "kind": "hook",
+      "name": "Stop",
+      "source": "src/agent/hooks.ts"
+    },
+    {
+      "kind": "hook",
+      "name": "SubagentStart",
+      "source": "src/agent/hooks.ts"
+    },
+    {
+      "kind": "hook",
+      "name": "SubagentStop",
+      "source": "src/agent/hooks.ts"
+    },
+    {
+      "kind": "hook",
+      "name": "UserPromptSubmit",
+      "source": "src/agent/hooks.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/afk",
+      "source": "src/cli/slash/commands/afk.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/afk-md",
+      "source": "src/cli/slash/commands/afk-md.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/agents",
+      "source": "src/cli/slash/plugin-agents.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/allow-dir",
+      "source": "src/cli/slash/commands/allow-dir.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/bad",
+      "source": "src/cli/slash/commands/feedback.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/bgsub",
+      "source": "src/cli/slash/commands/bgsub.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/bgsub:cancel",
+      "source": "src/cli/slash/commands/bgsub.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/bgsub:join",
+      "source": "src/cli/slash/commands/bgsub.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/bgsub:status",
+      "source": "src/cli/slash/commands/bgsub.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/bug",
+      "source": "src/cli/slash/commands/bug.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/changelog",
+      "source": "src/cli/slash/commands/changelog.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/clear",
+      "source": "src/cli/slash/commands/core.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/compact",
+      "source": "src/cli/slash/commands/core.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/config",
+      "source": "src/cli/slash/commands/config-doctor.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/copy",
+      "source": "src/cli/slash/commands/copy.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/cost",
+      "source": "src/cli/slash/commands/info.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/debug",
+      "source": "src/cli/slash/commands/info.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/diff",
+      "source": "src/cli/slash/commands/diff.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/doctor",
+      "source": "src/cli/slash/commands/config-doctor.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/editor",
+      "source": "src/cli/slash/commands/editor.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/exit",
+      "source": "src/cli/slash/commands/core.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/export",
+      "source": "src/cli/slash/commands/export.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/fast",
+      "source": "src/cli/slash/commands/fast.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/font-size",
+      "source": "src/cli/slash/commands/font-size.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/fork",
+      "source": "src/cli/slash/commands/fork.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/get-started",
+      "source": "src/skills/get-started/index.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/ghost",
+      "source": "src/cli/slash/commands/ghost.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/goal",
+      "source": "src/cli/slash/commands/goal.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/good",
+      "source": "src/cli/slash/commands/feedback.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/handoffs",
+      "source": "src/cli/slash/commands/handoffs.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/handoffs:answer",
+      "source": "src/cli/slash/commands/handoffs.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/help",
+      "source": "src/cli/slash/commands/core.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/history",
+      "source": "src/cli/slash/commands/info.history.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/inbox",
+      "source": "src/cli/slash/commands/inbox.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/init",
+      "source": "src/cli/slash/commands/init.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/keys",
+      "source": "src/cli/slash/commands/keys.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/limits",
+      "source": "src/cli/slash/commands/info.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/marketplace",
+      "source": "src/cli/slash/marketplace-browse.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/marketplaces",
+      "source": "src/cli/slash/marketplace-browse.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/mcp",
+      "source": "src/cli/slash/commands/info.mcp.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/mint",
+      "source": "src/skills/mint/index.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/model",
+      "source": "src/cli/slash/commands/info.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/name",
+      "source": "src/cli/slash/commands/name.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/peers",
+      "source": "src/cli/slash/commands/peers.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/plan",
+      "source": "src/cli/slash/commands/plan.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/reauth",
+      "source": "src/cli/slash/commands/reauth.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/reload-plugins",
+      "source": "src/cli/slash/plugin-skills/reload.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/resume",
+      "source": "src/cli/slash/commands/resume.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/retry",
+      "source": "src/cli/slash/commands/retry.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/rewind",
+      "source": "src/cli/slash/commands/core.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/search",
+      "source": "src/cli/slash/commands/search.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/service-setup",
+      "source": "src/skills/service-setup/index.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/sh",
+      "source": "src/cli/slash/commands/sh.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/skills",
+      "source": "src/cli/slash/plugin-skills/listing.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/spine",
+      "source": "src/cli/slash/commands/spine.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/stats",
+      "source": "src/cli/slash/commands/stats.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/suggestions",
+      "source": "src/cli/slash/commands/suggestions.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/tasks",
+      "source": "src/cli/slash/commands/tasks.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/tasks:cancel",
+      "source": "src/cli/slash/commands/tasks.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/tasks:view",
+      "source": "src/cli/slash/commands/tasks.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/telegram-setup",
+      "source": "src/skills/telegram-setup/index.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/theme",
+      "source": "src/cli/slash/commands/theme.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/thinking",
+      "source": "src/cli/slash/commands/thinking.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/todo",
+      "source": "src/cli/slash/commands/todo.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/tokens",
+      "source": "src/cli/slash/commands/info.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/tools",
+      "source": "src/cli/slash/commands/info.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/transcript",
+      "source": "src/cli/slash/commands/transcript.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/usage",
+      "source": "src/cli/slash/commands/info.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/whatif",
+      "source": "src/cli/slash/commands/whatif.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/worktree",
+      "source": "src/cli/slash/commands/worktree.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "agent",
+      "source": "src/agent/tools/schemas.agent-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "ask_question",
+      "source": "src/agent/tools/schemas.interaction-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "bash",
+      "source": "src/agent/tools/schemas.bash.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "browser_act",
+      "source": "src/agent/tools/schemas.browser-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "browser_close",
+      "source": "src/agent/tools/schemas.browser-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "browser_observe",
+      "source": "src/agent/tools/schemas.browser-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "browser_open",
+      "source": "src/agent/tools/schemas.browser-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "browser_screenshot",
+      "source": "src/agent/tools/schemas.browser-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "cancel_background_job",
+      "source": "src/agent/tools/schemas.background-cancel.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "cancel_schedule",
+      "source": "src/agent/tools/schemas.schedule.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "clipboard_read",
+      "source": "src/agent/tools/schemas.interaction-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "clipboard_write",
+      "source": "src/agent/tools/schemas.interaction-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "code_symbols",
+      "source": "src/agent/tools/schemas.lsp-symbols.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "compose",
+      "source": "src/agent/tools/schemas.agent-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "config_get",
+      "source": "src/agent/tools/schemas.worktree-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "config_set",
+      "source": "src/agent/tools/schemas.worktree-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "create_schedule",
+      "source": "src/agent/tools/schemas.schedule.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "edit_file",
+      "source": "src/agent/tools/schemas.file-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "exit_plan_mode",
+      "source": "src/agent/tools/handlers/exit-plan-mode.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "extract_document",
+      "source": "src/agent/tools/schemas.file-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "get_background_job_health",
+      "source": "src/agent/tools/schemas.background-health.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "get_facet",
+      "source": "src/agent/tools/schemas.facet.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "get_runtime_state",
+      "source": "src/agent/awareness/tool.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "get_schedule_history",
+      "source": "src/agent/tools/schemas.schedule.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "git_read",
+      "source": "src/agent/tools/schemas.git-read.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "glob",
+      "source": "src/agent/tools/schemas.file-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "grep",
+      "source": "src/agent/tools/schemas.file-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "image_edit",
+      "source": "src/agent/tools/schemas.web-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "image_generate",
+      "source": "src/agent/tools/schemas.web-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "json_query",
+      "source": "src/agent/tools/schemas.json-query.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "list_directory",
+      "source": "src/agent/tools/schemas.file-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "list_schedules",
+      "source": "src/agent/tools/schemas.schedule.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "list_sessions",
+      "source": "src/agent/tools/schemas.peer.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "memory_search",
+      "source": "src/agent/memory/memory-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "memory_update",
+      "source": "src/agent/memory/memory-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "model_complete",
+      "source": "src/agent/tools/schemas.model-complete.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "patch_apply",
+      "source": "src/agent/tools/schemas.patch-apply.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "procedure_write",
+      "source": "src/agent/memory/memory-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "read_file",
+      "source": "src/agent/tools/schemas.file-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "read_witness",
+      "source": "src/agent/tools/schemas.witness.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "remote_agent",
+      "source": "src/agent/tools/schemas.remote-agent.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "search_witness",
+      "source": "src/agent/tools/schemas.witness.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "send_message_to_agent",
+      "source": "src/agent/tools/schemas.background-steer.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "send_telegram",
+      "source": "src/agent/tools/schemas.web-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "send_to_session",
+      "source": "src/agent/tools/schemas.peer.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "skill",
+      "source": "src/agent/tools/schemas.agent-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "state_cas",
+      "source": "src/agent/state/state-schemas.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "state_delete",
+      "source": "src/agent/state/state-schemas.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "state_get",
+      "source": "src/agent/state/state-schemas.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "state_put",
+      "source": "src/agent/state/state-schemas.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "state_query",
+      "source": "src/agent/state/state-schemas.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "terminal_font_size",
+      "source": "src/agent/tools/schemas.worktree-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "test_run",
+      "source": "src/agent/tools/schemas.test-run.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "update_schedule",
+      "source": "src/agent/tools/schemas.schedule.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "view_image",
+      "source": "src/agent/tools/schemas.file-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "wait_for",
+      "source": "src/agent/tools/schemas.wait-for.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "web_request",
+      "source": "src/agent/tools/schemas.web-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "web_scrape",
+      "source": "src/agent/tools/schemas.web-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "workspace_publish",
+      "source": "src/agent/workspace/workspace-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "workspace_query",
+      "source": "src/agent/workspace/workspace-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "workspace_subscribe",
+      "source": "src/agent/workspace/workspace-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "worktree",
+      "source": "src/agent/tools/schemas.worktree-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "write_file",
+      "source": "src/agent/tools/schemas.file-tools.ts"
+    }
+  ]
+}

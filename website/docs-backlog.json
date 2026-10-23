@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "kind": "command",
+      "name": "afk acp",
+      "reason": "New command added in main; docs page not yet written.",
+      "added": "2026-10-20"
+    },
+    {
+      "kind": "command",
+      "name": "afk events",
+      "reason": "New command added in main; docs page not yet written.",
+      "added": "2026-10-18"
+    },
+    {
+      "kind": "command",
+      "name": "afk events github",
+      "reason": "New command added in main; docs page not yet written.",
+      "added": "2026-10-18"
+    },
+    {
+      "kind": "command",
+      "name": "afk trace export-otlp",
+      "reason": "New command added in main; docs page not yet written.",
+      "added": "2026-10-18"
+    },
+    {
+      "kind": "slash",
+      "name": "/export",
+      "reason": "New slash command added in main; docs page not yet written.",
+      "added": "2026-10-20"
+    },
+    {
+      "kind": "slash",
+      "name": "/handoffs",
+      "reason": "New slash command added in main; docs page not yet written.",
+      "added": "2026-10-20"
+    },
+    {
+      "kind": "slash",
+      "name": "/handoffs:answer",
+      "reason": "New slash command added in main; docs page not yet written.",
+      "added": "2026-10-20"
+    }
+  ]
+}

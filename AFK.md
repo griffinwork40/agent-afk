@@ -25,6 +25,12 @@ pnpm audit:sdk:check                               # CI gate: fail on unlocked S
 pnpm audit:sdk:update-lock                         # add new symbols → .sdk-dependency.lock.json (edit `reason` before commit)
 pnpm audit:env:check                               # CI gate: no raw process.env reads outside src/config/env.ts
 pnpm scan:env:check                                # CI gate: docs/env-registry.{json,md} in sync with src/config/env.ts
+pnpm scan:surface                                  # regenerate docs/public-surface.json from public registries
+pnpm scan:surface:check                            # CI gate: committed public surface matches registries
+pnpm docs:surface:check                            # CI gate: handwritten coverage or dated backlog reason
+pnpm docs:refs:check                               # CI gate: no stale references to public symbols
+pnpm docs:impact --base origin/main                 # advisory change-to-docs summary
+pnpm docs:report                                   # backlog, generated-only symbols, recent feat commits
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color> outside src/cli/palette.ts (--list to find sites)
 pnpm audit:filesize:check                          # 350-code-line ceiling (comments/blanks excluded), ratcheted against .filesize-baseline.json — CI runs it but NON-blocking (`|| true`) until #2206 lands; treat a failure as yours to fix
 pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values; add --allow-growth --reason "<text>" to record a deliberate increase)
@@ -40,6 +46,20 @@ pnpm release                                       # release pipeline (scripts/r
 ```
 
 Every gate above plus `pnpm lint` and `pnpm build` runs on each PR (`.github/workflows/ci.yml`) — run them locally before pushing, not after CI reddens.
+
+## Keeping the docs site current
+
+The docs site (`website/`, docs.agentafk.com) is kept honest by deterministic gates in CI lint-build and `pnpm check:audits` (so also pre-push). When one fails, fix the docs in the same PR:
+
+| Gate fails | Meaning | Fix |
+|---|---|---|
+| `scan:cli:check` / `scan:slash:check` / `scan:config:check` / `scan:env:check` | a generated reference page is out of date | run the matching `pnpm scan:<x>` and commit; never hand-edit `reference/{cli,slash-commands,config-keys,environment-variables}.mdx` |
+| `scan:surface:check` | `docs/public-surface.json` no longer matches the code registries | `pnpm scan:surface` and commit the snapshot |
+| `docs:surface:check` | a command, slash command, tool, config key, or hook is named on no hand-written page | document it on the page for that task (see `pnpm docs:impact --base origin/main` for where), or add a reasoned entry to `website/docs-backlog.json`; remove entries once documented |
+| `docs:refs:check` | a hand-written page names a command, flag, slash command, `AFK_*` var, config key, tool, or hook that no longer exists | update the page to the current name (verify in code); `{/* docs-refs-ignore-next-line */}` only for deliberate historical examples |
+| `scan:docs-coverage:check` / `docs:links:check` | a tool or hook is missing from its reference page, or a link/sidebar entry is broken | add the entry or fix the link |
+
+Behaviour changes that rename nothing are not caught mechanically: when you change what a user-facing feature does, update its guide. `pnpm docs:report` prints the backlog, symbols only covered by generated pages, `feat` commits since the last docs change, and a ready prompt for drafting the docs.
 
 ### Running
 

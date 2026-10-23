@@ -159,7 +159,9 @@ afk marketplace list
 afk marketplace update
 ```
 
-For a specific installed plugin, use `afk plugin update <name>`, `disable <name>`, `enable <name>`, or `remove <name>`. Marketplace equivalents include `update <name>` and `remove <name>`. Use the names reported by the listing, not a guessed directory name. See the [CLI reference](/reference/cli) for pinning, replacement, and noninteractive options.
+For a specific installed plugin, use `afk plugin update <name>`, `afk plugin disable <name>`, `afk plugin enable <name>`, or `afk plugin remove <name>`. Marketplace equivalents include `afk marketplace update <name>` and `afk marketplace remove <name>`. Use the names reported by the listing, not a guessed directory name. See the [CLI reference](/reference/cli) for pinning, replacement, and noninteractive options.
+
+Use `afk plugin config <name>` to list a plugin's declared user options, adding a key to read one or a key and value to set it; sensitive options are refused by this CLI path. In the REPL, `/marketplaces` lists installed catalogs and `/marketplace` manages them.
 
 Plugin installation state lives under `~/.afk/plugins/`, with `.index.json` tracking enabled entries and `cache/` holding marketplaces. Discovery understands nested marketplace layouts, but installed/enabled state still matters.
 
@@ -183,6 +185,8 @@ The example shows the manifest shape, not a repository you should install. `url`
 
 ## What plugins contribute
 
+{/* docs-refs-ignore-start */}
+
 | Plugin path or field | Contribution |
 | --- | --- |
 | `skills/<name>/SKILL.md` | Skill instructions and metadata |
@@ -192,6 +196,8 @@ The example shows the manifest shape, not a repository you should install. `url`
 | `.claude-plugin/mcp.json` | MCP server definitions |
 | `hooks/hooks.json` | Command hooks, behind the plugin-hook trust gate |
 | Manifest `main` | Executable JavaScript setup module |
+
+{/* docs-refs-ignore-end */}
 
 Legacy Claude Code command files are parsed as prompts and listed by `/skills`. Their names come from the file path, not frontmatter. They remain user-invoked commands rather than automatically expanding the model's skill-routing catalog. Supported metadata such as description, argument hints, allowed tools, and model goes through the shared skill parser.
 

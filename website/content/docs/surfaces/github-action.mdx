@@ -54,8 +54,8 @@ jobs:
 
       - name: Add the response to the job summary
         env:
-          AFK_RESPONSE: ${{ steps.afk.outputs.response }}
-        run: printf '%s\n' "$AFK_RESPONSE" >> "$GITHUB_STEP_SUMMARY"
+          STEP_RESPONSE: ${{ steps.afk.outputs.response }}
+        run: printf '%s\n' "$STEP_RESPONSE" >> "$GITHUB_STEP_SUMMARY"
 ```
 
 The action revision and the installed npm package are pinned separately. Update the full action commit SHA and `afk-version` deliberately when adopting a newer release.
