@@ -260,7 +260,7 @@ describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', ()
   it('is derived from the tiers + identity aliases + OpenAI hints, in the documented order', () => {
     expect(MODEL_ALIASES_HINT).toEqual([
       // Capability tiers (SLOT_NAMES)
-      'local', 'small', 'medium', 'large',
+      'local', 'small', 'medium', 'large', 'subagent',
       // Fixed-identity Claude/xAI/OpenAI aliases (DIRECT_MODEL_ALIASES)
       'opus', 'opus_1m', 'opus-5.5', 'opus-5.5_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable', 'grok',
       'sol', 'luna', 'astra', 'terra',
