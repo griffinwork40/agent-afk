@@ -47,6 +47,7 @@ function slots(overrides: Partial<ModelSlots>): ModelSlots {
     small: { id: 'claude-haiku-5-5' },
     medium: { id: 'claude-sonnet-4-6' },
     large: { id: 'claude-opus-5-5' },
+    subagent: { id: '' },
     ...overrides,
   };
 }

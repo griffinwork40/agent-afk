@@ -36,6 +36,7 @@ function slots(overrides: Partial<Record<keyof ModelSlots, ModelSlotBinding>> = 
     small: { id: 'claude-haiku-4-5-20251001' },
     medium: { id: 'claude-sonnet-5' },
     large: { id: 'claude-opus-4-8' },
+    subagent: { id: '' },
   };
   return { ...base, ...overrides } as ModelSlots;
 }

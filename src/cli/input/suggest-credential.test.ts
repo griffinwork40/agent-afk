@@ -31,6 +31,7 @@ function makeSlots(
     small: { id: 'claude-haiku-4-5' },
     medium: { id: 'claude-sonnet-4-5' },
     large: { id: 'claude-opus-4-5' },
+    subagent: { id: '' },
   };
   return { ...defaults, ...overrides };
 }

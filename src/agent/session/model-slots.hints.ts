@@ -41,7 +41,7 @@ export const OPENAI_MODEL_HINTS: readonly string[] = [
 // Invariant: these must stay in sync with SLOT_NAMES and
 // Object.keys(DIRECT_MODEL_ALIASES) in model-slots.ts.  They are inlined to
 // avoid a circular import (model-slots → model-slots.hints → model-slots).
-const _SLOT_NAMES = ['local', 'small', 'medium', 'large'] as const;
+const _SLOT_NAMES = ['local', 'small', 'medium', 'large', 'subagent'] as const;
 const _DIRECT_ALIAS_KEYS = [
   'opus', 'opus_1m', 'opus-5.5', 'opus-5.5_1m',
   'sonnet', 'sonnet_1m',
