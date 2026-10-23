@@ -346,4 +346,38 @@ describe('/rewind with file checkpoints', () => {
     expect(renderSelector).toHaveBeenCalledTimes(1);
     expect(lines.some((l) => l.includes('No file changes to restore'))).toBe(true);
   });
+
+  it('uncaptured warnings appear in preview when bash calls were not fully captured', async () => {
+    const warnings = [
+      'Bash call in turn t2 was not captured: background job',
+      'Some shell side-effects in the rewound range are not undone by this restore.',
+    ];
+    const rewindFiles = vi.fn()
+      .mockResolvedValueOnce({ canRewind: true, filesChanged: ['/w/a.ts'], uncaptured: warnings })
+      .mockResolvedValueOnce({ canRewind: true, filesChanged: ['/w/a.ts'], insertions: 1, deletions: 0, uncaptured: warnings });
+    const s = session(rewindFiles);
+    const { ctx, lines } = makeCtx(s);
+    (renderSelector as Mock).mockResolvedValueOnce(0).mockResolvedValueOnce(0);
+
+    await getRewindCmd().handler(ctx, 'files');
+
+    // Each uncaptured warning is printed as a WARN line in the preview.
+    for (const w of warnings) {
+      expect(lines.some((l) => l.startsWith('WARN:') && l.includes(w))).toBe(true);
+    }
+  });
+
+  it('uncaptured warnings appear even when no files changed', async () => {
+    const warnings = ['Bash call in turn t1 was skipped (BASH_DISABLE).'];
+    const rewindFiles = vi.fn()
+      .mockResolvedValueOnce({ canRewind: true, filesChanged: [], uncaptured: warnings });
+    const s = session(rewindFiles);
+    const { ctx, lines } = makeCtx(s);
+    (renderSelector as Mock).mockResolvedValueOnce(0);
+
+    await getRewindCmd().handler(ctx, 'files');
+
+    expect(lines.some((l) => l.includes('No file changes to restore'))).toBe(true);
+    expect(lines.some((l) => l.startsWith('WARN:') && l.includes('BASH_DISABLE'))).toBe(true);
+  });
 });

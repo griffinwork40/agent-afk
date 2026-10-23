@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { beginCheckpointTurn, endCheckpointTurn } from './turn-lifecycle.js';
 import { rewindFiles } from './rewind-files.js';
-import { readTurnLog, turnsFrom, expectedHashes, hashBytes } from './turn-log.js';
+import { readTurnLog, turnsFrom, expectedHashes, hashBytes, appendTurnLog } from './turn-log.js';
 
 let tmp: string;
 let stateDir: string;
@@ -133,6 +133,85 @@ describe('all-or-report restore', () => {
     await turn('t1', { a: 'v1' });
     await rewindFiles(deps(), 't1');
     expect(existsSync(path.join(stateDir, 'file-checkpoints', SESSION, '.rewind-lock'))).toBe(false);
+  });
+});
+
+describe('bash log entries', () => {
+  it('appendTurnLog writes a bash entry that roundtrips through readTurnLog', () => {
+    appendTurnLog(SESSION, { kind: 'bash', turnId: 't1', status: 'captured', files: 3, ts: 1 }, stateDir);
+    appendTurnLog(SESSION, { kind: 'bash', turnId: 't2', status: 'skipped', reason: 'background job', ts: 2 }, stateDir);
+    appendTurnLog(SESSION, { kind: 'bash', turnId: 't3', status: 'partial', reason: 'detached mid-run', ts: 3 }, stateDir);
+    const log = readTurnLog(SESSION, stateDir);
+    expect(log).toHaveLength(3);
+    expect(log[0]).toMatchObject({ kind: 'bash', turnId: 't1', status: 'captured', files: 3 });
+    expect(log[1]).toMatchObject({ kind: 'bash', turnId: 't2', status: 'skipped', reason: 'background job' });
+    expect(log[2]).toMatchObject({ kind: 'bash', turnId: 't3', status: 'partial', reason: 'detached mid-run' });
+  });
+
+  it('isEntry guard skips bash entries with unknown status', () => {
+    // Write a bash entry with an invalid status directly; readTurnLog should skip it.
+    const logPath = path.join(stateDir, 'file-checkpoints', SESSION, 'turns.jsonl');
+    mkdirSync(path.dirname(logPath), { recursive: true });
+    writeFileSync(logPath, '{"kind":"bash","turnId":"t1","status":"unknown","ts":1}\n');
+    expect(readTurnLog(SESSION, stateDir)).toHaveLength(0);
+  });
+});
+
+describe('uncaptured warnings in rewind results', () => {
+  it('no warnings when no bash entries exist in the range', async () => {
+    writeFileSync(file('a'), 'v0');
+    await turn('t1', { a: 'v1' });
+    const result = await rewindFiles(deps(), 't1', { dryRun: true });
+    expect(result.uncaptured).toBeUndefined();
+  });
+
+  it('warns about ignored and outside files even when all bash entries are captured', async () => {
+    writeFileSync(file('a'), 'v0');
+    await turn('t1', { a: 'v1' });
+    appendTurnLog(SESSION, { kind: 'bash', turnId: 't1', status: 'captured', files: 2, ts: Date.now() }, stateDir);
+    const result = await rewindFiles(deps(), 't1', { dryRun: true });
+    expect(result.uncaptured).toEqual([expect.stringContaining('git-ignored files or files outside the repo')]);
+  });
+
+  it('emits warnings for skipped bash entries in the folded suffix', async () => {
+    writeFileSync(file('a'), 'v0');
+    await turn('t1', { a: 'v1' });
+    await turn('t2', {});
+    appendTurnLog(SESSION, { kind: 'bash', turnId: 't2', status: 'skipped', reason: 'background job', ts: Date.now() }, stateDir);
+    const result = await rewindFiles(deps(), 't1', { dryRun: true });
+    expect(result.uncaptured).toBeDefined();
+    expect(result.uncaptured!.length).toBeGreaterThanOrEqual(2);
+    expect(result.uncaptured!.some((w) => w.includes('background job'))).toBe(true);
+    expect(result.uncaptured!.some((w) => w.includes('External side-effects'))).toBe(true);
+  });
+
+  it('emits warnings for partial bash entries in the folded suffix', async () => {
+    writeFileSync(file('a'), 'v0');
+    await turn('t1', { a: 'v1' });
+    appendTurnLog(SESSION, { kind: 'bash', turnId: 't1', status: 'partial', reason: 'detached', ts: Date.now() }, stateDir);
+    const result = await rewindFiles(deps(), 't1');
+    expect(result.uncaptured).toBeDefined();
+    expect(result.uncaptured!.some((w) => w.includes('detached'))).toBe(true);
+    expect(result.uncaptured!.some((w) => w.includes('External side-effects'))).toBe(true);
+  });
+
+  it('bash entry outside the rewind suffix does not generate warnings', async () => {
+    writeFileSync(file('a'), 'v0');
+    await turn('t1', { a: 'v1' });
+    await turn('t2', { a: 'v2' });
+    // t0 is before t1 in real time but NOT in the log suffix when rewinding to t2
+    appendTurnLog(SESSION, { kind: 'bash', turnId: 'not-in-log', status: 'skipped', ts: Date.now() }, stateDir);
+    const result = await rewindFiles(deps(), 't2', { dryRun: true });
+    expect(result.uncaptured).toBeUndefined();
+  });
+
+  it('zero-snapshot turn with uncaptured warnings still carries them', async () => {
+    await turn('quiet', {});
+    appendTurnLog(SESSION, { kind: 'bash', turnId: 'quiet', status: 'skipped', reason: 'BASH_DISABLE', ts: Date.now() }, stateDir);
+    const result = await rewindFiles(deps(), 'quiet');
+    expect(result.canRewind).toBe(true);
+    expect(result.uncaptured).toBeDefined();
+    expect(result.uncaptured!.some((w) => w.includes('BASH_DISABLE'))).toBe(true);
   });
 });
 

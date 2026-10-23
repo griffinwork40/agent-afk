@@ -15,6 +15,7 @@
  */
 
 import os from 'os';
+import { beginBashCheckpoint } from '../../file-checkpoint/bash-checkpoint.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { wouldBeRestricted } from './_cwd-utils.js';
@@ -283,7 +284,10 @@ export function createBashHandler(
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
     let { command, timeout_ms, background, explicitTimeout, clampedTimeoutWarning } = parseBashInput(input);
 
+    const checkpoint = context?.fileCheckpoint ? await beginBashCheckpoint(context.fileCheckpoint, context.resolveBase ?? cwd ?? process.cwd(),
+      signal.aborted ? 'aborted before spawn' : background ? 'run_in_background' : undefined, signal) : undefined;
     if (signal.aborted) {
+      await checkpoint?.finish('aborted before spawn');
       return { content: 'Command aborted', isError: true };
     }
 
@@ -311,6 +315,7 @@ export function createBashHandler(
     }
 
     const startedAt = Date.now();
+    let detachedCapture: Promise<void> | undefined;
     const rawResult = await new Promise<{ content: string; isError?: boolean; truncated?: boolean; capturePath?: string; durationMs?: number; exitCode?: number }>((resolve) => {
       let resolved = false;
 
@@ -403,6 +408,8 @@ export function createBashHandler(
           resolve,
         };
         applyBashDetach(context.detachRegistry, toolUseId, command, (token, label) => {
+          // Invariant: start the final snapshot at detach, not eventual close.
+          detachedCapture = checkpoint?.finish('detached; later changes are not captured');
           execOnDetach(token, label, toolUseId, detachParams);
           resolved = resolvedRef.value;
           deregisterOnClose = deregisterOnCloseRef.value;
@@ -415,7 +422,7 @@ export function createBashHandler(
       });
 
       attachErrorHandler({ proc, context, cwd, startedAt, settle });
-    });
+    }).finally(async () => { await (detachedCapture ?? checkpoint?.finish()); });
     if (clampedTimeoutWarning) {
       return formatClampedWarningResult(rawResult, clampedTimeoutWarning, true);
     }

@@ -693,6 +693,18 @@ export interface ProviderRewindResult {
   failures?: RewindFileFailure[];
   /** Paths changed outside the agent since the last recorded state (drift guard). */
   conflicts?: string[];
+  /**
+   * Human-readable warnings for bash calls in the rewound range whose effects
+   * were not captured (ignored/outside-repo files, skipped background jobs,
+   * detached-partial captures). Present when at least one `bash` turn-log entry
+   * in the folded suffix has `status !== 'captured'`, OR when a `captured` entry
+   * noted files that were excluded (git-ignored or outside the repo root).
+   *
+   * These are advisory: the file restore still proceeds. Callers and surfaces
+   * should display each warning so the user understands what the restore does NOT
+   * undo.
+   */
+  uncaptured?: string[];
 }
 
 /** One path a rewind could not restore. */

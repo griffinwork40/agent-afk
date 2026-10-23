@@ -61,12 +61,13 @@ async function chooseMode(ctx: SlashContext, target: RewindTarget): Promise<Rewi
   return typeof choice === 'number' ? MODES[choice] : undefined;
 }
 
-function showPreview(ctx: SlashContext, changed: string[], conflicts: Set<string>, failures: Array<{ path: string; error: string }>): void {
+function showPreview(ctx: SlashContext, changed: string[], conflicts: Set<string>, failures: Array<{ path: string; error: string }>, uncaptured: string[]): void {
   ctx.out.line(`Files to restore (${changed.length}):`);
   for (const path of changed) {
     ctx.out.line(`  ${conflicts.has(path) ? '!' : '•'} ${path}${conflicts.has(path) ? '  (changed outside the agent since)' : ''}`);
   }
   for (const failure of failures) ctx.out.line(`  ✗ ${failure.path}: ${failure.error}`);
+  for (const note of uncaptured) ctx.out.warn(`  ⚠ ${note}`);
 }
 
 /** Preview, confirm, and restore files. Returns true only when every file restored. */
@@ -78,12 +79,14 @@ async function restoreFiles(ctx: SlashContext, session: Session, checkpointTurnI
     ctx.out.warn(`Cannot rewind files: ${preview.error ?? 'unknown error'}`);
     return false;
   }
+  const uncaptured = preview.uncaptured ?? [];
   if (changed.length === 0 && failures.length === 0) {
     ctx.out.info('No file changes to restore since that prompt.');
+    for (const note of uncaptured) ctx.out.warn(`  ⚠ ${note}`);
     return true;
   }
   const conflicts = new Set(preview.conflicts ?? []);
-  showPreview(ctx, changed, conflicts, failures);
+  showPreview(ctx, changed, conflicts, failures, uncaptured);
   const choices = conflicts.size > 0
     ? ['Restore all, overwriting changes made outside the agent', 'Restore, but keep files changed outside the agent', 'Cancel']
     : ['Restore these files', 'Cancel'];
