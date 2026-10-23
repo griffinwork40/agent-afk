@@ -51,6 +51,7 @@ describe('openai-compatible overflow guard honours slot contextWindow override',
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     const safe = checkContextOverflow(
       { contextWindowTokens: 100_000 },
@@ -67,6 +68,7 @@ describe('openai-compatible overflow guard honours slot contextWindow override',
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     const overflow = checkContextOverflow(
       { contextWindowTokens: 122_000 },
@@ -84,6 +86,7 @@ describe('openai-compatible overflow guard honours slot contextWindow override',
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(contextLimitFor(CEREBRAS_ID)).toBe(128_000);
   });
@@ -94,6 +97,7 @@ describe('openai-compatible overflow guard honours slot contextWindow override',
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // No MODEL_AUTOCOMPACT_BUDGET entry for qwen-3.8-27b → returns full override window.
     expect(autoCompactLimitFor(CEREBRAS_ID)).toBe(128_000);

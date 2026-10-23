@@ -400,6 +400,7 @@ describe('#3964: per-slot maxOutputTokens override', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(maxOutputTokensFor('my-qwen')).toBe(32_768);
   });
@@ -410,6 +411,7 @@ describe('#3964: per-slot maxOutputTokens override', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(maxOutputTokensFor('claude-haiku-5-5')).toBe(16_384);
   });
@@ -426,6 +428,7 @@ describe('#3964: per-slot maxOutputTokens override', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // my-local-llm has no MODEL_MAX_OUTPUT_TOKENS entry; routes as openai-compat
     // (HF-style check fails but it has a contextWindow override → derived default)
@@ -436,6 +439,7 @@ describe('#3964: per-slot maxOutputTokens override', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // min(64_000, floor(131_072 / 4)) = min(64_000, 32_768) = 32_768
     expect(maxOutputTokensFor('gpt-local-custom')).toBe(32_768);
@@ -447,6 +451,7 @@ describe('#3964: per-slot maxOutputTokens override', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // min(64_000, floor(512_000 / 4)) = min(64_000, 128_000) = 64_000
     expect(maxOutputTokensFor('gpt-bigwindow')).toBe(64_000);
@@ -460,6 +465,7 @@ describe('#3964: per-slot maxOutputTokens override', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(maxOutputTokensFor('gpt-qwen-self-hosted')).toBe(16_384);
     // safeAutoCompactThresholdFor uses (window - outputCap); with 16k cap
@@ -485,6 +491,7 @@ describe('#4062: _1m id with per-slot maxOutputTokens override', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: { id: concreteId, maxOutputTokens: 32_000 },
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // Before the fix this returned 128_000 (the _1m table entry) because the
     // early return ran before the slot override check.
@@ -507,6 +514,7 @@ describe('#4062: derived default floor — contextWindow < 4', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // floor(1/4) = 0; Math.max(1, 0) = 1
     expect(maxOutputTokensFor('gpt-tiny')).toBe(1);
@@ -518,6 +526,7 @@ describe('#4062: derived default floor — contextWindow < 4', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(maxOutputTokensFor('gpt-micro')).toBe(1);
   });
@@ -528,6 +537,7 @@ describe('#4062: derived default floor — contextWindow < 4', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(maxOutputTokensFor('gpt-four')).toBe(1);
   });
@@ -542,6 +552,7 @@ describe('#4062: derived default — 256k contextWindow boundary', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // floor(256_000 / 4) = 64_000 = DEFAULT_MAX_OUTPUT → capped at 64k
     expect(maxOutputTokensFor('gpt-256k')).toBe(64_000);
@@ -553,6 +564,7 @@ describe('#4062: derived default — 256k contextWindow boundary', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(maxOutputTokensFor('gpt-255k')).toBe(63_999);
   });
@@ -567,6 +579,7 @@ describe('#4062: two-slots-same-id tie-breaking for maxOutputTokens', () => {
       small: { id: 'shared-llm', maxOutputTokens: 8_000 },
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // local is first in SLOT_NAMES → 16_000 wins
     expect(maxOutputTokensFor('shared-llm')).toBe(16_000);
@@ -578,6 +591,7 @@ describe('#4062: two-slots-same-id tie-breaking for maxOutputTokens', () => {
       small: { id: 'shared-llm', maxOutputTokens: 8_000 },
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(maxOutputTokensFor('shared-llm')).toBe(8_000);
   });

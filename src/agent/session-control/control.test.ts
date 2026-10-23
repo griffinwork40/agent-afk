@@ -119,7 +119,7 @@ describe('setSessionModel', () => {
     const stats = createSessionStats('sonnet');
     const setModel = vi.fn();
     expect(await setSessionModel({ setModel }, stats, 'sonnnet')).toMatchObject({ ok: false, message: expect.stringContaining('Unknown model') });
-    setSlotBindings({ local: { id: '' }, small: { id: 'haiku' }, medium: { id: 'sonnet' }, large: { id: 'opus' } });
+    setSlotBindings({ local: { id: '' }, small: { id: 'haiku' }, medium: { id: 'sonnet' }, large: { id: 'opus' }, subagent: { id: '' } });
     expect(await setSessionModel({ setModel }, stats, 'local')).toMatchObject({ ok: false });
     expect(setModel).not.toHaveBeenCalled();
     expect(stats.model).toBe('sonnet');
