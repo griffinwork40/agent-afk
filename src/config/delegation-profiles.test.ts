@@ -144,6 +144,16 @@ describe('AFK_DELEGATION_PROFILE env integration (resolveMaxNestingDepth)', () =
     const { resolveMaxNestingDepth } = await import('../agent/tools/nesting.js');
     expect(resolveMaxNestingDepth()).toBe(3);
   });
+
+  it('unparseable AFK_MAX_NESTING_DEPTH returns default even when a profile is active (F1 regression)', async () => {
+    // Invariant: individual env vars always override profile values.
+    // An unparseable depth var must return the default immediately, not fall
+    // through to the profile (which would return profile depth instead of 3).
+    process.env[PROFILE_KEY] = 'deep'; // profile would give 5 if it wins
+    process.env[DEPTH_KEY] = 'not-a-number'; // unparseable — must not fall through
+    const { resolveMaxNestingDepth } = await import('../agent/tools/nesting.js');
+    expect(resolveMaxNestingDepth()).toBe(3); // default, not profile depth 5
+  });
 });
 
 // ─── Integration: budget config with profile ─────────────────────────────────

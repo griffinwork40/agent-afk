@@ -86,6 +86,7 @@ export function resolveDelegationProfile(
   if (raw === undefined) return undefined;
   const name = raw.trim().toLowerCase();
   if (name === '') return undefined;
+  if (!Object.hasOwn(DELEGATION_PROFILES, name)) return undefined;
   const profile = DELEGATION_PROFILES[name];
   if (profile === undefined) return undefined;
   return profile;
