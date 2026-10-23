@@ -196,6 +196,69 @@ const NO_PATH_SUBCOMMANDS = new Set<GitReadSubcommand>([
 // but those patterns must NOT be treated as pathspecs — for-each-ref has no path
 // semantics. It is in NO_PATH_SUBCOMMANDS so it exits before the confinePathspec loop.
 
+/** Positive integer regex — used to validate the value of -N / -n N. */
+const COUNT_VALUE_RE = /^[1-9][0-9]*$/;
+
+/**
+ * Normalize count shorthands that models frequently emit for subcommands that
+ * already allow `--max-count=`:
+ *
+ *   -5        → --max-count=5
+ *   -n 5      → --max-count=5   (consumes the following token)
+ *   -n5       → --max-count=5
+ *
+ * Returns the normalized token array, or an error string.
+ * Only fires when the subcommand's policy includes `--max-count=`.
+ * `-n` is only treated as a count shorthand when it is NOT already an exact
+ * flag in the policy (e.g. shortlog and grep list `-n` as `--numbered` /
+ * `--line-number` respectively; for those, `-n` passes through unchanged).
+ *
+ * IMPORTANT: `grep` is explicitly excluded even though it has `--max-count=`
+ * in its policy. In `git grep`, `-5` means `-C 5` (context lines), NOT a
+ * count limit. The compact `-n5` form is likewise ambiguous with `-n -5`.
+ * grep's own option token `-C`/`-A`/`-B` are not in the allowlist, so those
+ * forms are already rejected by checkToken; we must not silently rewrite them.
+ */
+function normalizeCountArgs(args: string[], policy: SubcommandPolicy, subcommand: GitReadSubcommand): string[] | string {
+  if (!policy.valued.includes('--max-count=')) return args;
+  // grep: -N means context lines (-C N), not a count limit. Skip normalization
+  // entirely so the token reaches checkToken and is rejected (grep has no -N flag).
+  if (subcommand === 'grep') return args;
+  // If `-n` is an exact flag in this policy, leave it alone (shortlog uses
+  // `-n` as `--numbered`; we must not consume its following token).
+  const nIsFlag = policy.flags.includes('-n');
+  const out: string[] = [];
+  let i = 0;
+  while (i < args.length) {
+    const tok = args[i]!;
+    // -<N>  (bare negative-integer shorthand, e.g. -5)
+    if (/^-[1-9][0-9]*$/.test(tok)) {
+      out.push(`--max-count=${tok.slice(1)}`);
+      i++;
+      continue;
+    }
+    // -n<N>  (compact, e.g. -n5) — safe even when -n is a flag because the
+    // compact form is unambiguous (no separate flag spells -n5).
+    if (/^-n[1-9][0-9]*$/.test(tok)) {
+      out.push(`--max-count=${tok.slice(2)}`);
+      i++;
+      continue;
+    }
+    // -n <N>  (spaced, e.g. -n 5) — only when -n is not already a standalone flag.
+    if (tok === '-n' && !nIsFlag) {
+      const next = args[i + 1];
+      if (next === undefined) return 'Rejected option "-n": missing count value.';
+      if (!COUNT_VALUE_RE.test(next)) return `Rejected option "-n ${next}": value must be a positive integer.`;
+      out.push(`--max-count=${next}`);
+      i += 2;
+      continue;
+    }
+    out.push(tok);
+    i++;
+  }
+  return out;
+}
+
 /** Validate a request and build the argv that follows the fixed global options. */
 export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   const sub = req.subcommand;
@@ -212,9 +275,35 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   // from pathspecs. Tokens after it join `paths` and are confined below like
   // any other path, so this widens nothing.
   const sep = rawArgs.indexOf('--');
-  const args = sep === -1 ? rawArgs : rawArgs.slice(0, sep);
+  let args = sep === -1 ? rawArgs : rawArgs.slice(0, sep);
   const paths = sep === -1 ? fieldPaths : [...fieldPaths, ...rawArgs.slice(sep + 1)];
   if (paths.length > MAX_ARGS) return { ok: false, error: `"paths" accepts at most ${MAX_ARGS} entries.` };
+
+  // Fix 3 & F4: strip echoed subcommand tokens from args.
+  // Models sometimes repeat the subcommand token as args[0] (e.g. args:["show","HEAD"]).
+  // F3: Only strip args[0] when args.length >= 2; a lone subcommand token (e.g.
+  //     args:["show"]) would silently change meaning — "show" could be a valid
+  //     same-name ref — so we reject it instead.
+  // F4: Also reject any token at a later position that equals the subcommand, because
+  //     e.g. args:["-5","log"] passes the position-0 guard but "log" would be
+  //     treated as a spurious revision by checkToken.
+  if (args.length >= 2 && args[0] === subcommand) {
+    args = args.slice(1);
+  } else if (args.length === 1 && args[0] === subcommand) {
+    return { ok: false, error: `Ambiguous args: ["${subcommand}"] — did you mean to pass a revision named "${subcommand}", or is this an echoed subcommand? Use args:[] for bare git ${subcommand}.` };
+  }
+  // After stripping a leading echo, reject any remaining token that equals the
+  // subcommand name (partial echo, e.g. args:["-5","log"] with subcommand "log").
+  const echoIdx = args.findIndex((t) => t === subcommand);
+  if (echoIdx !== -1) {
+    return { ok: false, error: `Ambiguous args: token at position ${echoIdx} equals the subcommand "${subcommand}". Pass the subcommand only in the "subcommand" field.` };
+  }
+
+  // Fix 1: normalize -N / -n N / -nN count shorthands to --max-count=N.
+  const normalizedArgs = normalizeCountArgs(args, policy, subcommand);
+  if (typeof normalizedArgs === 'string') return { ok: false, error: normalizedArgs };
+  args = normalizedArgs;
+
   for (const tok of args) {
     const err = checkToken(tok, policy, subcommand);
     if (err !== null) return { ok: false, error: err };
@@ -229,7 +318,10 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
     const revs = args.filter((t) => !t.startsWith('-'));
     argv.push(...opts, '-e', req.pattern, ...revs);
   } else {
-    if (req.pattern !== undefined) return { ok: false, error: '"pattern" is only valid for subcommand "grep".' };
+    // Fix 2: treat empty/whitespace-only pattern as absent for non-grep subcommands.
+    // OpenAI-compatible models routinely fill optional string fields with "".
+    const effectivePattern = typeof req.pattern === 'string' && req.pattern.trim().length === 0 ? undefined : req.pattern;
+    if (effectivePattern !== undefined) return { ok: false, error: '"pattern" is only valid for subcommand "grep".' };
     argv.push(...args);
   }
 
