@@ -74,8 +74,12 @@ export function resolveMaxNestingDepth(): number {
       if (Number.isInteger(n) && n >= 0 && n <= MAX_NESTING_DEPTH_CEILING) {
         return n;
       }
+      // Parseable but out-of-range (e.g. "7" above the ceiling of 6): the env
+      // var was explicitly set to an invalid value, so the profile must NOT win.
+      // Return the default immediately rather than falling through.
+      return DEFAULT_MAX_NESTING_DEPTH;
     }
-    // Unparseable / out-of-range: fall through to profile / default below.
+    // Unparseable (non-decimal, NaN, etc.): fall through to profile / default below.
   }
   // Consult the delegation profile when no explicit depth var is set.
   const profile = resolveDelegationProfile(env.AFK_DELEGATION_PROFILE);
