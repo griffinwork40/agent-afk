@@ -29,6 +29,9 @@ export const codeSymbolsTool: AnthropicToolDef = {
       action_index: { type: 'integer', minimum: 0, description: 'Zero-based index from code_actions; mutually exclusive with action_title.' },
       action_title: { type: 'string', description: 'Exact, unique code action title to apply.' },
     },
+    // Contract: narrowed from ['file_path', 'subcommand', 'line', 'col'] in
+    // wave 1 because workspace_symbols needs no file_path and document_symbols
+    // needs no line/col. Per-subcommand validation lives in lsp-refactor-input.ts.
     required: ['subcommand'],
   },
 };

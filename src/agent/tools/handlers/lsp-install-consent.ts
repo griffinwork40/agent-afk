@@ -7,7 +7,10 @@ export function lspInstallContext(context?: ToolHandlerContext, signal?: AbortSi
   // An explicit dispatcher grant is required: the global router may belong to
   // a parent REPL or another session, so handler presence alone is insufficient.
   // A non-matching key also prevents hasHandler() from counting other sessions.
-  const sessionKey = context?.sessionId ?? '';
+  // Invariant: a missing sessionId must never collide with another session's
+  // key. An empty string would match a ''-keyed handler from a concurrent
+  // session that also lacks a sessionId, so use a per-call unique sentinel.
+  const sessionKey = context?.sessionId ?? `__no-session-${Date.now()}-${Math.random()}`;
   const interactive = context?.lspInstallAllowed === true && elicitationRouter.hasHandler(sessionKey);
   return {
     interactive,
