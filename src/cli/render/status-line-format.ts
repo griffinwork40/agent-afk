@@ -242,7 +242,14 @@ export function formatStatusLine(f: StatusLineFields, maxW: number): string {
 
   // Last-held risk category chip (#3900): shown only in autonomous mode so
   // reviewers of an unattended run see which rule family last paused the gate.
-  // droppablePriority 1.5 — shed before context bar (2) but after branch (1).
+  // Invariant: permissionMode is checked here rather than relying on the chip
+  // emitted above (lines 235-236) because that block runs unconditionally and
+  // this guard must stay independent. The duplicate condition is intentional.
+  // Invariant: droppablePriority 1.5 is the only non-integer priority in this
+  // function. It places the risk-category chip between branch (1) and context
+  // bar (2) in the shedding order — closer to context in importance than branch
+  // but less critical than the context bar itself. All other priorities are
+  // integers; 1.5 is load-bearing and must not be renumbered.
   if (f.lastHeldCategory !== undefined && f.permissionMode === 'autonomous') {
     parts.push({
       text: palette.warning(`[${f.lastHeldCategory}]`),

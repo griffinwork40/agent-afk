@@ -207,6 +207,14 @@ describe('TerminalCompositor — resize while disarmed', () => {
       expect(out, 'inflated ghost-erase must erase rows beyond logical bottom').toContain(
         `\x1b[24;1H\x1b[2K`,
       );
+      // Upper-bound clamp: flushResizeGhostErase clamps bottom to liveRows (40),
+      // so row 40 IS erased but row 41 is NOT (would be off-screen).
+      expect(out, 'ghost-erase must reach the new viewport bottom (row 40)').toContain(
+        `\x1b[40;1H\x1b[2K`,
+      );
+      expect(out, 'ghost-erase must not exceed the new viewport (row 41 must not appear)').not.toContain(
+        `\x1b[41;1H\x1b[2K`,
+      );
     } finally {
       c.disarm();
     }

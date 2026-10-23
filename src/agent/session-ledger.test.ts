@@ -411,14 +411,24 @@ describe('tailLedger', () => {
     }, { timeout: 5000, interval: 20 });
 
     const seen: LedgerRecord[] = [];
+
+    // Invariant: the tail must establish its file offset (via fsp.stat) before
+    // new data is written, otherwise on loaded CI runners the stat resolves
+    // AFTER the writer has flushed and fileOffset skips past all new records,
+    // making the tail poll forever until the test times out (#4248).
+    let tailReady!: () => void;
+    const tailReadyPromise = new Promise<void>((r) => { tailReady = r; });
+
     const done = (async () => {
-      for await (const rec of tailLedger(id)) {
+      for await (const rec of tailLedger(id, { onCaughtUp: () => tailReady() })) {
         seen.push(rec);
       }
     })();
 
-    // Write a live record, then close. No fixed sleeps — the tail's internal
-    // poll (250 ms) plus fs.watch wakeup picks up both writes deterministically.
+    await tailReadyPromise;
+
+    // Write a live record, then close. The tail's internal poll (250 ms) plus
+    // fs.watch wakeup picks up both writes deterministically.
     writer.recordUser('live-one');
     await writer.close('close');
     await done;

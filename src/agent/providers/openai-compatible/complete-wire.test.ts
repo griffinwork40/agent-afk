@@ -1,5 +1,5 @@
 /**
- * Tests for `completeWithWire` — the wire selection behind
+ * Tests for `completeWithWireWithStop` — the wire selection behind
  * `OpenAICompatibleProvider.complete()`.
  *
  * Regression: a ChatGPT-subscription OAuth credential was always sent over
@@ -24,12 +24,12 @@ vi.mock('./oneshot.js', () => ({
   oneShotResponses: (...a: unknown[]) => oneShotResponses(...(a as [])),
 }));
 
-import { completeWithWire, completeWithWireWithStop, type CompleteWireClientOptions } from './complete-wire.js';
+import { completeWithWireWithStop, type CompleteWireClientOptions } from './complete-wire.js';
 import { CHATGPT_BACKEND_BASE_URL } from './responses-config.js';
 
 const base = { model: 'gpt-6-luna', system: 'sys', user: 'input: git sta', maxTokens: 24 };
 
-describe('completeWithWire', () => {
+describe('completeWithWireWithStop', () => {
   beforeEach(() => {
     resolveOpenAIAuth.mockReset();
     oneShotChatCompletionWithStop.mockClear();
@@ -42,9 +42,9 @@ describe('completeWithWire', () => {
     const factory = vi.fn((_: CompleteWireClientOptions) => fakeClient);
     const signal = new AbortController().signal;
 
-    const out = await completeWithWire({ ...base, signal }, factory);
+    const out = await completeWithWireWithStop({ ...base, signal }, factory);
 
-    expect(out).toBe('responses-reply');
+    expect(out.text).toBe('responses-reply');
     expect(oneShotChatCompletionWithStop).not.toHaveBeenCalled();
     expect(factory).toHaveBeenCalledTimes(1);
     const opts = factory.mock.calls[0]![0];
@@ -62,7 +62,7 @@ describe('completeWithWire', () => {
     const factory = vi.fn((_: CompleteWireClientOptions) => ({}) as OpenAI);
 
     // No baseURL → resolveWireMode forces the ChatGPT backend.
-    await completeWithWire({ ...base, defaultHeaders: { 'x-extra': '1' } }, factory);
+    await completeWithWireWithStop({ ...base, defaultHeaders: { 'x-extra': '1' } }, factory);
 
     const opts = factory.mock.calls[0]![0];
     expect(opts.baseURL).toBe(CHATGPT_BACKEND_BASE_URL);
@@ -73,9 +73,9 @@ describe('completeWithWire', () => {
     resolveOpenAIAuth.mockReturnValue({ apiKey: 'sk-platform', source: 'env' });
     const factory = vi.fn();
 
-    const out = await completeWithWire({ ...base, baseURL: 'http://localhost:8080/v1' }, factory);
+    const out = await completeWithWireWithStop({ ...base, baseURL: 'http://localhost:8080/v1' }, factory);
 
-    expect(out).toBe('chat-reply');
+    expect(out.text).toBe('chat-reply');
     expect(factory).not.toHaveBeenCalled();
     expect(oneShotResponses).not.toHaveBeenCalled();
     expect(oneShotChatCompletionWithStop).toHaveBeenCalledWith(
@@ -86,7 +86,7 @@ describe('completeWithWire', () => {
   it('an explicit caller key (e.g. xAI delegation) resolves as config and stays on Chat Completions', async () => {
     resolveOpenAIAuth.mockReturnValue({ apiKey: 'xai-key', source: 'config' });
 
-    await completeWithWire({ ...base, apiKey: 'xai-key', baseURL: 'https://api.x.ai/v1' });
+    await completeWithWireWithStop({ ...base, apiKey: 'xai-key', baseURL: 'https://api.x.ai/v1' });
 
     expect(resolveOpenAIAuth).toHaveBeenCalledWith('xai-key', {}, false);
     expect(oneShotResponses).not.toHaveBeenCalled();
@@ -99,7 +99,7 @@ describe('completeWithWire', () => {
     resolveOpenAIAuth.mockReturnValue({ apiKey: null, source: 'chatgpt-oauth-expired' });
     const input = { ...base };
 
-    await completeWithWire(input);
+    await completeWithWireWithStop(input);
 
     expect(oneShotResponses).not.toHaveBeenCalled();
     expect(oneShotChatCompletionWithStop).toHaveBeenCalledWith(input);
@@ -108,7 +108,7 @@ describe('completeWithWire', () => {
   it('forwards forceChatgptOAuth to auth resolution', async () => {
     resolveOpenAIAuth.mockReturnValue({ apiKey: 'chatgpt-access', source: 'chatgpt-oauth' });
 
-    await completeWithWire({ ...base, forceChatgptOAuth: true }, () => ({}) as OpenAI);
+    await completeWithWireWithStop({ ...base, forceChatgptOAuth: true }, () => ({}) as OpenAI);
 
     expect(resolveOpenAIAuth).toHaveBeenCalledWith(undefined, {}, true);
   });
@@ -116,17 +116,17 @@ describe('completeWithWire', () => {
   // Regression #3620: customBaseURL guard must be threaded into resolveWireMode
   it('OAuth + custom baseURL: routes to Chat Completions on the custom endpoint, not the ChatGPT backend', async () => {
     // resolveWireMode suppresses the ChatGPT backend redirect when a custom
-    // endpoint is set — verify completeWithWire passes input.baseURL through.
+    // endpoint is set — verify completeWithWireWithStop passes input.baseURL through.
     resolveOpenAIAuth.mockReturnValue({ apiKey: 'chatgpt-access', source: 'chatgpt-oauth', accountId: 'acct_1' });
     const factory = vi.fn((_: CompleteWireClientOptions) => ({}) as OpenAI);
 
-    const out = await completeWithWire(
+    const out = await completeWithWireWithStop(
       { ...base, baseURL: 'http://my-proxy.internal/v1' },
       factory,
     );
 
     // Must land on Chat Completions (not Responses) — factory never called.
-    expect(out).toBe('chat-reply');
+    expect(out.text).toBe('chat-reply');
     expect(factory).not.toHaveBeenCalled();
     expect(oneShotResponses).not.toHaveBeenCalled();
     expect(oneShotChatCompletionWithStop).toHaveBeenCalledWith(

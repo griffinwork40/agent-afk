@@ -626,6 +626,35 @@ describe('rescoreSettledUnknown', () => {
     expect(result.relabeled).toBe(0);
   });
 
+  function fofVote(n: number): Vote {
+    return { lf: 'fix_of_fix', vote: -1, strength: 'weak', severity: 'minor', evidence: `PR #${n}`, observed_at: NOW };
+  }
+
+  it('includeFailed: relabels a fix_of_fix-only failed record; default leaves it alone', async () => {
+    const id = 'rescore-failed-fof-001';
+    writeRecord({ ...makeSettledUnknown(id, [fofVote(1), fofVote(2)]), label: 'failed' }, tmpDir);
+
+    const untouched = await rescoreSettledUnknown({ outcomesDir: tmpDir });
+    expect(untouched.scanned).toBe(0);
+    expect(readRecord(id, tmpDir)?.label).toBe('failed');
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir, includeFailed: true });
+    expect(result.relabeled).toBe(1);
+    const updated = readRecord(id, tmpDir);
+    expect(updated?.label).toBe('succeeded');
+    expect(updated?.history.at(-1)?.reason).toContain('was failed');
+  });
+
+  it('includeFailed: never touches a record carrying explicit /bad feedback', async () => {
+    const id = 'rescore-failed-explicit-001';
+    const bad: Vote = { lf: 'explicit_feedback', vote: -1, strength: 'strong', severity: 'critical', evidence: '/bad', observed_at: NOW };
+    writeRecord({ ...makeSettledUnknown(id, [bad, fofVote(1), fofVote(2)]), label: 'failed' }, tmpDir);
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir, includeFailed: true });
+    expect(result.scanned).toBe(0);
+    expect(readRecord(id, tmpDir)?.label).toBe('failed');
+  });
+
   it('skips provisional records', async () => {
     const id = 'rescore-prov-001';
     writeRecord(

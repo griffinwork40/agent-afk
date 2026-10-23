@@ -288,8 +288,7 @@ export function parseAgentInput(input: unknown): AgentInput {
   }
   // Invariant: the startsWith('-') case is already rejected by the throw
   // above, and isValidSshTarget also rejects it — so hostRaw is always a
-  // valid, non-dash-prefixed target at this point.  The ternary is kept as
-  // a simple pass-through for clarity.
+  // valid, non-dash-prefixed target at this point.
   const host = hostRaw;
   const continuation_chain_id = readOptionalString(agentInput, 'continuation_chain_id');
 

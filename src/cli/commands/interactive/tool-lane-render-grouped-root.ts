@@ -1,4 +1,4 @@
-import { displayWidth, truncateDisplayWidth } from '../../display.js';
+import { displayWidth, stripAnsi, truncateDisplayWidth } from '../../display.js';
 import { palette } from '../../palette.js';
 import { styleForToolName } from '../../tool-category.js';
 import {
@@ -65,6 +65,69 @@ function groupedResultSuffix(
   return '';
 }
 
+// C0/C1 control bytes EXCLUDING LF (\x0A). Used by styleGroupedTargets to
+// sanitize bash toolInput while preserving the newline command separator that
+// the bash lexer inside styleBashCommand needs to find command-word boundaries.
+const CONTROL_EXCEPT_LF = /[\x00-\x09\x0B-\x1F\x7F-\x9F]/g;
+
+/**
+ * Style and join grouped target strings into a single display string capped at
+ * `targetWidth` columns, stopping early once the budget is spent.
+ *
+ * Invariant: bash entries are styled BEFORE newline flattening (mirrors
+ * tool-lane-format-args.ts:365-370). The order is:
+ *   1. stripAnsi + strip C0/C1 except LF + trim  — remove injection surface
+ *      while preserving the newline command separator the lexer needs; trim
+ *      ensures the first command word lands at position 0 (lexer start pos)
+ *   2. styleBashCommand                          — danger-chip + dim on correct words
+ *   3. replace [\r\n]+ → ' '                    — flatten the now-styled string
+ *   4. shortenPaths                              — path linkification
+ * Non-bash entries use sanitizeLabel (which flattens LF) then shortenPaths,
+ * matching pre-existing behaviour for non-bash grouped rows.
+ */
+function styleGroupedTargets(
+  toolName: string,
+  entries: ToolEntry[],
+  targetWidth: number,
+): string {
+  const isBash = isBashToolName(toolName);
+  const sep = palette.toolArg(', ');
+  const sepWidth = displayWidth(sep);
+  let result = '';
+  let remaining = targetWidth;
+  for (const entry of entries) {
+    if (result !== '' && remaining <= 0) break;
+    const raw = entry.toolInput;
+    let styled: string;
+    if (isBash) {
+      // Step 1: strip ANSI and all C0/C1 control bytes except LF (\x0A),
+      // then trim edge whitespace so the lexer sees the first command word
+      // at position 0 (mirrors the single-entry path which trims before
+      // passing to formatToolLine).
+      const clean = stripAnsi(raw).replace(CONTROL_EXCEPT_LF, ' ').trim();
+      // Step 2: linkify paths BEFORE SGR styling so collapseFsPaths regex
+      // matches absolute-path command words unobstructed by escape sequences.
+      // OSC 8 hyperlinks emitted here are opaque to the bash lexer (it treats
+      // them as a single token) — see tool-lane-format-bash.ts lexer comment.
+      const shortened = shortenPaths(clean);
+      // Step 3: style with LF intact so lexer sees newline command separators
+      const withStyle = styleBashCommand(shortened);
+      // Step 4: flatten newlines on the now-styled string
+      styled = withStyle.replace(/[\r\n]+/g, ' ');
+    } else {
+      styled = palette.toolArg(shortenPaths(sanitizeLabel(raw)).trim());
+    }
+    if (result === '') {
+      result = styled;
+      remaining -= displayWidth(styled);
+    } else {
+      result += sep + styled;
+      remaining -= sepWidth + displayWidth(styled);
+    }
+  }
+  return result;
+}
+
 /**
  * Render a root-level same-tool group as one terminal-width-safe row.
  *
@@ -87,18 +150,8 @@ export function formatGroupedToolResults(
     palette.dim(` ×${entries.length}`) +
     ' ';
   const suffix = groupedResultSuffix(entries, cols, homeDir);
-  const targetList = entries.map((entry) => shortenPaths(sanitizeLabel(entry.toolInput)).trim());
   const targetWidth = Math.max(0, cols - displayWidth(prefix) - displayWidth(suffix));
-  // Colorize BEFORE truncating: grouped args use the same styling the
-  // single-entry path applies via formatToolLine (`palette.toolArg`, plus
-  // command-word emphasis for bash), so grouped args never render brighter
-  // or flatter than their ungrouped siblings. Wrapping first is safe
-  // because truncateDisplayWidth tokenizes ANSI — escapes cost zero width, so
-  // the reserved `targetWidth` budget is unaffected — and it re-closes both
-  // the OSC 8 span and the SGR state when the cut lands inside them.
-  const styledTargets = isBashToolName(toolName)
-    ? targetList.map(styleBashCommand).join(palette.toolArg(', '))
-    : palette.toolArg(targetList.join(', '));
+  const styledTargets = styleGroupedTargets(toolName, entries, targetWidth);
   const targetPreview = truncateDisplayWidth(styledTargets, targetWidth);
 
   return clampLineToTerminal(prefix + targetPreview + suffix, cols);

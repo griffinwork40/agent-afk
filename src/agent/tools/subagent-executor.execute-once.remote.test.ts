@@ -24,6 +24,13 @@ import {
   type RemoteAgentDispatchDeps,
 } from './subagent-executor.execute-once.remote.js';
 import { checkAndRunRemoteDispatch } from './subagent-executor.execute-once.helpers.js';
+
+// Module-level mock so the release() test can replace executeRemoteAgentDispatch
+// inside checkAndRunRemoteDispatch without real SSH.
+vi.mock('./subagent-executor.execute-once.remote.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./subagent-executor.execute-once.remote.js')>();
+  return { ...actual };
+});
 import type { RemoteHost } from '../../remote/hosts.js';
 import type { SshRunner, SshExecResult, SshStreamOptions } from '../../remote/ssh-runner.js';
 import { PID_MARKER } from '../../remote/remote-script.js';
@@ -314,54 +321,29 @@ describe('checkAndRunRemoteDispatch budget receipt handling', () => {
   });
 
   it('calls release() on successful remote dispatch', async () => {
-    // Supply a fake executeRemoteAgentDispatch via the overload that accepts
-    // deps. We cannot inject deps through checkAndRunRemoteDispatch (it calls
-    // the production function), so we test release() by driving
-    // executeRemoteAgentDispatch directly with a fake runner that delivers a
-    // done outcome, then verifying the receipt contract.
-    //
-    // checkAndRunRemoteDispatch calls release() when result.isError is falsy.
-    // We verify this by building a minimal receipt and a fake deps object
-    // producing a successful outcome, then calling checkAndRunRemoteDispatch
-    // with a host name that will resolve through our fake loadHostsFn.
-    //
-    // Because checkAndRunRemoteDispatch does not accept deps, we test the
-    // release() branch by mocking the module boundary: supply a loadHostsFn
-    // that resolves to a valid host and a runner that returns a done stream,
-    // and call executeRemoteAgentDispatch directly to confirm the result is
-    // non-error, which is the condition under which checkAndRunRemoteDispatch
-    // calls release().
-    const successDeps = makeDeps({}, doneEvent('success reply'));
-    const dispatchResult = await executeRemoteAgentDispatch(
-      { host: 'test-host', prompt: 'task' },
-      ABORT.signal,
-      successDeps,
-    );
-    // Confirm the done path produces a non-error result (the condition that
-    // causes checkAndRunRemoteDispatch to call release()).
-    expect(dispatchResult.isError).toBeUndefined();
-    expect(dispatchResult.content).toContain('success reply');
+    // Mock executeRemoteAgentDispatch at the module boundary so
+    // checkAndRunRemoteDispatch receives a non-error result without real SSH.
+    const mod = await import('./subagent-executor.execute-once.remote.js');
+    const spy = vi
+      .spyOn(mod, 'executeRemoteAgentDispatch')
+      .mockResolvedValueOnce({ content: 'remote reply' });
 
-    // Now verify checkAndRunRemoteDispatch itself calls release() when
-    // executeRemoteAgentDispatch (production) returns a non-error.  We use
-    // AFK_REMOTE_DEPTH guard to force an error path and confirm rollback;
-    // the release() path is structurally symmetric and covered by inspection.
-    // To exercise it end-to-end we rely on the integration in execute-once.ts
-    // (covered by the executor integration tests).  Document the assertion:
-    // release() is called iff result.isError is falsy in checkAndRunRemoteDispatch.
     const release = vi.fn();
     const rollback = vi.fn();
     const receipt = { release, rollback } as never;
-    vi.stubEnv('AFK_REMOTE_DEPTH', '1'); // force error → rollback
-    const r2 = await checkAndRunRemoteDispatch(
+
+    const result = await checkAndRunRemoteDispatch(
       { host: 'any-host', prompt: 'task' },
       ABORT.signal,
-      receipt, 'call-2', updateWave,
+      receipt, 'call-release', updateWave,
     );
-    expect(r2!.isError).toBe(true);
-    expect(rollback).toHaveBeenCalledTimes(1);
-    expect(release).not.toHaveBeenCalled();
-    vi.stubEnv('AFK_REMOTE_DEPTH', '');
+
+    expect(result).toBeDefined();
+    expect(result!.isError).toBeUndefined();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(rollback).not.toHaveBeenCalled();
+
+    spy.mockRestore();
   });
 
   it('calls rollback() when AFK_REMOTE_DEPTH causes refusal', async () => {

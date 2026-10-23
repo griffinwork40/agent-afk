@@ -160,6 +160,13 @@ describe('EffectStore — Scenario 2 reconciliation: unknown → confirmed (#371
     const unknown = await store.updateStatus({ id: pending.id, status: 'unknown' });
     expect(unknown.reconciledAt).toBeUndefined();
 
+    // Disk-roundtrip read-back: a stale-spread regression in collapseById
+    // that accidentally carried reconciledAt forward would be invisible if
+    // we only checked the in-memory return value above.
+    const readBack = (await store.query({ status: 'unknown' }))[0];
+    expect(readBack).toBeDefined();                        // guards the roundtrip
+    expect(readBack?.reconciledAt).toBeUndefined();
+
     const confirmed = await store.updateStatus({ id: pending.id, status: 'confirmed' });
     expect(confirmed.reconciledAt).toBeDefined();
   });
@@ -221,9 +228,5 @@ describe('EffectStore — Scenario 2 reconciliation: unknown → confirmed (#371
    * accepts a remote-read result and atomically transitions unknown→confirmed
    * does not exist. Callers must wire this manually.
    */
-  it('status-quo pin: no reconcile() method on EffectStore [known gap]', () => {
-    // EffectStore exposes: writePending, updateStatus, acknowledgeRetry,
-    // findByIdempotencyKey, query, all — no reconcile() encapsulation yet.
-    expect(typeof (store as unknown as Record<string, unknown>)['reconcile']).toBe('undefined');
-  });
+  it.todo('reconcile() encapsulation — #3714 known gap');
 });

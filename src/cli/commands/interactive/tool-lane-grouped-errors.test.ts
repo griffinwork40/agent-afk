@@ -21,6 +21,8 @@ import { displayWidth, stripAnsi } from '../../display.js';
 import { palette } from '../../palette.js';
 import type { ToolFailureClass } from '../../../agent/trace/types.js';
 import { makeResult } from './__fixtures__/tool-lane-render.fixtures.js';
+import { formatGroupedToolResults } from './tool-lane-render-grouped-root.js';
+import type { ToolEntry } from './tool-lane-render.js';
 
 /**
  * Build a lane with an Agent parent and `n` bash children, marking the entries
@@ -162,6 +164,65 @@ describe('grouped sibling rows — failure visibility', () => {
     const raw = lane.getOverlay().split('\n').find((l) => l.includes('×4'))!;
     // One dim-open before the count, and no red anywhere.
     expect(raw).not.toMatch(/\u001b\[31m/);
+  });
+});
+
+describe('grouped bash rows — danger-chip and path shortening', () => {
+  /**
+   * Regression test for the shortenPaths-before-styleBashCommand ordering.
+   *
+   * When an absolute path is the command word (e.g. `/usr/bin/env node`), the
+   * old order (style → shorten) broke path detection: `collapseFsPaths` in
+   * `shortenPaths` expected the `/` at the start of the token but found an SGR
+   * escape (`\x1b[38;2;...]`) preceding it instead, so no shortening occurred.
+   * The correct order (shorten → style) is what this test enforces.
+   *
+   * We call `formatGroupedToolResults` directly with an explicit `cols` value
+   * so the test does not depend on `toolLaneWidth()` / terminal geometry.
+   */
+  it('shortens an absolute-path command word even when danger-chip styling fires', () => {
+    // Use a synthetic POSIX path so collapseFsPaths (which matches the
+    // /path/with/3+/segments regex) works portably on Windows CI where
+    // process.env.HOME is a Windows backslash path that the regex cannot match.
+    const homeDir = '/tmp/afk-test-home';
+    // Build three ToolEntry-shaped objects — the minimal shape that
+    // styleGroupedTargets reads (toolUseId, toolName, toolInput, prefix).
+    const entries: ToolEntry[] = [0, 1, 2].map((i) => ({
+      toolUseId: `b${i}`,
+      toolName: 'bash',
+      toolInput: `${homeDir}/bin/mytool --flag arg`,
+      prefix: `▸ bash ("${homeDir}/bin/mytool --flag arg")`,
+      result: makeResult('ok'),
+      kind: 'tool' as const,
+      startedAt: 0,
+    }));
+    // 120 cols gives plenty of room for the argument preview to appear.
+    const row = stripAnsi(formatGroupedToolResults('bash', entries, 120));
+    // The absolute home-dir prefix must be collapsed — if shortenPaths ran
+    // AFTER styleBashCommand it would see an SGR-prefixed path and skip it.
+    expect(row).not.toContain(homeDir);
+    // The filename tail must still be visible.
+    expect(row).toContain('mytool');
+  });
+
+  it('renders multi-command grouped bash rows without embedding a raw newline', () => {
+    // Multi-command input (newline separator) exercises LF-preservation inside
+    // styleBashCommand and the subsequent [\r\n]+→space flatten step.
+    const entries: ToolEntry[] = [0, 1, 2].map((i) => ({
+      toolUseId: `b${i}`,
+      toolName: 'bash',
+      toolInput: `cd /tmp\nrm -rf scratch`,
+      prefix: `▸ bash ("cd /tmp && rm -rf scratch")`,
+      result: makeResult('ok'),
+      kind: 'tool' as const,
+      startedAt: 0,
+    }));
+    const row = stripAnsi(formatGroupedToolResults('bash', entries, 120));
+    // Newlines must be flattened — a raw LF in the render row would break
+    // the terminal's single-line scrollback contract.
+    expect(row).not.toContain('\n');
+    // The rm keyword must survive (styleBashCommand fired and kept it).
+    expect(row).toContain('rm');
   });
 });
 

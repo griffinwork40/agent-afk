@@ -1,8 +1,8 @@
 /**
  * Tests for `improve/eval-run/contracts.ts`.
  *
- * These exercise the REAL guardrails (the live dispatcher, the live skill
- * depth-message builder, the live detector registry) — so a regression in any
+ * These exercise the REAL guardrails (the live dispatcher, the live
+ * detector registry) — so a regression in any
  * guardrail surfaces here as a failing check, exactly as it would in a real
  * `afk improve eval-run`. No disk I/O, no AFK_HOME isolation needed.
  */

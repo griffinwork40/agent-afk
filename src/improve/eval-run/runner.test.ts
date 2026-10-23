@@ -238,6 +238,14 @@ describe('decideStatus precedence', () => {
     ).toBe('unsupported');
   });
 
+  it('unsupported when replayHandlerExists=true but replayDrove is omitted', () => {
+    // Coupling: supplying replayHandlerExists without replayDrove is treated as
+    // "handler existed but never drove" — must not surface as `pass`.
+    expect(
+      decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck], replayHandlerExists: true }),
+    ).toBe('unsupported');
+  });
+
   it('replayInconclusive forces unsupported even with a contract and passing checks', () => {
     // A skipped replay must never read as `pass` — guardrail presence is not
     // card-specific behavioural proof.

@@ -39,7 +39,7 @@ import {
 } from './config/types.js';
 import { loadEnvConfig, resetEnvConfigCache } from './config/env-tier.js';
 import { loadJsonConfig, resetJsonConfigCache } from './config/json-tier.js';
-import { loadAfkMd, resetAfkMdCache } from './config/afk-md-tier.js';
+import { loadAfkMd, resetAfkMdCache, warnIfAfkMdOversize } from './config/afk-md-tier.js';
 
 export type { ImportFromConfig, ImportSourceBinary };
 
@@ -55,8 +55,8 @@ export {
 
 /**
  * Clear the in-memory config-disk caches. Exposed for tests that mock the
- * filesystem per-case and for any future "config changed" invalidation
- * hook (currently none — config is reread on next CLI process).
+ * filesystem per-case and for live-reload paths such as `/afk-md reload`
+ * that bust the cache and recompose mid-session.
  *
  * Also clears the env-config cache so tests that mutate `process.env`
  * between cases see the new values; in production this matters less since
@@ -179,6 +179,9 @@ export function loadConfig(overrides?: Partial<CliConfig>, cwd: string = process
     const afkMd = loadAfkMd(cwd);
     if (afkMd !== null) {
       merged.systemPrompt = afkMd.content;
+      // Only here, where AFK.md actually supplies the prompt — never on the
+      // shadow-report probe above, whose files are not sent on any request.
+      warnIfAfkMdOversize(afkMd);
       // Each contributing path gets its own `afk-md:` prefix, joined with the
       // same `+` convention resolveBaseSystemPrompt() uses for framework+overlay
       // layering: `afk-md:<path>` when one tier resolved (unchanged format),

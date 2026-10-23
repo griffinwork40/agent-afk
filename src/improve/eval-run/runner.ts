@@ -288,10 +288,12 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
  *      was never actually checked. A guardrail-presence pass alone is not
  *      card-specific behavioural proof; it must not surface as `pass`.
  *
- * `pass` therefore requires a replay handler to exist AND to have conclusively
- * driven the guardrail (`replayDrove`). When `replayHandlerExists` is omitted
- * (e.g. in direct unit tests of `decideStatus` that predate this field), the
- * old behaviour is preserved for backward compatibility with those call-sites.
+ * `pass` therefore requires — in addition to a non-throwing contract
+ * (`!contractThrew`) and no failing checks — a replay handler to exist AND to
+ * have conclusively driven the guardrail (`replayDrove`). When
+ * `replayHandlerExists` is omitted (e.g. in direct unit tests of
+ * `decideStatus` that predate this field), the old behaviour is preserved for
+ * backward compatibility with those call-sites.
  */
 export function decideStatus(args: {
   hasContract: boolean;

@@ -67,6 +67,10 @@ export { makeCheck, snapshot } from './contracts.types.js';
 // this module path continue to resolve.
 export { buildToolFailureClassificationCorpus } from './contracts.tfd.js';
 
+// Re-export so tests that import buildSubagentBlockCorpus from this module
+// path continue to resolve (matching the contracts.tfd pattern).
+export { buildSubagentBlockCorpus } from './contracts.sab.js';
+
 // ---------------------------------------------------------------------------
 // Contract: repeated-tool-use -> repeat-loop circuit breaker (PR #80)
 // ---------------------------------------------------------------------------
