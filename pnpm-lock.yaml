@@ -85,6 +85,9 @@ importers:
       undici:
         specifier: ^8.11.2
         version: 8.12.1
+      vscode-jsonrpc:
+        specifier: ^9.0.3
+        version: 9.0.3
       wrap-ansi:
         specifier: ^10.0.0
         version: 10.0.2
@@ -1633,6 +1636,10 @@ packages:
       jsdom:
         optional: true
 
+  vscode-jsonrpc@9.0.3:
+    resolution: {integrity: sha512-qETYf9PCl1lVfwR+oBmMfc4vP2nqLNA35ABxorw3j06+xlKRgDVxbLgKm4Y/xPL0YWdeDjLoI4ImICIT3nB0zQ==}
+    engines: {node: '>=14.0.0'}
+
   w3c-xmlserializer@6.0.0:
     resolution: {integrity: sha512-4Nsy8K5Tr6SPDH9jhKJOHf7ChDrc1zufZTVSF7x72hwuEXBqxqk9G6cK+K2NRUtB3iELRJqjXb4JPDMBjMTl2Q==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
@@ -2941,6 +2948,8 @@ snapshots:
       jsdom: 30.1.2
     transitivePeerDependencies:
       - msw
+
+  vscode-jsonrpc@9.0.3: {}
 
   w3c-xmlserializer@6.0.0:
     dependencies:
