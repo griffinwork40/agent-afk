@@ -333,6 +333,37 @@ describe('resolveDelegationBudgetConfig', () => {
     expect(config?.maxConcurrentChildrenPerAgent).toBeUndefined();
     expect(config?.maxConcurrentAgents).toBeUndefined();
   });
+
+  // ── Individual-var-overrides-profile invariant tests ──────────────────────
+  // These verify that an explicitly-set-but-invalid individual env var does NOT
+  // fall through to the profile value — it must resolve to undefined (no cap).
+
+  it('profile=deep + AFK_MAX_CONCURRENT_AGENTS=notanumber → maxConcurrentAgents undefined (profile must not win)', () => {
+    process.env['AFK_DELEGATION_PROFILE'] = 'deep';
+    process.env['AFK_MAX_CONCURRENT_AGENTS'] = 'notanumber';
+    const config = resolveDelegationBudgetConfig();
+    // profile deep would give maxConcurrentAgents=16 — individual invalid var must block that
+    expect(config?.maxConcurrentAgents).toBeUndefined();
+  });
+
+  it('profile=deep + AFK_MAX_CONCURRENT_AGENTS=0 → maxConcurrentAgents undefined (zero is not positive)', () => {
+    process.env['AFK_DELEGATION_PROFILE'] = 'deep';
+    process.env['AFK_MAX_CONCURRENT_AGENTS'] = '0';
+    const config = resolveDelegationBudgetConfig();
+    // zero is not a valid positive int; profile must not override an explicitly-set var
+    expect(config?.maxConcurrentAgents).toBeUndefined();
+  });
+
+  it('profile=deep + AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT=notanumber → maxConcurrentChildrenPerAgent undefined; profile still fills other fields', () => {
+    process.env['AFK_DELEGATION_PROFILE'] = 'deep';
+    process.env['AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT'] = 'notanumber';
+    const config = resolveDelegationBudgetConfig();
+    // The invalid individual var must not fall through to profile's maxConcurrentChildrenPerAgent=4
+    expect(config?.maxConcurrentChildrenPerAgent).toBeUndefined();
+    // The other two fields are unset — profile fills them in normally
+    expect(config?.maxConcurrentAgents).toBe(16);
+    expect(config?.maxTotalAgents).toBe(48);
+  });
 });
 
 // ─── buildBudgetRefusalMessage ───────────────────────────────────────────────

@@ -69,6 +69,31 @@ function resolvePositiveInt(
   return Math.min(n, ceiling);
 }
 
+// ─── Individual-or-profile resolution ───────────────────────────────────────
+
+/**
+ * Resolve one budget field from an individual env var or a profile fallback.
+ *
+ * Invariant: if `raw` is set (non-undefined), the profile MUST NOT win for
+ * this field — even when `raw` is invalid. An invalid-but-set individual var
+ * means "no cap", not "fall through to profile". Only consult the profile when
+ * `raw === undefined` (the var was never set).
+ */
+function resolveIndividualOrProfile(
+  raw: string | undefined,
+  ceiling: number,
+  profileValue: number | undefined,
+): number | undefined {
+  if (raw !== undefined) {
+    // Individual var explicitly set — profile must not win, even if invalid.
+    return resolvePositiveInt(raw, ceiling) ?? undefined;
+  }
+  // Unset — profile is the fallback.
+  return profileValue !== undefined
+    ? resolvePositiveInt(String(profileValue), ceiling)
+    : undefined;
+}
+
 /**
  * Resolve delegation budget config from environment variables.
  *
@@ -77,38 +102,26 @@ function resolvePositiveInt(
  * `DelegationBudget` only when this returns a non-undefined config.
  */
 export function resolveDelegationBudgetConfig(): DelegationBudgetConfig | undefined {
-  // Individual env vars always win; profile values are the fallback defaults.
-  const maxChildren = resolvePositiveInt(
-    env.AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT,
-    CEILING_CONCURRENT_CHILDREN_PER_AGENT,
-  );
-  const maxConcurrent = resolvePositiveInt(
-    env.AFK_MAX_CONCURRENT_AGENTS,
-    CEILING_CONCURRENT_AGENTS,
-  );
-  const maxTotal = resolvePositiveInt(
-    env.AFK_MAX_TOTAL_AGENTS,
-    CEILING_TOTAL_AGENTS,
-  );
-
-  // Consult the delegation profile for fields not set by individual vars.
+  // Consult the delegation profile as a source of fallback defaults only.
   const profile = resolveDelegationProfile(env.AFK_DELEGATION_PROFILE);
 
-  const effectiveChildren =
-    maxChildren ??
-    (profile?.maxConcurrentChildrenPerAgent !== undefined
-      ? resolvePositiveInt(String(profile.maxConcurrentChildrenPerAgent), CEILING_CONCURRENT_CHILDREN_PER_AGENT)
-      : undefined);
-  const effectiveConcurrent =
-    maxConcurrent ??
-    (profile?.maxConcurrentAgents !== undefined
-      ? resolvePositiveInt(String(profile.maxConcurrentAgents), CEILING_CONCURRENT_AGENTS)
-      : undefined);
-  const effectiveTotal =
-    maxTotal ??
-    (profile?.maxTotalAgents !== undefined
-      ? resolvePositiveInt(String(profile.maxTotalAgents), CEILING_TOTAL_AGENTS)
-      : undefined);
+  // Individual env vars always override the profile — even when invalid.
+  // An invalid-but-set var resolves to undefined (no cap), not to the profile.
+  const effectiveChildren = resolveIndividualOrProfile(
+    env.AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT,
+    CEILING_CONCURRENT_CHILDREN_PER_AGENT,
+    profile?.maxConcurrentChildrenPerAgent,
+  );
+  const effectiveConcurrent = resolveIndividualOrProfile(
+    env.AFK_MAX_CONCURRENT_AGENTS,
+    CEILING_CONCURRENT_AGENTS,
+    profile?.maxConcurrentAgents,
+  );
+  const effectiveTotal = resolveIndividualOrProfile(
+    env.AFK_MAX_TOTAL_AGENTS,
+    CEILING_TOTAL_AGENTS,
+    profile?.maxTotalAgents,
+  );
 
   if (
     effectiveChildren === undefined &&

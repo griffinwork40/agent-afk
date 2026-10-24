@@ -214,7 +214,7 @@ export const MODEL_ENV_REGISTRY = [
       '"deep" (depth 5, maxChildren 4, maxConcurrent 16, maxTotal 48), ' +
       '"shallow" (depth 2, maxChildren 2, maxConcurrent 8, maxTotal 16). ' +
       'Individual env vars (AFK_MAX_NESTING_DEPTH, etc.) always override the profile value ' +
-      'when set. Unknown or empty values fall back to "normal" silently.',
+      'when set. Unknown or empty values are ignored; callers use their built-in defaults (equivalent to "normal").',
     type: 'string',
     required: false,
     example: 'deep',

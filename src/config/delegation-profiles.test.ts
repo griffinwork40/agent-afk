@@ -9,6 +9,8 @@ import {
   resolveDelegationProfile,
   DELEGATION_PROFILES,
 } from './delegation-profiles.js';
+import { resolveMaxNestingDepth } from '../agent/tools/nesting.js';
+import { resolveDelegationBudgetConfig } from '../agent/tools/delegation-budget.js';
 
 describe('resolveDelegationProfile', () => {
   it('returns undefined when raw is undefined', () => {
@@ -122,26 +124,22 @@ describe('AFK_DELEGATION_PROFILE env integration (resolveMaxNestingDepth)', () =
 
   it('profile=deep sets depth to 5', async () => {
     process.env[PROFILE_KEY] = 'deep';
-    const { resolveMaxNestingDepth } = await import('../agent/tools/nesting.js');
     expect(resolveMaxNestingDepth()).toBe(5);
   });
 
   it('profile=shallow sets depth to 2', async () => {
     process.env[PROFILE_KEY] = 'shallow';
-    const { resolveMaxNestingDepth } = await import('../agent/tools/nesting.js');
     expect(resolveMaxNestingDepth()).toBe(2);
   });
 
   it('explicit AFK_MAX_NESTING_DEPTH overrides profile', async () => {
     process.env[PROFILE_KEY] = 'deep'; // profile says 5
     process.env[DEPTH_KEY] = '1';       // explicit override
-    const { resolveMaxNestingDepth } = await import('../agent/tools/nesting.js');
     expect(resolveMaxNestingDepth()).toBe(1);
   });
 
   it('unknown profile falls back to default depth 3', async () => {
     process.env[PROFILE_KEY] = 'turbo';
-    const { resolveMaxNestingDepth } = await import('../agent/tools/nesting.js');
     expect(resolveMaxNestingDepth()).toBe(3);
   });
 
@@ -151,7 +149,6 @@ describe('AFK_DELEGATION_PROFILE env integration (resolveMaxNestingDepth)', () =
     // through to the profile (which would return profile depth instead of 3).
     process.env[PROFILE_KEY] = 'deep'; // profile would give 5 if it wins
     process.env[DEPTH_KEY] = 'not-a-number'; // unparseable — must not fall through
-    const { resolveMaxNestingDepth } = await import('../agent/tools/nesting.js');
     expect(resolveMaxNestingDepth()).toBe(3); // default, not profile depth 5
   });
 });
@@ -182,13 +179,11 @@ describe('AFK_DELEGATION_PROFILE env integration (resolveDelegationBudgetConfig)
 
   it('profile=normal returns undefined (no budget limits)', async () => {
     process.env[PROFILE_KEY] = 'normal';
-    const { resolveDelegationBudgetConfig } = await import('../agent/tools/delegation-budget.js');
     expect(resolveDelegationBudgetConfig()).toBeUndefined();
   });
 
   it('profile=deep returns the deep budget values', async () => {
     process.env[PROFILE_KEY] = 'deep';
-    const { resolveDelegationBudgetConfig } = await import('../agent/tools/delegation-budget.js');
     const cfg = resolveDelegationBudgetConfig();
     expect(cfg).not.toBeUndefined();
     expect(cfg?.maxConcurrentChildrenPerAgent).toBe(4);
@@ -198,7 +193,6 @@ describe('AFK_DELEGATION_PROFILE env integration (resolveDelegationBudgetConfig)
 
   it('profile=shallow returns the shallow budget values', async () => {
     process.env[PROFILE_KEY] = 'shallow';
-    const { resolveDelegationBudgetConfig } = await import('../agent/tools/delegation-budget.js');
     const cfg = resolveDelegationBudgetConfig();
     expect(cfg).not.toBeUndefined();
     expect(cfg?.maxConcurrentChildrenPerAgent).toBe(2);
@@ -209,7 +203,6 @@ describe('AFK_DELEGATION_PROFILE env integration (resolveDelegationBudgetConfig)
   it('individual env var overrides the profile value', async () => {
     process.env[PROFILE_KEY] = 'deep';    // profile: maxConcurrentAgents=16
     process.env[CONCURRENT_KEY] = '5';    // explicit override
-    const { resolveDelegationBudgetConfig } = await import('../agent/tools/delegation-budget.js');
     const cfg = resolveDelegationBudgetConfig();
     expect(cfg?.maxConcurrentAgents).toBe(5);    // individual var wins
     expect(cfg?.maxConcurrentChildrenPerAgent).toBe(4); // profile fills in the rest
@@ -218,7 +211,6 @@ describe('AFK_DELEGATION_PROFILE env integration (resolveDelegationBudgetConfig)
 
   it('unknown profile returns undefined (no budget)', async () => {
     process.env[PROFILE_KEY] = 'turbo';
-    const { resolveDelegationBudgetConfig } = await import('../agent/tools/delegation-budget.js');
     expect(resolveDelegationBudgetConfig()).toBeUndefined();
   });
 });
