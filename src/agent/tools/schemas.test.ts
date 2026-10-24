@@ -308,9 +308,10 @@ describe('sendMessageToAgentTool', () => {
     expect(sendMessageToAgentTool.input_schema.required).toEqual(['jobId', 'message']);
   });
 
-  it('description mentions mode="background" and provenance boundary', () => {
-    expect(sendMessageToAgentTool.description).toMatch(/mode="background"/);
-    expect(sendMessageToAgentTool.description).toMatch(/user-owned|user-backgrounded/i);
+  it('description mentions model origin and Ctrl+B, and excludes user-initiated', () => {
+    expect(sendMessageToAgentTool.description).toMatch(/model origin/);
+    expect(sendMessageToAgentTool.description).toMatch(/Ctrl\+B/);
+    expect(sendMessageToAgentTool.description).toMatch(/user-initiated/);
   });
 
   it('has category "subagent"', () => {

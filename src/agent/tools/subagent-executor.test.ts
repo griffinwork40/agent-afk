@@ -2063,7 +2063,7 @@ describe('SubagentExecutor', () => {
       expect(result.content).toContain(job.jobId);
     });
 
-    it('send_message_to_agent: refuses to steer user-owned jobs', async () => {
+    it('send_message_to_agent: steers user-backgrounded (Ctrl+B) jobs', async () => {
       const registry = new BackgroundAgentRegistry({});
       const steerMock = vi.fn();
       const handle = {
@@ -2074,7 +2074,8 @@ describe('SubagentExecutor', () => {
         handle,
         prompt: 'user work',
         model: 'sonnet',
-        provenance: 'user',
+        provenance: 'user-backgrounded',
+        parentSessionId: 'parent-session-id',
       });
       const bgExecutor = new SubagentExecutor({
         subagentManager: mockSubagentMgr as any,
@@ -2088,9 +2089,9 @@ describe('SubagentExecutor', () => {
         name: 'send_message_to_agent',
         input: { jobId: job.jobId, message: 'change plan' },
       }));
-      expect(result.isError).toBe(true);
-      expect(result.content).toMatch(/backgrounded by the user/);
-      expect(steerMock).not.toHaveBeenCalled();
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toMatch(/queued/i);
+      expect(steerMock).toHaveBeenCalledWith('change plan');
     });
 
     it('send_message_to_agent: returns non-error for terminal jobs (already done)', async () => {
@@ -2184,7 +2185,7 @@ describe('SubagentExecutor', () => {
       expect(steerMock).not.toHaveBeenCalled();
     });
 
-    it('send_message_to_agent: known-ID enumeration filters out user-owned jobs', async () => {
+    it('send_message_to_agent: known-ID enumeration includes user-backgrounded jobs', async () => {
       const registry = new BackgroundAgentRegistry({});
       const modelHandle = bgHandle('model-job');
       const userHandle = bgHandle('user-job');
@@ -2195,11 +2196,11 @@ describe('SubagentExecutor', () => {
         provenance: 'model',
         parentSessionId: 'parent-session-id',
       });
-      registry.register({
+      const userJob = registry.register({
         handle: userHandle.handle,
         prompt: 'user work',
         model: 'sonnet',
-        provenance: 'user',
+        provenance: 'user-backgrounded',
         parentSessionId: 'parent-session-id',
       });
       const bgExecutor = new SubagentExecutor({
@@ -2215,9 +2216,9 @@ describe('SubagentExecutor', () => {
         input: { jobId: 'bg-nonexistent', message: 'redirect' },
       }));
       expect(result.isError).toBe(true);
-      // Should list model-owned job but not user-owned job
+      // Model-owned and user-backgrounded jobs should appear; truly user-initiated should not
       expect(result.content).toContain(modelJob.jobId);
-      expect(result.content).not.toContain('user-job');
+      expect(result.content).toContain(userJob.jobId);
     });
 
     it('send_message_to_agent: returns isError when registry is unavailable', async () => {
@@ -2480,7 +2481,7 @@ describe('SubagentExecutor', () => {
 
       // Observable as a running registry job; the trigger is cleared.
       expect(registry.get(payload.jobId)?.status).toBe('running');
-      expect(registry.get(payload.jobId)?.provenance).toBe('user');
+      expect(registry.get(payload.jobId)?.provenance).toBe('user-backgrounded');
       expect(exec.hasPromotableForeground()).toBe(false);
 
       // Resolving the in-flight run drives the adopted job to terminal.
