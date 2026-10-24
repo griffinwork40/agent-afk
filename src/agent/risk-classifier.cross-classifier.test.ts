@@ -87,13 +87,14 @@ function expectReadOnly(cmd: string): void {
  * Assert that all four classifiers agree a command is mutating:
  *   A. classifyRisk !== 'safe'
  *   B. classifyBashCommand.mutating === true
- *   C. detectDestructiveCommands — checked (may or may not match; not all
- *      mutating commands are destructive-pattern matches)
- *   D. detectReleaseBoundaryCommands — checked (may or may not match)
+ *   C. detectDestructiveCommands — asserted not to throw and result checked
+ *   D. detectReleaseBoundaryCommands — asserted not to throw and result checked
  *
  * Classifiers C and D are OBSERVE-tier pattern detectors: they record but do
  * not block. A mutating command may or may not appear in their pattern tables,
- * so we assert they return without error (coverage) but do not require hits.
+ * so we assert they return an array (coverage + no-throw) but do not require
+ * hits. This ensures a regression in either detector flips CI rather than
+ * silently discarding the result.
  */
 function expectMutating(cmd: string): void {
   expect(
@@ -104,9 +105,16 @@ function expectMutating(cmd: string): void {
     classifyBashCommand(cmd).mutating,
     `classifyBashCommand("${cmd}").mutating`,
   ).toBe(true);
-  // Classifiers C+D: exercise to confirm no throw; hits are command-dependent.
-  detectDestructiveCommands(cmd);
-  detectReleaseBoundaryCommands(cmd);
+  // Classifiers C+D: assert they return an array without throwing so a
+  // regression that makes either crash or return a non-array flips CI.
+  expect(
+    detectDestructiveCommands(cmd),
+    `detectDestructiveCommands("${cmd}") should return an array`,
+  ).toBeInstanceOf(Array);
+  expect(
+    detectReleaseBoundaryCommands(cmd),
+    `detectReleaseBoundaryCommands("${cmd}") should return an array`,
+  ).toBeInstanceOf(Array);
 }
 
 // ---------------------------------------------------------------------------
