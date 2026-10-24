@@ -17,6 +17,9 @@ export class AsyncMutex {
   private _waiters: Array<() => void> = [];
   private _locked = false;
 
+  /** True when the lock is held or at least one caller is queued. */
+  get isLocked(): boolean { return this._locked || this._waiters.length > 0; }
+
   /**
    * Acquire the lock. Resolves immediately when free; queues when held.
    * Returns a release callback — call it exactly once, in a `finally` block.
@@ -63,4 +66,14 @@ export class MutexRegistry {
 
   /** Number of tracked keys (for tests / diagnostics). */
   get size(): number { return this._map.size; }
+
+  /**
+   * Delete the mutex for `key` if it is currently idle (not locked, no
+   * waiters). Call after releasing a lock to reclaim memory for ephemeral
+   * keys. No-op when the key is absent or the mutex is still in use.
+   */
+  releaseIfIdle(key: string): void {
+    const m = this._map.get(key);
+    if (m && !m.isLocked) this._map.delete(key);
+  }
 }

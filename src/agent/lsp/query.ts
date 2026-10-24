@@ -74,6 +74,7 @@ export async function withPooledFile<T>(
   const syncKey = `${clientId(client)}:${pathToFileURL(filePath).toString()}`;
   const releaseSyncLock = await syncLocks.get(syncKey).acquire();
   let syncedUri: string | null = null;
+  let releasedSyncLock = false;
   try {
     // Invariant: inactive open copies must be closed BEFORE the request, so
     // cross-file answers use disk rather than another route's stale edit.
@@ -83,9 +84,16 @@ export async function withPooledFile<T>(
     const sync = await client.syncFile(filePath, content);
     if (!sync) throw new LspClientError('response', 'Unsupported file type');
     syncedUri = sync.uri;
+    // Invariant: release the sync lock after syncFile completes, before fn.
+    // The mutex only protects the didChange notification itself; holding it
+    // across awaitSyncDiagnostics inside fn would block concurrent queries
+    // for the same file unnecessarily.
+    releaseSyncLock();
+    releasedSyncLock = true;
     return await fn({ client, sync, seqBeforeSync, remainingMs });
   } finally {
-    releaseSyncLock();
+    if (!releasedSyncLock) releaseSyncLock();
+    syncLocks.releaseIfIdle(syncKey);
     // Also prune documents whose concurrent query holds have now released.
     releaseDoc();
     if (syncedUri !== null) client.closeOthers(syncedUri);

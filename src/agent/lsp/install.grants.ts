@@ -62,6 +62,7 @@ async function readGrantsFile(path: string): Promise<GrantsFile> {
       parsed !== null &&
       typeof parsed === 'object' &&
       (parsed as Record<string, unknown>)['v'] === 1 &&
+      (parsed as Record<string, unknown>)['grants'] !== null &&
       typeof (parsed as Record<string, unknown>)['grants'] === 'object'
     ) {
       return parsed as GrantsFile;

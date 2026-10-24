@@ -52,9 +52,9 @@ async function dirBytes(dir: string): Promise<number> {
       const child = join(dir, name);
       try {
         const st = await lstat(child);
-        if (st.isDirectory()) {
+        if (st.isDirectory() && !st.isSymbolicLink()) {
           total += await dirBytes(child);
-        } else {
+        } else if (!st.isDirectory()) {
           total += st.size;
         }
       } catch {

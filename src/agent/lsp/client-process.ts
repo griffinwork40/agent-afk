@@ -90,16 +90,24 @@ export function buildSpawnCommand(
 // client must be killed when Node can no longer run promise continuations.
 const children = new Set<ChildProcess>();
 let guardianInstalled = false;
+// Captured BEFORE prependListener so listenerCount reflects the surface's
+// pre-guardian ownership of SIGTERM (not our own listener).
+let _sigtermHadOwner = false;
 
 function terminateChildren(): void {
   for (const child of children) killServerTreeSync(child);
+}
+
+/** Last-resort exit-handler kill: no spawnSync — unreliable after event loop stops. */
+function terminateChildrenAtExit(): void {
+  for (const child of children) forceKillRoot(child);
 }
 
 function onSigterm(): void {
   terminateChildren();
   // A CLI/daemon shutdown handler owns termination when present. Otherwise
   // restore Node's default signal semantics rather than swallowing SIGTERM.
-  if (process.listenerCount('SIGTERM') === 1) {
+  if (!_sigtermHadOwner) {
     process.removeListener('SIGTERM', onSigterm);
     process.kill(process.pid, 'SIGTERM');
   }
@@ -107,12 +115,21 @@ function onSigterm(): void {
 
 function trackChild(child: ChildProcess): void {
   children.add(child);
-  const forget = () => { children.delete(child); };
+  const forget = () => {
+    children.delete(child);
+    child.removeListener('exit', forget);
+    child.removeListener('error', forget);
+  };
   child.once('exit', forget);
   child.once('error', forget);
   if (!guardianInstalled) {
     guardianInstalled = true;
-    process.once('exit', terminateChildren);
+    // Invariant: capture count BEFORE installing our listener so we see only
+    // the surface's pre-existing SIGTERM ownership, not our own handler.
+    _sigtermHadOwner = process.listenerCount('SIGTERM') > 0;
+    // On exit, the event loop is gone; spawnSync is unreliable on win32.
+    // Use direct kill only. The SIGTERM path uses full killServerTreeSync.
+    process.once('exit', process.platform === 'win32' ? terminateChildrenAtExit : terminateChildren);
     // Run before existing once-listeners remove themselves during dispatch,
     // so listenerCount still reflects the surface's ownership of shutdown.
     process.prependListener('SIGTERM', onSigterm);
