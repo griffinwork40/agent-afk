@@ -371,6 +371,68 @@ function hiddenGitMutation(tokens: readonly string[]): string | null {
 }
 
 /**
+ * git subcommands that destroy working-tree state. A subset of
+ * `GIT_MUTATING_SUBCMDS` — checked by `destructiveGitSegmentReason`.
+ */
+export const DESTRUCTIVE_GIT_SUBCMDS = new Set([
+  'checkout', 'switch', 'restore', 'clean',
+]);
+
+/**
+ * Classify a `git …` invocation for working-tree-destructive operations only
+ * (NOT the full mutating set). Returns a descriptive reason, or null if the
+ * invocation is not destructive to the working tree.
+ *
+ * Destructive set:
+ *   - `checkout` / `switch`  — always (branch or file form both destroy state)
+ *   - `restore`              — always (discards working-tree changes)
+ *   - `clean`                — always (deletes untracked files)
+ *   - `reset --hard`         — only the `--hard` form
+ *   - `stash drop/clear/pop` — destroy stash entries or modify working tree
+ */
+export function destructiveGitSegmentReason(argv: readonly string[]): string | null {
+  if (argv.includes('--help') || argv.includes('-h')) return null;
+  const { sub, rest } = gitSubcommand(argv);
+  if (sub === undefined || sub === 'help') return null;
+  if (DESTRUCTIVE_GIT_SUBCMDS.has(sub)) return `git ${sub} (working-tree destructive)`;
+  if (sub === 'reset') {
+    return argv.includes('--hard') ? 'git reset --hard (working-tree destructive)' : null;
+  }
+  if (sub === 'stash') {
+    const next = rest[0] ?? '';
+    if (next === 'drop' || next === 'clear' || next === 'pop') {
+      return `git stash ${next} (working-tree destructive)`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Classify a raw shell command string for working-tree-destructive git
+ * commands. Returns `{ destructive: true, reason }` on the first matching
+ * segment, or `{ destructive: false }` when none match.
+ *
+ * Tokenizes the command (reusing `tokenizeSegments`) and applies
+ * `destructiveGitSegmentReason` to each resolved segment so wrappers such as
+ * `sudo git checkout main` and variable substitutions such as `g=git; $g reset
+ * --hard` are caught correctly.
+ */
+export function classifyDestructiveGit(
+  command: string,
+): { destructive: boolean; reason?: string } {
+  const vars = new Map<string, string>();
+  for (const rawTokens of tokenizeSegments(command)) {
+    const seg = resolveSegment(rawTokens, vars);
+    if (seg === null) continue;
+    const base = baseName(seg.command);
+    if (base !== 'git') continue;
+    const reason = destructiveGitSegmentReason(seg.argv);
+    if (reason !== null) return { destructive: true, reason };
+  }
+  return { destructive: false };
+}
+
+/**
  * Tokenize the command and apply the positional (subcommand-anchored) matchers —
  * git subcommand + curl write-method — over every resolved segment, sharing a
  * variable map so `g=git; $g push` resolves. When a segment's command is NOT git

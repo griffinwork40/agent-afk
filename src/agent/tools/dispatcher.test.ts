@@ -3071,3 +3071,52 @@ describe('SessionToolDispatcher — maxOutputBytes central output cap (#661)', (
     }
   });
 });
+
+describe('blockDestructiveGit gate', () => {
+  function bashHandler(): ToolHandler {
+    return async (input: unknown) => {
+      const obj = input as Record<string, unknown>;
+      return { content: `ran: ${String(obj['command'] ?? '')}` };
+    };
+  }
+  function makeDestructiveGitDispatcher(blockDestructiveGit: boolean) {
+    return new SessionToolDispatcher({
+      handlers: new Map([['bash', bashHandler()]]),
+      schemas: [...builtinToolSchemas],
+      permissions: { allowedTools: ['bash'] },
+      blockDestructiveGit,
+    });
+  }
+  function bashCall(command: string): ToolCall {
+    return makeCall({ name: 'bash', input: { command } });
+  }
+
+  it('blocks git checkout when blockDestructiveGit is true', async () => {
+    const dispatcher = makeDestructiveGitDispatcher(true);
+    const result = await dispatcher.execute(bashCall('git checkout main'));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('working-tree-destructive');
+    expect(result.failureClass).toBe('permission-denied');
+  });
+
+  it('allows git commit when blockDestructiveGit is true', async () => {
+    const dispatcher = makeDestructiveGitDispatcher(true);
+    const result = await dispatcher.execute(bashCall('git commit -m "x"'));
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toBe('ran: git commit -m "x"');
+  });
+
+  it('allows git push when blockDestructiveGit is true', async () => {
+    const dispatcher = makeDestructiveGitDispatcher(true);
+    const result = await dispatcher.execute(bashCall('git push'));
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toBe('ran: git push');
+  });
+
+  it('allows git checkout when blockDestructiveGit is false', async () => {
+    const dispatcher = makeDestructiveGitDispatcher(false);
+    const result = await dispatcher.execute(bashCall('git checkout main'));
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toBe('ran: git checkout main');
+  });
+});

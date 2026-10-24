@@ -161,6 +161,8 @@ export interface BuildDispatcherDeps {
   /** When true, gate state_put/cas/delete regardless of readOnlyMemory. */
   readOnlyState: boolean;
   readOnlyBash: boolean;
+  /** When true, working-tree-destructive git commands are blocked (all children). */
+  blockDestructiveGit: boolean;
   customTools: readonly CustomToolDef[];
   mcpManager: import('../../mcp/index.js').McpManager | undefined;
   schemas: readonly AnthropicToolDef[];
@@ -371,6 +373,9 @@ export function buildDispatcher(
     // (set by createChildProviderFactory / buildReadOnlyReconProvider) so a
     // read-only skill's forked child can't run mutating shell commands.
     readOnlyBash: deps.readOnlyBash,
+    // Destructive-git gate: blocks checkout/switch/restore/clean/reset --hard/
+    // stash drop|clear|pop for ALL child sessions.
+    blockDestructiveGit: deps.blockDestructiveGit,
     // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
     ...(opts?.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: opts.spawnedPidRegistry } : {}),
     // Yield contract: the queued-message probe rides on planExitControls (the

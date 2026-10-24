@@ -484,6 +484,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // the provider's construction-time flag so a read-only skill's forked
     // OpenAI-routed child also blocks mutating shell commands.
     if (this.providerOpts.readOnlyBash === true) dispatcherOpts.readOnlyBash = true;
+    // Destructive-git gate — parity with anthropic-direct. Blocks checkout/
+    // switch/restore/clean/reset --hard/stash drop|clear|pop for all children.
+    if (this.providerOpts.blockDestructiveGit === true) dispatcherOpts.blockDestructiveGit = true;
     // Path-containment bypass: bypassPermissions (explicit) + autonomous (AFK)
     // both disable path containment for every per-call context.
     dispatcherOpts.allowAll = pathContainmentBypassed(permissionMode);

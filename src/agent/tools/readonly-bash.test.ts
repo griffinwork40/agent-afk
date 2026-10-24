@@ -837,3 +837,42 @@ describe('classifyBashCommand', () => {
     }
   });
 });
+
+import { classifyDestructiveGit } from './readonly-bash.tokenizer.js';
+
+describe('classifyDestructiveGit', () => {
+  const destructive: Array<[string, string]> = [
+    ['git checkout main', 'git checkout (branch)'],
+    ['git checkout -b feature', 'git checkout -b (new branch — still destructive)'],
+    ['git switch main', 'git switch'],
+    ['git reset --hard', 'git reset --hard'],
+    ['git clean -fd', 'git clean'],
+    ['git restore .', 'git restore'],
+    ['git stash drop', 'git stash drop'],
+    ['git stash clear', 'git stash clear'],
+    ['git stash pop', 'git stash pop'],
+  ];
+  for (const [cmd, label] of destructive) {
+    it(`classifies as destructive: ${label}`, () => {
+      const result = classifyDestructiveGit(cmd);
+      expect(result.destructive, `expected "${cmd}" to be destructive`).toBe(true);
+      expect(result.reason).toBeTruthy();
+    });
+  }
+
+  const safe: Array<[string, string]> = [
+    ['git reset --soft', 'git reset --soft'],
+    ['git stash list', 'git stash list'],
+    ['git stash show', 'git stash show'],
+    ['git commit -m "x"', 'git commit'],
+    ['git push', 'git push'],
+    ['git status', 'git status'],
+    ['git log', 'git log'],
+  ];
+  for (const [cmd, label] of safe) {
+    it(`classifies as NOT destructive: ${label}`, () => {
+      const result = classifyDestructiveGit(cmd);
+      expect(result.destructive, `expected "${cmd}" to be non-destructive`).toBe(false);
+    });
+  }
+});

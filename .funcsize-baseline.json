@@ -1,6 +1,6 @@
 {
   "limit": 200,
   "entries": {
-
+    "src/agent/providers/anthropic-direct/build-dispatcher.ts::buildDispatcher": { "loc": 201, "reason": "feat: blockDestructiveGit field forwarding adds 1 LOC to dispatcher construction object literal" }
   }
 }
