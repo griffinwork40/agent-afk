@@ -239,7 +239,7 @@ export function adoptForegroundRun(
     runPromise,
     prompt: backgroundPrompt,
     model: model ?? 'sonnet',
-    provenance: 'user',
+    provenance: 'user-backgrounded',
     parentSessionId,
     ...(isoTd ? {
       onCleanup: async () => {

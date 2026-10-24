@@ -4,11 +4,19 @@ import type { ToolCall, ToolResult } from '../types.js';
 /**
  * Execute model-side steering of a running background subagent.
  *
- * This is the **model-owned** steering domain: the parent model sends
- * a redirect to a background child via `send_message_to_agent`. Foreground
- * subagents are steered by the **human** via the interrupt picker
- * (Ctrl+C → Steer → readline → next REPL turn), not through this tool.
- * See `interrupt-picker.ts` and `loop-iteration.ts` for that path.
+ * Invariant: steering is gated on **origin**, not on how the job
+ * reached the background. Three provenance values encode this:
+ *   - `'model'`             — model-dispatched via `mode: "background"`
+ *   - `'user-backgrounded'` — model-dispatched foreground, Ctrl+B'd by user
+ *   - `'user'`              — truly user-initiated (refused)
+ *
+ * Both `'model'` and `'user-backgrounded'` are steerable because the
+ * model originated the job. `cancel_background_job` is stricter:
+ * it requires `provenance === 'model'` (see `background-cancel.ts`).
+ *
+ * Foreground subagents can also be steered by the **human** via the
+ * interrupt picker (Ctrl+C → Steer). See `interrupt-picker.ts` and
+ * `loop-iteration.ts` for that path.
  */
 export async function sendMessageToAgent(
   registry: BackgroundAgentRegistry | undefined,
@@ -35,7 +43,7 @@ export async function sendMessageToAgent(
   const job = registry.get(jobId);
   if (!job) {
     const known = registry.list()
-      .filter((item) => item.provenance === 'model')
+      .filter((item) => item.provenance !== 'user')
       .filter((item) => !callerSessionId || item.parentSessionId === callerSessionId)
       .map((item) => item.jobId);
     return {
@@ -43,9 +51,9 @@ export async function sendMessageToAgent(
       isError: true,
     };
   }
-  if (job.provenance !== 'model') {
+  if (job.provenance === 'user') {
     return {
-      content: `Refused: background job ${jobId} was backgrounded by the user. Only model-created background jobs can be steered this way.`,
+      content: `Refused: background job ${jobId} is user-initiated and cannot be steered by the model.`,
       isError: true,
     };
   }
