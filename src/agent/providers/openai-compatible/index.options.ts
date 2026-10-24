@@ -62,6 +62,12 @@ export interface OpenAICompatibleProviderOptions extends ChildSessionOptions {
    */
   readOnlyBash?: boolean;
   /**
+   * When true, working-tree-destructive git commands are blocked for ALL child
+   * sessions. Parity with `AnthropicDirectProviderOptions.blockDestructiveGit`.
+   * Set by `createChildProviderFactory`. Defaults to false.
+   */
+  blockDestructiveGit?: boolean;
+  /**
    * Caller-provided dispatcher. When set, the provider does NOT build its
    * own — the caller owns lifecycle. Mirrors anthropic-direct's `externalTools`
    * option used by tests and the nesting fixture.

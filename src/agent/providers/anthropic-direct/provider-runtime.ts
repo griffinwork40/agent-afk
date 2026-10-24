@@ -132,6 +132,8 @@ export class AnthropicDirectProvider implements ModelProvider {
   private readonly readOnlyState: boolean;
   /** When true, the per-query dispatcher blocks mutating bash (read-only skill child). */
   private readonly readOnlyBash: boolean;
+  /** When true, working-tree-destructive git commands are blocked (all children). */
+  private readonly blockDestructiveGit: boolean;
   /** When set, MCP tools are merged into `schemas` + dispatcher handlers per query. */
   private readonly mcpManager: import('../../mcp/index.js').McpManager | undefined;
   /** In-process custom tools registered by the library consumer. */
@@ -222,6 +224,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.readOnlyMemory = opts.readOnlyMemory === true;
     this.readOnlyState = opts.readOnlyState === true;
     this.readOnlyBash = opts.readOnlyBash === true;
+    this.blockDestructiveGit = opts.blockDestructiveGit === true;
     this.customTools = opts.customTools ?? [];
     this.fastModeController = opts.fastModeController;
     this.mcpManager = opts.mcpManager;
@@ -261,6 +264,7 @@ export class AnthropicDirectProvider implements ModelProvider {
         readOnlyMemory: this.readOnlyMemory,
         readOnlyState: this.readOnlyState,
         readOnlyBash: this.readOnlyBash,
+        blockDestructiveGit: this.blockDestructiveGit,
         customTools: this.customTools,
         mcpManager: this.mcpManager,
         schemas: this.schemas,
