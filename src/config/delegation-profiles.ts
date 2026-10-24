@@ -13,8 +13,9 @@
  *   `deep`              — depth 5, wider fan-out budgets
  *   `shallow`           — depth 2, tighter fan-out budgets
  *
- * Unknown or missing profile names fall back to `normal` silently (same
- * philosophy as AFK_MAX_NESTING_DEPTH's range-guard fallback).
+ * Unknown or missing profile names return `undefined`; callers fall through
+ * to their own defaults in that case (same philosophy as env-var range-guard
+ * fallbacks elsewhere in the config layer).
  *
  * @module config/delegation-profiles
  */

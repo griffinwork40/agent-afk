@@ -232,6 +232,7 @@ describe('DelegationBudget', () => {
 
 describe('resolveDelegationBudgetConfig', () => {
   const ENV_KEYS = [
+    'AFK_DELEGATION_PROFILE',
     'AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT',
     'AFK_MAX_CONCURRENT_AGENTS',
     'AFK_MAX_TOTAL_AGENTS',
