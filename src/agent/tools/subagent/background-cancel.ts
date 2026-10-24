@@ -30,8 +30,15 @@ export async function cancelBackgroundJob(
     return { content: `Background job ${jobId} is already ${job.status}; nothing to cancel.` };
   }
   if (job.provenance !== 'model') {
+    // The model did not dispatch this job — the user Ctrl+B'd it into the
+    // background. Cancelling it from the model side would violate the
+    // user-owned provenance boundary. Use send_to_session / send_message_to_agent
+    // to steer it instead, or have the user run /bgsub:cancel.
     return {
-      content: `Refused: background job ${jobId} was backgrounded by the user. Ask the user to run /bgsub:cancel ${jobId}.`,
+      content:
+        `Refused: background job ${jobId} was backgrounded by the user (Ctrl+B) and is user-owned. ` +
+        `The model may not cancel it. To steer or stop it, use send_message_to_agent (or send_to_session) ` +
+        `to send a message to the running job, or ask the user to run: /bgsub:cancel ${jobId}`,
       isError: true,
     };
   }

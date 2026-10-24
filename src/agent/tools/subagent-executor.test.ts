@@ -1972,6 +1972,45 @@ describe('SubagentExecutor', () => {
       expect(modelHandle.cancelMock).toHaveBeenCalledOnce();
     });
 
+    // B4 — the PR's central behavioral invariant: cancel_background_job must
+    // refuse a user-backgrounded job (provenance: 'user') with isError: true,
+    // leave the job running, and hint that send_message_to_agent still works.
+    it('cancel_background_job refuses a user-backgrounded job: isError, job still running, steer hint included', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const { handle, cancelMock } = bgHandle('user-bg-job');
+      const job = registry.register({
+        handle,
+        prompt: 'user investigation',
+        model: 'sonnet',
+        provenance: 'user',
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.cancelBackgroundJob(makeCall({
+        name: 'cancel_background_job',
+        input: { jobId: job.jobId, reason: 'no longer needed' },
+      }));
+
+      // Must be refused with isError
+      expect(result.isError).toBe(true);
+      // Message must correctly describe the situation (user Ctrl+B'd, not model-dispatched)
+      expect(result.content).toMatch(/Ctrl\+B/);
+      expect(result.content).not.toMatch(/was backgrounded by the user\./); // old wrong phrasing gone
+      // Must hint that send_message_to_agent still works
+      expect(result.content).toMatch(/send_message_to_agent/);
+      // Must tell user how to cancel it themselves
+      expect(result.content).toContain(`/bgsub:cancel ${job.jobId}`);
+      // Job must still be running — cancel was not called
+      expect(cancelMock).not.toHaveBeenCalled();
+      expect(registry.get(job.jobId)?.status).toBe('running');
+    });
+
     it('cancel_background_job reports unknown ids with known ids and treats terminal jobs as non-errors', async () => {
       const registry = new BackgroundAgentRegistry({});
       const terminalHandle = bgHandle('terminal-job');
