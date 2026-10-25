@@ -1973,7 +1973,7 @@ describe('SubagentExecutor', () => {
     });
 
     // B4 — the PR's central behavioral invariant: cancel_background_job must
-    // refuse a user-backgrounded job (provenance: 'user') with isError: true,
+    // refuse a user-backgrounded job (provenance: 'user-backgrounded') with isError: true,
     // leave the job running, and hint that send_message_to_agent still works.
     it('cancel_background_job refuses a user-backgrounded job: isError, job still running, steer hint included', async () => {
       const registry = new BackgroundAgentRegistry({});
@@ -1982,7 +1982,7 @@ describe('SubagentExecutor', () => {
         handle,
         prompt: 'user investigation',
         model: 'sonnet',
-        provenance: 'user',
+        provenance: 'user-backgrounded',
       });
       const bgExecutor = new SubagentExecutor({
         subagentManager: mockSubagentMgr as any,
@@ -2242,6 +2242,14 @@ describe('SubagentExecutor', () => {
         provenance: 'user-backgrounded',
         parentSessionId: 'parent-session-id',
       });
+      const trulyUserHandle = bgHandle('truly-user-job');
+      const trulyUserJob = registry.register({
+        handle: trulyUserHandle.handle,
+        prompt: 'truly user initiated',
+        model: 'sonnet',
+        provenance: 'user',
+        parentSessionId: 'parent-session-id',
+      });
       const bgExecutor = new SubagentExecutor({
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
@@ -2258,6 +2266,8 @@ describe('SubagentExecutor', () => {
       // Model-owned and user-backgrounded jobs should appear; truly user-initiated should not
       expect(result.content).toContain(modelJob.jobId);
       expect(result.content).toContain(userJob.jobId);
+      // 'user'-provenance jobs must be excluded from the enumeration hint
+      expect(result.content).not.toContain(trulyUserJob.jobId);
     });
 
     it('send_message_to_agent: returns isError when registry is unavailable', async () => {
