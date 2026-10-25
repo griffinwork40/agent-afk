@@ -279,6 +279,7 @@ export async function printStartupBanner(params: StartupBannerParams): Promise<v
   const recallLine = renderStartupRecall({
     cwd: worktreeCwd ?? process.cwd(),
     isResume, isTTY: tty, isFirstRun: firstRun,
+    currentSessionId: ctx.session.current.sessionId,
   });
   if (recallLine) console.log(recallLine);
   const dashboardLines = await renderStartupDashboard({
