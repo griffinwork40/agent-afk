@@ -82,7 +82,7 @@ export async function runWorktreeCleanup(params: WorktreeCleanupParams): Promise
   let ignoredProbeEarly: Awaited<ReturnType<typeof probeNonRebuildableIgnoredFiles>> | undefined;
   try {
     [status, ignoredProbeEarly] = await Promise.all([
-      execFile('git', ['-C', currentPath, 'status', '--porcelain']),
+      execFile('git', ['--no-optional-locks', '-C', currentPath, 'status', '--porcelain']),
       probeNonRebuildableIgnoredFiles(execFile, currentPath),
     ]);
   } catch (err) {

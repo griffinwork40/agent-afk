@@ -146,7 +146,7 @@ export async function snapshotGitStateForCancelAll(cwd: string): Promise<void> {
   try {
     const [statResult, statusResult] = await Promise.all([
       execFile('git', ['diff', '--stat', 'HEAD'], { cwd, encoding: 'utf8', timeout: 2000 }),
-      execFile('git', ['status', '--short'], { cwd, encoding: 'utf8', timeout: 2000 }),
+      execFile('git', ['--no-optional-locks', 'status', '--short'], { cwd, encoding: 'utf8', timeout: 2000 }),
     ]);
     const stat = statResult.stdout.trim();
     const status = statusResult.stdout.trim();

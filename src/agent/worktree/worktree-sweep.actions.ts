@@ -113,7 +113,7 @@ export async function probeCandidate(
   let isDirty = false;
   let dirtyReason: DirtyReason = 'clean';
   try {
-    const statusResult = await execFile('git', ['-C', entryPath, 'status', '--porcelain']);
+    const statusResult = await execFile('git', ['--no-optional-locks', '-C', entryPath, 'status', '--porcelain']);
     isDirty = statusResult.stdout.trim().length > 0;
     if (isDirty) dirtyReason = 'uncommitted changes';
   } catch {

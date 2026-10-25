@@ -151,7 +151,7 @@ export async function captureWorkspaceCheckpoint(cwd: string, exec: CheckpointGi
   const [branchRaw, headRaw, statusRaw] = await Promise.all([
     git(['rev-parse', '--abbrev-ref', 'HEAD']),
     git(['rev-parse', 'HEAD']),
-    git(['status', '--porcelain=v1', '-z']),
+    git(['--no-optional-locks', 'status', '--porcelain=v1', '-z']),
   ]);
   const branch = branchRaw.ok ? branchRaw.stdout.trim() : undefined;
   const head = headRaw.ok ? headRaw.stdout.trim() : undefined;

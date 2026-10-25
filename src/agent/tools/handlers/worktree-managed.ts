@@ -253,7 +253,7 @@ export async function isManagedWorktreeDirty(
   worktreePath: string,
 ): Promise<boolean> {
   try {
-    const status = await execFile('git', ['-C', worktreePath, 'status', '--porcelain']);
+    const status = await execFile('git', ['--no-optional-locks', '-C', worktreePath, 'status', '--porcelain']);
     return status.stdout.trim().length > 0;
   } catch {
     return true; // unreadable → treat as dirty (safe fallback)
