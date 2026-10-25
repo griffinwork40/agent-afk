@@ -243,6 +243,7 @@ export interface StartupBannerParams {
   worktreeHandleRef: { current: WorktreeHandle | undefined };
   worktreeCwd: string | undefined;
   bootPruneNotice: string | undefined;
+  bootPruneRemovedCount?: number;
 }
 
 /**
@@ -251,7 +252,7 @@ export interface StartupBannerParams {
  * Called as the callback to measurePreArmAnchorRow.
  */
 export async function printStartupBanner(params: StartupBannerParams): Promise<void> {
-  const { ctx, worktreeHandleRef, worktreeCwd, bootPruneNotice } = params;
+  const { ctx, worktreeHandleRef, worktreeCwd, bootPruneNotice, bootPruneRemovedCount } = params;
   const notices = getAndClearUpdateNotices();
   if (notices !== null) {
     if (notices.pendingMessage !== null) process.stderr.write(notices.pendingMessage);
@@ -282,6 +283,7 @@ export async function printStartupBanner(params: StartupBannerParams): Promise<v
   if (recallLine) console.log(recallLine);
   const dashboardLines = await renderStartupDashboard({
     isTTY: tty, isFirstRun: firstRun,
+    bootPruneStaleCount: bootPruneRemovedCount,
   });
   for (const line of dashboardLines) console.log(line);
 

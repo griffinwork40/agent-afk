@@ -236,7 +236,7 @@ export function registerInteractiveCommand(program: Command): void {
       // banner/notices) so the persistent compositor starts below them.
       process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
       const { anchorRow } = await measurePreArmAnchorRow(() =>
-        printStartupBanner({ ctx, worktreeHandleRef, worktreeCwd, bootPruneNotice }),
+        printStartupBanner({ ctx, worktreeHandleRef, worktreeCwd, bootPruneNotice, bootPruneRemovedCount: bootPrune.removedCount }),
       );
 
       ctx.preArmAnchorRow = anchorRow;
