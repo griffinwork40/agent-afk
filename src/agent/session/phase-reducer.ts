@@ -115,7 +115,9 @@ export function reducePhase(
 
       if (chunk.type === 'tool_use_detail') {
         const { toolName, toolInput } = chunk;
-        const cat = categorizeTool(toolName);
+        let parsedInput: unknown;
+        try { parsedInput = JSON.parse(toolInput); } catch { parsedInput = undefined; }
+        const cat = categorizeTool(toolName, parsedInput);
 
         // Subagent/skill/dag dispatch → waiting_on_subagent.
         if (cat === 'subagent' || cat === 'skill' || cat === 'dag') {
