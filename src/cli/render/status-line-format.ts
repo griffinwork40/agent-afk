@@ -138,8 +138,8 @@ export interface StatusLineFields {
    * `/usage-awareness off`. Rendered as a dim `usage hidden` chip after the
    * held-category slot so the operator sees at a glance that the model cannot
    * see subscription usage. Only drawn when true; absent/false draws nothing.
-   * Takes droppablePriority 2.5 — between held-category (1.5) and context (2)
-   * in shed order.
+   * Takes droppablePriority 2.5 — between context (2) and cost (3) in shed
+   * order.
    */
   usageAwarenessOff?: boolean;
 }
@@ -254,11 +254,11 @@ export function formatStatusLine(f: StatusLineFields, maxW: number): string {
   // Invariant: permissionMode is checked here rather than relying on the chip
   // emitted above (lines 235-236) because that block runs unconditionally and
   // this guard must stay independent. The duplicate condition is intentional.
-  // Invariant: droppablePriority 1.5 is the only non-integer priority in this
-  // function. It places the risk-category chip between branch (1) and context
-  // bar (2) in the shedding order — closer to context in importance than branch
-  // but less critical than the context bar itself. All other priorities are
-  // integers; 1.5 is load-bearing and must not be renumbered.
+  // Invariant: droppablePriority 1.5 and 2.5 are the only non-integer priorities
+  // in this function. 1.5 places the risk-category chip between branch (1) and
+  // context (2); 2.5 places the usage-awareness chip between context (2) and
+  // cost (3). All other priorities are integers; both are load-bearing and must
+  // not be renumbered.
   if (f.lastHeldCategory !== undefined && f.permissionMode === 'autonomous') {
     parts.push({
       text: palette.warning(`[${f.lastHeldCategory}]`),
