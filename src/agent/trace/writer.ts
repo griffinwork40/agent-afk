@@ -87,9 +87,13 @@ export interface TraceWriter extends TraceSink {
    *  `seal()` returns, `write()` rejects.
    *
    * @param pendingWrites Optional promises for in-flight child terminal
-   *   emits. Awaited (all-settled) with the write gate still open, BEFORE
-   *   the `session_sealed` line is queued, so child cancellation rows land
-   *   before the seal record (#3714). The wait is bounded by
+   *   emits. Each promise must already have been initiated (i.e. the
+   *   `emitSubagentLifecycle` / `write()` call has been made) before
+   *   `seal()` is called — the write itself may still be in-flight and
+   *   arrive at the writer after `seal()` starts, because the gate
+   *   remains open while these are awaited. Awaited (all-settled) BEFORE
+   *   the `session_sealed` line is queued, so child cancellation rows
+   *   land before the seal record (#3714). The wait is bounded by
    *   `SEAL_PENDING_WRITES_TIMEOUT_MS`; on timeout a stderr warning names
    *   the abandoned count and `session_sealed` is written anyway.
    */

@@ -77,3 +77,26 @@ describe('OpenAIJournalWiring microcompaction', () => {
     expect(journal.records).toHaveLength(before);
   });
 });
+
+describe('OpenAIJournalWiring rewind (#4271)', () => {
+  it('records a rewind as truncate{reason:"rewind"} plus a rewind mark, like anthropic-direct', () => {
+    const journal = new FakeJournal();
+    const marks: Array<{ label: JournalMarkLabel; detail?: Record<string, unknown> }> = [];
+    journal.mark = (label: JournalMarkLabel, detail?: Record<string, unknown>): void => {
+      marks.push({ label, ...(detail ? { detail } : {}) });
+    };
+    const wiring = new OpenAIJournalWiring({ model: 'gpt-5.5', messageJournal: journal } as AgentConfig);
+    const turns = [
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'q2' },
+      { role: 'assistant', content: 'a2' },
+    ] as unknown as OpenAIMessage[];
+    wiring.sync(turns);
+    turns.splice(2);
+    wiring.syncRewind(turns, 2);
+    expect(journal.records.at(-1)).toEqual({ kind: 'truncate', length: 2, reason: 'rewind' });
+    expect(marks).toEqual([{ label: 'rewind', detail: { turnIndex: 2 } }]);
+  });
+});
+

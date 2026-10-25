@@ -47,24 +47,54 @@ export interface AudioTranscriber {
   transcribe(bytes: Buffer, fileName: string, maxBytes: number): Promise<TranscribeResult>;
 }
 
+/** Strip Bearer tokens from error messages before they reach logs. */
+function redactBearer(text: string): string {
+  return text.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+}
+
+/** Seam type for the SSRF egress check injected at construction time. */
+type EgressCheckFn = (url: string) => Promise<{ allowed: boolean; reason?: string }>;
+
 /**
  * OpenAI-compatible `/audio/transcriptions` transcriber.
  *
  * Sends a multipart/form-data POST with the audio file and model field.
  * The API key is included as a Bearer token when configured.
  * Redirects are never followed (SI-4 from media-download.ts applied here too).
+ * When a `checkEgress` function is supplied, it is called before every fetch
+ * to reject private/loopback/link-local/cloud-metadata hosts (SSRF guard).
  */
+
 export class OpenAIAudioTranscriber implements AudioTranscriber {
   constructor(
     private readonly apiUrl: string,
     private readonly apiKey: string | undefined,
     private readonly model: string,
     private readonly timeoutMs: number = 60_000,
+    private readonly checkEgress?: EgressCheckFn,
   ) {}
 
   async transcribe(bytes: Buffer, fileName: string, maxBytes: number): Promise<TranscribeResult> {
     if (bytes.byteLength > maxBytes) {
       return { status: 'too-large', maxBytes };
+    }
+
+    // SSRF host guard: reject private/loopback/link-local/cloud-metadata hosts.
+    // Runs at transcribe-time so async DNS resolution is available.
+    if (this.checkEgress) {
+      let verdict: { allowed: boolean; reason?: string };
+      try {
+        verdict = await this.checkEgress(this.apiUrl);
+      } catch (err) {
+        const raw = String(err instanceof Error ? err.message : err);
+        return { status: 'network-error', safeMessage: `SSRF egress check failed: ${redactBearer(raw)}` };
+      }
+      if (!verdict.allowed) {
+        return {
+          status: 'network-error',
+          safeMessage: `AFK_TRANSCRIBE_API_URL blocked by SSRF guard: ${redactBearer(verdict.reason ?? 'private or internal host')}`,
+        };
+      }
     }
 
     const form = new FormData();
@@ -88,7 +118,7 @@ export class OpenAIAudioTranscriber implements AudioTranscriber {
       });
     } catch (err) {
       const raw = String(err instanceof Error ? err.message : err);
-      const safeMessage = raw.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+      const safeMessage = redactBearer(raw);
       return { status: 'network-error', safeMessage };
     }
 
@@ -129,12 +159,15 @@ const DEFAULT_WHISPER_MODEL = 'whisper-1';
  * re-loading.  Only `AFK_TRANSCRIBE_API_URL` is required; the key and model
  * have defaults.
  */
-export function createTranscriber(env: {
-  AFK_TRANSCRIBE_API_URL?: string;
-  AFK_TRANSCRIBE_API_KEY?: string;
-  AFK_TRANSCRIBE_MODEL?: string;
-  AFK_TRANSCRIBE_TIMEOUT_MS?: string;
-}): AudioTranscriber | null {
+export function createTranscriber(
+  env: {
+    AFK_TRANSCRIBE_API_URL?: string;
+    AFK_TRANSCRIBE_API_KEY?: string;
+    AFK_TRANSCRIBE_MODEL?: string;
+    AFK_TRANSCRIBE_TIMEOUT_MS?: string;
+  },
+  opts: { checkEgress?: (url: string) => Promise<{ allowed: boolean; reason?: string }> } = {},
+): AudioTranscriber | null {
   const url = env.AFK_TRANSCRIBE_API_URL?.trim();
   if (!url) return null;
 
@@ -165,5 +198,6 @@ export function createTranscriber(env: {
     env.AFK_TRANSCRIBE_API_KEY?.trim() || undefined,
     env.AFK_TRANSCRIBE_MODEL?.trim() || DEFAULT_WHISPER_MODEL,
     resolvedTimeout,
+    opts.checkEgress,
   );
 }

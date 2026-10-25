@@ -12,7 +12,7 @@ const __dirname = dirname(__filename);
 const PINNED_HASHES = {
   'research-agent': 'bdc3550cf8657dc6acdf32375df9026b27eae1665752e8bea04fdf51bb4fe9a7',
   contract: '3b1b65c031897f5ecaf57aa6a99e9bf94fc2caf17f3fe1c9fdf6bcfc80f13c54',
-  'git-investigator': 'd1f186b82574641a4cb616990cee70a36f95a109b3688f59c07d12d26de60c03',
+  'git-investigator': 'afbcb25afbf62e74f1cab41fd4e6c1d0f442a3ad2253bc341d53b61f90937b91',
 } as const;
 
 type AgentName = keyof typeof PINNED_HASHES;

@@ -35,10 +35,14 @@ import type { ToolEventMin } from '../done-evidence.js';
 import { dispatchTurnStop } from './turn-stream-runner.stop.js';
 import type { StopWiring } from '../types/session-types.js';
 
-/** Cost already counted against `maxBudgetUsd`: own turns + completed subagents. */
+/**
+ * Cost already counted against `maxBudgetUsd`: own turns + completed subagents,
+ * summed across ALL lifecycle cycles so a REPL `/clear` does not re-zero the
+ * budget (#3882 cause 4).
+ */
 function seededBudgetCost(accounting: AccountingAccumulator): number {
   const acct = accounting.snapshot();
-  return acct.sessionRunningCostUsd + acct.subagentRunningCostUsd;
+  return acct.lifetimeSessionCostUsd + acct.lifetimeSubagentCostUsd;
 }
 
 /**

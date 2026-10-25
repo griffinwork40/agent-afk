@@ -11,6 +11,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Mock } from 'vitest';
+
+/** Untyped call-through mock; the precise signature is irrelevant to these tests. */
+type AnyMock = Mock<(...args: unknown[]) => unknown>;
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -55,6 +59,7 @@ function makeStats(): SessionStats {
     totalCostUsd: 0,
     totalTokens: 0,
     totalDurationMs: 0,
+    unpricedTurns: 0,
     sessionStartTime: Date.now(),
     turnCosts: [],
     turnTokens: [],
@@ -255,7 +260,7 @@ describe('/tasks slash commands', () => {
       const h = makeHandle('sub-done-2', 'succeeded');
       const manager = makeManager([], [{ id: 'sub-done-2', handle: h }]);
       // Make get() return the handle
-      (manager as unknown as { get: ReturnType<typeof vi.fn> }).get
+      (manager as unknown as { get: AnyMock }).get
         = vi.fn().mockImplementation((id: string) =>
           id === 'sub-done-2' ? h : undefined,
         );
@@ -282,49 +287,88 @@ describe('/tasks slash commands', () => {
 
   describe('/tasks interactive — enterTaskViewMode rejection', () => {
     it('logs the error and resolves instead of swallowing it silently', async () => {
-      // Arrange: one active handle so the list is non-empty.
-      const h = makeHandle('sub-err-1', 'running');
-      const manager = makeManager([h]);
-      setTasksRegistry(manager, SESSION_LABEL);
+      // Stub process.stdin.isTTY=true so the non-TTY guard does not short-
+      // circuit in CI environments where isTTY is undefined/false.
+      // The guard is `!isTTY && !setSoftStopHandler`; this test supplies both
+      // setSoftStopHandler (so guard already passes) AND the stub (belt+braces).
+      const origIsTTY = process.stdin.isTTY;
+      Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
 
-      const errorLines: string[] = [];
-      const ctx: SlashContext = {
-        session: { current: {} } as unknown as SlashContext['session'],
-        stats: {
-          totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0,
-          sessionStartTime: Date.now(), turnCosts: [], turnTokens: [], turns: [],
-          model: 'sonnet', permissionMode: 'default',
-        },
-        out: {
-          line: vi.fn(),
-          raw: vi.fn(),
-          success: vi.fn(),
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: (t: string): void => { errorLines.push(t); },
-        },
-        ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
-        // Provide setSoftStopHandler to enter interactive mode.
-        setSoftStopHandler: vi.fn(),
-      };
+      try {
+        // Arrange: one active handle so the list is non-empty.
+        const h = makeHandle('sub-err-1', 'running');
+        const manager = makeManager([h]);
+        setTasksRegistry(manager, SESSION_LABEL);
 
-      // Make enterTaskViewMode reject with a known error.
-      mockedEnterTaskViewMode.mockRejectedValueOnce(new Error('boom'));
+        const errorLines: string[] = [];
+        const ctx: SlashContext = {
+          session: { current: {} } as unknown as SlashContext['session'],
+          stats: {
+            totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0, unpricedTurns: 0,
+            sessionStartTime: Date.now(), turnCosts: [], turnTokens: [], turns: [],
+            model: 'sonnet', permissionMode: 'default',
+          },
+          out: {
+            line: vi.fn(),
+            raw: vi.fn(),
+            success: vi.fn(),
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: (t: string): void => { errorLines.push(t); },
+          },
+          ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
+          // Provide setSoftStopHandler to enter interactive stdin mode.
+          setSoftStopHandler: vi.fn(),
+        };
 
-      // Start the handler — it awaits stdin input after collectAllTasks (async).
-      const handlerPromise = tasksCmd.handler(ctx, '');
+        // Make enterTaskViewMode reject with a known error.
+        mockedEnterTaskViewMode.mockRejectedValueOnce(new Error('boom'));
 
-      // Wait for the async collectAllTasks + renderList + stdin.on() to complete
-      // before firing the simulated keypress.
-      await new Promise<void>((r) => setTimeout(r, 50));
-      process.stdin.emit('data', '\r');
+        // Start the handler — it awaits stdin input after collectAllTasks.
+        const handlerPromise = tasksCmd.handler(ctx, '');
 
-      // Wait for the handler to settle (enterTaskViewMode rejects → catch logs → resolve).
-      await handlerPromise;
+        // Wait for collectAllTasks + renderList + stdin.on() to register.
+        await new Promise<void>((r) => setTimeout(r, 50));
+        process.stdin.emit('data', '\r');
 
-      // The error must have been logged (not swallowed).
-      expect(errorLines.length).toBeGreaterThan(0);
-      expect(errorLines.some(l => l.includes('task view error') && l.includes('boom'))).toBe(true);
+        // Handler settles: enterTaskViewMode rejects → catch logs → resolve.
+        await handlerPromise;
+
+        // The error must have been logged (not swallowed).
+        expect(errorLines.length).toBeGreaterThan(0);
+        expect(errorLines.some(l => l.includes('task view error') && l.includes('boom'))).toBe(true);
+      } finally {
+        Object.defineProperty(process.stdin, 'isTTY', { value: origIsTTY, configurable: true });
+      }
     }, 10_000);
+  });
+
+  // -------------------------------------------------------------------------
+  // Non-TTY guard: without setSoftStopHandler AND non-TTY → returns 'continue'
+  // -------------------------------------------------------------------------
+
+  describe('/tasks non-TTY guard', () => {
+    it('returns continue without hanging when non-TTY and no setSoftStopHandler', async () => {
+      const origIsTTY = process.stdin.isTTY;
+      Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+
+      try {
+        const h = makeHandle('sub-nontty-1', 'running');
+        const manager = makeManager([h]);
+        setTasksRegistry(manager, SESSION_LABEL);
+
+        const { ctx, lines } = makeCtx();
+        // No setSoftStopHandler — ctx has only session/stats/out/ui.
+
+        const result = await tasksCmd.handler(ctx, '');
+
+        // Must return 'continue' immediately (no stdin hang).
+        expect(result).toBe('continue');
+        // Emits a plain list (no interactive mode).
+        expect(lines.length).toBeGreaterThan(0);
+      } finally {
+        Object.defineProperty(process.stdin, 'isTTY', { value: origIsTTY, configurable: true });
+      }
+    });
   });
 });

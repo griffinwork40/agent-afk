@@ -39,5 +39,5 @@ export function collectSlash(): ReturnType<typeof partitionSlash> {
 if (isMain(import.meta.url)) {
   const result = collectSlash();
   console.log(`${result.core.length} core slash commands; ${result.skills.length} public shipped TS skills; ${result.excluded.length} excluded registered skills (${result.excluded.join(', ')})`);
-  process.exitCode = writeReference('slash-commands', renderSlash(result), process.argv.includes('--check')) ? 0 : 1;
+  process.exitCode = writeReference('slash-commands', renderSlash(result), process.argv.includes('--check'), undefined, 'scan:slash') ? 0 : 1;
 }

@@ -70,7 +70,8 @@ export const READONLY_BASH_DISABLED_REASON =
  * `undefined` (keep the generic reason) otherwise.
  *
  * Mirror: `checkReadOnlyBash` in `dispatcher.pre-dispatch-gates.ts` carries an
- * identical guard (`toolName === 'bash' && readOnlyBash && isReadOnlyGitToolEnabled()`)
+ * equivalent guard (same logical predicate, split across two branches in
+ * `checkReadOnlyBash` — see `dispatcher.pre-dispatch-gates.ts:276`)
  * as a backstop for any path that reaches the dispatcher with bash still
  * admitted. If this predicate changes, update that function too (and vice versa).
  */

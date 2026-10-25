@@ -41,6 +41,7 @@ import { pushIfConfigured } from './push.js';
 import { installCrashNotifier } from '../utils/crash-notifier.js';
 import { errorMessage } from '../utils/errors.js';
 import { createTranscriber } from './audio-transcriber.js';
+import { checkEgressTarget } from '../http-client/egress-guard.js';
 
 /**
  * Crash-notification handler for the Telegram bot process.
@@ -91,7 +92,7 @@ function recordTelegramStartup(daemonVersion: string): void {
  * Extracted from main() to keep that function within the 200-line ceiling.
  */
 function resolveTranscriber(e: typeof env): ReturnType<typeof createTranscriber> {
-  return createTranscriber(e);
+  return createTranscriber(e, { checkEgress: checkEgressTarget });
 }
 
 export async function main(): Promise<void> {

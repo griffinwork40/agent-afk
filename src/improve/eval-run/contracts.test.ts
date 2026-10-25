@@ -1,8 +1,8 @@
 /**
  * Tests for `improve/eval-run/contracts.ts`.
  *
- * These exercise the REAL guardrails (the live dispatcher, the live skill
- * depth-message builder, the live detector registry) — so a regression in any
+ * These exercise the REAL guardrails (the live dispatcher, the live
+ * detector registry) — so a regression in any
  * guardrail surfaces here as a failing check, exactly as it would in a real
  * `afk improve eval-run`. No disk I/O, no AFK_HOME isolation needed.
  */
@@ -17,7 +17,7 @@ import {
   supportedContractPatterns,
 } from './contracts.js';
 import { REPEAT_CIRCUIT_BREAKER_THRESHOLD } from '../../agent/tools/dispatcher.js';
-import { SKILL_MAX_DEPTH_RECOVERY_HINT } from '../../agent/tools/skill-depth-message.js';
+import { DEFAULT_SUBAGENT_BLOCK_MIN_OCCURRENCES } from '../scan/detectors/subagent-block.js';
 import { detectToolFailureDensity } from '../scan/detectors/tool-failure-density.js';
 import type { FailurePattern } from '../schemas.js';
 
@@ -28,7 +28,7 @@ import type { FailurePattern } from '../schemas.js';
 describe('resolveContract', () => {
   it('maps each registered pattern to its contract', () => {
     expect(resolveContract('repeated-tool-use')?.id).toBe('repeat-loop-circuit-breaker');
-    expect(resolveContract('subagent-block')?.id).toBe('skill-max-depth-recovery-hint');
+    expect(resolveContract('subagent-block')?.id).toBe('subagent-hook-block-detector');
     expect(resolveContract('tool-failure-density')?.id).toBe('tool-failure-density-enabled');
     expect(resolveContract('closure-anomaly')?.id).toBe('closure-abort-recovery-hint');
   });
@@ -48,7 +48,7 @@ describe('resolveContract', () => {
     ]);
     expect(knownContractIds()).toEqual([
       'repeat-loop-circuit-breaker',
-      'skill-max-depth-recovery-hint',
+      'subagent-hook-block-detector',
       'tool-failure-density-enabled',
       'closure-abort-recovery-hint',
     ]);
@@ -113,36 +113,38 @@ describe('repeat-loop-circuit-breaker contract', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Contract: skill max-depth recovery hint
+// Contract: subagent-hook-block-detector (fixes the prior mismapping)
 //
-// KNOWN MISMAPPING: this contract is registered under patternId
-// `subagent-block`, but it validates the skill MAX-DEPTH refusal — a different
-// mechanism than the `hook_decision`/SubagentStart/`block` events the
-// subagent-block detector actually fires on (see the note in contracts.ts).
-// The checks below still pass (the refusal builder is healthy); they just do
-// not prove anything about the detector's recorded failures. Do NOT add a
-// fixture-replay for subagent-block against this contract until the mapping is
-// resolved.
+// The `subagent-block` detector fires on `hook_decision` events with
+// `hookEvent:'SubagentStart'` + `decision:'block'`. The prior contract
+// validated `buildSkillMaxDepthRefusal` — a skill-executor depth gate on a
+// completely different code path that the detector never observes. This
+// contract exercises the real detector against a synthetic corpus.
 // ---------------------------------------------------------------------------
 
-describe('skill-max-depth-recovery-hint contract (KNOWN subagent-block mismapping)', () => {
-  it('all checks pass against the live refusal builder', async () => {
+describe('subagent-hook-block-detector contract', () => {
+  it('all checks pass against the live detectSubagentBlock detector', async () => {
     const result = await resolveContract('subagent-block')!.run();
     expect(result.checks.map((c) => c.name)).toEqual([
-      'refusal-states-depth',
-      'recovery-hint-present',
-      'hint-directs-inline-work',
+      'emits-card-on-recurring-subagent-block',
+      'card-pattern-is-subagent-block',
+      'block-count-and-sessions-correct',
+      'excludes-non-subagent-hook-blocks',
+      'below-threshold-produces-no-card',
     ]);
     for (const c of result.checks) {
       expect(c.status, `${c.name}: ${c.actual}`).toBe('pass');
     }
   });
 
-  it('evidence references the shared message builder and carries the hint', async () => {
+  it('evidence references the live detector and the default threshold constant', async () => {
     const result = await resolveContract('subagent-block')!.run();
-    const builderEvidence = result.evidence.find((e) => e.ref.includes('buildSkillMaxDepthRefusal'));
-    expect(builderEvidence).toBeDefined();
-    expect(builderEvidence!.detail).toContain(SKILL_MAX_DEPTH_RECOVERY_HINT);
+    const detectorEvidence = result.evidence.find((e) => e.ref.includes('detectSubagentBlock'));
+    expect(detectorEvidence).toBeDefined();
+    expect(detectorEvidence!.detail).toContain('3 SubagentStart blocks');
+    const thresholdEvidence = result.evidence.find((e) => e.ref.includes('DEFAULT_SUBAGENT_BLOCK_MIN_OCCURRENCES'));
+    expect(thresholdEvidence).toBeDefined();
+    expect(thresholdEvidence!.detail).toBe(String(DEFAULT_SUBAGENT_BLOCK_MIN_OCCURRENCES));
   });
 });
 

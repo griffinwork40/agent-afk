@@ -250,6 +250,48 @@ describe('AgentSession — opt-in executors (#3442)', () => {
     }
   });
 
+  it('tree budget (subagent gate): spend from a prior REPL cycle counts after /clear (#3882 cause 4)', async () => {
+    // Cycle 1: record $0.7 subagent spend — below $1 ceiling, no abort.
+    const trace = new InMemoryTraceWriter();
+    const session = new AgentSession({ model: 'claude-haiku-4-5', provider: createMockProvider(), maxBudgetUsd: 1, traceWriter: trace });
+    try {
+      await session.waitForInitialization();
+      session.recordSubagentCompletion(undefined, 0.7);
+      expect(session.abortSignal.aborted).toBe(false);
+      // /clear resets the per-cycle accumulators but must NOT reset the lifetime total.
+      await session.reset();
+      // Cycle 2: record another $0.4 — lifetime is now $1.1, must cross the ceiling.
+      session.recordSubagentCompletion(undefined, 0.4);
+      expect(session.abortSignal.aborted).toBe(true);
+      const reason = session.abortSignal.reason as BudgetExceededError;
+      expect(reason).toBeInstanceOf(BudgetExceededError);
+      expect(reason.runningCostUsd).toBeCloseTo(1.1);
+      expect(reason.maxBudgetUsd).toBe(1);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('tree budget (per-turn gate): turn cost from a prior REPL cycle counts after /clear (#3882 cause 4)', async () => {
+    // Cycle 1: send a message that costs $0.001 via the mock provider; $1 ceiling.
+    // Mock provider totalCostUsd = 0.001 per turn (see createMockProvider).
+    const trace = new InMemoryTraceWriter();
+    // Seed subagent spend of $0.9995 so one more turn ($0.001) crosses $1.0005 > $1.
+    const session = new AgentSession({ model: 'claude-haiku-4-5', provider: createMockProvider(), maxBudgetUsd: 1.0005, traceWriter: trace });
+    try {
+      await session.waitForInitialization();
+      session.recordSubagentCompletion(undefined, 0.9995);
+      expect(session.abortSignal.aborted).toBe(false);
+      // /clear — per-cycle counters reset, but lifetime must survive.
+      await session.reset();
+      // Cycle 2: one turn should cross the ceiling.
+      await session.sendMessage('hi').catch(() => undefined);
+      expect(session.abortSignal.reason).toBeInstanceOf(BudgetExceededError);
+    } finally {
+      await session.close();
+    }
+  });
+
   it("Surface 'sdk' is accepted and maps to the unknown origin", () => {
     const s: Surface = 'sdk';
     expect(deriveOrigin(s)).toBe('unknown');

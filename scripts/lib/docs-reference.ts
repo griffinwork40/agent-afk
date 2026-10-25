@@ -28,12 +28,12 @@ export function pageHeader(title: string, description: string, scan: string, sou
 }
 
 /** Byte-exact comparison, matching render-env-registry.ts (no normalization). */
-export function writeReference(slug: string, output: string, check: boolean, directory = resolve(repoRoot, 'website/content/docs/reference')): boolean {
+export function writeReference(slug: string, output: string, check: boolean, directory = resolve(repoRoot, 'website/content/docs/reference'), scanCmd?: string): boolean {
   const path = resolve(directory, `${slug}.mdx`);
   const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
   if (check) {
     if (current !== output) {
-      console.error(`Reference drift: ${slug}. Run pnpm scan:${slug === 'cli' ? 'cli' : slug === 'slash-commands' ? 'slash' : 'config'}.`);
+      console.error(`Reference drift: ${slug}. Run pnpm ${scanCmd ?? `scan:${slug}`}.`);
       return false;
     }
     console.log(`Reference in sync: ${slug}`);

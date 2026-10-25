@@ -54,6 +54,8 @@ export function resetStats(stats: SessionStats): void {
   // make the NEXT conversation's first turn persist a fresh sidecar under the
   // PREVIOUS conversation's name — a user-visible misattribution.
   delete stats.name;
+  delete stats.nameExplicit;
+  delete stats.displayName;
   // Preserve `permissionMode` (user-controlled state — the plan/AFK gates read
   // it live; `/clear` should not silently drop the operator out of AFK mode).
   // Preserve `thinkingUi` for the same reason — the `/thinking` user setting

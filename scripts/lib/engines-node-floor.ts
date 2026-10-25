@@ -3,7 +3,7 @@
  *
  * Used by `scripts/check-engines-node-floor.ts` (the CLI) and by
  * `tests/engines-node-floor.test.ts` (unit tests that run inside `pnpm test`
- * so the check is exercised on every PR, not only in CI auto-release).
+ * so the check is exercised on every PR, not only when the CLI is run).
  *
  * Contract: pure — no I/O, no side effects, no process.exit. The caller owns
  * printing and exit so the script can use its own error messages.

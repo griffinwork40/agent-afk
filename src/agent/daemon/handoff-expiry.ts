@@ -210,11 +210,11 @@ export function sweepExpiredHandoffs(
   if (sweepInFlight || now - lastSweepAt < EXPIRY_SWEEP_INTERVAL_MS) return;
   lastSweepAt = now;
   sweepInFlight = true;
-  const expireOpts = {
+  const expireOpts: Parameters<typeof expireStaleHandoffs>[0] = {
     queueDir,
     now,
-    ...(handoffsDir !== undefined ? { handoffsDir } : {}),
-    ...(isInFlight !== undefined ? { isInFlight } : {}),
+    ...(handoffsDir !== undefined && { handoffsDir }),
+    ...(isInFlight !== undefined && { isInFlight }),
   };
   void expireStaleHandoffs(expireOpts)
     .catch((err: unknown) => {

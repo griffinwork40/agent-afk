@@ -234,7 +234,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
  * frozen pre-resize frame rows.
  *
  * Side-effect-free beyond mutating `self.pendingResizeErase`,
- * `self.bandGeometryStale`, `self.resizeGeometryStale`, and `self.disarmRows`.
+ * `self.bandGeometryStale`, `self.resizeGeometryStale`, `self.disarmRows`, and `self.disarmCols`.
  */
 export function handleDisarmWindowResize(self: LifecycleHost): void {
   const liveRows = self.stdout.rows ?? 24;
@@ -267,4 +267,5 @@ export function handleDisarmWindowResize(self: LifecycleHost): void {
   self.bandGeometryStale = true;
   self.resizeGeometryStale = true; // mirrors handleResizeImmediate — SIGWINCH-only flag (#3212)
   self.disarmRows = 0;
+  self.disarmCols = 0; // mirror disarmRows reset (#4203)
 }

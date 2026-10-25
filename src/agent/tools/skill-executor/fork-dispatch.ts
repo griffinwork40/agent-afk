@@ -431,6 +431,7 @@ export async function runForkedSkillToResult(
     handle = await manager.forkSubagent({
       parent: internals.ctx.parentSession,
       config: childConfig,
+      yieldEnabled: true, // foreground skill-fork dispatch (#4297 F-C2)
       idPrefix,
       parentId,
       agentType: label,

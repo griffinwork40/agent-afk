@@ -330,10 +330,12 @@ describe('Scenario 3 (#3714): goal change while worker runs', () => {
 
     // Operator pauses the goal mid-flight …
     const paused = goalStore.pauseGoal();
+    expect(paused).toBeDefined();
     expect(paused?.status).toBe('paused');
 
     // … then resumes it — same text, status back to active
     const resumed = goalStore.resumeGoal();
+    expect(resumed).toBeDefined();
     expect(resumed?.status).toBe('active');
     expect(resumed?.text).toBe(goalTextAtDispatch);
 

@@ -31,26 +31,9 @@ vi.mock('./awareness/presence.js', () => ({
   setPresenceBlocked: vi.fn().mockResolvedValue(undefined),
 }));
 
-// Mock the pending-question store so markResolved calls on the abort-in-queue
-// path can be asserted without a real StateStore. recordQuestion returns a
-// minimal PendingQuestion; markResolved returns null (question-not-found is the
-// safe default when no store is wired). Hoisted by vitest automatically.
-vi.mock('./elicitation/pending-question-store.js', () => ({
-  recordQuestion: vi.fn().mockReturnValue({
-    questionId: 'mock-qid',
-    sessionId: undefined,
-    surface: 'test',
-    prompt: 'mock',
-    createdAt: new Date().toISOString(),
-    status: 'pending',
-  }),
-  markResolved: vi.fn().mockReturnValue(null),
-}));
-
 import { elicitationRouter } from './elicitation-router.js';
 import { pushIfConfigured } from '../telegram/push.js';
 import { setPresenceBlocked } from './awareness/presence.js';
-import { markResolved } from './elicitation/pending-question-store.js';
 
 /** Ordered [sessionId, blocked] pairs the router asked presence to write. */
 function blockedCalls(): Array<[string, boolean]> {
@@ -347,7 +330,7 @@ describe('elicitationRouter', () => {
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    it('abort-during-queue: calls markResolved with "aborted" for the aborted request', async () => {
+    it('abort-during-queue: aborted request resolves to decline', async () => {
       // Install a handler that blocks on a promise so the first request holds the queue.
       let resolveBlock!: () => void;
       const block = new Promise<void>((res) => { resolveBlock = res; });
@@ -355,8 +338,6 @@ describe('elicitationRouter', () => {
         await block;
         return { action: 'accept' };
       });
-
-      vi.mocked(markResolved).mockClear();
 
       // Route two requests: first holds the queue, second will be aborted while waiting.
       const controller = new AbortController();
@@ -372,11 +353,6 @@ describe('elicitationRouter', () => {
       const r2 = await p2;
 
       expect(r2.action).toBe('decline');
-      // The abort-in-queue path must call markResolved with 'aborted'.
-      const abortedCalls = vi.mocked(markResolved).mock.calls.filter(
-        (c) => c[1] === 'aborted',
-      );
-      expect(abortedCalls.length).toBeGreaterThanOrEqual(1);
     });
 
     it('pendingCount() increments during overlap and returns 0 after both resolve', async () => {

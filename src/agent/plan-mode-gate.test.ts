@@ -241,4 +241,35 @@ describe('createPlanModeGate', () => {
     });
     expect(result.decision).toBeUndefined();
   });
+
+  // #4202 follow-up: agent{host} must be plan-mode gated identically to remote_agent.
+  it('blocks agent with host in plan mode', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({ event: 'PreToolUse', toolName: 'agent', input: { prompt: 'task', host: 'my-server' } });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('agent with `host`');
+  });
+
+  it('allows agent without host in plan mode (local subagent)', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({ event: 'PreToolUse', toolName: 'agent', input: { prompt: 'task' } });
+    expect(result.decision).toBeUndefined();
+  });
+
+  it('allows agent with host when not in plan mode', () => {
+    const { gate } = makeGate('default');
+    const result = gate({ event: 'PreToolUse', toolName: 'agent', input: { prompt: 'task', host: 'my-server' } });
+    expect(result.decision).toBeUndefined();
+  });
+
+  it('does not block agent with host in a subagent context', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'agent',
+      input: { prompt: 'task', host: 'my-server' },
+      parentSessionId: 'parent-session-123',
+    });
+    expect(result.decision).toBeUndefined();
+  });
 });

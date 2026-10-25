@@ -104,6 +104,21 @@ export class McpManager {
    */
   onToolsRefreshed?: (serverName: string) => void;
 
+  /**
+   * Optional callback invoked when a previously-connected server transitions
+   * to `error` state due to a mid-session transport failure (`onTransportError`).
+   *
+   * The session layer wires this to `queueFrameworkContext` so the model's
+   * NEXT turn receives a notice naming the server that went down, matching
+   * the startup-notice behaviour from #4064 but for later disconnects.
+   *
+   * The `serverName` argument is the original config key (not the wire name).
+   * The `reason` argument is the raw error message (NOT yet sanitised — the
+   * consumer is responsible for safe embedding, or callers should use
+   * {@link buildMcpDisconnectNotice} which handles sanitisation).
+   */
+  onServerError?: (serverName: string, reason: string) => void;
+
   private constructor(records: Map<string, ServerRecord>) {
     this.records = records;
     const regSource: Array<{ serverName: string; toolNames: string[] }> = [];
@@ -197,10 +212,16 @@ export class McpManager {
 
       // Capture stderr-style transport errors so a server that dies mid-
       // session downgrades to `error` rather than crashing the process.
+      // Fire `onServerError` so the session layer can queue a framework-
+      // context notice for the model's next turn (#4064-b).
       client.onTransportError = (err) => {
         record.state.status = 'error';
         record.state.error = truncate(err.message, 200);
         console.warn(`[mcp:${serverName}] transport error: ${err.message}`);
+        // Truncate before passing to onServerError so the session layer's
+        // buildMcpDisconnectNotice receives the same 200-char-capped string
+        // that record.state.error holds — not the raw unbounded message. (#4203)
+        managerBox.manager?.onServerError?.(serverName, truncate(err.message, 200));
       };
       // Wire notifications/tools/list_changed → refreshServer() so the
       // next tool_use round sees the updated tool set without session restart.
@@ -487,6 +508,7 @@ export class McpManager {
       rec.state.status = 'error';
       rec.state.error = truncate(err.message, 200);
       console.warn(`[mcp:${serverName}] transport error: ${err.message}`);
+      this.onServerError?.(serverName, err.message);
     };
     freshClient.onToolListChanged = () => {
       void this.refreshServer(serverName).catch((err) => {

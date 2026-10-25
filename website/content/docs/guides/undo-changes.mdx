@@ -1,43 +1,63 @@
 ---
 title: "Undo file edits and rewind conversations"
-description: "Revisit an earlier prompt, restore opt-in SDK file checkpoints, and keep git as your outer safety net."
+description: "Rewind the conversation, the files the agent edited, or both to an earlier prompt, and keep git as your outer safety net."
 ---
 
-Conversation rewind and file restore are separate operations. Use `/rewind` to change what the model remembers, and git or explicitly enabled SDK file checkpoints to change what is on disk.
+`/rewind` can rewind the conversation, the files the agent edited, or both. In the interactive REPL, afk saves a file's state before the agent's first write to it in each turn, so it can put files back to how they were at any earlier prompt.
 
 <Callout type="warn">
-Rewinding a conversation does not undo file edits, shell commands, API requests, sent messages, or other external effects. Inspect the workspace before resending an earlier prompt.
+File rewind covers edits made with `write_file`, `edit_file`, and `patch_apply`. It does not undo shell commands, API requests, sent messages, subagent edits, or other external effects. Inspect the workspace before resending an earlier prompt.
 </Callout>
 
-## Edit an earlier prompt
+## Rewind to an earlier prompt
 
 <Steps>
 <Step>
 
-Wait until the current turn has stopped. Run `/rewind`, or press Esc twice at an empty, idle REPL prompt.
+Wait until the current turn has stopped, then run `/rewind`.
 
 </Step>
 <Step>
 
-Select an earlier user message from the picker. Cancel the picker if you want to keep the current conversation.
+Select an earlier user message from the picker, then choose what to rewind:
+
+- **Conversation only** removes that prompt and everything after it, and loads its text into your input to edit and resend.
+- **Files only** restores files to how they were just before that prompt, and keeps the conversation.
+- **Conversation and files** does both. Files are restored first, and the conversation is rewound only if every file was restored.
 
 </Step>
 <Step>
 
-The chosen prompt and everything after it are removed from the active conversation. The selected prompt's text is loaded into your input buffer. Edit it and press Enter to resend.
+For a file rewind, review the list of files that will change, then confirm. Nothing on disk changes until you confirm.
 
 </Step>
 </Steps>
 
-Conversation rewind is available on both the Anthropic and OpenAI-compatible providers. It requires an interactive terminal and cannot run while a turn is in flight. Tool-result messages are not offered as user prompts. A prompt without text, such as an image-only turn, is not a rewind target.
+`/rewind conversation`, `/rewind files`, and `/rewind both` skip the menu. Pressing Esc twice at an empty, idle prompt runs `/rewind conversation`.
 
-Rewind is a conversation branch operation, not a transaction rollback. For example, if a discarded turn created a file, the model may no longer remember creating it, but the file remains. Tell the model about the current disk state before asking it to repeat the work.
+Rewinding to a prompt undoes every later turn's file edits too, not only that prompt's. A file the agent created after that point is deleted.
+
+If a file was changed outside the agent since afk last saw it, for example by you in your editor, the preview marks it. You then choose whether to overwrite those changes or keep them. Files kept this way are reported as not restored, so a **Conversation and files** rewind then leaves the conversation alone. Run `/rewind conversation` if you want to rewind it anyway.
+
+The files option is unavailable for prompts from before a `--resume`, a `/model` switch, or a compaction that replaced them. It is also unavailable when checkpoints are turned off.
+
+### Turn file checkpoints off
+
+Set `fileCheckpoints` to `false` in `afk.config.json`:
+
+```json
+{ "fileCheckpoints": false }
+```
+
+Conversation rewind keeps working. Other surfaces (one-shot `afk chat`, Telegram, the daemon) do not save file checkpoints.
+
+### Storage and retention
+
+Checkpoints live under the AFK state directory at `file-checkpoints/<sessionId>/`, with identical content stored once per session. A cleanup pass at session start removes whole sessions older than 14 days, then the oldest sessions until the total is under 1 GiB. It never removes the running session, anything touched in the last hour, or a session mid-restore. `AFK_FILE_CHECKPOINT_MAX_AGE_DAYS`, `AFK_FILE_CHECKPOINT_MAX_BYTES`, and `AFK_FILE_CHECKPOINT_RETENTION_DISABLE` adjust or disable it. Checkpoints are not a security boundary against another process running as your user.
 
 ## Restore file checkpoints from the SDK
 
-File checkpointing is an opt-in `AgentConfig` capability, disabled by default. It is implemented for both providers. There is not currently a CLI checkpoint toggle or a `/rewind files` picker. Applications embedding afk enable it when they create a session.
-
-Checkpoints save a file's state before the first supported write to that path in a turn. Supported tools are `write_file`, `edit_file`, and a non-dry-run `patch_apply`. Shell changes are not captured.
+For applications embedding afk, file checkpointing is an `AgentConfig` option, off by default, implemented for both providers. Checkpoints save a file's state before the first supported write to that path in a turn. Supported tools are `write_file`, `edit_file`, and a non-dry-run `patch_apply`. Shell changes are not captured.
 
 <Steps>
 <Step>
@@ -92,13 +112,9 @@ In a streaming application, the `done` event's metadata carries the same checkpo
 
 ### What a file restore does
 
-For each tracked path, restore writes the saved bytes and mode, or deletes the file if it did not exist before that turn. Current write grants and protected-path rules are rechecked. A historical checkpoint does not grant new access.
+Restoring a checkpoint puts every tracked path back to its state at the start of that turn, including paths that only later turns touched. It writes the saved bytes and mode, or deletes the file if it did not exist yet. Current write grants and protected-path rules are rechecked. A historical checkpoint does not grant new access.
 
-A checkpoint covers paths touched in that turn, not a whole-workspace snapshot. It does not roll back unrelated files touched only by later turns. Restoring an old checkpoint can overwrite newer work at a tracked path, so inspect the diff and preview before applying it.
-
-Restoration is per-file, not transactional. A failure can report some files already changed. Check `canRewind`, `error`, and `filesChanged` rather than assuming all-or-nothing success.
-
-Checkpoint state lives under the configured AFK state directory at `file-checkpoints/<sessionId>/`. Saved content is deduplicated within the session. There is no automatic checkpoint retention or garbage collection policy yet. Checkpoints are not a security boundary against another process running as your user.
+Restoration is per-file, not transactional, but never silently partial. Every path is attempted, and each one that could not be restored is listed in `failures`, with `canRewind: false`. Paths changed outside the agent since the last recorded state are listed in `conflicts` and are left alone unless you pass `{ overwriteConflicts: true }`.
 
 ## Keep git as the outer safety net
 

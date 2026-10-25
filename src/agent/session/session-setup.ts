@@ -10,6 +10,7 @@ import {
   SESSION_GRANTS_KEEP_TAIL_LINES,
 } from '../log-retention.js';
 import { sweepWitnessTree, WITNESS_SWEEP_START_DELAY_MS } from '../witness-sweep.js';
+import { sweepFileCheckpoints, FILE_CHECKPOINT_SWEEP_START_DELAY_MS } from '../file-checkpoint/retention.js';
 import { sweepSessionSidecars, SESSION_SIDECAR_SWEEP_START_DELAY_MS } from '../session-sidecar-sweep.js';
 import { sweepMemoryGc, MEMORY_GC_SWEEP_START_DELAY_MS } from '../memory/memory-gc-sweep.js';
 import { debugLog } from '../../utils/debug.js';
@@ -170,6 +171,12 @@ export function scheduleTopLevelHousekeeping(
     void sweepWitnessTree({ activeLabel: getActiveLabel() });
   }, WITNESS_SWEEP_START_DELAY_MS);
   witnessSweepTimer.unref();
+  // File-checkpoint retention (#4271): same deferral, stamp-throttled, and the
+  // running session's checkpoint directory is excluded by identity.
+  const checkpointSweepTimer = setTimeout(() => {
+    void sweepFileCheckpoints({ activeSessionId: getActiveSessionId() });
+  }, FILE_CHECKPOINT_SWEEP_START_DELAY_MS);
+  checkpointSweepTimer.unref();
   const sidecarSweepTimer = setTimeout(() => {
     void sweepSessionSidecars({ activeSessionId: getActiveSessionId() });
   }, SESSION_SIDECAR_SWEEP_START_DELAY_MS);

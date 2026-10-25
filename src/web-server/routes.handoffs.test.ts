@@ -22,10 +22,14 @@ const mockAnswerHandoff = vi.fn<
   (taskId: string, answer: unknown, source: string, dir: string | undefined, identity: string) => Promise<boolean>
 >();
 
-vi.mock('../agent/daemon/handoff-store.js', () => ({
-  listPendingHandoffs: (dir: string) => mockListPendingHandoffs(dir),
-  readHandoff: (taskId: string, dir: string) => mockReadHandoff(taskId, dir),
-}));
+vi.mock('../agent/daemon/handoff-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agent/daemon/handoff-store.js')>();
+  return {
+    ...actual,
+    listPendingHandoffs: (dir: string) => mockListPendingHandoffs(dir),
+    readHandoff: (taskId: string, dir: string) => mockReadHandoff(taskId, dir),
+  };
+});
 
 vi.mock('../agent/daemon/handoff-wiring.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../agent/daemon/handoff-wiring.js')>();
@@ -292,6 +296,26 @@ describe('routes.handoffs — handleAnswerHandoff', () => {
     expect(mockAnswerHandoff).not.toHaveBeenCalled();
   });
 
+  it('returns 409 when record exists but status is already answered', async () => {
+    mockReadHandoff.mockResolvedValue(makeRecord({ status: 'answered' }));
+    const { res, json } = makeRes();
+    await handleAnswerHandoff(makeReq(), res, 'q-1700000000000-abc', { answer: 'yes' }, { handoffsDir: DIR });
+    const { status, body } = json();
+    expect(status).toBe(409);
+    expect((body as { error: string }).error).toBe('no_longer_active');
+    expect(mockAnswerHandoff).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 when record exists but status is expired', async () => {
+    mockReadHandoff.mockResolvedValue(makeRecord({ status: 'expired' }));
+    const { res, json } = makeRes();
+    await handleAnswerHandoff(makeReq(), res, 'q-1700000000000-abc', { answer: 'yes' }, { handoffsDir: DIR });
+    const { status, body } = json();
+    expect(status).toBe(409);
+    expect((body as { error: string }).error).toBe('no_longer_active');
+    expect(mockAnswerHandoff).not.toHaveBeenCalled();
+  });
+
   it('returns 200 and calls answerHandoff with correct args when CAS wins', async () => {
     mockReadHandoff.mockResolvedValue(makeRecord());
     mockAnswerHandoff.mockResolvedValue(true);
@@ -368,6 +392,25 @@ describe('routes.handoffs — handleAnswerHandoff', () => {
     const { status, body } = json();
     expect(status).toBe(409);
     expect((body as { error: string }).error).toBe('no_longer_active');
+  });
+
+  it('rethrows non-race errors from answerHandoff (disk I/O, permission failure, etc.)', async () => {
+    mockReadHandoff.mockResolvedValue(makeRecord());
+    const ioError = new Error('EACCES: permission denied');
+    mockAnswerHandoff.mockRejectedValue(ioError);
+    let headWritten = false;
+    const { res } = makeRes();
+    const origWriteHead = res.writeHead.bind(res);
+    (res as unknown as { writeHead: (s: number) => void }).writeHead = (s: number) => {
+      headWritten = true;
+      origWriteHead(s);
+    };
+    await expect(
+      handleAnswerHandoff(makeReq(), res, 'q-1700000000000-abc', { answer: 'yes' }, { handoffsDir: DIR }),
+    ).rejects.toThrow('EACCES: permission denied');
+    // No response must have been written — the error propagates to the
+    // framework's 500 handler, not silently mapped to a JSON reply.
+    expect(headWritten).toBe(false);
   });
 
   it('returns 400 when answer exceeds MAX_ANSWER_BYTES', async () => {

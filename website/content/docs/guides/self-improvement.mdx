@@ -52,7 +52,7 @@ The registered scan patterns include `repeated-tool-use`, `closure-anomaly`, and
 
 `eval-gen --proposal` records a validated proposal back-reference without changing the proposal. `--evidence-row <index>` selects a card's 0-based evidence row, defaulting to the newest. The command refuses a duplicate eval case for that row unless you explicitly pass `--force`. Use `--no-write` to preview proposal, eval-case, or eval-run output without saving it; `--json` is available for scripting. The [CLI reference](/reference/cli) lists the remaining flags.
 
-A generated eval case is not a full replay of the agent's original run. `eval-run` rechecks the fixture checksum and executes a registered deterministic guardrail contract; it does not feed the fixture through a model or detector. A passing run exits 0, fail or error exits 1, and an unsupported pattern exits **3** because no contract checked anything. Do not treat `unsupported` as a passing CI gate. `--no-write` runs without persisting a result. The pipeline never invokes an LLM or applies code changes.
+A generated eval case is not a full replay of the agent's original run. `eval-run` rechecks the fixture checksum and executes a registered deterministic guardrail contract; it does not feed the fixture through a model or detector. A passing run exits 0, fail or error exits 1, and an unsupported pattern exits **3** because no card-specific behavioural proof was obtained (no contract, no replay handler, or a replay handler that ran inconclusively). Do not treat `unsupported` as a passing CI gate. `--no-write` runs without persisting a result. The pipeline never invokes an LLM or applies code changes.
 
 ## Check previously reported defects
 

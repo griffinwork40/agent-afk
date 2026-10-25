@@ -27,10 +27,14 @@ vi.mock('./turn-handler.js', () => ({
 vi.mock('../../slash/registry.js', () => ({
   dispatch: vi.fn(async () => ({ handled: true, result: 'exit' as const })),
   parse: vi.fn(() => null),
+  has: vi.fn(() => false),
 }));
 vi.mock('../../slash/plugin-skills.js', () => ({
   autoRegisterPluginPassthroughs: vi.fn(async () => {}),
   getPluginShadowingNoticeLines: vi.fn(() => []),
+  setInitBarrier: vi.fn(),
+  isPluginInitPending: vi.fn(() => false),
+  awaitPluginInit: vi.fn(async () => {}),
 }));
 
 vi.mock('../../background-status-bar.js', () => ({

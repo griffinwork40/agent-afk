@@ -11,6 +11,7 @@
  */
 
 import { list as listSlashCommands, aliasEntries } from '../slash/registry.js';
+import { shouldFilePickerSubmit } from './file-picker-predicate.js';
 import { InputCore } from '../input-core.js';
 import { isSoftNewlineEnter, endsWithBackslashContinuation } from './enter-decision.js';
 import type { ReaderState } from './reader.state.js';
@@ -78,18 +79,21 @@ export function handleReturnKey(
 
   if (st.ac.dropdownOpen) {
     // Slash commands: one Enter finalizes the choice AND submits.
-    // File refs (`@path`): only accept the path — the user is
-    // likely mid-sentence and still typing a prompt, so submitting
-    // here would send a bare path by mistake. Tab still accepts-
-    // only for either kind (see below).
+    // File refs (`@path`): directory → accept only (dropdown reopens
+    // for contents); file → accept AND submit so the user doesn't
+    // need a second Enter after the final file pick. Tab still
+    // accepts-only for either kind (see below).
     //
     // COR-2: only submit after a slash completion if applySelection()
     // actually applied a candidate (returns true). If no candidate was
     // selected, applySelection() is a no-op and we must NOT submit the
     // raw partial slash text.
     const kind = st.ac.trigger?.kind;
+    // Snapshot before applySelection clears the candidate list.
+    const candidateValue = st.ac.candidates[st.ac.selectedIndex]?.value;
     const applied = applySelectionFn(st, repaintCtx, repaintFn);
     if (kind === 'slash' && applied) { callbacks.onSubmit(); }
+    else if (kind === 'file' && applied && shouldFilePickerSubmit(candidateValue)) { callbacks.onSubmit(); }
   } else if (endsWithBackslashContinuation(st.input.buffer)) {
     // Trailing backslash escapes Enter → convert to a real newline.
     st.input = InputCore.replaceRange(

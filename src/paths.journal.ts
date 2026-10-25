@@ -36,3 +36,16 @@ export function getSubagentJournalPath(sessionId: string, subagentId: string): s
 export function getSessionBlobsDir(sessionId: string): string {
   return join(getSessionLedgerDir(sessionId), 'blobs');
 }
+
+/**
+ * Archive slot for a session ledger that a web `/clear` or `/rewind` replaced:
+ * `sessions/<sessionId>/events.reset-<stamp>.jsonl`. Readers open
+ * `events.jsonl` by exact name, so archives are never mistaken for the live
+ * ledger; they exist so a reset never destroys the durable tool-call record.
+ */
+export function getSessionLedgerArchivePath(sessionId: string, stamp: string): string {
+  if (!SUBAGENT_ID_SAFE.test(stamp)) {
+    throw new Error(`Invalid ledger archive stamp: ${JSON.stringify(stamp)}`);
+  }
+  return join(getSessionLedgerDir(sessionId), `events.reset-${stamp}.jsonl`);
+}

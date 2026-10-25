@@ -21,11 +21,17 @@ import type { AnthropicToolDef } from '../../tools/types.js';
 /**
  * Build the provider's static tool-schema list.
  *
- * Order is load-bearing and preserved exactly as the constructor had it:
- * builtins, then executor-gated tools (`agent`/`skill`/`compose`), then the
- * memory trio (or `memory_search` alone for a read-only child), then
- * `get_runtime_state`, then consumer-registered custom tools LAST so their
- * names never silently shadow a builtin.
+ * Order (#4198, #4217):
+ *   1. builtins (invariant core + optional tail)
+ *   2. memory trio (`memory_search` / full set)   ← stable across sessions
+ *   3. state-store tools                           ← stable across sessions
+ *   4. `get_runtime_state` + workspace tools       ← stable across sessions
+ *   5. nesting tools (`agent` / `skill` / `compose`) — placed AFTER the
+ *      stable block so that variation in their schemas (e.g. present vs
+ *      absent at max depth, or a different `agent_type` property when a
+ *      registry is wired) invalidates the fewest cached tokens.
+ *   6. consumer-registered custom tools LAST so their names never silently
+ *      shadow a builtin.
  *
  * MCP tools are intentionally NOT included here. `buildDispatcher()` serves
  * them from `_mcpToolsCache` / `_mcpHandlersCache`, which are populated on
@@ -37,13 +43,6 @@ import type { AnthropicToolDef } from '../../tools/types.js';
 export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): AnthropicToolDef[] {
   // `git_read` (#3754) joins the builtins only while AFK_READONLY_GIT_TOOL is on.
   const schemas = [...builtinToolSchemas, ...readOnlyGitSchemas()];
-  // The executor supplies the `agent` tool def so a named-agent registry
-  // can advertise its types in the description (see agents/tool-def.ts).
-  // Optional chaining: test stubs without describeAgentTool fall back to
-  // the static schema.
-  if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
-  if (opts.skillExecutor) schemas.push(skillTool);
-  if (opts.composeExecutor) schemas.push(composeTool);
   // Recon sessions (readOnlyMemory=true) get only `memory_search`. Child
   // sessions (readOnlyMemory=false, readOnlyState=true) get search +
   // memory_update; hot-write is blocked at hook time, not schema time. Full
@@ -78,6 +77,15 @@ export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): Anth
     if (opts.subscribeHandler !== undefined) schemas.push(workspaceSubscribeTool);
   }
   schemas.push(getRuntimeStateTool);
+  // Nesting tools — placed AFTER memory/state/get_runtime_state (#4217) so
+  // variation in their schemas (present vs absent at max depth, or a
+  // different `agent_type` property when a registry is wired) invalidates
+  // the fewest cached tokens. The executor supplies the `agent` tool def so
+  // a named-agent registry can advertise its types; optional chaining lets
+  // test stubs without describeAgentTool fall back to the static schema.
+  if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
+  if (opts.skillExecutor) schemas.push(skillTool);
+  if (opts.composeExecutor) schemas.push(composeTool);
   // Custom (consumer-registered) tool schemas are appended last so their
   // names never silently shadow a builtin. A custom schema whose name
   // collides with an already-present builtin (or an earlier custom tool) is

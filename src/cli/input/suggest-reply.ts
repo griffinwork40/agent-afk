@@ -56,8 +56,22 @@ export function joinContinuation(buffer: string, reply: string): string | null {
     line = reply;
   } else {
     const word = trailingWord(buffer);
-    if (word.length === 0) line = buffer + reply;
-    else if (reply.startsWith(word)) line = buffer.slice(0, buffer.length - word.length) + reply;
+    if (word.length === 0) {
+      // Buffer ends in whitespace: reply is the next text verbatim. Guard
+      // against a non-compliant model that repeats the last word: if the reply
+      // starts with the word that precedes the trailing space, strip it so we
+      // never yield "foo bar bar baz" when the buffer is "foo bar ".
+      const prevWord = /\S+$/.exec(buffer.trimEnd())?.[0] ?? '';
+      if (prevWord.length > 0) {
+        // Model non-compliantly echoed the preceding word.
+        if (reply === prevWord) return null; // bare echo with nothing new
+        if (reply.startsWith(prevWord + ' '))
+          line = buffer + reply.slice(prevWord.length + 1); // strip the duplicate
+        else line = buffer + reply;
+      } else {
+        line = buffer + reply;
+      }
+    } else if (reply.toLowerCase().startsWith(word.toLowerCase())) line = buffer.slice(0, buffer.length - word.length) + reply;
     else return null;
   }
   return line.length > buffer.length ? line : null;

@@ -21,6 +21,7 @@ import {
   parseReadRoots,
   parseWriteRoots,
 } from './input-parse.roots.js';
+import { isValidSshTarget } from '../../../remote/hosts.js';
 
 export type AgentExecutionMode = 'foreground' | 'background';
 
@@ -148,6 +149,18 @@ export interface AgentInput {
    * (not silently no-oped) when this is not set.
    */
   progress_events?: boolean;
+  /**
+   * Optional remote host name or SSH target. When present, the subagent runs on
+   * the named remote machine via `RemoteSubagentHandle` / SSH transport instead
+   * of forking a local `AgentSession`. The value is a hosts.json key or a
+   * literal `user@host` / `~/.ssh/config` alias — the same resolution that
+   * `remote_agent` uses. Refused when `AFK_REMOTE_DEPTH` is set (this session
+   * is itself a remote run and cannot fan out further). Risk class `high`
+   * (inherits the same gate as `remote_agent`).
+   */
+  host?: string;
+  /** Runtime-minted continuation chain id (docs/subagent-continuation.md, D7). */
+  continuation_chain_id?: string;
 }
 
 /**
@@ -257,6 +270,28 @@ export function parseAgentInput(input: unknown): AgentInput {
       ? Boolean(progressEventsValue)
       : undefined;
 
+  // host: optional string. When present, routes the dispatch to a remote host
+  // via RemoteSubagentHandle. Validated the same way as remote_agent's `host`
+  // param: must be non-empty, no leading '-' (would be mistaken for an ssh
+  // flag). The hosts.json resolution and AFK_REMOTE_DEPTH refusal are
+  // enforced at dispatch time in executeOnce, not at parse time, to keep this
+  // parser pure (no I/O).
+  const hostRaw = readOptionalString(agentInput, 'host');
+  if (hostRaw !== undefined && /[\0\n\r]/.test(hostRaw)) {
+    throw new Error('Agent tool `host` must not contain NUL, newline, or carriage-return.');
+  }
+  if (hostRaw !== undefined && hostRaw.startsWith('-')) {
+    throw new Error('Agent tool `host` may not start with "-".');
+  }
+  if (hostRaw !== undefined && !isValidSshTarget(hostRaw)) {
+    throw new Error(`Agent tool \`host\` is not a valid SSH target: ${JSON.stringify(hostRaw)}`);
+  }
+  // Invariant: the startsWith('-') case is already rejected by the throw
+  // above, and isValidSshTarget also rejects it — so hostRaw is always a
+  // valid, non-dash-prefixed target at this point.
+  const host = hostRaw;
+  const continuation_chain_id = readOptionalString(agentInput, 'continuation_chain_id');
+
   return {
     prompt,
     ...(attachments !== undefined ? { attachments } : {}),
@@ -273,5 +308,7 @@ export function parseAgentInput(input: unknown): AgentInput {
     ...(readRoots !== undefined ? { readRoots } : {}),
     ...(isolation !== undefined ? { isolation } : {}),
     ...(progress_events !== undefined ? { progress_events } : {}),
+    ...(host !== undefined ? { host } : {}),
+    ...(continuation_chain_id !== undefined ? { continuation_chain_id } : {}),
   };
 }

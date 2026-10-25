@@ -263,7 +263,7 @@ describe('routing', () => {
 
     const retried = await fetch(api(h, '/api/commands'), { headers });
     expect(retried.status).toBe(200);
-    expect(await retried.json()).toEqual({ commands: [{ name: '/help' }] });
+    expect(await retried.json()).toEqual({ commands: [expect.objectContaining({ name: '/help' })] });
     expect(loader).toHaveBeenCalledTimes(2);
   });
 
@@ -302,8 +302,8 @@ describe('routing', () => {
     const responses = await Promise.all([first, second]);
     expect(responses.map((res) => res.status)).toEqual([200, 200]);
     expect(await Promise.all(responses.map((res) => res.json()))).toEqual([
-      { commands: [{ name: '/help' }] },
-      { commands: [{ name: '/help' }] },
+      { commands: [expect.objectContaining({ name: '/help' })] },
+      { commands: [expect.objectContaining({ name: '/help' })] },
     ]);
   });
 
@@ -361,6 +361,19 @@ describe('startWebServer — owned sessions', () => {
     // acceptance rather than completion.
     const prompt = await post(h, '/api/sessions/sess-1/prompt', { text: 'hi' });
     expect(prompt.status).toBe(202);
+  });
+
+  it('lists an owned, still-empty session with the owner cwd and model (welcome folder chip)', async () => {
+    const owned = new Set<string>(['sess-empty-cwd']);
+    const fake = {
+      owned,
+      list: () => [{ id: 'sess-empty-cwd', cwd: '/work/my-repo', model: 'haiku', createdAt: 'now' }],
+    };
+    const h = await start({ owner: fake as never });
+    const res = await fetch(api(h, '/api/sessions'), { headers: { Authorization: `Bearer ${h.token}` } });
+    const body = await res.json() as { sessions: Array<{ id: string; cwd?: string; model?: string }> };
+    const row = body.sessions.find((s) => s.id === 'sess-empty-cwd');
+    expect(row).toMatchObject({ cwd: '/work/my-repo', model: 'haiku' });
   });
 
   it('409s a prompt to a session this process does not own', async () => {

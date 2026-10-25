@@ -6,7 +6,8 @@
  * pop the dropdown and which entries to show.
  */
 
-import { readdirSync, promises as fsp, type Dirent } from 'fs';
+import { readdirSync, statSync, promises as fsp, type Dirent } from 'fs';
+import { join } from 'path';
 import { list as listSlashCommands, aliasEntries, lookup } from '../slash/registry.js';
 import { matchSlashCandidates, isSubsequence, type CommandEntry } from './slash-match.js';
 import { resolveQuery, MAX_FILE_MATCHES } from '../multi-line-reader.js';
@@ -130,10 +131,13 @@ export function buildSlashUniverse(): CommandEntry[] {
  * `fs.Dirent` (from `readdir(dir, { withFileTypes: true })`) satisfies this
  * structurally, and tests can supply plain objects without stubbing the
  * whole class. Only `name` and `isDirectory()` are ever consulted.
+ * `isSymbolicLink` is optional — present on real Dirents, absent on
+ * test stubs (treated as non-symlink).
  */
 export interface FileDirent {
   name: string;
   isDirectory(): boolean;
+  isSymbolicLink?(): boolean;
 }
 
 /**
@@ -201,11 +205,16 @@ export function __fileScanCacheSize(): number {
  * like `@src/inp` match `src/cli/input/` without displacing prefix hits. Both
  * buckets are capped together at MAX_FILE_MATCHES.
  *
- * Directory flag is derived from the Dirent (`isDirectory()`), NOT a follow-up
- * `statSync`. Tradeoff: a symlink that points at a directory reports as a
- * symlink (not a directory) and therefore loses its trailing `/`. That is an
- * accepted cosmetic loss — dropping the per-entry stat is what keeps the scan
- * off the blocking syscall path.
+ * Directory flag: this pure core derives the flag from `isDirectory()` on the
+ * Dirent and performs no `stat` call itself. Symlinks are resolved by the
+ * callers before reaching this function:
+ * - `filterFileCandidatesAsync` (async path, ~line 290–301) stats each symlink
+ *   entry and marks it as a directory when its target is one, so symlinked
+ *   directories get a trailing `/`.
+ * - `filterFileCandidates` (sync path, ~line 330–339) does the same.
+ * Broken symlinks and symlinks to non-directory targets are left as
+ * non-directories (no trailing `/`). Callers that pass raw unresolved Dirents
+ * will see symlink entries as non-directories.
  */
 export function buildFileCandidates(
   entries: FileDirent[],
@@ -278,7 +287,23 @@ export async function filterFileCandidatesAsync(
     return buildFileCandidates(cached.entries, query, rootDir, homeDir);
   }
   try {
-    const entries: Dirent[] = await fsp.readdir(scanDir, { withFileTypes: true });
+    const raw: Dirent[] = await fsp.readdir(scanDir, { withFileTypes: true });
+    // Resolve symlinks: for any entry that is a symbolic link, stat the
+    // target to check whether it resolves to a directory. Wrap matching
+    // entries so buildFileCandidates (which only reads isDirectory()) sees
+    // the correct flag without a statSync on the hot keystroke path.
+    const entries: FileDirent[] = await Promise.all(
+      raw.map(async (d): Promise<FileDirent> => {
+        if (!d.isSymbolicLink()) return d;
+        try {
+          const st = await fsp.stat(join(scanDir, d.name));
+          if (st.isDirectory()) {
+            return { name: d.name, isDirectory: () => true, isSymbolicLink: () => true };
+          }
+        } catch { /* broken symlink — treat as file */ }
+        return d;
+      }),
+    );
     scanCache.set(scanDir, { entries, at: Date.now() });
     return buildFileCandidates(entries, query, rootDir, homeDir);
   } catch {
@@ -305,7 +330,18 @@ export function filterFileCandidates(
 ): Candidate[] {
   const { scanDir } = resolveQuery(query, rootDir, homeDir);
   try {
-    const entries = readdirSync(scanDir, { withFileTypes: true });
+    const raw = readdirSync(scanDir, { withFileTypes: true });
+    // Resolve symlinks synchronously (one-time prefetch path, not keystroke path).
+    const entries: FileDirent[] = raw.map((d): FileDirent => {
+      if (!d.isSymbolicLink()) return d;
+      try {
+        const st = statSync(join(scanDir, d.name));
+        if (st.isDirectory()) {
+          return { name: d.name, isDirectory: () => true, isSymbolicLink: () => true };
+        }
+      } catch { /* broken symlink — treat as file */ }
+      return d;
+    });
     scanCache.set(scanDir, { entries, at: Date.now() });
     return buildFileCandidates(entries, query, rootDir, homeDir);
   } catch {

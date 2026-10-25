@@ -23,11 +23,22 @@ interface SourceState {
     tokens: number;
     /**
      * Authoritative, increment-only tool-use counter. Written exclusively by
-     * `tool_use_detail` event handlers (+= 1 per event). Never overwritten by
-     * progress events. This is the ground-truth count for "how many tools did
-     * this agent use."
+     * `tool_use_detail` event handlers, once per unique toolUseId. Never
+     * overwritten by progress events. This is the ground-truth count for
+     * "how many tools did this agent use."
      */
     toolUses: number;
+    /**
+     * Per-turn dedup set — tracks toolUseIds already counted toward
+     * `toolUses`. Providers (e.g. Anthropic) emit a `pending: true`
+     * tool.use.start placeholder while arguments are still streaming,
+     * followed by the real (non-pending) start for the SAME toolUseId.
+     * Without dedup both events increment `toolUses`, producing a 2×
+     * count in the Done summary. We count on FIRST SIGHT of each id,
+     * which also works for providers that never emit a pending placeholder.
+     * Bounded per-turn (one Set entry per distinct tool call).
+     */
+    seenToolUseIds: Set<string>;
     /**
      * Advisory field — stores the most recent `event.progress.toolUses` value
      * from the SDK progress event stream. Semantically distinct from `toolUses`:
@@ -106,7 +117,7 @@ function freshSourceState(agentType: string | undefined): SourceState {
   const state: SourceState = {
     startedAt: Date.now(),
     lastEventAt: Date.now(),
-    stats: { tokens: 0, toolUses: 0 },
+    stats: { tokens: 0, toolUses: 0, seenToolUseIds: new Set<string>() },
     contentBuffer: '',
     done: false,
     errored: false,

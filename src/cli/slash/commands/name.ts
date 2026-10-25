@@ -14,8 +14,7 @@
  */
 
 import { palette } from '../../palette.js';
-import { saveSession } from '../../session-store.js';
-import { slugifySessionName } from '../../session-name.js';
+import { setSessionName } from '../../../agent/session-control/index.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import type { SlashCommand } from '../types.js';
 import { errorMessage } from '../../../utils/errors.js';
@@ -43,40 +42,38 @@ export const nameCmd: SlashCommand = {
     // No arg → report the current name.
     if (!raw) {
       if (ctx.stats.name) {
-        ctx.out.line(palette.dim('  name  ') + palette.warning(ctx.stats.name));
+        const hostConsole = ctx.capabilities === undefined || ctx.capabilities.has('consoleOutput');
+        const shown = hostConsole ? ctx.stats.name : (ctx.stats.displayName ?? ctx.stats.name);
+        ctx.out.line(palette.dim('  name  ') + palette.warning(shown));
       } else {
         ctx.out.info('No name set. Use /name <name> to set one.');
       }
       return 'continue';
     }
 
-    const slug = slugifySessionName(raw);
-    if (!slug) {
+    const result = setSessionName(ctx.stats, raw, {
+      onName: (name) => { void peerNotifierRef?.setName(name); },
+    });
+    if (!result.ok) {
       ctx.out.warn('Invalid name — use letters, numbers, spaces, or hyphens.');
       return 'continue';
     }
 
-    ctx.stats.name = slug;
-
-    // Propagate the new name to the peer-presence file so peer discovery
-    // (list_sessions, /peers) shows the updated label immediately. Fire-and-
-    // forget: the presence write is best-effort and must not block the REPL.
-    void peerNotifierRef?.setName(slug);
-
-    // Persist now if there's something to save; otherwise the name rides
-    // along on the first per-turn autosave. saveSession keys on sessionId,
-    // not the name, so no duplicate sidecar is created.
-    if (ctx.stats.totalTurns > 0) {
-      try {
-        // Mid-session rename: no closeTime.
-        saveSession(ctx.stats);
-        ctx.out.success(palette.success('Named') + palette.dim(`  ${slug}`));
-        ctx.out.line(palette.dim(`  Resume:  ${formatResumeCommand(slug, ctx.stats.model)}`));
-      } catch (err) {
-        ctx.out.error(`Named "${slug}" but save failed: ${errorMessage(err)}`);
-      }
+    // Invariant: REPL output is byte-identical to before (slug + resume hint).
+    // The `afk interactive --resume` hint is a host-shell command, so only a
+    // surface attached to the host console (capability `consoleOutput`; legacy
+    // contexts without capabilities count as the REPL) prints it. Other
+    // surfaces (web, Telegram) echo the name as typed instead of the slug.
+    const hostConsole = ctx.capabilities === undefined || ctx.capabilities.has('consoleOutput');
+    const slug = result.name;
+    const shown = hostConsole ? slug : (ctx.stats.displayName ?? slug);
+    if ('saveError' in result) {
+      ctx.out.error(`Named "${shown}" but save failed: ${errorMessage(result.saveError)}`);
+    } else if (result.saved) {
+      ctx.out.success(palette.success('Named') + palette.dim(`  ${shown}`));
+      if (hostConsole) ctx.out.line(palette.dim(`  Resume:  ${formatResumeCommand(slug, ctx.stats.model)}`));
     } else {
-      ctx.out.success(palette.success('Named') + palette.dim(`  ${slug}  (saves on first turn)`));
+      ctx.out.success(palette.success('Named') + palette.dim(`  ${shown}  (saves on first turn)`));
     }
     return 'continue';
   },

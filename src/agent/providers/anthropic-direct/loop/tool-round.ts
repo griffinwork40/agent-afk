@@ -37,6 +37,7 @@ import {
 import { dispatchToolCalls } from './tool-dispatch.js';
 import { emitAndCommitToolResults } from './tool-results.js';
 import { buildVitalsNote } from '../../shared/vitals.js';
+import { emitSessionPhase } from '../../../trace/emit.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 
 /**
@@ -196,9 +197,19 @@ export async function* runToolRound(
   // silent hang. `windDownReason` guarantees the early-exit above fires at most
   // once; any tool_use the wind-down round returns is settled without dispatch.
   const notice = roundDeliveryNotice(turn.iterations, maxIterations);
-  const lastResult = input.messages[input.messages.length - 1];
-  if (notice && lastResult?.role === 'user' && Array.isArray(lastResult.content)) {
-    lastResult.content.push({ type: 'text', text: notice });
+  if (notice) {
+    const lastResult = input.messages[input.messages.length - 1];
+    if (lastResult?.role === 'user' && Array.isArray(lastResult.content)) {
+      lastResult.content.push({ type: 'text', text: notice });
+    } else {
+      // The tail is not a user-array turn (only valid Anthropic injection point).
+      // Emitting a synthetic user message would break API message-shape rules,
+      // so we cannot deliver the notice — emit an observable trace event instead.
+      void emitSessionPhase(input.traceWriter, {
+        phase: 'round_cap_notice_dropped',
+        metadata: { provider: 'anthropic-direct', round: turn.iterations },
+      });
+    }
   }
   const roundsSpent = shouldWindDown(turn.iterations, maxIterations);
   const timeSpent = softDeadlineExpired(turn.startedAt, softDeadlineMs);

@@ -106,7 +106,18 @@ export function classifyError(err: unknown): ClassifiedError {
     return {
       kind: 'auth',
       userMessage: 'Authentication failed. Check that your API key is valid and has not expired.',
-      hint: 'Verify the ANTHROPIC_API_KEY environment variable or run `afk login`.',
+      hint: 'Verify the ANTHROPIC_API_KEY environment variable or run `afk login --force`.',
+      exitCode: 1,
+      raw: err,
+    };
+  }
+
+  // 5a. Anthropic PermissionDeniedError (seat removed, subscription inactive)
+  if (err instanceof Error && err.name === 'PermissionDeniedError') {
+    return {
+      kind: 'auth',
+      userMessage: 'Access denied (HTTP 403). Your account seat may have been removed or subscription access is inactive.',
+      hint: 'Check your subscription at https://console.anthropic.com/settings/billing, or switch accounts with `afk login --force`.',
       exitCode: 1,
       raw: err,
     };

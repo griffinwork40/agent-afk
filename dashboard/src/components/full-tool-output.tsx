@@ -7,6 +7,7 @@
  * replaces the preview in place.
  */
 
+import { useState } from 'react';
 import { useFullToolResult } from '@/hooks/use-full-tool-result';
 
 interface FullToolOutputProps {
@@ -21,6 +22,21 @@ interface FullToolOutputProps {
 
 const PRE_CLASS = 'overflow-x-auto whitespace-pre-wrap font-mono text-[11px] text-foreground';
 
+function OutputText({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const lines = text.split('\n');
+  const hiddenLines = Math.max(0, lines.length - 25);
+  return <div>
+    <button type="button" onClick={() => { void navigator.clipboard.writeText(text).then(() => setCopied(true)).catch(() => setCopied(false)); }} className="mb-1 text-xs text-foreground rounded focus-visible:outline-2 focus-visible:outline-ring">{copied ? 'Copied output' : 'Copy output'}</button>
+    <div className="relative">
+      <pre className={PRE_CLASS}>{expanded ? text : lines.slice(0, 25).join('\n')}</pre>
+      {hiddenLines > 0 && !expanded && <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-card to-transparent" />}
+    </div>
+    {hiddenLines > 0 && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(v => !v)} className="w-full py-2 text-xs text-foreground rounded focus-visible:outline-2 focus-visible:outline-ring">{expanded ? 'Show less' : `Show ${hiddenLines} more lines`}</button>}
+  </div>;
+}
+
 export function FullToolOutput({ toolUseId, preview, clipped, unavailable }: FullToolOutputProps) {
   const { state, canLoad, load } = useFullToolResult(toolUseId);
 
@@ -28,7 +44,7 @@ export function FullToolOutput({ toolUseId, preview, clipped, unavailable }: Ful
     const { result } = state;
     return (
       <div>
-        <pre className={PRE_CLASS}>{result.text}</pre>
+        <OutputText text={result.text} />
         {result.truncated && (
           <p className="mt-1 text-[11px] italic text-muted-foreground">
             Showing the first {result.text.length.toLocaleString()} of{' '}
@@ -48,7 +64,7 @@ export function FullToolOutput({ toolUseId, preview, clipped, unavailable }: Ful
           Output not in the live record (replayed session)
         </p>
       )}
-      {preview && <pre className={PRE_CLASS}>{preview}</pre>}
+      {preview && <OutputText text={preview} />}
       {offerLoad && (
         <button
           type="button"

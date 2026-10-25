@@ -364,6 +364,98 @@ describe('waitForHandler — #1430 PID registry wiring', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #4226: command cwd field — resolution, containment, and wiring
+// ---------------------------------------------------------------------------
+
+describe('waitForHandler — #4226 command cwd field', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCheckEgress.mockResolvedValue({ allowed: true });
+  });
+
+  it('passes caller-supplied cwd to evaluateCommand', async () => {
+    const { evaluateCommand } = await import('./wait-for-conditions.js');
+    const mockEvalCmd = vi.mocked(evaluateCommand);
+    let capturedCond: unknown;
+    mockEvalCmd.mockImplementationOnce((cond) => {
+      capturedCond = cond;
+      return { met: true, detail: 'command exited 0' };
+    });
+
+    const resolveBase = path.resolve('/home/user/project');
+    await waitForHandler(
+      { type: 'command', command: 'test -f build/out.js', cwd: resolveBase },
+      neverSignal,
+      { resolveBase } as never,
+    );
+
+    expect((capturedCond as { cwd?: string })?.cwd).toBe(resolveBase);
+  });
+
+  it('resolves a relative cwd against context.resolveBase', async () => {
+    const { evaluateCommand } = await import('./wait-for-conditions.js');
+    const mockEvalCmd = vi.mocked(evaluateCommand);
+    let capturedCond: unknown;
+    mockEvalCmd.mockImplementationOnce((cond) => {
+      capturedCond = cond;
+      return { met: true, detail: 'command exited 0' };
+    });
+
+    const resolveBase = path.resolve('/home/user/project');
+    await waitForHandler(
+      { type: 'command', command: 'test -f out.js', cwd: 'packages/app' },
+      neverSignal,
+      { resolveBase } as never,
+    );
+
+    expect((capturedCond as { cwd?: string })?.cwd).toBe(
+      path.resolve(resolveBase, 'packages/app'),
+    );
+  });
+
+  it('falls back to context.resolveBase when cwd is not supplied', async () => {
+    const { evaluateCommand } = await import('./wait-for-conditions.js');
+    const mockEvalCmd = vi.mocked(evaluateCommand);
+    let capturedCond: unknown;
+    mockEvalCmd.mockImplementationOnce((cond) => {
+      capturedCond = cond;
+      return { met: true, detail: 'command exited 0' };
+    });
+
+    const resolveBase = path.resolve('/home/user/project');
+    await waitForHandler(
+      { type: 'command', command: 'true' },
+      neverSignal,
+      { resolveBase } as never,
+    );
+
+    expect((capturedCond as { cwd?: string })?.cwd).toBe(resolveBase);
+  });
+
+  it('returns error when cwd is outside allowed roots (containment)', async () => {
+    // A confined session (resolveBase set, readRoots set to a restricted list)
+    // must refuse a cwd outside those roots.
+    const resolveBase = path.resolve('/home/user/project');
+    const result = await waitForHandler(
+      { type: 'command', command: 'true', cwd: '/etc' },
+      neverSignal,
+      { resolveBase, readRoots: [resolveBase] } as never,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/outside the allowed/);
+  });
+
+  it('returns error when cwd is an empty string', async () => {
+    const result = await waitForHandler(
+      { type: 'command', command: 'true', cwd: '' },
+      neverSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/cwd/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // P5: relative file path → resolved against context.resolveBase
 // ---------------------------------------------------------------------------
 

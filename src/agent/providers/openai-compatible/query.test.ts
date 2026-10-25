@@ -965,6 +965,7 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
       small: { id: 'gpt-5.5' },
       medium: { id: 'gpt-5.5' },
       large: { id: 'gpt-5.5' },
+      subagent: { id: '' },
     });
     pendingChunks = [
       { choices: [{ delta: { content: 'ok' } }] },
@@ -986,6 +987,7 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
       small: { id: 'gpt-5.5' },
       medium: { id: 'gpt-5.5' },
       large: { id: 'gpt-5.5' },
+      subagent: { id: '' },
     });
     pendingChunks = [
       { choices: [{ delta: { content: 'ok' } }] },
@@ -1007,6 +1009,7 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
       small: { id: 'gpt-4o-mini' },
       medium: { id: 'gpt-5.5' },
       large: { id: 'gpt-5.5' },
+      subagent: { id: '' },
     });
     const controlled = makeControlledPromptStream();
     const q = buildQueryFromConfig(baseConfig({ model: 'small' }), controlled.stream);

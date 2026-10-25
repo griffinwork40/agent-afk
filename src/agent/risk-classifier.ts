@@ -531,6 +531,12 @@ export function classifyRiskDetailed(
   // prompt could bypass the local AFK gate by routing through the remote.
   // High risk ensures autonomous mode (AFK gate) holds this tool for approval.
   if (tool === 'remote_agent') return { level: 'high', reason: 'remote-exec', category: 'remote-exec' };
+  // `agent` with `host` set has the same risk profile as `remote_agent` — the
+  // underlying SSH transport is identical. The schema description promises this
+  // classification; the AFK gate must hold it for approval in autonomous mode.
+  if (tool === 'agent' && typeof input === 'object' && input !== null && 'host' in input && (input as Record<string, unknown>)['host'] !== undefined) {
+    return { level: 'high', reason: 'remote-exec', category: 'remote-exec' };
+  }
 
   // ---- MCP tools ----------------------------------------------------------
   // Any `mcp__*` tool is an externally-contributed function from a third-party

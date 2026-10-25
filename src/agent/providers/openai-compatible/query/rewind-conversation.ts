@@ -29,6 +29,7 @@ import type {
 import type { OpenAIMessage } from '../messages.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import { isUserAuthoredTurn, messageText } from '../../../content/user-authored.js';
+import { stripPreamble } from '../../../session/preamble-strip.js';
 
 const PREVIEW_MAX_CHARS = 72;
 
@@ -53,7 +54,7 @@ export function listOpenAIUserTurns(priorTurns: readonly OpenAIMessage[]): Rewin
   for (let i = 0; i < priorTurns.length; i++) {
     const msg = priorTurns[i];
     if (msg && isUserAuthoredTurn(msg)) {
-      targets.push({ turnIndex: i, preview: toPreview(messageText(msg.content)) });
+      targets.push({ turnIndex: i, preview: toPreview(stripPreamble(messageText(msg.content))) });
     }
   }
   return targets.reverse();
@@ -86,7 +87,9 @@ export function rewindOpenAIConversation(
     return { rewound: false, reason: 'invalid-target', messagesBefore, messagesAfter: messagesBefore };
   }
 
-  const reloadText = messageText(target.content);
+  // Framework context drained in front of the prompt ([placeholder-prevent],
+  // bridge, jev digest) is not what the user typed: never reload it.
+  const reloadText = stripPreamble(messageText(target.content));
   priorTurns.splice(turnIndex);
 
   return {

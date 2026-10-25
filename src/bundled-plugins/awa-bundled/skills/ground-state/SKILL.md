@@ -22,13 +22,13 @@ Run the four surveys below **directly using your own tools**. Do NOT dispatch an
 
 ### State survey *(bash)*
 
-Issue these commands (combine into one or two bash calls):
-- `git symbolic-ref --short HEAD` — current branch
+Issue these commands (combine into one or two bash calls; when running under `git_read` instead of `bash`, adapt accordingly — `git_read` uses an argv allowlist, so use only the long-form flags shown here):
+- `git rev-parse --abbrev-ref HEAD` — current branch
 - `git rev-parse HEAD` — HEAD SHA
 - `git status -s` — uncommitted changes
-- `git log --oneline -5` — recent commit history
-- `git stash list` — stash state
-- `git rev-list --left-right --count HEAD...@{upstream} 2>/dev/null` — upstream divergence
+- `git log --oneline --max-count=5` — recent commit history
+- `git stash list` — stash state (via `git_read`: subcommand `stash` with no arguments; the tool forces `list`)
+- `git rev-list --count HEAD..@{upstream}` + `git rev-list --count @{upstream}..HEAD` — upstream divergence (ahead / behind)
 
 Adapt what you surface to the domain:
 
@@ -110,7 +110,7 @@ After the snapshot is assembled, construct the **Brief Anchor** — a path-verif
 
 **Construction procedure:**
 
-1. From your state survey output, extract the verified `cwd` (absolute path from `pwd`), `branch` (from `git symbolic-ref --short HEAD`), and `HEAD` SHA (from `git rev-parse HEAD`).
+1. From your state survey output, extract the verified `cwd` (absolute path from `pwd`), `branch` (from `git rev-parse --abbrev-ref HEAD`), and `HEAD` SHA (from `git rev-parse HEAD`).
 2. From your infrastructure survey output, extract the 2–4 canonical file paths most relevant to the task. For each, run `stat <path>` — include the path only if `stat` exits 0. Paths that fail `stat` are omitted; if zero paths survive, set the list to `(none verified)`.
 3. Assemble the preamble block:
 

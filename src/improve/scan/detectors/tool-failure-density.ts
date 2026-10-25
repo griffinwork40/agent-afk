@@ -74,6 +74,59 @@ import type { ToolFailureClass } from '../../../agent/trace/types.js';
 import { clampExcerpt, MAX_EVIDENCE_PER_CARD } from './_lib.js';
 import { BENIGN_FAILURE_CLASSES } from '../../../agent/trace/types.js';
 
+// ---------------------------------------------------------------------------
+// Error-head normalization
+// ---------------------------------------------------------------------------
+
+/**
+ * Maximum number of error clusters surfaced in the card detail. Top-N by
+ * descending failure count; ties broken by first-seen order (insertion stable).
+ */
+export const MAX_ERROR_CLUSTERS = 5;
+
+/**
+ * Normalise an `errorHead` string so that failures differing only in
+ * session-specific identifiers, numeric values, quoted strings, paths, or
+ * durations collapse to the same cluster key.
+ *
+ * Transformations applied in order (each pass operates on the output of the
+ * previous one):
+ *
+ *   1. Known ID prefixes (`toolu_…`, `bg-…`, `call_…`, `sess-…`,
+ *      `msg-…`, `sub-…`) → `<id>`.
+ *   2. Absolute paths (`/Users/…`, `/tmp/…`, `/home/…`, etc.) → `<path>`.
+ *   3. Duration patterns (`123ms`, `4.5s elapsed`, `2m30s`) → `<dur>`.
+ *   4. Quoted values (single or double, ≤120 chars) → `<val>`.
+ *   5. Remaining digit runs (≥2 digits) → `#`.
+ *   6. Collapse runs of whitespace to a single space and trim.
+ *
+ * The result is a stable string suitable for use as a `Map` key.
+ */
+export function normalizeErrorHead(head: string): string {
+  let s = head;
+
+  // 1. Known ID prefixes → <id>
+  s = s.replace(/\b(?:toolu|call|bg|sess|msg|sub)[_-][A-Za-z0-9_-]+/g, '<id>');
+
+  // 2. Absolute paths (Unix-style: starts with / followed by at least one non-space char).
+  s = s.replace(/\/[^\s"',;)}\]]{2,}/g, '<path>');
+
+  // 3. Duration patterns: optional number + unit combos like 123ms, 4.5s, 2m30s.
+  s = s.replace(/\b\d+(?:\.\d+)?(?:ms|s|m|h)\b/g, '<dur>');
+
+  // 4. Quoted values (double or single quotes, up to 120 chars content).
+  s = s.replace(/"[^"]{0,120}"/g, '<val>');
+  s = s.replace(/'[^']{0,120}'/g, '<val>');
+
+  // 5. Remaining digit runs of 2+ digits → #
+  s = s.replace(/\b\d{2,}\b/g, '#');
+
+  // 6. Collapse whitespace.
+  s = s.replace(/\s+/g, ' ').trim();
+
+  return s;
+}
+
 /**
  * Failure classes that mean "the system correctly said no" or "the human did
  * not answer", not "the tool failed". A domain-policy refusal, a permission
@@ -127,6 +180,8 @@ interface FailureSighting {
   truncated: boolean;
   /** Coarse failure class from the trace event, when present. */
   failureClass?: ToolFailureClass;
+  /** First ≤200 chars of error text (redacted), when present on the event. */
+  errorHead?: string;
 }
 
 /** Aggregated stats per tool name across all sessions. */
@@ -193,6 +248,7 @@ export function detectToolFailureDensity(
           durationMs: ev.payload.durationMs,
           truncated: ev.payload.truncated,
           ...(failureClass !== undefined ? { failureClass } : {}),
+          ...(ev.payload.errorHead !== undefined ? { errorHead: ev.payload.errorHead } : {}),
         });
         stats.affectedSessions.add(session.sessionId);
         if (ev.payload.truncated) stats.truncatedFailureCount += 1;
@@ -255,6 +311,8 @@ function buildResult(stats: ToolStats, rate: number): DetectorResult {
   const excludedByClass: Record<string, number> = {};
   for (const [cls, n] of stats.excludedByClass) excludedByClass[cls] = n;
 
+  const errorClusters = buildErrorClusters(stats.failures);
+
   return {
     slug,
     title: buildTitle(stats.toolName, stats.failures.length, stats.totalCalls, rate),
@@ -263,7 +321,7 @@ function buildResult(stats: ToolStats, rate: number): DetectorResult {
     observedAt,
     evidence,
     detail: {
-      detector: 'tool-failure-density@v2',
+      detector: 'tool-failure-density@v3',
       toolName: stats.toolName,
       totalCalls: stats.totalCalls,
       failureCount: stats.failures.length,
@@ -273,10 +331,60 @@ function buildResult(stats: ToolStats, rate: number): DetectorResult {
       avgFailureDurationMs: round2(avgFailureDurationMs),
       failureClassBreakdown,
       excludedByClass,
+      errorClusters,
       sessionIds: Array.from(stats.affectedSessions),
       seqs: stats.failures.map((f) => f.seq),
     },
   };
+}
+
+/**
+ * One error cluster entry surfaced in `card.detail.errorClusters`.
+ *
+ * `normalized` is the cluster key produced by {@link normalizeErrorHead}.
+ * `count` is the number of failures that mapped to that key.
+ * `sample` is one raw (un-normalized) `errorHead` from those failures — the
+ * first one seen — so a reviewer can see what the real error text looks like
+ * without losing the normalization that groups them.
+ */
+export interface ErrorCluster {
+  normalized: string;
+  count: number;
+  sample: string;
+}
+
+/**
+ * Group failures by normalized `errorHead` and return the top
+ * {@link MAX_ERROR_CLUSTERS} clusters by descending count.
+ *
+ * Failures with no `errorHead` are tallied under the sentinel key
+ * `'(no errorHead)'` only when they constitute the majority; if every failure
+ * lacks an `errorHead` the returned array is empty (nothing useful to cluster).
+ */
+function buildErrorClusters(failures: FailureSighting[]): ErrorCluster[] {
+  const withHead = failures.filter((f) => f.errorHead !== undefined);
+  if (withHead.length === 0) return [];
+
+  // Accumulate counts and first-seen sample per normalized key.
+  const counts = new Map<string, number>();
+  const samples = new Map<string, string>();
+  for (const f of withHead) {
+    const raw = f.errorHead as string;
+    const key = normalizeErrorHead(raw);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (!samples.has(key)) samples.set(key, raw);
+  }
+
+  // Sort by descending count, then cap.
+  const sorted = Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_ERROR_CLUSTERS);
+
+  return sorted.map(([normalized, count]) => ({
+    normalized,
+    count,
+    sample: samples.get(normalized) ?? '',
+  }));
 }
 
 /**

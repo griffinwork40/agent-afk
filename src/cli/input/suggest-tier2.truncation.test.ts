@@ -119,6 +119,27 @@ describe('Tier-2 ghost text: truncation regression', () => {
     expect(req.system).toMatch(/final word exactly as typed/);
   });
 
+  it('caches a null result for a non-truncated unjoinable reply', async () => {
+    // Invariant: joined === null && !reply.truncated → result is null, and that
+    // null IS cached so the engine does not re-fire for this buffer on the next
+    // keystroke-triggered request.
+    let calls = 0;
+    const completeFn = vi.fn(async (_req: CompleteRequest) => {
+      calls += 1;
+      // Unjoinable: reply shares no prefix with the buffer's trailing word.
+      return { text: 'something completely unrelated', stopReason: 'end' as const };
+    });
+    const engine = createSuggestEngine({ debounceMs: 0, completeFn });
+
+    // First call: miss → fires LLM → unjoinable → null, cached.
+    expect(await engine.getGhost('ship it', makeCtx())).toBeNull();
+    expect(calls).toBe(1);
+
+    // Second call: same buffer → cache hit → null, no second LLM call.
+    expect(await engine.getGhost('ship it', makeCtx())).toBeNull();
+    expect(calls).toBe(1);
+  });
+
   it('journals a truncated reply with the trimmed text the user actually sees', async () => {
     const onRecord = vi.fn();
     const engine = createSuggestEngine({

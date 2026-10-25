@@ -46,7 +46,7 @@ describe('ledgerRecordToItem — tool fidelity', () => {
     const item = ledgerRecordToItem({ v: 1, ts: 1, kind: 'tool', toolName: 'bash', input: 'ls' });
     expect(item?.kind).toBe('tool');
     if (item?.kind !== 'tool') throw new Error('expected tool');
-    expect(item.status).toBe('ok');
+    expect(item.status).toBe('running');
     expect(item.outputUnavailable).toBe(true);
     expect(item.output).toBeUndefined();
     expect(item.name).toBe('bash');
@@ -155,6 +155,26 @@ describe('ledgerRecordToItem — streaming placeholder suppression', () => {
 
   it('keeps a tool named with an ellipsis-like input on a non-tool record', () => {
     expect(ledgerRecordToItem({ kind: 'user', text: '…' })).toMatchObject({ kind: 'user' });
+  });
+});
+
+describe('ledgerRecordToItem — tool running status', () => {
+  it('keeps a tool running until its tool_result, then ok', () => {
+    const idx = new Map();
+    const item = ledgerRecordToItem({ kind: 'tool', toolName: 'bash', toolUseId: 'u1', input: 'sleep 4' }, idx);
+    if (item?.kind !== 'tool') throw new Error('expected tool');
+    expect(item.status).toBe('running');
+    ledgerRecordToItem({ kind: 'tool_result', toolUseId: 'u1', content: '' }, idx);
+    expect(item.status).toBe('ok');
+  });
+
+  it('settles a result-less running tool when the turn ends (done or error)', () => {
+    for (const kind of ['done', 'error']) {
+      const idx = new Map();
+      const item = ledgerRecordToItem({ kind: 'tool', toolName: 'bash', toolUseId: 'u2', input: 'ls' }, idx);
+      ledgerRecordToItem({ kind }, idx);
+      expect((item as { status: string }).status).toBe('ok');
+    }
   });
 });
 

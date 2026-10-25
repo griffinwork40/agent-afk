@@ -498,7 +498,7 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
   accountInfo(): Promise<ProviderAccountInfo>;
   rewindFiles(
     userMessageId: string,
-    options?: { dryRun?: boolean },
+    options?: RewindFilesOptions,
   ): Promise<ProviderRewindResult>;
   /**
    * Optional. Summarize older history into a short preamble in place,
@@ -689,6 +689,27 @@ export interface ProviderRewindResult {
   filesChanged?: string[];
   insertions?: number;
   deletions?: number;
+  /** Paths that could not be (or, on dry-run, would not be) restored, with why. */
+  failures?: RewindFileFailure[];
+  /** Paths changed outside the agent since the last recorded state (drift guard). */
+  conflicts?: string[];
+}
+
+/** One path a rewind could not restore. */
+export interface RewindFileFailure {
+  path: string;
+  error: string;
+}
+
+/** Options for {@link ProviderQuery.rewindFiles}. */
+export interface RewindFilesOptions {
+  /** Report what would change without touching disk. */
+  dryRun?: boolean;
+  /**
+   * Also restore paths flagged as `conflicts` (changed outside the agent since
+   * the last recorded state). Without it, those paths are reported as failures.
+   */
+  overwriteConflicts?: boolean;
 }
 
 /**
@@ -745,6 +766,13 @@ export interface RewindTarget {
   turnIndex: number;
   /** Short, single-line preview of the user message text (already truncated). */
   preview: string;
+  /**
+   * Checkpoint turnId of the file checkpoint this prompt started, for
+   * {@link ProviderQuery.rewindFiles}. Absent when checkpointing was off, the
+   * turn predates a resume or `/model` swap, or compaction replaced the message:
+   * surfaces must then offer conversation-only rewind, never guess a turn.
+   */
+  checkpointTurnId?: string;
 }
 
 /**

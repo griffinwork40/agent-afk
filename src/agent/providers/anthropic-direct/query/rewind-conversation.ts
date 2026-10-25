@@ -37,6 +37,7 @@ import type {
 } from '../../../provider.js';
 import { repairOrphanToolUses } from './repair-orphan-tool-uses.js';
 import { isUserAuthoredTurn, messageText } from '../../../content/user-authored.js';
+import { stripPreamble } from '../../../session/preamble-strip.js';
 import type { SessionState } from './session-state.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 
@@ -59,7 +60,7 @@ export function listUserTurns(messages: readonly MessageParam[]): RewindTarget[]
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i];
     if (message && isUserAuthoredTurn(message)) {
-      targets.push({ turnIndex: i, preview: toPreview(messageText(message.content)) });
+      targets.push({ turnIndex: i, preview: toPreview(stripPreamble(messageText(message.content))) });
     }
   }
   // Newest-first so the most-recent prompt sits at the top of the picker.
@@ -98,7 +99,9 @@ export function rewindConversationHistory(
     return { rewound: false, reason: 'invalid-target', messagesBefore, messagesAfter: messagesBefore };
   }
 
-  const reloadText = messageText(target.content);
+  // Framework context drained in front of the prompt ([placeholder-prevent],
+  // bridge, jev digest) is not what the user typed: never reload it.
+  const reloadText = stripPreamble(messageText(target.content));
 
   // Discard the target user turn and everything after it, in place.
   state.messages.splice(turnIndex);

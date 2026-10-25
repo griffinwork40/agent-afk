@@ -19,12 +19,13 @@ export const TOOLS_ENV_REGISTRY = [
   {
     name: 'AFK_LSP_DIAGNOSTICS',
     description:
-      'Enable opt-in post-edit LSP diagnostics (phase 1 of #3904). When set to 1, ' +
-      'after every successful edit_file or write_file call the handler queries ' +
+      'Enable opt-in LSP features (#3904). When set to 1: ' +
+      '(phase 1) after every successful edit_file or write_file call the handler queries ' +
       'typescript-language-server (must be on PATH) for diagnostics on the touched ' +
-      'file and appends any errors/warnings to the tool result. ' +
+      'file and appends any errors/warnings to the tool result; ' +
+      '(phase 2) enables the code_symbols tool for go-to-definition and find-references. ' +
       'Off by default. A missing or slow server never fails or stalls the edit — ' +
-      'the query times out silently. TypeScript only in this phase.',
+      'the query times out silently. TypeScript / JavaScript only in this phase.',
     type: 'boolean',
     required: false,
     default: '0',
@@ -44,6 +45,34 @@ export const TOOLS_ENV_REGISTRY = [
     required: false,
     default: '1500',
     example: '3000',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_LSP_SYMBOLS_TIMEOUT_MS',
+    description:
+      'Hard timeout in milliseconds for code_symbols (go-to-definition / ' +
+      'find-references) LSP queries (AFK_LSP_DIAGNOSTICS=1). Symbol queries ' +
+      'can require a cold-start index build and therefore need a longer budget ' +
+      'than the post-edit diagnostics timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS). ' +
+      'Default 5000 (5 s). Raise for large monorepos where the first query ' +
+      'triggers a full project load.',
+    type: 'number',
+    required: false,
+    default: '5000',
+    example: '10000',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_LSP_IDLE_SHUTDOWN_MS',
+    description:
+      'Idle window in milliseconds after which a pooled (persistent) language ' +
+      'server with no requests is shut down (#4272). Servers are kept warm per ' +
+      'workspace root and language so repeat LSP queries skip the cold start. ' +
+      'Default 300000 (5 min). Idle timers never keep the process alive.',
+    type: 'number',
+    required: false,
+    default: '300000',
+    example: '60000',
     category: 'misc',
   },
 ] as const satisfies readonly EnvVarMeta[];

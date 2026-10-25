@@ -12,6 +12,7 @@
 import { builtinToolSchemas } from './schemas.js';
 import { agentTool, skillTool, composeTool } from './schemas.agent-tools.js';
 import { gitReadTool } from './schemas.git-read.js';
+import { codeSymbolsTool } from './schemas.lsp-symbols.js';
 import { memoryToolSchemas } from '../memory/memory-tools.js';
 import { stateToolSchemas } from '../state/state-schemas.js';
 import { getRuntimeStateTool } from '../awareness/index.js';
@@ -42,6 +43,10 @@ const SAFE_TOOLS: ReadonlySet<string> = new Set(
     skillTool,
     composeTool,
     gitReadTool,
+    // codeSymbolsTool: concurrencySafe:true because each invocation spawns
+    // its own isolated typescript-language-server process with no shared
+    // state, making parallel calls independently safe.
+    codeSymbolsTool,
     ...memoryToolSchemas,
     ...stateToolSchemas,
     getRuntimeStateTool,

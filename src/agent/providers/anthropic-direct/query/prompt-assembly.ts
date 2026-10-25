@@ -53,6 +53,14 @@ export interface PromptAssemblyArgs {
   runtimeStateSource: RuntimeStateSource;
   /** User-supplied system prompt, already normalized to a string or null. */
   userSystem: string | null;
+  /**
+   * Dynamic "Available agent types" listing produced by
+   * `subagentExecutor.describeAgentTypeListing()`.  Empty string (or omitted)
+   * when no named agents are registered.  Injected into the volatile tail of
+   * the system prompt (after `# Environment` / manifest) so agent-set
+   * differences between sessions never break the prefix cache (#4217).
+   */
+  agentTypeListing?: string;
 }
 
 export interface AssembledPrompt {
@@ -137,6 +145,9 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
     hotMemory: config.hotMemory ?? '',
     goalPrompt: config.goalPrompt ?? '',
     manifest,
+    // Agent-type listing is placed after the manifest in the volatile tail so
+    // sessions differing only in their agent sets keep a stable prefix (#4217).
+    agentTypeListing: args.agentTypeListing ?? '',
     userSystem: args.userSystem,
   });
 

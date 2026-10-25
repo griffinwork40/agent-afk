@@ -32,6 +32,7 @@ function makeSlots(over: Partial<ModelSlots>): ModelSlots {
     small: over.small ?? { id: DEFAULT_SLOT_BINDINGS.small.id },
     medium: over.medium ?? { id: DEFAULT_SLOT_BINDINGS.medium.id },
     large: over.large ?? { id: DEFAULT_SLOT_BINDINGS.large.id },
+    subagent: over.subagent ?? { id: '' },
   };
 }
 

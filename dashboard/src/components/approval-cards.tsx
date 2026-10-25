@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { apiFetch } from '@/lib/api';
@@ -33,18 +33,24 @@ function ApprovalCard({
   const [inputValue, setInputValue] = useState(
     typeof request.questionDefault === 'string' ? request.questionDefault : '',
   );
+  const submitting = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const answer = async (action: 'accept' | 'decline', content?: Record<string, unknown>) => {
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError(null);
     try {
       await answerApproval({ requestId: id, response: { action, content } });
+      // Invariant: return focus only after the approval write succeeds.
       onAnswered();
+      document.querySelector<HTMLTextAreaElement>('[data-testid="composer-textarea"]')?.focus();
     } catch {
       setError('Failed to submit — try again');
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   };
@@ -53,9 +59,20 @@ function ApprovalCard({
 
   return (
     <div
+      role="dialog"
+      aria-label={request.title || 'Approval required'}
+      aria-busy={busy}
+      tabIndex={0}
+      onKeyDown={e => {
+        if (type !== 'confirm' || busy || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.key.toLowerCase() === 'y' || e.key.toLowerCase() === 'n') {
+          e.preventDefault();
+          void answer(e.key.toLowerCase() === 'y' ? 'accept' : 'decline');
+        }
+      }}
       className={cn(
         'rounded-lg border-2 border-yellow-500/60 bg-yellow-500/5 p-3 text-sm',
-        'flex flex-col gap-2',
+        'flex flex-col gap-2 focus-visible:outline-2 focus-visible:outline-ring [&_button:focus-visible]:outline-2 [&_button:focus-visible]:outline-ring',
       )}
     >
       <div className="flex items-start gap-2">
@@ -68,7 +85,7 @@ function ApprovalCard({
             <p className="text-muted-foreground">{request.message}</p>
           )}
           {request.description && (
-            <p className="text-muted-foreground/80 text-xs mt-0.5">
+            <p className="text-muted-foreground text-xs mt-0.5">
               {request.description}
             </p>
           )}
@@ -78,15 +95,53 @@ function ApprovalCard({
           disabled={busy}
           className="shrink-0 text-muted-foreground hover:text-foreground"
           title="Dismiss"
+          aria-label="Dismiss approval"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
+      {type === 'number' && (
+        <div className="flex gap-2">
+          <input
+            type="number"
+            aria-label={request.title || 'Approval response'}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            disabled={busy}
+            {...(request.questionMin !== undefined ? { min: request.questionMin } : {})}
+            {...(request.questionMax !== undefined ? { max: request.questionMax } : {})}
+            className={cn(
+              'flex-1 rounded border border-input bg-background px-2 py-1 text-sm',
+              'focus:outline-none focus:ring-1 focus:ring-ring',
+            )}
+          />
+          <ActionButton
+            onClick={() => {
+              const n = Number(inputValue);
+              if (isNaN(n)) return;
+              if (request.questionMin !== undefined && n < request.questionMin) return;
+              if (request.questionMax !== undefined && n > request.questionMax) return;
+              void answer('accept', { number: n });
+            }}
+            disabled={
+              busy ||
+              inputValue === '' ||
+              isNaN(Number(inputValue)) ||
+              (request.questionMin !== undefined && Number(inputValue) < request.questionMin) ||
+              (request.questionMax !== undefined && Number(inputValue) > request.questionMax)
+            }
+            label="Submit"
+            variant="primary"
+          />
+        </div>
+      )}
+
       {type === 'text' && (
         <div className="flex gap-2">
           <input
             type="text"
+            aria-label={request.title || 'Approval response'}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             disabled={busy}
@@ -126,7 +181,7 @@ function ApprovalCard({
       )}
 
       {error && (
-        <p className="text-xs text-red-400">{error}</p>
+        <p role="alert" className="text-xs text-foreground">{error}</p>
       )}
     </div>
   );
@@ -164,7 +219,7 @@ export function ApprovalCards({ approvals, onDismiss }: ApprovalCardsProps) {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   const visible = approvals.filter((a) => !dismissed.has(a.id));
-  if (visible.length === 0) return null;
+
 
   const dismiss = (id: string) => {
     setDismissed((prev) => new Set([...prev, id]));
@@ -173,6 +228,7 @@ export function ApprovalCards({ approvals, onDismiss }: ApprovalCardsProps) {
 
   return (
     <div className="flex flex-col gap-2">
+      <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">{visible.length ? `Approval required: ${visible.map(a => a.request.title || a.request.message || 'Please respond').join('; ')}` : ''}</p>
       {visible.map((approval) => (
         <ApprovalCard
           key={approval.id}

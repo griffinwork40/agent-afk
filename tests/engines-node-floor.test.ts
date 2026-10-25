@@ -2,8 +2,8 @@
  * Unit tests for `scripts/lib/engines-node-floor.ts`.
  *
  * These run inside `pnpm test` (vitest) so the logic is exercised on every PR
- * and during auto-release's `pnpm lint && pnpm test` gate — not just in the
- * `Check engines.node floor` workflow step.
+ * and in publish.yml's test gate, not only when the CLI is run by hand before
+ * a release.
  */
 
 import { describe, expect, it } from 'vitest';

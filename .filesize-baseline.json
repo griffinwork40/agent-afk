@@ -1,6 +1,6 @@
 {
   "limit": 350,
   "entries": {
-    "src/telegram/bot.ts": { "loc": 353, "reason": "feat(#3899): voice/audio transcription adds BotOptions.transcriber field and registerAudioHandlers call to bot.ts (+2 code lines)" }
+
   }
 }

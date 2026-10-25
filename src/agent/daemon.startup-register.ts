@@ -19,8 +19,10 @@ import type { ScheduledTask } from './daemon/triggers.js';
  * fully operational.
  *
  * `scheduler.register()` calls `validateScheduledTask()`, which throws on
- * an invalid ISO 8601 date string. Catching here matches the post-startup
- * malformed gate behaviour in `evaluateRunAtGate` (scheduler.runat-gate.ts).
+ * an invalid ISO 8601 date string. Unlike the post-startup `'malformed'` gate
+ * path in `evaluateRunAtGate` (scheduler.runat-gate.ts), startup quarantine
+ * only emits a `console.warn` — it does NOT write a `status:'skipped'`
+ * telemetry record, because the scheduler tick loop has not started yet.
  * (#4052)
  */
 export function registerTasksWithQuarantine(

@@ -40,14 +40,14 @@ interface ScriptedTurn {
 
 let scriptedTurns: ScriptedTurn[] = [];
 let turnIndex = 0;
-let createCalls: Array<{ args: { messages: unknown[]; tools?: unknown[] } }> = [];
+let createCalls: Array<{ args: { messages: unknown[]; tools?: unknown[]; tool_choice?: unknown } }> = [];
 
 function installScriptedClient(): void {
   const factory: OpenAIClientFactory = () =>
     ({
       chat: {
         completions: {
-          create: async (args: { stream?: boolean; messages: unknown[]; tools?: unknown[] }) => {
+          create: async (args: { stream?: boolean; messages: unknown[]; tools?: unknown[]; tool_choice?: unknown }) => {
             createCalls.push({ args });
             if (!args.stream) throw new Error('test mock only supports streaming');
             const script = scriptedTurns[turnIndex++];
@@ -1015,6 +1015,31 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
       expect(windDownMsgs.some((m) => m.content === WIND_DOWN_NOTE)).toBe(true);
       expect(windDownMsgs.some((m) => m.content === SOFT_DEADLINE_NOTE)).toBe(false);
     });
+  });
+
+  it('a blocking Stop-hook segment restarts roundsUsed at 1 (subagent round counting treats 1 then 1 as two rounds)', async () => {
+    const fixture = makeDispatcher();
+    const stopTurn = (text: string): ScriptedTurn => ({
+      chunks: [
+        { choices: [{ delta: { content: text } }] },
+        { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+      ],
+    });
+    // Segment 1: one tool round, then stop. Stop hook continues. Segment 2: one tool round, then stop.
+    scriptedTurns = [toolCallTurn('s1'), stopTurn('one'), toolCallTurn('s2'), stopTurn('two')];
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk', source: 'config' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('go'),
+      config: baseConfig(),
+      toolDispatcher: fixture.dispatcher,
+    });
+    let ends = 0;
+    q.setBeforeTurnEnd(async () => (++ends === 1 ? { continueWith: 'keep going' } : undefined));
+    const events = await collect(q);
+    expect(fixture.handlerCalls).toHaveLength(2);
+    expect(events.flatMap((e) => (e.type === 'progress' ? [e.progress.roundsUsed] : []))).toEqual([1, 1]);
   });
 
   it('runs uncapped at top level — past the former hard-coded 50-round limit (no maxToolUseIterations)', async () => {

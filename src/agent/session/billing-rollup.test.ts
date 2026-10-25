@@ -108,15 +108,19 @@ describe('AccountingAccumulator billing wiring', () => {
     });
   });
 
-  it('subagents: an outcome-tagged (failed/cancelled) report is billing-only', () => {
+  it('subagents: an outcome-tagged (failed/cancelled) report adds costUsd to subagentRunningCostUsd (#3882 cause 1)', () => {
+    // Legacy counters (count, tokens) stay success-only; billing.subagents carries ALL spend.
+    // costUsd IS now included for failed/cancelled children so session_sealed.subagentCostUsd
+    // reflects total spend across all terminal outcomes (fix for #3882 cause 1).
     const acc = new AccountingAccumulator();
-    acc.recordSubagentCompletion({ inputTokens: 10, billing: anth(10, 0, 0) }, 0.5);
-    acc.recordSubagentCompletion({ billing: anth(7, 3, 1, 2), outcome: 'failed' });
-    acc.recordSubagentCompletion({ billing: openAICompatibleBilling(10, 4, 1), outcome: 'cancelled' }, 9);
+    acc.recordSubagentCompletion({ inputTokens: 10, billing: anth(10, 0, 0) }, 0.5);          // succeeded: $0.50
+    acc.recordSubagentCompletion({ billing: anth(7, 3, 1, 2), outcome: 'failed' });             // failed: no costUsd
+    acc.recordSubagentCompletion({ billing: openAICompatibleBilling(10, 4, 1), outcome: 'cancelled' }, 9); // cancelled: $9
     const snap = acc.snapshot();
     expect(snap.subagentCompletedCount).toBe(1);
     expect(snap.subagentRunningTokens).toEqual({ input: 10, output: 0, cacheRead: 0, cacheCreation: 0 });
-    expect(snap.subagentRunningCostUsd).toBe(0.5);
+    // $0.50 (succeeded) + $9 (cancelled) = $9.50; failed had no costUsd so contributes $0.
+    expect(snap.subagentRunningCostUsd).toBe(9.5);
     expect(snap.subagentBilling?.byProvider).toEqual({
       'anthropic-direct': { uncachedInput: 17, cacheRead: 3, cacheWrite: 1, output: 2 },
       'openai-compatible': { uncachedInput: 6, cacheRead: 4, cacheWrite: 0, output: 1 },

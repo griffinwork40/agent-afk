@@ -356,6 +356,30 @@
       "category": "daemon"
     },
     {
+      "name": "AFK_FILE_CHECKPOINT_MAX_AGE_DAYS",
+      "description": "Evict a file-checkpoint session directory once its newest content is older than this many days. Default 14.",
+      "type": "number",
+      "required": false,
+      "default": "14",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_MAX_BYTES",
+      "description": "Aggregate byte cap for state/file-checkpoints/; oldest session directories are evicted first once exceeded. Default 1073741824 (1 GiB).",
+      "type": "number",
+      "required": false,
+      "default": "1073741824",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_RETENTION_DISABLE",
+      "description": "Disable the file-checkpoint retention sweep (state/file-checkpoints/), so no session checkpoint directory is ever evicted.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
       "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
       "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even to tool calls whose context carries no grant manager. Every production provider wires itself as the grant manager on every surface (REPL, Telegram, afk chat, daemon, subagents), so there the denylist is already active; without one it fails open. Set to 1 to force it on for those contexts too. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off.",
       "type": "boolean",
@@ -462,7 +486,7 @@
     },
     {
       "name": "AFK_LSP_DIAGNOSTICS",
-      "description": "Enable opt-in post-edit LSP diagnostics (phase 1 of #3904). When set to 1, after every successful edit_file or write_file call the handler queries typescript-language-server (must be on PATH) for diagnostics on the touched file and appends any errors/warnings to the tool result. Off by default. A missing or slow server never fails or stalls the edit — the query times out silently. TypeScript only in this phase.",
+      "description": "Enable opt-in LSP features (#3904). When set to 1: (phase 1) after every successful edit_file or write_file call the handler queries typescript-language-server (must be on PATH) for diagnostics on the touched file and appends any errors/warnings to the tool result; (phase 2) enables the code_symbols tool for go-to-definition and find-references. Off by default. A missing or slow server never fails or stalls the edit — the query times out silently. TypeScript / JavaScript only in this phase.",
       "type": "boolean",
       "required": false,
       "default": "0",
@@ -476,6 +500,24 @@
       "required": false,
       "default": "1500",
       "example": "3000",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_LSP_IDLE_SHUTDOWN_MS",
+      "description": "Idle window in milliseconds after which a pooled (persistent) language server with no requests is shut down (#4272). Servers are kept warm per workspace root and language so repeat LSP queries skip the cold start. Default 300000 (5 min). Idle timers never keep the process alive.",
+      "type": "number",
+      "required": false,
+      "default": "300000",
+      "example": "60000",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_LSP_SYMBOLS_TIMEOUT_MS",
+      "description": "Hard timeout in milliseconds for code_symbols (go-to-definition / find-references) LSP queries (AFK_LSP_DIAGNOSTICS=1). Symbol queries can require a cold-start index build and therefore need a longer budget than the post-edit diagnostics timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS). Default 5000 (5 s). Raise for large monorepos where the first query triggers a full project load.",
+      "type": "number",
+      "required": false,
+      "default": "5000",
+      "example": "10000",
       "category": "misc"
     },
     {
@@ -805,6 +847,30 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_SUBAGENT",
+      "description": "Bind the \"subagent\" routing slot to a model id/alias. When set, all dispatched subagents (agent/skill/compose forks without an explicit model) use this model instead of the medium tier. Use with AFK_MODEL_SUBAGENT_BASE_URL to route subagent inference to a different provider (Together, Fireworks, Groq, or self-hosted vLLM/SGLang). Overrides afk.config.json models.subagent.",
+      "type": "string",
+      "required": false,
+      "example": "Qwen/Qwen3-32B",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_SUBAGENT_API_KEY",
+      "description": "Per-slot API key for the \"subagent\" routing slot. Overrides global credentials for subagent forks only.",
+      "type": "string",
+      "required": false,
+      "category": "model",
+      "secret": true
+    },
+    {
+      "name": "AFK_MODEL_SUBAGENT_BASE_URL",
+      "description": "Per-slot endpoint base URL for the \"subagent\" routing slot. Point at Together (https://api.together.xyz/v1), Fireworks, Groq, or a self-hosted vLLM/SGLang endpoint to route subagent inference off Anthropic.",
+      "type": "string",
+      "required": false,
+      "example": "https://api.together.xyz/v1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_TTFB_TIMEOUT_MS",
       "description": "Per-ROUND time-to-first-token budget (ms) for the anthropic-direct streaming loop. Bounds how long a round may stall BEFORE its first streamed CONTENT token (a text/thinking delta or tool_use); the connection-level message_start and keep-alive pings do NOT count. Once a content token streams, the timer is cleared and the rest of the response is governed instead by the progress-aware AFK_MODEL_STALL_TIMEOUT_MS window, so a normal slow call (below the bound) and any actively-streaming extended-thinking response are never aborted. The budget is divided into 3 shorter first-byte ATTEMPTS (each ~2/3 of this value, so the worst-case wall time per round is unchanged from the previous 2-attempt regime while a transient stall gets 3 chances instead of 2). NOTE: a request whose FIRST token takes longer than the per-attempt bound — e.g. a very large opus_1m prefill — is aborted and re-driven, then surfaces as an error once the budget is spent (raise this value or set 0 for such workloads); this trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. Default 180000 (180s ≈ 2× the measured p99 ttfb), i.e. 3 × 120s. Set to 0 to disable.",
       "type": "number",
@@ -839,10 +905,18 @@
     },
     {
       "name": "AFK_OTLP_ENDPOINT",
-      "description": "OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). When set, `afk trace export-otlp` will POST the converted payload to this endpoint in addition to (or instead of) writing to stdout. Currently informational — live push support is a follow-up to the offline converter (issue #3901).",
+      "description": "OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). When set, `afk trace export-otlp` POSTs the converted OTLP/JSON payload to this endpoint after converting the witness trace. A dead or unreachable endpoint never blocks or fails the command — the error is printed to stderr and the command still exits 0. Equivalent to passing `--endpoint <url>` on the command line; the flag takes precedence when both are provided.",
       "type": "string",
       "required": false,
       "example": "http://localhost:4318/v1/traces",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_OTLP_HEADERS",
+      "description": "Comma-separated list of `Key=Value` HTTP headers appended to every OTLP/HTTP push request made by `afk trace export-otlp` when `AFK_OTLP_ENDPOINT` or `--endpoint` is set. Typical use: bearer tokens and tenant identifiers required by managed collectors (e.g. Grafana Cloud, Honeycomb). Values that contain a literal comma must be percent-encoded (%2C). Example: `Authorization=Bearer <tok>,X-Org=acme`.",
+      "type": "string",
+      "required": false,
+      "example": "Authorization=Bearer tok123,X-Org=acme",
       "category": "misc"
     },
     {
@@ -1116,6 +1190,24 @@
       "required": false,
       "default": "0",
       "example": "1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_SUBAGENT_CONTINUATION_MAX_CONTINUATIONS",
+      "description": "Maximum number of continuations per subagent continuation chain (not counting the initial dispatch). 0 disables continuation entirely (every continuation call is refused). Unset, empty, non-numeric, or negative falls back to the default 3.",
+      "type": "number",
+      "required": false,
+      "default": "3",
+      "example": "5",
+      "category": "model"
+    },
+    {
+      "name": "AFK_SUBAGENT_CONTINUATION_MAX_ROUNDS",
+      "description": "Aggregate tool-round limit per subagent continuation chain (the initial dispatch plus every `continuation_chain_id` continuation). The initial attempt is charged at its round cap (or its runtime-counted rounds when uncapped); each continuation is charged its full finite allowance at admission, clipped to what remains. No refunds. Unset, empty, non-numeric, or < 1 falls back to the default 150.",
+      "type": "number",
+      "required": false,
+      "default": "150",
+      "example": "300",
       "category": "model"
     },
     {

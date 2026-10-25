@@ -1,7 +1,7 @@
 /**
  * Tree scan + baseline ratchet for the POSIX-assumption guard. Consumed by the
  * CLI (`scripts/check-posix-guard.ts`) and by `tests/posix-guard.test.ts`, which
- * is what makes `pnpm test` (ubuntu CI + auto-release) enforce it on every PR.
+ * is what makes `pnpm test` (ubuntu CI + publish.yml) enforce it on every PR.
  *
  * Invariant: the ratchet is GROWTH-ONLY. A (file, rule) count above its
  * baseline fails; a count at or below it passes, including a file that has

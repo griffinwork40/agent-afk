@@ -776,4 +776,200 @@ describe('#4063 — AgentSession SDK-owned MCP manager', () => {
     spy.mockRestore();
     await sdkManager.disconnectAll();
   });
+
+  // -------------------------------------------------------------------------
+  // #4064 item 3 — mcp_server_status OutputEvent
+  //
+  // getOutputStream() must emit mcp_server_status events so embedders can
+  // display accurate MCP health UI without polling mcpServerStatus().
+  //
+  // Three sub-cases:
+  //   (g1) A failed server emits { type:'mcp_server_status', status:'error' }
+  //        at session init (snapshot).
+  //   (g2) An oauth_pending server emits status:'oauth_pending' at init.
+  //   (g3) A mid-session disconnect (onServerError callback) emits
+  //        status:'disconnected' on the stream.
+  // -------------------------------------------------------------------------
+
+  it('(g1) getOutputStream emits mcp_server_status error event at init for a failed server', async () => {
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpServers: BOGUS_SERVER_SPEC,
+    });
+
+    // Subscribe before init settles.
+    const events: import('../types/session-types.js').OutputEvent[] = [];
+    (async () => {
+      for await (const ev of session.getOutputStream()) {
+        events.push(ev);
+      }
+    })().catch(() => {});
+
+    await session.waitForInitialization();
+    // Allow one microtask flush so the pushSidebandEvent calls land.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const statusEvents = events.filter((e) => e.type === 'mcp_server_status') as Array<{
+      type: 'mcp_server_status'; serverName: string; status: string; reason?: string;
+    }>;
+    expect(statusEvents.length).toBeGreaterThan(0);
+    const ev = statusEvents.find((e) => e.serverName === 'bogus');
+    expect(ev).toBeDefined();
+    expect(ev?.status).toBe('error');
+
+    await session.close();
+  });
+
+  it('(g2) getOutputStream emits mcp_server_status oauth_pending event at init', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    // Build a stub manager with an oauth_pending server.
+    const stubManager = {
+      getServerStates: vi.fn().mockReturnValue([
+        { serverName: 'my-oauth-server', status: 'oauth_pending' },
+      ]),
+      getMcpToolWireNames: vi.fn().mockReturnValue([]),
+      getMcpTools: vi.fn().mockReturnValue([]),
+      getMcpHandlers: vi.fn().mockReturnValue(new Map()),
+      callTool: vi.fn(),
+      disconnectAll: vi.fn().mockResolvedValue(undefined),
+      onServerError: undefined as ((serverName: string, reason: string) => void) | undefined,
+    } as unknown as import('../mcp/manager.js').McpManager;
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpManager: stubManager,
+    });
+
+    const events: import('../types/session-types.js').OutputEvent[] = [];
+    (async () => {
+      for await (const ev of session.getOutputStream()) {
+        events.push(ev);
+      }
+    })().catch(() => {});
+
+    await session.waitForInitialization();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const statusEvents = events.filter((e) => e.type === 'mcp_server_status') as Array<{
+      type: 'mcp_server_status'; serverName: string; status: string;
+    }>;
+    const ev = statusEvents.find((e) => e.serverName === 'my-oauth-server');
+    expect(ev).toBeDefined();
+    expect(ev?.status).toBe('oauth_pending');
+
+    await session.close();
+  });
+
+  it('(g3) getOutputStream emits mcp_server_status disconnected when onServerError fires', async () => {
+    const { McpManager: McpManagerCls } = await import('../mcp/manager.js');
+
+    let capturedOnServerError: ((serverName: string, reason: string) => void) | undefined;
+
+    const stubManager = {
+      getServerStates: vi.fn().mockReturnValue([]),
+      getMcpToolWireNames: vi.fn().mockReturnValue([]),
+      getMcpTools: vi.fn().mockReturnValue([]),
+      getMcpHandlers: vi.fn().mockReturnValue(new Map()),
+      callTool: vi.fn(),
+      disconnectAll: vi.fn().mockResolvedValue(undefined),
+      get onServerError() { return capturedOnServerError; },
+      set onServerError(cb: ((serverName: string, reason: string) => void) | undefined) {
+        capturedOnServerError = cb;
+      },
+    } as unknown as import('../mcp/manager.js').McpManager;
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpManager: stubManager,
+    });
+
+    const events: import('../types/session-types.js').OutputEvent[] = [];
+    (async () => {
+      for await (const ev of session.getOutputStream()) {
+        events.push(ev);
+      }
+    })().catch(() => {});
+
+    await session.waitForInitialization();
+
+    // Simulate a mid-session transport error.
+    expect(capturedOnServerError).toBeDefined();
+    capturedOnServerError!('my-server', 'ECONNRESET');
+    await new Promise((r) => setTimeout(r, 0));
+
+    const statusEvents = events.filter((e) => e.type === 'mcp_server_status') as Array<{
+      type: 'mcp_server_status'; serverName: string; status: string; reason?: string;
+    }>;
+    const ev = statusEvents.find((e) => e.serverName === 'my-server');
+    expect(ev).toBeDefined();
+    expect(ev?.status).toBe('disconnected');
+    expect(ev?.reason).toBe('ECONNRESET');
+
+    await session.close();
+  });
+
+  // (g3-redact) The onServerError → mcp_server_status path must redact
+  // secret-shaped text from the reason before it reaches the OutputEvent
+  // stream — parity with the startup-snapshot path (failedMcpServers).
+  it('(g3-redact) onServerError reason is redacted when it contains a secret', async () => {
+    let capturedOnServerError: ((serverName: string, reason: string) => void) | undefined;
+
+    const stubManager = {
+      getServerStates: vi.fn().mockReturnValue([]),
+      getMcpToolWireNames: vi.fn().mockReturnValue([]),
+      getMcpTools: vi.fn().mockReturnValue([]),
+      getMcpHandlers: vi.fn().mockReturnValue(new Map()),
+      callTool: vi.fn(),
+      disconnectAll: vi.fn().mockResolvedValue(undefined),
+      get onServerError() { return capturedOnServerError; },
+      set onServerError(cb: ((serverName: string, reason: string) => void) | undefined) {
+        capturedOnServerError = cb;
+      },
+    } as unknown as import('../mcp/manager.js').McpManager;
+
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'test-key',
+      persistSession: false,
+      cwd: process.cwd(),
+      mcpManager: stubManager,
+    });
+
+    const events: import('../types/session-types.js').OutputEvent[] = [];
+    (async () => {
+      for await (const ev of session.getOutputStream()) {
+        events.push(ev);
+      }
+    })().catch(() => {});
+
+    await session.waitForInitialization();
+
+    // Fire onServerError with a reason containing an Anthropic API key.
+    const secretReason = 'auth failed: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    expect(capturedOnServerError).toBeDefined();
+    capturedOnServerError!('leaky-server', secretReason);
+    await new Promise((r) => setTimeout(r, 0));
+
+    const statusEvents = events.filter((e) => e.type === 'mcp_server_status') as Array<{
+      type: 'mcp_server_status'; serverName: string; status: string; reason?: string;
+    }>;
+    const ev = statusEvents.find((e) => e.serverName === 'leaky-server');
+    expect(ev).toBeDefined();
+    expect(ev?.status).toBe('disconnected');
+    // The sk-ant-* key must be replaced with [REDACTED].
+    expect(ev?.reason).toContain('[REDACTED]');
+    expect(ev?.reason).not.toContain('sk-ant-');
+
+    await session.close();
+  });
 });

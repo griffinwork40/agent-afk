@@ -457,8 +457,35 @@ describe('createBashRestrictionHook — quoted heredoc data (#3850)', () => {
     `git commit -F - <<EOF\n${mention}\nEOF`,
     // Consumer executes stdin.
     `sh <<'EOF'\ngit commit -F - <<'INNER'\n${mention}\nINNER\nEOF`,
+    // Single-quoted -c: quote style must not open a fail-open path. A bash -c
+    // with single-quoted argument is semantically identical to double-quoted;
+    // the block boundary must be quote-style independent.
+    `bash -c 'cat ${mention}/Google/Chrome/Default/Login\\ Data'`,
   ])('keeps unsafe git-commit heredoc variants blocked: %s', (command) => {
     expect(hook(ctx(command)).decision).toBe('block');
+  });
+
+  it('blocks bash -c credential-theft (single-quoted variant)', () => {
+    // Direct credential-read via bash -c; not a git-commit heredoc.
+    // Kept outside the git-commit suite to make its distinct threat model clear.
+    const command = `bash -c 'cat ${mention}/Google/Chrome/Default/Login\\ Data' <<'EOF'\nignored body\nEOF`;
+    expect(hook(ctx(command)).decision).toBe('block');
+  });
+
+  it('blocks bash -c credential-theft (double-quoted variant)', () => {
+    // Quote style must not affect fail-closed boundary.
+    const command = `bash -c "cat ${mention}/Google/Chrome/Default/Login\\ Data" <<'EOF'\nignored body\nEOF`;
+    expect(hook(ctx(command)).decision).toBe('block');
+  });
+
+  it('bash -c credential-theft block carries an Interpreter reason', () => {
+    // The entry added to the blocked set at line 463 is an interpreter -c
+    // one-liner; verify the reason names the interpreter guard, not a generic
+    // restricted-path string, so the block surface is unambiguous.
+    const command = `bash -c 'cat ${mention}/Google/Chrome/Default/Login\\ Data'`;
+    const decision = hook(ctx(command));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('Interpreter');
   });
 });
 

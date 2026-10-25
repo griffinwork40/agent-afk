@@ -5,8 +5,7 @@
  * Each root is rendered by TopologyNode. The container adds a subtle
  * left border for visual continuity and a small section header.
  *
- * Contract: an empty `nodes` array renders the header but no tree rows —
- * callers decide whether to hide the whole panel when there is nothing to show.
+ * Contract: empty execution groups are omitted, including terminal notices.
  */
 
 import { cn } from '@/lib/utils';
@@ -27,6 +26,7 @@ export interface TopologySpineProps {
 // ---------------------------------------------------------------------------
 
 export function TopologySpine({ nodes, className }: TopologySpineProps) {
+  if (nodes.length === 0) return null;
   return (
     <div
       className={cn(
@@ -34,28 +34,22 @@ export function TopologySpine({ nodes, className }: TopologySpineProps) {
         className,
       )}
     >
-      {/* Section header */}
-      <div className="mb-1 text-[10px] uppercase tracking-widest text-muted-foreground/40 select-none">
+      {/* Section header — text-foreground/60 (~AA at 10px bold on dark bg) */}
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-foreground/60 select-none">
         Execution
       </div>
 
       {/* Tree roots */}
-      {nodes.length === 0 ? (
-        <div className="text-[11px] text-muted-foreground/30 italic py-1">
-          No activity yet
-        </div>
-      ) : (
-        <div className="flex flex-col gap-0.5">
-          {nodes.map((node, idx) => (
-            <TopologyNode
-              key={node.id}
-              node={node}
-              depth={0}
-              isLast={idx === nodes.length - 1}
-            />
-          ))}
-        </div>
-      )}
+      <div className="flex flex-col gap-0.5">
+        {nodes.map((node, idx) => (
+          <TopologyNode
+            key={node.id}
+            node={node}
+            depth={0}
+            isLast={idx === nodes.length - 1}
+          />
+        ))}
+      </div>
     </div>
   );
 }

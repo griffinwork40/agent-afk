@@ -374,14 +374,26 @@ describe('classifyRisk — bash safe', () => {
     expect(classifyRisk('bash', { command: 'gh pr comment 123 --body "LGTM"' }, ctx)).toBe('medium');
   });
 
-  // Known residual (Tier-2, #4103): classifyBashCommand's FS_MUTATING regex
-  // matches bare unquoted FS-verb args of safe-listed readers — e.g.
-  // `grep -rn truncate src/` is classified mutating and escalated to `high`
-  // even though `truncate` is a grep search term, not a command invocation.
-  // This is safe-side (over-gates: prompts the user, never silently allows a
-  // write). Fix tracked in #3846 remaining work (CMD_START-anchoring FS_MUTATING).
+  // ── known residuals (Tier-2, #4103) ──────────────────────────────────────
+  // classifyBashCommand's FS_MUTATING regex matches bare unquoted FS-verb args
+  // of safe-listed readers — e.g. `grep -rn truncate src/` is classified
+  // mutating and escalated to `high` even though `truncate` is a grep search
+  // term, not a command invocation. This is safe-side (over-gates: prompts the
+  // user, never silently allows a write). The 17-verb FS_MUTATING set includes
+  // truncate, tee, dd, mv, cp, rm, …; CMD_START-anchoring fix tracked in #3846.
   it('grep -rn truncate src/ → high (known Tier-2 over-gate, safe-side)', () => {
     expect(classifyRisk('bash', { command: 'grep -rn truncate src/' }, ctx)).toBe('high');
+  });
+
+  it('grep -rn rsync src/ → high (known Tier-2 over-gate, same FS_MUTATING set)', () => {
+    // `rsync` is in the 17-verb FS_MUTATING set but absent from BASH_MEDIUM/
+    // BASH_HIGH, so a grep arg of `rsync` reaches the classifyBashCommand guard
+    // and triggers the same CMD_START-unanchored over-gate as `truncate` above.
+    expect(classifyRisk('bash', { command: 'grep -rn rsync src/' }, ctx)).toBe('high');
+  });
+
+  it('grep -rn dd src/ → high (known Tier-2 over-gate, same FS_MUTATING set)', () => {
+    expect(classifyRisk('bash', { command: 'grep -rn dd src/' }, ctx)).toBe('high');
   });
 });
 
@@ -534,6 +546,11 @@ describe('classifyRisk — other tools', () => {
 
   it('remote_agent → high (arbitrary remote execution, bypassPermissions default)', () => {
     expect(classifyRisk('remote_agent', { host: 'cm', prompt: 'rm -rf /' }, ctx)).toBe('high');
+  });
+
+  // Finding 6: agent tool with host set must also be high risk
+  it('agent with host → high (same SSH transport as remote_agent)', () => {
+    expect(classifyRisk('agent', { host: 'myhost', prompt: 'hi' }, ctx)).toBe('high');
   });
   it('send_telegram → medium', () => {
     expect(classifyRisk('send_telegram', { message: 'hello' }, ctx)).toBe('medium');
@@ -1540,6 +1557,11 @@ describe('classifyRiskDetailed — category field (#3900)', () => {
 
   it('remote_agent → remote-exec', () => {
     expect(classifyRiskDetailed('remote_agent', {}, ctx).category).toBe('remote-exec');
+  });
+
+  // Finding 6: agent+host must classify as remote-exec
+  it('agent with host → remote-exec category', () => {
+    expect(classifyRiskDetailed('agent', { host: 'myhost', prompt: 'hi' }, ctx).category).toBe('remote-exec');
   });
 
   it('mcp__db__delete → mcp-destructive', () => {

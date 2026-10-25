@@ -11,12 +11,24 @@ import type { IHistoryRing } from '../input/types.js';
 import type { AutocompleteState } from '../input/autocomplete-state.js';
 import type { TerminalCompositor } from '../terminal-compositor.js';
 import type { PreviewDiffRef } from '../../agent/tools/hooks/edit-preview-hook.js';
+import type { CompletionWriter } from '../commands/interactive/shared.js';
 
 export interface StreamRendererOptions {
   /** Resolved display-only root slash identity. */
   skillIdentity?: import('./skill-identity-format.js').SkillIdentity;
   /** Where line-based output goes (non-TTY fallback + always-emitted compact lines). */
   out: Writer;
+  /**
+   * Optional reference to the REPL's shared completion writer. When provided,
+   * `finalizeSubagent` records each rendered subagent id in
+   * `completionWriter.renderedSubagentIds` so the SubagentStop-hook
+   * Channel B line is suppressed even after `suppressSubagentCompletion`
+   * resets at turn teardown (the teardown-race defect).
+   *
+   * Absent on non-TTY / one-shot `chat` surfaces — those never set
+   * `suppressSubagentCompletion` in the first place, so the guard is moot.
+   */
+  completionWriter?: CompletionWriter;
   /**
    * Controls how orchestrator-side thinking is rendered:
    * - `'off'` — suppressed entirely (no buffer, no overlay, no summary)

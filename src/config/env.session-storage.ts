@@ -16,6 +16,7 @@
 
 import type { EnvVarMeta } from './env.js';
 import { SESSION_TMPDIR_ENV_REGISTRY } from './env.session-tmpdir.js';
+import { FILE_CHECKPOINT_ENV_REGISTRY } from './env.file-checkpoint.js';
 
 export const SESSION_STORAGE_ENV_REGISTRY = [
   {
@@ -44,4 +45,6 @@ export const SESSION_STORAGE_ENV_REGISTRY = [
   // Per-session temp dirs (env.session-tmpdir.ts), spliced here so env.ts —
   // grandfathered over the size ceiling — needs no new import.
   ...SESSION_TMPDIR_ENV_REGISTRY,
+  // File-checkpoint retention (env.file-checkpoint.ts), spliced the same way.
+  ...FILE_CHECKPOINT_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];

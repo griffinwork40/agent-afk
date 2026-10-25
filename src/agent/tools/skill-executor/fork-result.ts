@@ -73,8 +73,24 @@ function renderPartial(marker: string, partial: string): Pick<ToolResult, 'conte
  */
 export function renderForkOutcome(result: SubagentResult, noOutputError: string): ToolResult {
   if (result.status === 'succeeded' && result.message) {
+    const baseContent = annotateIfIncomplete(result.message.content, result.stopReason);
+
+    // When the child yielded an Asking block, prepend a structured needs_input
+    // header so the parent can recognise it and answer via continuation or
+    // fresh re-dispatch. Mirrors the same pattern in foreground-handoff.ts.
+    let content = baseContent;
+    if (result.needsInput !== undefined) {
+      const ni = result.needsInput;
+      content =
+        `[needs_input] This child yielded a question to you instead of completing.\n\n` +
+        `Question: ${ni.question}\n` +
+        (ni.assumption !== undefined ? `Assumption it resolves: ${ni.assumption}\n` : '') +
+        (ni.onceAnswered !== undefined ? `Once answered: ${ni.onceAnswered}\n` : '') +
+        `\nTo answer, re-dispatch a fresh agent with the child's summary and your answer as the prompt.\n\n---\n${baseContent}`;
+    }
+
     return {
-      content: annotateIfIncomplete(result.message.content, result.stopReason),
+      content,
       ...incompleteToolResultFields(result.stopReason),
     };
   }

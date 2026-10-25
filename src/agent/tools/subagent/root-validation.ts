@@ -239,6 +239,11 @@ export function validateRootPath(
   value: unknown, field: RootField, caller: RootValidationCaller,
 ): string {
   if (caller.kind === 'compose' || field !== 'cwd') {
+    // Invariant: agent cwd skips this guard because readOptionalString
+    // (input-parse.roots.ts) has already coerced blank/non-string values to
+    // undefined, so only a valid non-empty string reaches here. Skipping keeps
+    // the 'empty' error reserved for explicit empty strings on array fields; a
+    // value that slipped the upstream normalization would get 'absolute' instead.
     if (typeof value !== 'string' || (caller.kind === 'compose' ? value.trim().length : value.length) === 0) {
       throw rootError(caller, field, value, 'empty');
     }

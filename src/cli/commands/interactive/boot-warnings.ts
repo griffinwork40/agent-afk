@@ -10,6 +10,7 @@
  */
 
 import { palette } from '../../palette.js';
+import { flushDeferredAfkMdSizeWarnings } from '../../config/afk-md-tier.js';
 
 /**
  * Print every buffered bootstrap warning, then empty the buffer in place.
@@ -28,4 +29,8 @@ export function drainBootWarnings(warnings: string[]): void {
     console.warn(palette.warning(`  ${w}`));
   }
   warnings.length = 0;
+  // AFK.md size warnings deferred by `index.ts` across the pre-parse
+  // `loadConfig()` land here, after the REPL screen clear (#4292). Flushing
+  // also ends deferral, so a second drain is a no-op like the loop above.
+  flushDeferredAfkMdSizeWarnings();
 }

@@ -158,6 +158,33 @@ describe('subagent billing across turns', () => {
 });
 
 /**
+ * A one-turn session that yields a billed `done` (with optional costUsd) but
+ * NO assistant message, so run() always fails with "produced no output".
+ * `before` runs first (e.g. abort/cancel), so the turn's spend lands after it.
+ */
+function billedNoMessageWithCost(costUsd: number, before?: () => void): IAgentSession {
+  return {
+    sessionId: 'mock-session',
+    state: 'idle',
+    abortSignal: new AbortController().signal,
+    async *sendMessageStream() {
+      before?.();
+      yield {
+        type: 'done',
+        metadata: usageToMetadata(
+          { inputTokens: 10_000, cachedInputTokens: 9_000, outputTokens: 100, totalCostUsd: costUsd, billing: openAICompatibleBilling(10_000, 9_000, 100) },
+          'mock-session',
+        ),
+      } as OutputEvent;
+    },
+    async interrupt() {},
+    async close() {},
+    getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+    getLastResponseMetadata: () => null,
+  } as unknown as IAgentSession;
+}
+
+/**
  * A one-turn session that yields a billed `done` with NO assistant message.
  * `before` runs first (e.g. abort/cancel), so the turn's spend lands after it.
  */
@@ -564,5 +591,96 @@ describe('billing_settled phase on post-cancel delta (#3931)', () => {
       (e) => e.kind === 'session_phase' && e.payload.phase === 'billing_settled',
     );
     expect(settled).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3882 cause 1: failed/cancelled child costUsd must reach subagentCostUsd
+// ---------------------------------------------------------------------------
+
+describe('#3882 cause 1: failed/cancelled child costUsd in session_sealed.subagentCostUsd', () => {
+  function harnessWithCost(
+    costUsd: number,
+    before?: (h: { handle: SubagentHandleImpl<unknown>; controller: AbortController }) => void,
+  ) {
+    const graph = new AbortGraph();
+    const controller = new AbortController();
+    graph.register('root', controller);
+    const writer = new InMemoryTraceWriter();
+    const acc = new AccountingAccumulator();
+    const onSucceeded = vi.fn(
+      (usage: Parameters<AccountingAccumulator['recordSubagentCompletion']>[0], cost: number | undefined) =>
+        acc.recordSubagentCompletion(usage, cost),
+    );
+    const ref: { handle?: SubagentHandleImpl<unknown> } = {};
+    const handle: SubagentHandleImpl<unknown> = new SubagentHandleImpl(
+      'cost-child',
+      billedNoMessageWithCost(costUsd, before ? () => before({ handle: ref.handle!, controller }) : undefined),
+      controller, graph, undefined, 5000, undefined, vi.fn(),
+      undefined, undefined, undefined, undefined, undefined, writer, onSucceeded,
+    );
+    ref.handle = handle;
+    return { handle, controller, writer, acc, onSucceeded };
+  }
+
+  it('failed child costUsd reaches subagentRunningCostUsd (#3882 cause 1)', async () => {
+    const h = harnessWithCost(0.07);
+    await expect(h.handle.run('go')).rejects.toThrow(/produced no output/);
+    const snap = h.acc.snapshot();
+    // Legacy success-only count must stay zero.
+    expect(snap.subagentCompletedCount).toBe(0);
+    // Before fix: subagentRunningCostUsd is 0 (costUsd always passed as undefined for failed).
+    // After fix: the child's $0.07 must appear here.
+    expect(snap.subagentRunningCostUsd).toBeCloseTo(0.07, 10);
+  });
+
+  it('cascade-cancelled child costUsd reaches subagentRunningCostUsd (#3882 cause 1)', async () => {
+    const h = harnessWithCost(0.04, ({ controller }) => controller.abort());
+    await expect(h.handle.run('go')).rejects.toThrow();
+    const snap = h.acc.snapshot();
+    expect(snap.subagentCompletedCount).toBe(0);
+    // Before fix: 0. After fix: $0.04.
+    expect(snap.subagentRunningCostUsd).toBeCloseTo(0.04, 10);
+  });
+
+  it('explicitly cancelled child costUsd reaches subagentRunningCostUsd (#3882 cause 1)', async () => {
+    const h = harnessWithCost(0.05, ({ handle }) => void handle.cancel());
+    await expect(h.handle.run('go')).rejects.toThrow();
+    await h.handle._pendingCancellationWrite;
+    const snap = h.acc.snapshot();
+    expect(snap.subagentCompletedCount).toBe(0);
+    // Before fix: 0. After fix: $0.05.
+    expect(snap.subagentRunningCostUsd).toBeCloseTo(0.05, 10);
+  });
+
+  it('mixed: one succeeded ($0.10) + one failed ($0.07) = $0.17 total (#3882 cause 1)', async () => {
+    const graph = new AbortGraph();
+    const controller = new AbortController();
+    graph.register('root', controller);
+    const acc = new AccountingAccumulator();
+    const onSucceeded = (
+      usage: Parameters<AccountingAccumulator['recordSubagentCompletion']>[0],
+      cost: number | undefined,
+    ): void => acc.recordSubagentCompletion(usage, cost);
+
+    // Succeeded child: $0.10
+    acc.recordSubagentCompletion(undefined, 0.10);
+
+    // Failed child: $0.07 — the fix must route this into subagentRunningCostUsd.
+    const writer = new InMemoryTraceWriter();
+    const ctrl2 = new AbortController();
+    graph.register('child2', ctrl2);
+    const handle2 = new SubagentHandleImpl(
+      'child2',
+      billedNoMessageWithCost(0.07),
+      ctrl2, graph, undefined, 5000, undefined, vi.fn(),
+      undefined, undefined, undefined, undefined, undefined, writer, onSucceeded,
+    );
+    await expect(handle2.run('go')).rejects.toThrow(/produced no output/);
+
+    const snap = acc.snapshot();
+    expect(snap.subagentCompletedCount).toBe(1);
+    // Before fix: $0.10 (failed child cost missing). After fix: $0.17.
+    expect(snap.subagentRunningCostUsd).toBeCloseTo(0.17, 10);
   });
 });

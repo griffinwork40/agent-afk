@@ -210,6 +210,9 @@ describe('AnthropicDirectQuery — interrupt mid-turn then resume', () => {
     // still alive (the bug terminated it here).
     expect(r.done).toBe(false);
     expect((r.value as ProviderEvent).type).toBe('turn.completed');
+    // The loop's graceful-abort terminal carries the interrupt reason, so
+    // consumers (web ledger `stopped` marker) can tell Stop from a natural end.
+    expect((r.value as Extract<ProviderEvent, { type: 'turn.completed' }>).usage.stopReason).toBe('interrupted');
 
     // Turn 2 — the regression: before the fix the shared generator had already
     // returned, so pushing a new message produced nothing (no agent turn).
@@ -223,6 +226,7 @@ describe('AnthropicDirectQuery — interrupt mid-turn then resume', () => {
       if (ev.type === 'assistant.message') assistantText = ev.text;
       if (ev.type === 'turn.completed') {
         sawTurn2Completed = true;
+        expect(ev.usage.stopReason).not.toBe('interrupted');
         break;
       }
       r = await it.next();

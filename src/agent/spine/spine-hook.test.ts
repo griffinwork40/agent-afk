@@ -102,6 +102,7 @@ vi.mock('node:fs', async (importOriginal) => {
 import { createSpineSessionEndHook } from './spine-hook.js';
 import { persistDiffFingerprint } from './spine-hook.diff.js';
 import type { HookContext } from '../hooks.js';
+import { clearRepoRootSyncCache } from '../../utils/git.js';
 
 // Mirror of the production constant — kept in sync manually so truncation
 // tests exercise the actual production length, not a stale fixture value.
@@ -159,6 +160,7 @@ describe('MAX_DESCRIPTION_LEN drift guard', () => {
 describe('createSpineSessionEndHook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRepoRootSyncCache();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
   });
@@ -244,6 +246,7 @@ describe('createSpineSessionEndHook', () => {
 describe('createSpineSessionEndHook — label branches', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRepoRootSyncCache();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
     Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
@@ -492,6 +495,7 @@ describe('createSpineSessionEndHook — label branches', () => {
 describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRepoRootSyncCache();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
     Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
@@ -744,6 +748,7 @@ describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => 
 describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRepoRootSyncCache();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
     Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
@@ -993,6 +998,7 @@ describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
 describe('createSpineSessionEndHook — pending-log writes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRepoRootSyncCache();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     // Clear the capture array for each test.
     _capturedAppendCalls.length = 0;
@@ -1204,6 +1210,7 @@ describe('createSpineSessionEndHook — pending-log writes', () => {
 describe('createSpineSessionEndHook — #2867 regressions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRepoRootSyncCache();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
     Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
@@ -1629,6 +1636,7 @@ describe('createSpineSessionEndHook — #2867 regressions', () => {
 describe('createSpineSessionEndHook — fingerprint persistence ordering', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRepoRootSyncCache();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
     _capturedWriteCalls.length = 0;
@@ -1728,6 +1736,7 @@ describe('createSpineSessionEndHook — duplicate-fingerprint skips classifyDiff
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRepoRootSyncCache();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
     _capturedWriteCalls.length = 0;
@@ -1775,6 +1784,7 @@ describe('createSpineSessionEndHook — duplicate-fingerprint skips classifyDiff
 describe('createSpineSessionEndHook — #3894 regression', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRepoRootSyncCache();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
     Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });

@@ -593,7 +593,7 @@ describe('SessionManager — recordTelegramTurn (shared session store)', () => {
   test('records a Telegram turn as a resumable, named, telegram-tagged sidecar', () => {
     manager.recordTelegramTurn(111, 'Help me fix the resume bug', 'sure', { sessionId: 'sdk-tg-1' });
 
-    const found = findSession('help-me-fix-the-resume-bug');
+    const found = findSession('help-me-fix-resume-bug');
     expect(found?.data.sessionId).toBe('sdk-tg-1');
     expect(found?.data.source).toBe('telegram');
     expect(found?.data.telegramChatId).toBe(111);
@@ -617,7 +617,7 @@ describe('SessionManager — recordTelegramTurn (shared session store)', () => {
     const m = makeManager('sdk-from-live');
     await m.getSession(333); // populate this.sessions with a session that has a sessionId
     m.recordTelegramTurn(333, 'do a thing', 'done'); // no metadata
-    expect(findSession('do-a-thing')?.data.sessionId).toBe('sdk-from-live');
+    expect(findSession('a-thing')?.data.sessionId).toBe('sdk-from-live');
     await m.closeAll().catch(() => {});
   });
 
@@ -741,14 +741,14 @@ describe('SessionManager — session naming (/name)', () => {
   test('renaming overrides an auto-derived name without forking a duplicate sidecar', () => {
     // First turn auto-names from the message text.
     manager.recordTelegramTurn(704, 'investigate the bug', 'a', { sessionId: 'sdk-704' });
-    expect(findSession('investigate-the-bug')?.data.sessionId).toBe('sdk-704');
+    expect(findSession('investigate-bug')?.data.sessionId).toBe('sdk-704');
 
     // Renaming updates the SAME sidecar (keyed by sessionId), not a new file.
     manager.setSessionName(704, 'custom-label');
 
     expect(findSession('custom-label')?.data.sessionId).toBe('sdk-704');
     // Old auto-name no longer resolves — the name field was overwritten in place.
-    expect(findSession('investigate-the-bug')).toBeUndefined();
+    expect(findSession('investigate-bug')).toBeUndefined();
     expect(listSessions().filter((e) => e.sessionId === 'sdk-704')).toHaveLength(1);
   });
 

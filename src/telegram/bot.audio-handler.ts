@@ -50,8 +50,12 @@ export function registerAudioHandlers(
         const captionEntities = (msg as Record<string, unknown> | undefined)?.['caption_entities'] as MessageEntity[] | undefined;
         const chatId = ctx.chat?.id;
         if (chatId !== undefined && tagOnlyChats.has(chatId)) {
+          const botId = ctx.botInfo?.id;
+          if (botId === undefined) {
+            log(`Voice/audio dropped in tag-only chat ${chatId}: bot identity unknown (botInfo missing)`);
+            return;
+          }
           const caption = (msg as Record<string, unknown> | undefined)?.['caption'] as string | undefined;
-          const botId = ctx.botInfo?.id ?? 0;
           if (!addressedToBot(caption, captionEntities, msg?.reply_to_message?.from?.id, botId, ctx.botInfo?.username)) {
             log(`Voice/audio ignored in tag-only chat ${chatId} (not addressed to bot)`);
             return;
@@ -82,7 +86,7 @@ export function registerAudioHandlers(
             // text_mention so the second tag-only gate in MessageHandler.handle()
             // passes without re-slicing the transcript at caption-relative offsets
             // (which would silently fail to match the @mention).
-            entities: [{ type: 'text_mention' as const, offset: 0, length: 0, user: { id: ctx.botInfo?.id ?? 0, is_bot: true, first_name: '' } }],
+            entities: [{ type: 'text_mention' as const, offset: 0, length: 0, user: { id: ctx.botInfo?.id ?? -1, is_bot: true, first_name: '' } }],
           }),
           writable: true,
           enumerable: true,

@@ -7,6 +7,7 @@ import type OpenAI from 'openai';
 import type { ProviderEvent, ProviderQuery, ProviderUserTurn } from '../provider.js';
 import type { FileCheckpointRegistry } from './file-checkpoint.js';
 import { FileCheckpointState } from '../providers/openai-compatible/query.file-checkpoint.js';
+import { readTurnLog } from './turn-log.js';
 import * as checkpoints from './file-checkpoint.js';
 vi.mock('./file-checkpoint.js', async original => ({ ...await original<typeof import('./file-checkpoint.js')>() }));
 import { AnthropicDirectQuery } from '../providers/anthropic-direct/query.js';
@@ -107,6 +108,17 @@ for (const provider of ['anthropic', 'openai']) {
       const result = await query.rewindFiles('public-message-id');
       expect(result.canRewind).toBe(true);
       expect(readFileSync(file, 'utf8')).toBe('original');
+      query.close();
+    });
+
+    it('links the prompt to its checkpoint in listRewindTargets and logs turn + post entries (#4271)', async () => {
+      const { query, file } = makeQuery(provider, 'linked-message-id');
+      for await (const _event of query) { /* drain the turn */ }
+      const [target] = query.listRewindTargets?.() ?? [];
+      expect(target?.checkpointTurnId).toBe('linked-message-id');
+      const log = readTurnLog('test-session');
+      expect(log.filter((e) => e.kind === 'turn').map((e) => e.kind === 'turn' && e.turnId)).toEqual(['linked-message-id']);
+      expect(log.find((e) => e.kind === 'post')).toMatchObject({ turnId: 'linked-message-id', paths: { [file]: expect.any(String) } });
       query.close();
     });
 

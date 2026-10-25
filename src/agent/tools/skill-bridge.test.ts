@@ -375,8 +375,8 @@ describe('collectSkillEntries', () => {
       description: 'Basic skill',
       source: 'builtin',
     });
-    expect(entries[0].argumentHint).toBeUndefined();
-    expect(entries[0].whenToUse).toBeUndefined();
+    expect(entries[0]!.argumentHint).toBeUndefined();
+    expect(entries[0]!.whenToUse).toBeUndefined();
   });
 
   it('collects multiple skills preserving all metadata', () => {

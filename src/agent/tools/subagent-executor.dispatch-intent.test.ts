@@ -81,6 +81,34 @@ describe('classifyDispatchIntent (#3754)', () => {
       expect(classifyDispatchIntent(REAL_REVIEW_BRIEF_2)).toBeUndefined();
     });
   });
+
+  // #3796: mixed-intent prompts — document where RECON_EXEMPTION_RE can hide genuine write intent.
+  // These tests pin the current behaviour so any future regex change is visible.
+  describe('mixed-intent prompts — RECON_EXEMPTION_RE boundary cases', () => {
+    // Known gap: "report what changed" in the tail triggers the recon exemption even though
+    // "edit the file" in the head is a clear write imperative.  Pinned as a false-negative
+    // so the boundary is explicit and a future fix must update this test.
+    it('[known-gap] "edit the file, then report what changed" — currently exempted (false negative)', () => {
+      expect(classifyDispatchIntent('edit the file, then report what changed')).toBeUndefined();
+    });
+
+    // This one correctly rejects: "implement the fix" matches the impl pattern and
+    // "describe your changes" does NOT match the recon-exemption pattern (no what/which/etc.).
+    it('rejects "implement the fix and describe your changes" — implement is write intent', () => {
+      expect(classifyDispatchIntent('implement the fix and describe your changes')).toBeDefined();
+    });
+
+    // Known gap: "list what you modified" triggers the recon exemption even though
+    // "patch src/foo.ts" in the head is a clear write imperative.  Same category as above.
+    it('[known-gap] "patch src/foo.ts … then list what you modified" — currently exempted (false negative)', () => {
+      expect(classifyDispatchIntent('patch src/foo.ts to add the feature, then list what you modified')).toBeUndefined();
+    });
+
+    // Pure recon brief with negation — must continue to pass.
+    it('still passes a pure recon brief that mentions verbs in negation context', () => {
+      expect(classifyDispatchIntent('do not edit anything, just report what changed')).toBeUndefined();
+    });
+  });
 });
 
 describe('checkReadOnlyDispatchIntent (#3754)', () => {

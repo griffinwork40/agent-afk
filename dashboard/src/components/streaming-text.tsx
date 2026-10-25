@@ -1,4 +1,3 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
 import { MarkdownContent } from './markdown-content';
 
 /** A blinking vertical-bar cursor. Renders nothing when not needed. */
@@ -11,160 +10,33 @@ export function StreamingCursor() {
 const CODE_FENCE_RE = /^[ \t]*(`{3,}|~{4,})/;
 
 /**
- * Returns an adjusted display length that never cuts off inside a code-fence
- * marker. If the slice [0, rawLen] would land mid-line and that partial line
- * starts a code fence, we extend to the end of that line so the fence is never
- * partially visible.
+ * Length of `text` that is safe to render while more text may still arrive:
+ * if the trailing (unterminated) line is a code-fence marker, it is held back
+ * until its newline arrives, so a half-typed ``` ``` ``` info string never
+ * flashes as a fence that then changes language.
  */
-function fenceSafeLength(text: string, rawLen: number): number {
-  if (rawLen >= text.length) return rawLen;
-
-  // Find the start of the current (partial) line.
-  const lineStart = text.lastIndexOf('\n', rawLen - 1) + 1; // 0 if no newline
-  const partialLine = text.slice(lineStart, rawLen);
-
-  if (CODE_FENCE_RE.test(partialLine)) {
-    // Extend to the end of this line (or end of text).
-    const lineEnd = text.indexOf('\n', rawLen);
-    return lineEnd === -1 ? text.length : lineEnd + 1;
-  }
-
-  return rawLen;
+export function fenceSafeLength(text: string): number {
+  const lineStart = text.lastIndexOf('\n') + 1;
+  if (lineStart >= text.length) return text.length;
+  return CODE_FENCE_RE.test(text.slice(lineStart)) ? lineStart : text.length;
 }
 
 export interface StreamingTextProps {
   text: string;
   isStreaming: boolean;
-  /** Characters per second. Defaults to 80. */
-  speed?: number;
-  onComplete?: () => void;
 }
 
 /**
- * Renders text character-by-character via rAF, then delegates to
- * `<MarkdownContent>` for the visible slice. Shows a blinking cursor while
- * text is still arriving or the animation hasn't caught up.
- *
- * Invariant: `displayedLength` only ever increases — never resets mid-stream.
- * Invariant: rAF loop is the ONLY writer of `displayedLengthRef`; React state
- *   is updated at most once per ~16ms frame to avoid excessive re-renders.
- * Invariant: `cancelAnimationFrame` is called on unmount via the cleanup
- *   returned by the useEffect that owns the loop.
+ * Renders text as it arrives from the server (no client-side typewriter): the
+ * live draft's buffered text, with a cursor while it is still streaming.
+ * Durable/historical text (`isStreaming` false) renders whole and immediately.
  */
-export function StreamingText({
-  text,
-  isStreaming,
-  speed = 80,
-  onComplete,
-}: StreamingTextProps) {
-  // Displayed slice length tracked in ref (written every frame) + state
-  // (drives re-render). We only call setState when the value actually changes
-  // so React batches naturally around 16ms frame boundaries.
-  const displayedLengthRef = useRef(0);
-  const [displayedLength, setDisplayedLength] = useState(0);
-
-  // rAF handle — stored in ref so cleanup can reach it.
-  const rafRef = useRef<number | null>(null);
-
-  // Last timestamp from rAF, used to compute per-frame character advance.
-  const lastTimestampRef = useRef<number | null>(null);
-
-  // Whether onComplete has already been called for this message.
-  const completedRef = useRef(false);
-
-  // Stable callback so useEffect deps don't change on every render.
-  const onCompleteRef = useRef(onComplete);
-  useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
-
-  // Speed ref: updated every render so the running rAF loop always reads the
-  // current value rather than the value captured at loop creation time.
-  const speedRef = useRef(speed);
-  useEffect(() => { speedRef.current = speed; });
-
-  // Edge case: if the component mounts with text already present and streaming
-  // is already false (e.g. a replayed/historical message), skip animation and
-  // show the full text immediately.
-  const skipAnimation = !isStreaming && displayedLengthRef.current === 0 && text.length > 0;
-
-  const startLoop = useCallback(() => {
-    // Don't double-schedule.
-    if (rafRef.current !== null) return;
-
-    function tick(timestamp: number) {
-      const last = lastTimestampRef.current ?? timestamp;
-      const elapsed = timestamp - last;
-      lastTimestampRef.current = timestamp;
-
-      const charsPerMs = speedRef.current / 1000;
-      const advance = Math.max(1, Math.floor(charsPerMs * elapsed));
-
-      const currentLen = displayedLengthRef.current;
-      const targetLen = text.length; // captured via closure — latest prop value
-
-      if (currentLen < targetLen) {
-        const rawNext = Math.min(currentLen + advance, targetLen);
-        const next = fenceSafeLength(text, rawNext);
-        displayedLengthRef.current = next;
-        setDisplayedLength(next);
-      }
-
-      const caught = displayedLengthRef.current >= text.length;
-
-      if (caught && !isStreaming) {
-        // Animation complete.
-        rafRef.current = null;
-        lastTimestampRef.current = null;
-        if (!completedRef.current) {
-          completedRef.current = true;
-          onCompleteRef.current?.();
-        }
-        return; // stop loop
-      }
-
-      // Continue — either still catching up or isStreaming (more text may arrive).
-      rafRef.current = requestAnimationFrame(tick);
-    }
-
-    rafRef.current = requestAnimationFrame(tick);
-  }, [text, isStreaming]);
-
-  useEffect(() => {
-    // Fast path: historical/replayed message — render full text immediately.
-    if (skipAnimation) {
-      displayedLengthRef.current = text.length;
-      setDisplayedLength(text.length);
-      if (!completedRef.current) {
-        completedRef.current = true;
-        onCompleteRef.current?.();
-      }
-      return;
-    }
-
-    // If there's new text to animate (either new streaming tokens or initial
-    // mount with partial text), kick off the rAF loop.
-    if (displayedLengthRef.current < text.length || isStreaming) {
-      startLoop();
-    }
-
-    return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    };
-  // Re-run when text grows (streaming tokens) or streaming flips off.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, isStreaming, skipAnimation]);
-
-  // Determine what to show.
-  const effectiveLength = skipAnimation ? text.length : displayedLength;
-  const visibleText = text.slice(0, effectiveLength);
-  const showCursor = effectiveLength < text.length || isStreaming;
-
+export function StreamingText({ text, isStreaming }: StreamingTextProps) {
+  const visibleText = isStreaming ? text.slice(0, fenceSafeLength(text)) : text;
   return (
     <span className="streaming-text-root">
       <MarkdownContent text={visibleText} />
-      {showCursor && <StreamingCursor />}
+      {isStreaming && <StreamingCursor />}
     </span>
   );
 }

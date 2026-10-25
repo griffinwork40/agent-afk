@@ -174,6 +174,13 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    */
   /** @internal */ _lastStreamedContent: string = '';
   /**
+   * Runtime-counted tool-use rounds across every stream this handle ran
+   * (summed per stream from provider `progress.roundsUsed` events, which the
+   * provider loops emit after each tool round whether or not a cap is set).
+   * Never model-reported. Read by continuation accounting (D4) for uncapped runs.
+   */
+  /** @internal */ _runtimeRoundsUsed = 0;
+  /**
    * Pause-aware extension policy for the CURRENT run's wall-clock ceiling.
    * Created in `run()` (which owns `withTimeout`) but fed from the stream loop
    * in `streamToFinalMessage`, so — like `lastStreamedContent` — it lives as an
@@ -381,11 +388,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       // failed event here to avoid a double-emit for the same termination.
       if ((this._currentStatus as string) === 'cancelled') {
         // cancel() already emitted the row and settled the billing known then;
-        // settle only the DELTA that accrued after it (a `done` drained on
+        // settle any spend that accrued after it (a `done` drained on
         // interrupt) so it still reaches the rollup, counted once (#3878).
-        // Emit a billing_settled session_phase so trace readers can account for
-        // the delta — without it the cancelled row's totals are understated
-        // (#3931 item 1). Fire-and-forget: mirrors pause_extension_granted.
+        // Emit a billing_settled session_phase carrying cumulative run totals
+        // (not a delta); consumers derive the post-cancel delta by subtracting
+        // the cancelled row's watermark (#3931 item 1).
+        // Fire-and-forget: mirrors pause_extension_granted.
         const postCancelFields = settleUnreportedBilling(this, 'cancelled', billingContext);
         if (postCancelFields.provider !== undefined && postCancelFields.tokens !== undefined) {
           const { uncachedInput, cacheRead, cacheWrite, output } = postCancelFields.tokens;
@@ -517,9 +525,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       transition: 'cancelled',
       subagentId: this.id,
       source: 'explicit',
-      // Unreported spend accrued before the cancel (#3878): rolls up the delta,
-      // stamps the cumulative total; `{}` when all of it was already reported.
-      // May undercount spend that lands later — the rollup is authoritative.
+      // Unreported spend accrued before the cancel (#3878): stamps the
+      // cumulative total fields (not a delta); `{}` when all spend was already
+      // reported. May undercount spend that lands later — the rollup is authoritative.
       ...settleUnreportedBilling(this, 'cancelled'),
     });
 

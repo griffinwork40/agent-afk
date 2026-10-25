@@ -16,6 +16,7 @@
  */
 
 import { emitSessionPhase } from '../trace/emit.js';
+import { isUsageAwarenessEnabled } from '../usage/usage-awareness-toggle.js';
 import type { TraceSink } from '../trace/index.js';
 import { providerForModel } from '../providers/index.js';
 import type { UsageRecord } from '../usage/usage-record.js';
@@ -45,6 +46,7 @@ export async function evaluateDispatchUsage(
 ): Promise<string | undefined> {
   // Only Claude sessions draw down the subscription windows we track.
   if (provider !== 'anthropic-direct') return undefined;
+  if (!isUsageAwarenessEnabled()) return undefined;
   const now = Date.now();
   const ev = evaluateUsage(readRecord(), now);
   const notice = buildUsageNotice(ev, now);
