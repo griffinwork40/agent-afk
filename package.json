@@ -174,7 +174,7 @@
     "@vitest/coverage-v8": "^5.0.3",
     "@xterm/headless": "^6.0.0",
     "esbuild": "^0.28.0",
-    "jscpd": "5.4.1",
+    "jscpd": "5.4.2",
     "node-pty": "^1.1.0",
     "tsx": "^4.19.2",
     "typescript": "^6.0.3",
