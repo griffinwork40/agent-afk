@@ -91,7 +91,12 @@ export function formatHealthRail(fields: HealthRailFields, maxWidth: number): st
   // width cost, line is identical to pre-feature output).
   const segments = [turnText, elapsedText, callsText, subsText, ctxText];
   if (totalProcs > 0) {
-    const procsText = palette.info(`${activeProcs}/${totalProcs} procs`);
+    // Dim when zero active (all finished), matching the subs segment pattern.
+    // (Issue #4395 item 4.)
+    const procsText =
+      activeProcs > 0
+        ? palette.info(`${activeProcs}/${totalProcs} procs`)
+        : palette.dim(`0/${totalProcs} procs`);
     segments.push(procsText);
   }
 

@@ -135,6 +135,14 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
   private traceWriter: TraceSink | undefined;
   private readonly jobs = new Map<string, InternalJob>();
   private counter = 0;
+  /**
+   * Monotonic count of every process ever started via `start()`. Unlike
+   * `jobs.size`, this is never affected by `pruneHistory()` evictions, so it
+   * accurately reflects total lifetime starts even after the history cap is
+   * reached. Read by {@link HealthRail} to display the accurate `N/total` procs
+   * figure. (Issue #4395 item 1.)
+   */
+  startedProcsEver = 0;
   /** Set by killAll(): a registry being torn down accepts no new jobs. */
   private closed = false;
   private exitHookInstalled = false;
@@ -162,6 +170,7 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
   start(args: StartProcessJobArgs): ProcessJobSnapshot {
     if (this.closed) throw new Error('This session is ending; no new background processes can start.');
     if (this.runningCount() >= this.maxConcurrent) throw new ProcessJobCapError(this.maxConcurrent);
+    this.startedProcsEver++;
     const id = `${PROCESS_JOB_ID_PREFIX}${++this.counter}`;
     fs.mkdirSync(this.logDir, { recursive: true, mode: 0o700 });
     enforceSessionQuota(this.logDir, this.opts.sessionQuotaBytes ?? DEFAULT_SESSION_QUOTA_BYTES, this.liveLogPaths());

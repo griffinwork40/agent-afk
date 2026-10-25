@@ -233,9 +233,12 @@ export class HealthRail {
     const totalSubs = this.totalBgSubsEver + this.totalFgSubsEver;
 
     // Background processes: sourced from the ProcessJobRegistry.
+    // Use startedProcsEver (a monotonic counter on the registry) rather than
+    // allProcJobs.length so the total is accurate past the MAX_HISTORY=50 prune
+    // cap. (Issue #4395 item 1.)
     const allProcJobs = this.processJobs ? this.processJobs.list() : [];
     const activeProcs = allProcJobs.filter((j) => j.status === 'running').length;
-    this.totalProcsEver = Math.max(this.totalProcsEver, allProcJobs.length);
+    this.totalProcsEver = this.processJobs?.startedProcsEver ?? 0;
 
     // Accumulate total tool calls across all completed turns.
     const toolCalls = stats.turns.reduce(
@@ -291,6 +294,14 @@ export class HealthRail {
     // Compute elapsedMs at paint time so the counter ticks even between update()
     // calls (e.g. during long tool executions or streaming without tool events).
     const snap = this.snapshot;
+    // Refresh activeProcs live on every repaint so idle-input repaints (tick
+    // interval, resize) always show the current running count rather than the
+    // stale value baked into the snapshot at the last update() call.
+    // totalProcs comes from startedProcsEver (monotonic counter), so it never
+    // needs a live re-read. (Issue #4395 item 2.)
+    const liveActiveProcs = this.processJobs
+      ? this.processJobs.list().filter((j) => j.status === 'running').length
+      : 0;
     const fields: HealthRailFields = snap
       ? {
           totalTurns: snap.totalTurns,
@@ -298,7 +309,7 @@ export class HealthRail {
           toolCalls: snap.toolCalls,
           activeSubs: snap.activeSubs,
           totalSubs: snap.totalSubs,
-          activeProcs: snap.activeProcs,
+          activeProcs: liveActiveProcs,
           totalProcs: snap.totalProcs,
           contextRatio: snap.contextRatio,
         }
@@ -308,7 +319,7 @@ export class HealthRail {
           toolCalls: 0,
           activeSubs: 0,
           totalSubs: 0,
-          activeProcs: 0,
+          activeProcs: liveActiveProcs,
           totalProcs: 0,
           contextRatio: 0,
         };

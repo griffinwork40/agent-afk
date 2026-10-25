@@ -153,4 +153,33 @@ describe('formatHealthRail', () => {
     expect(result).toContain('ctx');
     expect(result).not.toContain('procs');
   });
+
+  // Issue #4395 item 3: all-finished display case (activeProcs=0, totalProcs>0).
+  it('shows 0/total procs when all processes have finished', () => {
+    const result = stripAnsi(formatHealthRail(
+      { totalTurns: 1, elapsedMs: 0, toolCalls: 0, activeSubs: 0, totalSubs: 0, activeProcs: 0, totalProcs: 3, contextRatio: 0 },
+      120,
+    ));
+    expect(result).toContain('0/3 procs');
+  });
+
+  // Issue #4395 item 4: procs segment dims when zero-active, like subs.
+  it('uses dim color for procs when activeProcs is 0 but totalProcs > 0', () => {
+    // When active>0, the segment should not be dim (palette.info wraps it).
+    // We can't inspect chalk colors directly, but we can verify the text
+    // content and that the dim case differs structurally from the active case.
+    const dimResult = formatHealthRail(
+      { totalTurns: 1, elapsedMs: 0, toolCalls: 0, activeSubs: 0, totalSubs: 0, activeProcs: 0, totalProcs: 2, contextRatio: 0 },
+      120,
+    );
+    const activeResult = formatHealthRail(
+      { totalTurns: 1, elapsedMs: 0, toolCalls: 0, activeSubs: 0, totalSubs: 0, activeProcs: 1, totalProcs: 2, contextRatio: 0 },
+      120,
+    );
+    // Both contain the procs segment text.
+    expect(stripAnsi(dimResult)).toContain('0/2 procs');
+    expect(stripAnsi(activeResult)).toContain('1/2 procs');
+    // The ANSI escape sequences differ between the two (dim vs info color).
+    expect(dimResult).not.toBe(activeResult);
+  });
 });

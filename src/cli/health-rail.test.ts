@@ -176,6 +176,7 @@ describe('HealthRail subagent counts', () => {
 
   it('counts running background processes', () => {
     const mockProcJobs = {
+      startedProcsEver: 3,
       list: () => [
         { status: 'running' },
         { status: 'running' },
@@ -191,28 +192,57 @@ describe('HealthRail subagent counts', () => {
     expect(getSnapshot(rail)?.totalProcs).toBe(3);
   });
 
-  it('ratchets process total upward when registry prunes history', () => {
-    let callCount = 0;
+  // Issue #4395 item 3: all-finished display case (activeProcs=0, totalProcs>0).
+  it('shows activeProcs=0 and totalProcs>0 when all processes have finished', () => {
     const mockProcJobs = {
-      list: () => {
-        callCount++;
-        if (callCount === 1) {
-          return [
-            { status: 'running' },
-            { status: 'completed' },
-            { status: 'completed' },
-          ];
-        }
-        // Pruned: only running job remains
-        return [{ status: 'running' }];
-      },
+      startedProcsEver: 5,
+      list: () => [
+        { status: 'completed' },
+        { status: 'completed' },
+        { status: 'failed' },
+      ],
     };
     const rail = new HealthRail({
       getExtraRows,
       processJobs: mockProcJobs as unknown as import('../agent/shell-jobs/process-jobs.js').ProcessJobRegistry,
     });
-    rail.update(makeStats()); // totalProcsEver = 3
-    rail.update(makeStats()); // list returns 1, but ratchet stays 3
+    rail.update(makeStats());
+    expect(getSnapshot(rail)?.activeProcs).toBe(0);
+    expect(getSnapshot(rail)?.totalProcs).toBe(5);
+  });
+
+  // Issue #4395 item 1: startedProcsEver counter accurately reflects total past
+  // MAX_HISTORY=50 pruning — the registry's monotonic counter is used directly.
+  it('uses startedProcsEver counter (not list length) for totalProcs', () => {
+    // Simulate a registry that has started 60 jobs but only retains the last
+    // 50 (MAX_HISTORY). list() returns 50 items; startedProcsEver is 60.
+    const mockProcJobs = {
+      startedProcsEver: 60,
+      list: () => Array.from({ length: 50 }, () => ({ status: 'completed' as const })),
+    };
+    const rail = new HealthRail({
+      getExtraRows,
+      processJobs: mockProcJobs as unknown as import('../agent/shell-jobs/process-jobs.js').ProcessJobRegistry,
+    });
+    rail.update(makeStats());
+    // totalProcs must be 60 (from startedProcsEver), not 50 (list().length).
+    expect(getSnapshot(rail)?.totalProcs).toBe(60);
+  });
+
+  it('ratchets process total upward when registry prunes history', () => {
+    // The registry's startedProcsEver counter is monotonic and never shrinks,
+    // so even after pruneHistory() evicts old jobs the displayed total stays
+    // accurate. Simulate by having startedProcsEver stay at 3 across calls.
+    const mockProcJobs = {
+      startedProcsEver: 3,
+      list: () => [{ status: 'running' as const }],
+    };
+    const rail = new HealthRail({
+      getExtraRows,
+      processJobs: mockProcJobs as unknown as import('../agent/shell-jobs/process-jobs.js').ProcessJobRegistry,
+    });
+    rail.update(makeStats()); // totalProcs = startedProcsEver = 3
+    rail.update(makeStats()); // still 3 (list only returns 1 item, but counter wins)
     expect(getSnapshot(rail)?.totalProcs).toBe(3);
   });
 
