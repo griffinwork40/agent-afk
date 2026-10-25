@@ -399,6 +399,24 @@ describe('resolveMaxNestingDepth (AFK_MAX_NESTING_DEPTH)', () => {
     expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
   });
 
+  it('ignores AFK_DELEGATION_PROFILE when AFK_MAX_NESTING_DEPTH is parseable but above the ceiling', () => {
+    // Regression guard (F1): a parseable but out-of-range depth (e.g. "7") must
+    // return DEFAULT_MAX_NESTING_DEPTH, NOT the profile depth. Previously the
+    // parseable-but-invalid branch fell through to the profile lookup, so
+    // AFK_MAX_NESTING_DEPTH=7 + AFK_DELEGATION_PROFILE=deep would silently
+    // return 5 (the deep profile\'s maxNestingDepth) instead of 3.
+    const PROFILE_KEY = 'AFK_DELEGATION_PROFILE';
+    const savedProfile = process.env[PROFILE_KEY];
+    process.env[PROFILE_KEY] = 'deep'; // deep profile maxNestingDepth = 5
+    process.env[KEY] = String(MAX_NESTING_DEPTH_CEILING + 1); // "7" — above ceiling
+    try {
+      expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH); // 3, not 5
+    } finally {
+      if (savedProfile !== undefined) process.env[PROFILE_KEY] = savedProfile;
+      else delete process.env[PROFILE_KEY];
+    }
+  });
+
   it('falls back to the default on unparseable garbage', () => {
     process.env[KEY] = 'not-a-number';
     expect(resolveMaxNestingDepth()).toBe(DEFAULT_MAX_NESTING_DEPTH);
