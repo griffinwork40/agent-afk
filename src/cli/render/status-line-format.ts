@@ -133,6 +133,15 @@ export interface StatusLineFields {
    * peripheral field; vanishes first on narrow terminals.
    */
   tokPerSec?: number;
+  /**
+   * True when the operator has toggled usage awareness off via
+   * `/usage-awareness off`. Rendered as a dim `usage hidden` chip after the
+   * held-category slot so the operator sees at a glance that the model cannot
+   * see subscription usage. Only drawn when true; absent/false draws nothing.
+   * Takes droppablePriority 2.5 — between held-category (1.5) and context (2)
+   * in shed order.
+   */
+  usageAwarenessOff?: boolean;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -255,6 +264,10 @@ export function formatStatusLine(f: StatusLineFields, maxW: number): string {
       text: palette.warning(`[${f.lastHeldCategory}]`),
       droppablePriority: 1.5,
     });
+  }
+
+  if (f.usageAwarenessOff) {
+    parts.push({ text: palette.dim('usage hidden'), droppablePriority: 2.5 });
   }
 
   if (f.contextPct !== undefined) {

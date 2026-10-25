@@ -789,6 +789,18 @@ Hint: When you want to know how close you are to hitting your Claude subscriptio
 
 Flags: None
 
+### `/usage-awareness`
+
+Toggle whether the model sees subscription usage info
+
+Usage: `/usage-awareness [on\|off]`
+
+Aliases: `/ua`
+
+Hint: Controls whether subscription usage data appears in the model context (vitals note, fan-out notice, get_runtime_state). When off, the model cannot see how much of your subscription window has been consumed. Human-facing readouts (`/info usage`) are unaffected. Persists across sessions via afk.config.json. Default: on.
+
+Flags: `on`, `off`
+
 ### `/whatif`
 
 Predict behavioural impact of a proposed change to your AFK environment

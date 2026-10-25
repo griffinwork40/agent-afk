@@ -274,6 +274,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'interactive.thinkingUi', tier: 'agent', type: 'enum', enumValues: ['summary', 'live', 'digest', 'off'], description: 'Default REPL thinking-display mode.' },
   { path: 'theme', tier: 'agent', type: 'enum', enumValues: ['dark', 'light', 'umber', 'auto'], description: 'TUI color palette (dark | light | umber | auto). Display-only; auto detects a light/dark background from the terminal and falls back to dark. umber matches the Umber terminal and is dark-only, so auto never selects it.' },
   { path: 'updatePolicy', tier: 'human', type: 'enum', enumValues: ['notify', 'auto', 'off'], description: 'Self-update policy (human-tier: auto self-update is scope-widening).' },
+  { path: 'tools.usageAwareness', tier: 'agent', type: 'boolean', description: 'Whether the model sees subscription usage info (vitals, fan-out notice, get_runtime_state). Default: true.' },
   { path: 'autoResumeOnUsageLimit', tier: 'agent', type: 'boolean', description: 'Auto-resume after a usage-limit pause.' },
   { path: 'bgSummaries', tier: 'agent', type: 'boolean', description: 'Background summarisation.' },
   { path: 'maxSummaryCallsPerSession', tier: 'agent', type: 'number', clamp: { min: 1, max: 500, integer: true }, description: 'Cap on summary calls per session.' },

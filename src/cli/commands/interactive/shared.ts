@@ -944,5 +944,6 @@ export function formatStatusFields(
       ? { maxBudgetUsd }
       : {}),
     ...(activeAgentCount !== undefined && activeAgentCount > 0 ? { activeAgentCount } : {}),
+    ...(stats.usageAwareness === false ? { usageAwarenessOff: true } : {}),
   };
 }

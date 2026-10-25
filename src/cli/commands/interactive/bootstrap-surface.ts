@@ -4,6 +4,7 @@ import { StatusLine } from '../../status-line.js';
 import { GitStatusSampler } from '../../git-status-sampler.js';
 import { createConsoleWriter } from '../../slash/writer.js';
 import { createSessionStats } from '../../slash/session-stats.js';
+import { setUsageAwareness } from '../../../agent/usage/usage-awareness-toggle.js';
 import type { SessionStats } from '../../slash/types.js';
 import type { PermissionMode } from '../../../agent/types/sdk-types.js';
 import type { CompletionWriter } from './shared.js';
@@ -65,6 +66,12 @@ export function createReplSurface(a: {
     : a.options.permissionMode ?? a.cliConfig.permissionMode;
   if (initialPermissionMode !== undefined) {
     stats.permissionMode = initialPermissionMode;
+  }
+  // Seed usage-awareness toggle from config. Default is on (undefined = on).
+  const configUsageAwareness = a.cliConfig.tools?.usageAwareness;
+  if (configUsageAwareness !== undefined) {
+    stats.usageAwareness = configUsageAwareness;
+    setUsageAwareness(configUsageAwareness);
   }
   // Seed thinking-UI mode so `/thinking` has a live value to mutate.
   // `options.thinkingUi` was already resolved by the interactive action handler

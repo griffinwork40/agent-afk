@@ -28,7 +28,7 @@ export interface AutoRoutingConfig {
 }
 
 export interface CliConfig {
-  tools?: { disabled?: string[] };
+  tools?: { disabled?: string[]; usageAwareness?: boolean };
   apiKey?: string;
   /**
    * Base URL for the Anthropic Messages API. When set, traffic is routed to
@@ -352,7 +352,7 @@ export interface ConfigFileSchema {
    * extra deny list for sessions whose active model resolves to that slot;
    * resolved and enforced in agent/tools/operator-denied.slots.ts.
    */
-  tools?: { disabled?: string[]; disabledBySlot?: Partial<Record<string, string[]>> };
+  tools?: { disabled?: string[]; disabledBySlot?: Partial<Record<string, string[]>>; usageAwareness?: boolean };
   model?: string;
   /**
    * Per-tier model bindings. Each slot accepts a bare id string
