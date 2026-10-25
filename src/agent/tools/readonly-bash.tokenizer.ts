@@ -370,6 +370,22 @@ function hiddenGitMutation(tokens: readonly string[]): string | null {
   return null;
 }
 
+// Analogous to `hiddenGitMutation` but narrowed to the destructive subset.
+// When a compound-command keyword (`then`, `{`) causes `resolveSegment` to
+// return null — or when the resolved base is not `git` — the raw token list
+// may still contain a literal `git` followed by a destructive subcommand.
+// Walk the tokens and call `destructiveGitSegmentReason` on the tail after
+// each `git` occurrence, mirroring the backstop logic in `hiddenGitMutation`.
+function hiddenDestructiveGit(tokens: readonly string[]): string | null {
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (baseName(tokens[i]!) === 'git') {
+      const reason = destructiveGitSegmentReason(tokens.slice(i + 1));
+      if (reason !== null) return reason;
+    }
+  }
+  return null;
+}
+
 /**
  * git subcommands that destroy working-tree state. A subset of
  * `GIT_MUTATING_SUBCMDS` — checked by `destructiveGitSegmentReason`.
@@ -423,9 +439,17 @@ export function classifyDestructiveGit(
   const vars = new Map<string, string>();
   for (const rawTokens of tokenizeSegments(command)) {
     const seg = resolveSegment(rawTokens, vars);
-    if (seg === null) continue;
+    if (seg === null) {
+      const hidden = hiddenDestructiveGit(rawTokens);
+      if (hidden !== null) return { destructive: true, reason: hidden };
+      continue;
+    }
     const base = baseName(seg.command);
-    if (base !== 'git') continue;
+    if (base !== 'git') {
+      const hidden = hiddenDestructiveGit(rawTokens);
+      if (hidden !== null) return { destructive: true, reason: hidden };
+      continue;
+    }
     const reason = destructiveGitSegmentReason(seg.argv);
     if (reason !== null) return { destructive: true, reason };
   }

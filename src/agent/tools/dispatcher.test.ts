@@ -3085,6 +3085,7 @@ describe('blockDestructiveGit gate', () => {
       schemas: [...builtinToolSchemas],
       permissions: { allowedTools: ['bash'] },
       blockDestructiveGit,
+      hookRegistry: undefined,
     });
   }
   function bashCall(command: string): ToolCall {
@@ -3118,5 +3119,19 @@ describe('blockDestructiveGit gate', () => {
     const result = await dispatcher.execute(bashCall('git checkout main'));
     expect(result.isError).toBeUndefined();
     expect(result.content).toBe('ran: git checkout main');
+  });
+
+  it('blocks brace-group git checkout when blockDestructiveGit is true', async () => {
+    const dispatcher = makeDestructiveGitDispatcher(true);
+    const result = await dispatcher.execute(bashCall('{ git checkout main; }'));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('working-tree-destructive');
+  });
+
+  it('blocks if/then git reset --hard when blockDestructiveGit is true', async () => {
+    const dispatcher = makeDestructiveGitDispatcher(true);
+    const result = await dispatcher.execute(bashCall('if true; then git reset --hard; fi'));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('working-tree-destructive');
   });
 });

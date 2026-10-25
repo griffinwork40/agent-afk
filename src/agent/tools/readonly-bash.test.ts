@@ -875,4 +875,20 @@ describe('classifyDestructiveGit', () => {
       expect(result.destructive, `expected "${cmd}" to be non-destructive`).toBe(false);
     });
   }
+
+  describe('compound-command bypass (must NOT be bypassable)', () => {
+    const compoundDestructive: Array<[string, string]> = [
+      ['{ git checkout main; }', 'brace-group git checkout'],
+      ['{ git reset --hard; }', 'brace-group git reset --hard'],
+      ['if true; then git checkout main; fi', 'if/then git checkout'],
+      ['if true; then git clean -fd; fi', 'if/then git clean'],
+    ];
+    for (const [cmd, label] of compoundDestructive) {
+      it(`blocks compound: ${label}`, () => {
+        const result = classifyDestructiveGit(cmd);
+        expect(result.destructive, `expected "${cmd}" to be destructive`).toBe(true);
+        expect(result.reason).toBeTruthy();
+      });
+    }
+  });
 });
