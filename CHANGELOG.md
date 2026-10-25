@@ -11,12 +11,16 @@ Entries in the [Unreleased] section may include a short commit hash suffix
 
 ## [Unreleased]
 
+## [5.337.0] - 2026-10-25
+
 ### Added
 - dynamic startup recall + ambient dashboard (#4397) (3a4908ef2)
 - add /usage-awareness toggle to control model visibility of subscription usage (#4402) (4fe650879)
 
 ### Fixed
 - stale comments, fail-closed gate parity, provider gate tests (#4223) (619e4c371)
+- replace it.fails with pinned assertions in cross-classifier Section 3 (#3846) (ae2534944)
+- extend cross-classifier helpers to all four classifiers + add tier assertions (7df520797)
 - narrow stampLastContent to UserMessageParam | AssistantMessageParam for SDK v1.x (9e52858ed)
 - use git_read-compatible flag forms in state survey (#4390) (a76a99e67)
 
