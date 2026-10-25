@@ -67,17 +67,21 @@ export { createWithRetry, type ConnectionRetryInfo } from './connection-create.j
 
 /**
  * Acquire the per-endpoint semaphore (if configured for this turn's baseUrl),
- * call `createWithRetry`, release the semaphore as soon as the connection
- * promise settles, then return the resolved stream.
+ * call `createWithRetry`, and return the resolved stream wrapped so the
+ * semaphore is held until the stream is fully exhausted, errors, or is aborted.
  *
- * Holding the slot only for the connection phase (not the full stream) means a
- * second waiter is unblocked once the first request has been accepted by the
- * server — the right serialisation point for a prefill-heavy single-request
- * local server (Ollama, LM Studio, MLX). Part of #3886.
+ * Holding the slot for the FULL stream lifetime (not just the connection phase)
+ * is the correct serialisation point for local single-request servers (Ollama,
+ * LM Studio, MLX): the bottleneck is the entire generation, not just the HTTP
+ * handshake. The wrapped async iterable releases in its generator `finally`
+ * block so every exit path — clean completion, error, or abort — is covered.
  *
- * @param turnInput - The turn-level input carrying `baseUrl` and
- *   `endpointConcurrency`; used only for semaphore key resolution, never
- *   forwarded to `createWithRetry`.
+ * If the semaphore acquire itself is aborted (via `signal`), the promise
+ * rejects with an AbortError and no slot is consumed. Part of #3886.
+ *
+ * @param turnInput - The turn-level input carrying `baseUrl`,
+ *   `endpointConcurrency`, and `signal`; used for semaphore key resolution and
+ *   abort propagation. Never forwarded to `createWithRetry`.
  */
 async function createWithEndpointSemaphore(
   turnInput: RunTurnInput,
@@ -85,12 +89,34 @@ async function createWithEndpointSemaphore(
 ): ReturnType<typeof createWithRetry> {
   const sem = getEndpointSemaphore(turnInput.baseUrl, turnInput.endpointConcurrency);
   if (sem === null) return createWithRetry(...args);
-  await sem.acquire();
-  try {
-    return await createWithRetry(...args);
-  } finally {
-    sem.release();
+
+  const waitStart = Date.now();
+  await sem.acquire(turnInput.signal);
+  const waitMs = Date.now() - waitStart;
+
+  // Trace semaphore wait when non-trivial (> 0 ms recorded).
+  if (waitMs > 0) {
+    void emitSessionPhase(turnInput.traceWriter, {
+      phase: 'endpoint_semaphore_wait',
+      durationMs: waitMs,
+      resolvedModel: turnInput.model,
+      metadata: {
+        baseUrl: turnInput.baseUrl ?? '',
+        activeCount: sem.activeCount,
+      },
+    });
   }
+
+  // Wrap the stream so the slot is held until the iterable is exhausted or
+  // errors — not just until the HTTP connection is accepted.
+  const rawStream = await createWithRetry(...args);
+  return (async function* semaphoreHeld() {
+    try {
+      yield* rawStream;
+    } finally {
+      sem.release();
+    }
+  })();
 }
 
 function traceConnectionLifecycle(input: RunTurnInput): (info: ConnectionLifecycleInfo) => void {

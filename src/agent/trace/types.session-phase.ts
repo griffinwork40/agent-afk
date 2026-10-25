@@ -301,6 +301,13 @@ export type SessionPhaseName =
   | 'compose_leaf_tools_stripped'
   /** Hook-block repeat breaker trip (#3736). metadata: { tool, count, fork }. */
   | 'hook_block_repeat_tripped'
+  // Per-endpoint concurrency semaphore wait (#3886). Emitted when a model
+  // request queued behind the semaphore and the wait was non-zero. A single
+  // event (no paired start); `durationMs` is the queue wait in ms. `metadata`
+  // carries `baseUrl` (the normalised endpoint key) and `activeCount` (holders
+  // at the moment the slot was granted). PURE OBSERVABILITY — never alters the
+  // request; exists so operators can diagnose elevated latency on local servers.
+  | 'endpoint_semaphore_wait'
   // Post-cancel late billing settled after the `cancelled` lifecycle row was
   // already written (#3931). Emitted only when spend accrued AFTER cancel()
   // emitted its row — i.e. a `done` drained on interrupt. Carries cumulative

@@ -44,7 +44,7 @@
 /** A minimal counting semaphore. */
 export interface EndpointSemaphore {
   /** Block until a slot is available, then claim it. */
-  acquire(): Promise<void>;
+  acquire(signal?: AbortSignal): Promise<void>;
   /** Release one slot. Must be called exactly once per successful `acquire()`. */
   release(): void;
   /** Current number of active holders (for observability / tests). */
@@ -63,13 +63,25 @@ class CountingSemaphore implements EndpointSemaphore {
     return this._activeCount;
   }
 
-  acquire(): Promise<void> {
+  acquire(signal?: AbortSignal): Promise<void> {
     if (this._activeCount < this.limit) {
       this._activeCount += 1;
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => {
-      this._queue.push(resolve);
+    return new Promise<void>((resolve, reject) => {
+      const resolver = () => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      };
+      const onAbort = () => {
+        // Splice this resolver out of the queue so the slot is not permanently
+        // consumed; release() will not find it and will not mistakenly promote it.
+        const idx = this._queue.indexOf(resolver);
+        if (idx !== -1) this._queue.splice(idx, 1);
+        reject(new DOMException('Semaphore acquire aborted', 'AbortError'));
+      };
+      this._queue.push(resolver);
+      signal?.addEventListener('abort', onAbort, { once: true });
     });
   }
 
@@ -93,11 +105,18 @@ function normaliseKey(baseUrl: string): string {
 /**
  * Process-global semaphore registry keyed by normalised endpoint URL.
  *
- * Exported only for test-hygiene (resetEndpointSemaphores). Do NOT reference
- * directly from production call-sites; use {@link getEndpointSemaphore}.
+ * Not exported — test-only access is via {@link _resetEndpointSemaphores}.
+ * Production call-sites use {@link getEndpointSemaphore}.
  * @internal
  */
-export const _semaphoreRegistry = new Map<string, EndpointSemaphore>();
+const _semaphoreRegistry = new Map<string, EndpointSemaphore>();
+
+/**
+ * Tracks keys for which a conflicting-limit warning has already been emitted.
+ * One-shot per key to avoid log spam across sessions.
+ * @internal
+ */
+const _warnedConflictKeys = new Set<string>();
 
 /**
  * Return the shared semaphore for `baseUrl` at the given `limit`, creating it
@@ -108,6 +127,10 @@ export const _semaphoreRegistry = new Map<string, EndpointSemaphore>();
  * the process lifetime. A subsequent call with a different `limit` for the
  * same key returns the EXISTING semaphore. Operators who change
  * `maxConcurrency` at runtime must restart the process.
+ *
+ * When two slots share a `baseUrl` with different `maxConcurrency` values,
+ * a one-shot `console.warn` is emitted identifying the conflict so operators
+ * can diagnose unexpected serialisation behaviour.
  */
 export function getEndpointSemaphore(
   baseUrl: string | undefined,
@@ -116,7 +139,17 @@ export function getEndpointSemaphore(
   if (!limit || !baseUrl) return null;
   const key = normaliseKey(baseUrl);
   const existing = _semaphoreRegistry.get(key);
-  if (existing !== undefined) return existing;
+  if (existing !== undefined) {
+    if (existing.limit !== limit && !_warnedConflictKeys.has(key)) {
+      _warnedConflictKeys.add(key);
+      console.warn(
+        `[endpoint-semaphore] Conflicting maxConcurrency for endpoint "${key}": ` +
+        `first-registered limit ${existing.limit} will be used (new request was ${limit}). ` +
+        `Restart the process to change the limit.`,
+      );
+    }
+    return existing;
+  }
   const sem = new CountingSemaphore(limit);
   _semaphoreRegistry.set(key, sem);
   return sem;
@@ -126,14 +159,16 @@ export function getEndpointSemaphore(
  * Execute `fn` under the given semaphore (or directly when `sem` is null).
  *
  * Guarantees that `sem.release()` is called exactly once even when `fn`
- * throws or rejects. Returns `fn`'s resolved value.
+ * throws or rejects. Returns `fn`'s resolved value. Passes `signal` to
+ * `acquire()` so an aborted session does not leak a queued resolver.
  */
 export async function withEndpointSemaphore<T>(
   sem: EndpointSemaphore | null,
   fn: () => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   if (sem === null) return fn();
-  await sem.acquire();
+  await sem.acquire(signal);
   try {
     return await fn();
   } finally {
@@ -142,11 +177,12 @@ export async function withEndpointSemaphore<T>(
 }
 
 /**
- * Clear all registered semaphores. **Test-only** — calling this in production
- * would race with live requests. Named with a leading underscore to make the
- * intent clear.
+ * Clear all registered semaphores and conflict-warn state.
+ * **Test-only** — calling this in production would race with live requests.
+ * Named with a leading underscore to make the intent clear.
  * @internal
  */
 export function _resetEndpointSemaphores(): void {
   _semaphoreRegistry.clear();
+  _warnedConflictKeys.clear();
 }
