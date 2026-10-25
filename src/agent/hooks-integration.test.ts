@@ -131,6 +131,23 @@ describe('SubagentManager — hook integration', () => {
     expect(shared.sessions).toHaveLength(1);
   });
 
+  it('SubagentStart carries chainId / continuationIndex on continuation forks only', async () => {
+    const registry = createHookRegistry();
+    const events: HookContext[] = [];
+    registry.register('SubagentStart', (ctx) => { events.push(ctx); return {}; });
+    const mgr = new SubagentManager({ hookRegistry: registry });
+    type ForkOpts = Parameters<typeof mgr.forkSubagent>[0];
+    await mgr.forkSubagent({ parent: { sessionId: 'p-1' }, config: { model: 'sonnet' } } as unknown as ForkOpts);
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p-1' }, config: { model: 'sonnet' },
+      continuation: { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], chainId: 'chain_abc', continuationOf: 'child-0', continuationIndex: 2 },
+    } as unknown as ForkOpts);
+    expect(events).toHaveLength(2);
+    expect(events[0]).not.toHaveProperty('chainId');
+    expect(events[0]).not.toHaveProperty('continuationIndex');
+    expect(events[1]).toMatchObject({ event: 'SubagentStart', chainId: 'chain_abc', continuationIndex: 2 });
+  });
+
   it('blocked SubagentStart throws HookBlockedError and never creates a session', async () => {
     const registry = createHookRegistry();
     registry.register('SubagentStart', () => ({

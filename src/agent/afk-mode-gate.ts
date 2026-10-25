@@ -171,6 +171,8 @@ interface ApprovalCtx {
   sessionId: string | undefined;
   /** Classifier reason for this call (e.g. `workspace-escape: …`). */
   riskReason?: string;
+  /** Named risk category from the classifier (#3900). */
+  riskCategory?: import('./risk-classifier.js').RiskCategory;
   /** Refusal-wording context; see {@link RefusalCtx}. */
   refusal: RefusalCtx;
 }
@@ -244,6 +246,7 @@ async function requestApproval(
       ...(isBlock ? { blockedTool: toolName } : {}),
       durationMs,
       approvalOutcome,
+      ...(ctx.riskCategory !== undefined ? { riskCategory: ctx.riskCategory } : {}),
     });
     return decision;
   }
@@ -414,6 +417,7 @@ export function createAfkModeGate(
           blockedTool: toolName,
           durationMs: Date.now() - start,
           approvalOutcome: 'carve-out',
+          riskCategory: verdict.category,
         });
         return {};
       }
@@ -444,6 +448,7 @@ export function createAfkModeGate(
         blockedTool: toolName,
         durationMs: Date.now() - start,
         approvalOutcome: 'hard-block',
+        riskCategory: verdict.category,
       });
       return decision;
     }
@@ -454,6 +459,7 @@ export function createAfkModeGate(
       {
         ...approvalCtx,
         ...(verdict.reason !== undefined ? { riskReason: verdict.reason } : {}),
+        riskCategory: verdict.category,
         refusal,
       },
       toolName,

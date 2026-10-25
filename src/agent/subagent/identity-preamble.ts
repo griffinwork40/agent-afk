@@ -40,6 +40,23 @@
 import type { AgentConfig } from '../types/config-types.js';
 import { resolveMaxNestingDepth } from '../tools/nesting.js';
 import { appendSystemPromptBlock } from './append-system-prompt-block.js';
+import { isWorktreeCwd } from '../manifest/worktree.js';
+
+/**
+ * Sentence appended to the identity preamble when the child's cwd is inside a
+ * linked afk worktree. Exported for tests.
+ *
+ * Invariant: every clause must be true for a child whose cwd is under
+ * `.afk-worktrees/`. The hazard (shared stash) is structural; the alternatives
+ * (`git diff`/`git apply`, rescue branch) work in any worktree.
+ */
+export const WORKTREE_STASH_RULE =
+  'Never run `git stash` push/pop/apply/drop/clear (or bare `git stash`) in this worktree: ' +
+  'the stash stack (refs/stash) is shared with every other worktree of this repo and a mutating ' +
+  'stash operation can silently consume or corrupt stashes from other agents or the main checkout ' +
+  '(incident 2026-10-21). To set changes aside: `git diff > <file-in-worktree>` then `git apply <file>`, ' +
+  'or commit to a rescue branch (`git switch -c rescue-<name> && git add <paths> && git commit`). ' +
+  '`git stash list`, `show`, `create`, `store`, and `branch` are still fine.';
 
 /** The resolved facts the preamble is derived from. */
 export interface SubagentIdentityFacts {
@@ -62,6 +79,25 @@ export interface SubagentIdentityFacts {
    * derive from one value.
    */
   nestedAgentAllowlist?: readonly string[];
+  /**
+   * The child's effective cwd, used to detect whether it is running inside a
+   * linked afk worktree (`.afk-worktrees/<slug>/`). When true, the no-stash
+   * rule sentence ({@link WORKTREE_STASH_RULE}) is appended to the preamble.
+   *
+   * Invariant: this must be the CHILD's resolved cwd (after inheritance from
+   * the parent), not the parent's cwd, so the sentence is present precisely
+   * when the child's bash tool would operate inside the shared-stash-hazard
+   * zone. Absent = no sentence emitted (conservative: no false assertions).
+   */
+  cwd?: string;
+  /**
+   * When `true`, the child may yield by ending its turn with an **Asking**
+   * block — the runtime will detect it, tag the result as `needsInput`, and
+   * return a structured header to the parent. Only set for foreground
+   * non-compose dispatches. When `false` or absent, the fallback
+   * "proceed on the most reasonable assumption" language is used instead.
+   */
+  yieldEnabled?: boolean;
 }
 
 function isFiniteNumber(n: unknown): n is number {
@@ -86,11 +122,36 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
   ];
 
   if (facts.isNonInteractive === true) {
-    lines.push(
-      '',
-      'No human is reachable from this session. When you need a decision you cannot make yourself,',
-      'proceed on the most reasonable assumption, or stop, and put the open question in your reply.',
-    );
+    if (facts.yieldEnabled === true) {
+      lines.push(
+        '',
+        'No human is reachable from this session. You can ask your parent agent (not a human) by',
+        'ending your turn with an **Asking** block in exactly this format:',
+        '',
+        '**Asking**',
+        '- Question: <your question>',
+        '- Assumption it resolves: <what answering clarifies>',
+        '- Once answered: <what you will do>',
+        '',
+        'Include a self-contained summary of work done so far above the Asking block, written for a',
+        'stranger who may continue from it.',
+        '',
+        'Ask only for information the parent uniquely holds: the user\'s intent, the original',
+        'conversation, or sibling findings. Never ask for something your own tools can answer.',
+        '',
+        'Asking ends your turn. You may resume with your full history, or a fresh agent may',
+        'continue from your summary.',
+        '',
+        'If you cannot ask (no question worth asking), proceed on the most reasonable assumption,',
+        'or stop and put the open question in your reply.',
+      );
+    } else {
+      lines.push(
+        '',
+        'No human is reachable from this session. When you need a decision you cannot make yourself,',
+        'proceed on the most reasonable assumption, or stop, and put the open question in your reply.',
+      );
+    }
   }
 
   // Resolve effective maxDepth: use the threaded value when available, fall
@@ -122,6 +183,14 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
     );
   }
 
+  // Worktree stash rule: emitted only when the child's cwd is inside a linked
+  // afk worktree. Every line of this preamble must be true for the child that
+  // receives it — the stash-hazard is structural and applies precisely when the
+  // child is in a worktree, so conditioning on cwd satisfies the module invariant.
+  if (facts.cwd !== undefined && isWorktreeCwd(facts.cwd)) {
+    lines.push('', WORKTREE_STASH_RULE);
+  }
+
   // Nested-dispatch scope. Emitted only when the allowlist is set (scoped agent),
   // so unscoped children are unchanged. Text is semantically consistent with the
   // executor rejection message (subagent-executor.ts nestedScope gate) so the child
@@ -138,6 +207,7 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
       lines.push(
         '',
         `When dispatching nested agents, agent_type is required and must be one of: ${nestedAgentAllowlist.join(', ')}.`,
+        'Do not delegate your ordinary research to another research-agent or Explore agent unless that exact type appears in this list. Complete it with your own read tools.',
         'A bare dispatch with no agent_type is not permitted here — set agent_type to one of the allowed types, or complete the task with your own tools.',
       );
     }
@@ -162,12 +232,15 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
 export function injectSubagentIdentityPreamble(
   config: AgentConfig,
   nestedAgentAllowlist?: readonly string[],
+  yieldEnabled?: boolean,
 ): AgentConfig {
   const block = renderSubagentIdentityPreamble({
     isNonInteractive: config.isNonInteractive,
     depth: config.depth,
     maxDepth: config.maxDepth,
     nestedAgentAllowlist,
+    cwd: config.cwd,
+    yieldEnabled,
   });
   return appendSystemPromptBlock(config, block);
 }

@@ -17,9 +17,8 @@ import {
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getQueueDir } from '../../paths.js';
-import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { type TaskRecord } from './task-lifecycle.js';
-import { reEnqueueRecord } from './lease-store.js';
+import { atomicWriteJson, reEnqueueRecord } from './lease-store.js';
 
 const LEASED_SUBDIR = 'leased';
 const DEAD_LETTER_SUBDIR = 'dead-letter';
@@ -40,10 +39,6 @@ function deadLetterPath(queueDir: string, taskId: string): string {
   return join(deadLetterDir(queueDir), `${taskId}.json`);
 }
 
-function atomicWriteJson(dest: string, data: unknown): void {
-  atomicWriteFile(dest, JSON.stringify(data), { mode: 0o600 });
-}
-
 /**
  * Reclaim a single lease that was just restored from 'waiting_human_input'
  * back to 'leased' by setLeaseState (crash-path only, called from
@@ -55,6 +50,13 @@ function atomicWriteJson(dest: string, data: unknown): void {
  * the correct guard because `renewLease` has no production caller — any task
  * running longer than the 10-minute lease TTL has leaseExpiry < now, and
  * calling recoverExpiredLeases would reclaim it mid-run.
+ *
+ * Records that are missing `attempts` or `maxAttempts` (crash-window writes) are
+ * reconstructed with `attempts: 0, maxAttempts: 1`.  On the first reclaim the
+ * check `attempts (0) < maxAttempts (1)` is true, so the record is re-enqueued.
+ * When `acquireLease` picks it up it increments `attempts` to 1; if the task
+ * crashes again the second reclaim sees `1 < 1` → false and dead-letters it.
+ * Dead-lettering therefore occurs on the **second** reclaim attempt, not the first.
  *
  * @param taskId    - The task whose restored lease should be reclaimed.
  * @param queueDir  - Queue root directory.
@@ -80,6 +82,9 @@ export function reclaimSingleLease(
   }
 
   // Apply same crash-window reconstruction as recoverExpiredLeases.
+  // Records that are missing attempt fields are reconstructed with
+  // attempts: 0, maxAttempts: 1.  They are re-enqueued on the first reclaim
+  // (0 < 1) and dead-lettered only on the second (1 < 1 → false).
   if (record.attempts === undefined || record.maxAttempts === undefined) {
     record = {
       ...record,

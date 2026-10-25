@@ -52,7 +52,7 @@ export function resolveMaxPredictions(probes: number, explicit?: number): number
 // Zod schema
 // ---------------------------------------------------------------------------
 
-const PredictionSchema = z.object({
+export const PredictionSchema = z.object({
   id: z.string(),
   behavior: z.string(),
   direction: z.enum(['added', 'removed', 'strengthened', 'weakened']),

@@ -74,3 +74,14 @@ describe('preamble-strip', () => {
   });
 });
 
+
+describe('extractUserContent — bare kebab-tag preamble (#placeholder-prevent)', () => {
+  it('returns the user text after a one-line [placeholder-prevent] block', () => {
+    const text = '[placeholder-prevent] Prefer running commands yourself with your tools; resolve placeholders.\n\nSay only: HELLO';
+    expect(isPreamble(text)).toBe(true);
+    expect(extractUserContent(text)).toBe('Say only: HELLO');
+  });
+  it('still returns undefined for a bare tag with no user text', () => {
+    expect(extractUserContent('[placeholder-prevent] Prefer running commands yourself.')).toBeUndefined();
+  });
+});

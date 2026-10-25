@@ -50,7 +50,7 @@ adversarial. A bypass here is a security bug.
 
 | Control | What it does | Source |
 |---|---|---|
-| **Browser domain policy** | Pre-navigation and post-redirect domain allow/block checks on every `browser_open` call; combined with an SSRF egress guard that blocks private/loopback/link-local/cloud-metadata ranges before the browser touches the network. | `src/browser/playwright/index.ts:114-127` |
+| **Browser domain policy** | Pre-navigation and post-redirect domain allow/block checks on every `browser_open` call; combined with an SSRF egress guard that blocks private/loopback/link-local/cloud-metadata ranges before the browser touches the network. | `src/browser/config.ts:374` (`enforceDomainPolicy`), `src/browser/playwright/index.ts:135-143` |
 | **Credential denylist floor** | Blocks bash and typed-file access to `~/.ssh`, `~/.aws`, `~/.afk/config`, `/etc/shadow`, and ~25 other credential roots. The bash and typed-tool denylists are kept in sync so a future entry covers both paths. | `src/agent/tools/hooks/bash-restriction-hook.ts:58-59`, `src/agent/tools/handlers/read-denylist.ts`, `src/agent/tools/handlers/write-denylist.ts` |
 | **SSRF / egress guard** | Rejects HTTP requests to private/loopback/link-local/cloud-metadata ranges before they leave the process. | `src/http-client/egress-guard.ts`, `src/agent/tools/handlers/web-scrape.ts:22` |
 | **Telegram allowlist** | Inbound messages from chat IDs not in `AFK_TELEGRAM_ALLOWED_CHAT_IDS` are silently dropped; outbound sends are routed only to allowlisted IDs. | `src/telegram/notify-routing.ts` |
@@ -73,7 +73,7 @@ issue, not a security vulnerability.
 | **Path / bash string filters** | Warn-only scan of bash command strings for out-of-root path references; block typed-file calls outside `readRoots`/`writeRoots`. | `src/agent/tools/hooks/bash-restriction-hook.ts`, `src/agent/tools/hooks/path-approval-hook.ts` |
 | **Read-only bash mode** | Blocks high-frequency mutation forms (writes, pipes to interpreter) for recon sub-agents. Classifier is best-effort, default-ALLOW. | `src/agent/tools/readonly-bash.ts:18`, `src/agent/tools/readonly-bash.ts:133` |
 | **AFK-mode gate** | Safety ceiling applied when running in AFK (unattended) mode; raises the bar for destructive actions without OS-level enforcement. | `src/agent/afk-mode-gate.ts`, `src/agent/default-hook-registry.ts:231` |
-| **Safe-destruct detect** | Observes destructive command patterns and surfaces them before execution in interactive sessions. | `src/agent/safe-destruct-detect.ts`, `src/agent/safe-destruct-patterns.ts` |
+| **Safe-destruct detect** | Observes or blocks destructive command patterns; worktree-scoped patterns (e.g. `git stash` mutating ops) are blocked only inside `.afk-worktrees/` linked worktrees. | `src/agent/safe-destruct-detect.ts`, `src/agent/safe-destruct-patterns.ts` |
 | **Release-boundary detect** | Observes sync-boundary commands (publish, deploy, release) to surface them before they escape in interactive sessions. | `src/agent/release-boundary-detect.ts` |
 | **Plan-mode gate** | Blocks write-capable tools while `exit_plan_mode` has not been called. Explicitly an honesty guardrail, not a security boundary. | `src/agent/plan-mode-gate.ts:27` |
 

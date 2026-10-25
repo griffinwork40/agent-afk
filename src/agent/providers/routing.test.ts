@@ -34,6 +34,13 @@ import { getDefaultSubagentModel } from '../../cli/shared-helpers.js';
 import type { SubagentExecutor } from '../tools/subagent-executor.js';
 import type { SkillExecutor } from '../tools/skill-executor.js';
 import type { ModelProvider } from '../provider.js';
+import {
+  computeSlotBindings,
+  resolveBinding,
+  setSlotBindings,
+  resetSlotBindings,
+  DEFAULT_SLOT_BINDINGS,
+} from '../session/model-slots.js';
 
 describe('providerForModel', () => {
   // Scrub env vars that `providerForModel` now consults internally.
@@ -694,5 +701,104 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
       const childProvider = providerForModel(childModel);
       expect(childProvider).not.toBe('anthropic-direct');
     }
+  });
+});
+
+/**
+ * Integration test: configured subagent slot → getDefaultSubagentModel →
+ * resolveBinding → correct provider/baseUrl/apiKey (#4337).
+ *
+ * Verifies the full resolution chain so that if any dispatch path were to
+ * pass the literal string "subagent" to the provider API instead of
+ * resolving it, the test would catch it.
+ *
+ * Chain:
+ *   computeSlotBindings({ subagent: { id, provider, baseUrl, apiKey } })
+ *     → setSlotBindings(bindings)
+ *     → getDefaultSubagentModel()  returns 'subagent' (the slot name)
+ *     → resolveBinding('subagent', bindings)  returns { id, provider, baseUrl, apiKey }
+ */
+describe('subagent slot dispatch path resolution — integration (#4337)', () => {
+  let _savedSubagentEnv: string | undefined;
+
+  beforeEach(() => {
+    _savedSubagentEnv = process.env['AFK_DEFAULT_SUBAGENT_MODEL'];
+    delete process.env['AFK_DEFAULT_SUBAGENT_MODEL'];
+  });
+
+  afterEach(() => {
+    resetSlotBindings();
+    if (_savedSubagentEnv === undefined) {
+      delete process.env['AFK_DEFAULT_SUBAGENT_MODEL'];
+    } else {
+      process.env['AFK_DEFAULT_SUBAGENT_MODEL'] = _savedSubagentEnv;
+    }
+  });
+
+  it('configured subagent slot resolves through the full chain to the correct binding', () => {
+    // Configure a subagent slot with a known id + baseUrl + apiKey.
+    const bindings = computeSlotBindings({
+      subagent: {
+        id: 'meta-llama/Llama-3.3-70B-Instruct',
+        provider: 'openai',
+        baseUrl: 'https://api.together.xyz/v1',
+        apiKey: 'tgp-test-key',
+      },
+    });
+    setSlotBindings(bindings);
+
+    // Step 1: getDefaultSubagentModel must return the slot name 'subagent',
+    // not the concrete id — returning 'subagent' preserves the per-slot
+    // baseUrl/apiKey/provider for downstream resolveBinding.
+    const slotName = getDefaultSubagentModel('claude-sonnet-5');
+    expect(slotName).toBe('subagent');
+
+    // Step 2: resolveBinding('subagent', bindings) must return the full
+    // concrete binding — id, provider, baseUrl, apiKey — not the literal
+    // string "subagent". If any dispatch path passes the raw slot name to
+    // the provider API, this assertion fails.
+    const resolved = resolveBinding(slotName, bindings);
+    expect(resolved).toEqual({
+      id: 'meta-llama/Llama-3.3-70B-Instruct',
+      provider: 'openai',
+      baseUrl: 'https://api.together.xyz/v1',
+      apiKey: 'tgp-test-key',
+    });
+  });
+
+  it('subagent slot configured via object override resolves end-to-end for any parent model', () => {
+    const bindings = computeSlotBindings({
+      subagent: {
+        id: 'mistralai/Mixtral-8x7B-Instruct-v0.1',
+        provider: 'openai',
+        baseUrl: 'https://api.fireworks.ai/inference/v1',
+        apiKey: 'fw-test-key',
+      },
+    });
+    setSlotBindings(bindings);
+
+    // Both Claude and OpenAI parents must return 'subagent' when the slot is
+    // configured — the slot takes precedence over parent-aware inheritance.
+    expect(getDefaultSubagentModel('claude-opus-5')).toBe('subagent');
+    expect(getDefaultSubagentModel('gpt-4o')).toBe('subagent');
+
+    // resolveBinding must hydrate the slot name into the full concrete binding.
+    const resolved = resolveBinding('subagent', bindings);
+    expect(resolved.id).toBe('mistralai/Mixtral-8x7B-Instruct-v0.1');
+    expect(resolved.baseUrl).toBe('https://api.fireworks.ai/inference/v1');
+    expect(resolved.apiKey).toBe('fw-test-key');
+  });
+
+  it('unconfigured subagent slot falls through to medium tier (slot name is never returned)', () => {
+    // When the subagent slot has no id configured, getDefaultSubagentModel
+    // must NOT return 'subagent' — it falls through to the parent-aware logic.
+    setSlotBindings({
+      ...DEFAULT_SLOT_BINDINGS,
+      subagent: { id: '' }, // unconfigured
+    });
+    // Claude parent → 'medium' (cost-management tier)
+    expect(getDefaultSubagentModel('claude-sonnet-5')).toBe('medium');
+    // OpenAI parent → inherits parent
+    expect(getDefaultSubagentModel('gpt-4o')).toBe('gpt-4o');
   });
 });

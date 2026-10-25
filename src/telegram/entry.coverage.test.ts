@@ -40,6 +40,7 @@ vi.mock('../agent/providers/index.js', () => ({ providerForModel: vi.fn(() => 'a
 vi.mock('../cli/config.js', () => ({
   loadConfig: vi.fn(() => ({ model: 'claude-sonnet-4-5', apiKey: 'sk-test' })),
   loadTelegramConfig: vi.fn(() => ({ tagOnlyChats: [] })),
+  getOperatorPermissionMode: vi.fn(() => undefined),
 }));
 vi.mock('../paths.js', () => ({
   getEnvConfigPath: vi.fn(() => '/tmp/test-afk.env'),
@@ -301,5 +302,29 @@ describe('entry.ts — main() happy path', () => {
     const ctorArg = mockBotCtor.mock.calls[0][0] as Record<string, unknown>;
     expect(ctorArg.thinking).toEqual({ type: 'enabled', budgetTokens: 8000 });
     expect(ctorArg.effort).toBe('high');
+  });
+
+  test('forwards permissionMode when getOperatorPermissionMode returns a value', async () => {
+    const config = await import('../cli/config.js');
+    vi.mocked(config.getOperatorPermissionMode).mockReturnValueOnce('default');
+    mockBotCtor.mockClear();
+    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGINT'); });
+    const { main } = await import('./entry.js');
+    await main();
+    expect(mockBotCtor).toHaveBeenCalledTimes(1);
+    const ctorArg = (mockBotCtor.mock.calls[0] as unknown[] | undefined)?.[0] as Record<string, unknown>;
+    expect(ctorArg['permissionMode']).toBe('default');
+  });
+
+  test('omits permissionMode when getOperatorPermissionMode returns undefined', async () => {
+    const config = await import('../cli/config.js');
+    vi.mocked(config.getOperatorPermissionMode).mockReturnValueOnce(undefined);
+    mockBotCtor.mockClear();
+    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGINT'); });
+    const { main } = await import('./entry.js');
+    await main();
+    expect(mockBotCtor).toHaveBeenCalledTimes(1);
+    const ctorArg = (mockBotCtor.mock.calls[0] as unknown[] | undefined)?.[0] as Record<string, unknown>;
+    expect(ctorArg).not.toHaveProperty('permissionMode');
   });
 });

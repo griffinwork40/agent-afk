@@ -156,7 +156,6 @@ function extendOnThrottle(ttfb: { extend(ms: number): void }): (retryAfterMs: nu
  */
 async function* attemptSignatureRetry(
   input: RunTurnInput,
-  turn: Pick<TurnAccumulator, 'windDownReason'>,
   ttfbTimeoutMs: number,
   stallTimeoutMs: number,
   requestStartedAt: number,
@@ -172,7 +171,14 @@ async function* attemptSignatureRetry(
     messages: isCacheEnabled({ baseUrl: input.baseUrl })
       ? withMessagesBreakpoint(input.messages, getCacheTtl())
       : input.messages,
-    tools: turn.windDownReason !== null ? null : input.tools,
+    // Wind-down rounds keep the SAME tools array so the request prefix stays
+    // byte-identical and server-side prefix/prompt caches remain valid.
+    // Anthropic's cache prefix order is tools → system → messages, so dropping
+    // tools would invalidate every cached block and force a full re-prefill on
+    // the one round that is supposed to be cheap. The model is told not to call
+    // tools via the wind-down note in the conversation; any tool_use it returns
+    // is settled without dispatch in tool-round.ts.
+    tools: input.tools,
   });
   const retryTtfb = armFirstByteTimeout(input.signal, ttfbTimeoutMs);
   const retryStall = armStreamStallWatchdog(retryTtfb.signal, stallTimeoutMs, traceStreamStall(input));
@@ -327,8 +333,14 @@ export async function* openRound({
   const params: AnthropicMessagesCreateParams = buildRoundParams({
     ...input,
     messages: messagesForRequest,
-    // Wind-down round: omit tools so the model must produce text.
-    tools: turn.windDownReason !== null ? null : input.tools,
+    // Wind-down rounds keep the SAME tools array so the request prefix stays
+    // byte-identical and server-side prefix/prompt caches remain valid.
+    // Anthropic's cache prefix order is tools → system → messages, so dropping
+    // tools would invalidate every cached block and force a full re-prefill on
+    // the one round that is supposed to be cheap. The model is told not to call
+    // tools via the wind-down note in the conversation; any tool_use it returns
+    // is settled without dispatch in tool-round.ts.
+    tools: input.tools,
   });
 
   // Witness layer: stamp request-initiation time so the model_ttfb phase can
@@ -418,7 +430,7 @@ export async function* openRound({
     }
     const e = annotateFastError(err, input.fastMode === true);
     if (isInvalidSignatureError(e)) {
-      const hit = yield* attemptSignatureRetry(input, turn, ttfbTimeoutMs, stallTimeoutMs, requestStartedAt);
+      const hit = yield* attemptSignatureRetry(input, ttfbTimeoutMs, stallTimeoutMs, requestStartedAt);
       if (hit !== null) return hit;
       // A user interrupt during the retry is a clean stop, not the stale 400.
       if (input.signal.aborted) {

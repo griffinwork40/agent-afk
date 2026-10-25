@@ -88,8 +88,9 @@ export type TriageNote = z.infer<typeof TriageNoteSchema>;
  * The card schema. Slug-keyed; merged on re-detection by `card-writer.ts`.
  *
  * Merge rules (enforced by writer, asserted in tests):
- *   - `firstSeen` is the MIN of all observations.
- *   - `lastSeen` is the MAX of all observations.
+ *   - `firstSeen` is the MIN of observations where evidence was added (merged-noops do not advance it).
+ *   - `lastSeen` is the MAX of observations where evidence was added (merged-noops do not advance it).
+ *   - `sightingCount` counts every merge call, including merged-noops — tracks recurrence beyond the evidence cap.
  *   - `occurrenceCount` is the count of evidence entries (post-dedup).
  *   - `evidence` is deduped by `(sessionId, eventIndices[0])`.
  *   - `notes` from disk are PRESERVED — scans never touch them.
@@ -106,6 +107,7 @@ export const FailureCardSchema = z.object({
   firstSeen: z.string().datetime(),
   lastSeen: z.string().datetime(),
   occurrenceCount: z.number().int().nonnegative(),
+  sightingCount: z.number().int().nonnegative().default(0),
   evidence: z.array(FailureEvidenceSchema).min(1),
   /** Detector-specific blob. Shape varies by `pattern`; consumers should
    *  guard on `pattern` before reading fields. */
@@ -578,7 +580,10 @@ export type EvalRunEvidenceRef = z.infer<typeof EvalRunEvidenceRefSchema>;
  * Top-line run outcome:
  *   - `pass`        — a contract ran and every check passed.
  *   - `fail`        — a contract ran and at least one check failed.
- *   - `unsupported` — no deterministic contract is registered for the pattern.
+ *   - `unsupported` — no card-specific behavioural proof was obtained: no
+ *                     contract is registered, no replay handler exists, or a
+ *                     replay handler exists but ran inconclusively (fixture
+ *                     intact yet the recorded loop did not reproduce).
  *   - `error`       — the contract threw unexpectedly mid-run.
  */
 export const EvalRunStatusSchema = z.enum(['pass', 'fail', 'unsupported', 'error']);

@@ -182,6 +182,7 @@ describe('diagnose --slot flag slot binding resolution', () => {
     small: { id: 'gpt-4o-mini', provider: 'openai' },
     medium: { id: 'chatgpt-4o-latest', provider: 'chatgpt-oauth' },
     large: { id: 'gpt-4o', provider: 'openai' },
+    subagent: { id: '' },
   };
 
   beforeEach(() => {

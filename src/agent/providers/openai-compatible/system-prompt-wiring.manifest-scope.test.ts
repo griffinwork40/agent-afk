@@ -52,7 +52,7 @@ function makeSkillExecutor(scope: {
 function makeArgs(overrides: Partial<SystemPromptWiringArgs> = {}): SystemPromptWiringArgs {
   return {
     config: {},
-    hasWorkspaceStore: false,
+    workspacePromptEnabled: false,
     readOnlyMemory: false,
     readOnlyState: false,
     resolvedSessionId: undefined,

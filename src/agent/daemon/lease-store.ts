@@ -86,7 +86,7 @@ function deadLetterPath(queueDir: string, taskId: string): string {
 }
 
 /** Atomically write JSON to dest via a tmp file in the same directory. */
-function atomicWriteJson(dest: string, data: unknown): void {
+export function atomicWriteJson(dest: string, data: unknown): void {
   atomicWriteFile(dest, JSON.stringify(data), { mode: 0o600 });
 }
 

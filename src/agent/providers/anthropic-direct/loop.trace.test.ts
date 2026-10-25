@@ -557,20 +557,29 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
       },
     };
 
-    // Batch dispatcher: fast call resolves in ~5ms, slow in ~80ms.
+    // Batch dispatcher: fast call takes 5ms, slow takes 80ms.
     // We inject completedAt directly so the emit site can read it — this is
     // what the real dispatcher.batch-process.ts now does (issue #2249 fix).
+    //
+    // To avoid Windows timer-resolution flakes (issue #4140): capture a shared
+    // `batchBase` timestamp once before any call runs, then set each call's
+    // completedAt = batchBase + delay. Both completedAt values share the same
+    // base, so durationMs = completedAt - startedAt ≈ delay for each call and
+    // the ratio slow/fast is deterministic regardless of wall-clock resolution.
+    let batchBase: number | undefined;
     const batchDispatcher = makeBatchDispatcher(async (calls) => {
+      batchBase = Date.now();
       const results: ToolResult[] = [];
       await Promise.all(calls.map(async (call, i) => {
         const delay = i === 0 ? 5 : 80;
-        await new Promise<void>((r) => setTimeout(r, delay));
-        results[i] = { content: call.name === 'glob' ? 'fast' : 'slow', completedAt: Date.now() };
+        results[i] = {
+          content: call.name === 'glob' ? 'fast' : 'slow',
+          completedAt: batchBase! + delay,
+        };
       }));
       return results;
     });
 
-    const startBefore = Date.now();
     await collect(
       runTurn({
         client,
@@ -589,7 +598,6 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
         traceWriter: writer,
       }),
     );
-    const batchDuration = Date.now() - startBefore;
 
     await new Promise((resolve) => setImmediate(resolve));
 
@@ -611,15 +619,15 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
       throw new Error('slow event not found');
     }
 
-    // Fast call should be well under the batch's total duration.
-    // Batch total ~80ms; fast call ~5ms. With #2249 fix: fast.durationMs << batch.
-    // Use generous threshold to avoid flakiness: fast < slow - 30ms.
+    // Both events must carry non-negative durations.
     expect(fastEvent.payload.durationMs).toBeGreaterThanOrEqual(0);
     expect(slowEvent.payload.durationMs).toBeGreaterThanOrEqual(0);
-    expect(fastEvent.payload.durationMs).toBeLessThan(batchDuration - 10);
-    // Slow should be close to the full batch duration.
-    // Use >= to tolerate Windows' 15ms timer resolution (exact equality is valid).
-    expect(slowEvent.payload.durationMs).toBeGreaterThanOrEqual(fastEvent.payload.durationMs! + 30);
+    // Per-call attribution: completedAt values are batchBase+5 and batchBase+80.
+    // startedAt (from tool-dispatch.ts) is recorded just before the batch fires,
+    // so it is ≤ batchBase. Therefore slow.durationMs ≥ 80 and fast.durationMs
+    // ≤ 5 + (batchBase - startedAt). The ordering slow > fast is deterministic
+    // from the injected completedAt values — no wall-clock margin needed.
+    expect(slowEvent.payload.durationMs).toBeGreaterThan(fastEvent.payload.durationMs!);
   });
 
   it('omits batchIndex and batchSize from tool_call.completed when only batchIndex is present (both-or-neither guard)', async () => {

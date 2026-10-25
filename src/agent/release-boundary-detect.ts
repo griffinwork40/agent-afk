@@ -86,6 +86,13 @@ function isDryRun(command: string): boolean {
 /**
  * Mask known message/stdin data and single-quoted literal search arguments.
  * Shell and interpreter payloads remain visible, including their quotes.
+ *
+ * Known limitation: `stripLiterals` mode only strips single-segment
+ * `echo`/`grep`/`rg` literals. Compound literal searches such as
+ * `grep 'npm publish' CHANGELOG && git status` will false-positive because
+ * the second segment (`git status`) is not recognised as a literal consumer.
+ * This is intentional: the conservative fallback avoids false negatives on
+ * genuinely dangerous compound commands.
  */
 function stripQuotedLiterals(command: string): string {
   return maskHookCommandData(command, true);
@@ -136,7 +143,23 @@ export function createReleaseBoundaryDetect(): (context: HookContext) => HookDec
     // BLOCK-tier match to OBSERVE-tier behavior so the agent can still run
     // these pre-flight checks without friction. The matched ids are still
     // returned so the observe record captures what would have been blocked.
-    if (isDryRun(maskHookCommandData(command))) {
+    // isDryRun is applied after masking to avoid matching --dry-run inside a
+    // quoted -m value (e.g. `git commit -m "--dry-run"`). For compound lines
+    // where words() rejects the separator and the fallback returns raw text,
+    // we test each semicolon/pipe-delimited segment independently so that
+    // `git commit -m "--dry-run"; npm publish` is not incorrectly exempted.
+    // Dry-run exemption logic: split the command on shell separators and test
+    // each segment independently. A segment that does NOT match any release
+    // boundary pattern (e.g. `echo done`) is harmless regardless of dry-run
+    // flags — it must not veto the exemption. Only segments that themselves
+    // match a release-boundary pattern are required to carry a dry-run flag.
+    // This means `npm publish --dry-run && echo done` is correctly exempted
+    // (the `echo done` segment is non-release, so it is skipped), while
+    // `git commit -m "--dry-run"; npm publish` is still blocked (the
+    // `npm publish` segment matches and has no --dry-run flag).
+    const segments = command.split(/(?:;|\|\|?|&&)/)
+      .map((s) => maskHookCommandData(s.trim()));
+    if (segments.every((s) => !detectReleaseBoundaryCommands(s).length || isDryRun(s))) {
       return {
         decision: 'approve',
         reason: `${RELEASE_BOUNDARY_DETECT_REASON_PREFIX} [${matched.join(', ')}] (dry-run: not blocked)`,

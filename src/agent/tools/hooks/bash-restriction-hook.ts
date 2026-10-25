@@ -58,8 +58,10 @@
  * The restricted roots are the typed-tool read denylist (`read-denylist.ts`)
  * plus a few bash-only extras — one shared list, so a credential path floored
  * for `read_file` is floored for `cat` too, and its exact-file carve-outs
- * (`~/.afk/config/mcp.json`) stay readable in interactive bash. Headless bash
- * skips the carve-outs (deny by default), since it cannot tell read from write. See
+ * (`~/.afk/config/mcp.json`) and SSH public keys stay readable in interactive
+ * bash — but ONLY for a provably read-only command
+ * (`bash-restriction-hook.readonly-gate.ts`); any other command naming them
+ * is scanned unscrubbed. Headless bash skips the carve-outs entirely. See
  * {@link builtinBashSensitiveRoots} for what each half contributes,
  * {@link deriveRestrictedSubstrings} for the interactive (grant-filtered) path,
  * and {@link headlessRestrictedSubstrings} for the headless (unfiltered) floor.
@@ -104,6 +106,8 @@ import {
 } from './afk-home-refs.js';
 import { escapeRegExp } from '../../../utils/regexp.js';
 import { homeAliasSpellings, restrictedRootSpellings } from './bash-restriction-hook.win32-spellings.js';
+import { isProvablyReadOnly } from './bash-restriction-hook.readonly-gate.js';
+import { EXACT_REF_TAIL, scrubSshPubKeyRefs } from './bash-restriction-hook.pubkey-scrub.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -238,7 +242,20 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     const home = homedir();
     const afkHome = configuredAfkHome();
     const normalized = normalizeHomeRefs(stripQuotedBodyFileData(command), home, afkHome);
-    const scanned = headless ? normalized : scrubAllowlistedRefs(normalized, home, afkHome);
+    // Invariant: the carve-outs are READ grants. They are scrubbed only for a
+    // provably read-only command (allowlisted pure readers, no redirection,
+    // chaining, or substitution — see bash-restriction-hook.readonly-gate.ts).
+    // Anything else that names a carve-out is scanned UNSCRUBBED and blocked by
+    // the enclosing root: `echo … >> <ssh>/config` (ProxyCommand = code
+    // execution), `cp x <ssh>/known_hosts` (trust injection), `tee
+    // <afk>/config/mcp.json` (an MCP server command) and interpreter
+    // one-liners all used to pass because the scrub ignored what the command
+    // did with the path. The gate reads the RAW command, so nothing the
+    // normalizer rewrites can hide an operator from it.
+    const scrub = !headless && isProvablyReadOnly(command);
+    const scanned = scrub
+      ? scrubSshPubKeyRefs(scrubAllowlistedRefs(normalized, home, afkHome), home)
+      : normalized;
     const restrictedSubstrings =
       grantManager !== undefined && !headless
         ? deriveRestrictedSubstrings(grantManager.getGrants())
@@ -374,7 +391,7 @@ function stripQuotedBodyFileData(command: string): string {
   const bodyFile = tokens.indexOf('--body-file');
   const isBodyFile = consumer === 'gh' && (noun === 'issue' || noun === 'pr') &&
     ['create', 'comment', 'edit'].includes(verb ?? '') && bodyFile >= 3 && tokens[bodyFile + 1] === '-';
-  if (!isBodyFile && !isStdoutOnlyCat(tokens)) return command;
+  if (!isBodyFile && !isStdoutOnlyCat(tokens) && !isGitCommitStdin(tokens)) return command;
   const bodyStart = newline + 1;
   let end = bodyStart;
   while (end < command.length) {
@@ -403,7 +420,47 @@ function isStdoutOnlyCat(tokens: readonly string[]): boolean {
   // -e (show ends+nonprint), -n (number), -s (squeeze), -t (show tabs+nonprint),
   // -u (unbuffered), -v (show-nonprinting).  Long opts (`--number`, etc.) are
   // not needed here because the tokenizer leaves them as separate tokens.
-  return tokens[0] === 'cat' && tokens.slice(1).every((t) => /^-[AbenrstuveV]*$/.test(t));
+  return tokens[0] === 'cat' && tokens.slice(1).every((t) => /^-[Abenstuve]*$/.test(t));
+}
+
+/**
+ * True only for `git [[-c key=val]…] commit -F -` — reads stdin as a commit
+ * message string, never executes it. Covers the AFK-canonical commit form
+ * `git -c user.name=X -c user.email=Y commit -F -` where the message body
+ * is passed via a quoted heredoc.
+ *
+ * Contract: `tokens` is the result of `tokenizeSegments` on the header (prefix
+ * + suffix). The caller already guarantees at most one heredoc and a simple
+ * header, so `tokens[0]` is the first word after any `git -c` flags.
+ *
+ * Allowed: only `-c key=val` flags before `commit`, `-F -` after it, and no
+ * other arguments — an unknown flag or a file operand other than `-` is
+ * rejected (fails closed). `--` is intentionally not permitted here because
+ * the tokenizer would split the command at it anyway.
+ *
+ * Deliberately unsupported: `-C <dir>` and `--git-dir=<path>` global flags are
+ * not matched and fall through to the full restricted-path scan (fail-closed).
+ * Supporting them would require resolving the directory argument against the
+ * grant roots, which is out of scope for this narrow exemption.
+ */
+function isGitCommitStdin(tokens: readonly string[]): boolean {
+  if (tokens[0] !== 'git') return false;
+  let i = 1;
+  // Skip zero or more `-c key=val` flags.
+  while (i < tokens.length && tokens[i] === '-c') {
+    i++; // advance past '-c'
+    if (i >= tokens.length || !/^\w[\w.]*=/.test(tokens[i]!)) return false;
+    i++; // advance past 'key=val'
+  }
+  // Next must be 'commit'.
+  if (tokens[i] !== 'commit') return false;
+  i++;
+  // Remaining tokens must be exactly '-F' '-'.
+  if (tokens[i] !== '-F') return false;
+  i++;
+  if (tokens[i] !== '-') return false;
+  i++;
+  return i === tokens.length;
 }
 
 /**
@@ -475,7 +532,9 @@ function normalizeHomeRefs(command: string, home: string, afkHome: string | unde
   // substring matches, so rewriting separators cannot affect what runs.
   return normalized
     .replace(/\$\{HOME\}|\$HOME\b/g, home)
-    .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`)
+    // `<>;|&(` are word starts too: bash tilde-expands a redirection target
+    // (`echo x >~/.ssh/config`) and the first word after an operator.
+    .replace(/(^|[\s/=:<>;|&(])~(?=$|[/\s])/g, `$1${home}`)
     .replace(/\\/g, '/')
     .replace(PATH_LIKE_SPAN, (span) => path.posix.normalize(span));
 }
@@ -528,7 +587,9 @@ function allowlistedFileForms(home: string, afkHome: string | undefined): string
 
 /**
  * Blank out references to the read denylist's exact-file carve-outs before
- * either check scans the command.
+ * either check scans the command. Called ONLY for a provably read-only command
+ * (see the factory and `bash-restriction-hook.readonly-gate.ts`); a write that
+ * names a carve-out must still hit the enclosing root.
  *
  * Invariant: EXACT files only — the same rule `isReadDenied` applies to this
  * list. The trailing `(?![\w./\\*?\[\]{}-])` guard is what enforces it: a
@@ -560,10 +621,7 @@ function allowlistedFileForms(home: string, afkHome: string | undefined): string
 function scrubAllowlistedRefs(text: string, home: string, afkHome: string | undefined): string {
   let out = text;
   for (const form of allowlistedFileForms(home, afkHome)) {
-    const exactRef = new RegExp(
-      `${escapeRegExp(form)}(?![\\w./\\\\*?\\[\\]{}-])(?!['"\`][\\w./\\\\*?\\[\\]{}-])`,
-      'g',
-    );
+    const exactRef = new RegExp(`${escapeRegExp(form)}${EXACT_REF_TAIL}`, 'g');
     out = out.replace(exactRef, ALLOWLISTED_PLACEHOLDER);
   }
   return out;

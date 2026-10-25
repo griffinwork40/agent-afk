@@ -53,6 +53,9 @@ export interface ProviderQueryContext {
   /** Presence-only: whether the workspace store is wired. Used to gate the
    *  workspace system prompt fragment in prompt assembly. */
   readonly workspaceStore: import('../../workspace/workspace-store.js').WorkspaceStore | undefined;
+  /** The owning provider's tool-grant answer (`ModelProvider.grantsTool`). Optional so
+   *  hand-built test contexts stay valid; absent means "unknown" (store presence only). */
+  grantsTool?(toolName: string): boolean;
   readonly mcpManager: import('../../mcp/index.js').McpManager | undefined;
   readonly fastModeController: import('../../fast-mode.js').FastModeController | undefined;
 

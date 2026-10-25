@@ -23,6 +23,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig } from './types/config-types.js';
 import type { ToolFailureClass } from './trace/types.js';
 import type { UsageLimitProvider } from '../utils/errors.js';
+import type { OneShotStopReason } from './providers/anthropic-direct/oneshot.js';
 
 /**
  * Normalized session identity emitted on the synthetic `session.init` event.
@@ -107,8 +108,21 @@ export interface ProviderUsage {
  * Contract: billing-semantics token counts for one or more model calls.
  * `uncachedInput + cacheRead + cacheWrite` is the full prompt across the summed
  * calls; hit rate = `cacheRead / (uncachedInput + cacheRead + cacheWrite)`.
- * `provider` is the bundled provider family that produced the counts
- * (`anthropic-direct` | `openai-compatible`), so rollups can split by it.
+ *
+ * `provider` is one of:
+ *   - `'anthropic-direct'` — Anthropic Messages API adapter.
+ *   - `'openai-compatible'` — OpenAI-compatible adapter.
+ *   - `'mixed'` — sentinel emitted by `sumBillingUsage` when two records from
+ *     different providers are summed (e.g. a multi-provider child session).
+ *     Per-provider cache-hit metrics are not meaningful for a `mixed` bucket;
+ *     only the `total` counters should be used. `BillingRollup.snapshot().byProvider`
+ *     will surface a `'mixed'` key when this occurs. `billingLifecycleFields`
+ *     propagates `provider` (including `'mixed'`) into `subagent_lifecycle`
+ *     payloads so the sentinel is visible in the trace.
+ *
+ * Rollups are split by `provider` via `BillingRollup` (schema:
+ * `BillingRollupSchema` in `trace/events.billing.ts`); analytics consumers
+ * must treat `byProvider` as an open map and handle unexpected keys gracefully.
  */
 export interface BillingUsage {
   provider: string;
@@ -484,7 +498,7 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
   accountInfo(): Promise<ProviderAccountInfo>;
   rewindFiles(
     userMessageId: string,
-    options?: { dryRun?: boolean },
+    options?: RewindFilesOptions,
   ): Promise<ProviderRewindResult>;
   /**
    * Optional. Summarize older history into a short preamble in place,
@@ -656,6 +670,8 @@ export interface ProviderContextUsage {
 export interface ProviderMcpServerStatus {
   name: string;
   status: string;
+  /** Number of tools exposed by this server; undefined when not yet known. */
+  toolCount?: number;
 }
 
 /** Loose structural shape for account info. */
@@ -673,6 +689,27 @@ export interface ProviderRewindResult {
   filesChanged?: string[];
   insertions?: number;
   deletions?: number;
+  /** Paths that could not be (or, on dry-run, would not be) restored, with why. */
+  failures?: RewindFileFailure[];
+  /** Paths changed outside the agent since the last recorded state (drift guard). */
+  conflicts?: string[];
+}
+
+/** One path a rewind could not restore. */
+export interface RewindFileFailure {
+  path: string;
+  error: string;
+}
+
+/** Options for {@link ProviderQuery.rewindFiles}. */
+export interface RewindFilesOptions {
+  /** Report what would change without touching disk. */
+  dryRun?: boolean;
+  /**
+   * Also restore paths flagged as `conflicts` (changed outside the agent since
+   * the last recorded state). Without it, those paths are reported as failures.
+   */
+  overwriteConflicts?: boolean;
 }
 
 /**
@@ -729,6 +766,13 @@ export interface RewindTarget {
   turnIndex: number;
   /** Short, single-line preview of the user message text (already truncated). */
   preview: string;
+  /**
+   * Checkpoint turnId of the file checkpoint this prompt started, for
+   * {@link ProviderQuery.rewindFiles}. Absent when checkpointing was off, the
+   * turn predates a resume or `/model` swap, or compaction replaced the message:
+   * surfaces must then offer conversation-only rewind, never guess a turn.
+   */
+  checkpointTurnId?: string;
 }
 
 /**
@@ -786,6 +830,16 @@ export interface ProviderCompleteArgs {
   baseUrl?: string;
 }
 
+/**
+ * Reply of {@link ModelProvider.completeWithStop}: the trimmed text plus why the
+ * model stopped. `'max_tokens'` means the reply was cut at the token cap, so
+ * its final word may be partial.
+ */
+export interface ProviderCompleteResult {
+  text: string;
+  stopReason: OneShotStopReason;
+}
+
 export interface ModelProvider {
   /** Human-friendly name for diagnostics. */
   readonly name: string;
@@ -798,6 +852,13 @@ export interface ModelProvider {
    */
   complete?(args: ProviderCompleteArgs): Promise<string>;
   /**
+   * Optional {@link complete} variant that also reports the stop reason, so a
+   * small-budget caller can tell a finished reply from one cut at `maxTokens`.
+   * Same auth, error, and trimming contract as `complete()`. Callers MUST
+   * feature-detect and fall back to `complete()` when it is absent.
+   */
+  completeWithStop?(args: ProviderCompleteArgs): Promise<ProviderCompleteResult>;
+  /**
    * Optional disposal hook. Releases provider-held resources — notably the
    * SQLite `MemoryStore` handle opened in the constructor. Callers that build a
    * provider purely for side-channel `complete()` use SHOULD call this when
@@ -806,4 +867,13 @@ export interface ModelProvider {
    * (`provider.close?.()`).
    */
   close?(): void | Promise<void>;
+  /**
+   * Optional tool-grant query: `false` when a call to `toolName` through this
+   * provider is certain to be refused (permission gate, or a store-backed tool
+   * such as `workspace_publish` with no store). Prompt assemblers use it so
+   * instruction text never names a tool the model cannot call (#4060). Callers
+   * MUST feature-detect and treat an absent method as "unknown", never as
+   * "denied". Implementations: `providers/shared/tool-grant.ts`.
+   */
+  grantsTool?(toolName: string): boolean;
 }

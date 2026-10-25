@@ -30,6 +30,9 @@ import { join } from 'node:path';
 import { handleCommandError } from '../errors/index.js';
 import { buildTraceResults, DEFAULT_RESULT_LINES } from './trace-results.js';
 import { formatTrace } from './trace-summary-render.js';
+import { traceToOtlp } from '../../agent/trace/otlp-export.js';
+import { pushOtlpHttp, parseOtlpHeaders } from '../../agent/trace/otlp-http-push.js';
+import { env } from '../../config/env.js';
 import {
   analyzeBlockEvasion,
   formatBlockEvasionReport,
@@ -287,6 +290,58 @@ export function registerTraceCommand(program: Command): void {
         for (const t of traces.slice(0, maxRows)) {
           const when = new Date(t.mtimeMs).toISOString().replace('T', ' ').slice(0, 19);
           process.stdout.write(`${when}  ${t.sessionId}\n`);
+        }
+      } catch (err) {
+        handleCommandError(err);
+      }
+    });
+
+  // afk trace export-otlp [session]
+  trace
+    .command('export-otlp [session]')
+    .description(
+      'Convert a sealed witness trace to OTLP/JSON (ExportTraceServiceRequest).\n' +
+        'Emits GenAI semantic convention spans: one session root, one span per\n' +
+        'subagent fork (gen_ai.agent.invoke), one span per tool call.\n' +
+        'Output is written to stdout; pipe to a collector or save with -o.\n' +
+        'Set --endpoint (or AFK_OTLP_ENDPOINT) to also POST the payload to a\n' +
+        'live OTLP/HTTP collector. A dead endpoint never fails the command.\n' +
+        '[session] is a session id or "latest" (default).',
+    )
+    .option('-o, --out <file>', 'Write output to a file instead of stdout')
+    .option(
+      '--endpoint <url>',
+      'OTLP/HTTP collector URL to POST the payload to (overrides AFK_OTLP_ENDPOINT)',
+    )
+    .action(async (session: string | undefined, options: { out?: string; endpoint?: string }) => {
+      try {
+        const selector = session ?? 'latest';
+        const loaded = await loadTrace(selector);
+        const payload = traceToOtlp(loaded.events, {
+          sessionId: loaded.sessionId,
+          malformed: loaded.malformed,
+        });
+        const json = JSON.stringify(payload, null, 2) + '\n';
+        if (options.out) {
+          const { writeFile: writeFileFs } = await import('node:fs/promises');
+          await writeFileFs(options.out, json, 'utf8');
+          process.stdout.write(`Wrote OTLP payload to ${options.out}\n`);
+        } else {
+          process.stdout.write(json);
+        }
+
+        // Live push: --endpoint flag takes precedence over AFK_OTLP_ENDPOINT.
+        const pushUrl = options.endpoint ?? env.AFK_OTLP_ENDPOINT;
+        if (pushUrl) {
+          const headers = parseOtlpHeaders(env.AFK_OTLP_HEADERS ?? '');
+          const result = await pushOtlpHttp(payload, { endpoint: pushUrl, headers });
+          if (result.ok) {
+            process.stderr.write(`[otlp] pushed to ${pushUrl} → HTTP ${result.status}\n`);
+          } else {
+            process.stderr.write(
+              `[otlp] push to ${pushUrl} failed (${result.error ?? `HTTP ${result.status ?? '?'}`}) — trace still exported locally\n`,
+            );
+          }
         }
       } catch (err) {
         handleCommandError(err);

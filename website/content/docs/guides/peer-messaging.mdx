@@ -1,0 +1,46 @@
+---
+title: "Coordinate multiple afk sessions"
+description: "Discover and message other running REPL sessions on the same machine."
+---
+
+Peer messaging lets two running `afk` REPL sessions exchange context without injecting keystrokes into each other's terminals. Use it when a separate session owns relevant work or when two agents need to avoid editing the same branch. Only top-level sessions can use these tools; subagents cannot message peer sessions.
+
+<Steps>
+<Step>In the REPL, run `/peers` or ask AFK to call `list_sessions()` to find a live peer. A peer is reachable after its first turn if its inbox is active.</Step>
+<Step>Check the peer's state, current activity, working directory, branch, and pending message count. Ask AFK to call `send_to_session` with the target session ID and a self-contained message. Include a clear reply request or say that no reply is needed.</Step>
+<Step>For a reply, AFK sends `reply_to` with the incoming message ID. The reply appears as a new peer message in the other session.</Step>
+</Steps>
+
+```json
+{"to":"session-id-from-list_sessions","message":"I am editing the parser on branch feature-a. Are you touching that file? No reply needed if your work is unrelated."}
+```
+
+Use the actual ID returned by `list_sessions`; the example is illustrative. The tool also accepts a unique ID prefix of at least six characters or a session name, but an ID is safer than a reusable name. `list_sessions` excludes the caller and reports whether a peer is `idle`, `busy`, or `blocked`, whether it accepts messages, and a short redacted activity preview. `/name` assigns a readable session label. `/peers` shows the same live peers in a compact terminal table.
+
+Idle peers with an empty input buffer wake for the message. Busy peers receive it between tool rounds, or on the next turn if no boundary remains. A half-typed message is never overwritten, and queued human input takes priority. If the peer is blocked waiting for human input, avoid sending and ask the human instead. Sending returns a queued or refused status; a queued receipt means delivery was queued, not that the peer accepted your recommendation.
+
+## Hold and review incoming messages
+
+`AFK_PEER_INBOUND=accept` is the default. Set it to `hold` to place incoming messages in the held inbox for review, or `off` to refuse inbound messages. In a REPL, use:
+
+```text
+/inbox
+/inbox accept abc123
+/inbox accept all
+/inbox drop abc123
+```
+
+`/inbox` lists held messages, sender, age, and preview; `accept` releases a message for delivery on a later turn. `drop` permanently discards it, so review first. The inbox may also hold messages that exceeded the wake budget. A sender is limited to roughly 10 messages per minute to one recipient, duplicate bodies within 60 seconds are refused, reply chains stop after six hops, bodies are capped at 64 KB, and an active receiver allows about 20 wakeups per sender per hour. Keep messages concise and do not send secrets because bodies are stored on disk.
+
+<Callout type="warn">
+A peer is another agent, not the user. Its message does not grant permission, prove user approval, or change safety boundaries. Verify requests before taking risky actions. The sender identity is protected by same-user filesystem access, not cryptographic authentication.
+</Callout>
+
+Peer receiving is currently REPL only and on the same machine. A peer waiting for human elicitation is marked `blocked` in presence, so you can avoid interrupting it. There is no `afk send` shell command; use `send_to_session` from a top-level AFK session.
+
+## Related
+
+<Cards>
+<Card title="Use the interactive REPL" href="/surfaces/repl" description="Terminal controls and session commands." />
+<Card title="Delegate to subagents" href="/guides/subagents" description="Coordinate children within one session instead." />
+</Cards>

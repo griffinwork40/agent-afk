@@ -54,6 +54,8 @@ export const INHERITED_ENV_KEYS: ReadonlySet<string> = new Set([
   'SystemRoot',
   'MSYSTEM',
   'LOCALAPPDATA',
+  // macOS: set by the OS to the launching app's bundle id (real-Chrome probe hint).
+  '__CFBundleIdentifier',
 ]);
 
 /**
@@ -254,6 +256,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'models.small', tier: 'agent', type: 'model-slot', description: 'Small-tier model id. Accepts a bare id string or a { id, provider, name } object (provider: anthropic | openai | chatgpt-oauth | xai | xai-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
   { path: 'models.medium', tier: 'agent', type: 'model-slot', description: 'Medium-tier model id. Accepts a bare id string or a { id, provider, name } object (provider: anthropic | openai | chatgpt-oauth | xai | xai-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
   { path: 'models.large', tier: 'agent', type: 'model-slot', description: 'Large-tier model id. Accepts a bare id string or a { id, provider, name } object (provider: anthropic | openai | chatgpt-oauth | xai | xai-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'models.subagent', tier: 'agent', type: 'model-slot', description: 'Default model for dispatched subagents. When set, overrides the medium tier fallback for agent/skill/compose forks. Accepts a bare id string or a { id, provider, name } object. Use with AFK_MODEL_SUBAGENT_BASE_URL / _API_KEY env vars to route subagent inference to a different provider (Together, Fireworks, Groq, self-hosted vLLM).' },
   { path: 'maxTokens', tier: 'agent', type: 'number', clamp: { min: 1, max: 1_000_000, integer: true }, description: 'Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS or --max-output-tokens to cap per-response output.' },
   { path: 'temperature', tier: 'agent', type: 'number', clamp: { min: 0, max: 2 }, description: 'Sampling temperature.' },
   { path: 'autoRouting.interactive', tier: 'agent', type: 'boolean', description: 'Auto-route model in the REPL.' },
@@ -265,6 +268,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'telegram.tagOnlyChats', tier: 'human', type: 'number-array', description: 'Chat ids where the bot answers only when addressed (reply to the bot, @mention, or text_mention resolving to the bot). Human-tier: it governs which chats the bot will respond in — a message-routing / who-can-drive-the-bot control, same class as the allowlist and telegram.notify.*. Requires Telegram privacy mode OFF for the bot to matter in groups.' },
   { path: 'telegram.verifyDone', tier: 'human', type: 'boolean', description: 'Opt-in AFK "Done" verification gate (human-tier: a self-honesty check on the agent\'s own completion reporting — the agent must not be able to disable it on its own config, same rationale as enableShellHooks/permissionMode).' },
   { path: 'enforceDoneEvidence', tier: 'human', type: 'boolean', description: 'Opt-in AFK terminal-state enforcement gate: in autonomous mode a turn that self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) gets a framework correction injected into the next turn, which must substantiate or downgrade the claim (issue #237). Human-tier: a self-honesty check the agent must not be able to disable on its own config, same rationale as telegram.verifyDone. Sibling of telegram.verifyDone (which only relabels the Telegram push; this one bounces the turn).' },
+  { path: 'fileCheckpoints', tier: 'human', type: 'boolean', description: 'Per-turn file checkpoints behind /rewind → files/both in the interactive REPL (#4271); default on, false opts out. Human-tier: it disables the operator\'s undo of agent file edits, which the agent must not be able to switch off on its own config.' },
   { path: 'interactive.worktreeAutoname', tier: 'agent', type: 'boolean', description: 'Auto-name worktrees.' },
   { path: 'interactive.suggestGhost', tier: 'agent', type: 'boolean', description: 'Ghost-text suggestions in the REPL.' },
   { path: 'interactive.thinkingUi', tier: 'agent', type: 'enum', enumValues: ['summary', 'live', 'digest', 'off'], description: 'Default REPL thinking-display mode.' },

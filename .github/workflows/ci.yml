@@ -33,15 +33,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -73,6 +73,21 @@ jobs:
 
       - name: Audit env-registry docs (docs/env-registry.{json,md} in sync with src/config/env.ts)
         run: pnpm scan:env:check
+
+      - name: Audit CLI reference drift
+        run: pnpm scan:cli:check
+
+      - name: Audit slash command reference drift
+        run: pnpm scan:slash:check
+
+      - name: Audit configuration key reference drift
+        run: pnpm scan:config:check
+
+      - name: Audit tool and hook documentation coverage
+        run: pnpm scan:docs-coverage:check
+
+      - name: Validate documentation links and navigation
+        run: pnpm docs:links:check
 
       - name: Audit SDK dependency surface (no unlocked @anthropic-ai/sdk imports)
         run: pnpm audit:sdk:check
@@ -129,6 +144,25 @@ jobs:
         # backstop that seals orphaned traces, and writer.test.ts calls the
         # sealer directly, so the existing suite would not catch the fork.
         run: pnpm audit:module-state:check
+
+      - name: Audit new copy-paste clones (jscpd, ratchet against base ref)
+        # Fails only on NEW clones whose fragments overlap lines ADDED in
+        # this PR's diff. jscpd fingerprints are content-keyed, so editing
+        # both halves of an existing grandfathered clone identically would
+        # produce a "new" fingerprint — scripts/check-new-clones.ts filters
+        # those false positives by intersecting new-clone ranges with the
+        # git diff. No committed baseline file, so parallel PRs never
+        # merge-race on one. A pure file move or rename is not a new clone.
+        # The default checkout is shallow and has no base ref, so fetch
+        # just its tip here. This runs AFTER the filesize/funcsize --changed-vs
+        # steps on purpose: fetching earlier would silently activate their
+        # TOUCHED check, which is a separate policy call (see that step).
+        # Intentional duplication: wrap it in `// jscpd:ignore-start` /
+        # `// jscpd:ignore-end` with a reason comment. List all clones with
+        # `pnpm audit:clones`.
+        run: |
+          git fetch --no-tags --depth=1 origin +${{ github.base_ref || 'main' }}:refs/remotes/origin/${{ github.base_ref || 'main' }}
+          CLONE_GATE_BASE_REF=origin/${{ github.base_ref || 'main' }} pnpm audit:clones:check
 
       - name: Audit vendored/bundled hash pins are unstale (#775)
         # `fix:pins:check` (scripts/update-hash-pins.ts --check) re-hashes the
@@ -198,19 +232,20 @@ jobs:
           - os: windows-2022
             test-cmd: pnpm test
     # Windows setup (~4-6 min) + test run (~9 min) fits comfortably in 30 min.
-    # ubuntu/macos keep 15 min (unchanged).
-    timeout-minutes: ${{ matrix.os == 'windows-2022' && 30 || 15 }}
+    # macOS runners are ~1.5× slower than ubuntu; recent runs hit 9-13 min and
+    # occasionally cancel at the 15-min wall. Raise to 25 min to give headroom.
+    timeout-minutes: ${{ matrix.os == 'windows-2022' && 30 || matrix.os == 'macos-latest' && 25 || 15 }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -223,7 +258,7 @@ jobs:
 
       - name: Upload coverage report
         if: always() && matrix.os != 'windows-2022'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           # Per-OS name — a matrix can't upload multiple artifacts under one immutable name.
           name: coverage-report-${{ matrix.os }}
@@ -253,15 +288,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 26
           cache: pnpm
@@ -283,15 +318,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
           cache: pnpm
@@ -314,15 +349,15 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -414,15 +449,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -445,10 +480,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: npm
@@ -473,15 +508,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -489,6 +524,12 @@ jobs:
 
       - name: Install dependencies
         run: cd dashboard && pnpm install --frozen-lockfile
+
+      # Typecheck was not gated before, and it rotted unnoticed (a removed
+      # `baseUrl` option failed the whole config, masking ~80 test typing
+      # errors). Keep it blocking now that it is green.
+      - name: Typecheck
+        run: cd dashboard && pnpm typecheck
 
       - name: Test
         run: cd dashboard && pnpm test
@@ -507,15 +548,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm

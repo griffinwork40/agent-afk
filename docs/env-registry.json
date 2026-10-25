@@ -2,6 +2,14 @@
   "version": 1,
   "vars": [
     {
+      "name": "__CFBundleIdentifier",
+      "description": "macOS-only, set by the OS: bundle id of the app that launched this process (e.g. the terminal). Read by the real-Chrome probe to name the app that needs Files & Folders access to Google Chrome on macOS 27+. A hint only — under tmux it reflects the app that started the tmux server.",
+      "type": "string",
+      "required": false,
+      "example": "com.apple.Terminal",
+      "category": "process"
+    },
+    {
       "name": "AFK_ALLOW_PROJECT_MCP",
       "description": "Opt-in to loading + spawning MCP servers declared in <cwd>/.mcp.json. Fail-closed: when unset (or 0), project-local servers are NOT spawned; set to a truthy value (1/true/yes/on) to load them. A project-local .mcp.json spawns arbitrary commands on session start, so it is off by default to prevent code execution when entering an untrusted repo (issue #571). Skipped servers are listed in a startup warning with the opt-in instruction.",
       "type": "boolean",
@@ -339,6 +347,39 @@
       "category": "misc"
     },
     {
+      "name": "AFK_EVENTS_GITHUB_POLL_MS",
+      "description": "Poll interval in milliseconds for `afk events github`. Overrides the --interval flag. Must be >= 5000. Default 60000 (1 minute). Part of #3896 (event-triggered runs).",
+      "type": "number",
+      "required": false,
+      "default": "60000",
+      "example": "30000",
+      "category": "daemon"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_MAX_AGE_DAYS",
+      "description": "Evict a file-checkpoint session directory once its newest content is older than this many days. Default 14.",
+      "type": "number",
+      "required": false,
+      "default": "14",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_MAX_BYTES",
+      "description": "Aggregate byte cap for state/file-checkpoints/; oldest session directories are evicted first once exceeded. Default 1073741824 (1 GiB).",
+      "type": "number",
+      "required": false,
+      "default": "1073741824",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_RETENTION_DISABLE",
+      "description": "Disable the file-checkpoint retention sweep (state/file-checkpoints/), so no session checkpoint directory is ever evicted.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
       "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
       "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even to tool calls whose context carries no grant manager. Every production provider wires itself as the grant manager on every surface (REPL, Telegram, afk chat, daemon, subagents), so there the denylist is already active; without one it fails open. Set to 1 to force it on for those contexts too. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off.",
       "type": "boolean",
@@ -444,6 +485,42 @@
       "category": "model"
     },
     {
+      "name": "AFK_LSP_DIAGNOSTICS",
+      "description": "Enable opt-in LSP features (#3904). When set to 1: (phase 1) after every successful edit_file or write_file call the handler queries typescript-language-server (must be on PATH) for diagnostics on the touched file and appends any errors/warnings to the tool result; (phase 2) enables the code_symbols tool for go-to-definition and find-references. Off by default. A missing or slow server never fails or stalls the edit — the query times out silently. TypeScript / JavaScript only in this phase.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_LSP_DIAGNOSTICS_TIMEOUT_MS",
+      "description": "Hard timeout in milliseconds for the post-edit LSP diagnostics query (AFK_LSP_DIAGNOSTICS=1). If the language server does not respond within this window the query is abandoned silently and the edit result is unchanged. Default 1500 (1.5 s) — intentionally low so a slow server does not stall every edit; raise when diagnostics are valuable enough to wait for.",
+      "type": "number",
+      "required": false,
+      "default": "1500",
+      "example": "3000",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_LSP_IDLE_SHUTDOWN_MS",
+      "description": "Idle window in milliseconds after which a pooled (persistent) language server with no requests is shut down (#4272). Servers are kept warm per workspace root and language so repeat LSP queries skip the cold start. Default 300000 (5 min). Idle timers never keep the process alive.",
+      "type": "number",
+      "required": false,
+      "default": "300000",
+      "example": "60000",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_LSP_SYMBOLS_TIMEOUT_MS",
+      "description": "Hard timeout in milliseconds for code_symbols (go-to-definition / find-references) LSP queries (AFK_LSP_DIAGNOSTICS=1). Symbol queries can require a cold-start index build and therefore need a longer budget than the post-edit diagnostics timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS). Default 5000 (5 s). Raise for large monorepos where the first query triggers a full project load.",
+      "type": "number",
+      "required": false,
+      "default": "5000",
+      "example": "10000",
+      "category": "misc"
+    },
+    {
       "name": "AFK_MAX_BUDGET_USD",
       "description": "Opt-in cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this. Unset by default (no cap applied).",
       "type": "number",
@@ -492,6 +569,22 @@
       "required": false,
       "default": "8",
       "example": "2",
+      "category": "process"
+    },
+    {
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC",
+      "description": "Per-provider override for AFK_MAX_CONCURRENT_SUBAGENT_CALLS applied to fan-out waves whose tasks run on the Anthropic provider (anthropic-direct). When set, takes precedence over the global AFK_MAX_CONCURRENT_SUBAGENT_CALLS for those waves. Unset = use the global value. Accepted range 1-32; out-of-range or unparseable input falls back to the global. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "3",
+      "category": "process"
+    },
+    {
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI",
+      "description": "Per-provider override for AFK_MAX_CONCURRENT_SUBAGENT_CALLS applied to fan-out waves whose tasks run on the OpenAI-compatible provider (openai-compatible). When set, takes precedence over the global AFK_MAX_CONCURRENT_SUBAGENT_CALLS for those waves. Unset = use the global value. Accepted range 1-32; out-of-range or unparseable input falls back to the global. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "5",
       "category": "process"
     },
     {
@@ -722,6 +815,30 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_SUBAGENT",
+      "description": "Bind the \"subagent\" routing slot to a model id/alias. When set, all dispatched subagents (agent/skill/compose forks without an explicit model) use this model instead of the medium tier. Use with AFK_MODEL_SUBAGENT_BASE_URL to route subagent inference to a different provider (Together, Fireworks, Groq, or self-hosted vLLM/SGLang). Overrides afk.config.json models.subagent.",
+      "type": "string",
+      "required": false,
+      "example": "Qwen/Qwen3-32B",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_SUBAGENT_API_KEY",
+      "description": "Per-slot API key for the \"subagent\" routing slot. Overrides global credentials for subagent forks only.",
+      "type": "string",
+      "required": false,
+      "category": "model",
+      "secret": true
+    },
+    {
+      "name": "AFK_MODEL_SUBAGENT_BASE_URL",
+      "description": "Per-slot endpoint base URL for the \"subagent\" routing slot. Point at Together (https://api.together.xyz/v1), Fireworks, Groq, or a self-hosted vLLM/SGLang endpoint to route subagent inference off Anthropic.",
+      "type": "string",
+      "required": false,
+      "example": "https://api.together.xyz/v1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_TTFB_TIMEOUT_MS",
       "description": "Per-ROUND time-to-first-token budget (ms) for the anthropic-direct streaming loop. Bounds how long a round may stall BEFORE its first streamed CONTENT token (a text/thinking delta or tool_use); the connection-level message_start and keep-alive pings do NOT count. Once a content token streams, the timer is cleared and the rest of the response is governed instead by the progress-aware AFK_MODEL_STALL_TIMEOUT_MS window, so a normal slow call (below the bound) and any actively-streaming extended-thinking response are never aborted. The budget is divided into 3 shorter first-byte ATTEMPTS (each ~2/3 of this value, so the worst-case wall time per round is unchanged from the previous 2-attempt regime while a transient stall gets 3 chances instead of 2). NOTE: a request whose FIRST token takes longer than the per-attempt bound — e.g. a very large opus_1m prefill — is aborted and re-driven, then surfaces as an error once the budget is spent (raise this value or set 0 for such workloads); this trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. Default 180000 (180s ≈ 2× the measured p99 ttfb), i.e. 3 × 120s. Set to 0 to disable.",
       "type": "number",
@@ -753,6 +870,22 @@
       "required": false,
       "example": "1",
       "category": "model"
+    },
+    {
+      "name": "AFK_OTLP_ENDPOINT",
+      "description": "OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). When set, `afk trace export-otlp` POSTs the converted OTLP/JSON payload to this endpoint after converting the witness trace. A dead or unreachable endpoint never blocks or fails the command — the error is printed to stderr and the command still exits 0. Equivalent to passing `--endpoint <url>` on the command line; the flag takes precedence when both are provided.",
+      "type": "string",
+      "required": false,
+      "example": "http://localhost:4318/v1/traces",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_OTLP_HEADERS",
+      "description": "Comma-separated list of `Key=Value` HTTP headers appended to every OTLP/HTTP push request made by `afk trace export-otlp` when `AFK_OTLP_ENDPOINT` or `--endpoint` is set. Typical use: bearer tokens and tenant identifiers required by managed collectors (e.g. Grafana Cloud, Honeycomb). Values that contain a literal comma must be percent-encoded (%2C). Example: `Authorization=Bearer <tok>,X-Org=acme`.",
+      "type": "string",
+      "required": false,
+      "example": "Authorization=Bearer tok123,X-Org=acme",
+      "category": "misc"
     },
     {
       "name": "AFK_OVERLOAD_PAUSE_MS",
@@ -842,7 +975,7 @@
     },
     {
       "name": "AFK_READ_DENYLIST",
-      "description": "Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read, and that the bash-restriction hook refuses to let a shell command reference on interactive surfaces (REPL, Telegram) — on headless surfaces (afk chat, daemon) bash fails open regardless of this list. A leading ~/ is expanded (~user/ is not — spell those absolutely). Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed. One built-in exception exists: ~/.afk/config/mcp.json (the MCP registry) IS readable — paths listed here outrank that carve-out, so set this to ~/.afk/config/mcp.json if your registry holds inline secrets rather than ${VAR} placeholders.",
+      "description": "Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read, and that the bash-restriction hook refuses to let a shell command reference on interactive surfaces (REPL, Telegram) — on headless surfaces (afk chat, daemon) bash fails open regardless of this list. A leading ~/ is expanded (~user/ is not — spell those absolutely). Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed. Built-in READ-only exceptions: ~/.afk/config/mcp.json (the MCP registry), ~/.afk/config/schedules.json, ~/.ssh/config, ~/.ssh/known_hosts, and SSH public keys (direct *.pub children of ~/.ssh, symlink-resolved). Paths listed here outrank every exception — e.g. set this to ~/.afk/config/mcp.json if your registry holds inline secrets rather than ${VAR} placeholders, or to ~/.ssh to re-deny all of ~/.ssh. Bash honors the exceptions only for provably read-only commands (cat/grep/head/… pipelines with no redirection); writes stay blocked on every surface.",
       "type": "string",
       "required": false,
       "example": "/Users/me/project/.env:/Users/me/secrets",
@@ -992,6 +1125,15 @@
       "category": "paths"
     },
     {
+      "name": "AFK_STEER_MODE",
+      "description": "Controls when a typed-ahead REPL message is delivered to the model during a multi-round turn. \"boundary\" (opt-in): drain the compositor queue at every tool-round boundary, so a correction typed during tool execution reaches the model on the NEXT tool round rather than waiting for the whole turn to end. \"turn-end\" (default): existing behaviour — the message is delivered as its own turn once the current turn finishes. The \"boundary\" mode is gated behind this env var during soak (issue #3897). Note: the user-yield contract (wait_for / exit_plan_mode) relies on \"turn-end\" semantics; those tools tell the model \"end your turn so the message is delivered first\", which is only accurate in \"turn-end\" mode. In \"boundary\" mode the message arrives mid-turn and the yield notice is redundant but harmless — the tool still returns early, the model still sees the message.",
+      "type": "string",
+      "required": false,
+      "default": "turn-end",
+      "example": "boundary",
+      "category": "misc"
+    },
+    {
       "name": "AFK_STOP_HOOK_MAX_CONTINUATIONS",
       "description": "Maximum number of same-turn continuation rounds a blocking Stop hook may trigger before the turn ends normally (issue #2714). Each continuation re-enters the model loop with the block reason as a framework user message, giving the agent another chance to address the hook. 0 disables continuation entirely (the turn ends on first block). Default: 2.",
       "type": "number",
@@ -1016,6 +1158,24 @@
       "required": false,
       "default": "0",
       "example": "1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_SUBAGENT_CONTINUATION_MAX_CONTINUATIONS",
+      "description": "Maximum number of continuations per subagent continuation chain (not counting the initial dispatch). 0 disables continuation entirely (every continuation call is refused). Unset, empty, non-numeric, or negative falls back to the default 3.",
+      "type": "number",
+      "required": false,
+      "default": "3",
+      "example": "5",
+      "category": "model"
+    },
+    {
+      "name": "AFK_SUBAGENT_CONTINUATION_MAX_ROUNDS",
+      "description": "Aggregate tool-round limit per subagent continuation chain (the initial dispatch plus every `continuation_chain_id` continuation). The initial attempt is charged at its round cap (or its runtime-counted rounds when uncapped); each continuation is charged its full finite allowance at admission, clipped to what remains. No refunds. Unset, empty, non-numeric, or < 1 falls back to the default 150.",
+      "type": "number",
+      "required": false,
+      "default": "150",
+      "example": "300",
       "category": "model"
     },
     {
@@ -1242,6 +1402,40 @@
       "required": false,
       "example": "1",
       "category": "debug"
+    },
+    {
+      "name": "AFK_TRANSCRIBE_API_KEY",
+      "description": "Bearer token for the AFK_TRANSCRIBE_API_URL transcription endpoint. Leave unset for unauthenticated local servers.",
+      "type": "string",
+      "required": false,
+      "category": "telegram",
+      "secret": true
+    },
+    {
+      "name": "AFK_TRANSCRIBE_API_URL",
+      "description": "OpenAI-compatible /audio/transcriptions endpoint URL used to transcribe inbound Telegram voice and audio messages. When unset, voice/audio messages receive a refusal reply naming this variable. Supports any OpenAI-compatible server including local Whisper deployments.",
+      "type": "string",
+      "required": false,
+      "example": "https://api.openai.com/v1/audio/transcriptions",
+      "category": "telegram"
+    },
+    {
+      "name": "AFK_TRANSCRIBE_MODEL",
+      "description": "Model name forwarded to the AFK_TRANSCRIBE_API_URL endpoint (default: whisper-1). Change when using an endpoint that expects a different model identifier.",
+      "type": "string",
+      "required": false,
+      "default": "whisper-1",
+      "example": "whisper-large-v3",
+      "category": "telegram"
+    },
+    {
+      "name": "AFK_TRANSCRIBE_TIMEOUT_MS",
+      "description": "Timeout in milliseconds for the transcription API POST request (default: 60000). Increase for slow local Whisper servers or large audio files.",
+      "type": "number",
+      "required": false,
+      "default": "60000",
+      "example": "120000",
+      "category": "telegram"
     },
     {
       "name": "AFK_TURN_SEPARATOR",
@@ -1574,6 +1768,13 @@
       "category": "process"
     },
     {
+      "name": "CHROME_CONFIG_HOME",
+      "description": "Linux only. When set, Chrome stores its profile under $CHROME_CONFIG_HOME/<channel-dir> instead of $XDG_CONFIG_HOME/<channel-dir>. Mirrors the override that chrome-devtools-mcp/Puppeteer apply when locating DevToolsActivePort so the real-Chrome probe checks the same path.",
+      "type": "string",
+      "required": false,
+      "category": "process"
+    },
+    {
       "name": "CI",
       "description": "Standard CI-detection convention. Auto-set by GitHub Actions, CircleCI, etc. Used to switch off TTY-only UX.",
       "type": "string",
@@ -1839,6 +2040,13 @@
       "required": false,
       "category": "auth",
       "secret": true
+    },
+    {
+      "name": "XDG_CONFIG_HOME",
+      "description": "Linux XDG base-dir spec override for per-user config files. When set (and CHROME_CONFIG_HOME is not), Chrome stores its profile under $XDG_CONFIG_HOME/<channel-dir>. Mirrors the override that chrome-devtools-mcp/Puppeteer apply when locating DevToolsActivePort.",
+      "type": "string",
+      "required": false,
+      "category": "process"
     }
   ]
 }

@@ -861,6 +861,10 @@ describe('path-approval hook ↔ handler parity (the divergence six PRs kept re-
     { name: 'confined, path inside root', grants: { resolveBase: CWD, readRoots: [CWD], writeRoots: [CWD] }, path: `${CWD}/src/a.ts` },
     { name: 'confined, path OUTSIDE root', grants: { resolveBase: CWD, readRoots: [CWD], writeRoots: [CWD] }, path: '/tmp/other/x.ts' },
     { name: 'bypass mode, out-of-root path', grants: { resolveBase: CWD, readRoots: [CWD], writeRoots: [CWD], allowAll: true }, path: '/var/log/x' },
+    // SSH public-key pattern carve-out: both layers must agree on allow/deny.
+    { name: 'bypass mode, ssh public key', grants: { resolveBase: CWD, readRoots: [CWD], writeRoots: [CWD], allowAll: true }, path: `${homedir()}/.ssh/id_ed25519.pub` },
+    { name: 'bypass mode, ssh private key', grants: { resolveBase: CWD, readRoots: [CWD], writeRoots: [CWD], allowAll: true }, path: `${homedir()}/.ssh/id_ed25519` },
+    { name: 'bypass mode, nested .pub under ssh', grants: { resolveBase: CWD, readRoots: [CWD], writeRoots: [CWD], allowAll: true }, path: `${homedir()}/.ssh/keys/x.pub` },
   ];
 
   for (const c of cases) {

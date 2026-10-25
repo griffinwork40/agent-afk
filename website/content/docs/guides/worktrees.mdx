@@ -1,227 +1,84 @@
 ---
-title: "Git Worktrees"
-description: "Isolate agent work in Git worktrees: afk worktree list/prune, afk farm, branch naming, and age-based auto-pruning."
+title: "Run work in isolated Git worktrees"
+description: "Create, prepare, preserve, and clean up isolated checkouts for sessions and subagents."
 ---
 
-Agent AFK can run agent sessions in isolated Git worktrees — separate working directories that share the same repository history but have independent checkouts. This lets parallel agents work on separate branches without interfering with each other or your main checkout.
+AFK can run sessions and subagents in separate Git worktrees so parallel edits and tests do not collide with your main checkout. Use `afk i --worktree` for a whole interactive session or `isolation: "worktree"` on an `agent` dispatch for one child. Review preserved changes before cleaning up checkouts or branches.
 
-## How worktrees are created
-
-When you run a session with `--worktree`, AFK creates a new worktree based on the remote's default branch (e.g. `origin/main`), fetched fresh. Override the base ref:
-
-```bash
-# Pin to a different base
-AFK_WORKTREE_BASE=origin/develop afk i --worktree
-
-# Base on the local HEAD
-AFK_WORKTREE_BASE=HEAD afk i --worktree
-```
-
-Or override per-session with `--worktree-base`.
-
-### Branch naming
-
-Worktree branches are prefixed with `afk/` by default. Override with `AFK_WORKTREE_BRANCH_PREFIX`:
+<Steps>
+<Step>Start an interactive session in a new checkout:</Step>
+</Steps>
 
 ```bash
-# Use a different prefix
-AFK_WORKTREE_BRANCH_PREFIX=wt/ afk i --worktree
-
-# Drop the prefix entirely
-AFK_WORKTREE_BRANCH_PREFIX= afk i --worktree
+afk i --worktree
 ```
 
-In interactive mode, AFK can auto-rename the worktree branch based on the first user message — `AFK_WORKTREE_AUTONAME=1` (the default). Set `AFK_WORKTREE_AUTONAME=0` to disable.
+<Steps>
+<Step>Inspect managed worktrees from the repository with `afk worktree list`.</Step>
+<Step>When the work is durable, decide whether to keep or clean up the checkout. Never remove the working directory of a session that is still running in it.</Step>
+</Steps>
 
-Source: `docs/env-registry.md` (Worktree category), `src/cli/commands/worktree.ts`.
+## Choose the base and branch name
 
-## `afk worktree list`
+Interactive `--worktree` fetches and starts from the remote default branch unless you set `--worktree-base` or `AFK_WORKTREE_BASE`. Set `AFK_WORKTREE_BASE=HEAD` to start from local HEAD. A branch uses the `afk/` prefix by default; `AFK_WORKTREE_BRANCH_PREFIX` changes it. Interactive branches can be named from your first message when `AFK_WORKTREE_AUTONAME=1` (the default). The `worktree` model tool's `create` action, by contrast, defaults its `base` to `HEAD`.
 
-Inspect all AFK-managed worktrees:
+### Decide what happens on exit
 
-```bash
-afk worktree list
-```
+After a clean interactive `--worktree` session, the REPL asks whether to keep the checkout and enter it, or delete the checkout and branch. A kept checkout is locked against automatic sweeping. `--worktree-on-exit keep|remove|ask`, `AFK_WORKTREE_ON_EXIT`, and `interactive.worktreeOnExit` set this policy; the CLI flag takes precedence. A dirty checkout is preserved rather than discarded. If the prompt cannot be displayed under the `ask` policy, the checkout is preserved without a permanent lock and remains eligible for later sweeping. A zero-turn session has no work to preserve. This quit-time deletion of an interactive branch is different from the model `worktree` tool's `remove`, which preserves its branch ref.
 
-Outputs a table with columns: `PATH`, `OWNER`, `AGE`, `STATUS`, and `PRUNE?`.
+## Install dependencies in newly managed worktrees
 
-The `STATUS` column shows the prune verdict for each worktree:
+Agent-created worktrees do not share ignored files such as `node_modules` with the main checkout. Commit `.afk/worktree-setup.json` in a trusted repository to run setup after creation through the `worktree` model tool, an isolated `agent`, or an isolated `compose` node:
 
-| Status | Meaning | Would prune? |
-|---|---|---|
-| `empty` | No commits beyond base | Yes |
-| `stale-clean` | Older than `maxAgeDaysClean`, no uncommitted changes | Yes |
-| `orphaned-dir` | Directory exists but no git registration | Yes |
-| `orphaned-registration` | Registered but directory missing | Yes |
-| `dead-owner` | Owner process no longer running | Yes |
-| `stale-dirty` | Older than `maxAgeDaysDirty`, has uncommitted changes | Warn |
-| (other) | Active or within age thresholds | No |
-
-Source: `src/cli/commands/worktree.ts` (`verdictWouldPrune()`).
-
-## `afk worktree prune`
-
-Remove stale worktrees. By default this is a dry run — pass `--apply` to actually delete:
-
-```bash
-# Dry run (show what would be pruned)
-afk worktree prune
-
-# Apply the prune
-afk worktree prune --apply
-```
-
-The command exits with code 1 if any `[ERROR]` warnings are present (e.g. a dirty worktree that would be forcibly removed).
-
-### Age thresholds
-
-Prune decisions use configurable age thresholds:
-
-| Variable | Default | What it controls |
-|---|---|---|
-| `AFK_WORKTREE_MAX_AGE_CLEAN` | `14` days | Max age before a clean worktree is pruned |
-| `AFK_WORKTREE_MAX_AGE_DIRTY` | `30` days | Max age before a dirty worktree is pruned |
-
-These can also be set in `afk.config.json` or passed as CLI flags. Resolution order: CLI flag → `afk.config.json` → env var → default.
-
-Source: `src/cli/commands/worktree.ts` (`afk worktree prune` handler).
-
-### Boot-time pruning
-
-Set `AFK_WORKTREE_BOOT_PRUNE=1` to have the daemon prune stale worktrees at startup in addition to the cron-driven sweep.
-
-## `afk farm` — speculative branch farm
-
-`afk farm` runs the same task across multiple isolated worktrees in parallel, then picks the best result:
-
-```bash
-afk farm "speed up the slow /search endpoint" --branches 3
-```
-
-Each branch runs in a separate worktree. At completion, `afk farm` scores the branches, prints a summary table, writes a memory fact about the winner, and optionally sends a Telegram digest.
-
-The farm is useful when you want to compare multiple independent approaches to the same task before committing to one.
-
-Source: `src/cli/commands/farm.ts`.
-
-## Sweep configuration
-
-The worktree prune sweep uses a configurable root directory:
-
-```bash
-AFK_WORKTREE_SWEEP_ROOT=/path/to/worktrees afk worktree prune
-```
-
-Disable the sweep entirely (useful for long-running tests):
-
-```bash
-AFK_WORKTREE_PRUNE_DISABLE=1 afk daemon
-```
-
-## The `worktree` model tool
-
-During sessions, the agent has access to a `worktree` tool for managing the full lifecycle of afk-managed worktrees. This is distinct from the `afk worktree` CLI commands — it is the sanctioned API the agent uses inside a running session.
-
-Worktrees created through this tool write a `.afk-worktree-meta.json` file that the sweep engine uses to track ownership and age. Worktrees created with raw `git worktree add` in the shell lack this metadata and are eventually reaped as ghosts — or leak forever if created outside `.afk-worktrees/`.
-
-### Actions
-
-| Action | Description |
-|---|---|
-| `create` | New worktree + branch under `.afk-worktrees/<name>`. Returns `{ path, branch, base, note }` where `note` warns that dependencies are not installed. |
-| `keep` | Lock the worktree so the sweep engine never removes it. |
-| `release` | Unlock a previously kept worktree, returning it to normal sweep lifecycle. |
-| `list` | Dry-run sweep report: every managed worktree with its verdict, owner, and age in days. |
-| `remove` | Remove the checkout (branch ref is always preserved). Refuses dirty, locked, commits-ahead, and non-rebuildable-ignored-files trees unless `force: true`. |
-
-### Creating a worktree
-
-```
-worktree { action: "create", name: "my-feature", base: "HEAD" }
-→ { path: "/repo/.afk-worktrees/my-feature", branch: "afk/my-feature", base: "...", note: "..." }
-```
-
-Pass the returned `path` as `cwd` when dispatching subagents into the new tree:
-
-```
-agent { prompt: "...", cwd: "/repo/.afk-worktrees/my-feature" }
-```
-
-The `note` field in the create response names the install command (`pnpm install`, `npm install`, etc.) you must run before building or testing — dependencies are not shared across worktrees.
-
-### `keep` and `release`
-
-`keep` locks a worktree against the sweep engine with a human-readable reason:
-
-```
-worktree { action: "keep", path: "my-feature", reason: "WIP refactor — do not sweep" }
-→ { path: "...", locked: true, note: "Use action 'release' to unlock." }
-```
-
-A locked worktree is never automatically removed or warned about, regardless of age or cleanliness. Use `release` to return it to normal lifecycle:
-
-```
-worktree { action: "release", path: "my-feature" }
-→ { path: "...", locked: false }
-```
-
-The lock reason is stored in the git worktree lock file (`git worktree lock --reason`).
-
-### Removing a worktree
-
-`remove` drops the checkout; it never deletes the branch ref:
-
-```
-worktree { action: "remove", path: "my-feature" }
-→ { path: "...", removed: true, branchPreserved: "afk/my-feature" }
-```
-
-The tool refuses a locked tree — call `release` first. When a worktree was preserved with commits ahead of base it is locked automatically; the order is mandatory:
-
-```
-worktree { action: "release", path: "my-feature" }
-worktree { action: "remove",  path: "my-feature", force: true }
-```
-
-`force: true` is safe for commits (the branch ref survives) but is NOT safe for local state: it also deletes untracked and ignored files (`.env`, gitignored plans) that were never committed. The tool refuses removal for trees holding such files unless you pass `force: true` and confirm the content is expendable.
-
----
-
-## Subagent isolation mode
-
-The `agent` tool supports `isolation: "worktree"`, which auto-creates a fresh managed worktree for the child and runs it there — without the parent having to call `worktree` first:
-
-```
-agent {
-  prompt: "...",
-  isolation: "worktree"
+```json
+{
+  "commands": ["pnpm install --frozen-lockfile"],
+  "timeoutMs": 300000
 }
 ```
 
-When isolation is active, the runtime:
+Commands run in order from the new worktree and stop on first failure. The optional `timeoutMs` defaults to five minutes **per command**. The file is read from the worktree's base commit. Creation still succeeds if setup fails, times out, or the declaration is invalid; the response includes a notice. The interactive `afk i --worktree` launcher does not run this setup, so run installation yourself or ask the agent to do it. Setup scripts run as your user, so only enable this in trusted repositories.
 
-1. Creates a new worktree under `.afk-worktrees/` branched from the dispatching session's HEAD.
-2. Runs the child inside that worktree (the child's `cwd` and write scope are confined to it).
-3. Tears down the worktree when the child finishes. If the tree is dirty, has commits ahead of base, or holds non-rebuildable ignored files, it is preserved and locked instead of removed — work in progress is never destroyed.
+## Dispatch a child into its own checkout
 
-This is the right mode for parallel write-capable subagents (speculative fixes, refactor lanes, independent experiments) where cross-contamination of edits or test runs would corrupt results. Read-only agents are silently unaffected — they have nothing to isolate.
+Ask AFK to use the `agent` tool with these parameters:
 
-`isolation: "worktree"` is mutually exclusive with the `cwd` parameter (the runtime owns the child's working directory when isolating) and with `writeRoots` (write confinement is inherent to the isolated tree). `readRoots` works alongside isolation — widening reads inside an isolated worktree is legitimate.
-
-Recovering a preserved isolated tree is done with the `worktree` tool:
-
-```
-worktree { action: "list" }                         // find it
-worktree { action: "release", path: "iso-agent-..." }
-worktree { action: "remove",  path: "iso-agent-...", force: true }
+```json
+{"prompt":"Implement and test the parser fix. Report the branch and verification.","isolation":"worktree","mode":"background"}
 ```
 
----
+Isolation creates a managed branch under `.afk-worktrees/` from the dispatching session's HEAD, confines the child there, and tries to remove its checkout after completion. A dirty checkout, commits ahead of base, or non-rebuildable ignored files cause it to be preserved and locked instead. `mode: "background"` returns a job ID while the child works; the result arrives automatically when it finishes. You cannot combine worktree isolation with `cwd` or `writeRoots`; you can still grant `readRoots`. Read-only named agents do not need this isolation and are unaffected.
 
-## Tips
+Alternatively, call the `worktree` tool's `create` action with `name` and optional `base`, then pass its returned absolute path as the child's `cwd`. Managed creation writes `.afk-worktree-meta.json`; raw `git worktree add` does not, and may be treated as an orphan by the sweeper.
 
-- `afk worktree list` is always safe — it's a read-only dry run.
-- Run `git worktree list` directly to see the full git-level view including worktrees AFK didn't create.
-- Dirty worktrees (`stale-dirty`) generate a warning rather than an immediate prune. Review them before running `prune --apply` if you have uncommitted work.
-- Worktree branches starting with `afk/` are AFK-managed. Other branches are left alone.
-- When a session ends cleanly inside its own worktree, the runtime removes it automatically. If you are running inside a worktree, never call `worktree remove` on your own `cwd` — it strands every subsequent tool call on a path that no longer exists.
+## Inspect and clean up checkouts
+
+```bash
+afk worktree list
+afk worktree prune
+```
+
+Both are dry runs. `afk worktree prune --apply` executes eligible removals; use `--max-age-days-clean` and `--max-age-days-dirty` to adjust thresholds. Defaults are 14 days for clean and 30 days for dirty, with configuration and environment overrides. `empty`, dead-owner, and orphaned checkouts may be reaped; stale dirty work is warned about and preserved. A stale clean checkout with commits ahead is **also preserved and warned about**, not silently deleted. A lock protects a checkout from age-based pruning. `AFK_WORKTREE_BOOT_PRUNE=1` enables startup pruning by the daemon; `AFK_WORKTREE_PRUNE_DISABLE=1` disables the sweep.
+
+The `worktree` model tool supports `list`, `keep` with a human-readable `reason`, `release`, and `remove`. Its `remove` preserves the branch ref and refuses dirty, locked, commits-ahead, or non-rebuildable ignored-file checkouts unless explicitly forced. Release a lock before removal. `force: true` can destroy uncommitted or ignored local files, so inspect them first. A checkout saved for commits ahead can be auto-unlocked by a later sweep once all commits reach upstream; dirty checkouts can be auto-unlocked once clean. Explicit keep-on-exit and ignored-local-state locks are not auto-unlocked.
+
+<Callout type="warn">
+There is no `expiresAt` parameter for a worktree lock. Scheduled tasks have an expiry field, but worktree locks do not. Use `release` when you want to remove a manual lock.
+</Callout>
+
+## Prune remote branches separately
+
+`afk worktree prune` removes eligible **checkouts**, not stale remote refs. To inspect `afk/*` branches on `origin` against `main` and their pull request status:
+
+```bash
+afk branch prune
+```
+
+This is a dry run. `afk branch prune --execute` deletes branches classified as safe; that is a remote operation, so review its table before running it. Open pull requests and detected unmerged commits are preserved. The classifier treats an unavailable GitHub CLI as "no PR" and a failed commit-ahead probe as zero ahead, so do not treat its output as proof that every candidate is safe. `--remote`, `--base`, and `--prefix` change the default target. To compare several task attempts rather than delegating one isolated child, see [the farm guide](/guides/farm).
+
+## Related
+
+<Cards>
+<Card title="Delegate to subagents" href="/guides/subagents" description="Run isolated children in foreground or background." />
+<Card title="Compare branches with a farm" href="/guides/farm" description="Try several independent approaches at once." />
+</Cards>

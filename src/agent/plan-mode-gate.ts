@@ -76,11 +76,28 @@ export function createPlanModeGate(
     // side-effect plan mode exists to prevent. It is categorized `web`, not
     // `write`, so the write-category block above does not catch it; this
     // explicit check closes that gap.
+    //
+    // The `agent` tool with a `host` field uses the same SSH transport
+    // (RemoteSubagentHandle) — it must be gated identically (#4202).
     if (toolName === 'remote_agent') {
       return {
         decision: 'block',
         reason: 'plan mode: remote_agent is refused. Use /plan off to exit plan mode.',
       };
+    }
+    if (toolName === 'agent') {
+      const host =
+        typeof context.input === 'object' && context.input !== null
+          ? (context.input as Record<string, unknown>)['host']
+          : undefined;
+      if (typeof host === 'string' && host.trim() !== '') {
+        return {
+          decision: 'block',
+          reason:
+            'plan mode: agent with `host` is refused (same risk class as remote_agent). ' +
+            'Use /plan off to exit plan mode.',
+        };
+      }
     }
 
     // `worktree` is action-gated: `list` is a read-only dry-run sweep and

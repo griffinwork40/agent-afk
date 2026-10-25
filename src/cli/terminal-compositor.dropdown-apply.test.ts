@@ -192,7 +192,7 @@ describe('TerminalCompositor — Enter applies dropdown selection', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('Enter on an open @file dropdown finalizes path but does NOT submit (user is mid-sentence)', async () => {
+  it('Enter on an open @file dropdown accepts a FILE and submits', async () => {
     const onSubmit = vi.fn();
     const ac = createAutocompleteState();
     const c = new TerminalCompositor({
@@ -205,10 +205,8 @@ describe('TerminalCompositor — Enter applies dropdown selection', () => {
     await c.arm();
     c.setInputMode('idle');
 
-    // Forge a file-trigger dropdown directly — the real file resolver is
-    // out of scope here; we only care that `kind === 'file'` causes Enter
-    // to apply-only without submitting. This is the file-completion arm
-    // of reader.ts:734-748 (kind !== 'slash' branch).
+    // Forge a file-trigger dropdown — selecting a file (no trailing '/')
+    // should accept the path AND submit, so one Enter completes the pick.
     stdin.emit('keypress', '@', { name: '@', sequence: '@' });
     stdin.emit('keypress', 's', { name: 's', sequence: 's' });
     ac.dropdownOpen = true;
@@ -218,12 +216,43 @@ describe('TerminalCompositor — Enter applies dropdown selection', () => {
 
     stdin.emit('keypress', undefined, { name: 'return' });
 
-    // onSubmit must NOT have fired — Enter on a file completion only
-    // accepts the path; the user is still composing the prompt body.
+    // File selection: Enter both accepts the path AND submits.
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    // The path should have been applied to the buffer.
+    expect(c.getBuffer().text).toBe('');  // cleared after submit
+    // Dropdown closed.
+    expect(ac.dropdownOpen).toBe(false);
+  });
+
+  it('Enter on an open @file dropdown accepts a DIRECTORY but does NOT submit (navigates deeper)', async () => {
+    const onSubmit = vi.fn();
+    const ac = createAutocompleteState();
+    const c = new TerminalCompositor({
+      stdout,
+      stdin,
+      onCancel: vi.fn(),
+      autocompleteState: ac,
+      onSubmit,
+    });
+    await c.arm();
+    c.setInputMode('idle');
+
+    // Forge a directory candidate (trailing '/') — Enter should accept
+    // the directory but NOT submit, so the dropdown can reopen with
+    // the directory's contents for further navigation.
+    stdin.emit('keypress', '@', { name: '@', sequence: '@' });
+    stdin.emit('keypress', 's', { name: 's', sequence: 's' });
+    ac.dropdownOpen = true;
+    ac.trigger = { kind: 'file', query: 's' };
+    ac.candidates = [{ value: '@src/', summary: '' }];
+    ac.selectedIndex = 0;
+
+    stdin.emit('keypress', undefined, { name: 'return' });
+
+    // Directory: accept only, no submit — user is still navigating the tree.
     expect(onSubmit).not.toHaveBeenCalled();
     // The path should have been applied to the buffer.
-    expect(c.getBuffer().text).toContain('@src/foo.ts');
-    // Dropdown closed.
+    expect(c.getBuffer().text).toContain('@src/');
     expect(ac.dropdownOpen).toBe(false);
   });
 

@@ -201,7 +201,10 @@ export function handleSubagentChunk(
       parentId,
       maxWidth,
     );
-    source.stats.toolUses += 1;
+    if (!source.stats.seenToolUseIds.has(chunk.toolUseId)) {
+      source.stats.seenToolUseIds.add(chunk.toolUseId);
+      source.stats.toolUses += 1;
+    }
     // Route through the full composed frame so the orchestrator's live-
     // thinking paragraph is preserved. (Issue #389.)
     if (ctx.isTTY && ctx.orchestratorCtx) {

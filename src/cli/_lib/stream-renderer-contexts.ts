@@ -22,6 +22,7 @@ import type { CommitCoordinator } from './commit-coordinator.js';
 import type { SourceState } from './stream-renderer-source.js';
 import type { ChildActivityTracker } from './child-activity-select.js';
 import type { ThoughtSummaryHold } from './thought-summary-hold.js';
+import type { CompletionWriter } from '../commands/interactive/shared.js';
 import { isDebugEnabled } from '../../utils/debug.js';
 
 /**
@@ -81,6 +82,7 @@ export function makeSubagentCtx(args: {
   streamingMarkdown: Map<string, StreamingMarkdownRenderer>;
   thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   orchestratorCtx: OrchestratorCtx;
+  completionWriter?: CompletionWriter;
 }): SubagentCtx {
   return {
     isTTY: args.isTTY,
@@ -102,6 +104,7 @@ export function makeSubagentCtx(args: {
     // renderer's toolLane / thinkingLane / lastProgressByTask, so the composed
     // frame includes the orchestrator's thinking paragraph + progress banner.
     orchestratorCtx: args.orchestratorCtx,
+    ...(args.completionWriter ? { completionWriter: args.completionWriter } : {}),
   };
 }
 

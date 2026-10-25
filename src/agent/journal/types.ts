@@ -119,7 +119,42 @@ export interface JournalAdoption {
 export type JournalTruncateReason = 'resync' | 'compact' | 'rewind' | 'clear' | 'repair' | 'provider_switch';
 
 /** Annotation labels. Never affect the folded array. */
-export type JournalMarkLabel = 'compact' | 'rewind' | 'clear' | 'resume' | 'fork' | 'model_switch';
+export type JournalMarkLabel =
+  | 'compact'
+  | 'rewind'
+  | 'clear'
+  | 'resume'
+  | 'fork'
+  | 'model_switch'
+  | 'suggestion'
+  /**
+   * A file-checkpointed user turn began (#4271). `detail`:
+   * `{ checkpointTurnId, messageIndex }`, where `messageIndex` is the user
+   * message's index in the provider-native history at turn start. Durable
+   * provenance tying a prompt to its file checkpoint across restarts.
+   */
+  | 'checkpoint';
+
+/**
+ * `detail` of a `suggestion` mark: one AI-generated REPL suggestion event
+ * (docs/message-journal.md). `generated` is written when the suggestion model
+ * returns a usable proposal; the other events are the user's response to it.
+ * A `generated` with no later `accepted`/`word_accepted` was ignored.
+ *
+ * A type alias (not an interface) so it stays assignable to the generic
+ * `Record<string, unknown>` mark detail.
+ */
+export type JournalSuggestionDetail = {
+  event: 'generated' | 'accepted' | 'word_accepted' | 'dismissed';
+  /** `completion` = inline continuation of typed text; `prompt` = empty-prompt next action. */
+  source: 'completion' | 'prompt';
+  /** The full suggested line (secrets redacted). */
+  text: string;
+  /** What the user had typed when it applied (completion only; secrets redacted). */
+  buffer?: string;
+  /** Suggestion model id (generated only). */
+  model?: string;
+};
 
 interface RecordBase {
   v: typeof JOURNAL_VERSION;

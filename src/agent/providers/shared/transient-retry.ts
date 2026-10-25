@@ -183,7 +183,13 @@ export function isTransientError(err: unknown): boolean {
   if (typeof status === 'number') {
     if (status === 429 || status === 503 || status === 529) return true;
     // Invariant: only this one specific 403 error_code is transient (#3467).
-    // All other 403s are genuine auth denials and must NOT be retried.
+    // All other 403s are genuine auth denials and must NOT be retried here.
+    // Note: a separate retry path for OAuth 403s exists at the auth tier
+    // (`isRefreshablePermissionDenied` in auth-retry-tier.ts), which attempts
+    // a single token refresh-and-replay before surfacing the error. The two
+    // tiers operate at different stack layers and cannot double-retry: this
+    // function gates the transient-connection retry loop; auth-retry-tier.ts
+    // gates the auth-refresh replay. They are mutually exclusive in practice.
     if (status === 403) return isTransientOauthOrg403(err);
   }
   return false;

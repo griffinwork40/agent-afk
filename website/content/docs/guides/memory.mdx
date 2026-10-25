@@ -1,165 +1,144 @@
 ---
-title: "Cross-Session Memory"
-description: "How Agent AFK stores and retrieves facts, procedures, and hot context across sessions — automatically, locally, with no external service required."
+title: "Remember facts across sessions"
+description: "Keep durable preferences, cited project facts, and reusable procedures available to future sessions."
 ---
 
-Agent AFK maintains persistent memory across sessions automatically. Everything is stored locally in `~/.afk/state/memory/` — no cloud sync, no external service. Memory is available on every surface: the REPL, Telegram bot, CLI `chat`, and daemon sessions.
+Memory lets you carry useful knowledge from one session into another without repeating it. Storage is local, and the REPL, Telegram, `afk chat`, and daemon sessions share it when they use the same state directory. Recalled content still enters the model's context, so local storage does not mean that content stays off the model provider's servers.
 
-## Two storage tiers
+## Save and recall something useful
 
-Memory is split into two tiers with different purposes and access patterns:
+<Steps>
+<Step>
+### Ask for a durable fact
 
-| Tier | File | Best for |
-|---|---|---|
-| **Hot memory** | `~/.afk/state/memory/HOT.md` | Identity, top preferences, active project pointer — things needed in every prompt |
-| **Fact archive** | `~/.afk/state/memory/memory.db` | Everything else: decisions, conventions, learnings, project details |
+```text
+Remember that this project uses pnpm exclusively. Verify the packageManager field and save the fact with a file citation.
+```
 
-### Hot memory (HOT.md)
+The agent uses `memory_update` with `target: "fact"`. A preference, project convention, decision, or debugging lesson belongs in the searchable archive, not automatically in every future prompt.
+</Step>
+<Step>
+### Recall it in a later session
 
-**Path:** `~/.afk/state/memory/HOT.md`
+```text
+Search memory for this project's package manager convention, then check whether the current package.json still agrees.
+```
 
-Hot memory is injected verbatim into the system prompt of every session before any other context. It is the first thing AFK reads at the start of each turn.
+`memory_search` retrieves facts and procedures. A remembered citation is a lead to check, not proof that a file has stayed unchanged.
+</Step>
+<Step>
+### Replace outdated knowledge
 
-**Capacity:** The hard cap is **5,250 characters (~1,500 tokens)**. Content beyond this limit is truncated from the end — the last entries to be written are the first to be cut. The first 600 characters are never sacrificed; content is always preserved from the top down.
+Ask the agent to supersede the old fact and supply fresh evidence. `action: "supersede"` preserves the original in history and removes it from normal active-fact search results. Use `action: "remove"` only when you intend to delete a fact.
+</Step>
+</Steps>
 
-**Atomic writes:** HOT.md is written atomically (write to a temp file, then rename). A backup copy is kept at `~/.afk/state/memory/HOT.md.bak` reflecting the previous state.
+## Choose the right storage tier
 
-**Best for:**
-- User identity (name, timezone, role)
-- 2–3 top durable preferences
-- A one-line pointer to the active project (name + path)
+| Store | Location under `~/.afk/state/memory/` | Use it for |
+| --- | --- | --- |
+| Hot memory | `HOT.md` | Identity and a few durable preferences needed in every session |
+| Fact archive | `memory.db` | Searchable conventions, decisions, preferences, and learnings |
+| Procedures | `procedures/<name>.md` | Reusable workflows with steps and verification criteria |
 
-<Callout type="info">
-HOT.md is injected into **every session on every surface**. Keep it short. Store project-specific conventions and detailed context in the fact archive instead — it is unbounded and searchable. If it doesn't need to be in every prompt forever, it's a fact, not hot.
+The archive uses SQLite with WAL mode and FTS5 search. There is no hot-memory-style character cap on individual archive storage. Facts are not automatically scoped to a repository, so include enough project context to distinguish similarly named systems.
+
+### Hot memory limits
+
+Hot memory is loaded at session construction and included in the system prompt. It is not reread from disk before every turn, and a write affects future sessions rather than rewriting the current prompt.
+
+Writes through `memory_update` enforce a **5,250 character cap**, approximately **1,500 tokens**. At **80%** usage the tool returns a warning. Oversized writes keep the beginning, truncate the tail, and add a visible truncation marker. The first 600 characters are protected from the complete-line truncation rule.
+
+Keep the most durable information first. Move project details into facts before the cap becomes a problem. Writes are atomic, and `HOT.md.bak` retains the previous version. These write-time protections do not make an oversized manually edited file safe to inject.
+
+<Callout type="warn">
+Hot memory is ambient context for future sessions. Avoid credentials, large task logs, and instructions copied from untrusted documents. Prefer project instructions in [AFK.md](/configuration/afk-md) for repository-specific policy.
 </Callout>
 
-### Fact archive (memory.db)
+## Fact categories and tools
 
-**Path:** `~/.afk/state/memory/memory.db`
+| Category | Example |
+| --- | --- |
+| `preference` | Your preferred explanation style |
+| `convention` | A repository's package manager or architectural rule |
+| `decision` | A design choice and its rationale |
+| `learning` | A debugging insight or agent reflection |
 
-The fact archive is a SQLite database with WAL mode enabled and FTS5 full-text search. It is unbounded — there is no size cap.
+The agent can save a cited fact with this tool input:
 
-Facts are searched using FTS5 match syntax, which supports:
-- `AND`, `OR`, `NOT` operators
-- `"exact phrase"` matching with quotes
-- `prefix*` prefix matching
-
-When updating an existing fact, use the **supersede** action rather than removing and re-adding. Supersede replaces the active fact while keeping the original in history for audit purposes.
-
-### Procedures
-
-**Path pattern:** `~/.afk/state/memory/procedures/<name>.md`
-
-Procedures are markdown files that describe reusable multi-step workflows. Each procedure is stored as a separate file with a kebab-case filename (e.g., `deploy-to-staging.md`).
-
-Procedures support optional frontmatter fields for metadata. They are searched by **substring match** (not FTS5), so simple keywords work reliably.
-
-## On-disk layout
-
-```
-~/.afk/state/memory/
-├── HOT.md
-├── HOT.md.bak
-├── memory.db
-└── procedures/
+```json
+{
+  "target": "fact",
+  "action": "set",
+  "category": "convention",
+  "content": "The dashboard project uses pnpm.",
+  "evidence": "dashboard/package.json:8"
+}
 ```
 
-## Fact categories
+The citation above illustrates the shape; the agent must use a location it actually checked. To supersede a fact, supply its numeric ID as `supersedes`, the replacement `content`, and fresh `evidence`. To remove it, supply `id` and `action: "remove"`. Hot memory supports only `action: "set"`, which replaces its contents.
 
-Every fact stored in the archive is tagged with one of four categories:
+### Search syntax
 
-| Category | What to store | Example |
-|---|---|---|
-| `preference` | User preferences, style choices, things to avoid | "I prefer TypeScript strict mode" |
-| `convention` | Non-obvious project conventions discovered during investigation | "This repo uses `pnpm` exclusively, not `npm`" |
-| `decision` | Key decisions with rationale, architectural choices | "Chose Zod over Yup because the team already uses it in the API layer" |
-| `learning` | Surprising findings from debugging or exploration | "WAL mode must be enabled before the first write or the DB ignores it" |
+`memory_search` takes `query`, optional `category`, optional ISO `since`, and `limit` (default 10). Fact queries support FTS5:
 
-## Memory tools
-
-Three tools manage memory:
-
-| Tool | Purpose |
-|---|---|
-| `memory_search` | Retrieve facts and procedures by relevance |
-| `memory_update` | Create, update, or remove facts and hot memory |
-| `procedure_write` | Save or overwrite a named procedure |
-
-### memory_search
-
-Searches the fact archive and procedures by relevance. Returns results ranked by match quality.
-
-**Parameters:**
-- `query` — FTS5 match string (required)
-- `category` — filter to one category: `preference`, `convention`, `decision`, or `learning` (optional)
-- `limit` — max results to return, default 10 (optional)
-- `since` — ISO date string; only return facts created after this date (optional)
-
-**FTS5 syntax examples:**
-
-```
-"exact phrase"           -- match the phrase literally
-TypeScript AND strict    -- both terms must appear
-deploy OR release        -- either term
-postgres NOT sqlite      -- exclude sqlite
-pnpm*                    -- prefix match (pnpm, pnpm-lock, etc.)
+```text
+"exact phrase"
+TypeScript AND strict
+deploy OR release
+postgres NOT sqlite
+pnpm*
 ```
 
-### memory_update
+Superseded facts are excluded from ordinary recall. Procedure searches use case-insensitive substring matching of query terms, not FTS5 operators. A category filter restricts results to facts and excludes procedures.
 
-Creates, updates, or removes entries in hot memory or the fact archive.
+## Evidence gate and stale citations
 
-**`target` values:**
-- `"fact"` — write to the searchable SQLite archive (default for almost everything)
-- `"hot"` — write to HOT.md (system prompt injection)
+The evidence gate is **on by default**. Set `AFK_MEMORY_EVIDENCE_GATE=0` to disable it; `1` explicitly enables it.
 
-**`action` values:**
-- `"set"` — create or overwrite
-- `"supersede"` — replace an existing fact while keeping its history; requires `supersedes: <id>`
-- `"remove"` — delete a fact by ID; requires `id: <id>`
+| Situation | Behavior with the gate enabled |
+| --- | --- |
+| `convention` without evidence | Saved with a warning, recalled as `[unverified]` |
+| `convention` with evidence | Recalled with a `verified` provenance verdict |
+| `learning` | Recalled with `[auto-reflected]` |
+| `preference`, `decision`, or procedure | Evidence verdict is `not-applicable` |
 
-**`category`** is required when `target` is `"fact"`: one of `preference`, `convention`, `decision`, `learning`.
+<Callout type="info">
+The gate does not block uncited writes and does not check whether a cited file, commit, or trace actually proves the claim. `verified` means a nonempty citation was supplied, not that AFK independently validated its truth.
+</Callout>
 
-Use `supersede` (not `remove` + `set`) when updating a fact that already exists. This preserves history and avoids duplicate entries.
+When you supersede a cited convention without supplying `evidence`, the old citation carries forward. The tool warns that the changed claim is still marked verified against the **old evidence**. Supply a current citation, or pass an empty evidence string to clear it and make the replacement unverified.
 
-### procedure_write
+## Reusable procedures
 
-Saves or overwrites a reusable procedure.
+Ask the agent to save a successful workflow with `procedure_write`:
 
-**Parameters:**
-- `name` — kebab-case filename without extension (e.g., `deploy-to-staging`). The tool writes to `~/.afk/state/memory/procedures/<name>.md`.
-- `content` — full markdown content of the procedure
-
-Procedures are searchable via `memory_search`. Use them for recurring multi-step workflows that you want available in future sessions.
-
-## Automatic lifecycle
-
-**Session start:** At the beginning of each session, AFK reads HOT.md and injects it into the system prompt. The model sees this content before processing the first user message.
-
-**During the session:** New facts, hot-memory updates, and procedures are written by the agent through the memory tools (`memory_update`, `procedure_write`) as it works — for example, when it discovers a preference, decision, or convention worth keeping for next time.
-
-**Session end:** A `SessionEnd` hook records the session itself in the archive (used for session history). It runs on every session end, independent of whether any facts were written during the session.
-
-**Subagent exclusion:** Only the top-level (coordinating) session can write memory. Subagents — sessions that carry a `parentSessionId` — are given the read-only `memory_search` tool, never `memory_update` or `procedure_write`, and the `SessionEnd` hook skips them entirely. This prevents parallel workers from polluting the store with duplicate or conflicting entries.
-
-## Relocating memory
-
-By default all memory files live under `~/.afk/state/memory/`. To move them to a different path, set the `AFK_STATE_DIR` environment variable:
-
-```bash
-export AFK_STATE_DIR=/path/to/shared/state
+```text
+Save a procedure named verify-dashboard-release with the commands we used, prerequisites, expected results, and recovery steps. Exclude credentials and this run's temporary paths.
 ```
 
-All memory files are then resolved under `<AFK_STATE_DIR>/memory/`. See [Environment Variables](/configuration/environment-variables) for the full list of path overrides.
+The tool takes `name` and full Markdown `content`. It writes or overwrites `procedures/<name>.md` and adds origin metadata such as creation time and source session. Names must be 1 to 100 characters, start with an alphanumeric character, and contain only alphanumeric characters, hyphens, or underscores. Kebab case is a useful convention.
 
-## Cross-surface sharing
+Procedures become searchable through `memory_search`; they are not automatically executed or injected into every prompt.
 
-Because all memory lives on disk under `<AFK_STATE_DIR>/memory/`, it is automatically shared across all surfaces that point to the same `AFK_STATE_DIR`:
+## Subagents and session lifecycle
 
-- Interactive REPL (`afk interactive`)
-- Telegram bot
-- CLI `chat` (`afk chat "..."`)
-- Daemon sessions
-- Scheduled tasks
+Subagents can write **facts** with `memory_update` when their tool access permits memory writes. They cannot write `target: "hot"`: a structural guard rejects that operation even if no hook registry is installed. An explicitly read-only-memory session has only `memory_search`; tool restrictions can also withhold writes.
 
-Facts written in a Telegram session are visible in the next REPL session, and vice versa. For more on how surfaces differ and share state, see [How It Works](/how-it-works).
+The ordinary child tool allowlist excludes `procedure_write`. Have the coordinator review and save a proposed procedure instead of having parallel workers overwrite a shared workflow. Session-history hooks skip child sessions rather than producing duplicate top-level history records.
+
+Use `workspace_publish` and `workspace_query` for findings that siblings need during the current task. Persist only useful, grounded knowledge to memory. See [subagent coordination](/guides/subagents) for workspace behavior.
+
+## Storage and sharing
+
+The default directory contains `HOT.md`, its backup, `memory.db`, procedure files, and a recovery log. Set `AFK_STATE_DIR` to relocate the state tree; memory then lives under that directory's `memory/` child. All surfaces pointing at that tree see the same archive. Existing running sessions do not automatically refresh their hot-memory snapshot.
+
+Session lifecycle hooks record session history independently of whether the agent saved any facts. Memory tools remain the explicit path for adding and correcting reusable knowledge.
+
+## Related
+
+<Cards>
+<Card title="Track a project goal" href="/guides/goal-tracking" description="Carry an objective, rather than a fact, across sessions." />
+<Card title="Persist structured state" href="/guides/state-store" description="Use exact keys, versions, and expiry for checkpoints." />
+<Card title="Delegate to subagents" href="/guides/subagents" description="Share findings without polluting durable memory." />
+</Cards>

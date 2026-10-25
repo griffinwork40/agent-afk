@@ -177,6 +177,7 @@ export function buildLaunchScript(opts: LaunchScriptOptions): string {
   if (opts.permissionMode !== undefined) args.push('--permission-mode', opts.permissionMode);
 
   const promptDelim = makeHeredocDelimiter(opts.prompt);
+
   const lines = [
     'set -e',
     'umask 077',

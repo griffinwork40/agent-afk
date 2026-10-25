@@ -49,11 +49,14 @@ vi.mock('./tools/handlers/worktree-managed.js', () => ({
 const teardownBackgroundWorktree = vi.hoisted(() =>
   vi.fn().mockResolvedValue(undefined),
 );
+const lockWorktreeForBackground = vi.hoisted(() => vi.fn());
 vi.mock('./tools/handlers/worktree-managed.background.js', () => ({
   teardownBackgroundWorktree,
+  lockWorktreeForBackground,
 }));
 
 import { runSubagentDAG, type SubagentDAGNode } from './dag-subagent.js';
+import { dispatchDagNode } from './dag-subagent.dispatch.js';
 
 // ---------------------------------------------------------------------------
 // Shared test harness (mirrors dag-subagent.test.ts helpers)
@@ -127,6 +130,92 @@ describe('runSubagentDAG — isolation:"worktree" wiring', () => {
   // -------------------------------------------------------------------------
   // (1) Happy path: worktree created, fork config cwd === worktree path.
   // -------------------------------------------------------------------------
+  describe('shared setup preserves DAG-specific semantics', () => {
+    // Contract: setupDagIsolation hard-codes childWriteCapable:true (#4139).
+    // DAG nodes always use the write-capable worktree path; canUseTool
+    // restrictions are enforced at the fork level, not the worktree level.
+    // The read-only skip branch in setupIsolationWorktree is only reached
+    // via the agent-tool path. createIsolatedWorktree being called here
+    // (not skipped) confirms childWriteCapable:true was wired — if it were
+    // false the worktree creation call would be short-circuited.
+    it('creates an isolation worktree even for deny-everything canUseTool nodes (childWriteCapable:true, #4139)', async () => {
+      createIsolatedWorktree.mockResolvedValue(ISO_RESULT);
+      const handle = makeFakeHandle('ok');
+      const manager = { forkSubagent: vi.fn(async () => handle) } as unknown as SubagentManager;
+      const signal = new AbortController().signal;
+      await dispatchDagNode(
+        { ...makeIsoNode(), canUseTool: async () => ({ behavior: 'deny' as const, message: 'read only' }) },
+        {}, signal, { manager, parentSession: makeParent(), nodes: [], edges: [], anchorCwd: '/repo' }, 0, 42,
+      );
+      // createIsolatedWorktree must be called: proves childWriteCapable:true
+      // reached setupIsolationWorktree (false would have skipped it).
+      expect(createIsolatedWorktree).toHaveBeenCalledWith({
+        cwd: '/repo', slugHint: expect.stringMatching(/^iso-compose-A-42-[a-z0-9]+$/), signal,
+      });
+      expect(lockWorktreeForBackground).not.toHaveBeenCalled();
+      expect(teardownBackgroundWorktree).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps exact thrown error and rolls back once when setup is aborted', async () => {
+      const controller = new AbortController();
+      createIsolatedWorktree.mockImplementationOnce(async ({ signal }: { signal: AbortSignal }) => {
+        expect(signal).toBe(controller.signal);
+        controller.abort();
+        throw new DOMException('Aborted', 'AbortError');
+      });
+      const budget = new DelegationBudget({ maxTotalAgents: 10 });
+      const record = budget.recordSpawn.bind(budget);
+      const rollback = vi.fn();
+      vi.spyOn(budget, 'recordSpawn').mockImplementation((id) => {
+        const receipt = record(id);
+        rollback.mockImplementation(receipt.rollback);
+        return { ...receipt, rollback };
+      });
+      const manager = { forkSubagent: vi.fn() } as unknown as SubagentManager;
+      await expect(dispatchDagNode(makeIsoNode(), {}, controller.signal, {
+        manager, parentSession: makeParent(), nodes: [], edges: [], delegationBudget: budget,
+      }, 0, 1)).rejects.toThrow(
+        'Failed to create isolated worktree for DAG node "A": Aborted. isolation:"worktree" requires the session to run inside a git repository.',
+      );
+      expect(rollback).toHaveBeenCalledTimes(1);
+      expect(budget.snapshot().total).toBe(0);
+      expect(manager.forkSubagent).not.toHaveBeenCalled();
+      expect(teardownBackgroundWorktree).not.toHaveBeenCalled();
+    });
+
+    it('prepends failed-setup notice once to the lazy prompt and returns it separately', async () => {
+      createIsolatedWorktree.mockResolvedValue({ ...ISO_RESULT,
+        setup: { status: 'failed', command: 'pnpm install', detail: 'exit code 1' },
+      });
+      const handle = makeFakeHandle('unchanged output');
+      const builder = vi.fn((inputs: Record<string, unknown>) => `upstream: ${inputs['upstream']}`);
+      const manager = { forkSubagent: vi.fn(async () => {
+        expect(builder).not.toHaveBeenCalled();
+        return handle;
+      }) } as unknown as SubagentManager;
+      const result = await dispatchDagNode({ ...makeIsoNode(), promptBuilder: builder },
+        { upstream: 'value' }, new AbortController().signal,
+        { manager, parentSession: makeParent(), nodes: [], edges: [] }, 0, 1);
+      expect(result.setupNotice).toContain('pnpm install');
+      expect(handle.runToResult).toHaveBeenCalledWith(`${result.setupNotice}\n\nupstream: value`);
+      expect(builder).toHaveBeenCalledTimes(1);
+      expect(result.message?.content).toBe('unchanged output');
+      expect(teardownBackgroundWorktree).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a pre-aborted node before setup or budget charging', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const budget = new DelegationBudget({ maxTotalAgents: 10 });
+      const manager = { forkSubagent: vi.fn() } as unknown as SubagentManager;
+      await expect(dispatchDagNode(makeIsoNode(), {}, controller.signal, {
+        manager, parentSession: makeParent(), nodes: [], edges: [], delegationBudget: budget,
+      }, 0, 1)).rejects.toThrow('Aborted');
+      expect(createIsolatedWorktree).not.toHaveBeenCalled();
+      expect(budget.snapshot().total).toBe(0);
+    });
+  });
+
   describe('happy path', () => {
     it('creates the worktree once and rewrites the fork config cwd to the worktree path', async () => {
       createIsolatedWorktree.mockResolvedValue(ISO_RESULT);

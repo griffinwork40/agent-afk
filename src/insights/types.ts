@@ -168,6 +168,18 @@ export interface InsightAggregates {
    * Derived by joining dispatch + outcome rows in routing-decisions.jsonl.
    */
   subagentOutcomes: import('./aggregators/subagent-outcomes.js').SubagentOutcomeAggregates;
+  /**
+   * False-positive rate for the `hook-block-repeat` meta-guard (#3849 Phase 1).
+   * Measures how often the guard fires but the session immediately continues
+   * successfully — the signal needed before any retirement decision.
+   */
+  guardrailFalsePositives: import('./aggregators/guardrail-false-positives.js').GuardrailFalsePositiveAggregates;
+  /**
+   * Observe-window firing counts for the `shadow-git-detect` guard (#3849).
+   * Measures how often the detector fires (currently approve-only) so operators
+   * can decide whether to promote it to block or retire it. NEEDS-DECISION.
+   */
+  shadowGitObserve: import('./aggregators/shadow-git-observe.js').ShadowGitObserveAggregates;
 }
 
 // ---------------------------------------------------------------------------

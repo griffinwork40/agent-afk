@@ -68,8 +68,43 @@ larger window without touching the global table.
 
 **Constraints:** must be a positive integer ≤ 10,000,000. Invalid values (0,
 negative, non-integer, too large) are silently ignored at config load and rejected
-with a clear error at the `config_set` write path. Does **not** affect max output
-tokens — `maxOutputTokensFor` is a separate cap read from the provider API.
+with a clear error at the `config_set` write path.
+
+#### `maxOutputTokens` — per-slot output-token cap override
+
+An optional positive integer (tokens). When set, `maxOutputTokensFor` returns
+this value for the bound model id instead of the built-in table or the 64k
+default. This directly controls the `max_tokens` / `max_completion_tokens` field
+sent to the provider and the output budget reserved in the context-overflow guard
+and auto-compaction geometry.
+
+**When to use:** self-hosted OpenAI-compatible models whose real reply cap differs
+from the 64k `DEFAULT_MAX_OUTPUT` fallback. For example, a Qwen3-35B-A3B server
+configured with `max_model_len = 32768` will never produce more than 32k output
+tokens; setting `"maxOutputTokens": 32768` on its slot reclaims the 32k that
+the flat 64k guess would otherwise reserve unnecessarily (raising the effective
+usable input window from ~50% to ~75% of a 128k context).
+
+A derived default also applies automatically when `contextWindow` is set but
+`maxOutputTokens` is not: for unlisted openai-compatible model ids AFK uses
+`min(64_000, floor(contextWindow / 4))` instead of the flat 64k guess, so a
+128k-window slot derives a 32k output cap without any extra configuration.
+
+**Constraints:** must be a positive integer ≤ 10,000,000. Invalid values are
+silently ignored at config load and rejected at the `config_set` write path.
+
+```json
+{
+  "models": {
+    "local": {
+      "id": "gpt-qwen3-35b",
+      "provider": "openai",
+      "contextWindow": 131072,
+      "maxOutputTokens": 32768
+    }
+  }
+}
+```
 
 ### Environment
 

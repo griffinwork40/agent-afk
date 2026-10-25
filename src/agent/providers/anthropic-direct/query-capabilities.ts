@@ -65,6 +65,7 @@ export function mcpServerStatusList(
   return mcpManager.getServerStates().map((s) => ({
     name: s.serverName,
     status: s.status,
+    toolCount: s.toolCount,
   }));
 }
 

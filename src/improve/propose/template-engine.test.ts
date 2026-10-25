@@ -47,6 +47,7 @@ function makeCard(overrides: Partial<FailureCard> = {}): FailureCard {
     firstSeen: '2026-05-22T10:00:00.000Z',
     lastSeen: '2026-05-22T10:00:00.000Z',
     occurrenceCount: 1,
+    sightingCount: 0,
     evidence: [
       {
         sessionId: 'sess-A',

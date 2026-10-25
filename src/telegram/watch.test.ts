@@ -150,7 +150,11 @@ describe('SessionWatchManager', () => {
     });
     await sleep(300);
     await writer.close('close');
-    await sleep(600);
+    // vi.waitFor instead of a fixed sleep(600): on slow Windows runners the
+    // debounce + tail flush can take longer than a fixed budget.
+    await vi.waitFor(() => {
+      expect(sent.join('\n')).toContain('watch ended');
+    }, { timeout: 2000 });
 
     const all = sent.join('\n');
     expect(all).toContain('👤 hello from CLI');
@@ -161,6 +165,31 @@ describe('SessionWatchManager', () => {
     // Batching: the user+assistant records (written within one debounce
     // window) must arrive in a single message, not one send per record.
     expect(sent.some((m) => m.includes('hello from CLI') && m.includes('on it'))).toBe(true);
+  });
+
+  it('relays pre-tool assistant text (segmented ledger) and keeps the 700-char preview for uncapped answers', async () => {
+    const id = freshId();
+    const writer = new SessionLedgerWriter(id);
+    writer.recordUser('pre');
+    await sleep(50);
+    const sent: string[] = [];
+    const manager = new SessionWatchManager();
+    manager.start(9, id, async (text) => { sent.push(text); });
+    await sleep(100);
+    writer.recordUser('run it');
+    writer.recordEvent({ type: 'chunk', chunk: { type: 'content', content: 'checking first' } });
+    writer.recordEvent({ type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: 't', toolName: 'bash', toolInput: 'ls' } } as never);
+    const long = 'z'.repeat(20_000);
+    writer.recordEvent({ type: 'message', message: { role: 'assistant', content: long, timestamp: new Date() } });
+    await sleep(300);
+    await writer.close('close');
+    await vi.waitFor(() => { expect(sent.join('\n')).toContain('watch ended'); }, { timeout: 2000 });
+    const all = sent.join('\n');
+    expect(all.indexOf('🤖 checking first')).toBeGreaterThan(-1);
+    expect(all.indexOf('🤖 checking first')).toBeLessThan(all.indexOf('🔧 bash'));
+    const answer = all.split('\n').find((l) => l.startsWith('🤖 zzz'))!;
+    expect(answer.length).toBeLessThan(800);
+    expect(answer.endsWith('…')).toBe(true);
   });
 
   it('stop aborts the tail and reports the watched id', async () => {
@@ -435,7 +464,11 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
     writer.recordUser('normal record');
     await sleep(300);
     await writer.close();
-    await sleep(600);
+    // vi.waitFor instead of a fixed sleep(600): on slow Windows runners the
+    // debounce + tail flush can take longer than a fixed budget.
+    await vi.waitFor(() => {
+      expect(sent.join('\n')).toContain('normal record');
+    }, { timeout: 2000 });
 
     expect(sent.join('\n')).toContain('normal record');
 

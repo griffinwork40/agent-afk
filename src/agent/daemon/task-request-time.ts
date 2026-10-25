@@ -1,3 +1,5 @@
+import { isValidIsoDate } from '../../utils/iso-date.js';
+
 /** Validate and normalize POST /tasks time fields before registering a task. */
 export function parseTaskRequestTime(obj: Record<string, unknown>):
   | { ok: true; cron: string | undefined; runAt: string | undefined; expiresAt: string | undefined }
@@ -11,17 +13,20 @@ export function parseTaskRequestTime(obj: Record<string, unknown>):
   if (rawRunAt === undefined && rawCron === undefined) {
     return { ok: false, error: 'cron (or cronExpression) or runAt is required' };
   }
-  if (rawRunAt !== undefined && (typeof rawRunAt !== 'string' || isNaN(Date.parse(rawRunAt)))) {
+  // Contract: null is not a valid runAt — it has no "clear" semantic here
+  // (POST /tasks creates a new task; clearing only applies to PATCH/update).
+  // Both runAt and expiresAt follow the same rule: absent (undefined) means
+  // "not set"; any present value must be a strict ISO 8601 string.
+  if (rawRunAt !== undefined && !isValidIsoDate(rawRunAt)) {
     return { ok: false, error: 'runAt must be a valid ISO 8601 date string' };
   }
-  if (rawExpiresAt !== undefined && rawExpiresAt !== null &&
-      (typeof rawExpiresAt !== 'string' || isNaN(Date.parse(rawExpiresAt)))) {
+  if (rawExpiresAt !== undefined && !isValidIsoDate(rawExpiresAt)) {
     return { ok: false, error: 'expiresAt must be a valid ISO 8601 date string' };
   }
   return {
     ok: true,
     cron: rawCron as string | undefined,
     runAt: rawRunAt as string | undefined,
-    expiresAt: typeof rawExpiresAt === 'string' ? rawExpiresAt : undefined,
+    expiresAt: rawExpiresAt as string | undefined,
   };
 }

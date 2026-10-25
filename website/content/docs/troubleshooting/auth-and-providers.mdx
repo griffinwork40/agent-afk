@@ -1,0 +1,144 @@
+---
+title: "Resolve authentication and provider problems"
+description: "Identify credential precedence, OAuth expiry, endpoint mistakes, and connection timeouts."
+---
+
+Authentication problems usually come from a missing credential, an expired subscription token, or a different credential source winning than you expected. Connection failures are separate: a valid key cannot fix an unreachable server or the wrong API protocol.
+
+## Identify the failing layer
+
+<Steps>
+<Step>
+### Inspect the current configuration
+
+```bash
+afk status
+afk doctor
+afk provider auth diagnose
+```
+
+Use `status` for model and provider selection, `doctor` for installation and custom endpoint checks, and `provider auth diagnose` for OpenAI and xAI credential sources. `status` does not make a live model request.
+</Step>
+<Step>
+### Match the error to the provider
+
+A `401` or `403` points to authentication, authorization, or endpoint access. `ECONNREFUSED`, DNS errors, and connection timeouts point to transport. A missing-model response points to a model id or API compatibility problem. A `429` is usually a rate or usage limit, not a reason to replace your credentials.
+</Step>
+<Step>
+### Correct one layer, then retry
+
+Check the intended provider's section below. Restart persistent AFK processes after changing their environment. Avoid posting tokens in prompts or bug reports.
+</Step>
+</Steps>
+
+## Anthropic login and Claude OAuth
+
+```bash
+afk login
+```
+
+When Anthropic is selected, this first checks for an existing credential and can report that you are already authenticated without prompting. Use `afk login --force` to replace it through a masked terminal prompt for an Anthropic API key or an existing OAuth token. It is not a browser login flow. If your default model is OpenAI-backed, `afk login` prints OpenAI guidance instead; select Anthropic for this operation with `AFK_MODEL=sonnet afk login --force`. A token starting with `sk-ant-oat` is saved as `CLAUDE_CODE_OAUTH_TOKEN`; other input is saved as `ANTHROPIC_API_KEY`. The wizard removes the conflicting entry from its environment file and asks you to restart a running daemon.
+
+“Saved” means the token was stored, not that a remote API accepted it. If a subsequent request fails:
+
+1. Confirm whether you intended API billing or Claude subscription OAuth.
+2. Check for an older credential exported in the launching shell or configured on the model slot.
+3. Re-authenticate through the tool that owns the OAuth credential if it has expired. AFK can refresh supported Claude Keychain OAuth credentials, but a pasted static token is not a refreshable login bundle.
+4. Retry the intended model after restarting the affected process.
+
+API keys and OAuth tokens are different credential types. Do not send a Claude OAuth token to an OpenAI-compatible endpoint or use an OpenAI key for Anthropic.
+
+## OpenAI API keys or ChatGPT subscription
+
+<Tabs items={['API key', 'ChatGPT OAuth']}>
+<Tab value="API key">
+
+The normal OpenAI credential order is an explicit session/slot key, `OPENAI_API_KEY`, `CODEX_API_KEY`, then Codex CLI's authentication file. Inspect the selected source without printing its raw value:
+
+```bash
+afk provider auth diagnose --format json
+```
+
+If an unexpected API key wins, correct that source rather than repeatedly logging in to Codex. A key found on disk is not a guarantee that its account has credit or access to the requested model.
+</Tab>
+<Tab value="ChatGPT OAuth">
+
+AFK can use the ChatGPT OAuth access token in `~/.codex/auth.json`. Authenticate with Codex:
+
+```bash
+codex login
+afk provider auth diagnose
+```
+
+AFK does not refresh Codex's single-use refresh tokens. If the diagnostic says the subscription token is expired, run `codex` to refresh it, then retry AFK. If the file has no usable access token, run `codex login` again.
+
+ChatGPT OAuth is the last-resort tier of ordinary resolution: it is used only when no earlier API key source wins. A model slot configured with `provider: 'chatgpt-oauth'` explicitly chooses subscription OAuth even when API keys exist. To diagnose that choice:
+
+```bash
+afk provider auth diagnose --slot medium
+```
+
+Use a model supported by the ChatGPT subscription backend. API model availability and subscription availability are not interchangeable.
+</Tab>
+</Tabs>
+
+## xAI and Grok
+
+For API access, configure `XAI_API_KEY`. For a supported SuperGrok, SuperGrok Heavy, or X Premium+ login:
+
+```bash
+afk provider auth xai login
+afk provider auth diagnose --family xai
+```
+
+Login uses a device-code flow by default; `--browser` selects a browser loopback flow. If both an API key and stored OAuth exist, automatic resolution reports ambiguous auth rather than silently choosing one. Select `--provider xai` for the API-key route or `--provider xai-oauth` for the OAuth route. For example, run `afk chat "Reply with OK" --model grok --provider xai-oauth`. The `grok` alias resolves to `grok-4.5`. Use `afk provider auth xai logout` to clear AFK's stored subscription tokens. xAI does not use `OPENAI_API_KEY`.
+
+## Custom base URLs and local servers
+
+Check that the endpoint speaks the protocol selected by your provider. An OpenAI-compatible server typically exposes `/v1/models` and `/v1/chat/completions`; an Anthropic-compatible server is a different route. Set the API prefix in the base URL, not the chat-completions resource itself.
+
+For a local server running on port 1234:
+
+```bash
+curl http://localhost:1234/v1/models
+```
+
+Use a model id returned by the server, and configure that endpoint on the intended model slot. `afk doctor` probes custom slot endpoints, but does not probe every possible global base URL. Its `auth unverified` warning can mean the probe deliberately omitted fallback credentials that a real session uses. See [doctor's endpoint checks](/troubleshooting).
+
+`AFK_OPENAI_BASE_URL` controls the general OpenAI-compatible endpoint; per-slot `baseUrl` settings let different model tiers use different servers. Avoid embedding credentials in URLs, and never point a cloud-credential configuration at an untrusted endpoint.
+
+## Connection retries and diagnostics
+
+Both the Anthropic and OpenAI-compatible stream-opening paths retry eligible transient connection failures. By default they use bounded retry counts. `AFK_CONNECT_RETRY_BUDGET_MS` opts into an elapsed-time budget for network retries before the stream opens:
+
+```bash
+AFK_CONNECT_RETRY_BUDGET_MS=30000 afk chat "Reply with OK"
+```
+
+A positive finite value enables the budget. Unset or invalid values preserve the existing retry-count policy. Budget-mode backoff uses jitter and an eight second delay cap. The budget bounds whether another network attempt is admitted; an attempt already running retains its own timeout, so this is not a hard total request deadline. It also does not turn permanent auth failures into retryable ones.
+
+Inspect `afk trace show --all` for `connection_failure`, `connection_recovered`, and `connection_budget_exhausted`. Metadata includes elapsed time, configured budget, transport error code, host, and event-loop lag observations. These connection diagnostics omit URL paths, credentials, and raw exception messages. A repeated DNS or refusal error needs a network/server fix, not a larger retry budget.
+
+## First-token timeouts
+
+The Anthropic streaming loop uses `AFK_MODEL_TTFB_TIMEOUT_MS` to bound waiting for the first content event. Text, thinking, and tool-use content count as progress; connection-open events and keepalive pings do not.
+
+The default configured value is `180000` milliseconds. The current retry implementation derives three attempts of approximately two thirds of that value each: at the default, up to three 120 second first-content waits. Do not interpret the configured value as a strict 180 second total wall-clock deadline. Trace events use `ttfb_timeout`; the underlying error marker is `model_ttfb_timeout`.
+
+If a large prefill legitimately needs longer, raise the value for the process you launch:
+
+```bash
+AFK_MODEL_TTFB_TIMEOUT_MS=300000 afk
+```
+
+Set it to `0` to disable the first-content watchdog, but only after checking that the request is genuinely slow rather than stuck. This setting is specific to the Anthropic streaming loop, not a universal OpenAI timeout knob.
+
+After content begins, a separate progress-aware `AFK_MODEL_STALL_TIMEOUT_MS` window detects silence. Its default is 20 minutes; active streaming resets it. Changing TTFB does not fix a stream that stalls after producing content.
+
+## Related
+
+<Cards>
+  <Card title="Configure credentials" href="/configuration/api-keys" description="Choose and store credentials for each provider." />
+  <Card title="Model slots" href="/configuration/model-slots" description="Bind models, providers, and endpoints independently." />
+  <Card title="Common errors" href="/troubleshooting/common-errors" description="Handle usage limits and other runtime failures." />
+</Cards>

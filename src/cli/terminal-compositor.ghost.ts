@@ -21,6 +21,11 @@ import {
   updateAutocomplete,
   type AutocompleteHost,
 } from './terminal-compositor.autocomplete.js';
+import {
+  noteGhostSource,
+  recordGhostAccept,
+  recordPromptDismiss,
+} from './terminal-compositor.ghost.record.js';
 
 /**
  * Request an empty-prompt suggestion for the turn that is starting, then show
@@ -73,8 +78,9 @@ export function primePromptGhost(self: AutocompleteHost): void {
 export function dismissPromptGhost(self: AutocompleteHost): boolean {
   const engine = self.ghostEngine;
   if (!engine) return false;
-  const hadSuggestion = (engine.peekPromptSuggestion?.() ?? null) !== null;
-  if (!hadSuggestion) return false;
+  const primed = engine.peekPromptSuggestion?.() ?? null;
+  if (primed === null) return false;
+  recordPromptDismiss(self, primed);
   // Optional-called for the same reason as `peekPromptSuggestion` below: a
   // hand-rolled test double predating the feature must not throw here.
   engine.clearPromptSuggestion?.();
@@ -130,6 +136,7 @@ export function updateGhost(self: AutocompleteHost): void {
   const tier1 = self.ghostEngine.getDeterministicGhost(buffer, ctx);
   if (tier1 !== null) {
     self.activeGhost = tier1;
+    noteGhostSource(self, tier1, null);
     return;
   }
 
@@ -146,6 +153,7 @@ export function updateGhost(self: AutocompleteHost): void {
     const primed = self.ghostEngine.peekPromptSuggestion?.() ?? null;
     if (primed !== null) {
       self.activeGhost = primed;
+      noteGhostSource(self, primed, 'prompt');
       return;
     }
   }
@@ -171,6 +179,7 @@ export function updateGhost(self: AutocompleteHost): void {
       result.length > requestedBuffer.length
     ) {
       self.activeGhost = result;
+      noteGhostSource(self, result, 'completion');
       self.repaint();
     }
   }).catch(() => { /* engine never throws, but be defensive */ });
@@ -208,6 +217,7 @@ function acceptableGhost(self: AutocompleteHost): string | null {
 export function applyGhostAccept(self: AutocompleteHost): boolean {
   const ghost = acceptableGhost(self);
   if (ghost === null) return false;
+  recordGhostAccept(self, ghost, true);
   // Replace buffer with the full ghost and position cursor at end. Sanitize
   // the suggested *remainder* before committing it (mirrors the render-path
   // strip in renderInputLine): the typed prefix is the user's own clean
@@ -261,6 +271,7 @@ export function applyGhostWordAccept(self: AutocompleteHost): boolean {
 
   const accepted = stripGhostControlChars(remainder.slice(0, i));
   const newBuffer = self.input.buffer + accepted;
+  recordGhostAccept(self, ghost, newBuffer.length >= ghost.length);
   self.input = InputCore.seed(newBuffer);
 
   // If this nibble consumed the entire ghost, clean up fully (same as

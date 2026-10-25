@@ -93,6 +93,7 @@ import { jsonQueryTool } from './schemas.json-query.js';
 import { modelCompleteTool } from './schemas.model-complete.js';
 import { gitReadTool } from './schemas.git-read.js';
 import { remoteAgentTool } from './schemas.remote-agent.js';
+import { codeSymbolsTool } from './schemas.lsp-symbols.js';
 
 /**
  * The always-on built-in tool definitions,
@@ -107,45 +108,98 @@ import { remoteAgentTool } from './schemas.remote-agent.js';
  * registered unconditionally — the underlying provider lazy-loads Playwright
  * only when a tool is actually invoked, so users who never call them pay
  * zero runtime cost beyond the schema bytes.
+ *
+ * ORDERING INVARIANT (#4198): invariant core tools occupy indices
+ * 0..INVARIANT_CORE_COUNT-1 (see schemas.order.ts). Optional / disableable /
+ * surface-filtered tools are grouped at the tail. This ensures two sessions
+ * differing only in which optional tools are enabled produce a byte-identical
+ * serialized prefix for all invariant core tools, maximising prefix-cache
+ * reuse on Anthropic prompt caching and local inference servers.
+ *
+ * The core segment = builtins not in any toolGroups() group, not
+ * surface-filtered, not registry-filtered, and not send_telegram. It starts with the six LOCKED_TOOLS
+ * builtins (read_file, write_file, edit_file, grep, glob, list_directory),
+ * which LOCKED_TOOLS guarantees can never be disabled by operator config.
+ * Every other core tool can still be disabled individually via tools.disabled
+ * or tools.disabledBySlot; doing so truncates the shared prefix at that tool's
+ * index. send_telegram is placed in the optional tail by convention (not
+ * grouped, not surface-filtered, but not locked either).
+ *
+ * ---- Invariant core (indices 0..22) -----------------------------------------
+ *   read_file, write_file, edit_file, grep, glob, list_directory,  <- LOCKED
+ *   bash, view_image, extract_document,
+ *   wait_for, patch_apply, test_run, get_facet, json_query, model_complete,
+ *   worktree, config_get, config_set,
+ *   read_witness, search_witness,
+ *   remote_agent, web_scrape, web_request
+ *
+ * ---- Optional tail (indices 23..44) -----------------------------------------
+ *   cancel_background_job, send_message_to_agent, get_background_job_health,
+ *   send_telegram,
+ *   image_generate, image_edit,
+ *   create_schedule, update_schedule, list_schedules, get_schedule_history,
+ *   cancel_schedule,
+ *   browser_open, browser_observe, browser_act, browser_screenshot,
+ *   browser_close,
+ *   clipboard_write, clipboard_read,
+ *   list_sessions, send_to_session,
+ *   terminal_font_size,
+ *   ask_question
  */
 export const builtinToolSchemas: readonly AnthropicToolDef[] = [
-  bashTool,
+  // -- Invariant core (0..22) ---------------------------------------------------
+  // Indices 0..5: LOCKED_TOOLS builtins -- operator config can never disable
+  // these six. Placing them first maximises the guaranteed-stable prefix.
   readFileTool,
-  viewImageTool,
-  extractDocumentTool,
   writeFileTool,
   editFileTool,
-  globTool,
   grepTool,
+  globTool,
   listDirectoryTool,
-  sendTelegramTool,
+  // Indices 6..22: remaining core builtins -- not in any toolGroups() group,
+  // not surface-filtered, and not registry-filtered (unlike the background-job
+  // tools). Individually disableable via tools.disabled / tools.disabledBySlot.
+  // Disabling any one truncates the shared prefix there.
+  bashTool,
+  viewImageTool,
+  extractDocumentTool,
+  waitForTool,
+  patchApplyTool,
+  testRunTool,
+  getFacetTool,
+  jsonQueryTool,
+  modelCompleteTool,
+  worktreeTool,
+  configGetTool,
+  configSetTool,
+  readWitnessTool,
+  searchWitnessTool,
+  remoteAgentTool,
   webScrapeTool,
   webRequestTool,
+  // -- Optional tail (23..44): disableable groups / surface-filtered -----------
+  cancelBackgroundJobTool,
+  sendMessageToAgentTool,
+  getBackgroundJobHealthTool,
+  sendTelegramTool,
   imageGenerateTool,
   imageEditTool,
   createScheduleTool,
   updateScheduleTool,
   listSchedulesTool,
   getScheduleHistoryTool,
-  cancelScheduleTool, cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool,
-  readWitnessTool, searchWitnessTool,
-  worktreeTool, terminalFontSizeTool,
-  configGetTool, configSetTool,
-  askQuestionTool, waitForTool,
+  cancelScheduleTool,
   browserOpenTool,
   browserObserveTool,
   browserActTool,
   browserScreenshotTool,
-  browserCloseTool, patchApplyTool,
-  testRunTool,
-  getFacetTool,
-  jsonQueryTool,
-  modelCompleteTool,
-  remoteAgentTool,
+  browserCloseTool,
   clipboardWriteTool,
   clipboardReadTool,
   listSessionsTool,
   sendToSessionTool,
+  terminalFontSizeTool,
+  askQuestionTool,
 ];
 
 /** Tool names in the always-on built-in set. */
@@ -160,6 +214,13 @@ export const BUILTIN_TOOL_NAMES = builtinToolSchemas.map((t) => t.name);
  * `../memory/memory-tools.ts` and are NOT included here — they are loaded as
  * a separate registry. Consumers that need the full universe must concat
  * `memoryToolSchemas` themselves (see `schema-classification.test.ts`).
+ *
+ * Note: `gitReadTool` is included here for closed-world classification but is
+ * only registered at runtime when `AFK_READONLY_GIT_TOOL` is enabled (#3754).
+ * The flag is read once at provider-construction time and is not expected to
+ * change during a session. Toggling `AFK_READONLY_GIT_TOOL` mid-session has no
+ * effect: the tool remains registered (or absent) for the entire lifetime of
+ * the provider instance, and a restart is required for the change to take effect.
  */
 export const ALL_TOOL_SCHEMAS: readonly AnthropicToolDef[] = [
   ...builtinToolSchemas,
@@ -168,4 +229,6 @@ export const ALL_TOOL_SCHEMAS: readonly AnthropicToolDef[] = [
   composeTool,
   // Opt-in (AFK_READONLY_GIT_TOOL, #3754); registered via readonly-git-surface.ts.
   gitReadTool,
+  // Opt-in (AFK_LSP_DIAGNOSTICS, #3904 phase 2); registered via lsp-symbols-surface.ts.
+  codeSymbolsTool,
 ];

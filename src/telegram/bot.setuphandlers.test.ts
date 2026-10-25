@@ -206,107 +206,26 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
   });
 
   // -------------------------------------------------------------------------
-  // /help — closure on line 133
+  // Stage 5: /help, /clear, /compact are no longer bot.command closures; they
+  // reach the detached 'text' listener and run through the shared registry.
   // -------------------------------------------------------------------------
-  describe('/help command closure', () => {
-    test('handleHelp is called via handleUpdate and bot replies', async () => {
+  describe('shared slash commands via the text listener', () => {
+    test('/help replies through the shared registry', async () => {
       const api = await fireCommand(bot, '/help');
-      expect(api).toHaveBeenCalledWith(
+      await vi.waitFor(() => expect(api).toHaveBeenCalledWith(
         'sendMessage',
-        expect.objectContaining({ chat_id: 12345 }),
-      );
+        expect.objectContaining({ chat_id: 12345, parse_mode: 'HTML', text: expect.stringContaining('/clear') }),
+      ));
     });
-  });
 
-  // -------------------------------------------------------------------------
-  // /clear — closures on lines 134-147 (no-route and idle paths)
-  // The no-route path requires a message with no chat — not achievable via
-  // handleUpdate (Telegraf always populates ctx.chat from message.chat).
-  // We drive the idle path (session.state === 'idle') via handleUpdate and
-  // the no-route path via the public handleClear() method.
-  // -------------------------------------------------------------------------
-  describe('/clear command closure', () => {
-    test('idle path: delegates to handleClear handler', async () => {
-      const sm = (
-        bot as unknown as {
-          sessionManager: { getSession: (...a: unknown[]) => unknown };
-        }
-      ).sessionManager;
-      vi.spyOn(sm, 'getSession').mockResolvedValueOnce({ state: 'idle' });
-      // handleClear calls clearSessions which replies "cleared"
+    test('/clear while the route is busy is queued, not run', async () => {
+      const sm = (bot as unknown as { sessionManager: { getSession: (...a: unknown[]) => unknown; getSessionIfExists: (...a: unknown[]) => unknown } }).sessionManager;
+      vi.spyOn(sm, 'getSession').mockResolvedValue({ state: 'streaming' });
+      const mh = (bot as unknown as { messageHandler: { enqueueSlash: (...a: unknown[]) => number | false } }).messageHandler;
+      const spy = vi.spyOn(mh, 'enqueueSlash').mockReturnValue(1);
       const api = await fireCommand(bot, '/clear');
-      // We just need the closure to have been entered — any sendMessage call confirms it.
-      expect(api).toHaveBeenCalled();
-    });
-
-    test('busy path via closure: enqueues clear and replies "Clear queued."', async () => {
-      const sm = (
-        bot as unknown as {
-          sessionManager: { getSession: (...a: unknown[]) => unknown };
-        }
-      ).sessionManager;
-      vi.spyOn(sm, 'getSession').mockResolvedValueOnce({ state: 'streaming' });
-      const mh = (
-        bot as unknown as {
-          messageHandler: { enqueueClear: (...a: unknown[]) => void };
-        }
-      ).messageHandler;
-      const spy = vi.spyOn(mh, 'enqueueClear').mockImplementation(() => {});
-      const api = await fireCommand(bot, '/clear');
-      expect(spy).toHaveBeenCalledTimes(1);
-      expect(api).toHaveBeenCalledWith(
-        'sendMessage',
-        expect.objectContaining({ text: 'Clear queued.' }),
-      );
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // /compact — closures on lines 148-165 (no-route and idle paths)
-  // -------------------------------------------------------------------------
-  describe('/compact command closure', () => {
-    test('idle path: calls handleCompact then drainQueue (compact throws — error path)', async () => {
-      const sm = (
-        bot as unknown as {
-          sessionManager: { getSession: (...a: unknown[]) => unknown };
-        }
-      ).sessionManager;
-      vi.spyOn(sm, 'getSession').mockResolvedValueOnce({ state: 'idle' });
-      const mh = (
-        bot as unknown as {
-          messageHandler: { drainQueue: (...a: unknown[]) => Promise<void> };
-        }
-      ).messageHandler;
-      const drainSpy = vi.spyOn(mh, 'drainQueue').mockResolvedValue(undefined);
-      const api = await fireCommand(bot, '/compact');
-      // drainQueue is called in the finally block regardless of handleCompact result
-      expect(drainSpy).toHaveBeenCalledTimes(1);
-      expect(api).toHaveBeenCalled();
-    });
-
-    test('idle path: successful compact calls handleCompact and drainQueue', async () => {
-      // Mock handleCompact to simulate a successful compaction (no throw).
-      // handleCompact owns its own ctx.reply() internally, so we verify the
-      // closure wired it correctly by asserting the spy was called.
-      const commandsHandler = await import('./handlers/commands.js');
-      const compactSpy = vi
-        .spyOn(commandsHandler, 'handleCompact')
-        .mockResolvedValueOnce(undefined);
-      const sm = (
-        bot as unknown as {
-          sessionManager: { getSession: (...a: unknown[]) => unknown };
-        }
-      ).sessionManager;
-      vi.spyOn(sm, 'getSession').mockResolvedValueOnce({ state: 'idle' });
-      const mh = (
-        bot as unknown as {
-          messageHandler: { drainQueue: (...a: unknown[]) => Promise<void> };
-        }
-      ).messageHandler;
-      const drainSpy = vi.spyOn(mh, 'drainQueue').mockResolvedValue(undefined);
-      await fireCommand(bot, '/compact');
-      expect(compactSpy).toHaveBeenCalledTimes(1);
-      expect(drainSpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(api).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ chat_id: 12345 })));
     });
   });
 
@@ -586,7 +505,7 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
       expect(api).toHaveBeenCalledWith(
         'sendMessage',
         expect.objectContaining({
-          text: expect.stringContaining('Voice and video support is not yet available'),
+          text: expect.stringContaining('Voice transcription is not configured'),
         }),
       );
     });
@@ -596,41 +515,33 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
   // bot.action(/^afk:m:/) — lines 286-310
   // -------------------------------------------------------------------------
   describe("bot.action(/^afk:m:/) closure", () => {
-    test('unknown alias is rejected silently (no reply)', async () => {
-      // An alias not in MODEL_ALIASES_HINT returns early without switchModel
-      const sm = (
-        bot as unknown as {
-          sessionManager: { switchModel: (...a: unknown[]) => Promise<void> };
-        }
-      ).sessionManager;
-      const spy = vi.spyOn(sm, 'switchModel').mockResolvedValue(undefined);
+    const handlerOf = (b: unknown) =>
+      (b as { messageHandler: { runSlash: (...a: unknown[]) => Promise<boolean> } }).messageHandler;
+    const managerOf = (b: unknown) =>
+      (b as { sessionManager: { switchModel: (...a: unknown[]) => Promise<void> } }).sessionManager;
+
+    test('unknown alias is rejected silently (no command run)', async () => {
+      const spy = vi.spyOn(handlerOf(bot), 'runSlash').mockResolvedValue(true);
       await fireAction(bot, 'afk:m:__invalid__');
       expect(spy).not.toHaveBeenCalled();
     });
 
-    test('valid alias triggers switchModel and edits message', async () => {
-      const sm = (
-        bot as unknown as {
-          sessionManager: { switchModel: (...a: unknown[]) => Promise<void> };
-        }
-      ).sessionManager;
-      const switchSpy = vi.spyOn(sm, 'switchModel').mockResolvedValue(undefined);
+    test('valid alias runs the shared /model command (in-place switch), never switchModel', async () => {
+      const runSpy = vi.spyOn(handlerOf(bot), 'runSlash').mockResolvedValue(true);
+      const switchSpy = vi.spyOn(managerOf(bot), 'switchModel').mockResolvedValue(undefined);
       await fireAction(bot, 'afk:m:haiku');
-      expect(switchSpy).toHaveBeenCalledWith(
+      expect(runSpy).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({ chatId: 12345 }),
-        'haiku',
+        '/model haiku',
       );
+      expect(switchSpy).not.toHaveBeenCalled();
     });
 
-    test('switchModel error is caught and logged (verbose)', async () => {
+    test('a command error is caught and logged (verbose)', async () => {
       const verboseBot = makeBot();
       (verboseBot as unknown as { options: { verbose: boolean } }).options.verbose = true;
-      const sm = (
-        verboseBot as unknown as {
-          sessionManager: { switchModel: (...a: unknown[]) => Promise<void> };
-        }
-      ).sessionManager;
-      vi.spyOn(sm, 'switchModel').mockRejectedValueOnce(new Error('switch err'));
+      vi.spyOn(handlerOf(verboseBot), 'runSlash').mockRejectedValueOnce(new Error('switch err'));
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       await fireAction(verboseBot, 'afk:m:sonnet');
       expect(logSpy).toHaveBeenCalledWith(
@@ -644,12 +555,7 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
 
     test('disallowed chat id is rejected silently', async () => {
       // Chat 99999 is not in allowedChatIds
-      const sm = (
-        bot as unknown as {
-          sessionManager: { switchModel: (...a: unknown[]) => Promise<void> };
-        }
-      ).sessionManager;
-      const spy = vi.spyOn(sm, 'switchModel').mockResolvedValue(undefined);
+      const spy = vi.spyOn(handlerOf(bot), 'runSlash').mockResolvedValue(true);
       await fireAction(bot, 'afk:m:haiku', 99999);
       expect(spy).not.toHaveBeenCalled();
     });

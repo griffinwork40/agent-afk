@@ -35,8 +35,9 @@ import type {
   ProviderQuery,
   ProviderQueryArgs,
   ProviderCompleteArgs,
+  ProviderCompleteResult,
 } from '../../provider.js';
-import { oneShotCompletion, type OneShotInput } from './oneshot.js';
+import { oneShotCompletionWithStop, type OneShotInput } from './oneshot.js';
 // Re-export the pure param resolvers extracted to ./resolve-params.ts (issue
 // #103) so the historical `from './index.js'` import path stays valid.
 export { resolveEffort, resolveMaxTokens, resolveThinkingParam } from './resolve-params.js';
@@ -63,6 +64,7 @@ import { MemoryStore } from '../../memory/index.js';
 import { WorkspaceStore } from '../../workspace/workspace-store.js';
 import { StateStore } from '../../state/state-store.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
+import { providerGrantsTool } from '../shared/tool-grant.js';
 import { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
 import { env } from '../../../config/env.js';
 import { buildProviderSchemas } from './provider-schemas.js';
@@ -292,6 +294,11 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.subscribeHandler = handler;
   }
 
+  /** See {@link ModelProvider.grantsTool}. Same permissions + store the dispatcher uses. */
+  grantsTool(toolName: string): boolean {
+    return providerGrantsTool(toolName, this.permissions, this.workspaceStore !== undefined);
+  }
+
   close(): void {
     // Only close stores this provider owns (see the Invariant above). The
     // workspace store is always injected, so it is never closed here.
@@ -317,6 +324,11 @@ export class AnthropicDirectProvider implements ModelProvider {
    * Local-model suggestions go through the openai-compatible provider instead.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
+    return (await this.completeWithStop(args)).text;
+  }
+
+  /** {@link complete} plus the mapped stop reason (see ModelProvider.completeWithStop). */
+  async completeWithStop(args: ProviderCompleteArgs): Promise<ProviderCompleteResult> {
     const token =
       args.apiKey && args.apiKey.length > 0
         ? args.apiKey
@@ -340,7 +352,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     // oneShotCompletion never sets — structurally compatible, hence the cast.
     const factory = this.providerFactory ?? getClientFactory();
     if (factory) input.clientFactory = factory as OneShotInput['clientFactory'];
-    return oneShotCompletion(input);
+    return oneShotCompletionWithStop(input);
   }
 
   // ---------------------------------------------------------------------------
@@ -385,6 +397,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       get readOnlyMemory() { return provider.readOnlyMemory; },
       get readOnlyState() { return provider.readOnlyState; },
       get workspaceStore() { return provider.workspaceStore; },
+      grantsTool: (toolName) => provider.grantsTool(toolName),
       get mcpManager() { return provider.mcpManager; },
       get fastModeController() { return provider.fastModeController; },
       getSharedReadRoots: () => provider.grants.readRoots,

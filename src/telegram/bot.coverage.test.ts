@@ -139,27 +139,18 @@ describe('TelegramBot — additional branch coverage', () => {
   });
 
   // -------------------------------------------------------------------------
-  // handleClear — no-route and busy-session branches (lines 468, 472-473)
+  // Shared /clear (Stage 5): busy route → queued via enqueueSlash
   // -------------------------------------------------------------------------
-  describe('handleClear()', () => {
-    test('replies with error when ctx has no chat (no route)', async () => {
+  describe('shared /clear', () => {
+    test('enqueues clear and replies with queue depth when session is busy', async () => {
       const c = ctx(12345, '/clear');
-      (c as unknown as Record<string, unknown>).chat = undefined;
-      (c as unknown as Record<string, unknown>).message = undefined;
-      await bot.handleClear(c);
-      expect(c.reply).toHaveBeenCalledWith(expect.stringContaining('Could not identify'));
-    });
-
-    test('enqueues clear and replies when session is busy', async () => {
-      const c = ctx(12345, '/clear');
-      // Make getSession return a busy session.
       const sm = (bot as unknown as { sessionManager: { getSession: (...a: unknown[]) => unknown } }).sessionManager;
       vi.spyOn(sm, 'getSession').mockResolvedValueOnce({ state: 'streaming' });
-      const mh = (bot as unknown as { messageHandler: { enqueueClear: (...a: unknown[]) => void } }).messageHandler;
-      const enqueueSpy = vi.spyOn(mh, 'enqueueClear').mockImplementation(() => {});
-      await bot.handleClear(c);
-      expect(enqueueSpy).toHaveBeenCalledTimes(1);
-      expect(c.reply).toHaveBeenCalledWith('Clear queued.');
+      const mh = (bot as unknown as { messageHandler: { enqueueSlash: (...a: unknown[]) => number | false } }).messageHandler;
+      const enqueueSpy = vi.spyOn(mh, 'enqueueSlash').mockReturnValue(1);
+      await bot.handleMessage(c);
+      expect(enqueueSpy).toHaveBeenCalledWith(expect.objectContaining({ chatId: 12345 }), c, '/clear');
+      expect(c.reply).toHaveBeenCalledWith(expect.stringContaining('1'));
     });
   });
 
@@ -185,18 +176,17 @@ describe('TelegramBot — additional branch coverage', () => {
   });
 
   // -------------------------------------------------------------------------
-  // /compact — idle and busy paths
+  // Shared /compact (Stage 5): busy route → queued via enqueueSlash
   // -------------------------------------------------------------------------
   describe('/compact command', () => {
-    test('queues compact and replies when the session is busy', async () => {
+    test('queues compact when the session is busy', async () => {
+      const c = ctx(12345, '/compact');
       const sm = (bot as unknown as { sessionManager: { getSession: (...a: unknown[]) => unknown } }).sessionManager;
-      const getSession = vi.spyOn(sm, 'getSession').mockResolvedValue({ state: 'streaming' });
-      const mh = (bot as unknown as { messageHandler: { enqueueCompact: (...a: unknown[]) => void } }).messageHandler;
-      const enqueue = vi.spyOn(mh, 'enqueueCompact').mockImplementation(() => {});
-      const api = await command(bot, '/compact');
-      expect(getSession).toHaveBeenCalledTimes(1);
+      vi.spyOn(sm, 'getSession').mockResolvedValue({ state: 'streaming' });
+      const mh = (bot as unknown as { messageHandler: { enqueueSlash: (...a: unknown[]) => number | false } }).messageHandler;
+      const enqueue = vi.spyOn(mh, 'enqueueSlash').mockReturnValue(2);
+      await bot.handleMessage(c);
       expect(enqueue).toHaveBeenCalledTimes(1);
-      expect(api).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ chat_id: 12345, text: 'Compact queued.' }));
     });
   });
 

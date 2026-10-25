@@ -7,7 +7,11 @@
  * to keep looping, exit, or re-run another command.
  */
 
+import type { OutputBlock } from './output-blocks.js';
+import type { Choose, ProgressEvent } from './interaction.js';
 import type { SessionRef } from '../../agent/session-ref.js';
+import type { SurfaceCapability } from './capabilities.js';
+export type { SurfaceCapability } from './capabilities.js';
 import type { ElicitationHandler } from '../../agent/elicitation-router.js';
 import type { AgentModelInput } from '../../agent/types.js';
 import type { TraceActor } from '../../agent/session/session-identity.js';
@@ -155,6 +159,18 @@ export interface SessionStats {
    */
   name?: string;
   /**
+   * True when `name` was chosen explicitly (`/name`), false/absent when it was
+   * auto-derived from the first user message. Surfaces show an explicit name
+   * verbatim and may humanize a derived slug for display.
+   */
+  nameExplicit?: boolean;
+  /**
+   * The explicit `/name` exactly as typed (trimmed, control characters and
+   * runs of whitespace collapsed). `name` stays the slug: it is the resume key
+   * `--resume <name>` matches. Absent for derived names. Display-only.
+   */
+  displayName?: string;
+  /**
    * Effective working directory for the session — the `cwd` passed to the
    * provider, or `process.cwd()` when none was overridden (e.g. `--worktree`
    * supplies an override). Captured at bootstrap and treated as immutable
@@ -162,6 +178,13 @@ export interface SessionStats {
    * user always sees which directory their tools are operating in.
    */
   cwd?: string;
+  /**
+   * Shared git repository root, resolved via `git rev-parse --git-common-dir`
+   * at session start. Identical for the main checkout and all linked worktrees
+   * of the same repo, so `/resume` can include worktree sessions in the local
+   * filter rather than hiding them behind an exact-cwd mismatch.
+   */
+  repoRoot?: string;
   /**
    * Origin surface of the session. Persisted to the shared session store so a
    * resumer can tell where a session came from. Undefined is treated as 'cli'
@@ -186,6 +209,8 @@ export interface SessionStats {
 
 /** Minimal console writer passed to handlers — thin wrapper around chalk output. */
 export interface Writer {
+  /** Optional structured output; terminal writers retain their existing renderers. */
+  block?(block: OutputBlock): void;
   line(text?: string): void;
   raw(text: string): void;
   success(text: string): void;
@@ -202,6 +227,11 @@ export interface UiSurface {
 
 /** What the handler sees when invoked. */
 export interface SlashContext {
+  /** Explicit surface support. Absent on legacy contexts during migration. */
+  capabilities?: ReadonlySet<SurfaceCapability>;
+  /** Surface adapters own presentation and cancellation; handlers use JSON-safe messages. */
+  choose?: Choose;
+  progress?: (event: ProgressEvent) => void;
   session: SessionRef;
   stats: SessionStats;
   out: Writer;
@@ -336,6 +366,8 @@ export type SlashResult =
 
 /** A registered slash command. */
 export interface SlashCommand {
+  /** Positive surface requirements; omitted/empty means portable. */
+  requires?: readonly SurfaceCapability[];
   /** Canonical name, including leading slash, e.g. "/cost". */
   name: string;
   /** Optional aliases, each with leading slash. */

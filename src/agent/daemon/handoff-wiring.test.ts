@@ -291,13 +291,15 @@ describe('recoverPendingHandoffs', () => {
 
     await recoverPendingHandoffs(handoffsDir);
 
-    expect(mockPush).toHaveBeenCalled();
+    expect(mockPush).toHaveBeenCalledTimes(1);
     const [, opts] = mockPush.mock.calls[0]!;
     expect(opts?.replyMarkup).toBeDefined();
     const kb = opts.replyMarkup.inline_keyboard;
     expect(kb).toHaveLength(1);
     expect(kb[0][0].text).toBe('Yes');
+    expect(kb[0][0].callback_data).toBeDefined();
     expect(kb[0][1].text).toBe('No');
+    expect(kb[0][1].callback_data).toBeDefined();
   });
 
   it('re-sends choice reminder with per-option buttons (no bot)', async () => {
@@ -318,13 +320,15 @@ describe('recoverPendingHandoffs', () => {
 
     await recoverPendingHandoffs(handoffsDir);
 
-    expect(mockPush).toHaveBeenCalled();
+    expect(mockPush).toHaveBeenCalledTimes(1);
     const [, opts] = mockPush.mock.calls[0]!;
     expect(opts?.replyMarkup).toBeDefined();
     const kb = opts.replyMarkup.inline_keyboard;
     expect(kb).toHaveLength(2);
     expect(kb[0][0].text).toBe('Alpha');
+    expect(kb[0][0].callback_data).toBeDefined();
     expect(kb[1][0].text).toBe('Beta');
+    expect(kb[1][0].callback_data).toBeDefined();
   });
 
   it('re-sends text reminder without inline keyboard (no bot)', async () => {
@@ -345,7 +349,7 @@ describe('recoverPendingHandoffs', () => {
 
     await recoverPendingHandoffs(handoffsDir);
 
-    expect(mockPush).toHaveBeenCalled();
+    expect(mockPush).toHaveBeenCalledTimes(1);
     const [, opts] = mockPush.mock.calls[0]!;
     expect(opts?.replyMarkup).toBeUndefined();
   });

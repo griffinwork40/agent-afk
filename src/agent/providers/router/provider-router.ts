@@ -58,6 +58,7 @@ import type {
   ProviderMcpServerStatus,
   ProviderAccountInfo,
   ProviderRewindResult,
+  RewindFilesOptions,
   ProviderRewindConversationResult,
   ProviderCompactResult,
   RewindTarget,
@@ -540,7 +541,7 @@ export class ProviderRouter implements ProviderQuery {
 
   async rewindFiles(
     userMessageId: string,
-    options?: { dryRun?: boolean },
+    options?: RewindFilesOptions,
   ): Promise<ProviderRewindResult> {
     const a = this.active;
     if (!a) return { canRewind: false, error: 'no active provider' };

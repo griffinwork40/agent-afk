@@ -1,105 +1,49 @@
 ---
-title: "AFK.md — Project Prompt Overlay"
-description: "Add project-specific instructions to every agent session by dropping an AFK.md at your project root or in your AFK home directory."
+title: "Give AFK project instructions"
+description: "Use AFK.md as a personal and project prompt overlay, and reload edits during an interactive session."
 ---
 
-`AFK.md` is plain-markdown file that `agent-afk` appends to its built-in
-framework prompt whenever you run from a directory that contains one. It's the simplest way to give the agent project context — just a Markdown file, no env vars or JSON config needed.
+`AFK.md` is plain Markdown appended to AFK's built-in framework prompt. Use it for test commands, architecture notes, and project conventions that the agent should know before it works. No frontmatter is required.
 
-## What goes in AFK.md
+## Add a project overlay
 
-Anything you would tell a collaborator before they start working in your repo:
+<Steps>
+<Step>Create `AFK.md` in the working directory with concise project instructions, or run `/init` in the REPL to generate a starter file.</Step>
+<Step>Run `afk i` from that directory. Type `/afk-md` to inspect which prompt files contribute.</Step>
+<Step>After changing the file in an active REPL, run `/afk-md reload` to apply the new overlay before your next request.</Step>
+</Steps>
 
-- Project conventions (language, style, tooling)
-- Commands to run before editing (build, test, lint)
-- Directories to avoid or treat carefully
-- Key architectural facts the agent should know upfront
-- Links or summaries of internal documentation
-
-There is no required structure and no frontmatter. Plain Markdown is all that
-is parsed.
-
-## Resolution order
-
-`loadConfig()` checks **both** locations and loads whichever are present — the
-tiers are additive, not first-found-wins:
-
-1. `$AFK_HOME/AFK.md` (default `~/.afk/AFK.md`) — **user-scope global**:
-   cross-project preferences that apply on every run.
-2. `<cwd>/AFK.md` — **project-scope**: loaded when you run `afk` from inside a
-   directory that contains one.
-
-When both exist they are concatenated **user-scope first, project-scope
-second**, each under a heading naming its source path, with the project
-section explicitly marked as taking precedence on conflict. Broadest context
-lands first; the most specific instructions land closest to the conversation.
-
-When only one exists — by far the common case — its content is used verbatim
-with **no added headings**, byte-identical to the previous single-tier
-behavior.
-
-If both paths resolve to the same file (for example `AFK_HOME` pointed at your
-project directory, whether directly or through a symlink) it is loaded once,
-not twice.
-
-If neither file exists, the framework prompt runs alone with no overlay. An
-empty or whitespace-only `AFK.md` is treated as absent — evaluated per file, so
-a blank project file still lets a populated personal one through.
-
-## How it layers with the framework prompt
-
-The framework base prompt (`system-prompt.md`, baked in at publish
-time) is always present. `AFK.md` content is **appended** to it under an
-`# Operator configuration` header — it augments, never replaces, the base.
-Every overlay appends; there is no full-replace mechanism.
-
-The same append behavior applies to all three operator overlay tiers
-(`AFK_SYSTEM_PROMPT` env, `afk.config.json` systemPrompt, `AFK.md`). Only one
-tier is used per session (highest priority wins). If `AFK_SYSTEM_PROMPT` is
-set, or `afk.config.json` has a `systemPrompt` field, `AFK.md` is not loaded.
-
-
-
-## Per-project vs. global
-
-Use **`<cwd>/AFK.md`** when instructions are specific to one repo. Commit it
-alongside your code so every teammate gets the same context when they run `afk`.
-
-Use **`~/.afk/AFK.md`** for cross-project preferences — your coding style,
-default tool preferences, or a standing instruction you want in every session
-regardless of directory.
-
-## Generating an AFK.md with `/init`
-
-In the REPL, `/init` scans the current project and writes a starter `AFK.md`
-with discovered conventions, test commands, and directory layout. Edit it
-afterward to add or remove context.
-
-## Inspecting the resolved overlay
-
-```bash
-afk --dump-prompt /tmp/resolved-prompt.txt
-```
-
-The output file includes a `systemPromptSource` header showing which tier
-was active (e.g. `framework+afk-md:/path/to/AFK.md`) and the full composed
-prompt. Use this to verify that your `AFK.md` is being picked up correctly.
-
-## Example
+For example:
 
 ```markdown
-# My Project
+# Project conventions
 
-TypeScript monorepo. Always run `pnpm install` before editing.
-
-## Commands
-
-- `pnpm build` — compile + copy prompt files to dist/
-- `pnpm test` — vitest (Node 22+)
-- `pnpm lint` — tsc --noEmit (strict; no unused vars/params)
-
-## Conventions
-
-- All env vars are declared in `src/config/env.ts`. Direct `process.env.*` reads outside that file fail CI.
-- pnpm only — never npm or yarn.
+Use pnpm for dependencies. Run `pnpm test` and `pnpm lint` before reporting code changes as complete.
+Do not modify generated files by hand.
 ```
+
+## Personal and project scope
+
+AFK reads `$AFK_HOME/AFK.md` (usually `~/.afk/AFK.md`) and `<cwd>/AFK.md`. If both are nonempty, their content is combined with personal instructions first and project instructions second; the project section takes precedence on conflicts. An empty file is ignored. If both paths resolve to the same real file, it is loaded once. The built-in framework prompt is always present; the overlay adds to it rather than replacing it.
+
+Only one **overlay source tier** wins: `AFK_SYSTEM_PROMPT` overrides JSON `systemPrompt`, which overrides the two `AFK.md` files. When a higher source is active, `/afk-md` and `/config view` report which AFK.md path is **shadowed**. Editing a shadowed file still saves it, but the model will not see it until that higher source is removed. The user file is not described as shadowed merely because a project file also exists: these two files compose.
+
+## Edit in the REPL
+
+| Command | Effect |
+|---|---|
+| `/afk-md` | Show personal and project file status, provenance, and overlay size. |
+| `/afk-md user` | Open your personal file with `$VISUAL` or `$EDITOR`. |
+| `/afk-md project` | Open this working directory's file. |
+| `/afk-md show` | Show the composed overlay seen by the model. |
+| `/afk-md add Remember to run tests` | Add a bullet to the project file; `--user` targets the personal file. |
+| `/afk-md reload` | Read the file again and hot reload the current session. |
+
+Editing through `/afk-md` triggers a reload after the editor closes. An external edit needs `/afk-md reload`; edits are not watched automatically. Reload updates the session prompt in place, but does not rewrite prior turns or erase conversation history. A failed reload leaves the current prompt intact. Use `afk i --dump-prompt` with its documented output-path option or `/afk-md show` to inspect the composed result; see [CLI reference](/reference/cli) for the full flag syntax.
+
+## Related
+
+<Cards>
+<Card title="Configuration overview" href="/configuration/overview" description="See prompt source precedence and file locations." />
+<Card title="Editing configuration" href="/configuration/editing-config" description="Change structured settings and inspect their sources." />
+</Cards>

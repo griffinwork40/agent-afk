@@ -42,6 +42,16 @@ import { getMcpConfigPath, type McpConfigFile } from '../../agent/mcp/index.js';
 import type { McpServerConfig } from '../../agent/mcp/types.js';
 import { errorMessage } from '../../utils/errors.js';
 import {
+  CHROME_DEVTOOLS_SERVER_NAME,
+  REAL_CHROME_CHANNELS,
+  type RealChromeChannel,
+} from '../../browser/real-chrome-probe.js';
+import {
+  CHROME_DEVTOOLS_MCP_FALLBACK_VERSION,
+  printConnectDiagnosis,
+  resolveChromeDevtoolsMcpVersion,
+} from './browser.connect-diagnosis.js';
+import {
   assertSafeBrowserProfile,
   getBrowserProfileStateDir,
   getBrowserStateRoot,
@@ -64,20 +74,25 @@ function waitForEnter(prompt: string): Promise<void> {
 }
 
 /** MCP server key written into mcpServers. Stable so connect/disconnect agree. */
-export const CHROME_DEVTOOLS_SERVER_NAME = 'chrome-devtools';
+export { CHROME_DEVTOOLS_SERVER_NAME };
 
-const VALID_CHANNELS = ['stable', 'beta', 'canary', 'dev'] as const;
-type ChromeChannel = (typeof VALID_CHANNELS)[number];
+const VALID_CHANNELS = REAL_CHROME_CHANNELS;
+type ChromeChannel = RealChromeChannel;
 
 /**
  * Build the mcpServers entry for chrome-devtools-mcp.
  *
- * Always runs via `npx …@latest --autoConnect`. A non-stable channel is
- * appended as `--channel <channel>` so autoConnect attaches to that channel's
- * running profile (autoConnect targets the channel's default user-data-dir).
+ * Runs via `npx chrome-devtools-mcp@<version> --autoConnect`, pinned to an
+ * exact version (resolved once by `connect`) rather than `@latest`. A
+ * non-stable channel is appended as `--channel <channel>` so autoConnect
+ * attaches to that channel's running profile (autoConnect targets the
+ * channel's default user-data-dir).
  */
-export function buildChromeDevtoolsEntry(channel: ChromeChannel = 'stable'): McpServerConfig {
-  const args = ['chrome-devtools-mcp@latest', '--autoConnect'];
+export function buildChromeDevtoolsEntry(
+  channel: ChromeChannel = 'stable',
+  version: string = CHROME_DEVTOOLS_MCP_FALLBACK_VERSION,
+): McpServerConfig {
+  const args = [`chrome-devtools-mcp@${version}`, '--autoConnect'];
   if (channel !== 'stable') {
     args.push('--channel', channel);
   }
@@ -180,8 +195,10 @@ function printSetupGuidance(): void {
     console.log(palette.meta(`  • Detected Chrome ${major} ✓ (autoConnect needs ≥ 144)`));
   }
   console.log(palette.meta('  1. In Chrome, open chrome://inspect/#remote-debugging and enable it (one time).'));
-  console.log(palette.meta('  2. The first time the agent drives Chrome, click "Allow" on the prompt.'));
-  console.log(palette.meta('  3. Chrome shows a "being controlled by automated test software" banner while active.'));
+  console.log(palette.meta('  2. macOS 27+: System Settings > Privacy & Security > Files & Folders > your terminal app >'));
+  console.log(palette.meta('     enable "Google Chrome" (one time; otherwise the agent sees "Could not find DevToolsActivePort").'));
+  console.log(palette.meta('  3. The first time the agent drives Chrome, click "Allow" on the prompt.'));
+  console.log(palette.meta('  4. Chrome shows a "being controlled by automated test software" banner while active.'));
   console.log('');
   console.log(palette.meta('The agent gains mcp__chrome-devtools__* tools (navigate, click, fill, take_snapshot, …)'));
   console.log(palette.meta('driving your REAL, logged-in profile. Run `/mcp` in the REPL to confirm it connected.'));
@@ -197,7 +214,8 @@ export function registerBrowserCommand(program: Command): void {
     .command('connect')
     .description('Wire chrome-devtools-mcp (--autoConnect) so the agent can drive your real, logged-in Chrome')
     .option('--channel <channel>', `Chrome channel autoConnect targets (${VALID_CHANNELS.join('|')})`, 'stable')
-    .action((opts: { channel?: string }) => {
+    .option('--no-open', 'Do not open chrome://inspect or System Settings when a setup step is missing')
+    .action((opts: { channel?: string; open?: boolean }) => {
       try {
         const channel = (opts.channel ?? 'stable').toLowerCase();
         if (!(VALID_CHANNELS as readonly string[]).includes(channel)) {
@@ -208,7 +226,7 @@ export function registerBrowserCommand(program: Command): void {
         const cfg = readMcpConfigFile(path);
         if (cfg.mcpServers === undefined) cfg.mcpServers = {};
 
-        const entry = buildChromeDevtoolsEntry(channel as ChromeChannel);
+        const entry = buildChromeDevtoolsEntry(channel as ChromeChannel, resolveChromeDevtoolsMcpVersion());
         const existing = cfg.mcpServers[CHROME_DEVTOOLS_SERVER_NAME];
 
         if (existing !== undefined && JSON.stringify(existing) === JSON.stringify(entry)) {
@@ -224,6 +242,7 @@ export function registerBrowserCommand(program: Command): void {
         }
 
         printSetupGuidance();
+        printConnectDiagnosis(channel as ChromeChannel, opts.open !== false);
       } catch (err) {
         handleCommandError(err);
       }

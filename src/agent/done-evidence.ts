@@ -14,6 +14,17 @@
 
 import { classifyBashCommand } from './tools/readonly-bash.js';
 
+// Contract: SHELL_WRITE_OPERATOR is used ONLY inside the isVerificationCommand
+// branch to detect whether a verification command also writes to disk (e.g.
+// `pnpm test > results.txt`, `pnpm test 2>&1 | tee log.txt`). It must NOT use
+// the broad FS_MUTATING word-boundary regexes from classifyBashCommand, which
+// match path tokens such as `src/rm.test.ts` (via \brm\b) and would incorrectly
+// mark a clean `pnpm test src/rm.test.ts` as mutating. Instead it checks only
+// genuine shell write operators: output redirection (`>` / `>>`) and piped tee.
+// The non-verification else-if branch continues to use classifyBashCommand so
+// that broad shell mutations (sed -i, rm, git commit, …) are still caught.
+const SHELL_WRITE_OPERATOR = /(?:\s>>?\s+\S|\|\s*tee\s+\S)/;
+
 /**
  * Minimal tool-event shape. The session layer supplies
  * `successfulToolNames` from `ResponseMetadata`; the REPL supplies full
@@ -117,14 +128,24 @@ export function classifyDoneEvidence(
       lastMutationIndex = i;
     } else if (e.toolName === 'bash') {
       // Verification check takes priority: a command that matches a verification
-      // pattern (pnpm test, cargo check, …) counts as verification regardless of
-      // whether classifyBashCommand also considers it mutating (it generally won't,
-      // but the ordering is deliberate — a test runner is never a stale-write risk).
-      // Only when it is NOT a verification command do we check whether it mutates;
-      // a mutating bash call (sed -i, rm, git commit, …) advances lastMutationIndex
-      // so a verification that ran BEFORE it is not counted as post-mutation.
+      // pattern (pnpm test, cargo check, …) counts as verification. Only when it
+      // is NOT a verification command do we check whether it contains a shell write
+      // operator; a mutating bash call (output redirect, tee) advances
+      // lastMutationIndex so a verification that ran BEFORE it is not counted as
+      // post-mutation confirmation.
       if (isVerificationCommand(e.input)) {
         lastVerificationIndex = i;
+        // A bash command can match a verification pattern AND also write to disk
+        // (e.g. `pnpm test > results.txt`, `pnpm test 2>&1 | tee log.txt`).
+        // When the command contains a shell write operator, advance lastMutationIndex
+        // too — so the verification no longer counts as post-mutation confirmation.
+        // Invariant: only genuine shell write operators (output redirection `>`/`>>`,
+        // piped `tee <file>`) are checked here — NOT the broad FS_MUTATING regexes
+        // from classifyBashCommand, which match path tokens such as `src/rm.test.ts`
+        // and would incorrectly mark a clean `pnpm test src/rm.test.ts` as mutating.
+        if (SHELL_WRITE_OPERATOR.test(e.input)) {
+          lastMutationIndex = i;
+        }
       } else if (classifyBashCommand(e.input).mutating) {
         lastMutationIndex = i;
       }

@@ -9,7 +9,7 @@
 
 import type { SubagentDAGNode } from '../dag-subagent.js';
 import type { ComposeNodeInput } from './compose-input-parse.js';
-import { resolveChildModel } from '../subagent/resolve-child-model.js';
+import { resolveChildModel, defaultTierModelFallback } from '../subagent/resolve-child-model.js';
 import { providerForModel } from '../providers/index.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { applyParentCredentialFallback } from './child-credential.js';
@@ -114,12 +114,16 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
   // Named-agent model default feeds into resolveChildModel as
   // `namedAgentModel` (lower precedence than an explicit call-site model,
   // higher than the compose-level defaultSubagentModel).
-  const nodeModel = resolveChildModel({
+  const nodeResolved = resolveChildModel({
     callSiteModel: n.model,
     namedAgentModel: resolvedAgent.namedAgentModel,
     defaultSubagentModel: ctx.defaultSubagentModel,
     defaultModel: ctx.defaultModel,
-  });
+  }, { withSource: true });
+  const nodeModel = nodeResolved.model;
+  // Default-tier fallback: the node's provider is pre-built for nodeModel's
+  // family, so the retry rebuilds it with the same gates for the parent model.
+  const nodeFallback = defaultTierModelFallback(nodeResolved, ctx.defaultModel);
   const resolvedNodeApiKey = resolveComposeNodeApiKey(nodeModel, ctx);
 
   // Attachment resolution: when a node declares `attachments`, resolve
@@ -200,6 +204,9 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
     ...(n.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
     // Node provider carries workspace + named-agent gates (compose-node-provider.ts).
     ...resolveComposeNodeProvider(nodeModel, ctx.workspaceStore, ctx.openaiBaseUrl, resolvedAgent),
+    ...(nodeFallback !== undefined
+      ? { modelFallback: { ...nodeFallback, buildProvider: (m: string) => resolveComposeNodeProvider(m, ctx.workspaceStore, ctx.openaiBaseUrl, resolvedAgent).provider } }
+      : {}),
     // Per-node resolved attachments; depth+1/maxDepth for preamble (#2266).
     ...(resolvedAttachments !== undefined ? { resolvedAttachments } : {}), depth: depth + 1, maxDepth,
   };

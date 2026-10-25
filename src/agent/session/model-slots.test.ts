@@ -17,6 +17,10 @@ import {
   DEFAULT_SLOT_BINDINGS,
   DIRECT_MODEL_ALIASES,
   getSlotBindings,
+  GPT_ASTRA_ID,
+  GPT_LUNA_ID,
+  GPT_SOL_ID,
+  GPT_TERRA_ID,
   MAX_CONTEXT_WINDOW_OVERRIDE,
   MODEL_ALIASES_HINT,
   OPENAI_MODEL_HINTS,
@@ -28,6 +32,7 @@ import {
   slotForInput,
   SLOT_NAMES,
   unconfiguredSlotError,
+  maxOutputTokensOverrideFor,
   type ModelSlots,
 } from './model-slots.js';
 import { autoCompactLimitFor, contextLimitFor, maxOutputTokensFor } from '../model-limits.js';
@@ -45,18 +50,22 @@ const ENV_KEYS = [
   'AFK_MODEL_MEDIUM_API_KEY',
   'AFK_MODEL_LARGE_BASE_URL',
   'AFK_MODEL_LARGE_API_KEY',
+  'AFK_MODEL_SUBAGENT',
+  'AFK_MODEL_SUBAGENT_BASE_URL',
+  'AFK_MODEL_SUBAGENT_API_KEY',
 ] as const;
 
 function clearEnv(): void {
   for (const k of ENV_KEYS) delete process.env[k];
 }
 
-function makeSlots(over: Partial<Record<'local' | 'small' | 'medium' | 'large', string>>): ModelSlots {
+function makeSlots(over: Partial<Record<'local' | 'small' | 'medium' | 'large' | 'subagent', string>>): ModelSlots {
   return {
     local: { id: over.local ?? DEFAULT_SLOT_BINDINGS.local.id },
     small: { id: over.small ?? DEFAULT_SLOT_BINDINGS.small.id },
     medium: { id: over.medium ?? DEFAULT_SLOT_BINDINGS.medium.id },
     large: { id: over.large ?? DEFAULT_SLOT_BINDINGS.large.id },
+    subagent: { id: '' },
   };
 }
 
@@ -66,10 +75,10 @@ afterEach(() => {
 });
 
 describe('SLOT_NAMES', () => {
-  it('has four entries with local first', () => {
-    expect(SLOT_NAMES).toHaveLength(4);
+  it('has five entries with local first and subagent last', () => {
+    expect(SLOT_NAMES).toHaveLength(5);
     expect(SLOT_NAMES[0]).toBe('local');
-    expect(SLOT_NAMES).toEqual(['local', 'small', 'medium', 'large']);
+    expect(SLOT_NAMES).toEqual(['local', 'small', 'medium', 'large', 'subagent']);
   });
 });
 
@@ -196,6 +205,44 @@ describe('fixed-identity Claude aliases (sonnet/opus/haiku decoupled from tiers,
   });
 });
 
+describe('OpenAI family aliases (sol/luna/astra/terra)', () => {
+  it('exposes each family alias via the direct-alias table', () => {
+    expect(DIRECT_MODEL_ALIASES['sol']).toBe(GPT_SOL_ID);
+    expect(DIRECT_MODEL_ALIASES['luna']).toBe(GPT_LUNA_ID);
+    expect(DIRECT_MODEL_ALIASES['astra']).toBe(GPT_ASTRA_ID);
+    expect(DIRECT_MODEL_ALIASES['terra']).toBe(GPT_TERRA_ID);
+  });
+
+  it('resolves each family alias to its pinned wire id (case-insensitive)', () => {
+    expect(resolveModelInput('sol')).toBe('gpt-6.1-sol');
+    expect(resolveModelInput('SOL')).toBe('gpt-6.1-sol');
+    expect(resolveModelInput('Luna')).toBe('gpt-6-luna');
+    expect(resolveModelInput('  astra  ')).toBe('gpt-6-astra');
+    expect(resolveBinding('terra')).toEqual({ id: 'gpt-5.6-terra' });
+  });
+
+  it('stays pinned regardless of tier rebindings', () => {
+    const rebound = makeSlots({ medium: 'claude-sonnet-4-6', large: 'claude-opus-5-5' });
+    expect(resolveModelInput('sol', rebound)).toBe('gpt-6.1-sol');
+    expect(resolveModelInput('luna', rebound)).toBe('gpt-6-luna');
+  });
+
+  it('is not a capability tier (slotForInput returns undefined)', () => {
+    expect(slotForInput('sol')).toBeUndefined();
+    expect(slotForInput('luna')).toBeUndefined();
+    expect(slotForInput('astra')).toBeUndefined();
+    expect(slotForInput('terra')).toBeUndefined();
+  });
+});
+
+describe('MODEL_ALIASES_HINT contains all DIRECT_MODEL_ALIASES keys (cross-check)', () => {
+  it('every key in DIRECT_MODEL_ALIASES appears in MODEL_ALIASES_HINT', () => {
+    for (const key of Object.keys(DIRECT_MODEL_ALIASES)) {
+      expect(MODEL_ALIASES_HINT, `missing DIRECT_MODEL_ALIASES key: ${key}`).toContain(key);
+    }
+  });
+});
+
 describe('OPENAI_MODEL_HINTS', () => {
   it('contains the curated OpenAI wire ids', () => {
     expect(OPENAI_MODEL_HINTS).toContain('gpt-5.6-sol');
@@ -216,9 +263,10 @@ describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', ()
   it('is derived from the tiers + identity aliases + OpenAI hints, in the documented order', () => {
     expect(MODEL_ALIASES_HINT).toEqual([
       // Capability tiers (SLOT_NAMES)
-      'local', 'small', 'medium', 'large',
-      // Fixed-identity Claude/xAI aliases (DIRECT_MODEL_ALIASES)
+      'local', 'small', 'medium', 'large', 'subagent',
+      // Fixed-identity Claude/xAI/OpenAI aliases (DIRECT_MODEL_ALIASES)
       'opus', 'opus_1m', 'opus-5.5', 'opus-5.5_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable', 'grok',
+      'sol', 'luna', 'astra', 'terra',
       // Curated OpenAI wire ids (OPENAI_MODEL_HINTS)
       'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna',
       'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
@@ -462,6 +510,7 @@ describe('resolveBinding — raw slot id match (#2985)', () => {
       small: { id: 'shared-model', provider: 'openai', baseUrl: 'http://small/v1' },
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     };
     expect(resolveBinding('shared-model', bindings)).toMatchObject({ provider: 'anthropic', baseUrl: 'http://local/v1' });
   });
@@ -759,6 +808,7 @@ describe('contextWindowOverrideFor', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(contextWindowOverrideFor('qwen-3.8-27b')).toBe(128_000);
   });
@@ -769,6 +819,7 @@ describe('contextWindowOverrideFor', () => {
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(contextWindowOverrideFor('gpt-4o')).toBeUndefined();
   });
@@ -781,6 +832,7 @@ describe('contextWindowOverrideFor', () => {
       small: { id: 'shared-model', contextWindow: 64_000 },
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(contextWindowOverrideFor('shared-model')).toBe(128_000);
   });
@@ -795,6 +847,7 @@ describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow overri
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // 'local' resolves to 'qwen-3.8-27b' which has a contextWindow override
     expect(contextLimitFor('local')).toBe(128_000);
@@ -808,6 +861,7 @@ describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow overri
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // Providers call contextLimitFor with the resolved concrete id — this is the real path.
     expect(contextLimitFor('qwen-3.8-27b')).toBe(128_000);
@@ -819,6 +873,7 @@ describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow overri
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // qwen-3.8-27b has no MODEL_AUTOCOMPACT_BUDGET entry → returns full window
     expect(autoCompactLimitFor('qwen-3.8-27b')).toBe(128_000);
@@ -842,6 +897,7 @@ describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow overri
       local: DEFAULT_SLOT_BINDINGS.local,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     // gpt-4o is normally 128k in the table; override raises it to 200k.
     expect(contextLimitFor('gpt-4o')).toBe(200_000);
@@ -859,7 +915,136 @@ describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow overri
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
     });
     expect(maxOutputTokensFor('qwen-3.8-27b')).toBe(without);
+  });
+});
+
+// ── #3964: per-slot maxOutputTokens ───────────────────────────────────────────
+describe('parseModelsConfig: maxOutputTokens field', () => {
+  it('parses a valid maxOutputTokens on an object binding', () => {
+    const out = parseModelsConfig({ local: { id: 'my-model', maxOutputTokens: 32_768 } });
+    expect(out.local).toEqual({ id: 'my-model', maxOutputTokens: 32_768 });
+  });
+
+  it('silently ignores a non-integer maxOutputTokens', () => {
+    const out = parseModelsConfig({ local: { id: 'my-model', maxOutputTokens: 1.5 } });
+    expect(out.local).toEqual({ id: 'my-model' });
+  });
+
+  it('silently ignores a zero or negative maxOutputTokens', () => {
+    expect(parseModelsConfig({ local: { id: 'x', maxOutputTokens: 0 } }).local).toEqual({ id: 'x' });
+    expect(parseModelsConfig({ local: { id: 'x', maxOutputTokens: -1 } }).local).toEqual({ id: 'x' });
+  });
+
+  it('silently ignores an absurdly large maxOutputTokens (> MAX_CONTEXT_WINDOW_OVERRIDE)', () => {
+    const tooLarge = MAX_CONTEXT_WINDOW_OVERRIDE + 1;
+    expect(parseModelsConfig({ local: { id: 'x', maxOutputTokens: tooLarge } }).local).toEqual({ id: 'x' });
+  });
+
+  it('accepts maxOutputTokens equal to MAX_CONTEXT_WINDOW_OVERRIDE', () => {
+    const out = parseModelsConfig({ local: { id: 'x', maxOutputTokens: MAX_CONTEXT_WINDOW_OVERRIDE } });
+    expect(out.local?.maxOutputTokens).toBe(MAX_CONTEXT_WINDOW_OVERRIDE);
+  });
+});
+
+describe('computeSlotBindings: maxOutputTokens propagation', () => {
+  it('carries maxOutputTokens from file override into resolved bindings', () => {
+    const out = computeSlotBindings({ local: { id: 'my-model', maxOutputTokens: 32_768 } });
+    expect(out.local.maxOutputTokens).toBe(32_768);
+  });
+
+  it('omits maxOutputTokens when not set in file override', () => {
+    const out = computeSlotBindings({ local: { id: 'my-model' } });
+    expect(out.local.maxOutputTokens).toBeUndefined();
+  });
+});
+
+describe('coerceSlotBindingInput: maxOutputTokens validation', () => {
+  it('accepts a valid positive integer maxOutputTokens', () => {
+    const res = coerceSlotBindingInput({ id: 'my-model', maxOutputTokens: 32_768 });
+    expect(res).toEqual({ ok: true, value: { id: 'my-model', maxOutputTokens: 32_768 } });
+  });
+
+  it('accepts maxOutputTokens as a numeric string (coerced)', () => {
+    const res = coerceSlotBindingInput({ id: 'my-model', maxOutputTokens: '16384' });
+    expect(res).toEqual({ ok: true, value: { id: 'my-model', maxOutputTokens: 16_384 } });
+  });
+
+  it('rejects a non-integer maxOutputTokens', () => {
+    const res = coerceSlotBindingInput({ id: 'x', maxOutputTokens: 1.5 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/maxOutputTokens/);
+  });
+
+  it('rejects a zero maxOutputTokens', () => {
+    const res = coerceSlotBindingInput({ id: 'x', maxOutputTokens: 0 });
+    expect(res.ok).toBe(false);
+  });
+
+  it('rejects maxOutputTokens exceeding MAX_CONTEXT_WINDOW_OVERRIDE', () => {
+    const res = coerceSlotBindingInput({ id: 'x', maxOutputTokens: MAX_CONTEXT_WINDOW_OVERRIDE + 1 });
+    expect(res.ok).toBe(false);
+  });
+});
+
+describe('maxOutputTokensOverrideFor', () => {
+  afterEach(() => { resetSlotBindings(); });
+
+  it('returns undefined when no slot carries maxOutputTokens', () => {
+    resetSlotBindings();
+    expect(maxOutputTokensOverrideFor('any-id')).toBeUndefined();
+  });
+
+  it('returns the override for the matching concrete id', () => {
+    setSlotBindings({
+      local: { id: 'my-model', maxOutputTokens: 32_768 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
+    });
+    expect(maxOutputTokensOverrideFor('my-model')).toBe(32_768);
+  });
+
+  it('returns undefined for a different id even when another slot has an override', () => {
+    setSlotBindings({
+      local: { id: 'my-model', maxOutputTokens: 32_768 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+      subagent: { id: '' },
+    });
+    expect(maxOutputTokensOverrideFor('other-model')).toBeUndefined();
+  });
+});
+
+// ── #4062: maxOutputTokens <= contextWindow cross-check ──────────────────────
+describe('#4062: coerceSlotBindingInput — maxOutputTokens <= contextWindow cross-check', () => {
+  it('rejects maxOutputTokens exceeding contextWindow when both are set', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 32_768, maxOutputTokens: 65_536 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/maxOutputTokens.*must not exceed.*contextWindow/i);
+  });
+
+  it('accepts maxOutputTokens equal to contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 32_768, maxOutputTokens: 32_768 });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts maxOutputTokens less than contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 131_072, maxOutputTokens: 32_768 });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts maxOutputTokens alone (no contextWindow to cross-check)', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', maxOutputTokens: 65_536 });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts contextWindow alone (no maxOutputTokens to cross-check)', () => {
+    const res = coerceSlotBindingInput({ id: 'my-llm', contextWindow: 32_768 });
+    expect(res.ok).toBe(true);
   });
 });

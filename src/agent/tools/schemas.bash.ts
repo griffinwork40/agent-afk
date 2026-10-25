@@ -44,7 +44,8 @@ export const bashTool: AnthropicToolDef = {
         description:
           'Optional timeout in milliseconds (default 120000, max 600000). ' +
           'The command is killed if it exceeds this duration. ' +
-          'With run_in_background this is the maximum runtime instead (default 7200000 = 2 h, max 86400000 = 24 h).',
+          'Values above the maximum are clamped to the maximum and noted in the tool result. ' +
+          'With run_in_background this is the maximum runtime instead (default 7200000 = 2 h, max 86400000 = 24 h, min 1000).',
       },
       run_in_background: {
         type: 'boolean',

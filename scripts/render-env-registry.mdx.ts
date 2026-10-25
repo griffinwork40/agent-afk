@@ -1,5 +1,5 @@
 /**
- * Render `website/content/docs/configuration/environment-variables.mdx` from
+ * Render `website/content/docs/reference/environment-variables.mdx` from
  * `ENV_REGISTRY` (`src/config/env.ts`).
  *
  * Imported and called by `render-env-registry.ts` alongside the JSON and
@@ -98,7 +98,7 @@ export function escapeMdx(text: string): string {
  * Render the MDX page from the registry.
  *
  * The returned string is a complete `.mdx` file that can be written directly
- * to `website/content/docs/configuration/environment-variables.mdx`.
+ * to `website/content/docs/reference/environment-variables.mdx`.
  *
  * Invariant: the frontmatter block, intro paragraph, and MDX generation
  * comment are verbatim copies of the hand-authored PAGE content that existed

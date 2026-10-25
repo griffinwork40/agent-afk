@@ -43,6 +43,7 @@ export function buildProviderQuery(
     systemPrefix,
     throttleQueue,
     tokenRefresher,
+    credentialFromStore,
     queryDispatcher,
     runtimeStateSource,
     toolDefs,
@@ -152,6 +153,7 @@ export function buildProviderQuery(
     userSystem: toolSystemAppend,
     systemPrefix,
     tokenRefresher,
+    credentialFromStore,
     ...(config.thinking !== undefined
       ? {
           thinking: resolveThinkingParam(config.thinking, maxTokens, model, resolvedEffort),
@@ -168,7 +170,7 @@ export function buildProviderQuery(
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
     ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
-    ...(config.hasWorkspacePreamble ? { hasWorkspacePreamble: true as const } : {}),
+    ...(config.hasWorkspacePreamble ? { hasWorkspacePreamble: true } : {}),
     ...(config.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: config.autoResumeOnUsageLimit }
       : {}),

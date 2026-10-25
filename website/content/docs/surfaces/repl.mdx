@@ -1,263 +1,310 @@
 ---
-title: "Interactive REPL"
-description: "afk i launches a full-featured interactive REPL with slash commands, plan mode, background tasks, and streaming output."
+title: "Work interactively in the REPL"
+description: "Start a persistent terminal session, read live activity, steer work, and use the REPL's input and review tools."
 ---
 
-The interactive REPL is Agent AFK's primary surface. Launch it with:
+The REPL is AFK's interactive terminal surface. Use it when you want a conversation that keeps context between prompts, streams model and tool activity, and lets you review or redirect work without leaving the terminal.
+
+## Start a session
+
+<Steps>
+<Step>
+
+Open a terminal in the project you want AFK to work on, then launch:
 
 ```bash
 afk i
-# or
-afk interactive
-# or just
-afk          # interactive is the default command
 ```
 
-The REPL gives you a persistent session with full tool access — bash, file ops, web fetch,
-subagents, MCP servers, memory — plus slash commands for built-in and plugin skills.
-
-## Common options
+`afk interactive` and bare `afk` start the same surface. You can also supply the opening prompt:
 
 ```bash
-afk i --model opus           # pick a model
-afk i --max-turns 200        # raise the turn limit (default 100)
-afk i --resume <id>          # resume a saved session
-afk i --continue             # continue the most recent session in cwd
-afk i -w                     # create a git worktree for isolation
-afk i -w my-feature          # worktree on a named branch
-afk i --mcp-config ./mcp.json  # load an additional MCP config
+afk i "Explain how this project is organized"
 ```
 
-## Slash commands
+</Step>
+<Step>
 
-Type `/` in the REPL to see available commands. Typos are caught automatically — type `/mnt` and AFK suggests `/mint`.
+Type a request and press **Enter**. Use **Shift+Enter** or **Alt+Enter** for a newline without submitting. If your terminal does not report modified Enter keys, end the line with a backslash and press Enter instead.
 
-### Session control
+</Step>
+<Step>
 
-| Command | Description |
-|---|---|
-| `/help` | List all available slash commands |
-| `/exit`, `/quit` | Leave the REPL |
-| `/clear` | Clear the screen |
-| `/compact` | Manually compact conversation history |
-| `/resume` | Resume a saved session |
-| `/fork` | Duplicate this conversation into a new, independent session |
-| `/name [name]` | Show or set this session's name |
-| `/sh [list \| show \<id\> \| kill \<id\>]` | Inspect or kill user-typed `!cmd` shell jobs |
+Press **Esc** to stop a running turn gracefully. At the idle prompt, use `/exit` or `/quit` to leave. Sessions autosave each turn, so you can return with `/resume`.
 
-### Information
+</Step>
+</Steps>
 
-| Command | Description |
-|---|---|
-| `/cost` | Running cost for the session |
-| `/tokens` | Context usage breakdown (total, categories, MCP tools, agents, skills) |
-| `/stats` | Show session statistics including skill runs |
-| `/history` | Print prior turns |
-| `/transcript` | View full session transcript in `$PAGER` |
-| `/model` | Show or switch the active model |
-| `/tools` | List registered tools |
-| `/mcp` | Show MCP server status |
-| `/limits` | Show rate-limit and budget state |
-| `/debug` | Toggle verbose debug output |
-| `/suggestions [N \| rm \<index\> \| clear]` | View or manage the saved input history that feeds ghost-text suggestions. `/suggestions` shows the last 20 entries; `/suggestions rm 3` removes entry #3; `/suggestions clear` wipes the ring. Prefix any input with a space to skip history recording. |
-| `/keys` | Show keybinding reference |
-| `/config` | View resolved configuration (model, provider, API keys, env vars) |
-| `/doctor` | Run system health checks (API keys, directories, config, Telegram) |
-| `/font-size [size] [editor]` | Get or set the terminal font size in Cursor / VS Code |
-| `/reauth [--check]` | Re-read keychain credentials and swap the running session's client |
+Common launch options:
 
-### Permissions
+| Option | Use it to |
+| --- | --- |
+| `--model opus` | Choose a model for this session. |
+| `--max-turns 200` | Change the conversation turn limit (REPL default: 100). |
+| `--continue` | Continue the most recent saved session in the current directory. |
+| `--resume <id>` | Resume a particular saved session. |
+| `-w` or `-w my-feature` | Start in an isolated git worktree. |
+| `--mcp-config ./mcp.json` | Load an additional MCP configuration. |
+| `--theme light` | Choose a terminal color palette. |
 
-| Command | Description |
-|---|---|
-| `/allow-dir <path>` | Pre-authorize a directory for file tools (`--revoke <path>` to remove a grant) |
-| `/afk` | Enter autonomous mode — risk-gated, with remote answer/abort over Telegram (`/afk off` to exit) |
+See the [CLI reference](/reference/cli) for the complete option list. Worktree exit behavior is configurable: a normal interactive exit asks whether to keep or delete a clean worktree; dirty worktrees are preserved. See [Worktrees](/guides/worktrees).
 
-There is no `/bypass` command — cycle into `bypassPermissions` with **Shift+Tab** (the REPL shows a `⚠ BYPASS` badge while it is active). See [Permissions](/configuration/permissions) for the full model behind these commands.
+## Read the screen
 
-### Planning and state
+The conversation and completed tool output become scrollback. The live area shows streaming text, active tool lanes, progress, and your input. The bottom status line summarizes the session. Fields that do not apply are omitted, and peripheral fields disappear first in narrow panes.
 
-| Command | Description |
-|---|---|
-| `/plan` | Open the plan editor |
-| `/goal [text]` | Set a persistent objective that survives compaction and session restarts. Subcommands: `set <text>`, `status`, `pause`, `resume`, `done`, `clear`. The active goal is injected into the system prompt at session start; mid-session changes take effect on the next session. |
-| `/todo [add\|done\|rm\|clear\|list]` | Per-session checklist. Add items with `/todo add <text>`, mark done with `/todo done <id>`, remove with `/todo rm <id>`, list with `/todo list` (also the default). |
-| `/spine [init\|show\|pending\|dismiss\|dismiss-all]` | Manage `SPINE.md` — the git-tracked project architecture manifest (invariants, rejected patterns, taste calls). `/spine init` bootstraps from existing codebase artifacts; the SessionEnd hook updates it automatically after coding sessions. |
-| `/ghost [on\|off]` | Toggle inline ghost-text suggestions for the current session. Session-scoped; does not persist. Permanent toggle: set `interactive.suggestGhost: false` in `afk.config.json`. |
-| `/init` | Scan the current project and generate an `AFK.md` |
-| `/changelog [--dry-run]` | Generate CHANGELOG entries from commits since last tag |
+| Signal | Meaning |
+| --- | --- |
+| Model and working directory | Which model is active and where tools operate. |
+| `⎇ branch #123` | Current git branch and its open pull request, when available. PR lookup needs a working `gh` installation and may appear after the branch. |
+| `○ default`, `● plan`, `⚡ bypass`, `◐ AFK` | Current permission mode. |
+| Context bar, tokens, and cost | Context occupancy and session usage. Turn and budget caps appear when configured. |
+| `847 tok/s` | Live token throughput while the model streams, not an end-to-end speed guarantee. |
+| `2↗` | Running background subagent count. A progress banner can also show `N running` when several children are active. |
+| Quota windows | Claude subscription utilization and reset information when available. API-key sessions do not supply these subscription windows. |
 
-### Background tasks
+Use `/usage` for Claude subscription quota and `/cost` for this conversation's spend. `/tokens` breaks down context usage. `/limits` lists known model context-window limits, it is not the subscription-quota command. See [Usage and cost](/guides/usage-and-cost).
 
-Press **Ctrl+B** to background a running foreground subagent (there is no whole-turn detach). The
-status bar at the bottom of the REPL shows running background-subagent counts.
+### Understand activity, parallelism, and waiting
 
-| Command | Description |
-|---|---|
-| `/bgsub` | List background subagent jobs |
-| `/bgsub:status` | Show status of background subagent jobs |
-| `/bgsub:join <id>` | Wait for and inject a background subagent's result |
-| `/bgsub:cancel <id>` | Cancel a running background subagent job |
+Progress text comes from current tool activity or the model's live thinking clause when available. It includes elapsed time and accumulated tool or token counts rather than merely changing a spinner label. Repeated same-tool activity may collapse into a `×N` group to keep the feed readable.
 
-### Built-in skills
+Tool glyphs briefly brighten on completion. A tool-lane badge such as `∥1/3` identifies a member of a parallel dispatch batch; singleton or sequential calls do not get a parallel badge. Nested agent, skill, and compose work is arranged as a tree. Parallel nested dispatches retain their batch badge on the committed completion line, so scrollback still shows that the work ran together.
 
-| Command | Description |
-|---|---|
-| `/mint <idea>` | End-to-end feature pipeline: spec → build → verify → ship |
-| `/diagnose <bug>` | Parallel root-cause analysis for bugs and failing tests |
-| `/get-started` | Guided first-run onboarding for AFK |
-| `/service-setup` | Install an AFK background process as a macOS LaunchAgent |
-| `/telegram-setup` | First-time Telegram bot onboarding |
+Before the first response content arrives, a waiting indicator shows elapsed time after a short grace period. Provider backoff appears as `rate-limited · retrying…` or a retry delay when supplied. This is different from a subscription pause that needs a longer wait or account change.
 
-<Callout type="info">
-Maintainer-loop skills (`/forge`, `/audit-fit`) are hidden by default. Set `AFK_INTERNAL=1`
-to surface them.
+## Read streaming output and changes
+
+Assistant Markdown streams progressively. Open code fences and tables show live previews before the final formatted block is committed. Terminal frame updates use synchronized output where supported to reduce partial-frame flicker; terminals and multiplexers can differ in how smoothly they display it.
+
+Tool lanes show tool names, summarized arguments, and outcomes. Thinking can appear as a collapsed summary or live output according to your thinking UI setting.
+
+File changes are easier to review in place:
+
+* `edit_file` can show a proposed replacement diff before execution. This is a display preview, not an approval or proof that the edit succeeded. Multi-occurrence `replace_all` edits skip that preview.
+* Completed edit, write, and `patch_apply` results show colored additions, removals, hunk headers, and change counts when diff data is available. Multi-file patches identify the affected files.
+* Set `AFK_SHOW_DIFFS=0` to hide inline diff blocks without changing whether tools execute.
+
+Use `/diff` for the current tracked working-tree changes (staged and unstaged), `/diff --staged` for staged changes only, or `/diff src/index.ts` to focus on one path. Large diffs are shortened in the REPL; the default body limit is 60 lines. `AFK_DIFF_LINES=0` removes that display limit.
+
+## Watch shell output and detach work
+
+While a model-run bash command is active, its lane shows a rolling output tail. By default, the preview keeps the last seven lines and no pinned opening lines. `AFK_BASH_PREVIEW_TAIL_LINES` and `AFK_BASH_PREVIEW_HEAD_LINES` change those display counts, not the model's output cap.
+
+For large captured bash output, press **Ctrl+G** to open the scrollable viewer. It starts near the end. Use arrows or Page Up/Page Down to scroll, `g`/`G` for top/bottom, `/` to search, and `n`/`N` for the next/previous match. **q** closes it. Esc clears an active search first, then closes. A capture must exist: output that fit the model cap may have no saved capture, and retention can remove old captures. The viewer loads at most 20,000 lines.
+
+**Ctrl+B** during a turn tries these actions in order:
+
+1. Promote a running foreground subagent into a background job.
+2. If no subagent is promotable, detach registered in-flight bash or compose calls so they can finish without holding up the immediate tool await.
+3. If nothing is eligible, do nothing.
+
+This does not detach the whole conversation turn. Detached tool results arrive later as session input. Background subagents can be inspected with `/bgsub`, `/bgsub:status`, `/bgsub:join <id>`, and `/bgsub:cancel <id>`. These jobs belong to the session, they are not persistent services. See [Background processes](/guides/background-processes) and [Subagents](/guides/subagents).
+
+### Run your own shell command
+
+Prefix a prompt with `!` to execute it directly without asking the model to run it:
+
+```text
+!git status
+!ls -la
+```
+
+Use `/sh` to inspect user-started shell jobs. `--no-shell-passthrough` or `AFK_SHELL_PASSTHROUGH=0` disables this input shortcut. Ctrl+C first aborts a foreground passthrough shell rather than opening the model-turn interrupt menu.
+
+## Stop and redirect a turn
+
+**Esc** soft-stops the active turn and keeps completed work. The progress banner changes to `stopping…` while teardown finishes, which can take time when child work is active. A second Esc does not restart cancellation. This stop behavior also applies to OpenAI-compatible streaming sessions.
+
+**Ctrl+C** during a normal TUI turn opens an interrupt picker:
+
+| Choice | Result |
+| --- | --- |
+| Stop | Keep work so far and return to the prompt. |
+| Cancel | Hard-cancel and close the REPL. |
+| Esc inside the picker | Dismiss the picker and leave the turn running. |
+| Ctrl+C again inside the picker | Hard-cancel immediately. |
+
+To redirect, choose **Stop** (or press Esc outside the picker), then send the new instruction. There is no separate **Steer** option in the current interrupt picker. Without a live TUI compositor, Ctrl+C takes the soft-stop path directly. At an idle prompt, two Ctrl+C presses within 1.5 seconds exit.
+
+<Callout type="warn">
+Stopping or cancelling a turn does not roll back file edits or external effects that already happened. Review `/diff` and use [Undo changes](/guides/undo-changes) when you need to restore files.
 </Callout>
 
-### Plugins and discovery
+### Type ahead without losing your draft
 
-| Command | Description |
-|---|---|
-| `/skills` | Discover skills loaded from plugins and user scope |
-| `/agents` | List subagents loaded by the SDK |
-| `/reload-plugins` | Re-scan plugin and user directories after edits |
+You can type while the model is working. **Enter** commits a non-empty message to the queue and clears the input so you can draft another. The input shows `[queued]` or `[N queued]`. Messages normally drain in order, one per completed turn.
 
-## Plan mode
+With an empty input and no completion menu open, **↑** recalls the newest queued message as an editable draft. Press Enter to queue it again. Backspace does not silently dequeue submitted messages.
 
-`/plan` opens an in-REPL plan editor. You can write a multi-step plan, iterate on it, and
-then let the agent execute it. Plan state is saved to `~/.afk/state/` and survives session
-restarts.
+Esc preserves both already queued messages and any unsubmitted draft. Text you only typed is not automatically submitted by stopping. Messages submitted during the post-Esc handoff can be coalesced into one redirect, rather than starting several tiny turns.
 
-### Exiting plan mode
+## Handle a subscription pause
 
-When the model judges its plan ready, it calls the `exit_plan_mode` tool. This presents a
-picker:
+When a supported subscription limit pauses the turn with automatic resumption enabled, the TUI opens a usage-limit picker:
 
-| Choice | What happens |
-|---|---|
-| **Approve — implement now (restore your previous mode)** | Restores the permission mode you were in before entering plan mode (e.g. `default`, `acceptEdits`) and seeds the implement turn |
-| **Approve — implement now (bypass mode)** | Escalates to `bypassPermissions` — no approval prompts, read/write any path — then seeds the implement turn |
-| **Keep planning** | Stays in plan mode; the model continues refining |
-| **Type your own answer** | Your text goes to the model as revision feedback; it stays in plan mode, revises, and calls `exit_plan_mode` again. Typed text never approves the plan |
+| Choice | Action |
+| --- | --- |
+| Keep waiting | Leave automatic resumption active; the reset time appears when known. |
+| Switch model / provider | End this wait, then type `/model <name>` and resend your request. |
+| Stop waiting | End the wait and return to the prompt. |
 
-The mode flip is deferred to the start of the next turn — the gate stays locked in plan mode
-for the remainder of the current turn. On approval, the model is instructed to first save the
-plan to `.afk/plans/` as a markdown file, then implement it.
+Use arrows and Enter to choose. There is no dedicated C-key action in the current picker. Esc dismisses the picker rather than selecting Stop waiting. Outside the picker, Esc soft-stops the waiting turn; submitting a line during a pause also ends the wait instead of leaving it queued indefinitely.
 
-You can also exit plan mode manually with `/plan off`.
+For Claude subscription sessions, the notice also explains that signing in to another account with `claude login` in another terminal can let the waiting turn resume automatically on that account. Other providers do not get that Claude-specific instruction. With `autoResumeOnUsageLimit: false`, or without a live TUI, AFK shows a passive usage notice instead of the interactive waiting picker.
 
-## Shift+Tab permission cycle
+## Compose better prompts
 
-Press **Shift+Tab** at any time to cycle the active permission mode. The cycle order is:
+### Files, completion, and images
 
+Type `@` followed by a path to complete a file reference. Matches include subsequences, not just prefixes, with prefix matches first. Slash completion also works after whitespace inside a draft, so you can mention a skill in a sentence. Recently used slash commands rank ahead of other matches within their match group.
+
+Use **↑/↓** to select a completion and **Tab** to insert it without sending. Enter on a slash-command completion completes and submits; Enter on a file or flag completion only inserts the selection. Type `--` after a command to request its advertised flag completions.
+
+Press **Ctrl+V** to attach a clipboard image. On macOS, ordinary **Cmd+V** can also trigger image detection through terminal paste handling. Linux image paste uses `wl-paste` on Wayland or `xclip` on X11 when installed. Clipboard image extraction is not implemented for Windows. With an empty text buffer, Backspace removes the most recently attached image. See [Images](/guides/images).
+
+<Callout type="info">
+Ctrl+R reverse-history search is implemented in the alternate raw input reader, but is not wired into the normal compositor-backed REPL. In the standard REPL, use ↑/↓ for input history and `/search` for conversation content. Plain output uses a simple line reader, it does not enable that alternate Ctrl+R handler.
+</Callout>
+
+### Open an external editor
+
+Press **Ctrl+O**, or run `/editor`, to compose a longer prompt. AFK chooses `$VISUAL` before `$EDITOR`, seeds a temporary file with your input, and returns a successful edit to the input box for review. It does not send the prompt automatically. A failed editor launch or nonzero exit keeps the original draft. This requires the interactive TUI.
+
+### Control ghost suggestions
+
+Dim ghost text proposes completions from input history and command candidates. When those do not match, an enabled model-backed suggester can complete a prefix after a pause. A separate model-backed proposal can suggest an entire next action at an empty prompt after a turn.
+
+| Action | Control |
+| --- | --- |
+| Accept the entire suggestion | Tab (when a completion menu or task view does not take precedence). |
+| Accept one word | Right arrow at the end of the buffer. |
+| Dismiss an empty-prompt proposal | Esc. |
+| Pause or resume suggestions for this session | `/ghost off`, `/ghost on`. |
+| Check the current state | `/ghost`. |
+| Disable the engine at startup | `AFK_SUGGEST_GHOST=0` or `interactive.suggestGhost: false`. |
+| Disable model-backed prefix completions | `AFK_SUGGEST_ENABLED=0`. |
+| Disable only empty-prompt proposals | `AFK_SUGGEST_PROMPT=0`. |
+
+If the engine was disabled at startup, `/ghost on` cannot create it mid-session. `/suggestions` shows the last 20 saved inputs, `/suggestions 50` shows more, and `/suggestions rm 3` or `/suggestions clear` removes history entries. Begin an input with a space to exclude it from saved input history.
+
+## Review and revisit a conversation
+
+Use `/search retry` to find case-insensitive matches in this session's user prompts and assistant replies. It prints turn numbers and snippets for up to the 20 most recent matching turns. `/search --error` (or `-e`) prints the most recent recorded tool error. These commands locate content, they do not move a scrollback cursor.
+
+Use `/history` to replay conversation output, `/history 10` to limit it to recent turns, or `/transcript` to open the transcript in your pager. Journal-backed replay preserves content blocks, tool cards, and results using the live renderer. Older saves without a journal fall back to a less detailed turn-record replay.
+
+### Rewind an earlier prompt
+
+Run `/rewind` to choose an earlier message, then choose whether to rewind the conversation, the files the agent edited, or both. A conversation rewind loads that prompt's text into your input; edit it, then press Enter to start the revised branch. A file rewind previews every file before restoring. Pressing **Esc twice at an empty, idle prompt** runs a conversation-only rewind. Rewind cannot run while a turn is active.
+
+File rewind covers the agent's `write_file`, `edit_file`, and `patch_apply` edits, not shell commands. See the [undo guide](/guides/undo-changes).
+
+### Copy useful output
+
+| Command | Copies |
+| --- | --- |
+| `/copy` or `/cp` | Last assistant response as raw Markdown, without terminal chrome. |
+| `/copy plain` | Last response with Markdown formatting removed, suitable for email or Slack. |
+| `/copy 2` or `/cp 2` | Code block 2 from the last response, using the index shown on its header. |
+
+Clipboard copying requires the interactive REPL and a TTY. AFK tries local clipboard utilities first, then OSC 52 through the terminal, useful over SSH. Your terminal must permit OSC 52; AFK cannot confirm that an OSC 52 write reached the clipboard.
+
+## Resume saved work
+
+Run `/resume` for a searchable picker with relative save times, model, turn count, cost, and session name. If this directory has saved sessions, only those appear; if none exist here, the picker falls back to all directories. You can also run `/resume <name-or-id>` directly.
+
+Type to fuzzy-filter the list, use arrows to select, then press Enter for a conversation preview. Confirm with Enter or cancel with Esc. The preview shows up to ten recent stored turns with shortened text and tool summaries. Once resumed, AFK replays the conversation, preferring the full journal when available. The active session cannot be swapped while a turn is running.
+
+For startup resumption, use `afk i --continue` or `afk i --resume <id>`. `/name` gives a session a memorable label, and `/fork` creates an independent conversation from the current one. See [Sessions and context](/concepts/sessions-and-context).
+
+## Change models, settings, and instructions
+
+`/model` opens an arrow-key picker of model slots, identity aliases, and curated OpenAI model IDs. You can also type a full model ID or `org/model` directly. `/model <name>` switches the running session and retains its conversation context.
+
+The non-TUI model listing marks unavailable aliases with `needs sign-in`. The current interactive picker does not display those auth labels, so appearing in the picker does not prove a model is authenticated. See [Models and providers](/configuration/models-providers).
+
+`/config` opens the settings menu. Choose a category, setting, then value; Esc backs out a level. Rows show resolved values and their configuration source so you can spot overrides. `model` and `theme` can apply live; other edits report when a restart is needed. `/config view` is read-only, and `/config set <key> <value>` is the direct editing path for supported keys. See [Edit configuration](/configuration/editing-config).
+
+`/afk-md` shows the personal and project instruction overlays. `/afk-md project` or `/afk-md user` opens one in your editor and attempts a live reload after a successful save. `/afk-md reload` rereads external edits. The command reports when a higher-priority prompt shadows the file or a provider needs a new launch; successful live changes affect your next message. This edits standing instructions, not the separate cross-session memory archive. See [AFK.md](/configuration/afk-md).
+
+### Fast mode
+
+`/fast` reports the current preference and whether it is effective. `/fast on` and `/fast off` take effect on the next turn. Fast mode is off by default, applies to the main session only, and excludes custom or local endpoints. Eligible Anthropic Opus models use fast mode; eligible OpenAI models use the priority tier. An unsupported model leaves the preference on but inactive, with a reason shown by `/fast`. Provider eligibility and billing still apply.
+
+## Plan safely and manage tasks
+
+**Shift+Tab** cycles `default → plan → bypassPermissions → default`. In autonomous mode it exits AFK and lands on `default`; it never enters AFK. Use `/afk` to enter autonomous operation. The status line and transient mode notice show the active mode.
+
+<Callout type="warn">
+`bypassPermissions` removes path-approval prompts and containment. Do not treat Shift+Tab as only a plan toggle: cycling from plan lands in bypass. See [Permissions](/configuration/permissions).
+</Callout>
+
+`/plan on` enters a read-only planning conversation: writes and mutating shell commands are refused, while read-only investigation runs. `/plan off` returns to default mode and starts a turn to save the plan under `.afk/plans/` and implement it. Shift+Tab changes modes without seeding implementation.
+
+When the agent proposes leaving plan mode, its approval picker lets you restore the previous mode, explicitly choose bypass when different, keep planning, or type revision feedback. Free-text feedback is not approval. Approval schedules a separate save-and-implement turn; writes remain blocked for the rest of the current planning turn.
+
+Use `/tasks` to browse subagents and Enter to view a selected task. During streaming, Tab can open the newest running subagent's live view if no completion menu takes precedence. Type a message and Enter there to send it to that child, or Esc to return to the parent view.
+
+Other slash-command highlights, grouped by task:
+
+| Task | Commands |
+| --- | --- |
+| Inspect the session | `/stats`, `/tools`, `/mcp`, `/debug`, `/doctor`, `/reauth`. |
+| Manage context and goals | `/compact`, `/goal`, `/todo`, `/spine`. |
+| Control access | `/allow-dir`, `/afk`, Shift+Tab. |
+| Discover extensions | `/skills`, `/agents`, `/reload-plugins`. |
+| Start guided work | `/get-started`, `/mint`, `/diagnose`, `/service-setup`, `/telegram-setup`. |
+| Project maintenance | `/init`, `/changelog`. |
+| Terminal convenience | `/clear`, `/keys`, `/font-size`. |
+
+`/goal` stores a project-scoped objective across sessions; changes are saved immediately but enter the model's standing context at the next session start. `/todo` manages this session's durable checklist. `/spine` manages the git-tracked `SPINE.md` architecture manifest, including its invariants and rejected patterns. See [Goal tracking](/guides/goal-tracking), [State store](/guides/state-store), and [Spine](/guides/spine).
+
+Use `/allow-dir` to authorize another directory, or revoke a grant with its `--revoke` option. There is no `/bypass` command, use the permission cycle when you deliberately want bypass mode.
+
+Use `/help` and the [slash-command reference](/reference/slash-commands) for the full list and arguments. See [Skills](/skills/overview) for skill workflows.
+
+## Tune the terminal
+
+### Themes and reading width
+
+Choose `dark`, `light`, `umber`, or `auto` with `--theme`, `AFK_THEME`, the `theme` config key, or `/theme` during a session. `auto` uses `COLORFGBG` and falls back to dark; it never selects umber. `/theme light` restyles the active frame and future output, not existing scrollback. Persist a choice with `afk config set theme light`.
+
+Prose normally wraps at 80 columns and wider unbordered content, including code, at 100. `AFK_PROSE_MEASURE` changes prose width. An explicitly set `AFK_TEXT_MEASURE` overrides it for compatibility. Set `AFK_TEXT_MEASURE=full` to use the terminal's full width. Width controls affect display, not model behavior.
+
+### Titles, notifications, and upgrades
+
+On a TTY, AFK sets the terminal title to include the project and adds `running` during turns. `AFK_TERM_TITLE=0` leaves your title alone. Completion notifications through OSC 9 are opt-in with `AFK_NOTIFY=1` and require terminal support.
+
+If AFK is upgraded while this REPL is running, a notice identifies the installed and running versions. The running process does not restart automatically. Save your work and restart the session to load the new version.
+
+### tmux and plain output
+
+For tmux, these settings reduce Escape latency and improve colors, clipboard support, and modified Enter handling:
+
+```text
+set -sg escape-time 10
+set -g default-terminal "tmux-256color"
+set -as terminal-features ",*:RGB"
+set -g set-clipboard on
+set -g extended-keys on
 ```
-default → plan → bypassPermissions → default (wraps)
-```
 
-| Mode | What it does |
-|---|---|
-| `default` | Path containment + approval prompts active |
-| `plan` | Writes refused; read-only bash allowed, mutating bash blocked |
-| `bypassPermissions` | Path-approval prompts and containment off; read/write any path |
+With tmux's default Ctrl+B prefix, press **Ctrl+B twice** to send the detach shortcut through to AFK. OSC 52 clipboard writes use tmux's native clipboard forwarding; they do not require `allow-passthrough`. If auto theme detection is wrong inside tmux, select a theme explicitly. On Node 22 or 24, `FORCE_COLOR=3` can help when tmux incorrectly reports only 256-color support.
 
-Each press advances one step and prints a one-line status message. If the session is already
-in `autonomous` (AFK) mode, Shift+Tab exits AFK and lands on `default` — the key never
-_enters_ AFK. Use `/afk` to enter autonomous mode.
-
-See [Permissions](../configuration/permissions.mdx) for full mode descriptions.
-
-## Streaming output
-
-The REPL streams model output token-by-token with markdown rendering. Tool calls render as
-collapsible lane entries showing the tool name, arguments, and result. Extended thinking renders
-as a summary lane (or live, depending on `--thinking-ui`).
-
-## Ghost-text suggestions
-
-The REPL shows inline completions as dim text after the cursor. Two tiers produce suggestions:
-
-| Tier | Source | When it fires |
-|---|---|---|
-| **Tier 1 — history-based** | Previous inputs, slash-command flags, `@`-file paths | Synchronous; fires on every keystroke, always active |
-| **Tier 2 — LLM-based** | Debounced model call completing what you are typing | After a short pause, when Tier 1 has no match and `AFK_SUGGEST_ENABLED` is truthy (on by default) |
-
-### Accepting a suggestion
-
-| Key | Effect |
-|---|---|
-| **Tab** | Accept the full ghost suggestion |
-| **→** (right arrow at end of buffer) | Accept one word at a time — advances through the next word boundary, leaving the rest of the ghost visible |
-| **Esc** (at empty prompt) | Dismiss the empty-prompt proposal offered after each turn |
-
-### Controlling ghost text
-
-- **`/ghost off`** — suppress all ghost text for the rest of the session. `/ghost on` resumes.
-- **`/ghost`** (no args) — show whether ghost text is currently on or paused.
-- **`AFK_SUGGEST_GHOST=0`** — disable ghost text at boot (no-op for the `/ghost` toggle).
-- **`interactive.suggestGhost: false`** in `afk.config.json` — permanent off across all sessions.
-
-The `/suggestions` command lets you inspect and prune the history ring that feeds Tier 1. Prefix any input with a space to skip recording it.
-
-## Type-ahead and queueing
-
-You don't have to wait for the agent to finish a turn before typing your next message. Press
-**Enter** on a non-empty buffer while a turn is in flight and the message is **queued** — the input
-clears so you can draft the next one. The input line shows `[queued]` for one pending message or
-`[N queued]` for several.
-
-Queued messages drain in order (FIFO), one per completed turn. To revise the message you most
-recently queued, press **↑** (Up arrow) on an empty buffer: the last queued message pops back into
-the input as an editable draft (non-destructive). **Backspace does not dequeue** — committed
-type-ahead is only ever recalled for editing with ↑, never silently discarded.
-
-## Usage limits
-
-When your Claude subscription hits its hourly limit mid-session, the REPL shows a usage-limit
-notice rather than failing the turn. By default AFK **auto-resumes** when the limit resets — you
-don't need to retype anything. The notice also lists the actions you can take right now:
-
-- **Switch model** — type `/model <name>` then Enter to continue on a different model.
-- **Switch account** — run `claude login` in any terminal; the session resumes automatically.
-- **Stop waiting** — press **Esc**.
-
-Set `autoResumeOnUsageLimit: false` in `afk.config.json` to opt out of automatic resume (the
-notice then prompts you to resend, switch to API-key billing, or re-auth). The `/limits` command
-shows current rate-limit and budget state at any time.
-
-## Worktree isolation
-
-`-w` / `--worktree` creates a git worktree for the session. Every bash command and file operation
-the agent runs lands in the isolated worktree, not your main working tree. On a clean exit
-(no uncommitted changes), the worktree and branch are removed automatically. On a dirty exit,
-the worktree is preserved so you can review or commit the changes.
+If cursor redraws misbehave over tmux or SSH, start with plain output:
 
 ```bash
-afk i -w                     # auto-named worktree
-afk i -w my-feature          # named branch
-afk i -w --worktree-base HEAD  # base on local checkout instead of origin/main
+AFK_PLAIN_OUTPUT=1 afk i
 ```
 
-## Shell passthrough
+This replaces live overlays and the rich input box with simpler line-oriented output and input. Tool completions and subagent lifecycle events still print concise progress lines. On a real terminal, a static waiting notice disappears when content starts; redirected output omits that waiting notice. Do not expect TUI pickers, ghost text, image-paste controls, or the normal compositor key bindings in plain mode.
 
-Prefix a line with `!` to run it directly in your shell without sending it to the model:
+## Related
 
-```
-> !ls -la
-> !git status
-```
-
-Disable with `--no-shell-passthrough` or `AFK_SHELL_PASSTHROUGH=0`.
-
-## Session persistence
-
-Sessions are saved to `~/.afk/state/sessions/`. Resume from the REPL with `/resume`, or at
-startup:
-
-```bash
-afk i --resume <session-id>
-afk i --continue              # most recent session in cwd
-```
-
-`/resume` lists sessions saved from the **current working directory** first — so the picker in a
-project shows that project's sessions, not every session on the machine. When no session was saved
-from the current directory, it falls back to listing all saved sessions.
+<Cards>
+  <Card title="Keyboard shortcuts" href="/reference/keyboard-shortcuts" description="Find bindings by input, picker, task, and output-viewer context." />
+  <Card title="Slash commands" href="/reference/slash-commands" description="Look up every command and its arguments." />
+  <Card title="Usage and cost" href="/guides/usage-and-cost" description="Distinguish session spend, context limits, and subscription quota." />
+  <Card title="Background processes" href="/guides/background-processes" description="Choose how to run and inspect work without blocking the foreground." />
+</Cards>

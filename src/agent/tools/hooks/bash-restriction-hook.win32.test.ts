@@ -137,6 +137,16 @@ describe('bash-restriction hook under win32 semantics — credential floor holds
     expect(hook(ctx('cat /c/Users/alice/.afk/config/mcp.json', mgr)).decision).not.toBe('block');
   });
 
+  it('keeps ssh public keys readable in every win32 spelling, private keys blocked', () => {
+    expect(hook(ctx('cat ~/.ssh/id_ed25519.pub', mgr)).decision).not.toBe('block');
+    expect(hook(ctx('cat $HOME/.ssh/id_rsa.pub', mgr)).decision).not.toBe('block');
+    expect(hook(ctx('cat C:\\Users\\alice\\.ssh\\id_rsa.pub', mgr)).decision).not.toBe('block');
+    expect(hook(ctx('cat /c/Users/alice/.ssh/id_rsa.pub', mgr)).decision).not.toBe('block');
+    expect(hook(ctx('cat /c/Users/alice/.ssh/id_rsa.pub"/../id_rsa"', mgr)).decision).toBe('block');
+    expect(hook(ctx('cat C:\\Users\\alice\\.ssh\\*.pub', mgr)).decision).toBe('block');
+    expect(hook(ctx('echo x > C:\\Users\\alice\\.ssh\\id_rsa.pub', mgr)).decision).toBe('block');
+  });
+
   it('keeps the carve-outs EXACT-file: siblings and backups stay blocked', () => {
     expect(hook(ctx('cat ~/.ssh/config.bak', mgr)).decision).toBe('block');
     expect(hook(ctx('cat /c/Users/alice/.ssh/config"/../id_rsa"', mgr)).decision).toBe('block');

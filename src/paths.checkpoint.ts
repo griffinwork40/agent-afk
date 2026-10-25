@@ -45,6 +45,38 @@ export function getFileCheckpointBlobDir(sessionId: string, stateDir?: string): 
   return join(session, '.blobs');
 }
 
+/**
+ * Ordered per-session turn log (`turns.jsonl`): turn starts, post-turn content
+ * hashes, and restores, in chronological append order. See
+ * `agent/file-checkpoint/turn-log.ts`.
+ */
+export function getFileCheckpointTurnLogPath(sessionId: string, stateDir?: string): string {
+  const session = stateDir ? join(stateDir, 'file-checkpoints', sessionId)
+    : getFileCheckpointSessionDir(sessionId);
+  return join(session, 'turns.jsonl');
+}
+
+/**
+ * Pid of the process currently checkpointing into this session directory,
+ * rewritten at every checkpointed turn start. The retention sweep never evicts
+ * a directory whose owner is alive (see `agent/file-checkpoint/retention.ts`).
+ */
+export function getFileCheckpointOwnerPath(sessionId: string, stateDir?: string): string {
+  const session = stateDir ? join(stateDir, 'file-checkpoints', sessionId)
+    : getFileCheckpointSessionDir(sessionId);
+  return join(session, '.owner');
+}
+
+/**
+ * Marker present while a live restore runs. The retention sweep skips a
+ * session directory holding it (see `agent/file-checkpoint/retention.ts`).
+ */
+export function getFileCheckpointRewindLockPath(sessionId: string, stateDir?: string): string {
+  const session = stateDir ? join(stateDir, 'file-checkpoints', sessionId)
+    : getFileCheckpointSessionDir(sessionId);
+  return join(session, '.rewind-lock');
+}
+
 // ---------------------------------------------------------------------------
 // Per-turn
 // ---------------------------------------------------------------------------

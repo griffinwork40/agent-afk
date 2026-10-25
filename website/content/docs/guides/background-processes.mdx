@@ -1,0 +1,120 @@
+---
+title: "Run long processes in the background"
+description: "Launch supervised shell jobs, inspect their output, and distinguish processes from background agents."
+---
+
+Use a supervised background process when a server, test watcher, or long command must keep running while the agent does other work. AFK returns a job ID immediately, records output, and reports when the process exits.
+
+## Start, inspect, and stop a process
+
+<Steps>
+<Step>
+### Ask for a supervised launch
+
+In the top-level interactive REPL, ask the agent to start your command with the `bash` tool and `run_in_background: true`. For a Python project with the standard library installed, an example tool input is:
+
+```json
+{
+  "command": "python3 -m http.server 8080 --bind 127.0.0.1",
+  "run_in_background": true,
+  "timeout_ms": 3600000
+}
+```
+
+The result includes `job_id` such as `proc-1`, `pid`, `status`, `log_path`, and `max_runtime_ms`. Run the server in the foreground of that command. Do not append `&`, use `nohup`, or make the program daemonize itself.
+</Step>
+<Step>
+### Confirm readiness
+
+A started process is not necessarily ready. Ask the agent to inspect `get_background_job_health` with the returned `jobId`, or use `wait_for` on the returned log path and a known readiness line. A process wait can watch the returned leader PID exit, but that does not test server readiness.
+
+The health response includes status, elapsed time, bytes written, log path, exit details when settled, and `recentOutput`. Process output is untrusted data, not instructions.
+</Step>
+<Step>
+### Stop it when finished
+
+Ask the agent to call `cancel_background_job` with the `jobId` and a non-empty `reason`. It requests graceful termination and escalates if necessary. You can also inspect and stop jobs directly in the REPL:
+
+```text
+/sh
+/sh show proc-1
+/sh kill proc-1
+```
+
+Use the actual ID returned by your launch. A settled job retains its natural exit result instead of being relabeled cancelled.
+</Step>
+</Steps>
+
+## Limits and lifetime
+
+| Property | Behavior |
+| --- | --- |
+| Availability | Top-level interactive REPL only, not subagents, Telegram, daemon, or one-shot chat. |
+| Concurrency | At most three running supervised process jobs. |
+| Runtime | `timeout_ms` defaults to two hours and is capped at 24 hours for background launches. |
+| Input | No stdin or PTY. Cancel and restart a process that needs different arguments. |
+| Completion | An automatic `background-process-result` notice reports metadata, not raw output. |
+| Lifetime | Jobs belong to the REPL session. Session exit stops them; they are not persistent services. |
+| Read-only modes | Background launches are refused by plan and other read-only gates, even for a read-only-looking command. |
+
+Completion notices carry exit code, signal, duration, byte count, and log location. They are delivered at a safe turn boundary or wake an idle REPL. You do not need to poll just to detect completion. Exit code zero means the command exited successfully, not that the task's result has been verified.
+
+Logs live by default under `~/.afk/state/proc-jobs/`. Each log rotates at 32 MB with one retained rotation. Settled-log quotas and a seven-day stale-directory sweep bound disk use.
+
+<Callout type="warn">
+This is session supervision, not crash-proof service management. A hard AFK crash can leave a process untracked. POSIX children that create a new session can escape process-group cleanup. On Windows, cleanup can target the leader's process tree while the leader is alive, but cannot reliably reap survivors after it exits. Use an [OS service](/guides/run-as-service) for the daemon or bot, and [scheduled shell tasks](/guides/scheduling) for independent commands.
+</Callout>
+
+## Detach an already running call with Ctrl+B
+
+When a foreground `bash` call or `compose` DAG is in flight in the REPL, press **Ctrl+B** to detach it without killing it. AFK releases the model's wait, lets the work continue, and delivers the eventual result back to the session. If several detachable calls are active in one batch, the detach applies to the whole active batch.
+
+This is different from launching with `run_in_background: true`. A Ctrl+B-detached tool call keeps its existing tool-call identity; it is not adopted as a `proc-N` job. It remains tied to session teardown and its original timeout. Do not assume `/sh show proc-1` or process-job health applies to it.
+
+Ctrl+B can also background a running agent turn. That is background agent work, described in [subagents](/guides/subagents), rather than a raw supervised process.
+
+## Inspect background agent jobs
+
+Background agents use `bg-...` job IDs, not `proc-...`. Their `get_background_job_health` response reports `status`, `elapsedMs`, `lastActivityAt`, and, while running, `idleSinceMs`. Handle-level signals can add `pendingSteeringMessages` and up to five `recentProgressEvents`. These are coarse progress signals, not proof that a stalled-looking agent is broken. There is no `recentActivity` field in the current response.
+
+For durable background agent event logs, use:
+
+```bash
+afk bg list
+```
+
+Then pass a listed job ID to `afk bg tail` for live events or `afk bg replay` for existing events. `tail --from-start` replays history before following, and `--no-follow` exits after existing history. These commands read background agent logs under `~/.afk/state/bg/`; they do not list supervised `proc-N` shell jobs. Logs survive the parent process, but the running agent does not.
+
+## Live bash previews and full captures
+
+While a foreground bash command runs, the REPL shows a rolling output tail. The display is ephemeral UI feedback, not extra output sent to the model. Outcome previews can show both the beginning and end of output:
+
+| Environment variable | Default | Accepted range |
+| --- | --- | --- |
+| `AFK_BASH_PREVIEW_HEAD_LINES` | `0`, no head block | Integer 0 to 200 |
+| `AFK_BASH_PREVIEW_TAIL_LINES` | `7` | Integer 0 to 200 |
+
+These control non-empty lines in the displayed outcome preview, not model-context limits or log retention. Invalid values fall back to defaults.
+
+```bash
+AFK_BASH_PREVIEW_HEAD_LINES=3 AFK_BASH_PREVIEW_TAIL_LINES=12 afk
+```
+
+Bash results larger than about 100 KB are reduced to a head-and-tail view for the model. When retained, the full output is saved as a bash capture in the session's witness directory. The foreground safety cap terminates commands emitting more than 8 MB, so that path cannot promise a complete capture. Supervised background logs use their own rotating-log limits instead.
+
+Find retained captures with:
+
+```bash
+afk captures list
+afk captures list --limit 50 --json
+```
+
+Use `--session` with a known session ID to narrow the listing. The JSON output includes file locations for reading or searching with your own tools. Captures are subject to witness retention, by default 30 days and a two-GiB tree cap. The command is `afk captures list`, not `afk bash search`.
+
+## Related
+
+<Cards>
+<Card title="Run subagents" href="/guides/subagents" description="Delegate agent work and understand background agent ownership." />
+<Card title="Schedule tasks" href="/guides/scheduling" description="Run independent shell or agent tasks through the daemon." />
+<Card title="Observe sessions" href="/guides/observability" description="Inspect traces, logs, and retained evidence." />
+</Cards>

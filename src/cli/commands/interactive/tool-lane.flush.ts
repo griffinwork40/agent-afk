@@ -33,6 +33,16 @@ export interface ToolLaneFlushHost {
   order: string[];
   agentIdStack: string[];
   readonly compactScrollback: boolean;
+  /**
+   * Synthetic ids that have been absorbed into a committed ancestor block via
+   * {@link flushSource}. Any tool events arriving after absorption with one of
+   * these ids as their `agentContext` are silently dropped by
+   * {@link ToolLane.addStartWithAgentContext} — the parent is gone from the
+   * lane and recreating a child under it would produce an orphan root.
+   *
+   * The set grows monotonically during a turn; cleared on lane reset (flush()).
+   */
+  absorbedIds: Set<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,15 +142,27 @@ export function flushSource(
     ? formatAgentChildren(parentEntry, children, childMap, homeDir, ancestorIsLast, host.compactScrollback).join('\n')
     : formatAgentSummary(parentEntry, children, childMap, homeDir, ancestorIsLast, host.compactScrollback);
 
-  // Remove collected entries from the lane.
+  // Remove collected entries from the lane and record them as absorbed so
+  // any future tool events whose agentContext points at one of these ids are
+  // silently dropped instead of re-creating a detached orphan root.
   for (const id of collected) {
     host.entries.delete(id);
+    host.absorbedIds.add(id);
   }
   host.order = host.order.filter((id) => !collected.has(id));
 
   const blockLines = childBlock === '' ? [] : [childBlock];
-  const separator = scrollbackSeparator(ancestorIsLast.length);
-  return [...ancestorLines, ...blockLines, separator];
+  // Separator invariant: only emit when there is a block to separate.
+  // At depth 0 the separator is '' (a blank breathing-row that commitSubagentBlock
+  // peels off and commits via a separate commitAbove('')). At depth > 0 it is a
+  // dim spine string. When blockLines is empty (no content was rendered for this
+  // agent — e.g. headerEmitted=true + no children remaining + no summary), the
+  // commit contributes nothing visible, so appending a separator would stack
+  // consecutive spine-only rows when several such agents complete in sequence
+  // (defect D). Suppressing it is safe: the separator's sole purpose is visual
+  // spacing AFTER a rendered block; with no block there is nothing to space from.
+  const separatorRows = blockLines.length > 0 ? [scrollbackSeparator(ancestorIsLast.length)] : [];
+  return [...ancestorLines, ...blockLines, ...separatorRows];
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +215,7 @@ export function flushCompletedRoots(
 
   for (const id of collected) {
     host.entries.delete(id);
+    host.absorbedIds.add(id);
   }
   host.order = host.order.filter((id) => !collected.has(id));
 

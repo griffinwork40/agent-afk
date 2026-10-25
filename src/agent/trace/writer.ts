@@ -87,9 +87,13 @@ export interface TraceWriter extends TraceSink {
    *  `seal()` returns, `write()` rejects.
    *
    * @param pendingWrites Optional promises for in-flight child terminal
-   *   emits. Awaited (all-settled) with the write gate still open, BEFORE
-   *   the `session_sealed` line is queued, so child cancellation rows land
-   *   before the seal record (#3714). The wait is bounded by
+   *   emits. Each promise must already have been initiated (i.e. the
+   *   `emitSubagentLifecycle` / `write()` call has been made) before
+   *   `seal()` is called — the write itself may still be in-flight and
+   *   arrive at the writer after `seal()` starts, because the gate
+   *   remains open while these are awaited. Awaited (all-settled) BEFORE
+   *   the `session_sealed` line is queued, so child cancellation rows
+   *   land before the seal record (#3714). The wait is bounded by
    *   `SEAL_PENDING_WRITES_TIMEOUT_MS`; on timeout a stderr warning names
    *   the abandoned count and `session_sealed` is written anyway.
    */
@@ -342,9 +346,16 @@ export class NdjsonTraceWriter implements TraceWriter {
    * `session_sealed` record at all. `sealRecordPersisted` only flips once
    * a record has actually been written, so an interrupted `seal()` still
    * falls through to this backstop.
+   *
+   * When `this.sealing` is true, a normal `seal()` is already in flight
+   * (its async append is queued but not yet persisted). This guard makes
+   * `sealOnProcessExit` a no-op in that case — accepting a small orphan
+   * window where the process dies after `seal()` sets `sealing` but
+   * before the append lands. That window is bounded by the write-queue
+   * drain time (typically <10 ms on local disk).
    */
   sealOnProcessExit(): void {
-    if (this.sealRecordPersisted || this.seq === 0) return;
+    if (this.sealRecordPersisted || this.sealing || this.seq === 0) return;
     this.sealed = true;
     liveTraceWriters.delete(this);
     try {

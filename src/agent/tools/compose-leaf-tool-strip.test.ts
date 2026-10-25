@@ -460,7 +460,8 @@ describe('compose leaf invariant — end-to-end (issue #3579)', () => {
     // Notice must also be appended
     expect(nodePrompt).toContain(COMPOSE_LEAF_NOTICE);
     // Notice must come AFTER the base prompt
-    expect(nodePrompt).toBe(`OPERATOR BASE PROMPT\n\n${COMPOSE_LEAF_NOTICE}`);
+    expect(nodePrompt).toContain(`OPERATOR BASE PROMPT\n\n${COMPOSE_LEAF_NOTICE}`);
+    expect(nodePrompt).toContain('This compose node can use only these tools:');
   });
 
   it('research-agent (non-blank body) + notice: body precedes notice in DAG node systemPrompt', async () => {
@@ -468,6 +469,7 @@ describe('compose leaf invariant — end-to-end (issue #3579)', () => {
     // body IS present, it must appear before the notice (not replaced by it).
     const dagNode = await runAndGetDagNode({ agent_type: 'research-agent', model: 'sonnet' });
     const body = agentRegistry.get('research-agent')!.definition.prompt;
-    expect(dagNode.systemPrompt).toBe(`${body}\n\n${COMPOSE_LEAF_NOTICE}`);
+    expect(dagNode.systemPrompt).toContain(`${body}\n\n${COMPOSE_LEAF_NOTICE}`);
+    expect(dagNode.systemPrompt).toContain('This compose node can use only these tools:');
   });
 });

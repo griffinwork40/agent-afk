@@ -111,3 +111,29 @@ describe('StreamRenderer.dispose: wait_for hint flag', () => {
     expect(setRootWaitActive).toHaveBeenCalledWith(false);
   });
 });
+
+describe('processEvent: heartbeat after a stall never re-creates a flushed entry', () => {
+  it('clears the pause annotation without resurrecting the absorbed Agent row', () => {
+    const { ctx } = makeCtx();
+    const meta = { subagentId: 'child-2', agentType: 'research-agent' } as Parameters<typeof processEvent>[2];
+    processEvent(ctx, start('c2-t1', 'Read'), meta);
+    const source = ctx.sources.get('child-2')!;
+    const syntheticId = source.syntheticAgentToolUseId!;
+    expect(ctx.toolLane.hasEntry(syntheticId)).toBe(true);
+
+    // The child's block is absorbed into an ancestor's committed flush, then
+    // the stall annotation fired while it was silent.
+    ctx.toolLane.flushSource(syntheticId);
+    source.pauseAnnotation = ' · waiting 31s';
+    source.stalledTicks = 400;
+
+    processEvent(ctx, {
+      type: 'progress',
+      progress: { taskId: 't', description: 'd', totalTokens: 1, toolUses: 1, durationMs: 1 },
+    }, meta);
+    expect(source.pauseAnnotation).toBeUndefined();
+    expect(source.stalledTicks).toBe(0);
+    expect(ctx.toolLane.hasEntry(syntheticId), 'heartbeat must not re-create the entry').toBe(false);
+    expect(ctx.toolLane.hasPending()).toBe(false);
+  });
+});

@@ -72,6 +72,17 @@ before `memoryPrompt`, `hotMemory`, the `# Environment` fragment, and the
 skill `manifest`. All of those later sections are appended AFTER the budget
 preamble in what the model actually receives.
 
+## Continuing a capped child
+
+Hitting the cap no longer forces a restart from a summary. A capped (or
+otherwise incomplete) result carries a `[continuation: chain_id=…]` line.
+The parent can pass that id as `continuation_chain_id` to start a fresh child
+from the capped child's full conversation, with a new round allowance. A
+chain-wide aggregate budget (`AFK_SUBAGENT_CONTINUATION_MAX_ROUNDS`, default
+150) and a continuation count (`AFK_SUBAGENT_CONTINUATION_MAX_CONTINUATIONS`,
+default 3) bound the total. See
+[`subagent-continuation.md`](subagent-continuation.md).
+
 ## Open gaps
 
 - The runtime still has no non-convergence detector. The preamble's closing

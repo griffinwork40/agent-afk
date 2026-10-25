@@ -21,7 +21,7 @@ An unconfigured install uses these defaults:
 | `medium` | `claude-sonnet-4-6` | `sonnet`, `sonnet_1m` |
 | `large` | `claude-opus-5-5` | `opus`, `opus_1m` |
 
-**Note:** These default model IDs reflect the latest available models as of this writing. As new versions ship, these defaults are updated in the codebase (`src/agent/session/model-slots.ts`). You can override any slot via environment variables (`AFK_MODEL_SMALL`, `AFK_MODEL_MEDIUM`, `AFK_MODEL_LARGE`) or `afk.config.json` — see [Configuring slots](/docs/configuration/model-slots#configuring-slots-in-afkconfigjson) for details.
+**Note:** These default model IDs reflect the latest available models as of this writing. As new versions ship, these defaults are updated in the codebase (`src/agent/session/model-slots.ts`). You can override any slot via environment variables (`AFK_MODEL_SMALL`, `AFK_MODEL_MEDIUM`, `AFK_MODEL_LARGE`) or `afk.config.json` — see [Configuring slots](#configuring-slots-in-afkconfigjson) for details.
 
 If you never touch slots, behavior is identical to before this feature existed.
 
@@ -38,6 +38,7 @@ provider credentials. The full object shape (`ModelSlotConfigEntry`, source:
 | `provider` | `"anthropic"` \| `"openai"` \| `"chatgpt-oauth"` | Explicit provider override. Inferred from the model ID when omitted. Use when a bare shim ID (no `gpt-`/`org/model` signal) must route to a specific provider. `"chatgpt-oauth"` (or the `"chatgpt"` shorthand) forces the ChatGPT-subscription OAuth credential (`~/.codex/auth.json`) for this tier only — see [Per-slot ChatGPT-subscription OAuth](/configuration/models-providers#chatgpt-oauth-per-slot). |
 | `baseUrl` | string | Per-slot endpoint. For Anthropic-routed tiers, the Messages API base; for OpenAI-routed tiers, the Chat Completions base. Wins over global `AFK_OPENAI_BASE_URL` / `AFK_LOCAL_BASE_URL` for this tier only. |
 | `apiKey` | string | Per-slot API key. Wins over global credentials for this tier only. |
+| `contextWindow` | positive integer | Overrides the effective context limit for the bound model, ahead of the built-in limit table. Maximum 10,000,000 tokens; this changes AFK's accounting and compaction threshold, not the provider's actual quota. |
 
 ```jsonc
 {
@@ -68,7 +69,9 @@ OpenAI-routed tier it is the Chat Completions base. A per-slot value wins over
 the corresponding global (`AFK_OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, etc.) for
 that tier only.
 
-The full field reference for `afk.config.json` is generated under **Reference**.
+The full field reference is [Configuration keys](/reference/config-keys). An operator can also ask the agent to call `config_set` with `target: "config"`, `key: "models.medium"`, and an object value such as `{"id":"gpt-4.1","provider":"openai","name":"work"}`. The tool accepts the `id`, `provider`, and `name` binding fields but refuses credential-bearing `apiKey` or `baseUrl` in the object. Set per-slot endpoint or key via the human CLI or the corresponding `AFK_MODEL_MEDIUM_BASE_URL` and `AFK_MODEL_MEDIUM_API_KEY` env vars; secrets must be entered through a human-controlled channel.
+
+For example, `"local": {"id":"my-local-model","provider":"openai","contextWindow":128000}` tells AFK to use 128,000 as its effective context limit. Set it only to a limit your endpoint really supports. The override is stored in JSON, not supplied by the model-ID env var.
 
 ## Configuring slots via environment variables
 
@@ -143,3 +146,10 @@ Each tier's credentials are applied automatically — an Anthropic key can't lea
   OpenAI model, and an Anthropic model, all coexisting in the same session —
   see [Per-slot ChatGPT-subscription OAuth](/configuration/models-providers#chatgpt-oauth-per-slot).
 - Per-tier credentials via `afk.config.json` or `AFK_MODEL_*` env vars.
+
+## Related
+
+<Cards>
+<Card title="Models and providers" href="/configuration/models-providers" description="Understand provider routing and authentication." />
+<Card title="Configuration keys" href="/reference/config-keys" description="Look up the complete model binding schema." />
+</Cards>

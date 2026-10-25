@@ -107,10 +107,18 @@ async function gitReadImpl(input: unknown, signal: AbortSignal, context: ToolHan
   if (out.error !== undefined) return { content: `git_read: failed to run git: ${out.error}`, isError: true };
   // git grep exits 1 for "no matches" — not an error.
   const noMatch = plan.argv[0] === 'grep' && out.code === 1 && out.stderr.trim() === '';
-  if (out.code !== 0 && !out.overflow && !noMatch) {
+  // git merge-base --is-ancestor exits 1 to mean "false" (not an ancestor) — not an error.
+  const isAncestorFalse = plan.argv[0] === 'merge-base' && plan.argv.includes('--is-ancestor') && out.code === 1 && out.stderr.trim() === '';
+  // git cat-file -e exits 1 when the object does not exist — not an error.
+  const catFileAbsent = plan.argv[0] === 'cat-file' && plan.argv.includes('-e') && out.code === 1 && out.stderr.trim() === '';
+  if (out.code !== 0 && !out.overflow && !noMatch && !isAncestorFalse && !catFileAbsent) {
     return { content: boundOutput(`git exited ${out.code ?? 'abnormally'}: ${out.stderr.trim() || out.stdout.trim()}`, maxBytes), isError: true };
   }
-  const body = out.stdout.length > 0 ? out.stdout : noMatch ? '(no matches)' : '(no output)';
+  const body = out.stdout.length > 0 ? out.stdout
+    : noMatch ? '(no matches)'
+    : isAncestorFalse ? '(not an ancestor)'
+    : catFileAbsent ? '(object not found)'
+    : '(no output)';
   return { content: boundOutput(body, maxBytes) };
 }
 

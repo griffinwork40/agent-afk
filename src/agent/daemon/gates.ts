@@ -21,7 +21,13 @@ export type SessionStartSkipReason =
   /** Task has passed its `expiresAt` wall-clock deadline. */
   | 'expired'
   /** Task has a `runAt` that has not been reached yet. */
-  | 'not-yet';
+  | 'not-yet'
+  /**
+   * A stored `runAt` or `expiresAt` value is not a valid ISO 8601 string.
+   * This can happen when `schedules.json` has been hand-edited. The task is
+   * skipped and a warning is emitted so the operator knows to fix the value.
+   */
+  | 'malformed';
 
 export interface GateDecision {
   fire: boolean;

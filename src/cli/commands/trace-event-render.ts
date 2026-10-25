@@ -79,13 +79,16 @@ export function renderEvent(event: TraceEvent, ctx: RenderContext): string | nul
     case 'hook_decision': {
       const p = event.payload;
       if (p.decision === undefined) return null; // all handlers passed — noise
+      // Named risk category (#3900): bracket after the hookEvent so reviewers
+      // see WHY an action was held or blocked, not just that it was.
+      const cat = p.riskCategory !== undefined ? ` [${p.riskCategory}]` : '';
       if (p.decision === 'block') {
         const tool = p.blockedTool ? ` ${p.blockedTool}` : '';
         const reason = p.reason ? `  (${truncate(p.reason, 80)})` : '';
-        return line('hook', `BLOCK ${p.hookEvent}${tool}${reason}`);
+        return line('hook', `BLOCK ${p.hookEvent}${tool}${cat}${reason}`);
       }
       const reason = p.reason ? `  (${truncate(p.reason, 80)})` : '';
-      return line('hook', `approve ${p.hookEvent}${reason}`);
+      return line('hook', `approve ${p.hookEvent}${cat}${reason}`);
     }
 
     case 'hook_summary': {

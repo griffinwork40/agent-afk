@@ -22,11 +22,14 @@ export function MobileSidebar({ open, onClose, children }: MobileSidebarProps) {
       {/* Drawer */}
       <div
         className={cn(
-          "fixed inset-y-0 left-0 z-50 w-64 bg-sidebar transition-transform duration-200 ease-in-out md:hidden",
+          "fixed inset-y-0 left-0 z-50 w-max max-w-[85vw] overflow-hidden bg-sidebar transition-transform duration-200 ease-in-out md:hidden",
           open ? "translate-x-0" : "-translate-x-full"
         )}
         role="dialog"
-        aria-modal="true"
+        aria-label="Sidebar"
+        aria-modal={open || undefined}
+        aria-hidden={!open}
+        inert={!open}
       >
         {children}
       </div>

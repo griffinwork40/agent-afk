@@ -965,6 +965,7 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
       small: { id: 'gpt-5.5' },
       medium: { id: 'gpt-5.5' },
       large: { id: 'gpt-5.5' },
+      subagent: { id: '' },
     });
     pendingChunks = [
       { choices: [{ delta: { content: 'ok' } }] },
@@ -986,6 +987,7 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
       small: { id: 'gpt-5.5' },
       medium: { id: 'gpt-5.5' },
       large: { id: 'gpt-5.5' },
+      subagent: { id: '' },
     });
     pendingChunks = [
       { choices: [{ delta: { content: 'ok' } }] },
@@ -1007,6 +1009,7 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
       small: { id: 'gpt-4o-mini' },
       medium: { id: 'gpt-5.5' },
       large: { id: 'gpt-5.5' },
+      subagent: { id: '' },
     });
     const controlled = makeControlledPromptStream();
     const q = buildQueryFromConfig(baseConfig({ model: 'small' }), controlled.stream);
@@ -4114,3 +4117,84 @@ describe('OpenAICompatibleQuery — Responses wire tool arguments on *.done even
 });
 
 // Public checkpoint lifecycle regressions live in file-checkpoint/provider-rewind.test.ts.
+
+// ---------------------------------------------------------------------------
+// Item 2 — getMcpServerStates wired into OpenAICompatibleProvider.buildDispatcher
+// ---------------------------------------------------------------------------
+
+describe('OpenAICompatibleProvider — getMcpServerStates wired into buildDispatcher (#4064)', () => {
+  // Prove that calling an mcp__<server>__<tool> for a failed server returns the
+  // MCP-aware message (names the server + error) rather than the generic
+  // "Unknown tool" text, exercising the real buildDispatcher path.
+
+  beforeEach(() => {
+    scriptedTurns = [];
+    scriptedTurnIndex = 0;
+  });
+
+  it('returns MCP-aware message when dispatcher calls a failed-server tool', async () => {
+    // Script: one turn that calls mcp__failed-srv__search, then done.
+    installScriptedClient();
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_mcp',
+                      type: 'function',
+                      function: { name: 'mcp__failed-srv__search', arguments: '{}' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+          },
+        ],
+      },
+      {
+        chunks: [
+          {
+            choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+          },
+        ],
+      },
+    ];
+
+    // Minimal mcpManager stub: reports failed-srv in error state.
+    const mcpManager = {
+      getMcpTools: () => [],
+      getMcpHandlers: () => new Map(),
+      getMcpToolWireNames: () => [],
+      getServerStates: () => [
+        { serverName: 'failed-srv', status: 'error', error: 'spawn ENOENT' },
+      ],
+    } as unknown as import('../../mcp/manager.js').McpManager;
+
+    const provider = new OpenAICompatibleProvider({ mcpManager });
+    const events = await collect(
+      provider.query({ prompt: singleInput('search please'), config: baseConfig() }),
+    );
+
+    const toolOut = events.find((e) => e.type === 'tool.output');
+    expect(toolOut).toBeDefined();
+    if (toolOut?.type === 'tool.output') {
+      expect(toolOut.isError).toBe(true);
+      // MCP-aware message names the server and its error
+      expect(toolOut.content).toContain('failed-srv');
+      expect(toolOut.content).toContain('spawn ENOENT');
+      expect(toolOut.content).toContain('Do NOT retry');
+      // Must NOT be the generic unknown-tool message
+      expect(toolOut.content).not.toMatch(/^Unknown tool/);
+    }
+  });
+});

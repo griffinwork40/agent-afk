@@ -1550,6 +1550,65 @@ describe('StatusLine — active agent fan-out count', () => {
   });
 });
 
+describe('StatusLine — lastHeldCategory (#3900)', () => {
+  // Minimal helpers reused from the narrow-terminal block above.
+  function wideStreamLocal(cols: number) {
+    const writes: string[] = [];
+    return {
+      isTTY: true,
+      columns: cols,
+      rows: 24,
+      write(s: string) { writes.push(s); return true; },
+      writes,
+    };
+  }
+  const ANSI_RE = /\x1b\[[0-9;]*m/g;
+  function stripped(s: string) { return s.replace(ANSI_RE, ''); }
+
+  it('shows [workspace-write] chip in autonomous mode', () => {
+    const stream = wideStreamLocal(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', permissionMode: 'autonomous', lastHeldCategory: 'workspace-write' });
+    const out = stripped(stream.writes.join(''));
+    expect(out).toContain('[workspace-write]');
+  });
+
+  it('does not show lastHeldCategory in non-autonomous modes', () => {
+    const stream = wideStreamLocal(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', permissionMode: 'default', lastHeldCategory: 'workspace-write' });
+    const out = stripped(stream.writes.join(''));
+    expect(out).not.toContain('[workspace-write]');
+  });
+
+  it('omits the chip when lastHeldCategory is undefined', () => {
+    const stream = wideStreamLocal(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', permissionMode: 'autonomous' });
+    const out = stripped(stream.writes.join(''));
+    expect(out).not.toMatch(/\[.*\]/);
+  });
+
+  it('drops the chip before contextPct on narrow terminals', () => {
+    // At 30 cols only model + mode chip fit; category chip should be shed first.
+    const stream = wideStreamLocal(30);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      permissionMode: 'autonomous',
+      lastHeldCategory: 'workspace-write',
+      contextPct: 0.5,
+    });
+    const out = stripped(stream.writes.join(''));
+    // The model name must still be present.
+    expect(out).toContain('sonnet');
+  });
+});
+
 describe('StatusLine — AFK_CENTER_CONTENT centering', () => {
   /** Wide mock stream: 200 cols, so centering (measure=100) gives a 50-col left margin. */
   function wideStream(cols = 200): MockStream {
@@ -1587,8 +1646,7 @@ describe('StatusLine — AFK_CENTER_CONTENT centering', () => {
     status.stop();
   });
 
-  it('output is byte-identical to non-centered when AFK_CENTER_CONTENT is unset', () => {
-    // No stub — AFK_CENTER_CONTENT must be absent / falsy.
+  it('output is byte-identical to non-centered when AFK_CENTER_CONTENT is empty string', () => {
     vi.stubEnv('AFK_CENTER_CONTENT', '');
     const stream = wideStream(200);
     const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
@@ -1614,6 +1672,35 @@ describe('StatusLine — AFK_CENTER_CONTENT centering', () => {
     const plainPaint = paintChunk.replace(BROAD_ANSI_RE, '');
     // Entire painted line must not exceed terminal width.
     expect(plainPaint.length).toBeLessThanOrEqual(cols);
+    status.stop();
+  });
+
+  it('output is byte-identical to non-centered when AFK_CENTER_CONTENT is truly absent', () => {
+    // Ensure the env var is completely absent (not just empty string).
+    vi.unstubAllEnvs();
+    const stream = wideStream(200);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cost: 0.01 });
+    const out = lastJoined(stream);
+    const paintChunk = out.split('\x1b[2K')[1] ?? '';
+    const plainPaint = paintChunk.replace(BROAD_ANSI_RE, '');
+    // No leading margin — content starts immediately (first char at col 0).
+    expect(plainPaint.charAt(0)).not.toBe(' ');
+    status.stop();
+  });
+
+  it('centered output has empty margin on narrow terminal (cols=80)', () => {
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    const stream = wideStream(80);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cost: 0.01, tokens: 500 });
+    const out = lastJoined(stream);
+    const paintChunk = out.split('\x1b[2K')[1] ?? '';
+    const plainPaint = paintChunk.replace(BROAD_ANSI_RE, '');
+    // cols=80 ≤ measure=100 → marginCols = 0, no leading spaces.
+    expect(plainPaint.charAt(0)).not.toBe(' ');
     status.stop();
   });
 });

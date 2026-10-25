@@ -112,9 +112,12 @@ vi.mock('../providers/index.js', () => ({
 
 vi.mock('../subagent/resolve-child-model.js', () => ({
   resolveChildModel: vi.fn(
-    ({ callSiteModel, defaultSubagentModel }: { callSiteModel?: string; namedAgentModel?: string; defaultSubagentModel: string; defaultModel?: string }) =>
-      callSiteModel ?? defaultSubagentModel,
+    ({ callSiteModel, defaultSubagentModel }: { callSiteModel?: string; namedAgentModel?: string; defaultSubagentModel: string; defaultModel?: string }, extra?: { withSource: true }) => {
+      const model = callSiteModel ?? defaultSubagentModel;
+      return extra?.withSource ? { model, source: callSiteModel !== undefined ? 'callSite' : 'default' } : model;
+    },
   ),
+  defaultTierModelFallback: vi.fn(() => undefined),
 }));
 
 vi.mock('../../paths.js', async (importOriginal) => {

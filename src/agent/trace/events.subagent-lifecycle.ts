@@ -28,6 +28,9 @@ export const SubagentStartedPayloadSchema = z.object({
   agentType: z.string().optional(),
   resolvedAgentType: z.string().optional(),
   maxToolUseIterations: z.number().int().nonnegative().optional(),
+  chainId: z.string().optional(),
+  continuationOf: z.string().optional(),
+  continuationIndex: z.number().int().positive().optional(),
 });
 
 export const SubagentSucceededPayloadSchema = z.object({

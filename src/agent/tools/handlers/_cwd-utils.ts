@@ -12,11 +12,11 @@ import path from 'path';
 import { lstatSync, realpathSync, readlinkSync } from 'fs';
 import type { ToolHandlerContext } from '../types.js';
 import {
-  isReadDenied,
   READ_DENYLIST_ENTRY_MARKER,
   PROTECTED_CREDENTIAL_PATH_MARKER,
 } from './read-denylist.js';
 import { assertNotDenylisted } from './write-denylist.js';
+import { decidePathAccess } from './path-policy.js';
 import { isEnoent, isErrnoCode } from '../../../utils/errors.js';
 import { isWithinScratchRoot } from './scratch-roots.js';
 
@@ -228,14 +228,16 @@ export function resolveAndContain(
   // write-denylist.ts; reads had NO floor); it is applied to the resolved
   // absolute path, exactly as computed by computeContainment. Writes keep their
   // own floor in write-file.ts / edit-file.ts.
-  if (mode === 'read') {
-    const denied = isReadDenied(resolved);
-    if (denied.denied) {
-      throw new Error(
-        `Path \`${inputPath}\` ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
-          `(${READ_DENYLIST_ENTRY_MARKER} \`${denied.matched}\`) and cannot be read.`,
-      );
-    }
+  //
+  // Routed through `decidePathAccess` (#3847 first slice) so this layer and
+  // the path-approval hook share one canonicalization rather than each calling
+  // `isReadDenied` independently with their own `path.resolve()` anchors.
+  const decision = decidePathAccess(resolved, mode);
+  if (decision.kind === 'deny') {
+    throw new Error(
+      `Path \`${inputPath}\` ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
+        `(${READ_DENYLIST_ENTRY_MARKER} \`${decision.matched}\`) and cannot be read.`,
+    );
   }
 
   if (restricted) {

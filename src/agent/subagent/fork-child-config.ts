@@ -30,6 +30,7 @@ import { applyManagerApiKeyFallback } from '../tools/child-credential.js';
 import { injectToolBudgetPreamble } from './budget-preamble.js';
 import { injectSubagentIdentityPreamble } from './identity-preamble.js';
 import { injectWorkspacePreamble } from '../workspace/index.js';
+import type { WorkspaceToolAccess } from '../workspace/workspace-preamble.js';
 import type { WorkspaceStore, WorkspaceEntry } from '../workspace/workspace-store.js';
 import { DENY_ELICITATION, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
 import { resolveSoftDeadlineMs } from '../providers/shared/soft-deadline.js';
@@ -72,6 +73,14 @@ export interface AssembleChildConfigArgs<T> {
    */
   parentRootSessionId: string | undefined;
   /**
+   * When `true`, the child's identity preamble includes the yield-and-resume
+   * paragraph explaining how to use an **Asking** block to yield a question to
+   * the parent. Set for foreground non-compose dispatches; `false`/absent for
+   * compose nodes (guarded by the DAG fail-fast) and background children
+   * (deferred to v2). Defaults to `false` when absent.
+   */
+  yieldEnabled?: boolean;
+  /**
    * The nested-dispatch allowlist for the CHILD being assembled. Derived from
    * `resolvedAccess.nestedAgentTypes` in `buildChildConfig` (child-config.ts)
    * and threaded here via `ForkSubagentOptions.nestedAgentAllowlist` so the
@@ -108,8 +117,8 @@ export type ParentForkFields = Pick<
  *   to {@link injectSubagentIdentityPreamble} so the child's preamble names
  *   the types it may dispatch. Single source: same value the executor enforces.
  */
-function applyForkPreambles(config: AgentConfig, nestedAgentAllowlist?: readonly string[]): AgentConfig {
-  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config, nestedAgentAllowlist));
+function applyForkPreambles(config: AgentConfig, nestedAgentAllowlist?: readonly string[], yieldEnabled?: boolean): AgentConfig {
+  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config, nestedAgentAllowlist, yieldEnabled));
 }
 
 /**
@@ -206,7 +215,14 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
  * `splitAtWorkspacePreamble` on actual fork provenance (#3924).
  *
  * Extracted from {@link assembleChildConfig} to keep that function under the
- * 200-line ceiling. Returns the config unchanged when no workspace store is set.
+ * 200-line ceiling. Returns the config unchanged when no workspace store is set,
+ * or when the child cannot publish into an empty workspace (nothing to say).
+ *
+ * Invariant (#4060): the tool-usage text follows the child's FINAL provider,
+ * read here from `assembled.provider`. Every fork path (agent tool, skill,
+ * compose, `phaseRole`) converges on this call with that provider already set,
+ * and the provider's own permissions + store are what its dispatcher enforces.
+ * A provider-less config (or one without `grantsTool`) keeps the legacy text.
  */
 function applyWorkspacePreamble(
   assembled: AgentConfig,
@@ -214,8 +230,19 @@ function applyWorkspacePreamble(
   workspaceEntries: WorkspaceEntry[],
 ): AgentConfig {
   if (!workspaceStore) return assembled;
-  const withPreamble = injectWorkspacePreamble(assembled, workspaceEntries);
+  const access = resolveWorkspaceToolAccess(assembled.provider);
+  const withPreamble = injectWorkspacePreamble(assembled, workspaceEntries, access);
+  if (withPreamble === assembled) return assembled;
   return { ...withPreamble, hasWorkspacePreamble: true };
+}
+
+/** The child's workspace tool grant, or `undefined` when its provider cannot say. */
+function resolveWorkspaceToolAccess(provider: AgentConfig['provider']): WorkspaceToolAccess | undefined {
+  if (provider?.grantsTool === undefined) return undefined;
+  return {
+    publish: provider.grantsTool('workspace_publish'),
+    query: provider.grantsTool('workspace_query'),
+  };
 }
 
 /**
@@ -439,9 +466,9 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     // telemetry-only (emitSubagentLifecycle). The mutual-exclusion check in
     // validatePhaseRole ensures we don't clobber a caller's explicit provider.
     ...(options.phaseRole === 'read-only'
-      ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel) }
+      ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel, args.workspaceStore) }
       : {}),
-  }, args.nestedAgentAllowlist);
+  }, args.nestedAgentAllowlist, args.yieldEnabled);
 
   return applyWorkspacePreamble(assembled, args.workspaceStore, workspaceEntries);
 }

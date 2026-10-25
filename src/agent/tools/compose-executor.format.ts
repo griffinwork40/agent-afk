@@ -127,10 +127,14 @@ export function formatDAGResult(
       const partial = formatPartialFindings(
         (f.error as SubagentExecutionError).partialOutput,
       );
+      const setupNotice = (f.error as SubagentExecutionError).setupNotice;
       const body = partial
         ? `${msg}\n\n### Partial findings before failure:\n${partial}`
         : msg;
-      sections.push(`## ${f.id} [FAILED]\n${body}`);
+      const bodyWithNotice = setupNotice !== undefined
+        ? `${setupNotice}\n\n${body}`
+        : body;
+      sections.push(`## ${f.id} [FAILED]\n${bodyWithNotice}`);
     }
   }
 

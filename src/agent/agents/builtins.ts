@@ -21,6 +21,7 @@ import { researchAgent } from '../../skills/_agents/research-agent.js';
 import { gitInvestigator } from '../../skills/_agents/git-investigator.js';
 import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
 import { parseAgentMarkdown } from './parser.js';
+import { withGitReadSubstitution, isReadOnlyGitToolEnabled, GIT_READ_TOOL_NAME } from '../tools/readonly-git-surface.js';
 import type { RegisteredAgent } from './types.js';
 
 /**
@@ -80,8 +81,20 @@ other restriction above (${preservedContract}) still holds.`;
  * Registry-entry grants for research-agent, beyond `researchAgent.allowedTools`.
  * Single source of truth: spread into `tools` AND rendered into the prompt via
  * `withRegistryGrants`, so mechanical access and stated access stay in lockstep.
+ *
+ * When `AFK_READONLY_GIT_TOOL` is on, `git_read` is added so research-agent can
+ * answer git questions directly — without the nested git-investigator hop — at
+ * the cost of one context level and one model call per git question (#4059).
+ * The flag-conditional grant keeps the tool surface byte-identical at flag-off
+ * (no schema injection, no prompt delta), preserving existing behaviour for
+ * operators who have not opted in. git-investigator is kept in place: skills
+ * that dispatch it by name continue to work regardless of the flag.
  */
-const RESEARCH_AGENT_REGISTRY_GRANTS = ['memory_search', 'Agent(git-investigator)'] as const;
+function researchAgentRegistryGrants(): string[] {
+  const grants: string[] = ['memory_search', 'Agent(git-investigator)'];
+  if (isReadOnlyGitToolEnabled()) grants.push(GIT_READ_TOOL_NAME);
+  return grants;
+}
 
 const GENERAL_PURPOSE_PROMPT = `You are a general-purpose sub-agent for complex, multi-step tasks that require both exploration and action.
 
@@ -144,6 +157,7 @@ const GENERAL_PURPOSE_MAX_TOOL_USE_ITERATIONS = 150;
  * shadowing leak into the next in long-lived processes (tests, telegram).
  */
 export function builtinAgents(): Map<string, RegisteredAgent> {
+  const grants = researchAgentRegistryGrants();
   const entries: RegisteredAgent[] = [
     {
       name: researchAgent.name,
@@ -152,7 +166,7 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         description: researchAgent.description,
         prompt: withRegistryGrants(
           vendoredPromptBody(researchAgent.systemPrompt),
-          RESEARCH_AGENT_REGISTRY_GRANTS,
+          grants,
           researchAgent.allowedTools,
         ),
         // The scoped `Agent(git-investigator)` grant matches the vendored
@@ -183,7 +197,10 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         // argument CHILD_ALLOWED_TOOLS already makes at nesting.ts:124-131.
         // Note `memory_update`/`procedure_write` are deliberately NOT granted:
         // those mutate, and target:"hot" reaches every future session's prompt.
-        tools: [...researchAgent.allowedTools, ...RESEARCH_AGENT_REGISTRY_GRANTS],
+        // `git_read` is added by `researchAgentRegistryGrants()` when
+        // `AFK_READONLY_GIT_TOOL` is on (#4059): research-agent can then answer
+        // git questions directly, without the nested git-investigator hop.
+        tools: [...researchAgent.allowedTools, ...grants],
         // Anti-runaway bound (see READONLY_AGENT_MAX_TOOL_USE_ITERATIONS): a
         // read-only research/review agent that keeps tool-calling without ever
         // emitting a final message otherwise runs unbounded on the (uncapped)
@@ -197,7 +214,12 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
       source: 'builtin',
       definition: {
         description: gitInvestigator.description,
-        prompt: vendoredPromptBody(gitInvestigator.systemPrompt),
+        // Under AFK_READONLY_GIT_TOOL the bashReadOnly gate below swaps Bash
+        // for git_read, so the prompt must say so too.
+        // Note: withGitReadSubstitution allocates per builtinAgents() call when
+        // the flag is on; accepted as negligible — this is a cold path (called
+        // once per agent dispatch, not per tool call or token).
+        prompt: withGitReadSubstitution(vendoredPromptBody(gitInvestigator.systemPrompt)),
         tools: [...gitInvestigator.allowedTools],
         // No `model`: builtins never pin a model, so dispatch follows the
         // operator's subagent policy (getDefaultSubagentModel). Guarded in

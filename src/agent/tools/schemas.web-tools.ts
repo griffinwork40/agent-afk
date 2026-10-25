@@ -140,8 +140,8 @@ export const webRequestTool: AnthropicToolDef = {
     'SSRF-guarded: all private/internal IP ranges blocked by default (see AFK_WEB_ALLOW_PRIVATE_HOSTS). ' +
     'Respects AFK_BROWSER_ALLOWED_DOMAINS / BLOCKED_DOMAINS when domain policy is configured.\n\n' +
     'Risk levels: GET/HEAD/OPTIONS = low; POST/PUT/PATCH = medium; DELETE = high. ' +
-    'Only idempotent methods (GET, HEAD, OPTIONS, PUT, DELETE) are auto-retried on transient failures; ' +
-    'POST and PATCH are NEVER auto-retried.\n\n' +
+    'Only safe idempotent methods (GET, HEAD, OPTIONS) are auto-retried on transient failures; ' +
+    'POST, PUT, PATCH, and DELETE are NEVER auto-retried.\n\n' +
     'Body is auto-serialized: objects/arrays → JSON with Content-Type: application/json; ' +
     'strings → text/plain. Caller-supplied Content-Type overrides inference.\n\n' +
     'Response body is truncated to `max_response_bytes` (default 100KB, ceiling 1MB). ' +

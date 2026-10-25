@@ -15,6 +15,7 @@ import {
   teardownBackgroundWorktree,
 } from './handlers/worktree-managed.background.js';
 import type { StreamCutProbe } from '../subagent/stream-cut-retry.js';
+import type { ForkSubagentOptions } from '../subagent/fork-types.js';
 import { debugLog } from '../../utils/debug.js';
 import { appendImageBlocks } from '../content/image-blocks.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
@@ -43,18 +44,21 @@ export interface IsolationWorktreeResult {
   /** Paths needed to tear down the worktree on completion. */
   teardown: { repoRoot: string; worktreePath: string };
   /**
-   * Set when the repo-declared worktree setup (#3601) did not succeed. Already
-   * prepended to `parsed.prompt` for the child; the caller also surfaces it to
-   * the parent in the tool result.
+   * Set when the repo-declared worktree setup (#3601) did not succeed. For
+   * agent-tool callers it is prepended to `parsed.prompt` for the child; DAG
+   * callers wrap `promptBuilder` themselves (dag-subagent.dispatch.ts). The
+   * caller also surfaces it to the parent in the tool result.
    */
   setupNotice?: string;
 }
 
 export interface SetupIsolationWorktreeArgs {
-  parsed: AgentInput;
+  parsed: Pick<AgentInput, 'prompt' | 'mode' | 'agent_type' | 'id_prefix'>;
   currentCwd: string | undefined;
   isolationCounterRef: { value: number };
-  childConfig: AgentConfig;
+  childConfig: Pick<AgentConfig, 'cwd'>;
+  /** DAG keeps its node-specific failure text; agent dispatch returns a ToolResult. */
+  dagNodeId?: string;
   childWriteCapable: boolean;
   probe: StreamCutProbe | undefined;
   budgetReceipt: SpawnReceipt | undefined;
@@ -66,8 +70,15 @@ export interface SetupIsolationWorktreeArgs {
  * Creates an isolated worktree for `isolation:"worktree"` dispatches and
  * mutates `childConfig.cwd` to point at it.  Returns the teardown descriptor
  * on success, `{ skipped: true }` when the agent is read-only, or
- * `{ error }` that the caller should return immediately.
+ * `{ error }` that the caller should return immediately. DAG callers always
+ * create a foreground tree and throw their historical node-specific error.
  */
+export function setupIsolationWorktree(
+  args: SetupIsolationWorktreeArgs & { dagNodeId: string; childWriteCapable: true },
+): Promise<IsolationWorktreeResult>;
+export function setupIsolationWorktree(
+  args: SetupIsolationWorktreeArgs,
+): Promise<IsolationWorktreeResult | { skipped: true } | { error: ToolResult }>;
 export async function setupIsolationWorktree(
   args: SetupIsolationWorktreeArgs,
 ): Promise<IsolationWorktreeResult | { skipped: true } | { error: ToolResult }> {
@@ -110,6 +121,12 @@ export async function setupIsolationWorktree(
   } catch (err) {
     const message = errorMessage(err);
     budgetReceipt?.rollback();
+    if (args.dagNodeId !== undefined) {
+      throw new Error(
+        `Failed to create isolated worktree for DAG node "${args.dagNodeId}": ${message}. ` +
+        `isolation:"worktree" requires the session to run inside a git repository.`,
+      );
+    }
     return {
       error: {
         content:
@@ -147,6 +164,10 @@ export interface ForkAndCheckCancelArgs {
     cwd?: string,
   ) => void;
   callId: string;
+  /** Default-tier model fallback from buildChildConfig (undefined = not eligible). */
+  modelFallback?: ForkSubagentOptions['modelFallback'];
+  /** D8: continuation fork (resume the seeded journal); undefined on ordinary dispatches. */
+  continuation?: ForkSubagentOptions['continuation'];
 }
 
 export type ForkResult =
@@ -185,6 +206,7 @@ export async function forkAndCheckCancel(
       parent: ctx.parentSession,
       parentId: callId,
       config: childConfig,
+      yieldEnabled: true, // foreground agent-tool dispatch (#4297 F-C2)
       idPrefix: parsed.id_prefix,
       agentType:
         namedAgent !== undefined
@@ -205,6 +227,8 @@ export async function forkAndCheckCancel(
       denyElicitations: true,
       progressEvents: parsed.progress_events,
       ...(nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist } : {}),
+      ...(args.modelFallback !== undefined ? { modelFallback: args.modelFallback } : {}),
+      ...(args.continuation !== undefined ? { continuation: args.continuation } : {}),
     });
   } catch (err) {
     const message = errorMessage(err);
@@ -382,4 +406,67 @@ export function checkNestedScope(
             : `agent_type "${requestedType}" is out of scope.`),
     isError: true,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Remote dispatch gate
+// ---------------------------------------------------------------------------
+
+import { executeRemoteAgentDispatch } from './subagent-executor.execute-once.remote.js';
+
+/**
+ * When `parsed.host` is set, releases the budget receipt and delegates to
+ * `executeRemoteAgentDispatch`.  Returns the `ToolResult` so the caller can
+ * `return` it immediately, or `undefined` when the local path should proceed.
+ *
+ * Extracted here to keep `executeOnce` within the 200-line ceiling.
+ *
+ * Invariant: the delegation-budget slot (concurrent-spawn count) is acquired
+ * BEFORE this helper is called and is held for the entire SSH session — from
+ * the `delegationBudget.recordSpawn` call in `executeOnce` through to the
+ * `rollback()` / `release()` call inside this function.  This is intentional:
+ * a remote dispatch occupies a real concurrency slot just like a local one,
+ * preventing unbounded fan-out even though no local AgentSession is forked.
+ * The slot is rolled back (not consumed) on any pre-execution failure path
+ * (isRemoteRun refusal, isolation guard, host-resolve error) so those slots
+ * remain available for subsequent local dispatches.
+ *
+ * Gates that apply to BOTH local and remote paths (enforced in `executeOnce`
+ * before this call): depth check, delegation-budget canSpawn/recordSpawn.
+ * Gates that apply ONLY to the local path (after this call returns undefined):
+ * `evaluateDispatchUsageForModel` — skipped because the remote session runs
+ * its own model; a local usage notice would be misleading (no local tokens
+ * are consumed).  `emitTelemetry` (inside forkAndCheckCancel) and
+ * `appendRoutingDecision` — skipped for parity with the `remote_agent` tool,
+ * which also omits them; the remote host's own session records those events.
+ */
+export async function checkAndRunRemoteDispatch(
+  parsed: Pick<AgentInput, 'host' | 'prompt' | 'model' | 'isolation' | 'cwd'>,
+  signal: AbortSignal,
+  budgetReceipt: SpawnReceipt | undefined,
+  callId: string,
+  updateCurrentWaveUnit: (
+    callId: string,
+    status: 'running' | 'done' | 'failed',
+    error?: string,
+    cwd?: string,
+  ) => void,
+): Promise<ToolResult | undefined> {
+  if (parsed.host === undefined) return undefined;
+  // Remote runs don't consume local delegation budget — roll it back rather
+  // than releasing it, so the slot stays available for future local dispatches.
+  // release() is called only after a successful runRemoteAgent completes;
+  // on every early-return failure path inside executeRemoteAgentDispatch
+  // (isRemoteRun guard, isolation guard, host-resolve error) the caller never
+  // ran, so we must not permanently burn the slot.
+  updateCurrentWaveUnit(callId, 'running');
+  const result = await executeRemoteAgentDispatch(parsed, signal);
+  if (result.isError) {
+    budgetReceipt?.rollback();
+    updateCurrentWaveUnit(callId, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
+  } else {
+    budgetReceipt?.release();
+    updateCurrentWaveUnit(callId, 'done');
+  }
+  return result;
 }

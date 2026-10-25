@@ -3,14 +3,14 @@
  * into AccountingAccumulator (root per turn, subagents per completion), and
  * the `session_sealed.billing` payload (schema-valid, omitted when empty).
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BillingRollup, sealBillingField } from './billing-rollup.js';
 import { AccountingAccumulator } from './accounting-accumulator.js';
 import { sealTraceWriter } from './closure-emitter.js';
 import { usageToMetadata } from './stream-consumer.js';
 import { InMemoryTraceWriter } from '../trace/writer.js';
 import { SessionSealedPayloadSchema } from '../trace/events.js';
-import { anthropicBilling, openAICompatibleBilling } from '../usage.billing.js';
+import { anthropicBilling, openAICompatibleBilling, sumBillingUsage } from '../usage.billing.js';
 
 const anth = (input: number, read: number, write: number, out = 0) =>
   anthropicBilling({ input_tokens: input, output_tokens: out, cache_read_input_tokens: read, cache_creation_input_tokens: write });
@@ -55,6 +55,24 @@ describe('BillingRollup', () => {
     r.add(anth(5, 0, 0));
     expect(snap.total.uncachedInput).toBe(1);
   });
+
+  it('provider: mixed — sumBillingUsage mismatch accumulates under mixed bucket', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const r = new BillingRollup();
+    const mixed = sumBillingUsage(anth(10, 200, 50, 5), openAICompatibleBilling(300, 100, 8));
+    expect(mixed?.provider).toBe('mixed');
+    r.add(mixed);
+    r.add(anth(5, 100, 0, 2)); // normal record added alongside
+    const snap = r.snapshot()!;
+    expect(snap.byProvider['mixed']).toEqual({ uncachedInput: 210, cacheRead: 300, cacheWrite: 50, output: 13 });
+    expect(snap.byProvider['anthropic-direct']).toEqual({ uncachedInput: 5, cacheRead: 100, cacheWrite: 0, output: 2 });
+    expect(snap.total).toEqual({ uncachedInput: 215, cacheRead: 400, cacheWrite: 50, output: 15 });
+    // The warn is the behavioral signal that 'mixed' was produced.
+    expect(warnSpy).toHaveBeenCalledOnce();
+    // Exhaustive key check: no stale 'openai-compatible' key alongside 'mixed'.
+    expect(Object.keys(snap.byProvider).sort()).toEqual(['anthropic-direct', 'mixed']);
+    warnSpy.mockRestore();
+  });
 });
 
 describe('AccountingAccumulator billing wiring', () => {
@@ -90,15 +108,19 @@ describe('AccountingAccumulator billing wiring', () => {
     });
   });
 
-  it('subagents: an outcome-tagged (failed/cancelled) report is billing-only', () => {
+  it('subagents: an outcome-tagged (failed/cancelled) report adds costUsd to subagentRunningCostUsd (#3882 cause 1)', () => {
+    // Legacy counters (count, tokens) stay success-only; billing.subagents carries ALL spend.
+    // costUsd IS now included for failed/cancelled children so session_sealed.subagentCostUsd
+    // reflects total spend across all terminal outcomes (fix for #3882 cause 1).
     const acc = new AccountingAccumulator();
-    acc.recordSubagentCompletion({ inputTokens: 10, billing: anth(10, 0, 0) }, 0.5);
-    acc.recordSubagentCompletion({ billing: anth(7, 3, 1, 2), outcome: 'failed' });
-    acc.recordSubagentCompletion({ billing: openAICompatibleBilling(10, 4, 1), outcome: 'cancelled' }, 9);
+    acc.recordSubagentCompletion({ inputTokens: 10, billing: anth(10, 0, 0) }, 0.5);          // succeeded: $0.50
+    acc.recordSubagentCompletion({ billing: anth(7, 3, 1, 2), outcome: 'failed' });             // failed: no costUsd
+    acc.recordSubagentCompletion({ billing: openAICompatibleBilling(10, 4, 1), outcome: 'cancelled' }, 9); // cancelled: $9
     const snap = acc.snapshot();
     expect(snap.subagentCompletedCount).toBe(1);
     expect(snap.subagentRunningTokens).toEqual({ input: 10, output: 0, cacheRead: 0, cacheCreation: 0 });
-    expect(snap.subagentRunningCostUsd).toBe(0.5);
+    // $0.50 (succeeded) + $9 (cancelled) = $9.50; failed had no costUsd so contributes $0.
+    expect(snap.subagentRunningCostUsd).toBe(9.5);
     expect(snap.subagentBilling?.byProvider).toEqual({
       'anthropic-direct': { uncachedInput: 17, cacheRead: 3, cacheWrite: 1, output: 2 },
       'openai-compatible': { uncachedInput: 6, cacheRead: 4, cacheWrite: 0, output: 1 },

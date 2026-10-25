@@ -39,8 +39,9 @@ export interface SystemPromptWiringArgs {
    * provides `getManifestScope()` for plugin/allowlist scoping.
    */
   skillExecutor?: SkillExecutor;
-  /** Whether a workspace store is present (controls workspace fragment). */
-  hasWorkspaceStore: boolean;
+  /** Whether the `# Shared Workspace` fragment is included: a store is present AND
+   *  both workspace tools are granted (`grantsWorkspacePrompt`, #4060). */
+  workspacePromptEnabled: boolean;
   /** Whether the memory store is read-only. */
   readOnlyMemory: boolean | undefined;
   /** Whether the state store is read-only. */
@@ -57,6 +58,14 @@ export interface SystemPromptWiringArgs {
   getCurrentCwd: () => string;
   /** Awareness source used to read the workspace snapshot. */
   runtimeStateSource: RuntimeStateSource;
+  /**
+   * Dynamic "Available agent types" listing produced by
+   * `subagentExecutor.describeAgentTypeListing()`.  Empty string (or omitted)
+   * when no named agents are registered.  Injected into the volatile tail of
+   * the system prompt (after `# Environment` / manifest) so agent-set
+   * differences between sessions never break the prefix cache (#4217).
+   */
+  agentTypeListing?: string;
 }
 
 /**
@@ -92,9 +101,10 @@ export interface SystemPromptWiringResult {
  */
 export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPromptWiringResult {
   const {
-    config, skillExecutor, hasWorkspaceStore, readOnlyMemory, readOnlyState,
+    config, skillExecutor, workspacePromptEnabled, readOnlyMemory, readOnlyState,
     resolvedSessionId, surface, getCurrentCwd, runtimeStateSource,
   } = args;
+  const agentTypeListing = args.agentTypeListing ?? '';
 
   // --- Stable fragments (computed once; not cwd-dependent) ---
   const toolBase = resolveToolSystemPrompt(config.isSkillDispatch, config.isUnnamedWorker);
@@ -173,11 +183,14 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
     const parts: string[] = toolBase.length > 0 ? [toolBase] : [];
     if (resolvedBase !== undefined && resolvedBase.length > 0) parts.push(resolvedBase);
     parts.push(memoryPrompt);
-    const workspacePrompt = resolveWorkspaceSystemPrompt(hasWorkspaceStore);
+    const workspacePrompt = resolveWorkspaceSystemPrompt(workspacePromptEnabled);
     if (workspacePrompt) parts.push(workspacePrompt);
     for (const frag of [hotMemory, goalPrompt]) { if (frag.length > 0) parts.push(frag); }
     parts.push(envFragment);
     if (manifest.length > 0) parts.push(manifest);
+    // Agent-type listing is placed after the manifest in the volatile tail so
+    // sessions differing only in their agent sets keep a stable prefix (#4217).
+    if (agentTypeListing.length > 0) parts.push(agentTypeListing);
     return parts.join('\n\n');
   };
 

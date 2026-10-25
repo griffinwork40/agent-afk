@@ -20,6 +20,7 @@ import {
   TASK_RETRY_DELAY_MIN_MS,
   TASK_RETRY_DELAY_MAX_MS,
 } from './task-retry.js';
+import { isValidIsoDate } from '../../utils/iso-date.js';
 
 export type TriggerMode = 'cron' | 'sessionstart' | 'both' | 'pull';
 
@@ -144,9 +145,8 @@ export function validateScheduledTask(task: ScheduledTask): void {
     );
   }
   if (task.runAt !== undefined) {
-    const ms = Date.parse(task.runAt);
-    if (isNaN(ms)) {
-      throw new Error(`task ${task.taskId}: runAt must be a valid ISO 8601 date string`);
+    if (!isValidIsoDate(task.runAt)) {
+      throw new Error(`task ${task.taskId}: runAt must be a valid ISO 8601 date string (got: ${task.runAt})`);
     }
     if (task.cronExpression !== undefined) {
       throw new Error(
@@ -155,9 +155,8 @@ export function validateScheduledTask(task: ScheduledTask): void {
     }
   }
   if (task.expiresAt !== undefined) {
-    const ms = Date.parse(task.expiresAt);
-    if (isNaN(ms)) {
-      throw new Error(`task ${task.taskId}: expiresAt must be a valid ISO 8601 date string`);
+    if (!isValidIsoDate(task.expiresAt)) {
+      throw new Error(`task ${task.taskId}: expiresAt must be a valid ISO 8601 date string (got: ${task.expiresAt})`);
     }
   }
   const executor = task.executor ?? 'agent';

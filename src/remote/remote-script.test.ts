@@ -209,8 +209,16 @@ describe('launch script stdin isolation (regression)', () => {
 
       let stdout = '';
       try {
+        // Append `wait` so the shell blocks until the `nohup "$p" … &` background
+        // job has fully exited before returning control to execFileSync.  Without
+        // this, on Windows-2022 with Git Bash the backgrounded stub process can
+        // still hold tmpHome open after the parent shell exits, causing rmSync in
+        // the finally block to throw EBUSY/EPERM and mask any assertion failure
+        // above it (a vitest throw from finally replaces the original error).
+        // The stub afk is `exit 0` so wait returns immediately in practice.
+        const scriptWithWait = script + '\nwait';
         stdout = execFileSync(shell, ['-s'], {
-          input: script,
+          input: scriptWithWait,
           cwd: tmpHome,   // item 3: bare `touch PWNED` lands in tmpHome
           env: { HOME: homeForShell, PATH: process.env['PATH'] ?? '/usr/bin:/bin' },
           timeout: 10_000,

@@ -239,5 +239,9 @@ export function formatSubagentCompletion(info: SubagentCompleteInfo, columns?: n
  */
 export function emitSubagentCompletion(writer: CompletionWriter, info: SubagentCompleteInfo): void {
   if (writer.suppressSubagentCompletion) return;
+  // Also suppress if the tool lane already committed a Done row for this id
+  // (guards against the teardown-race: SubagentStop fires after suppressSubagentCompletion
+  // is reset in teardownTurn but the tool lane rendered the subagent during the turn).
+  if (writer.renderedSubagentIds?.has(info.subagentId)) return;
   writer.fn(formatSubagentCompletion(info));
 }

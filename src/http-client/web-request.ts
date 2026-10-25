@@ -4,8 +4,8 @@
  * Provides structured, SSRF-guarded HTTP requests supporting all standard
  * methods (GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE) with:
  *   - SSRF protection via `guardedFetch` (per-hop redirect validation)
- *   - Automatic retry only for idempotent methods (GET, HEAD, OPTIONS, PUT,
- *     DELETE); POST/PATCH are never auto-retried
+ *   - Automatic retry only for safe idempotent methods (GET, HEAD, OPTIONS);
+ *     POST, PUT, PATCH, and DELETE are never auto-retried
  *   - Response body truncation to a configurable byte budget
  *   - JSON auto-parse when response Content-Type is application/json
  *   - Filtered response headers (no set-cookie, no x-* internals)

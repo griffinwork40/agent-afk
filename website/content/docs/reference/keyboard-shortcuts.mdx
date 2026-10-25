@@ -1,0 +1,184 @@
+---
+title: "Look up keyboard shortcuts"
+description: "Find verified REPL key bindings for editing prompts, steering turns, navigating pickers, and reading output."
+---
+
+REPL keys depend on what currently owns the terminal: your prompt, a running turn, a picker, or a viewer. Start with the tables below rather than assuming a key does the same thing everywhere. These bindings describe the normal TUI unless a different input reader is named explicitly.
+
+Run `/keys` for the built-in quick reference and `/help` for commands. Plain output (`AFK_PLAIN_OUTPUT=1`) uses a simple line reader instead of the normal TUI, so most application-level bindings below do not apply there.
+
+## Submit, stop, and switch modes
+
+| Key | Context | Action |
+| --- | --- | --- |
+| Enter | Idle prompt with text or an image | Submit the prompt. Empty input does nothing. |
+| Enter | Running turn with a draft | Commit the draft to the type-ahead queue and clear the input for another draft. |
+| Enter | Slash completion menu | Apply the selected command and submit. |
+| Enter | File or flag completion menu | Apply the selection without submitting. |
+| Shift+Enter | Prompt, terminal reports the modifier | Insert a newline. |
+| Alt+Enter | Prompt | Insert a newline. |
+| Backslash then Enter | Prompt ending with a continuation backslash | Replace the trailing backslash with a newline. |
+| Esc | Running turn, outside a picker or task view | Soft-stop, preserve completed work and the draft, and wait for teardown. Does not roll back effects. |
+| Esc | Idle prompt | Dismiss completion UI; at an empty prompt, dismiss the proposed next action. |
+| Esc twice | Empty idle prompt, within 600 ms | Open the conversation rewind selector. |
+| Ctrl+C | Running model turn with an armed TUI | Open the Stop / Cancel picker. |
+| Ctrl+C again | Interrupt picker open | Hard-cancel and close the REPL immediately. |
+| Ctrl+C | Running model turn without an armed TUI | Request a soft-stop. |
+| Ctrl+C twice | Idle prompt, within 1.5 seconds | Exit. The first press prints the exit reminder. |
+| Ctrl+C | Foreground `!` shell command | Abort the shell before applying model-turn or idle-exit actions. |
+| Ctrl+D | Empty TUI input | Signal EOF through the cancel path. At idle, the exit confirmation behavior still applies. Use `/exit` for a direct exit. |
+| Ctrl+D | Non-empty TUI input | Delete the character after the cursor. |
+| Ctrl+L | Prompt or streaming input | Clear the screen and repaint, without clearing conversation context. |
+| Shift+Tab | Prompt or streaming input | Cycle `default → plan → bypassPermissions → default`. From AFK mode, exit AFK and land on default. |
+| Ctrl+B | Running turn | First promote eligible foreground subagents; otherwise detach eligible bash/compose calls; otherwise do nothing. Never detaches the whole turn. |
+| Ctrl+B | Idle normal TUI | No action. |
+| Ctrl+O | Normal TUI | Open the current draft in `$VISUAL`, or `$EDITOR` if VISUAL is unset. Successful edits return to the buffer without sending. |
+| Ctrl+G | Normal TUI | Open captured output from the most recent bash command that has a capture. This is not a viewer for the currently running command's live tail. |
+
+<Callout type="warn">
+Shift+Tab is a permission-mode cycle, not just a plan toggle. The bypass step disables path-approval prompts and containment. Cancel and exit do not undo changes already made. See [Permissions](/configuration/permissions) and [Undo changes](/guides/undo-changes).
+</Callout>
+
+## Edit and navigate the prompt
+
+On macOS, **Alt** usually means **Option** configured to send Meta. Terminal-specific Command mappings only work if your terminal forwards the corresponding control sequence to AFK.
+
+| Key | Context | Action |
+| --- | --- | --- |
+| Left / Right | Text input | Move one character. Right has ghost-accept behavior at the end of the buffer, described below. |
+| Ctrl+A / Home | Normal TUI input | Move to the start of the current logical line, not the whole multiline buffer. |
+| Ctrl+E / End | Normal TUI input | Move to the end of the current logical line. |
+| Ctrl+Left / Alt+Left | Normal TUI input | Move one word backward. |
+| Ctrl+Right / Alt+Right | Normal TUI input | Move one word forward. |
+| Alt+B / Alt+F | Prompt | Move one word backward / forward. |
+| Backspace | Prompt | Delete the previous character. A collapsed paste placeholder is deleted as one unit at its boundary. |
+| Backspace | Empty text buffer with image attachments | Remove the most recently attached image. Does not dequeue type-ahead messages. |
+| Delete | Prompt | Delete the next character; a collapsed paste placeholder is deleted as one unit at its boundary. |
+| Alt+Backspace | Prompt | Delete the previous word (Option+Delete on macOS). |
+| Alt+Delete | Prompt | Delete the next word (Option+Fn+Delete on macOS). |
+| Ctrl+W | Prompt | Delete the previous word. |
+| Ctrl+U | Prompt | Delete from the cursor to the start of the current line. |
+| Ctrl+K | Prompt | Delete from the cursor to the end of the current line. |
+| Up / Ctrl+P | Completion menu open | Move the selection upward. |
+| Down / Ctrl+N | Completion menu open | Move the selection downward. |
+| Up / Ctrl+P | Empty buffer, menu closed, pending type-ahead | Recall the newest queued message and its attachments for editing. |
+| Up / Ctrl+P | Normal TUI, menu closed | Recall older input history. |
+| Down / Ctrl+N | Normal TUI, menu closed | Move forward through input history. |
+| Tab | Completion menu open | Insert the highlighted completion without sending. |
+| Tab | Streaming, no completion menu, running child available | Open the newest running subagent's live view. |
+| Tab | No higher-priority completion or task view | Accept the full ghost suggestion. Otherwise no action. |
+| Right | Cursor at buffer end, ghost visible, menu closed | Accept the next word of the ghost suggestion. |
+| Ctrl+V | TUI, supported clipboard image backend | Attach a clipboard image. macOS uses the pasteboard; Linux uses `wl-paste` or `xclip`. |
+| Cmd+V | macOS terminal paste | Paste text, or probe the clipboard for an image when terminal paste handling makes it available. |
+
+Typing `@` followed by a path opens file completion. Slash completion can start at the beginning of input or after whitespace within a draft. Type `--` after a slash command to complete advertised flags. These are input triggers, not separate key chords.
+
+### Alternate raw input reader
+
+The alternate raw reader has additional bindings not wired into the standard compositor-backed prompt. It is not enabled by plain output, which chooses the simple line reader instead. This distinction also explains why some entries printed by `/keys` do not work in the normal prompt.
+
+| Key | Context | Action |
+| --- | --- | --- |
+| Ctrl+B / Ctrl+F | Alternate raw reader | Move one character backward / forward. |
+| Home / End | Alternate raw reader | Move to the whole buffer's start / end. |
+| Up / Ctrl+P | Alternate raw reader, menu closed | Move up a visual row in a multiline draft; recall history when movement is unavailable. |
+| Down / Ctrl+N | Alternate raw reader, menu closed | Move down a visual row; otherwise move forward in history. |
+| Ctrl+X | Alternate raw reader | Remove the most recently attached image. |
+| Ctrl+D | Alternate raw reader | EOF only on an empty buffer; no action on a non-empty buffer. |
+| Ctrl+R | Alternate raw reader | Start incremental reverse input-history search. Type a query to search; repeated Ctrl+R moves to older matches. |
+| Enter | Reverse input-history search | Accept the displayed match and submit through the normal Enter handler. |
+| Esc / Ctrl+G | Reverse input-history search | Cancel the search and restore the draft saved before searching. |
+| Backspace | Reverse input-history search | Remove the last query character and search again. |
+| Ctrl+C | Reverse input-history search | Pass the interrupt to the surrounding reader. |
+| Other navigation key | Reverse input-history search | Keep the current match, leave search, and process that key normally. |
+
+For conversation search in the standard REPL, use `/search <term>` or `/search --error`.
+
+## Pickers and settings
+
+These shared picker bindings apply to `/model`, `/resume`, the settings categories, usage-pause choices, and the Stop / Cancel menu. The rewind selector supports Up/Down, Enter, and Esc/Ctrl+C, but not all shared-picker shortcuts.
+
+| Key | Context | Action |
+| --- | --- | --- |
+| Up / Ctrl+P | Shared picker | Select the previous option. |
+| Down / Ctrl+N | Shared picker | Select the next option. |
+| Home / End | Shared picker | Select the first / last option. |
+| Enter | Single-choice picker | Confirm the highlighted option. |
+| Space | Multiple-choice picker | Toggle the highlighted option. |
+| Enter | Multiple-choice picker | Confirm the selected set. |
+| Esc | Ordinary picker | Cancel or go back one settings level. In the interrupt menu, the running turn continues. |
+| Ctrl+C | Shared picker | Cancel, except the interrupt menu where it hard-cancels the session. |
+| Printable characters | Searchable `/resume` picker | Append to the fuzzy filter. |
+| Backspace / Delete | Searchable picker | Remove the last filter character. |
+| Esc | Searchable picker with non-empty filter | Clear the filter first; press again to dismiss. |
+| Enter | Resume conversation preview | Resume the selected session. |
+| Esc / Ctrl+C | Resume preview or bug-report preview | Cancel the preview action. |
+| Enter | Bug-report preview | Confirm submission. |
+| Up / Down | Conversation rewind selector | Choose an earlier prompt. |
+| Enter | Conversation rewind selector | Rewind and load the chosen prompt for editing. |
+| Esc / Ctrl+C | Conversation rewind selector | Cancel without rewinding. |
+
+### Settings text fields
+
+These bindings apply to the in-TUI text editor used for settings and other short field values, not the external `$EDITOR`.
+
+| Key | Context | Action |
+| --- | --- | --- |
+| Left / Ctrl+B | Settings text field | Move one character backward. |
+| Right / Ctrl+F | Settings text field | Move one character forward. |
+| Home / Ctrl+A | Settings text field | Move to the start of the field. |
+| End / Ctrl+E | Settings text field | Move to the end of the field. |
+| Backspace / Delete | Settings text field | Delete the previous / next character. |
+| Ctrl+W | Settings text field | Delete the previous word. |
+| Ctrl+U / Ctrl+K | Settings text field | Delete to line start / end. |
+| Enter | Settings text field | Validate and confirm. Validation errors keep the field open. |
+| Esc / Ctrl+C | Settings text field | Cancel the edit. |
+
+## Subagent task views
+
+| Key | Context | Action |
+| --- | --- | --- |
+| Up / Down | `/tasks` list | Select a subagent. |
+| Enter | `/tasks` list | Open the highlighted subagent's history and live output. |
+| Esc / Ctrl+C | `/tasks` list | Return to the main conversation. |
+| Esc | `/tasks:view <id>` | Leave the task view. |
+| Tab | Parent turn streaming, no completion menu | Open the most recently dispatched running child, if one exists. |
+| Printable text then Enter | Mid-turn child view | Send a message to the child. |
+| Backspace | Mid-turn child view | Remove the last character from the child-message draft. |
+| Esc | Mid-turn child view or its completion screen | Return to the parent view without cancelling the child. |
+
+The mid-turn child view is a separate input context. Parent turn activity continues while you read it. Other control keys are not prompt-editing shortcuts there.
+
+## Bash output viewer
+
+Open the viewer with Ctrl+G. It reads saved output and starts at the tail, rather than attaching to the running shell. If there is no capture or it has expired, the error screen closes on any key.
+
+| Key | Context | Action |
+| --- | --- | --- |
+| Up / Ctrl+P | Viewer | Scroll up one line. |
+| Down / Ctrl+N | Viewer | Scroll down one line. |
+| Page Up / Page Down | Viewer | Scroll approximately one screen. |
+| `g` / Home | Viewer | Jump to the top. |
+| `G` / End | Viewer | Jump to the bottom. |
+| `/` | Viewer | Start entering a search query. |
+| Enter | Viewer search input | Apply a case-insensitive substring search. |
+| Backspace / Delete | Viewer search input | Remove the last query character. |
+| Esc | Viewer search input | Cancel the new query and keep the previous search. |
+| `n` / `N` | Viewer with search results | Move to the next / previous match, wrapping at the ends. |
+| Esc | Viewer with an active search | Clear the search first. |
+| Esc | Viewer without an active search | Close the viewer. |
+| `q` | Viewer outside search-input mode | Close the viewer immediately. |
+
+## Terminal compatibility
+
+Modified Enter and Alt/Option keys depend on your terminal forwarding distinct sequences. If Shift+Enter submits instead of inserting a newline, use Alt+Enter, a trailing backslash, or Ctrl+O.
+
+In tmux with its default prefix, **Ctrl+B twice** sends a literal Ctrl+B to AFK. Enable extended keys for reliable modified Enter handling, and reduce tmux's Escape delay if soft-stop feels slow. See [the REPL terminal settings](/surfaces/repl).
+
+## Related
+
+<Cards>
+  <Card title="Interactive REPL" href="/surfaces/repl" description="Learn screen anatomy, queues, stopping, resume, and terminal setup." />
+  <Card title="Slash commands" href="/reference/slash-commands" description="Look up commands for actions without a key binding." />
+  <Card title="Permissions" href="/configuration/permissions" description="Understand what changes when you cycle permission modes." />
+</Cards>

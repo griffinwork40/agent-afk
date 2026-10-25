@@ -1,0 +1,146 @@
+---
+title: "Run afk with a local model"
+description: "Bind the local slot to an OpenAI-compatible server and verify its model ID, credentials, and context window."
+---
+
+AFK can use a locally hosted model through the same tool loop as a cloud model. Use the `local` slot to keep the endpoint and model ID together, and choose a server/model combination that supports chat completions and reliable tool calling.
+
+## Connect a local server
+
+<Steps>
+<Step>
+### Start an OpenAI-compatible endpoint
+
+Choose one of the server paths below. AFK connects to the server; it does not download model weights or start the inference server for you.
+
+<Tabs items={['MLX on macOS', 'Ollama', 'LM Studio', 'vLLM']}>
+<Tab value="MLX on macOS">
+
+On Apple Silicon, use an MLX-backed server such as oMLX with its OpenAI-compatible API enabled. The local Mac setup uses `http://localhost:8000/v1`. Load a model suited to your available memory, then inspect the server's `/v1/models` response for its exact ID.
+
+</Tab>
+<Tab value="Ollama">
+
+Start Ollama and download a tool-capable model. For example, if you choose `qwen3:8b`:
+
+```bash
+ollama pull qwen3:8b
+```
+
+Ollama's usual OpenAI-compatible base URL is `http://localhost:11434/v1`. Keep the model name, including its tag, identical to the server's model listing.
+
+</Tab>
+<Tab value="LM Studio">
+
+Load a model and start LM Studio's local API server. Its usual OpenAI-compatible base URL is `http://localhost:1234/v1`. Use the ID returned by that server, which may differ from the model's display label in the application.
+
+</Tab>
+<Tab value="vLLM">
+
+Start a vLLM OpenAI-compatible server with a model and tool-call parser appropriate to that model. Point AFK at its configured host and port, commonly `http://localhost:8000/v1`. Tool-calling behavior is a server/model setting, not something selecting the `local` slot can add to an unsupported model.
+
+</Tab>
+</Tabs>
+
+For all runners, verify the actual port and model ID rather than relying on defaults. Keep the endpoint bound to loopback unless you intentionally need remote access; authenticate servers exposed to a network.
+</Step>
+<Step>
+### Bind the local slot
+
+For the Ollama example above, in the shell that will launch AFK:
+
+```bash
+export AFK_MODEL_LOCAL='qwen3:8b'
+export AFK_MODEL_LOCAL_BASE_URL='http://localhost:11434/v1'
+export AFK_MODEL_LOCAL_API_KEY='ollama'
+```
+
+`ollama` is a nonsecret placeholder for a local server that does not require authentication, not a valid key for an authenticated endpoint. For a server that requires a key, provide that server's actual key through your private environment configuration. A dedicated slot key also avoids unintentionally falling back to unrelated cloud credentials.
+
+The same `AFK_MODEL_LOCAL`, `AFK_MODEL_LOCAL_BASE_URL`, and `AFK_MODEL_LOCAL_API_KEY` variables work with the other runners after you change the ID, URL, and authentication to match their settings. Persist them in your private `afk.env` if you want future shells and services to use them.
+</Step>
+<Step>
+### Verify and launch
+
+```bash
+afk doctor
+afk -m local
+```
+
+Start with a bounded task, such as reading one file and explaining it. Confirm tool calling works before delegating a broad implementation.
+</Step>
+</Steps>
+
+## Equivalent file configuration
+
+A binding in `afk.config.json` can name the provider explicitly and set a context window:
+
+```json
+{
+  "models": {
+    "local": {
+      "id": "qwen3:8b",
+      "provider": "openai",
+      "baseUrl": "http://localhost:11434/v1",
+      "apiKey": "ollama",
+      "contextWindow": 32768
+    }
+  }
+}
+```
+
+This example assumes the server is configured to serve a 32,768-token window. Configure the server accordingly or change the number to match it. Do not commit real API keys to project configuration.
+
+Per-slot environment values override the corresponding file values. `contextWindow` comes from file configuration and has no per-slot environment variable. You can keep credentials and endpoint in the environment while storing `id` and `contextWindow` in the file.
+
+<Callout type="info">
+`local` is a configurable slot, not a guarantee of offline execution. Other slots, subagents, MCP servers, web tools, image tools, or automatic analysis can still use network services. Check the task's tools and model choices if keeping data local is a requirement.
+</Callout>
+
+## Set the actual context window
+
+`models.local.contextWindow` overrides AFK's effective context limit for the bound model and influences context budgeting and automatic compaction. It accepts a positive integer up to 10,000,000 tokens, but it does not increase the server's real capacity or available memory.
+
+Set it to what the endpoint actually serves, not merely the model's advertised maximum. An oversized value can defer compaction until the server rejects the request. When multiple slots bind the same model ID with different overrides, the first matching configured slot in slot order wins; avoid contradictory limits for one ID.
+
+See [model slots](/configuration/model-slots) for shared bindings and precedence.
+
+## Interpret `afk doctor`
+
+For slots with a custom OpenAI-compatible endpoint, doctor probes `GET <baseUrl>/models` with a 3-second timeout and reports a row such as `Model slot "local" endpoint`.
+
+| Result | Meaning and action |
+| --- | --- |
+| Pass | Reachable endpoint with the selected model ID listed |
+| Warn: ID not listed | Copy a listed ID into the slot, or load the selected model |
+| Warn: invalid model-list response | Check the API prefix, usually `/v1` |
+| Warn: 401 or 403, auth rejected | The slot's own key was sent and rejected |
+| Warn: auth unverified | Doctor did not reproduce the runtime authentication path; test the slot in a session |
+| Fail: unreachable | Start the server or correct host, port, DNS, or firewall settings |
+
+Doctor sends only the slot's own key when the resolved route permits it. It does not reproduce cloud-key or subscription OAuth fallback behavior, and it never prints the key. A passing model-list probe verifies connectivity and the ID, not the model's reasoning quality or tool-call compatibility.
+
+## Performance and troubleshooting
+
+For a single accelerator, begin with one inference request at a time on the server. Parallel subagents can increase latency and memory pressure rather than improve throughput.
+
+AFK also offers process-wide caps:
+
+```bash
+export AFK_MAX_CONCURRENT_SUBAGENT_CALLS=1
+export AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS=1
+```
+
+These caps affect cloud subagents and ordinary safe tools too. Use them only when that tradeoff fits the whole session, not as a per-local-slot setting.
+
+Reasoning or thinking mode is configured by the local server and its chat template. AFK does not provide a universal local-model thinking switch. If tool calls appear as plain text or malformed JSON, check the server's tool parser and model template before changing AFK's prompt.
+
+For visual tasks, the served model also needs vision support. A model that handles text tools successfully is not necessarily able to inspect screenshots.
+
+## Related
+
+<Cards>
+<Card title="Configure model slots" href="/configuration/model-slots" description="Reuse model, endpoint, and context-window bindings." />
+<Card title="Choose providers" href="/configuration/models-providers" description="Understand provider routing and capabilities." />
+<Card title="Troubleshoot authentication" href="/troubleshooting/auth-and-providers" description="Diagnose credentials and endpoint failures." />
+</Cards>

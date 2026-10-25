@@ -1,166 +1,106 @@
-# Publish workflow — history & trust model
+# Publish workflow
 
-> Companion doc for `.github/workflows/publish.yml`. Source of truth for
-> the design decision to NOT re-run the test suite at publish time.
+> Companion doc for `.github/workflows/publish.yml`.
 
 ## TL;DR
 
-`publish.yml` runs Lint + tag-vs-package guardrail + `pnpm publish` — it
-**does not** re-run the test suite. CI on the release commit (via
-`ci.yml`) is the test gate. Re-adding a test step here would re-create
-the double-load problem documented below.
+Releases are **manual**. Merging to `main` publishes nothing. A release
+happens only when a maintainer pushes a `vX.Y.Z` tag, which fires
+`publish.yml` (lint + test + tag-vs-package guardrail + `npm publish
+--provenance` + GitHub Release).
 
-## The double-load problem
+The `auto-release.yml` workflow, which bumped, tagged, and published on
+every releasable merge to `main`, has been removed.
 
-Both `ci.yml` and `publish.yml` are pinned to `runs-on: [self-hosted, afk]`,
-which resolves to two macOS arm64 runners (`runner-afk-1`, `runner-afk-2`)
-registered on the same physical laptop.
+## Cutting a release
 
-When a PR is merged to `main`, the auto-release dance fires:
+1. Make sure `main` is green in CI and your local `main` matches
+   `origin/main`.
+2. Fill the `## [Unreleased]` section of `CHANGELOG.md`. In the REPL,
+   `/changelog` writes entries from conventional commits since the last
+   tag; review and edit them. `scripts/release.mjs` refuses to run on an
+   empty `[Unreleased]`.
+3. If `engines.node` changed since the last tag, check whether the floor
+   was raised (a raised floor is a breaking change, so the release must be
+   a major):
 
-1. The merge commit hits `main` → `ci.yml` runs lint+build+test → all green
-   (this is the gate the PR was reviewed against).
-2. `auto-release.yml` fires on the same merge commit, computes the next
-   version, writes a `chore(release): vX.Y.Z` commit + annotated tag, and
-   pushes both with `--follow-tags --atomic`.
-3. The release commit hits `main` → `ci.yml` fires again on the release
-   commit.
-4. The tag push → `publish.yml` fires.
+   ```bash
+   pnpm exec tsx scripts/check-engines-node-floor.ts
+   ```
 
-Steps 3 and 4 happen within seconds of each other, both targeting
-`[self-hosted, afk]`. With only two runners, one ends up running the
-full vitest suite for `ci.yml` while the other runs the full vitest
-suite for `publish.yml` — both on the same laptop, both doing real I/O
-(git worktree ops, FS writes, big imports). The contention exposes
-timing-sensitive tests that pass cleanly on an idle runner.
+4. Dry-run, then release:
 
-## Incident history
+   ```bash
+   pnpm release:dry patch   # or minor | major | x.y.z
+   pnpm release patch
+   ```
 
-Three releases were blocked by this pattern:
+   `release.mjs` bumps `package.json`, stamps `[Unreleased]` into a dated
+   version heading, commits `chore(release): vX.Y.Z`, tags, and pushes the
+   branch and tag with your own credentials.
 
-### v3.46.0 (5/29 morning) — orphan tag race
+5. The tag push fires `publish.yml`. Watch it with
+   `gh run watch` or in the Actions tab.
 
-Auto-release's non-atomic `git push` left `v3.46.0` as an orphan tag
-pointing off the main lineage. `git describe --tags` then returned
-`v3.45.3` instead of `v3.46.0`, so the next run kept recomputing
-`NEXT=3.46.0` → "tag already exists" → permanent lock.
+Choosing the bump is a human decision now. The Conventional Commits
+mapping the old workflow used is still a good default: `!:` or a
+`BREAKING CHANGE:` footer means major, `feat:` means minor,
+`fix|perf|refactor:` means patch, and docs/chore/test/ci-only means no
+release.
 
-Fixed by switching to `git tag --list 'v*' --sort=-v:refname | head -1`
-and `git push --atomic`. See `.github/workflows/auto-release.yml`
-"Determine bump level from commits" step.
+## Retrying a failed publish
 
+If `publish.yml` fails after the tag is already on the remote (flaky test,
+registry hiccup), re-run it against the existing tag:
+
+```bash
+gh workflow run publish.yml --ref vX.Y.Z
+```
+
+The "Verify tag matches package.json version" step refuses to publish a
+ref whose `package.json` version differs from the tag.
+
+## What `publish.yml` checks
+
+- **Tag vs `package.json` version.** Prevents publishing anything other
+  than what the tag points at.
+- **Lint** (`pnpm lint`) and **Test** (`pnpm test`). Runs on
+  GitHub-hosted `ubuntu-latest`; npm provenance attestation requires a
+  public GitHub-hosted runner.
+- **Publish** with the npm CLI, not `pnpm publish` (see the Invariant on
+  that step in `publish.yml`).
+
+## Incident history (from the auto-release era)
+
+These incidents happened while `auto-release.yml` existed and the release
+jobs ran on self-hosted runners. They are kept for context only; neither
+condition holds today.
+
+### v3.46.0: orphan tag race
+
+Auto-release's non-atomic `git push` left `v3.46.0` as an orphan tag off
+the main lineage, so every later run recomputed `NEXT=3.46.0` and failed
+with "tag already exists". Fixed then with `git push --atomic`.
 `v3.46.0` was deprecated on npm.
 
-### v3.47.1 (5/29 09:00Z) — import-shape timeouts
+### v3.47.1: import-shape timeouts
 
-Publish's Test step failed at the vitest 5s default on:
+Publish's Test step hit the vitest 5s default under self-hosted runner
+load. Fixed by PR #579 (`testTimeout: 15_000`). The tag exists but npm
+never received it; the change shipped in v3.48.0.
 
-- `src/cli/interactive-lifecycle.test.ts > ... > repaints current stats on demand and after clearScreen restart` (5033ms)
-- `src/cli/commands/interactive/resume-swap.test.ts > ... > bootstrap exports buildAgentSession (the function used in requestResume closure)` (5019ms)
+### v3.50.0: assertion-race flake
 
-The second is literally `await import('./bootstrap.js')` + `expect(typeof
-mod.buildAgentSession).toBe('function')`. The 5s ceiling caught the
-transitive import-graph cost under self-hosted-runner load — not a
-real hang.
-
-Tag `v3.47.1` exists; npm never received it. v3.48.0 shipped from a
-different commit ~10h later when load was lower; the v3.47.1 change
-(#564 between-turn slash output routing) shipped as part of v3.48.0
-anyway, so users didn't see the gap.
-
-Fixed by PR #579 (`vitest.config.ts: testTimeout: 15_000`). Merged
-post-incident.
-
-### v3.50.0 (5/29 19:30Z) — assertion-race flake
-
-Publish's Test step failed with **assertion errors** (not timeouts) in
-10 tests across `src/agent/worktree-sweep.test.ts`:
-
-```
-× empty-detection > classifies a worktree with no commits and no dirty files as empty 58ms
-  → expected +0 to be 1
-× stale-clean-preserves-branch > removes stale clean worktree via worktree remove but does NOT delete branch 28ms
-  → expected false to be true
-× base-sha-fallback > classifies correctly without .afk-worktree-meta.json present 7ms
-  → expected 0 to be greater than 0
-```
-
-Each test completed in 6–75 ms — well under any timeout. The
-failures are FS-write-visibility races: the test's `beforeEach`
-creates a tmpdir + writes files, then the implementation under test
-reads the directory; under load the directory listing returns
-empty before the writes are visible.
-
-PR #579's `testTimeout` bump does NOT fix this flavor (it's not a
-timeout).
-
-Concurrent `ci.yml` run on the same release commit also failed,
-with a different test file: 7 tests in `src/agent/worktree.test.ts`
-(real `git worktree` ops) hit ~10s timeouts.
-
-Recovery: `gh workflow run publish.yml --ref v3.50.0`. The re-fire
-completed in 2m1s with all steps green — runners were idle by then.
-
-## Why dropping the Test step is safe
-
-1. **`ci.yml` already gates the release commit.** It runs on every
-   push to `main`, including release commits. The `if:` guard in
-   `auto-release.yml` only suppresses auto-release recursion — it
-   does not suppress CI.
-
-2. **Release commits cannot regress tests.** They are auto-generated
-   and only modify two files:
-   - `package.json` — version field bumped from `X.Y.Z` → `X.Y.Z+1`.
-   - `CHANGELOG.md` — release notes prepended.
-
-   No test in this repo exercises either file's content. The release
-   commit's parent (the merged PR commit) already passed the full
-   test suite under CI.
-
-3. **The tag-vs-package-version guardrail stays.** publish.yml's
-   "Verify tag matches package.json version" step prevents publishing
-   anything other than what the tag points at — protects against
-   `workflow_dispatch` against a stale branch.
-
-4. **Lint stays.** `tsc --noEmit` runs in ~30s with no I/O races,
-   catches type-safety regressions in the release commit (e.g. if
-   the changelog generator somehow injected invalid syntax — has
-   never happened, but cheap to verify).
-
-## What to do if you want a test gate back
-
-Don't re-add `pnpm exec vitest run` here — that re-introduces the
-double-load. Instead, gate Publish on CI's conclusion for the same
-commit:
-
-```yaml
-- name: Wait for CI on this commit
-  run: |
-    SHA="${GITHUB_SHA}"
-    for i in $(seq 1 30); do
-      CI_STATUS=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs" \
-        --jq '.check_runs[] | select(.name == "Test") | .conclusion')
-      if [ "$CI_STATUS" = "success" ]; then exit 0; fi
-      if [ "$CI_STATUS" = "failure" ]; then exit 1; fi
-      sleep 10
-    done
-    exit 1
-  env:
-    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-```
-
-This waits for CI's `Test` job to finish (up to 5 minutes), fails fast
-on CI failure, and consumes ~0 runner cycles compared to a full vitest
-re-run. Not added in this PR because the trust model above makes it
-unnecessary — but documented here for the future contributor who
-might want belt-and-suspenders.
+FS-write-visibility races in `src/agent/worktree-sweep.test.ts` under
+double load (CI and publish on the same laptop). Recovered with
+`gh workflow run publish.yml --ref v3.50.0` once the runners were idle.
 
 ## Cross-references
 
-- `.github/workflows/publish.yml` — the workflow
-- `.github/workflows/ci.yml` — the actual test gate
-- `.github/workflows/auto-release.yml` — what creates the release
-  commits and tags
-- `vitest.config.ts` — `testTimeout: 15_000` (PR #579)
-- Hot-memory fact "Publish-gate flake (5/29)" — quick-reference for
-  recovery procedure
+- `.github/workflows/publish.yml`: the publish workflow
+- `.github/workflows/ci.yml`: the PR and `main` test gate
+- `scripts/release.mjs`: the release script behind `pnpm release`
+- `scripts/check-engines-node-floor.ts`: manual major-bump check for a
+  raised Node floor
+- `scripts/generate-changelog.mjs`: stamps conventional-commit entries and
+  a version heading in one step (formerly called by auto-release)

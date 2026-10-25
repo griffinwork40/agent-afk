@@ -104,17 +104,21 @@ what caused the bot to ignore credentials stashed by `afk login`.
 
 ## Available commands (Telegram)
 
-Aligned with the Agent SDK's slash command surface:
+Every portable shared slash command runs on Telegram through the shared
+command layer (`handlers/slash.ts`, see `docs/web-command-layer.md`): `/help`
+(registry list), `/clear` (reset in place), `/compact`, `/model [name]` (bare
+form keeps the tap-to-switch keyboard), `/name [name]`, `/cost`, `/usage`,
+`/tokens`, `/info`, `/thinking`, `/fast`, and others. Commands that need a terminal reply
+with the reason, and unknown commands reply with a suggestion. Session skills
+are sent to the agent.
+
+Telegram-only commands:
 
 - `/start` — Welcome + command list
-- `/help` — Command list (includes SDK-native slash commands when the
-  session was created with `settingSources`)
-- `/clear` — Clear conversation history (SDK `/clear`)
-- `/compact` — Compact conversation history (summarize older messages)
-- `/model [opus|sonnet|haiku|...]` — Switch model
-- `/cd [path]` — Show or change the session working directory
-- `/name [name]` — Show or set this session's name so the conversation can be
-  resumed by name from the CLI (`afk i --resume <name>`) instead of a UUID
+- `/cd [path]` (`/cwd`) — Show or change the session working directory
+- `/sessions`, `/new` — Switch between or start chat conversations
+- `/watch`, `/unwatch`, `/abort` — Live-tail and stop a CLI session
+- `/afk`, `/inbox`, `/insights`, `/good`, `/bad`
 
 ## Required environment
 

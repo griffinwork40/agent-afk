@@ -343,6 +343,70 @@ describe('MessageHandler tag-only gate — photo', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Gate — audio (synthesised context from bot.audio-handler)
+// ---------------------------------------------------------------------------
+
+describe('MessageHandler tag-only gate — audio (synthesised context)', () => {
+  const TAG_CHAT = -100123;
+
+  beforeEach(() => {
+    mockStreamResponse.mockClear();
+  });
+
+  it('caption-@mentioned voice in a tag-only chat reaches the agent with the transcript', async () => {
+    // Simulates the synthesised context produced by registerAudioHandlers
+    // after the pre-transcription gate passes and the transcript is ready.
+    // The synth context carries a text_mention entity encoding the
+    // "already addressed" decision — NOT the raw caption entities (whose
+    // offsets would be wrong against the transcript text).
+    const { handler, getSession } = makeHandler(new Set([TAG_CHAT]));
+    const transcript = 'please turn off the lights';
+    const synthMessage: Partial<Message.TextMessage> = {
+      text: transcript,
+      entities: [{
+        type: 'text_mention',
+        offset: 0,
+        length: 0,
+        user: { id: BOT_ID, is_bot: true, first_name: '' },
+      } as MessageEntity],
+    };
+    const ctx = {
+      chat: { id: TAG_CHAT, type: 'group' as const },
+      message: synthMessage,
+      botInfo: { id: BOT_ID, username: BOT_USERNAME },
+      react: vi.fn(async () => {}),
+      reply: vi.fn(async () => {}),
+      sendChatAction: vi.fn(async () => {}),
+    } as unknown as Context;
+
+    await handler.handle(ctx);
+
+    // The synth context must pass the second tag-only gate and reach
+    // processOne → streamResponse.
+    expect(getSession).toHaveBeenCalled();
+    expect(mockStreamResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it('audio WITHOUT addressing in a tag-only chat is still dropped', async () => {
+    // Control: a synth context with NO addressing entities is dropped.
+    const { handler, getSession } = makeHandler(new Set([TAG_CHAT]));
+    const ctx = {
+      chat: { id: TAG_CHAT, type: 'group' as const },
+      message: { text: 'some transcript', entities: [] },
+      botInfo: { id: BOT_ID, username: BOT_USERNAME },
+      react: vi.fn(async () => {}),
+      reply: vi.fn(async () => {}),
+      sendChatAction: vi.fn(async () => {}),
+    } as unknown as Context;
+
+    await handler.handle(ctx);
+
+    expect(getSession).not.toHaveBeenCalled();
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Gate — document (handleDocument)
 // ---------------------------------------------------------------------------
 

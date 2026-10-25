@@ -18,14 +18,14 @@ export function DiffViewer({ diff }: { diff: string }) {
               <tr
                 key={i}
                 className={cn(
-                  isAdd && 'bg-status-running/15 text-status-running',
-                  isDel && 'bg-status-failed/15 text-status-failed',
+                  isAdd && 'bg-status-running/15 text-foreground',
+                  isDel && 'bg-status-failed/15 text-foreground',
                   isHunk && 'bg-muted text-muted-foreground',
                   isMeta && 'text-muted-foreground',
                   !isAdd && !isDel && !isHunk && !isMeta && 'text-foreground',
                 )}
               >
-                <td className="select-none px-2 py-0 text-right text-muted-foreground/50 tabular-nums">
+                <td className="select-none px-2 py-0 text-right text-muted-foreground tabular-nums">
                   {i + 1}
                 </td>
                 <td className="w-full whitespace-pre px-2 py-0">

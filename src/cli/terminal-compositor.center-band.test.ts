@@ -10,7 +10,7 @@
  * test pins its own bug; the D test desyncs it to pin that no compositor site
  * reads process.stdout for the band.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { Terminal as HeadlessTerminal } from '@xterm/headless';
 import { TerminalCompositor } from './terminal-compositor.js';
@@ -192,5 +192,174 @@ describe('centered committed band (AFK_CENTER_CONTENT)', () => {
       c.disarm();
     });
     expect(lines.filter((l) => l.includes('WIDEHEAD_'))).toEqual([LONG]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #3763 — WIDTH-ONLY narrowing resize leaves duplicate oldest rows
+//
+// Root cause: with AFK_CENTER_CONTENT=1 (AFK_TEXT_MEASURE=100) the compositor
+// paints each row as `margin + content`, where margin = floor((cols-measure)/2).
+// At 200 cols: margin=50, so each painted row is up to 200 cols wide.  On a
+// width-only SIGWINCH to 120 cols, DECAWM autowrap reflows those 200-col rows
+// into ceil(200/120)=2 physical rows each, expanding the on-screen footprint
+// ABOVE the `top` anchor.  `pendingResizeErase` was snapshotted with `bottom =
+// lastKnownRows - 1` (logical rows), so only the lower half of the physical
+// footprint was erased, leaving the upper half as duplicate "ghost" copies of
+// the oldest visible rows.
+//
+// Fix (handleResizeImmediate): inflate `bottom` by the reflow factor
+// ceil(lastKnownCols / newCols) so the erase covers the full physical
+// footprint after narrowing.
+//
+// Test strategy: directly inspect `pendingResizeErase.bottom` after a
+// width-only SIGWINCH with centering on, confirming it covers the inflated
+// physical rows.  Pure unit test — no xterm headless needed.
+// ---------------------------------------------------------------------------
+
+describe('issue #3763 — WIDTH-ONLY narrowing resize: pendingResizeErase covers inflated physical rows', () => {
+  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); vi.stubEnv('AFK_CENTER_CONTENT', '1'); vi.stubEnv('AFK_TEXT_MEASURE', '100'); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); setProcCols(origProcCols); });
+
+  it('#3763: bottom inflated by ceil(200/120)=2 after 200→120 col narrowing', async () => {
+    setProcCols(COLS); // 200
+
+    const stdout = makeStdout(COLS, ROWS); // 200 cols, 24 rows
+    const stdin = makeStdin();
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), anchorRow: 1 });
+    await c.arm();
+
+    // Let initial frame render so lastKnownRows and lastKnownCols are set.
+    vi.advanceTimersByTime(20);
+
+    const internals = c as unknown as {
+      lastKnownRows: number;
+      lastKnownCols: number;
+      pendingResizeErase: { top: number; bottom: number; origin?: string } | null;
+      lastMeasuredFrameBottom: number;
+    };
+    expect(internals.lastKnownRows, 'lastKnownRows must be set after first repaint').toBeGreaterThan(0);
+    expect(internals.lastKnownCols, 'lastKnownCols must be 200 after first repaint').toBe(200);
+
+    // Commit some rows so the footprint has a non-trivial top.
+    c.commitAbove('ROW_A\nROW_B\nROW_C\n');
+    vi.advanceTimersByTime(20);
+
+    const topBefore = internals.lastKnownRows;
+
+    // Width-only narrowing: 200→120 cols, same 24 rows.
+    stdout.columns = 120;
+    setProcCols(120);
+    process.stdout.emit('resize');
+
+    const erase = internals.pendingResizeErase;
+    expect(erase, 'pendingResizeErase must be set on width-only narrowing SIGWINCH').not.toBeNull();
+    if (!erase) return;
+
+    // At 200 cols with AFK_TEXT_MEASURE=100: each painted row is up to 200
+    // cols wide. At 120 cols: ceil(200/120) = 2 physical rows per old row.
+    // So `bottom` must be at least `top + 2*(logicalRows) - 1`, which is
+    // strictly larger than the pre-fix `lastKnownRows - 1`.
+    const logicalBottom = topBefore - 1; // the pre-fix value
+    expect(erase.bottom, '#3763: bottom must exceed the pre-fix logical bottom').toBeGreaterThan(logicalBottom);
+    // Confirm the factor: bottom >= top + 2*(logicalBottom - top + 1) - 1
+    const logicalRows = logicalBottom - erase.top + 1;
+    const inflatedBottom = erase.top + 2 * logicalRows - 1;
+    expect(erase.bottom, '#3763: bottom must cover ceil(200/120)=2x inflated footprint').toBeGreaterThanOrEqual(inflatedBottom);
+
+    vi.advanceTimersByTime(200); // drain CPR timeout
+    c.disarm();
+  });
+
+  it('#3763: widen-guard — no inflation when terminal widens (120→200 cols)', async () => {
+    // reflowedPhysicalRows must return logicalRows unchanged when newCols >= oldCols.
+    // Set up at 120 cols so lastKnownCols=120, then fire a width-only SIGWINCH
+    // that widens to 200 cols. bottom must equal the plain logical bottom
+    // (lastKnownRows - 1 - extraRows), not an inflated value.
+    vi.unstubAllEnvs();
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    vi.stubEnv('AFK_TEXT_MEASURE', '100');
+    setProcCols(120);
+
+    const stdout = makeStdout(120, ROWS); // start at 120 cols
+    const stdin = makeStdin();
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), anchorRow: 1 });
+    await c.arm();
+    vi.advanceTimersByTime(20);
+
+    const internals = c as unknown as {
+      lastKnownRows: number;
+      lastKnownCols: number;
+      pendingResizeErase: { top: number; bottom: number; origin?: string } | null;
+    };
+    expect(internals.lastKnownCols, 'lastKnownCols must be 120 after first repaint').toBe(120);
+
+    c.commitAbove('ROW_A\nROW_B\nROW_C\n');
+    vi.advanceTimersByTime(20);
+
+    const rowsBefore = internals.lastKnownRows;
+
+    // Width-only WIDEN: 120→200 cols, same 24 rows.
+    stdout.columns = 200;
+    setProcCols(200);
+    process.stdout.emit('resize');
+
+    const erase = internals.pendingResizeErase;
+    expect(erase, 'pendingResizeErase set on width-only SIGWINCH').not.toBeNull();
+    if (!erase) return;
+
+    // Widen never reflows: bottom must equal logicalBottom = rowsBefore - 1.
+    // reflowedPhysicalRows returns logicalRows unchanged when newCols >= oldCols.
+    const logicalBottom = rowsBefore - 1;
+    expect(erase.bottom, '#3763 widen-guard: bottom must equal logicalBottom, not inflated').toBe(logicalBottom);
+
+    vi.advanceTimersByTime(200);
+    c.disarm();
+  });
+
+  it('#3763: EXPAND narrowing inflates bottom — same family as WIDTH-ONLY', async () => {
+    // EXPAND branch: rows grow AND cols narrow simultaneously.
+    // Confirm EXPAND also applies reflowedPhysicalRows (issue #4010 fix).
+    setProcCols(COLS); // 200
+
+    const stdout = makeStdout(COLS, ROWS); // 200 cols, 24 rows
+    const stdin = makeStdin();
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), anchorRow: 1 });
+    await c.arm();
+    vi.advanceTimersByTime(20);
+
+    const internals = c as unknown as {
+      lastKnownRows: number;
+      lastKnownCols: number;
+      pendingResizeErase: { top: number; bottom: number; origin?: string } | null;
+    };
+    expect(internals.lastKnownCols, 'lastKnownCols must be 200').toBe(200);
+
+    c.commitAbove('ROW_A\nROW_B\nROW_C\n');
+    vi.advanceTimersByTime(20);
+
+    const rowsBefore = internals.lastKnownRows;
+
+    // EXPAND + narrow: rows grow 24→28, cols shrink 200→120.
+    stdout.rows = ROWS + 4;
+    stdout.columns = 120;
+    setProcCols(120);
+    process.stdout.emit('resize');
+
+    const erase = internals.pendingResizeErase;
+    expect(erase, 'pendingResizeErase set on EXPAND SIGWINCH').not.toBeNull();
+    if (!erase) return;
+    expect(erase.origin, 'origin must be expand').toBe('expand');
+
+    // bottom must exceed the pre-fix logicalBottom = rowsBefore - 1.
+    // ceil(200/120) = 2 physical rows per old row → same inflation as WIDTH-ONLY.
+    const logicalBottom = rowsBefore - 1;
+    expect(erase.bottom, '#4010: EXPAND bottom must exceed pre-fix logical bottom').toBeGreaterThan(logicalBottom);
+    const logicalRows = logicalBottom - erase.top + 1;
+    const inflatedBottom = erase.top + 2 * logicalRows - 1;
+    expect(erase.bottom, '#4010: EXPAND bottom must cover 2x inflated footprint').toBeGreaterThanOrEqual(inflatedBottom);
+
+    vi.advanceTimersByTime(200);
+    c.disarm();
   });
 });

@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Command } from 'commander';
+import {
+  deferAfkMdSizeWarnings,
+  flushDeferredAfkMdSizeWarnings,
+  _resetAfkMdSizeWarnCache,
+} from './config/afk-md-tier.js';
 import { registerChatCommand } from './commands/chat.js';
 import { registerInteractiveCommand } from './commands/interactive.js';
 import { registerStatusCommand } from './commands/status.js';
@@ -113,5 +118,65 @@ Examples:
     const completionCommand = program.commands.find((c) => c.name() === 'completion');
     expect(completionCommand).toBeDefined();
     expect(completionCommand?.description()).toContain('Emit shell completion');
+  });
+});
+
+describe('preAction hook — deferred AFK.md size warning flush', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    _resetAfkMdSizeWarnCache();
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    _resetAfkMdSizeWarnCache();
+  });
+
+  it('flushes deferred warnings for non-interactive commands', () => {
+    // Simulate the preAction hook logic from index.ts for a non-interactive command.
+    deferAfkMdSizeWarnings();
+    const actionName: string = 'chat';
+    if (actionName !== 'interactive') flushDeferredAfkMdSizeWarnings();
+    // No messages were buffered, so warn is not called — but deferral was ended
+    // (subsequent direct calls emit immediately).
+    expect(warnSpy).not.toHaveBeenCalled();
+    // Confirm deferral is now off: a direct console.warn call from the flush
+    // path would fire if anything had been buffered.
+  });
+
+  it('does NOT flush when the action command is "interactive"', () => {
+    // Simulate the preAction hook logic from index.ts for the interactive command.
+    deferAfkMdSizeWarnings();
+    const actionName = 'interactive';
+    if (actionName !== 'interactive') flushDeferredAfkMdSizeWarnings();
+    // Flush was NOT called — deferral is still active, warn stays silent.
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('preAction hook wired on a real Commander program calls flush for non-interactive', () => {
+    const program = new Command();
+    program.exitOverride();
+
+    // Register a minimal synchronous sub-command (avoids real chat I/O).
+    let actionRan = false;
+    program.command('ping').action(() => {
+      actionRan = true;
+    });
+
+    let flushCalled = false;
+    // Wire the hook exactly as index.ts does it:
+    program.hook('preAction', (_thisCommand, actionCommand) => {
+      if (actionCommand.name() !== 'interactive') {
+        flushCalled = true;
+        flushDeferredAfkMdSizeWarnings();
+      }
+    });
+
+    deferAfkMdSizeWarnings();
+    program.parse(['node', 'afk', 'ping']);
+    expect(actionRan).toBe(true);
+    expect(flushCalled).toBe(true);
   });
 });

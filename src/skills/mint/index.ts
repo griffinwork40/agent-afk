@@ -17,7 +17,8 @@
  */
 
 import { registerSkill, type SkillExecutionContext, type SkillMetadata } from '../index.js';
-import { resolveChildModel } from '../../agent/subagent/resolve-child-model.js';
+import { resolveChildModel, defaultTierModelFallback } from '../../agent/subagent/resolve-child-model.js';
+import { setMintModelFallback } from './_phases/model-fallback.js';
 import type { AgentModelInput, IAgentSession } from '../../agent/types.js';
 import type { TraceSink } from '../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../agent/workspace/index.js';
@@ -374,6 +375,9 @@ function finalizeAfterSpec(sessionId: string, result: MintResult): MintResult {
   assertMintResultShape(result);
   if ('completed' in result || result.phase === 'heal-failed') {
     clearMintState(sessionId);
+    // Remove the module-scoped fallbackBySession entry so long-lived daemon
+    // processes do not accumulate one entry per completed mint invocation.
+    setMintModelFallback(sessionId, undefined);
   }
   return result;
 }
@@ -394,10 +398,13 @@ async function handler(
   // tool-lane entry in both the live overlay and the committed scrollback
   // block. See skills/index.ts SkillExecutionContext.callId.
   const skillCallId = ctx?.callId;
-  const defaultSubagentModel = resolveChildModel({
+  const resolvedPhaseModel = resolveChildModel({
     defaultSubagentModel: ctx?.defaultSubagentModel,
     defaultModel: ctx?.defaultModel,
-  });
+  }, { withSource: true });
+  const defaultSubagentModel = resolvedPhaseModel.model;
+  // Every mint phase fork reads this back (see _phases/model-fallback.ts).
+  setMintModelFallback(parentSessionId, defaultTierModelFallback(resolvedPhaseModel, ctx?.defaultModel));
 
   // Resume path — caller-supplied resumeFrom wins; otherwise reload the last
   // paused state for this session from disk.
@@ -408,8 +415,15 @@ async function handler(
         'mint: no paused spec found for this session to continue. Run /mint <idea> first, then /mint --continue approved.',
       );
     }
-    const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore, ctx?.delegationBudget);
-    return finalizeAfterSpec(parentSessionId, result);
+    try {
+      const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore, ctx?.delegationBudget);
+      return finalizeAfterSpec(parentSessionId, result);
+    } finally {
+      // Guard: clean up fallbackBySession on throw so daemon processes do not
+      // accumulate stale entries. finalizeAfterSpec handles the success path;
+      // calling setMintModelFallback(…, undefined) twice is a no-op. (#4203)
+      setMintModelFallback(parentSessionId, undefined);
+    }
   }
 
   if (!mintInput.idea) {
@@ -448,8 +462,13 @@ async function handler(
     return pausedResult;
   }
 
-  const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore, ctx?.delegationBudget);
-  return finalizeAfterSpec(parentSessionId, result);
+  try {
+    const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore, ctx?.delegationBudget);
+    return finalizeAfterSpec(parentSessionId, result);
+  } finally {
+    // Guard: clean up fallbackBySession on throw. (#4203)
+    setMintModelFallback(parentSessionId, undefined);
+  }
 }
 
 const mintSkill: SkillMetadata = {

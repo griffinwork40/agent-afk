@@ -356,6 +356,86 @@ describe('SubagentHandle streaming', () => {
       },
     );
 
+    it('overwrites stale non-terminal stop reason with STREAM_INCOMPLETE on buffered-partial (#3965)', async () => {
+      // Regression guard for #3965: resolveStreamResult's buffered-partial
+      // branch must overwrite any non-terminal _lastStopReason (e.g. 'tool_use',
+      // 'tool_calls') with STREAM_INCOMPLETE, not preserve it via `??=`.
+      //
+      // The stale reason is injected mid-stream by a custom sendMessageStream
+      // implementation that sets handle._lastStopReason AFTER run()'s own reset
+      // (handle.ts:295) but BEFORE the for-await loop exits. This simulates a
+      // provider variant or stop-hook continuation that emits an inter-round
+      // done event (which processDoneEvent would stamp as 'tool_use') before
+      // the stream is aborted mid-output. The stream then emits a content chunk
+      // and ends without a terminal message, triggering the buffered-partial
+      // branch with the stale reason already set.
+      //
+      // With `??=`: stale 'tool_use' would survive → stopReason:'tool_use'.
+      // With the fix (isTerminalStopReason guard): overwritten → STREAM_INCOMPLETE.
+      let capturedHandle: SubagentHandleImpl<unknown> | null = null;
+
+      const session: IAgentSession = {
+        sessionId: 'mock-stale-reason',
+        state: 'idle',
+        abortSignal: new AbortController().signal,
+        async sendMessage() {
+          return { role: 'assistant', content: '', timestamp: new Date() };
+        },
+        async *sendMessageStream() {
+          // Inject the stale non-terminal reason AFTER run()'s reset, before
+          // the for-await loop exits. This is the seam the bug exploited.
+          if (capturedHandle) {
+            capturedHandle._lastStopReason = 'tool_use';
+          }
+          // Emit buffered text (no terminal message event) — triggers the
+          // buffered-partial branch in resolveStreamResult.
+          yield { type: 'chunk', chunk: { type: 'content', content: 'partial round 2 output' } } as OutputEvent;
+          // Stream ends here without a `message` or `done` event.
+        },
+        async interrupt() {},
+        async close() {},
+        async reset() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        waitForInitialization: async () => ({ sessionId: 'mock-stale-reason', model: 'test-model', persistSession: true }),
+        getSessionIdentity: () => ({ persistSession: true }),
+        getSessionMetadata: () => ({ sessionId: 'mock-stale-reason', model: 'test-model', persistSession: true }),
+        getQuery: () => { throw new Error('not implemented'); },
+        getLastResponseMetadata: () => null,
+        getOutputStream: async function* () {},
+        getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+        supportedCommands: async () => [],
+        supportedModels: async () => [],
+        supportedAgents: async () => [],
+        getContextUsage: async () => ({ contextLimitTokens: 0, contextUsedTokens: 0 }),
+        mcpServerStatus: async () => [],
+        accountInfo: async () => ({ name: 'test', email: 'test@example.com' }),
+      } as unknown as IAgentSession;
+
+      const handle = new SubagentHandleImpl(
+        'stale-toolstop-test',
+        session,
+        controller,
+        abortGraph,
+        undefined,
+        5000,
+        undefined,
+        vi.fn(),
+      );
+      capturedHandle = handle;
+
+      const result = await handle.runToResult('p');
+
+      // The buffered-partial branch fires (text was streamed, no terminal message).
+      // stopReason must be STREAM_INCOMPLETE — not the stale 'tool_use'.
+      expect(result.stopReason).toBe(STREAM_INCOMPLETE);
+      expect(result.stopReason).not.toBe('tool_use');
+      // The run still succeeds (buffered partial salvaged), not failed.
+      expect(result.status).toBe('succeeded');
+      // The partial text is preserved as the message content.
+      expect(result.message?.content).toBe('partial round 2 output');
+    });
+
     it('returns a capped partial result (not a throw) when the tool-use cap fires with no message', async () => {
       // Anti-hang contract: a forked child that hits its tool-use-iteration cap
       // ends the turn with a `tool_use_loop_capped` done and no assistant
@@ -1669,7 +1749,7 @@ describe('SubagentHandle streaming', () => {
       );
     }
 
-    it('forwards usage and cost from msg.metadata.totalCostUsd on success', async () => {
+    it('forwards usage and cost from billingContext.cumulativeCostUsd on success', async () => {
       const onSucceeded = vi.fn();
       const finalMessage: Message = {
         role: 'assistant',
@@ -1714,6 +1794,30 @@ describe('SubagentHandle streaming', () => {
 
       expect(onSucceeded).toHaveBeenCalledTimes(1);
       const costArg = onSucceeded.mock.calls[0]![1];
+      expect(costArg).toBeUndefined();
+    });
+
+    it('ignores a negative totalCostUsd value (defense-in-depth guard)', async () => {
+      const onSucceeded = vi.fn();
+      const finalMessage: Message = {
+        role: 'assistant',
+        content: 'negative cost response',
+        timestamp: new Date(),
+        metadata: {
+          usage: { inputTokens: 10, outputTokens: 5 },
+          totalCostUsd: -0.001, // negative — must be rejected by the >= 0 guard
+          stopReason: 'end_turn',
+        },
+      };
+      const handle = buildHandleWithRollup(finalMessage, onSucceeded, {
+        input_tokens: 10,
+        output_tokens: 5,
+      });
+      await handle.run('p');
+
+      expect(onSucceeded).toHaveBeenCalledTimes(1);
+      const costArg = onSucceeded.mock.calls[0]![1];
+      // Negative value must be dropped; cumulativeCostUsd stays undefined.
       expect(costArg).toBeUndefined();
     });
 

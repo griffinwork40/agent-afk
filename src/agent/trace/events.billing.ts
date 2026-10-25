@@ -59,8 +59,9 @@ export type BillingRollupSnapshot = z.infer<typeof BillingRollupSchema>;
 export interface SubagentBillingFields {
   /**
    * Bundled provider family that served this child (`anthropic-direct` |
-   * `openai-compatible`), from its billing usage. Absent when the provider
-   * reported no usage.
+   * `openai-compatible` | `mixed`), from its billing usage. `'mixed'` is
+   * emitted when the child's turns spanned more than one provider family.
+   * Absent when the provider reported no usage.
    */
   provider?: string;
   /**

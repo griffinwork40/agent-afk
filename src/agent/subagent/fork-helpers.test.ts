@@ -53,6 +53,15 @@ vi.mock('../providers/shared/soft-deadline.js', () => ({
   resolveSoftDeadlineMs: vi.fn().mockReturnValue(0),
 }));
 
+vi.mock('../workspace/index.js', () => ({
+  // Returns a new object (spread) so the mock never satisfies the real
+  // injector's same-reference "nothing injected" contract (#4060). The real
+  // injectWorkspacePreamble CAN return the same reference when the child cannot
+  // publish; this mock always returns a new object to keep assembled-config
+  // tests readable.
+  injectWorkspacePreamble: vi.fn((cfg: object) => ({ ...cfg })),
+}));
+
 // ── subject imports ───────────────────────────────────────────────────────────
 
 import { validatePhaseRole } from './fork-validation.js';
@@ -65,6 +74,8 @@ import { SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
 import { DENY_ELICITATION } from './constants.js';
 import { injectSubagentIdentityPreamble } from './identity-preamble.js';
 import { injectToolBudgetPreamble } from './budget-preamble.js';
+import { injectWorkspacePreamble } from '../workspace/index.js';
+import type { WorkspaceStore } from '../workspace/workspace-store.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // validatePhaseRole
@@ -585,5 +596,20 @@ describe('assembleChildConfig', () => {
   it('inherits parentSurface when options.config.surface is absent', () => {
     const cfg = assembleChildConfig(makeArgs({ parentSurface: 'cli' }));
     expect(cfg.surface).toBe('cli');
+  });
+
+  it('stamps hasWorkspacePreamble: true when workspaceStore is provided', () => {
+    vi.mocked(injectWorkspacePreamble).mockClear();
+    const workspaceStore = {
+      queryRelevant: vi.fn().mockReturnValue([]),
+    } as unknown as WorkspaceStore;
+    const cfg = assembleChildConfig(makeArgs({ workspaceStore }));
+    expect(cfg.hasWorkspacePreamble).toBe(true);
+    expect(vi.mocked(injectWorkspacePreamble)).toHaveBeenCalledOnce();
+  });
+
+  it('does not set hasWorkspacePreamble when workspaceStore is absent', () => {
+    const cfg = assembleChildConfig(makeArgs());
+    expect(cfg.hasWorkspacePreamble).toBeUndefined();
   });
 });

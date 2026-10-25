@@ -77,14 +77,34 @@ const POLL_INTERVAL_MS = 250;
  *
  * - `fromStart: true` replays existing records first; otherwise starts at
  *   the current end of file (or 0 if the file doesn't exist yet).
- * - Yields until a `closed` record is read or `signal` aborts.
+ * - Reset seals are nonterminal; inode replacement (or shrink) rebases framing
+ *   and offsets. Other `closed` records terminate the tail.
  * - `fs.watch` on the ledger directory is the wakeup; a 250ms poll is the
  *   fallback — on macOS watch events are coalesced/dropped under load, so
  *   the poll floor is load-bearing, not belt-and-braces.
  */
+/**
+ * Identity of one ledger file generation (a `/clear` or `/rewind` replaces the
+ * file). `dev`+`ino` alone is not enough: Linux filesystems reuse a freed inode
+ * immediately, so a replacement can inherit the inode of an earlier generation
+ * and SSE cursors (`<generation>:<position>`) from different generations would
+ * collide. Birth time separates them; filesystems that report no birth time
+ * (birthtimeMs 0) degrade to the previous dev+ino identity.
+ */
+export function ledgerGeneration(stat: { dev: number; ino: number; birthtimeMs: number }): string {
+  return `${stat.dev}-${stat.ino}-${Math.trunc(stat.birthtimeMs)}`;
+}
+
 export async function* tailLedger(
   sessionId: string,
-  opts?: { fromStart?: boolean; signal?: AbortSignal },
+  opts?: {
+    fromStart?: boolean;
+    signal?: AbortSignal;
+    /** Called before records from each file generation (including the first). */
+    onGeneration?: (generation: string) => void;
+    /** Called once the initial snapshot has been drained. */
+    onCaughtUp?: () => void;
+  },
 ): AsyncGenerator<LedgerRecord> {
   if (!isSafeLedgerSessionId(sessionId)) return;
   const ledgerPath = getSessionLedgerPath(sessionId);
@@ -92,7 +112,8 @@ export async function* tailLedger(
   const { fromStart = false, signal } = opts ?? {};
 
   let fileOffset = 0;
-  const lineReader = new IncrementalLineReader();
+  let lineReader = new IncrementalLineReader();
+  let generation: string | undefined;
   let sawClosed = false;
 
   async function* readNewRecords(): AsyncGenerator<LedgerRecord> {
@@ -100,6 +121,13 @@ export async function* tailLedger(
     try {
       fd = await fsp.open(ledgerPath, 'r');
       const stat = await fd.stat();
+      const currentGeneration = ledgerGeneration(stat);
+      if (generation !== currentGeneration || stat.size < fileOffset) {
+        fileOffset = 0;
+        lineReader = new IncrementalLineReader();
+        generation = currentGeneration;
+        opts?.onGeneration?.(generation);
+      }
       if (stat.size <= fileOffset) return;
       const toRead = stat.size - fileOffset;
       const readBuf = Buffer.allocUnsafe(toRead);
@@ -109,6 +137,9 @@ export async function* tailLedger(
       for (const line of lineReader.feed(readBuf.toString('utf8', 0, bytesRead))) {
         const rec = parseRecord(line);
         if (!rec) continue;
+        // /clear seals the old writer before replacing the file. Existing
+        // readers must stay alive through that interval, not send session_end.
+        if (rec.kind === 'closed' && rec.reason === 'reset') continue;
         if (rec.kind === 'closed') sawClosed = true;
         yield rec;
         if (sawClosed) return;
@@ -126,6 +157,8 @@ export async function* tailLedger(
     try {
       const stat = await fsp.stat(ledgerPath);
       fileOffset = stat.size;
+      generation = ledgerGeneration(stat);
+      opts?.onGeneration?.(generation);
     } catch {
       // File doesn't exist yet — start from 0 and wait for it to appear.
     }
@@ -133,30 +166,23 @@ export async function* tailLedger(
     yield* readNewRecords();
     if (sawClosed) return;
   }
+  opts?.onCaughtUp?.();
 
   let watcher: fs.FSWatcher | null = null;
   let watcherChange: (() => void) | null = null;
 
   const waitForChange = (): Promise<void> =>
     new Promise<void>((resolve) => {
-      const pollTimer = setTimeout(() => {
-        watcherChange = null;
-        resolve();
-      }, POLL_INTERVAL_MS);
-      watcherChange = () => {
+      const wake = (): void => {
         clearTimeout(pollTimer);
+        signal?.removeEventListener('abort', wake);
         watcherChange = null;
         resolve();
       };
-      signal?.addEventListener(
-        'abort',
-        () => {
-          clearTimeout(pollTimer);
-          watcherChange = null;
-          resolve();
-        },
-        { once: true },
-      );
+      const pollTimer = setTimeout(wake, POLL_INTERVAL_MS);
+      watcherChange = wake;
+      signal?.addEventListener('abort', wake, { once: true });
+      if (signal?.aborted) wake();
     });
 
   try {

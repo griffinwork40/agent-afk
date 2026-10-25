@@ -1,6 +1,6 @@
 /**
  * Tests for the evidence gate on durable memory writes
- * (AFK_MEMORY_EVIDENCE_GATE — opt-in, prototype).
+ * (AFK_MEMORY_EVIDENCE_GATE — on by default; set to 0/false/no/off to disable).
  *
  * Pins the contract from the four scoped acceptance criteria:
  *   1. a citable codebase fact (convention) WITH evidence → recalled verified

@@ -82,6 +82,32 @@ export function isMcpToolName(name: string): boolean {
 }
 
 /**
+ * Return all wire-level tool-name prefixes that tools for `serverName` can
+ * start with.  Normally there is exactly one prefix — `mcp__<sanitized>__`
+ * — but when the concatenation overflows MAX_LEN the server segment is
+ * replaced with a short SHA-256 hash, so both the sanitized prefix AND the
+ * hash prefix are returned (a future tool list refresh after an overflow is
+ * still routable).
+ *
+ * Callers should match with `toolName.startsWith(prefix)` and, when multiple
+ * servers could share a prefix, prefer the longest matching one.
+ */
+export function serverWirePrefixes(serverName: string): string[] {
+  const sanitized = sanitizeNameSegment(serverName);
+  const normalPrefix = `${PREFIX}${sanitized}${SEPARATOR}`;
+  const hashPrefix = `${PREFIX}${shortHash(serverName)}${SEPARATOR}`;
+  // When even the shortest tool name (prefix + one char) would exceed
+  // MAX_LEN, every tool of this server is hash-prefixed: return only that.
+  if (normalPrefix.length + 1 > MAX_LEN) {
+    return [hashPrefix];
+  }
+  // When the sanitized prefix is within budget the hash prefix is only used
+  // for overflow tool names, so include it as a secondary candidate.
+  if (normalPrefix === hashPrefix) return [normalPrefix];
+  return [normalPrefix, hashPrefix];
+}
+
+/**
  * Result of building a per-manager name registry. The `tools` map is
  * `wireName → { serverName, originalToolName }` for use by the dispatcher's
  * `handlers.get(wireName)` lookup path; `conflicts` is the populated-only-

@@ -92,8 +92,12 @@ export function detectShadowGit(command: string): ShadowGitHit[] {
     const { verb, args } = gitArgList;
     // `git push` only recognises --no-verify (long form); `-n` on push means
     // --dry-run. `git commit` recognises both `-n` and `--no-verify`.
+    // Bundled short flags like `-an` / `-na` must also match: check any
+    // `-[a-z]+` cluster that contains `n` (but not `--` long flags).
     const longNoVerify = /(?:^|\s)--no-verify(?:\s|$)/.test(args);
-    const shortNoVerify = /(?:^|\s)-n(?:\s|$)/.test(args);
+    const shortNoVerify =
+      /(?:^|\s)-n(?:\s|$)/.test(args) ||
+      /(?:^|\s)-[a-mo-z]*n[a-mo-z]*(?:\s|$)/.test(args); // bundled: -an, -na, etc.
     if (verb === 'push' && longNoVerify)
       hits.push({ kind: 'no-verify', pattern: 'git-push-no-verify' });
     if (verb === 'commit' && (longNoVerify || shortNoVerify))
@@ -129,13 +133,16 @@ export function detectShadowGit(command: string): ShadowGitHit[] {
  * subshells are not expanded — the literal characters are preserved.
  */
 function splitSegments(command: string): string[] {
+  // Collapse backslash line-continuations before splitting: `git push \\\n--no-verify`
+  // becomes `git push  --no-verify` so both tokens land in the same segment.
+  const joined = command.replace(/\\\n/g, ' ');
   // Split on ;, &&, ||, |, or \n — but only when NOT inside a quoted string.
   const segments: string[] = [];
   let current = '';
   let inSingle = false;
   let inDouble = false;
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i]!;
+  for (let i = 0; i < joined.length; i++) {
+    const ch = joined[i]!;
     if (ch === "'" && !inDouble) { inSingle = !inSingle; current += ch; continue; }
     if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue; }
     if (inSingle || inDouble) { current += ch; continue; }
@@ -143,7 +150,7 @@ function splitSegments(command: string): string[] {
     if (ch === '\n' || ch === ';') {
       segments.push(current); current = ''; continue;
     }
-    if ((ch === '&' || ch === '|') && i + 1 < command.length && command[i + 1] === ch) {
+    if ((ch === '&' || ch === '|') && i + 1 < joined.length && joined[i + 1] === ch) {
       segments.push(current); current = ''; i++; continue;
     }
     if (ch === '|') {
@@ -165,8 +172,10 @@ function splitSegments(command: string): string[] {
  */
 function stripQuotedContent(s: string): string {
   // Replace "..." and '...' contents with a placeholder space.
+  // The double-quote pattern skips escaped quotes (`\\"`), preventing
+  // `"say \"hi\" --no-verify"` from leaking the flag text out of the string.
   return s
-    .replace(/"[^"]*"/g, '" "')
+    .replace(/"(?:[^"\\]|\\.)*"/g, '" "')
     .replace(/'[^']*'/g, "' '");
 }
 

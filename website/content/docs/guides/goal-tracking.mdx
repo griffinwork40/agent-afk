@@ -1,212 +1,99 @@
 ---
-title: "Goal Tracking"
-description: "Set persistent objectives that guide the agent across sessions."
+title: "Track a goal across project sessions"
+description: "Set, pause, and complete a persistent objective scoped to your Git repository."
 ---
 
-Goal tracking lets you declare a single overarching objective that the agent carries across every session, compaction, and terminal restart. Where [memory](/docs/guides/memory) captures facts and conventions accumulated over time, a goal is a directive — a statement of intent that shapes how the agent prioritizes and acts until you decide it is done.
+A goal tells the agent what you are trying to achieve beyond the current conversation. Unlike [memory](/guides/memory), which records knowledge, a goal is an objective included in new sessions while it is active.
 
-## What a goal is
+## Set your first goal
 
-A goal is a short piece of text (up to 500 characters) stored in the durable key-value store at `~/.afk/state/kv/kv.db`. It has a status — `active`, `paused`, or `completed` — and is injected into the system prompt at the start of every session when it is active.
+<Steps>
+<Step>
+### Start afk in the project
 
-The agent sees the goal as an `<active-goal>` block placed between the cross-session memory context and the `# Environment` section of the system prompt. It is read before the first user message, so it influences how the agent frames every question, every tool invocation, and every plan it builds.
+Run `afk` from the repository whose objective you want to track. Repository identity determines which goal is read and changed.
+</Step>
+<Step>
+### Set and inspect the objective
 
-Only **one goal** can be active at a time. Setting a new goal replaces any existing one, regardless of status.
-
-## Why use a goal
-
-Without a goal, each session starts fresh from the user's first message. With a goal, the agent enters every session already oriented toward a broader objective — it can surface whether the current task advances or conflicts with that objective, keep multi-session projects on track, and avoid drift when context window compression has trimmed the conversation history.
-
-Goals are most useful for:
-
-- **Multi-session projects** — "Ship the authentication refactor before the sprint ends"
-- **Sustained research** — "Understand the performance regression introduced in v2.4"
-- **Behavioral constraints** — "Every response must include a risk assessment"
-- **Ongoing maintenance** — "Keep the test suite green and the type errors at zero"
-
-## The `/goal` slash command
-
-All goal management happens through the `/goal` slash command in the interactive REPL.
-
-### Set a goal
-
-```
-/goal <text>
-/goal set <text>
-```
-
-Both forms are equivalent. The goal is written to the store immediately. It takes effect at the **start of the next session** — the running session's system prompt is not rebuilt mid-turn.
-
-```
+```text
 /goal Ship the authentication refactor before the sprint ends
-```
-
-```
-/goal set Understand the performance regression introduced in v2.4
-```
-
-### View the current goal
-
-```
-/goal
 /goal status
 ```
 
-Either form prints the current goal text, its status badge, and the timestamps for when it was set and last updated.
+`/goal set` is equivalent to `/goal` followed by the objective. Text is limited to 500 characters. Setting a goal replaces the existing goal for this project, including a paused or completed one.
+</Step>
+<Step>
+### Begin a new session
 
-```
-● active  Ship the authentication refactor before the sprint ends
-  set 2026-09-15T14:23:01.000Z  ·  updated 2026-09-15T14:23:01.000Z
-```
+Goal changes are saved immediately, but the active-goal prompt is built at session construction. Start a new session for the agent to receive the updated objective.
+</Step>
+</Steps>
 
-When no goal is set, the command prints: `No goal set. Try /goal <objective>`.
+## Project scope
 
-### Pause a goal
+Inside Git, goals are scoped to the repository's common root. Subdirectories and linked worktrees of the same repository share one goal. A separate clone has a different path-derived key, even if it has the same remote URL.
 
-```
-/goal pause
-```
+Outside Git, or when Git cannot resolve the repository, AFK falls back to the legacy global `current` goal. It does **not** create an independent goal for every arbitrary directory.
 
-Pauses an active goal. A paused goal is **not injected into the system prompt** — the agent behaves as if no goal is set until you resume it. Use this when you need to context-switch to unrelated work without clearing the goal entirely.
-
-Only an `active` goal can be paused. Pausing an already-paused or completed goal is a no-op with a warning.
-
-### Resume a goal
-
-```
-/goal resume
-```
-
-Transitions a paused goal back to `active`. On the next session start, the goal is injected into the system prompt again.
-
-Only a `paused` goal can be resumed. Resuming an already-active or completed goal is a no-op with a warning.
-
-### Mark a goal done
-
-```
-/goal done
-/goal complete
-```
-
-Both forms mark the goal as `completed`. A completed goal is not injected into the system prompt, and it cannot be resumed — if you want to continue the work, set a new goal. You must resume a paused goal before completing it.
-
-### Clear a goal
-
-```
-/goal clear
-```
-
-Removes the goal entirely from the store. There is no undo — if you might want the text later, use `/goal done` instead.
-
-## How the agent sees the goal
-
-When a goal is active at session construction, the assembler injects it as:
-
-```
-<active-goal>
-Ship the authentication refactor before the sprint ends
-(set: 2026-09-15T14:23:01.000Z)
-</active-goal>
-```
-
-This block appears after the cross-session memory context (`<cross-session-memory>`) and before the `# Environment` section. The agent reads it at the start of every turn.
-
-The goal text is sanitized before injection: any XML-like tags are stripped to prevent a crafted goal from injecting structural blocks (such as `<cross-session-memory>` or `<thinking>`) into the system prompt.
-
-Only **active** goals are injected. Paused and completed goals are silently excluded.
-
-<Callout type="info">
-Goal changes take effect at the **start of the next session**. When you run `/goal set ...` mid-session, the goal is written to the store immediately but the running session's system prompt is not rebuilt. Restart the REPL (or start a new session on any surface) for the agent to see the updated goal.
+<Callout type="warn">
+Changing a goal from a linked worktree changes the objective used by future sessions in the main checkout and its other linked worktrees. Already running sessions retain the goal prompt they started with.
 </Callout>
 
-## Status lifecycle
+Only one goal is stored per scope. Use a goal for a sustained refactor, a research question, or an ongoing maintenance objective. It does not replace individual task plans, and it does not schedule work by itself.
 
-```
-            ┌──────────────────────────────────────────────────────────┐
-            │                                                          │
-  /goal <text>                                                         │
-      │                                                                │
-      ▼                                                       /goal resume
-   active  ──── /goal pause ────► paused ──────────────────────────────┘
-      │
-  /goal done
-      │
-      ▼
- completed
-```
+## Manage the lifecycle
 
-Valid transitions:
+| Command | Result |
+| --- | --- |
+| `/goal` or `/goal status` | Show the text, status, creation time, and update time |
+| `/goal set <text>` | Replace the scoped goal with an active objective |
+| `/goal pause` | Change an active goal to paused |
+| `/goal resume` | Change a paused goal to active |
+| `/goal done` or `/goal complete` | Complete an active goal |
+| `/goal clear` | Delete the scoped goal |
 
-| From | To | Command |
-|---|---|---|
-| *(none)* | `active` | `/goal <text>` or `/goal set <text>` |
-| `active` | `active` (new text) | `/goal <text>` replaces the existing goal |
-| `active` | `paused` | `/goal pause` |
-| `active` | `completed` | `/goal done` |
-| `paused` | `active` | `/goal resume` |
-| `paused` | `active` (new text) | `/goal <text>` replaces the paused goal |
-| any | *(none)* | `/goal clear` |
+Paused and completed goals are not injected into new sessions. Resume a paused goal before completing it. A completed goal cannot be resumed; set a new goal if work continues. Commands that do not fit the current status leave it unchanged and report that no transition occurred.
 
-There is no path from `completed` back to `active`. Complete goals are terminal — set a new one to continue.
+Clearing has no undo. Completing keeps the objective and its timestamps available for inspection.
 
-## Storage
+### Example: interrupt and resume a refactor
 
-Goals are stored in the shared key-value database at `~/.afk/state/kv/kv.db` under namespace `goals`, key `current`. This is the same SQLite database used by other durable AFK state, and it is shared across all surfaces that point to the same `AFK_STATE_DIR`.
-
-The stored document has this shape:
-
-```json
-{
-  "text": "Ship the authentication refactor before the sprint ends",
-  "status": "active",
-  "createdAt": "2026-09-15T14:23:01.000Z",
-  "updatedAt": "2026-09-15T14:23:01.000Z",
-  "createdBy": "<session-id>"
-}
-```
-
-The `createdBy` field records which session set the goal and is informational only.
-
-To relocate the store to a different path, set `AFK_STATE_DIR`:
-
-```bash
-export AFK_STATE_DIR=/path/to/shared/state
-```
-
-The goal database is then resolved under `<AFK_STATE_DIR>/kv/kv.db`. See [Environment Variables](/docs/configuration/environment-variables) for the full list of path overrides.
-
-## Cross-surface sharing
-
-Because the goal store lives on disk, it is shared across every AFK surface pointing to the same `AFK_STATE_DIR`:
-
-- Interactive REPL (`afk interactive`)
-- Telegram bot
-- CLI `chat` (`afk chat "..."`)
-- Daemon sessions
-- Scheduled tasks
-
-A goal set in a Telegram session is active in the next REPL session, and vice versa.
-
-## Example workflow
-
-Here is a complete workflow for a multi-session refactor:
-
-```
-# Start of sprint — set the goal
-/goal Ship the authentication refactor before the sprint ends
-
-# Work across multiple sessions — agent sees the goal in every prompt
-
-# Mid-sprint — switch to an urgent unrelated bug fix
+```text
+/goal set Ship the authentication refactor with no public API changes
 /goal pause
-# ... fix the bug across one or more sessions ...
-/goal resume
-
-# Sprint ends — mark it done
-/goal done
-
-# New sprint — start fresh
-/goal Ship the data export feature with CSV and JSON support
 ```
 
-Throughout this sequence, the agent enters each session already oriented toward the active objective. When the goal is paused, sessions run without it. When it is resumed or replaced, the next session start picks it up automatically.
+Start a new session for the unrelated urgent task. When ready to return:
+
+```text
+/goal resume
+```
+
+Begin a new session for the refactor, then mark it complete when the objective is satisfied:
+
+```text
+/goal done
+```
+
+## What the agent receives
+
+An active objective is included as an `active-goal` block after memory context and before the environment section. It contains the objective and its creation timestamp. XML-like tags are stripped from the text before injection.
+
+The prompt snapshot is not refreshed just because you pause, complete, or replace a goal from another session. Tell a running agent directly if its current objective has changed.
+
+## Persistence across surfaces
+
+Goals are JSON documents in `~/.afk/state/kv/kv.db`, under the `goals` namespace. Git repository keys have the form `proj.<slug>-<hash>`; the non-Git fallback key is `current`. Stored fields include `text`, `status`, `createdAt`, `updatedAt`, and optional `createdBy` session attribution.
+
+The REPL, `afk chat`, Telegram, and daemon sessions can receive the same goal when they use the same state directory **and repository scope**. Merely sharing a state directory is not enough if the surfaces run in different repositories. Manage goals with `/goal` in the REPL.
+
+`AFK_STATE_DIR` relocates the database to its `kv/kv.db` child. See [structured state](/guides/state-store) for the underlying store.
+
+## Related
+
+<Cards>
+<Card title="Remember facts" href="/guides/memory" description="Keep preferences and knowledge separate from objectives." />
+<Card title="Use worktrees" href="/guides/worktrees" description="Understand checkouts that share one project goal." />
+<Card title="Schedule work" href="/guides/scheduling" description="Turn recurring objectives into explicit scheduled tasks." />
+</Cards>

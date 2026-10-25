@@ -156,6 +156,17 @@ vi.mock('child_process', async (importOriginal) => {
   return { ...actual, execFileSync: mockExecFileSync };
 });
 
+// connect-diagnosis mock — keeps `connect` hermetic: no `npm view` network
+// call, no probe of the real Chrome profile folder, no open(1).
+vi.mock('./browser.connect-diagnosis.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./browser.connect-diagnosis.js')>();
+  return {
+    ...actual,
+    resolveChromeDevtoolsMcpVersion: vi.fn(() => actual.CHROME_DEVTOOLS_MCP_FALLBACK_VERSION),
+    printConnectDiagnosis: vi.fn(),
+  };
+});
+
 // readline mock — waitForEnter uses createInterface
 vi.mock('node:readline', () => ({
   createInterface: vi.fn(() => ({

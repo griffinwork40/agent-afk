@@ -5,8 +5,8 @@
 agent-afk runs on Windows natively. The full unit suite gates every PR on
 `windows-2022` (assertions only; coverage floors are enforced on ubuntu because
 ~110 platform-gated tests leave win32-skipped branches uncovered). Some features
-remain unimplemented on native Windows (service management, clipboard image
-paste); see the checklist below. Issue #703 is closed.
+remain unimplemented on native Windows (clipboard image paste); see the
+checklist below. Issue #703 is closed.
 
 The recommended path for Windows users today is **WSL2**, which provides full
 compatibility with zero workarounds.
@@ -86,8 +86,9 @@ environment variable.
   is slower than the Linux filesystem (`~/…`). Clone repos inside WSL2's home
   directory for best performance.
 - **Service management**: `afk service install` inside WSL2 uses systemd (if
-  enabled) or requires manual service management. The native Windows service
-  layer (Task Scheduler / SCM) is not yet supported.
+  enabled) or requires manual service management. On native Windows, `afk
+  service install` uses the Task Scheduler backend (`schtasks`) — run it from
+  an elevated PowerShell prompt.
 - **GUI clipboard**: clipboard operations (`pbcopy`/`pbpaste` equivalents)
   work via `wl-copy`/`xclip` if a Wayland/X11 server is running (WSLg in
   Windows 11), or via `clip.exe` from within WSL2 for paste-to-Windows.
@@ -102,6 +103,6 @@ The following areas are being addressed for native Windows compatibility:
 - [x] Path handling → `path.sep`/`path.basename`/`path.join` throughout
 - [x] Env-var list separator → `;` on Windows (matching PATH convention)
 - [ ] Shell strategy → `cmd.exe` vs PowerShell vs WSL bash (decision pending; `pnpm test` currently uses bash via Git Bash)
-- [ ] Service layer → Windows service/Task Scheduler backend
+- [x] Service layer → Windows service/Task Scheduler backend (`schtasks`)
 - [ ] Keychain/OAuth → Windows Credential Manager integration
 - [x] Unit test suite green on `windows-2022` CI (required gate, closes #703)

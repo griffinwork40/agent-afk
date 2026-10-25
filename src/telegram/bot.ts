@@ -5,16 +5,17 @@
 
 import { Telegraf, Context } from 'telegraf';
 import { SessionManager, SessionManagerOptions } from './session-manager.js';
-import { formatError, formatModelSwitch } from './formatter.js';
+import { formatError } from './formatter.js';
 import { handleStart } from './handlers/start.js';
-import { handleHelp } from './handlers/help.js';
-import { handleClear, handleCompact, handleModelSwitch, MODEL_ALIASES_HINT } from './handlers/commands.js';
+import { MODEL_ALIASES_HINT } from '../agent/session/model-slots.js';
 import { handleSessions, handleNew, handleSwitchCallback } from './handlers/sessions.js';
 import { registerDelegatingCommands } from './bot.delegating-commands.js';
-import { BOT_COMMAND_DESCRIPTORS } from './bot.command-descriptors.js';
+import { botCommandDescriptors } from './bot.command-descriptors.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { handleFarmCallback } from './handlers/farm-callbacks.js';
 import { MessageHandler } from './handlers/message.js';
+import type { AudioTranscriber } from './audio-transcriber.js';
+import { registerAudioHandlers } from './bot.audio-handler.js';
 import { createAllowlistMiddleware } from './allowlist.js';
 import { FARM_CALLBACK_PREFIX } from './farm-callback-data.js';
 import { makeTelegramElicitationHandler } from './elicitation-handler.js';
@@ -51,6 +52,14 @@ export interface BotOptions extends SessionManagerOptions {
    * in the bootstrap.
    */
   allowedChatIds: Set<number>;
+
+  /**
+   * Optional audio transcriber for voice/audio messages.  When null or omitted,
+   * voice and audio messages receive a refusal reply naming the env var to set.
+   * Constructed by entry.ts from the typed env object and injected here so the
+   * single env read-point (env.ts) is preserved.
+   */
+  transcriber?: AudioTranscriber | null;
 
   /**
    * Chat IDs with the opt-in "tag-only" response policy: in these chats the bot
@@ -145,9 +154,9 @@ export class TelegramBot {
     this.bot.use(createAllowlistMiddleware(this.options.allowedChatIds, this.log.bind(this)));
 
     this.bot.command('start', (ctx) => handleStart(ctx));
-    this.bot.command('help', (ctx) => handleHelp(ctx, this.sessionManager));
-    this.bot.command('clear', (ctx) => this.handleClear(ctx));
-    this.bot.command('compact', (ctx) => this.handleCompact(ctx));
+    // Shared-registry commands (/help, /clear, /compact, /model, /name, /cost,
+    // /usage, ...) reach MessageHandler via the 'text' listener and run through
+    // handlers/slash.ts; only Telegram-only commands are registered here.
     registerDelegatingCommands(this.bot, this.sessionManager, this.log.bind(this));
     // /sessions — list this chat's resumable conversations with tap-to-switch
     // buttons; /new — start a fresh conversation (previous preserved). One
@@ -253,8 +262,16 @@ export class TelegramBot {
     // matches the 'text' filter even if the user added a caption).
     this.bot.on('photo', (ctx) => runDetached(this.messageHandler.handlePhoto(ctx)));
     this.bot.on('document', (ctx) => runDetached(this.messageHandler.handleDocument(ctx)));
-    // Acknowledge unsupported message types so users know why the bot is silent.
-    this.bot.on(['voice', 'video', 'sticker', 'video_note', 'audio'], (ctx) => { if (ctx.chat) void ctx.reply('I can process text, photo, and document messages. Voice and video support is not yet available.').catch((e) => this.log('Failed to send unsupported-type reply:', e)); });
+    // Voice/audio → transcript → text turn (+ video/sticker refusal). See bot.audio-handler.ts.
+    registerAudioHandlers(
+      this.bot,
+      this.options.transcriber ?? null,
+      this.messageHandler,
+      runDetached,
+      this.log.bind(this),
+      this.options.tagOnlyChats ?? new Set(),
+    );
+
 
     // Inline-button callbacks emitted by the farm digest. The allowlist
     // middleware (registered above) already filters callback_query updates
@@ -286,9 +303,11 @@ export class TelegramBot {
       if (!(MODEL_ALIASES_HINT as readonly string[]).includes(alias)) return;
 
       try {
-        await this.sessionManager.switchModel(route, alias);
-        const confirmText = formatModelSwitch(alias);
-        await ctx.editMessageText(confirmText).catch(() => ctx.reply(confirmText));
+        // Same path as typing `/model <alias>`: the shared in-place switch,
+        // which keeps the conversation (a teardown here would silently start
+        // a new one). The command replies with its own confirmation.
+        await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+        await this.messageHandler.runSlash(ctx, route, `/model ${alias}`);
       } catch (err) {
         this.log('Model action error:', err);
       }
@@ -364,7 +383,7 @@ export class TelegramBot {
 
     // Register commands with Telegram so they appear in the UI
     this.log('Registering bot commands...');
-    await this.bot.telegram.setMyCommands([...BOT_COMMAND_DESCRIPTORS]);
+    await this.bot.telegram.setMyCommands(await botCommandDescriptors());
 
     this.running = true;
     this.log('Bot started successfully');
@@ -442,44 +461,6 @@ export class TelegramBot {
     return handleStart(ctx);
   }
 
-  async handleHelp(ctx: Context): Promise<void> {
-    return handleHelp(ctx, this.sessionManager);
-  }
-
-  private async handleClear(ctx: Context): Promise<void> {
-    const route = routeFromCtx(ctx);
-    if (!route) {
-      await ctx.reply(formatError('Could not identify chat'));
-      return;
-    }
-    const session = await this.sessionManager.getSession(route);
-    if (session.state !== 'idle') {
-      this.messageHandler.enqueueClear(route, ctx);
-      await ctx.reply('Clear queued.');
-    } else {
-      return handleClear(ctx, this.sessionManager, this.registeredCommandChats, this.log.bind(this));
-    }
-  }
-
-  private async handleCompact(ctx: Context): Promise<void> {
-    const route = routeFromCtx(ctx);
-    if (!route) {
-      await ctx.reply(formatError('Could not identify chat'));
-      return;
-    }
-    const session = await this.sessionManager.getSession(route);
-    if (session.state !== 'idle') {
-      this.messageHandler.enqueueCompact(route, ctx);
-      await ctx.reply('Compact queued.');
-    } else {
-      try {
-        await handleCompact(ctx, this.sessionManager, this.log.bind(this));
-      } finally {
-        this.messageHandler.drainQueue(route).catch(err => this.log('Drain error:', err));
-      }
-    }
-  }
-
   async handleMessage(ctx: Context): Promise<void> {
     return this.messageHandler.handle(ctx);
   }
@@ -490,10 +471,6 @@ export class TelegramBot {
 
   async handleDocument(ctx: Context): Promise<void> {
     return this.messageHandler.handleDocument(ctx);
-  }
-
-  async handleModelSwitch(ctx: Context): Promise<void> {
-    return handleModelSwitch(ctx, this.sessionManager, this.log.bind(this));
   }
 
   /**

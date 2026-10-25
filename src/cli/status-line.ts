@@ -367,6 +367,10 @@ export class StatusLine {
     // When centering is off, contentBand returns { margin: '', width: cols },
     // making this byte-identical to the previous code path.
     const { margin, width: bandWidth } = contentBand(cols);
+    // RAIL_INDENT is NOT subtracted from bandWidth here because the status
+    // line sits below the stage bar and health rail — it occupies its own
+    // full-width row. The loop-stage bar subtracts RAIL_INDENT to align its
+    // left gutter with the rail column; the status line has no such gutter.
     const maxW = Math.max(4, bandWidth - 2);
     return margin + formatStatusLine(f, maxW);
   }

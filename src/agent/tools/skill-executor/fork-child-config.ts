@@ -160,6 +160,7 @@ export function buildForkedChildConfig(
         childConfig.model,
         ctx.openaiBaseUrl,
         effectiveAllowed,
+        ctx.workspaceStore,
       );
     } else if (effectiveAllowed !== undefined) {
       // Non-readOnly tools: allowlist at the cap. Restrict to the declared
@@ -169,6 +170,7 @@ export function buildForkedChildConfig(
         childConfig.model,
         effectiveReadOnlyBash,
         ctx.openaiBaseUrl,
+        ctx.workspaceStore,
       );
     }
     return { childConfig, childManager: undefined };

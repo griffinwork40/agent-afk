@@ -7,7 +7,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
-import { closeStore } from '../elicitation/pending-question-store.js';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -102,7 +101,6 @@ afterEach(() => {
   else process.env['AFK_HOME'] = savedAfkHome;
   if (savedAllowProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
   else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
-  closeStore();
   if (isolatedAfkHome !== undefined) rmSync(isolatedAfkHome, { recursive: true, force: true });
   isolatedAfkHome = undefined;
   // Reset the daemonDefaultCwd memo so each test gets a fresh resolution
@@ -1739,8 +1737,12 @@ describe('CronScheduler — concurrent cron tasks each get their own elicitation
       const tickAPromise = schedulerA.tick('concurrent-A');
       const tickBPromise = schedulerB.tick('concurrent-B');
 
-      // Yield enough for both ticks to reach sendMessage (past the install point).
-      await new Promise<void>((r) => setTimeout(r, 20));
+      // Latch on the install spy: wait until both installForSession calls have
+      // fired (i.e. both ticks have progressed past the install point) rather
+      // than using a fixed setTimeout that can be flaky on slow runners.
+      await vi.waitFor(() => {
+        if (installSpy.mock.calls.length < 2) throw new Error('waiting for both installs');
+      }, { timeout: 5000 });
 
       // Both installs must have happened with DISTINCT keys (no overwrite).
       const installedKeys = installSpy.mock.calls.map(([k]) => k);

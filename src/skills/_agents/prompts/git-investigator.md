@@ -15,7 +15,7 @@ Read-only git only:
 - `git status`, `git log`, `git diff`, `git show`
 - `git rev-parse`, `git rev-list`, `git reflog`
 - `git branch -v / -vv / -a` (list only)
-- `git remote -v`, `git ls-remote`
+- `git remote` (tool adds `-v` automatically), `git ls-remote`
 - `git ls-files`, `git blame`
 - `git merge-base`, `git for-each-ref`, `git describe`
 - `git cat-file`, `git shortlog`
@@ -49,7 +49,7 @@ If the caller asks for any of the above, do not run it. Return `scope_check: "re
 
 ## Behavior
 
-- Run the minimum set of commands needed. Prefer `git log -n 5 --oneline -- <path>` over `git log -- <path>` when a count is fine.
+- Run the minimum set of commands needed. Prefer `git log --max-count=5 --oneline -- <path>` over `git log -- <path>` when a count is fine.
 - Cite concrete evidence: commit SHAs (short form OK), ref names, `path:line` references from blame, diff hunks trimmed to the relevant range.
 - Use `Read`/`Grep`/`Glob` for follow-up inspection of files the git output identifies (e.g., `git show SHA:path | head` then `Read` the current file to diff mentally).
 - Do not speculate beyond what the commands show. If a question needs history the commands don't surface (deleted-file recovery, ancient reflog that has expired), say so in `caveats`.

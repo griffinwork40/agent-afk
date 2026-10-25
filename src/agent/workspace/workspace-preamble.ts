@@ -13,18 +13,52 @@ import type { WorkspaceEntry } from './workspace-store.js';
 import { appendSystemPromptBlock } from '../subagent/append-system-prompt-block.js';
 
 /**
+ * Which workspace tools the receiving child can actually call.
+ *
+ * Contract: `undefined` (at every call site that takes it) means "unknown",
+ * and the preamble keeps its legacy hedged wording byte-for-byte. A defined
+ * value is authoritative: a tool marked `false` is never named in the
+ * preamble, so a child whose allowlist excludes it is never told to call it
+ * (#4060 — small models act on hedged "if available, call it" text).
+ */
+export interface WorkspaceToolAccess {
+  publish: boolean;
+  query: boolean;
+}
+
+/** Tool-usage lines under the populated-preamble header. */
+function populatedUsageLines(access: WorkspaceToolAccess | undefined): string[] {
+  if (access === undefined) {
+    return [
+      'Use them to avoid re-discovering known facts. If your tool allowlist includes',
+      '`workspace_query`, poll for newer entries mid-run; publish new discoveries',
+      'with `workspace_publish` only if it is available to you.',
+    ];
+  }
+  return [
+    'Use them to avoid re-discovering known facts.',
+    ...(access.query ? ['Call `workspace_query` to poll for newer entries mid-run.'] : []),
+    ...(access.publish ? ['Publish new discoveries with `workspace_publish`.'] : []),
+  ];
+}
+
+/**
  * Render workspace entries as a readable context block.
  *
  * Each entry appears between `---` dividers with its id, type, confidence,
- * agent, subject, content, and evidence (when present).
+ * agent, subject, content, and evidence (when present). The findings are
+ * always rendered (reading them needs no tool); only the tool-usage lines
+ * depend on `access` (see {@link WorkspaceToolAccess}).
  */
-export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
+export function renderWorkspacePreamble(
+  entries: WorkspaceEntry[],
+  access?: WorkspaceToolAccess,
+): string {
   const lines: string[] = [
     WORKSPACE_CONTEXT_HEADER,
     '',
     'The following findings were published by other agents working on this task.',
-    'Use them to avoid re-discovering known facts. Call `workspace_query` to poll',
-    'for newer entries mid-run. Publish new discoveries with `workspace_publish`.',
+    ...populatedUsageLines(access),
   ];
 
   for (const entry of entries) {
@@ -85,21 +119,29 @@ export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
 /**
  * Append the workspace context preamble to a forked child's system prompt.
  *
- * Always returns a new config — injects a cold-start hint when entries is
- * empty, otherwise the rendered preamble. System-prompt union handling
- * delegated to `appendSystemPromptBlock`. Does not mutate the input.
+ * Injects a cold-start hint when entries is empty, otherwise the rendered
+ * preamble. System-prompt union handling delegated to
+ * `appendSystemPromptBlock`. Does not mutate the input.
+ *
+ * Contract: returns the input config UNCHANGED (same reference) when there is
+ * nothing to inject, i.e. the workspace is empty and `access` says the child
+ * cannot publish. A cold-start hint only exists to invite the first publish,
+ * so a child that cannot publish gets no block at all. Callers detect "no
+ * preamble" by reference equality. Otherwise returns a new config.
  */
 export function injectWorkspacePreamble(
   config: AgentConfig,
   entries: WorkspaceEntry[],
+  access?: WorkspaceToolAccess,
 ): AgentConfig {
   // Cold-start hint: even with zero entries, tell the child about workspace_publish
   // so the first agent to discover something can seed the workspace for siblings.
-  const block =
-    entries.length === 0
-      ? COLD_START_HINT
-      : renderWorkspacePreamble(entries);
-  return appendSystemPromptBlock(config, block);
+  if (entries.length === 0) {
+    if (access === undefined) return appendSystemPromptBlock(config, COLD_START_HINT);
+    if (!access.publish) return config;
+    return appendSystemPromptBlock(config, grantedColdStartHint(access.query));
+  }
+  return appendSystemPromptBlock(config, renderWorkspacePreamble(entries, access));
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -134,14 +176,33 @@ export const WORKSPACE_PREAMBLE_MARKERS: readonly string[] = [
 const COLD_START_HINT = [
   WORKSPACE_COLD_START_HEADER,
   '',
-  'No entries published yet — you may be the first. Call `workspace_publish` when you:',
+  'No entries published yet — you may be the first. If `workspace_publish` is available, call it when you:',
   '- confirm an architectural invariant or key export surface of a module,',
   '- rule out a hypothesis (so siblings skip the same dead end),',
   '- read a file another sibling will likely need (publish the insight, not the raw content).',
   '',
-  'Call `workspace_query` before reading a file or grepping a module — a sibling may have',
-  'already analyzed it. Publishing is free to batch alongside other tools in the same reply.',
+  'If `workspace_query` is available, call it before reading a file or grepping a module —',
+  'a sibling may have analyzed it. Otherwise use your available read tools directly.',
 ].join('\n');
+
+/**
+ * Cold-start hint for a child KNOWN to hold `workspace_publish`. Unlike
+ * {@link COLD_START_HINT} it states the call plainly, and names
+ * `workspace_query` only when that tool is granted too.
+ */
+function grantedColdStartHint(canQuery: boolean): string {
+  return [
+    WORKSPACE_COLD_START_HEADER,
+    '',
+    'No entries published yet; you may be the first. Call `workspace_publish` when you:',
+    '- confirm an architectural invariant or key export surface of a module,',
+    '- rule out a hypothesis (so siblings skip the same dead end),',
+    '- read a file another sibling will likely need (publish the insight, not the raw content).',
+    ...(canQuery
+      ? ['', 'Call `workspace_query` before reading a file or grepping a module; a sibling may have analyzed it.']
+      : []),
+  ].join('\n');
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

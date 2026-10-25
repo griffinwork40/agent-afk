@@ -1,0 +1,131 @@
+---
+title: "Diagnose problems with afk doctor"
+description: "Check credentials, configuration, directories, and model endpoints before investigating a failed session."
+---
+
+Start with `afk doctor` when AFK cannot start, authenticate, or reach a local model. It checks your installation and configuration without submitting a model prompt. For a failure inside a session, pair its results with that session's witness trace.
+
+## Run the checks
+
+<Steps>
+<Step>
+### Collect a health report
+
+```bash
+afk doctor
+```
+
+For structured output:
+
+```bash
+afk doctor --format json
+```
+
+The JSON report contains `checks` with `name`, `state`, optional `detail` and `fix`, plus a `summary` of passed, warned, and failed checks. The command exits with status `1` if any check fails, otherwise `0`. Warnings alone do not produce a failing exit status.
+</Step>
+<Step>
+### Read the failing row, not just the summary
+
+A **pass** means that particular check succeeded, not that a model completion will work. A **warn** means something needs attention or could not be verified. A **fail** identifies a failed check and usually includes a suggested remedy.
+
+Doctor checks Anthropic credentials even if you only use another provider. A missing Anthropic key can therefore make the overall command fail while your OpenAI or local configuration is usable. Do not add credentials for a provider you do not intend to use just to make every row green.
+</Step>
+<Step>
+### Correct the relevant configuration and check again
+
+Fix the reported directory, model id, credential source, or endpoint. Restart the daemon or other persistent AFK process after changing its environment. Re-run doctor, then try your intended model in a session if you need to verify a real completion.
+</Step>
+</Steps>
+
+## What doctor checks
+
+| Check | What it verifies |
+|---|---|
+| Anthropic credentials | Finds a usable local credential; may refresh Claude Keychain OAuth before checking |
+| Codex/OpenAI credentials | Recognizes API keys and Codex CLI credentials, including ChatGPT OAuth expiry |
+| xAI/Grok credentials | Finds API key or stored OAuth, and reports ambiguous authentication |
+| npm binary directory | Compares npm's global binary location with `PATH` |
+| Config, state, and logs directories | Checks write access; attempts to create missing directories |
+| Configuration file | Parses the resolved JSON config file; a missing file is valid because defaults apply |
+| Concurrency settings | Reports effective values and warns about invalid values that fall back to defaults |
+| Required environment variables | Reports missing variables marked required in the registry, when there are any |
+| Telegram | Calls `getMe` when a bot token is configured, with a five second timeout |
+| Importable extensions | Reports available Claude Code or Codex assets that have not been explicitly trusted for import |
+| Custom model slots | Probes configured endpoints as described below |
+
+<Callout type="info">
+Doctor is a diagnostic command, not a completely offline or side-effect-free check. It can create missing runtime directories, refresh Claude OAuth, and make Telegram and custom endpoint requests. Credential presence checks do not prove that a remote provider accepts the credential.
+</Callout>
+
+## Check a custom model endpoint
+
+For each model slot with a `baseUrl`, doctor requests `GET baseUrl/models` with a three second timeout. Slots routed through `anthropic-direct` are skipped. A trailing `/v1` in your base URL is preserved.
+
+| Result | Meaning and remedy |
+|---|---|
+| Pass, model available | Endpoint returned an OpenAI-style `data` array containing the configured model id |
+| Warn, model not listed | Start/load the model on the server or correct the slot's model id |
+| Warn, unexpected body or HTTP status | Check the API prefix and whether the service implements `/models` |
+| Warn, auth rejected | The endpoint rejected the slot's own API key |
+| Warn, auth unverified | Doctor did not send the runtime's fallback or OAuth credentials; this is not proof your session authentication is broken |
+| Fail, unreachable | Check the server process, host, port, DNS, firewall, or timeout |
+
+Doctor only sends a slot's own API key when its routing permits it. It does not copy `OPENAI_API_KEY`, Codex credentials, or OAuth tokens into an arbitrary endpoint probe. Credentials embedded in URL userinfo or query strings are stripped before fetching and printing. Use a slot key instead of credentials in a URL.
+
+## Check provider selection separately
+
+```bash
+afk status
+afk provider auth diagnose
+afk provider auth diagnose --format json
+afk provider auth diagnose --family xai
+```
+
+`afk status` shows the selected model, provider, credential summary, and permission posture. Despite its “provider reachable” wording, it constructs and closes a session without a real provider request. Use it to inspect selection, not to certify network reachability.
+
+`afk provider auth diagnose` reports OpenAI and xAI auth sources without raw tokens. Its default exit status follows OpenAI only. `--family xai` follows xAI; `--family any` succeeds if either family is usable. `--slot medium` honors a slot's forced ChatGPT OAuth choice, but is not a general endpoint or slot-key validation command.
+
+## Find session evidence
+
+```bash
+afk trace list
+afk trace show --all
+afk trace show --results
+```
+
+`trace show` defaults to the latest trace. To select another one, pass the session identifier shown by `trace list`.
+
+With the default runtime home:
+
+| Location | Contents |
+|---|---|
+| `~/.afk/config/` | Configuration and environment settings |
+| `~/.afk/logs/` | Process and service logs |
+| `~/.afk/state/witness/` | Per-session traces, screenshots, and related evidence |
+| `~/.afk/state/sessions/` | Session records and conversation journals |
+
+`AFK_HOME` changes the runtime home; `AFK_STATE_DIR` changes the state directory. A trace records what ran and when. Full message and tool-result content comes from journals; `--results` joins those results into the trace view when available. For Telegram service output, use `afk telegram logs`.
+
+<Callout type="warn">
+Journals and tool results may contain private code, messages, paths, or secrets. Review and redact evidence before sharing it. Do not attach your environment file or authentication stores to a bug report.
+</Callout>
+
+## File a useful bug report
+
+Inside the REPL:
+
+```text
+/bug The model endpoint connects in doctor but the first prompt fails
+```
+
+`/bug` prints a prefilled public GitHub issue link. Nothing is submitted until you review the form and click Submit. It includes AFK version, Node version, OS, model, and session id, but not your working directory, transcript, tool output, or trace contents.
+
+Add the exact error, steps to reproduce, expected behavior, and a minimal redacted diagnostic excerpt. `/bug --file` can submit through `gh` after an on-screen confirmation; the ordinary link flow needs no `gh` installation.
+
+## Related
+
+<Cards>
+  <Card title="Authentication and providers" href="/troubleshooting/auth-and-providers" description="Resolve credential, connection, and first-token failures." />
+  <Card title="Common errors" href="/troubleshooting/common-errors" description="Find a symptom, cause, and safe remedy." />
+  <Card title="Inspect session evidence" href="/guides/observability" description="Understand traces, journals, and diagnostic records." />
+</Cards>

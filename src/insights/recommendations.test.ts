@@ -40,6 +40,10 @@ function makeAgg(overrides: Partial<InsightAggregates> = {}): InsightAggregates 
     traces: zeroTraceAggregates(),
     daemon: zeroDaemonAggregates(),
     routing: zeroRoutingAggregates(),
+    outcomes: { byWeek: {}, totalRecords: 0, parseErrors: 0 },
+    preexistingDefects: { totalRecords: 0, skippedOutOfWindow: 0, topClusters: [], ledgerTruncated: false },
+    subagentOutcomes: { dispatchedCount: 0, outcomeCount: 0, byModelTypeDepth: {} },
+    guardrailFalsePositives: { totalTrips: 0, falsePositiveTrips: 0, falsePositiveRate: null, totalPreToolUseBlocks: 0, sessionsWithTrips: 0, sessionsScanned: 0 },
     ...overrides,
   };
 }

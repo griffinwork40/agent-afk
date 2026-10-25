@@ -34,7 +34,8 @@ import { contextWindowTokensUsed, guardContextOverflow } from './query/auto-comp
 import type { HookRegistry } from '../../hooks.js';
 import { annotateFastError, prepareTurnRequest } from './query/turn-request.js';
 import { maybeAutoCompact } from './query-turn-driver.auto-compact.js';
-import { createFileCheckpointRegistry, type FileCheckpointRegistry } from '../../file-checkpoint/file-checkpoint.js';
+import type { FileCheckpointRegistry } from '../../file-checkpoint/file-checkpoint.js';
+import { beginCheckpointTurn, endCheckpointTurn, linkCheckpointTurn } from '../../file-checkpoint/turn-lifecycle.js';
 import { ensureError } from '../../../utils/errors.js';
 
 /** Live accessors the turn driver needs from the owning query. */
@@ -161,7 +162,13 @@ function buildTurnRunInput(
 function beginTurnCheckpoint(ctx: TurnDriverContext, userMessageId?: string): FileCheckpointRegistry | undefined {
   if (!ctx.state.enableFileCheckpointing) return undefined;
   const turnId = userMessageId ?? randomUUID();
-  const registry = createFileCheckpointRegistry(ctx.initSessionId, turnId);
+  const registry = beginCheckpointTurn(ctx.initSessionId, turnId);
+  // The user message was pushed just before this call: link it so /rewind can
+  // map the picked prompt to this checkpoint (turn-lifecycle.ts).
+  const messageIndex = ctx.state.messages.length - 1;
+  const userMessage = ctx.state.messages[messageIndex];
+  if (userMessage !== undefined) linkCheckpointTurn(userMessage, turnId);
+  ctx.state.messageJournal?.mark('checkpoint', { checkpointTurnId: turnId, messageIndex });
   ctx.state.currentTurnId = turnId;
   if ('fileCheckpointWiring' in ctx.state.toolDispatcher) {
     (ctx.state.toolDispatcher as { fileCheckpointWiring: { set: (r: FileCheckpointRegistry | undefined) => void } })
@@ -170,14 +177,33 @@ function beginTurnCheckpoint(ctx: TurnDriverContext, userMessageId?: string): Fi
   return registry;
 }
 
-/** Tear down the per-turn checkpoint registry (called in the turn finally block). */
-function endTurnCheckpoint(ctx: TurnDriverContext): void {
+/**
+ * Tear down the per-turn checkpoint registry (called on completion and in the
+ * turn finally block). Records post-turn hashes once (endCheckpointTurn is
+ * idempotent per registry).
+ */
+function endTurnCheckpoint(ctx: TurnDriverContext, checkpoint: FileCheckpointRegistry | undefined): void {
   if (!ctx.state.enableFileCheckpointing) return;
+  endCheckpointTurn(ctx.initSessionId, checkpoint);
   ctx.state.currentTurnId = undefined;
   if ('fileCheckpointWiring' in ctx.state.toolDispatcher) {
     (ctx.state.toolDispatcher as { fileCheckpointWiring: { set: (r: undefined) => void } })
       .fileCheckpointWiring.set(undefined);
   }
+}
+
+/**
+ * Invariant: an ESC/Stop interrupt (abort reason 'interrupted') usually ends
+ * the turn through the loop's own graceful-abort terminal, which carries the
+ * ACCUMULATED usage (stopReason null, or a prior round's 'tool_use'). Stamp it
+ * exactly like the synthesized interrupt terminal (query-events.ts) so every
+ * consumer — the web ledger's `stopped` marker included — sees the same reason
+ * whichever path ended the turn. Other aborts (close, timeout, budget) and
+ * natural ends pass through untouched.
+ */
+function stampInterrupted<E extends Extract<ProviderEvent, { type: 'turn.completed' }>>(event: E, signal: AbortSignal): E {
+  if (!signal.aborted || signal.reason !== 'interrupted') return event;
+  return { ...event, usage: { ...event.usage, stopReason: 'interrupted', resultSubtype: 'interrupted' } };
 }
 
 /** Drive the session: emit `session.init`, then loop user turns until closed. */
@@ -280,7 +306,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
       // already saw end.
       let turnEmittedTerminal = false;
       try {
-        for await (const event of ctx.retry.turnWithRetries(runInput, () => ctx.state.closed)) {
+        for await (let event of ctx.retry.turnWithRetries(runInput, () => ctx.state.closed)) {
           // P2 (Codex review): yield `turn.completed` BEFORE the closed-return
           // so stream-consumer.ts's `setLastResponseMetadata` fires and
           // `AgentSession.lastStopReason` is populated. Without this, a
@@ -295,12 +321,13 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
           // the downstream synthesize-terminal logic correct: no second terminal
           // is emitted after we return.
           if (event.type === 'turn.completed') {
+            event = stampInterrupted(event, controller.signal);
             ctx.state.lastUsage = event.usage;
             ctx.abort.clear(controller);
             turnEmittedTerminal = true;
             // Invariant: release mutation wiring before publishing completion;
             // consumers may rewind without advancing this generator again.
-            endTurnCheckpoint(ctx);
+            endTurnCheckpoint(ctx, checkpoint);
             yield { ...event, ...(checkpoint ? { userMessageId: checkpoint.turnId } : {}) };
             if (ctx.state.closed) return;
             continue;
@@ -330,7 +357,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
           // only if the throw pre-empted it, so the consumer unwinds instead
           // of hanging on a `next()` that never resolves.
           if (!turnEmittedTerminal) {
-            endTurnCheckpoint(ctx);
+            endTurnCheckpoint(ctx, checkpoint);
             const event = ctx.makeInterruptedTurnEvent();
             yield { ...event, ...(checkpoint ? { userMessageId: checkpoint.turnId } : {}) };
           }
@@ -344,7 +371,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
         // Journal commit point for every turn exit (abort, error, overload).
         ctx.state.journalSync.sync(ctx.state.messages);
         // Clear the per-turn checkpoint registry (no-op when disabled).
-        endTurnCheckpoint(ctx);
+        endTurnCheckpoint(ctx, checkpoint);
       }
 
       // A turn that exits the loop CLEANLY (no throw) while the signal is

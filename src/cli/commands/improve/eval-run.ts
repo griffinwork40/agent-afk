@@ -112,9 +112,10 @@ function printEvalRunSummary(evalRun: EvalRun, jsonPath: string, markdownPath: s
  *
  *   pass        → 0  the recorded failure was re-driven and is neutralised
  *   fail|error  → 1  a regression, or the runner itself broke
- *   unsupported → 3  NOTHING WAS CHECKED — the eval-case's pattern has no
- *                    registered contract (`contracts.ts` resolveContract →
- *                    undefined), so the run asserted nothing at all
+ *   unsupported → 3  no card-specific behavioural proof was obtained — the
+ *                    pattern has no registered contract, no replay handler, or
+ *                    a replay handler that ran inconclusively (fixture intact
+ *                    but the recorded loop did not reproduce)
  *
  * `unsupported` previously exited 0, which made it indistinguishable from a
  * real `pass`: wiring this command into CI would have silently green-lit any

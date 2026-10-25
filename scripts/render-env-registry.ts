@@ -26,7 +26,7 @@ const repoRoot = resolve(__dirname, '..');
 
 const OUT_JSON = resolve(repoRoot, 'docs/env-registry.json');
 const OUT_MD = resolve(repoRoot, 'docs/env-registry.md');
-const OUT_MDX = resolve(repoRoot, 'website/content/docs/configuration/environment-variables.mdx');
+const OUT_MDX = resolve(repoRoot, 'website/content/docs/reference/environment-variables.mdx');
 
 const isCheck = process.argv.includes('--check');
 
@@ -137,7 +137,7 @@ function main(): void {
     console.error(`✗ scan:env: registry outputs would drift from src/config/env.ts.`);
     if (jsonDrift) console.error(`  - docs/env-registry.json`);
     if (mdDrift) console.error(`  - docs/env-registry.md`);
-    if (mdxDrift) console.error(`  - website/content/docs/configuration/environment-variables.mdx`);
+    if (mdxDrift) console.error(`  - website/content/docs/reference/environment-variables.mdx`);
     console.error('\nFix: run `pnpm scan:env` and commit the result.');
     process.exit(1);
   }

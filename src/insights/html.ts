@@ -15,26 +15,19 @@
 import type { InsightAggregates, Recommendation, InsightsOptions } from './types.js';
 import { renderOutcomes } from './html.outcomes.js';
 import { renderPreexistingDefects } from './html.preexisting-defects.js';
+import { renderGuardrailFalsePositives, renderShadowGitObserve } from './html.guardrail-false-positives.js';
+import { htmlEscape as _htmlEscape, safeNum as _safeNum } from './html.helpers.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Escape HTML special characters to prevent injection / rendering artifacts. */
-export function htmlEscape(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+/** Escape HTML special characters to prevent injection / rendering artifacts.
+ * Re-exported from html.helpers for backward compat with existing consumers. */
+export const htmlEscape: (s: string) => string = _htmlEscape;
 
 /** Safe number formatting — returns '0' instead of 'NaN' or 'undefined'. */
-function safeNum(n: number | undefined | null, decimals = 0): string {
-  if (n === undefined || n === null || !Number.isFinite(n)) return '0';
-  return n.toFixed(decimals);
-}
+const safeNum: (n: number | undefined | null, decimals?: number) => string = _safeNum;
 
 /** Format cost in USD. */
 function formatCost(usd: number | undefined): string {
@@ -398,6 +391,8 @@ export function generateHtml(
     renderRouting(aggregates),
     renderOutcomes(aggregates),
     renderPreexistingDefects(aggregates),
+    renderGuardrailFalsePositives(aggregates),
+    renderShadowGitObserve(aggregates),
     renderRecommendations(recommendations),
     renderAbout(aggregates),
   ].join('\n');
@@ -455,6 +450,8 @@ export function generateHtml(
     <a href="#routing">Routing</a>
     <a href="#outcomes">Outcomes</a>
     <a href="#preexisting-defects">Pre-existing Defects</a>
+    <a href="#guardrail-false-positives">Guardrail FPs</a>
+    <a href="#shadow-git-observe">Shadow-Git</a>
     <a href="#recommendations">Recommendations</a>
     <a href="#about">About</a>
   </nav>

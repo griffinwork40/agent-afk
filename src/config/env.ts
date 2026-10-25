@@ -56,6 +56,7 @@ import { MCP_ENV_REGISTRY } from './env.mcp.js';
 import { MISC_ENV_REGISTRY } from './env.misc.js';
 import { MODEL_ENV_REGISTRY } from './env.model.js';
 import { MODEL_TIERS_ENV_REGISTRY } from './env.model-tiers.js';
+import { SUGGEST_ENV_REGISTRY } from './env.model-tiers.suggest.js';
 import { PATHS_ENV_REGISTRY } from './env.paths.js';
 import { PEER_ENV_REGISTRY } from './env.peer.js';
 import { TELEGRAM_ENV_REGISTRY } from './env.telegram.js';
@@ -64,6 +65,8 @@ import { WHATIF_ENV_REGISTRY } from './env.whatif.js';
 import { SESSION_STORAGE_ENV_REGISTRY } from './env.session-storage.js';
 import { MEMORY_GC_ENV_REGISTRY } from './env.memory-gc.js';
 import { VITALS_ENV_REGISTRY } from './env.vitals.js';
+import { TOOLS_ENV_REGISTRY } from './env.tools.js';
+import { CONTINUATION_ENV_REGISTRY } from './env.continuation.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -128,6 +131,8 @@ export const ENV_REGISTRY = [
   ...MODEL_ENV_REGISTRY,
   // Model tiers, timeouts, suggestions, legacy aliases (env.model-tiers.ts)
   ...MODEL_TIERS_ENV_REGISTRY,
+  // REPL suggestion vars (env.model-tiers.suggest.ts)
+  ...SUGGEST_ENV_REGISTRY,
   // Memory GC env vars (env.memory-gc.ts)
   ...MEMORY_GC_ENV_REGISTRY,
 
@@ -177,6 +182,12 @@ export const ENV_REGISTRY = [
 
   // ── Per-round vitals harness note (env.vitals.ts) ────────────────────────
   ...VITALS_ENV_REGISTRY,
+
+  // ── Per-tool opt-in features (#3904 and future, env.tools.ts) ────────────
+  ...TOOLS_ENV_REGISTRY,
+
+  // ── Subagent continuation chain limits (env.continuation.ts) ─────────────
+  ...CONTINUATION_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];
 
 /**

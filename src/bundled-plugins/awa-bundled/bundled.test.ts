@@ -82,7 +82,7 @@ const PINNED_HASHES = {
   //   recommends the `agent` fan-out (simpler rate-limit control, no DAG needed), but now
   //   correctly notes compose is a valid alternative when DAG tracking is wanted.
   'fix-pr':
-    '0414de3e4b1ef45e3f5824fa93228087ae764b45dc090e22e590db5eab070515',
+    '5f1591c9d921919c9c73ba47a455753d7a9eea8f52e08c3187be082c77821acd',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
@@ -113,7 +113,7 @@ const PINNED_HASHES = {
   // (`pnpm test <file>` / `pnpm test -t "AuthService"`) plus a note to never emit
   // the `--` form. Bundled-only — mirror into the user-scope /refactor at
   // ~/.afk/skills/ if it drifts back.
-  refactor: '816bcc71c185cf0fe511c67424986ae08b45364d00bb790c1b972c3d562d099e',
+  refactor: '3823a970ce2fa7bdf0b2c40713de633e6ed3d450c0ad5665d342764fd51cee26',
   research: '052f8ec6f467f5b9200bea01286bebecf079c7135897a6a503c9cd74a019304b',
   // History: /review Wave 1 no longer mandates a `git show` re-read (#726,
   // #777); severity and disposition split into separate axes with an explicit

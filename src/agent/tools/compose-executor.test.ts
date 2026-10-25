@@ -2205,8 +2205,10 @@ describe('ComposeExecutor', () => {
         nodes: [{ id: 'a', prompt: 'research task', agent_type: 'research-agent' }],
       }));
       const dagOpts = mockRunSubagentDAG.mock.calls[0]?.[0];
-      // Named agent's definition prompt replaces the generic system prompt
-      expect(dagOpts.nodes[0].systemPrompt).toBe('You are a research specialist.');
+      // Named agent's definition prompt replaces the generic system prompt;
+      // resolveComposeAgentPrompt appends a tool-list suffix for named agents.
+      expect(dagOpts.nodes[0].systemPrompt).toContain('You are a research specialist.');
+      expect(dagOpts.nodes[0].systemPrompt).toContain('This compose node can use only these tools:');
       // Workspace-backed compose nodes always get replaySafe:false because
       // the provider grants CHILD_ALLOWED_TOOLS (write surface) regardless
       // of the named agent's declared frontmatter tools.

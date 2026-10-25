@@ -18,6 +18,7 @@ import { isExplicitlyEnabled } from '../../config/env-helpers.js';
 import type { ToolPermissionConfig } from './permissions.js';
 import type { AnthropicToolDef } from './types.js';
 import { gitReadTool } from './schemas.git-read.js';
+import { GIT_READ_SUBCOMMANDS } from './git-read.policy.js';
 
 export const GIT_READ_TOOL_NAME = 'git_read';
 
@@ -56,8 +57,50 @@ export function applyReadOnlyGitPermissions(
 /** Model-visible denial for a `bash` call on a read-only surface while the flag is on. */
 export const READONLY_BASH_DISABLED_REASON =
   'Bash is disabled for read-only agents (AFK_READONLY_GIT_TOOL). Use git_read for git ' +
-  '(status/log/diff/show/grep/tag/branch/blame/ls-files) and read_file/grep/glob/list_directory ' +
+  `(${GIT_READ_SUBCOMMANDS.join('/')}) and read_file/grep/glob/list_directory ` +
   'for files. If the task needs a shell or a write, stop and report that to your caller.';
+
+/**
+ * Denial override for the static allowlist gate. With the flag on, the swap
+ * removes `bash` from a read-only surface's allowlist, so a `bash` call dies
+ * at the permission check with the generic "not in the configured allowlist"
+ * text, BEFORE the read-only bash gate that carries
+ * {@link READONLY_BASH_DISABLED_REASON}. Returns that reason in exactly that
+ * case so the model learns about git_read on its first denied call;
+ * `undefined` (keep the generic reason) otherwise.
+ *
+ * Mirror: `checkReadOnlyBash` in `dispatcher.pre-dispatch-gates.ts` carries an
+ * equivalent guard (same logical predicate, split across two branches in
+ * `checkReadOnlyBash` — see `dispatcher.pre-dispatch-gates.ts:276`)
+ * as a backstop for any path that reaches the dispatcher with bash still
+ * admitted. If this predicate changes, update that function too (and vice versa).
+ */
+export function readOnlyBashDenialOverride(toolName: string, readOnlyBash: boolean): string | undefined {
+  return toolName === 'bash' && readOnlyBash && isReadOnlyGitToolEnabled() ? READONLY_BASH_DISABLED_REASON : undefined;
+}
+
+/**
+ * Invariant: the tool grant and the agent's BELIEF about its tools must change
+ * together (see `withRegistryGrants` in agents/builtins.ts). The swap above
+ * changes the grant at provider construction; this note changes the belief for
+ * a byte-pinned vendored prompt that still says "You have Bash". Appended at
+ * registry composition only while the flag is on, so the flag-off prompt is
+ * byte-identical.
+ */
+export function withGitReadSubstitution(body: string): string {
+  if (!isReadOnlyGitToolEnabled()) return body;
+  return `${body}
+
+## Tool substitution by this runtime
+
+Bash is NOT available. This runtime replaces it with the structured \`git_read\` tool, superseding any earlier statement that you have Bash or may pipe output. Read, Grep, and Glob are unchanged.
+
+- \`subcommand\`: one of ${GIT_READ_SUBCOMMANDS.join(', ')}.
+- \`args\`: allowlisted flags and revisions only. \`paths\`: file paths (git_read inserts \`--\` itself).
+- Example: \`git log -n 5 --oneline -- src/x.ts\` becomes \`{"subcommand":"log","args":["--max-count=5","--oneline"],"paths":["src/x.ts"]}\`.
+- Example: \`git grep -n foo HEAD -- src/\` becomes \`{"subcommand":"grep","pattern":"foo","args":["-n","HEAD"],"paths":["src/"]}\`.
+- A rejection names the allowed options. Do not retry the same shape.`;
+}
 
 /**
  * Schemas to append to a provider's builtin list: `[gitReadTool]` while the

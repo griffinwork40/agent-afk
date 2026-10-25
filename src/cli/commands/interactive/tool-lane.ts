@@ -13,7 +13,7 @@ import {
 } from './tool-lane-render.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
 import type { ElementFade } from '../../smoke-fade.js';
-import { trailingCompletedRootToolName } from './tool-lane.queries.js';
+import { liveChildAgentCount, trailingCompletedRootToolName } from './tool-lane.queries.js';
 import { renderToolLaneOverlay } from './tool-lane-overlay.js';
 import { propagateChildFailure as propagateChildFailureIn } from './tool-lane.ancestry.js';
 import { elapsedDisplayNeedsUpdate } from './tool-lane.elapsed-check.js';
@@ -50,6 +50,16 @@ export class ToolLane {
   private entries = new Map<string, Entry>();
   private order: string[] = [];
   private agentIdStack: string[] = [];
+  /**
+   * Synthetic ids absorbed by a prior {@link flushSource} call. Checked in
+   * {@link addStartWithAgentContext} to drop tool events whose parent was
+   * already committed to scrollback — prevents orphan roots in committed
+   * scrollback when a still-running child calls into a deleted parent lane row.
+   *
+   * Populated by {@link flushSource} (via {@link ToolLaneFlushHost.absorbedIds});
+   * cleared by {@link flush} when the whole lane is reset at turn end.
+   */
+  private absorbedIds = new Set<string>();
   /**
    * Tracks the last displayed elapsed-second value per in-flight tool entry so
    * {@link checkElapsedDisplayNeedsUpdate} can detect second-boundary crossings
@@ -152,6 +162,12 @@ export class ToolLane {
     agentContext: string | undefined,
     maxWidth?: number,
   ): void {
+    // Drop events whose agentContext was absorbed by a prior flushSource.
+    // The parent's lane row no longer exists; creating a child under it would
+    // produce a dangling agentContext that surfaces as an orphan root in
+    // committed scrollback. The overlay loses live detail for that child, but
+    // scrollback stays clean — this is the Direction 2 trade-off chosen in #4329.
+    if (agentContext !== undefined && this.absorbedIds.has(agentContext)) return;
     // Same rationale as addStart: strip ANSI at storage time so LLM-emitted
     // escapes can't reach palette.dim() on any downstream render surface.
     const safeInput = stripAnsi(toolInput);
@@ -166,6 +182,28 @@ export class ToolLane {
     const entry = freshToolEntry(toolUseId, toolName, safeInput, prefix, agentContext);
     this.entries.set(toolUseId, entry);
     this.order.push(toolUseId);
+  }
+
+  /**
+   * Update-only relabel of an EXISTING tool entry's display input (the stall
+   * annotation / heartbeat path). Returns `false` and does nothing when the
+   * entry is absent.
+   *
+   * Invariant: this never creates an entry. An absent id means the agent's
+   * block was already committed to scrollback — usually absorbed into an
+   * ancestor's flushSource block — and re-creating it would leave a ghost
+   * root that later commits as a separate block below its parent's Done row.
+   * Use {@link addStartWithAgentContext} only where creation is intended.
+   */
+  annotateIfPresent(toolUseId: string, toolName: string, toolInput: string): boolean {
+    if (!this.hasEntry(toolUseId)) return false;
+    this.addStartWithAgentContext(toolUseId, toolName, toolInput, undefined);
+    return true;
+  }
+
+  /** In-flight nesting children directly under `parentId`. See {@link liveChildAgentCount}. */
+  countLiveChildAgents(parentId: string): number {
+    return liveChildAgentCount(this.entries, parentId);
   }
 
   mergeAgentLabel(parentToolUseId: string, label: string, maxWidth?: number): boolean {
@@ -540,7 +578,21 @@ export class ToolLane {
   }
 
   flush(homeDir?: string): string[] {
+    // Clear the absorbed-id set on full flush (turn end). The set is
+    // turn-scoped: once the whole lane is reset, a new turn starts fresh.
+    this.absorbedIds.clear();
     return flushImpl(this as unknown as import('./tool-lane.flush.js').ToolLaneFlushHost, homeDir);
+  }
+
+  /**
+   * Returns `true` if `id` was absorbed by a prior {@link flushSource} or
+   * {@link flushCompletedRoots} call during the current turn. Used by tests
+   * to assert the absorbed-id guard.
+   *
+   * @internal
+   */
+  isAbsorbed(id: string): boolean {
+    return this.absorbedIds.has(id);
   }
 
 

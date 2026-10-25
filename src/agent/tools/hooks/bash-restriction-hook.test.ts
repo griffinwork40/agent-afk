@@ -431,6 +431,62 @@ describe('createBashRestrictionHook — quoted heredoc data (#3850)', () => {
     expect(hook(ctx(command)).decision).not.toBe('block');
     expect(hook(headlessCtx(command)).decision).not.toBe('block');
   });
+
+  // git commit -F - <<'EOF': commit message body is plain text, never executed.
+  // Covers the AFK-canonical form: git -c user.name=X -c user.email=Y commit -F -
+  // Single-quoted -c values are tokenized identically to double-quoted ones.
+  it.each([
+    `git commit -F - <<'EOF'\n${mention}\nEOF`,
+    `git -c user.name="AFK Agent" -c user.email=agent@agentafk.com commit -F - <<'EOF'\n${mention}\nEOF`,
+    `git -c 'user.name=AFK Agent' -c 'user.email=agent@agentafk.com' commit -F - <<'EOF'\n${mention}\nEOF`,
+    `git commit -F - <<'MSG'\nfix(#3850): heredoc body mentions ${mention}\nMSG`,
+    `git commit -F - <<\\EOF\n${mention}\nEOF`,
+  ])('allows git commit -F - body mentioning a restricted path: %s', (command) => {
+    expect(hook(ctx(command)).decision).not.toBe('block');
+    expect(hook(headlessCtx(command)).decision).not.toBe('block');
+  });
+
+  it.each([
+    // Body is written to disk — must stay blocked.
+    `git commit -F - <<'EOF' > /tmp/msg\n${mention}\nEOF`,
+    // Extra arguments after '-F -' are not the known safe form.
+    `git commit -F - --no-verify <<'EOF'\n${mention}\nEOF`,
+    // Not '-F -': a file path operand may name a credential.
+    `git commit -F ~/.afk/config/afk.env <<'EOF'\n${mention}\nEOF`,
+    // Unquoted delimiter: body is shell-expanded.
+    `git commit -F - <<EOF\n${mention}\nEOF`,
+    // Consumer executes stdin.
+    `sh <<'EOF'\ngit commit -F - <<'INNER'\n${mention}\nINNER\nEOF`,
+    // Single-quoted -c: quote style must not open a fail-open path. A bash -c
+    // with single-quoted argument is semantically identical to double-quoted;
+    // the block boundary must be quote-style independent.
+    `bash -c 'cat ${mention}/Google/Chrome/Default/Login\\ Data'`,
+  ])('keeps unsafe git-commit heredoc variants blocked: %s', (command) => {
+    expect(hook(ctx(command)).decision).toBe('block');
+  });
+
+  it('blocks bash -c credential-theft (single-quoted variant)', () => {
+    // Direct credential-read via bash -c; not a git-commit heredoc.
+    // Kept outside the git-commit suite to make its distinct threat model clear.
+    const command = `bash -c 'cat ${mention}/Google/Chrome/Default/Login\\ Data' <<'EOF'\nignored body\nEOF`;
+    expect(hook(ctx(command)).decision).toBe('block');
+  });
+
+  it('blocks bash -c credential-theft (double-quoted variant)', () => {
+    // Quote style must not affect fail-closed boundary.
+    const command = `bash -c "cat ${mention}/Google/Chrome/Default/Login\\ Data" <<'EOF'\nignored body\nEOF`;
+    expect(hook(ctx(command)).decision).toBe('block');
+  });
+
+  it('bash -c credential-theft block carries an Interpreter reason', () => {
+    // The entry added to the blocked set at line 463 is an interpreter -c
+    // one-liner; verify the reason names the interpreter guard, not a generic
+    // restricted-path string, so the block surface is unambiguous.
+    const command = `bash -c 'cat ${mention}/Google/Chrome/Default/Login\\ Data'`;
+    const decision = hook(ctx(command));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('Interpreter');
+  });
 });
 
 describe('createBashRestrictionHook — grant containment direction (F4 regression)', () => {
@@ -834,10 +890,12 @@ describe.skipIf(isWin32)('createBashRestrictionHook — mcp.json carve-out parit
     expect(hook(ctx(`cat ${mcp} ${home}/.afk/config/afk.env`)).decision).toBe('block');
   });
 
-  it('extends the carve-out to the interpreter guard', () => {
+  // Write-hole fix: an interpreter one-liner is not provably read-only (it can
+  // open the registry for append), so the carve-out no longer applies to it.
+  it('does NOT extend the carve-out to interpreter one-liners (write hole)', () => {
     expect(
       hook(ctx('python -c "import json; json.load(open(\'~/.afk/config/mcp.json\'))"')).decision,
-    ).not.toBe('block');
+    ).toBe('block');
   });
 
   // PR #805 P1 — quote-concatenation bypass. Shell concatenates
@@ -937,13 +995,15 @@ describe.skipIf(isWin32)('createBashRestrictionHook — ssh config / known_hosts
     expect(hook(ctx(`cat ${sshConfig} ${home}/.ssh/id_rsa`)).decision).toBe('block');
   });
 
-  it('extends the carve-out to the interpreter guard', () => {
+  // Write-hole fix: `open('~/.ssh/config','a')` is the same shape, so no
+  // interpreter one-liner gets the carve-out (ProxyCommand = code execution).
+  it('does NOT extend the carve-out to interpreter one-liners (write hole)', () => {
     expect(
       hook(ctx('python -c "print(open(\'~/.ssh/config\').read())"')).decision,
-    ).not.toBe('block');
+    ).toBe('block');
     expect(
       hook(ctx('python -c "print(open(\'~/.ssh/known_hosts\').read())"')).decision,
-    ).not.toBe('block');
+    ).toBe('block');
   });
 });
 

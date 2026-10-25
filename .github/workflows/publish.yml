@@ -31,13 +31,13 @@ jobs:
       id-token: write    # npm provenance attestation (OIDC)
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -47,7 +47,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # prepublishOnly -> build:dist -> scripts/build-web-ui.mjs needs these;
-      # mirrors auto-release.yml and ci.yml.
+      # mirrors ci.yml.
       - name: Install dashboard dependencies
         run: cd dashboard && pnpm install --frozen-lockfile
 
@@ -84,6 +84,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           generate_release_notes: true

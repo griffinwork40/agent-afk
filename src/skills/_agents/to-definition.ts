@@ -2,6 +2,7 @@ import type { AgentDefinition } from '../../agent/types/sdk-types.js';
 import { normalizeToolToken } from '../../agent/plugins/tool-injector.js';
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/tool.js';
+import { WORKSPACE_TOOL_NAMES } from '../../agent/workspace/workspace-tools.js';
 
 // Invariant: the vendored agent modules (research-agent, git-investigator) pin
 // their `allowedTools` to upstream Claude Code's PascalCase namespace (Read,
@@ -14,7 +15,13 @@ import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/tool.js';
 const KNOWN_AFK_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...BUILTIN_TOOL_NAMES,
   ...AWARENESS_TOOL_NAMES,
+  ...WORKSPACE_TOOL_NAMES,
   'memory_search',
+  // git_read (#4059): not in BUILTIN_TOOL_NAMES (conditional on
+  // AFK_READONLY_GIT_TOOL) but present in research-agent's allowedTools when
+  // the flag is on. Must be listed here so normalizeToolToken does not drop it
+  // fail-closed. Mirrors resolve.ts:59.
+  'git_read',
   'agent',
   'skill',
 ]);

@@ -83,6 +83,7 @@ import type { IAgentSession } from '../../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import type { ToolCall } from '../types.js';
 import { SubagentExecutor, type SubagentExecutorContext } from '../subagent-executor.js';
+import { buildChildConfigWithoutNesting, completeChildConfigNesting, type BuildChildConfigArgs } from './child-config.js';
 
 // --- Shared harness (mirrors subagent-executor.test.ts) --------------------
 
@@ -349,6 +350,92 @@ describe('SubagentExecutor — isolation:"worktree" wiring', () => {
       };
       expect(tdArg.repoRoot).toBe(ISO_RESULT.repoRoot);
       expect(tdArg.worktreePath).toBe(ISO_RESULT.path);
+    });
+  });
+
+  // ------------------------------------------------------------------------
+  // (5) #4374: depth-2+ nesting inherits worktree cwd, not parent repo root.
+  // When isolation:"worktree" rewrites childConfig.cwd, the two-phase API
+  // (buildChildConfigWithoutNesting + completeChildConfigNesting) ensures the
+  // child SubagentManager and child executor receive the worktree path — so
+  // depth-2+ forks inherit the correct write root.
+  // ------------------------------------------------------------------------
+  describe('#4374: depth-2+ nesting inherits worktree cwd', () => {
+    it('childManager and child executor receive the worktree path, not the parent repo root', () => {
+      let capturedExecutorCwd: string | undefined;
+      const args: BuildChildConfigArgs = {
+        parsed: { prompt: 'test' } as never,
+        namedAgent: undefined,
+        depth: 0,
+        maxDepth: 3,
+        currentCwd: '/repo',
+        signal: new AbortController().signal,
+        defaultConfig: { apiKey: 'test-key', systemPrompt: 'test' },
+        defaultSubagentModel: 'sonnet',
+        childProviderFactory: () => ({}) as never,
+        createChildExecutor: (ctx) => { capturedExecutorCwd = ctx.cwd; return {} as never; },
+      };
+
+      const pre = buildChildConfigWithoutNesting(args);
+      const worktreePath = '/repo/.afk-worktrees/iso-test';
+
+      // Phase 2: pass the worktree path as nestingCwd (simulating what
+      // executeOnce does after setupIsolationWorktree mutated childConfig.cwd).
+      const result = completeChildConfigNesting(args, pre, worktreePath);
+
+      // The nested SubagentManager's parentCwd should be the worktree path,
+      // so depth-2 forks inherit the correct write root.
+      expect(result.childManager).toBeDefined();
+      expect(result.childManager!.getReadScopeInputs().parentCwd).toBe(worktreePath);
+
+      // The child executor context's cwd should also be the worktree path,
+      // so depth-2 buildChildConfig receives the correct currentCwd.
+      expect(capturedExecutorCwd).toBe(worktreePath);
+    });
+
+    it('non-isolated dispatch without parsed.cwd: nesting uses args.currentCwd', () => {
+      const args: BuildChildConfigArgs = {
+        parsed: { prompt: 'test' } as never,
+        namedAgent: undefined,
+        depth: 0,
+        maxDepth: 3,
+        currentCwd: '/repo',
+        signal: new AbortController().signal,
+        defaultConfig: { apiKey: 'test-key', systemPrompt: 'test' },
+        defaultSubagentModel: 'sonnet',
+        childProviderFactory: () => ({}) as never,
+        createChildExecutor: () => ({}) as never,
+      };
+
+      const pre = buildChildConfigWithoutNesting(args);
+      const result = completeChildConfigNesting(args, pre, args.currentCwd);
+
+      expect(result.childManager).toBeDefined();
+      expect(result.childManager!.getReadScopeInputs().parentCwd).toBe('/repo');
+    });
+
+    it('explicit parsed.cwd without isolation: nesting inherits parsed.cwd, not executor cwd', () => {
+      const args: BuildChildConfigArgs = {
+        parsed: { prompt: 'test', cwd: '/data/project' } as never,
+        namedAgent: undefined,
+        depth: 0,
+        maxDepth: 3,
+        currentCwd: '/repo',
+        signal: new AbortController().signal,
+        defaultConfig: { apiKey: 'test-key', systemPrompt: 'test' },
+        defaultSubagentModel: 'sonnet',
+        childProviderFactory: () => ({}) as never,
+        createChildExecutor: () => ({}) as never,
+      };
+
+      const pre = buildChildConfigWithoutNesting(args);
+
+      // nestingCwd = parsed.cwd ?? currentCwd = '/data/project'
+      const nestingCwd = args.parsed.cwd ?? args.currentCwd;
+      const result = completeChildConfigNesting(args, pre, nestingCwd);
+
+      expect(result.childManager).toBeDefined();
+      expect(result.childManager!.getReadScopeInputs().parentCwd).toBe('/data/project');
     });
   });
 });

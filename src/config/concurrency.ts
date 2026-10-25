@@ -5,6 +5,28 @@ export const DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS = 8;
 export const DEFAULT_MAX_CONCURRENT_BACKGROUND_JOBS = 10;
 
 /**
+ * Provider slots that carry per-provider subagent-concurrency overrides.
+ *
+ * Mapping from the canonical `BundledProviderName` values (as returned by
+ * `providerForModel`) to the env key that overrides
+ * `AFK_MAX_CONCURRENT_SUBAGENT_CALLS` for fan-outs whose tasks run on that
+ * provider. When the env key is unset the global fallback is used, so nothing
+ * changes unless the operator explicitly configures a per-provider cap.
+ *
+ * Only `'anthropic-direct'` and `'openai-compatible'` are covered in this
+ * first slice; xai and other providers continue to use the global default.
+ * Follow-up: per-slot config, safe-tool batches. Part of #3886.
+ */
+export const PROVIDER_SUBAGENT_CONCURRENCY_KEYS = {
+  'anthropic-direct': 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC',
+  'openai-compatible': 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI',
+} as const satisfies Partial<Record<string, ProviderConcurrencyEnvKey>>;
+
+export type ProviderConcurrencyEnvKey =
+  | 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC'
+  | 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI';
+
+/**
  * Upper bound accepted from `AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS`.
  *
  * Invariant: each unit here is a real tool call competing for the same
@@ -42,7 +64,8 @@ export const MAX_CONCURRENT_BACKGROUND_JOBS_CEILING = 64;
 export type ConcurrencyEnvKey =
   | 'AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS'
   | 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS'
-  | 'AFK_MAX_CONCURRENT_BACKGROUND_JOBS';
+  | 'AFK_MAX_CONCURRENT_BACKGROUND_JOBS'
+  | ProviderConcurrencyEnvKey;
 
 interface ConcurrencyDefinition {
   key: ConcurrencyEnvKey;
@@ -153,4 +176,79 @@ export function resolveMaxConcurrentSubagentCalls(warn = true): number {
 
 export function resolveMaxConcurrentBackgroundJobs(warn = true): number {
   return resolve('AFK_MAX_CONCURRENT_BACKGROUND_JOBS', warn);
+}
+
+/**
+ * Per-provider definitions for the subagent-concurrency override keys.
+ *
+ * Shares the same ceiling and parse logic as the global
+ * `AFK_MAX_CONCURRENT_SUBAGENT_CALLS` definition — a per-provider cap is
+ * subject to the same "each unit is a forked AgentSession" invariant.
+ */
+const providerSubagentDefinitions: readonly (ConcurrencyDefinition & {
+  key: ProviderConcurrencyEnvKey;
+})[] = [
+  {
+    key: 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC',
+    defaultValue: DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+    maxValue: MAX_CONCURRENT_SUBAGENT_CALLS_CEILING,
+  },
+  {
+    key: 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI',
+    defaultValue: DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+    maxValue: MAX_CONCURRENT_SUBAGENT_CALLS_CEILING,
+  },
+];
+
+/**
+ * Resolve the effective subagent-concurrency cap for a specific provider.
+ *
+ * Precedence (highest wins):
+ *   1. Per-provider env key — `AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC`
+ *      or `AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI` — when set and valid.
+ *   2. Global `AFK_MAX_CONCURRENT_SUBAGENT_CALLS` (via
+ *      {@link resolveMaxConcurrentSubagentCalls}).
+ *   3. {@link DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS} (8) — the built-in
+ *      default, unchanged from the pre-#3886 behavior.
+ *
+ * When `provider` is `undefined` or maps to no known per-provider key (e.g.
+ * `'xai'`, `'xai-oauth'`) this degrades to the global resolver, so callers
+ * that do not know the provider at the fan-out site are unaffected.
+ *
+ * @param provider - The canonical provider name as returned by
+ *   `providerForModel()` (e.g. `'anthropic-direct'`,
+ *   `'openai-compatible'`). Pass `undefined` to skip per-provider lookup.
+ * @param warn - Whether to emit a one-shot stderr warning on invalid values.
+ */
+export function resolveMaxConcurrentSubagentCallsForProvider(
+  provider: string | undefined,
+  warn = true,
+): number {
+  if (provider !== undefined) {
+    const envKey =
+      PROVIDER_SUBAGENT_CONCURRENCY_KEYS[
+        provider as keyof typeof PROVIDER_SUBAGENT_CONCURRENCY_KEYS
+      ];
+    if (envKey !== undefined) {
+      const providerDef = providerSubagentDefinitions.find((d) => d.key === envKey);
+      if (providerDef !== undefined) {
+        const rawValue = env[envKey];
+        // Only use the per-provider override when it is explicitly set.
+        // When unset, fall through to the global resolver so the default
+        // stays at `DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS` without the
+        // operator having to mirror the global in two places.
+        if (rawValue !== undefined) {
+          const status = getConcurrencyStatus(providerDef, warn);
+          // Only use the per-provider value when it parsed successfully.
+          // When invalid, fall through to the global resolver so a
+          // configured global cap (e.g. AFK_MAX_CONCURRENT_SUBAGENT_CALLS=2)
+          // is respected instead of silently returning the hardcoded default.
+          if (status.valid) {
+            return status.effectiveValue;
+          }
+        }
+      }
+    }
+  }
+  return resolveMaxConcurrentSubagentCalls(warn);
 }

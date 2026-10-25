@@ -22,6 +22,11 @@ export const waitForTool: AnthropicToolDef = {
     '"process" — waits until a PID has exited (process.kill(pid, 0) → ESRCH). Only PIDs this session\'s bash tool spawned ' +
     '(the shell it launched, including the pid returned by bash run_in_background) are accepted; grandchildren and other PIDs are refused. ' +
     '"command" — runs a shell command repeatedly; exit 0 signals the condition is met. ' +
+    'Command restrictions: no compound syntax (&&, ||, ;), no redirects, no shell ' +
+    'expansion or substitution, and only allowlisted read-only commands (test, ls, cat, ' +
+    'grep, git status, gh …). For file existence/content use type=file; for HTTP use ' +
+    'type=url. Set cwd to run the command in a specific directory instead of writing ' +
+    '"cd <dir> && <cmd>", which the poll policy refuses. ' +
     'The tool returns when the condition is met, the timeout elapses (status: timed_out), or ' +
     'the session is cancelled (status: cancelled). Timeout is NOT an error — the model can retry. ' +
     'Each call waits at most 600000ms (10 min; default 120000ms = 2 min). Larger timeout_ms ' +
@@ -75,6 +80,14 @@ export const waitForTool: AnthropicToolDef = {
       command: {
         type: 'string',
         description: 'For command type: shell command to run. Condition is met when it exits 0.',
+      },
+      cwd: {
+        type: 'string',
+        description:
+          'For command type: working directory to run the command in. ' +
+          'Absolute or relative to the session root. Must be within the session\'s ' +
+          'allowed roots. Use this instead of "cd <dir> && <cmd>" (which the poll ' +
+          'policy refuses). Defaults to the session working directory.',
       },
       timeout_ms: {
         type: 'number',

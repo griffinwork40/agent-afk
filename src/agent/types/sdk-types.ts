@@ -361,6 +361,8 @@ export type McpServerStatus = {
       openWorld?: boolean;
     };
   }[];
+  /** Number of tools exposed by this server; undefined when not yet known. */
+  toolCount?: number;
 };
 
 export type SlashCommand = {

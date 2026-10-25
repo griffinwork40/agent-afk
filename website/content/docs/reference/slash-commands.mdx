@@ -1,0 +1,866 @@
+---
+title: "Slash commands"
+description: "Core REPL commands and public shipped TypeScript skills."
+---
+
+{/* Generated from the isolated slash command registry. Do not edit by hand; run `pnpm scan:slash`. */}
+
+Type these commands in the interactive REPL. Entries are sorted by canonical name. Plugin skill passthroughs, plugin agents, marketplace sourced skills, user skills, project skills, and internal skills are excluded; core plugin and marketplace management commands remain available.
+
+## Core commands
+
+### `/afk`
+
+Toggle AFK mode — autonomous work + Telegram reporting while you are away
+
+Usage: `/afk [on\|off]`
+
+Aliases: None
+
+Hint: Tell the agent you are away from keyboard: it works autonomously on reversible operations, a safety gate refuses high-risk/irreversible ops, and each turn reports its terminal state to Telegram. /afk off restores default permissions.
+
+Flags: None
+
+### `/afk-md`
+
+Inspect + edit your AFK.md prompt overlay, hot-reloaded into this session
+
+Usage: `/afk-md [user\|project\|show\|add <text>\|reload]`
+
+Aliases: `/mem`, `/memory`
+
+Hint: When you want to change the standing instructions the agent runs under — opens the tier in $EDITOR, diffs what changed, and applies it to the RUNNING session (no restart).
+
+Flags: `--user`
+
+### `/agents`
+
+List plugin-provided subagents (loads after session init)
+
+Usage: `/agents`
+
+Aliases: None
+
+Hint: None
+
+Flags: None
+
+### `/allow-dir`
+
+Manage per-session directory access grants for tool handlers
+
+Usage: `/allow-dir [--rw \| --revoke] [<path>]`
+
+Aliases: `/add-dir`
+
+Hint: When the model needs read or write access to a directory outside the session root — grant it here without restarting.
+
+Flags: `--rw`, `--revoke`
+
+### `/bad`
+
+Mark this session as failed (explicit outcome feedback)
+
+Usage: `/bad [note]`
+
+Aliases: None
+
+Hint: Rate this session as failed. Adds a strong explicit_feedback vote that overrides the combiner and settles the outcome immediately.
+
+Flags: None
+
+### `/bgsub`
+
+List background subagent jobs
+
+Usage: `/bgsub [id]`
+
+Aliases: None
+
+Hint: When you want to check on background subagent jobs spawned with mode="background" during this session.
+
+Flags: None
+
+### `/bgsub:cancel`
+
+Cancel a running background subagent job
+
+Usage: `/bgsub:cancel <id>`
+
+Aliases: None
+
+Hint: When you want to abort a background subagent job that is still in progress.
+
+Flags: None
+
+### `/bgsub:join`
+
+Wait for a background subagent job and print its result
+
+Usage: `/bgsub:join <id>`
+
+Aliases: None
+
+Hint: When a background subagent has finished and you want to surface its result into the conversation.
+
+Flags: None
+
+### `/bgsub:status`
+
+Show one background job
+
+Usage: `/bgsub:status <id>`
+
+Aliases: None
+
+Hint: When you need the full detail view for one specific background job by its ID.
+
+Flags: None
+
+### `/bug`
+
+Report a bug (prefilled GitHub link, or --file to file with gh)
+
+Usage: `/bug [--file] [what went wrong]`
+
+Aliases: None
+
+Hint: Report an afk bug. Prints a prefilled GitHub issue link with your afk version, Node, OS and model; add --file to file it directly with gh after a confirmation.
+
+Flags: `--file`
+
+### `/changelog`
+
+Generate CHANGELOG entries from commits since last tag
+
+Usage: `/changelog [--dry-run]`
+
+Aliases: None
+
+Hint: When you are preparing a release and want to auto-generate changelog entries from conventional commits.
+
+Flags: None
+
+### `/clear`
+
+Clear conversation history
+
+Usage: `/clear`
+
+Aliases: None
+
+Hint: When the current thread has drifted off-topic or you want a clean slate without restarting the session.
+
+Flags: None
+
+### `/compact`
+
+Compact history (summarize older messages)
+
+Usage: `/compact`
+
+Aliases: None
+
+Hint: When context is filling up but you want to keep the thread — summarizes old turns and keeps the recent ones intact.
+
+Flags: None
+
+### `/config`
+
+View or edit configuration — interactive settings menu on a TTY
+
+Usage: `/config [view \| set <key> <value>]`
+
+Aliases: None
+
+Hint: Browse and edit config mid-session in an arrow-key settings menu. Rows show the value the loader will actually use and name the tier it came from, so an env var or project-local afk.config.json that overrides your change is visible before you make it. `model` and `theme` apply immediately; other keys apply on the next restart. Same store as `afk config`.
+
+Flags: None
+
+### `/copy`
+
+Copy last response or a code block to clipboard
+
+Usage: `/copy [N\|plain]`
+
+Aliases: `/cp`
+
+Hint: When you need to paste agent output into another terminal or editor. Use /cp N to grab a specific code block — the index is shown on each block header. Use /copy plain for Slack/email-friendly output.
+
+Flags: None
+
+### `/cost`
+
+Show total and per-turn cost
+
+Usage: `/cost`
+
+Aliases: None
+
+Hint: When you want a dollar breakdown of this session — total, average per turn, and the recent turn-by-turn series.
+
+Flags: None
+
+### `/debug`
+
+Show SDK session metadata (tools, MCP, skills, plugins, etc.)
+
+Usage: `/debug`
+
+Aliases: None
+
+Hint: When something feels broken and you want to inspect what the session actually loaded — tools, MCP servers, plugins, system prompt source.
+
+Flags: None
+
+### `/diff`
+
+Show current git working-tree diff inline
+
+Usage: `/diff [--staged] [<file>]`
+
+Aliases: None
+
+Hint: Shows uncommitted changes colorized in the REPL. `--staged` for only staged changes; pass a path to scope to one file.
+
+Flags: None
+
+### `/doctor`
+
+Run system health checks (API keys, directories, config file, Telegram)
+
+Usage: `/doctor`
+
+Aliases: None
+
+Hint: When something feels broken — API key missing, config file unreadable, Telegram bot unreachable. Same checks as `afk doctor` but surfaced mid-session without exiting.
+
+Flags: None
+
+### `/editor`
+
+Compose the current prompt in your external $EDITOR (Ctrl+O)
+
+Usage: `/editor`
+
+Aliases: `/edit`
+
+Hint: When your prompt is long enough to want real editor keybindings — opens $VISUAL/$EDITOR seeded with the input box; on exit the text loads back for you to review and submit.
+
+Flags: None
+
+### `/exit`
+
+Exit the session
+
+Usage: `/exit`
+
+Aliases: `/quit`
+
+Hint: When you want to tear down the REPL — Ctrl+D on an empty prompt does the same.
+
+Flags: None
+
+### `/export`
+
+Export session as a self-contained md or html file
+
+Usage: `/export [md\|html] [path]`
+
+Aliases: None
+
+Hint: When you want a portable artifact of the full session — transcript, tool calls, and cost summary — to share or archive offline.
+
+Flags: None
+
+### `/fast`
+
+Toggle fast mode for the session (Anthropic Opus fast, OpenAI priority tier)
+
+Usage: `/fast [on\|off]`
+
+Aliases: None
+
+Hint: None
+
+Flags: `on`, `off`
+
+### `/font-size`
+
+Get or set the terminal font size in Cursor / VS Code
+
+Usage: `/font-size [size] [editor]`
+
+Aliases: None
+
+Hint: Direct shortcut to the terminal_font_size tool — bypasses the LLM and the first-write permission prompt. Examples: `/font-size` (read all), `/font-size 18` (set all), `/font-size 14 cursor` (set Cursor only).
+
+Flags: None
+
+### `/fork`
+
+Duplicate this conversation into a new, independent session
+
+Usage: `/fork`
+
+Aliases: `/branch`
+
+Hint: When you want to explore a divergent path without losing this thread — duplicates the conversation into a new resumable session you can continue in parallel.
+
+Flags: None
+
+### `/ghost`
+
+Toggle ghost-text suggestions mid-session
+
+Usage: `/ghost [on\|off]`
+
+Aliases: None
+
+Hint: Pause or resume inline ghost-text suggestions (the dim text after the cursor). `/ghost off` suppresses all ghost text for the rest of this session — nothing new appears and nothing new is recorded to history. `/ghost on` resumes. For a permanent toggle, set `interactive.suggestGhost: false` in afk.config.json.
+
+Flags: `on`, `off`
+
+### `/goal`
+
+Persistent objective that survives across sessions
+
+Usage: `/goal [set\|status\|pause\|resume\|done\|clear] ...`
+
+Aliases: None
+
+Hint: When you want the agent to track a durable objective across turns, compaction, and session restarts — not just a todo but the overarching goal.
+
+Flags: None
+
+### `/good`
+
+Mark this session as succeeded (explicit outcome feedback)
+
+Usage: `/good [note]`
+
+Aliases: None
+
+Hint: Rate this session as successful. Adds a strong explicit_feedback vote that overrides the combiner and settles the outcome immediately.
+
+Flags: None
+
+### `/handoffs`
+
+List pending daemon handoff questions
+
+Usage: `/handoffs`
+
+Aliases: None
+
+Hint: When a daemon task asked a question and is waiting for your answer — use /handoffs:answer &lt;id&gt; to respond.
+
+Flags: None
+
+### `/handoffs:answer`
+
+Answer a pending daemon handoff question
+
+Usage: `/handoffs:answer <task-id> [answer]`
+
+Aliases: None
+
+Hint: Provide your answer to a daemon task that is waiting on human input. Omit the answer to be prompted interactively.
+
+Flags: None
+
+### `/help`
+
+Show this help
+
+Usage: `/help`
+
+Aliases: None
+
+Hint: When you want the full command list with usage strings — broader than this inline dropdown.
+
+Flags: None
+
+### `/history`
+
+Show conversation history (full replay; optionally limit to last N turns)
+
+Usage: `/history [N]`
+
+Aliases: None
+
+Hint: When you want to review recent conversation turns with full content. Pass a number to limit output: `/history 10` shows the last 10 turns.
+
+Flags: None
+
+### `/inbox`
+
+List, accept, or drop held peer messages
+
+Usage: `/inbox [accept <id-prefix\|all> \| drop <id-prefix\|all>]`
+
+Aliases: None
+
+Hint: Use when AFK_PEER_INBOUND=hold: /inbox to list, /inbox accept &lt;prefix\|all&gt; to deliver on the next turn, /inbox drop &lt;prefix\|all&gt; to discard.
+
+Flags: None
+
+### `/info`
+
+Show session identity, model, permissions, and recorded usage
+
+Usage: `/info`
+
+Aliases: None
+
+Hint: None
+
+Flags: None
+
+### `/init`
+
+Scan project and generate AFK.md
+
+Usage: `/init`
+
+Aliases: None
+
+Hint: When you're in a fresh repo and want the model to bootstrap an AFK.md system prompt that captures conventions, commands, and architecture.
+
+Flags: None
+
+### `/keys`
+
+Show keybinding reference
+
+Usage: `/keys`
+
+Aliases: None
+
+Hint: When you want the full list of keyboard shortcuts available in the interactive REPL.
+
+Flags: None
+
+### `/limits`
+
+Show known per-model context-window limits
+
+Usage: `/limits`
+
+Aliases: None
+
+Hint: None
+
+Flags: None
+
+### `/marketplace`
+
+Manage plugin marketplaces (install \| install-plugin \| plugins \| remove \| update)
+
+Usage: `/marketplace <install\|install-plugin\|plugins\|remove\|update\|list> [args]`
+
+Aliases: None
+
+Hint: None
+
+Flags: None
+
+### `/marketplaces`
+
+List installed plugin marketplaces
+
+Usage: `/marketplaces`
+
+Aliases: None
+
+Hint: None
+
+Flags: None
+
+### `/mcp`
+
+List MCP servers connected to the session ("/mcp auth" to surface pending OAuth URLs)
+
+Usage: `/mcp`
+
+Aliases: None
+
+Hint: None
+
+Flags: None
+
+### `/model`
+
+Switch the active model mid-session
+
+Usage: `/model [local\|small\|medium\|large\|opus\|sonnet\|haiku\|fable\|org/model]`
+
+Aliases: None
+
+Hint: Switch the capability tier (local/small/medium/large — or your configured names) or pass a full model id. Bare `/model` opens an interactive picker on a TTY. Upgrade to large for a hard problem, downshift to small for cheap iteration — context carries over. Also accepts HuggingFace-style ids (e.g. mlx-community/Qwen3-30B-A3B-4bit).
+
+Flags: None
+
+### `/name`
+
+Show or set this session’s name
+
+Usage: `/name [name]`
+
+Aliases: None
+
+Hint: When you want a memorable handle for this session so /resume and --resume can find it by name instead of a UUID.
+
+Flags: None
+
+### `/peers`
+
+List live peer sessions (read-only)
+
+Usage: `/peers`
+
+Aliases: None
+
+Hint: Use to discover other afk REPL sessions you can send messages to. Shows name, id, surface, state, peerInbox, cwd, and branch.
+
+Flags: None
+
+### `/plan`
+
+Toggle plan mode; /plan off saves the plan to a file then implements it
+
+Usage: `/plan [on\|off\|<prompt>]`
+
+Aliases: None
+
+Hint: Think through an approach without changing anything — write tools and state-mutating bash are refused until you exit; read-only investigation runs. /plan off saves the plan + implements it; Shift+Tab cycles to the next mode without implementing.
+
+Flags: None
+
+### `/reauth`
+
+Re-read keychain credentials and swap the running session's client
+
+Usage: `/reauth [--check]`
+
+Aliases: None
+
+Hint: Force the running session to pick up a new keychain token (e.g. after `claude /login` in another terminal)
+
+Flags: None
+
+### `/reload-plugins`
+
+Reload plugin skills from disk and refresh the slash registry
+
+Usage: `/reload-plugins`
+
+Aliases: None
+
+Hint: None
+
+Flags: None
+
+### `/resume`
+
+List saved sessions, or swap the active session for a stored one
+
+Usage: `/resume [id]`
+
+Aliases: None
+
+Hint: When you want to continue a previously saved session — runs interactively to pick one if no id is given.
+
+Flags: None
+
+### `/retry`
+
+Resubmit the last user message (e.g. after a turn died from a usage-limit error)
+
+Usage: `/retry`
+
+Aliases: None
+
+Hint: When a turn died mid-stream (usage-limit 429, dropped subagent fork) and the conversation is stuck on your last message — resubmits it instead of retyping.
+
+Flags: None
+
+### `/rewind`
+
+Rewind the conversation, files, or both to a previous message
+
+Usage: `/rewind`
+
+Aliases: None
+
+Hint: When you want to go back to an earlier prompt — pick a message, then choose conversation (its text loads into the input to edit and resend), files (restore files to how they were before it), or both. A file restore is always previewed first. `/rewind conversation\|files\|both` skips the mode menu. (Also: press Esc twice at an empty prompt for a conversation-only rewind.)
+
+Flags: None
+
+### `/search`
+
+Search this session's turns (or --error to jump to the last tool error)
+
+Usage: `/search <term> \| /search --error`
+
+Aliases: None
+
+Hint: Find where something was said this session: /search &lt;term&gt; matches your prompts and the assistant's replies; /search --error jumps to the most recent tool failure.
+
+Flags: `--error`
+
+### `/sh`
+
+Inspect or kill `!cmd` shell jobs and model background processes
+
+Usage: `/sh [list \| show <id> \| kill <id>]`
+
+Aliases: None
+
+Hint: Manages shell processes started with `!cmd` (foreground) or `!&cmd` (background). No args → list. `show <id>` prints captured output, `kill <id>` terminates a running job.
+
+Flags: None
+
+### `/skills`
+
+List all skills available in this session — vendored, user, and plugin
+
+Usage: `/skills [name \| query]`
+
+Aliases: `/builtin-skills`
+
+Hint: Browse every skill the session can dispatch — pass a name for full details, or a search query to find skills by intent.
+
+Flags: None
+
+### `/spine`
+
+Agent-maintained SPINE.md — project architecture spine
+
+Usage: `/spine [init\|show\|pending\|dismiss <N>\|dismiss-all]`
+
+Aliases: None
+
+Hint: Use /spine show to view the current architecture spine, /spine init to bootstrap it, /spine pending to review queued items, /spine dismiss &lt;N&gt; to remove one, or /spine dismiss-all to clear.
+
+Flags: None
+
+### `/stats`
+
+Show session statistics including skill runs
+
+Usage: `/stats`
+
+Aliases: None
+
+Hint: When you want a summary of skill invocations, token usage, and cost for the current session.
+
+Flags: None
+
+### `/suggestions`
+
+View or manage saved input history (ghost-text source)
+
+Usage: `/suggestions [N \| rm <index> \| clear]`
+
+Aliases: None
+
+Hint: List recent inputs that feed ghost-text suggestions. `/suggestions rm 3` removes entry #3. `/suggestions clear` wipes all history. Tip: prefix any input with a space to skip history recording.
+
+Flags: None
+
+### `/tasks`
+
+List all subagents (active + recently completed) with cursor navigation
+
+Usage: `/tasks`
+
+Aliases: None
+
+Hint: When you want to see what subagents this session has spawned. Use ↑/↓ to navigate, Enter to view, Esc to return.
+
+Flags: None
+
+### `/tasks:cancel`
+
+Cancel a running subagent
+
+Usage: `/tasks:cancel <id>`
+
+Aliases: None
+
+Hint: When you want to abort a subagent that is still in progress.
+
+Flags: None
+
+### `/tasks:view`
+
+View a subagent's conversation (live view mode)
+
+Usage: `/tasks:view <id>`
+
+Aliases: None
+
+Hint: When you want to replay what a subagent said and which tools it called. Tails live output for running subagents.
+
+Flags: None
+
+### `/theme`
+
+Switch the TUI color palette (dark/light/umber) mid-session
+
+Usage: `/theme [dark\|light\|umber\|auto]`
+
+Aliases: None
+
+Hint: Switch the color palette: `dark` (default), `light` (retuned for light-background terminals), `umber` (the Umber terminal's warm palette — dark-only, never auto-selected), or `auto` (detect from the terminal, falling back to dark). Applies to the active frame and new output immediately; already-printed scrollback keeps its original colors. Session-scoped — persist with `afk config set theme <mode>`. Run without args to see the active theme.
+
+Flags: `dark`, `light`, `umber`, `auto`
+
+### `/thinking`
+
+Toggle how thinking blocks are rendered mid-session
+
+Usage: `/thinking [summary\|live\|digest\|off]`
+
+Aliases: `/thinking-ui`
+
+Hint: Switch thinking display: `live` (streaming preview + summary, default), `summary` (one-line collapse only), `digest` (live preview + persists a capped reasoning paragraph to scrollback per phase — good for AFK review), or `off` (hidden). This is a display-only toggle — extended thinking still runs; cost and latency are unaffected. Takes effect on the next turn — same semantics as `/model`. Run without args to see the current mode.
+
+Flags: `summary`, `live`, `digest`, `off`
+
+### `/todo`
+
+Manage this session's todo list
+
+Usage: `/todo [add\|done\|rm\|clear\|list] ...`
+
+Aliases: None
+
+Hint: When you want a durable checklist the model and you both see — survives across turns and shows above each prompt.
+
+Flags: None
+
+### `/tokens`
+
+Show token usage (SDK breakdown with local-stats fallback)
+
+Usage: `/tokens`
+
+Aliases: `/ctx`
+
+Hint: When you want to know how full the context window is — input/output/cache breakdown plus % of the model's limit used.
+
+Flags: None
+
+### `/tools`
+
+List tools available to the session
+
+Usage: `/tools`
+
+Aliases: None
+
+Hint: None
+
+Flags: None
+
+### `/transcript`
+
+View full session transcript in $PAGER
+
+Usage: `/transcript`
+
+Aliases: `/t`
+
+Hint: When you want to read the full conversation — all turns, tool calls, costs — in a scrollable pager.
+
+Flags: None
+
+### `/usage`
+
+Show Claude subscription usage (5h / 7d windows)
+
+Usage: `/usage`
+
+Aliases: None
+
+Hint: When you want to know how close you are to hitting your Claude subscription's rolling usage limits — distinct from /cost, which is session-local spend.
+
+Flags: None
+
+### `/whatif`
+
+Predict behavioural impact of a proposed change to your AFK environment
+
+Usage: `/whatif [change text \| flags]`
+
+Aliases: None
+
+Hint: Use when you want to safely preview what would happen if you changed your AFK.md, a memory fact, a model, or any other setting — before committing to it.
+
+Flags: `--append`, `--append-project`, `--file`, `--hot`, `--memory-add`, `--memory-category`, `--memory-remove`, `--disable-skill`, `--disable-plugin`, `--model`, `--effort`, `--env`, `--spec`, `--agent-model`, `--analyst-model`, `--verify`, `--quick`, `--turns`, `--samples`, `--max-usd`, `--judge`, `--concurrency`, `--max-turns`, `--timeout`, `--keep-sandboxes`, `--predict`, `--probes`, `--max-predictions`, `--no-baseline-sample`, `--yes`, `--force`, `--json`
+
+### `/worktree`
+
+List or prune afk-managed git worktrees
+
+Usage: `/worktree list \| /worktree prune [--apply] [--scope <interactive\|diagnose\|all>]`
+
+Aliases: None
+
+Hint: When you want to audit or clean up stale afk-managed git worktrees from past sessions.
+
+Flags: None
+
+The following public TypeScript skills are shipped in the package and require no user or plugin installation.
+
+## Shipped TypeScript skills
+
+### `/get-started`
+
+Guided first-run onboarding for AFK. Runs a preflight check (git repo, model provider, AFK.md, Exa/Telegram/service config), asks the user their name and gives a brief intro, detects importable Claude Code / Codex assets and offers `afk migrate`, walks optional capability setup (Exa Search, Telegram via /telegram-setup, background service via /service-setup), then recommends /init to generate project context and /clear to start fresh — ending by routing the user to their first task. Runs interactively in the current session.
+
+Usage: `/get-started`
+
+Aliases: None
+
+Hint: When someone is setting up AFK for the first time or asks how to get going — triggers on `/get-started`, 'how do I start', 'set me up', 'onboard me', or a fresh install with no AFK.md and unconfigured capabilities. Best run in the interactive REPL.
+
+Flags: None
+
+### `/mint`
+
+Takes a feature idea or refactor scope and delivers a ship-ready, verified implementation end-to-end
+
+Usage: `/mint <idea> \| --continue [approved]`
+
+Aliases: None
+
+Hint: When the user wants a feature or refactor delivered end-to-end (spec → research → build → verify) in one ship-ready pass. After the spec phase pauses for approval, resume by invoking mint again with the literal string `"approved"` (or `"yes"`, `"lgtm"`, `"--continue approved"`) as the arguments. Equivalent JSON forms `{"userApproved": true}` and `{"idea": "approved"}` are also accepted. The handler reloads the spec state from disk and runs phases 2–8.
+
+Flags: `--continue`
+
+### `/service-setup`
+
+Install an AFK background process (telegram bot or daemon) as an OS-supervised service — a launchd LaunchAgent on macOS or a systemd `--user` unit on Linux — so it auto-starts on login and relaunches on crash. Runs pre-flight checks (e.g., refuses to install the telegram service with an invalid token, which would otherwise crash-loop under KeepAlive/Restart=always), invokes `afk service install`, verifies with `afk service status`, and surfaces the management cheatsheet (including the `loginctl enable-linger` step on Linux). macOS + Linux + Windows (Task Scheduler) — fully supported; gracefully refuses on other unrecognised platforms.
+
+Usage: `/service-setup`
+
+Aliases: None
+
+Hint: When the user wants to make `afk telegram start` or `afk daemon` always-on — i.e., survive reboot, crash, OOM. Triggers on phrasings like 'install as a service', 'auto-start on login', 'keep the bot running', 'launchd', 'always-on telegram', or right after a successful `/telegram-setup` when the user asks how to make it persistent.
+
+Flags: None
+
+### `/telegram-setup`
+
+Guide the user through first-time Telegram bot onboarding without leaking the bearer token. Walks the user to run `afk telegram setup` in a terminal for token entry, then uses the sanctioned `afk telegram check-token`/`discover-chat`/`set-allowed-chat` subcommands to validate and finish allowlist setup — the token never enters the model context. Works in REPL or Telegram. Use when the user wants to set up Telegram push notifications for the first time, or to debug a partially-configured install.
+
+Usage: `/telegram-setup`
+
+Aliases: None
+
+Hint: When the user wants to set up Telegram bot notifications for the first time, or when they say something like "set up telegram", "connect telegram", "enable push", or you detect that TELEGRAM_BOT_TOKEN is unset and they're asking for notifications.
+
+Flags: None

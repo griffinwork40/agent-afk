@@ -1,224 +1,136 @@
 ---
-title: "Unattended Runs"
-description: "Run Agent AFK safely while you're away: daemon mode, Telegram supervision, budget caps, and scheduled tasks."
+title: "Run afk without a human at the keyboard"
+description: "Choose an unattended execution mode, arrange phone supervision, and require evidence before trusting completion."
 ---
 
-Agent AFK is built for work that happens while you're away from the keyboard. This guide covers the four pieces that make long, headless runs safe: the daemon, Telegram supervision, spend limits, and scheduled tasks.
+AFK can keep working while you are away, but a background process, a daemon, and an autonomous interactive session have different lifetimes and safety boundaries. Choose the smallest surface that fits the job, tell it what success means, and arrange a way to inspect the result.
 
-## The daemon
+## Choose the right mode
 
-`afk daemon` runs a headless agent session — no REPL, no interactive prompts, no permission dialogs:
+| Need | Use |
+| --- | --- |
+| Leave an interactive session working with phone supervision | The REPL with `/afk on`. |
+| Run recurring, startup, or one-shot tasks | [Scheduling](/guides/scheduling) with the [daemon](/surfaces/daemon). |
+| Keep the daemon or Telegram bot running after terminal exit | [An OS service](/guides/run-as-service). |
+| Keep a server or long shell command running during a REPL session | [Supervised background processes](/guides/background-processes). |
+| Call AFK from CI or a script and parse the response | [Headless chat](/guides/headless). |
+| Execute on another machine's files and accounts | [Remote dispatch](/guides/remote-dispatch). |
 
-```bash
-afk daemon
-```
+Autonomous mode is a permission mode, not a process supervisor. It does not make a laptop stay awake, restart a crashed REPL, or turn session-owned background jobs into services.
 
-The daemon accepts a task at startup and runs until it reaches a terminal state. All the same tools are available (Bash, file ops, web fetch, subagents), and bypass permissions are enabled by default so no tool prompt can wedge the session.
+## Leave an interactive session safely
 
-Pass a task inline:
-
-```bash
-afk daemon --task "run the test suite; if anything is red, diagnose it and open a draft PR with the fix"
-```
-
-Or set a default task in your environment:
-
-```bash
-AFK_DAEMON_TASK="review any PRs opened since the last run and post findings as a comment" afk daemon
-```
-
-The working directory for spawned sessions defaults to the current directory. Override the daemon-wide default with `AFK_DAEMON_CWD`, or pin individual tasks to a specific repo with the per-task `cwd` field (see [Scheduled tasks](/docs/surfaces/daemon#scheduled-tasks) for details).
-
-**Working directory precedence:** `task.cwd` → `AFK_DAEMON_CWD` → `process.cwd()`. Setting `cwd` on a task prevents grep/glob calls from walking the entire home directory during cron sweeps.
-
-### Running once
-
-`--once` runs a single task and exits when it reaches a terminal state, rather than looping:
+<Steps>
+<Step>
+### Set up the phone channel
 
 ```bash
-afk daemon --once --task "run the full test suite and send me a summary on Telegram"
-```
-
-This is useful in CI or cron where you want a bounded execution.
-
-## Telegram supervision
-
-Pairing the daemon with Telegram gives you push notifications the moment work lands in a terminal state — no polling, no tail-following a log file.
-
-**Setup (one-time):**
-
-```bash
-afk telegram setup    # walks through bot token + chat ID allowlist
-```
-
-**Start the bot:**
-
-```bash
+afk telegram setup
 afk telegram start
 ```
 
-Once configured, the `send_telegram` built-in tool is available to every agent session. The daemon calls it automatically on task completion; your own prompts and skills can call it too. The tool is safe to invoke unconditionally — it returns an error (does not throw) if Telegram is not configured.
+Complete setup with your own bot token and allowed chat ID. Keep the bot running, or install it through `afk service install telegram`. See the [Telegram guide](/surfaces/telegram) for setup and routing.
+</Step>
+<Step>
+### Establish the session, then arm AFK mode
 
-Recipients are gated by `AFK_TELEGRAM_ALLOWED_CHAT_IDS`. Set this to a comma-separated list of chat IDs that are allowed to interact:
+Start `afk` in the repository and complete one message so the session has an ID. Then enter:
 
-```bash
-AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678,98765432
+```text
+/afk on
 ```
 
-See the [Telegram surface guide](/surfaces/telegram) for full bot setup.
+AFK warns if Telegram is not configured. If you enable it before the first completed message, the phone relay cannot yet bind to a session ID: complete a turn and run `/afk on` again. Do not walk away while the UI says the relay is keyboard-only or its signing key could not be established.
+</Step>
+<Step>
+### Give a bounded task
 
-## Budget caps
+For example:
 
-Two environment variables set hard spending limits. The daemon aborts a turn if either ceiling is breached:
-
-| Variable | Type | Default | What it limits |
-|---|---|---|---|
-| `AFK_MAX_BUDGET_USD` | number | `5.00` | Cumulative USD spend ceiling for the session |
-| `AFK_TASK_BUDGET` | number | `100000` | Per-task cumulative token ceiling |
-
-Source: `docs/env-registry.md` (Model category).
-
-Set them in your shell, in `~/.afk/config/afk.env`, or pass `--max-budget-usd` / `--task-budget` per-session:
-
-```bash
-# Environment
-export AFK_MAX_BUDGET_USD=2.00
-export AFK_TASK_BUDGET=50000
-
-# Persist to afk.env (these are non-secret, so `afk config env set` works directly)
-afk config env set AFK_MAX_BUDGET_USD 2.00
-
-# Or per-run
-afk daemon --max-budget-usd 2.00 --task "triage today's new issues and draft a reply to each"
+```text
+Run the project's test suite. Diagnose failures and make a local fix if needed.
+Run the relevant tests again after the final edit. Do not push, publish, or send
+messages to third parties. Report Done with the changed files and test results,
+or Blocked with the exact dependency that prevents completion.
 ```
 
-When the session's cumulative spend crosses the ceiling, the turn aborts and you'll see `Hit the budget cap` in the output. Raise `AFK_MAX_BUDGET_USD` or unset it for the session to remove the limit.
+Name the working directory, verification command, forbidden effects, and completion evidence. `/afk off` restores default permissions when you return.
+</Step>
+</Steps>
 
-A per-output-token cap is also available if you need tighter control:
+## Autonomous permissions and phone approvals
 
-| Variable | Default | What it limits |
-|---|---|---|
-| `AFK_MAX_OUTPUT_TOKENS` | model ceiling (64k–128k) | Output tokens per turn only |
-| `AFK_MAX_TOKENS` | `4096` | Deprecated / inert — use `AFK_MAX_OUTPUT_TOKENS` |
+In AFK mode, safe and medium-risk operations can proceed without an ordinary keyboard permission prompt. High-risk operations, such as destructive commands, writes outside the trusted workspace, and schedule mutations, require special handling.
 
-## Scheduled tasks
+For the top-level interactive session, AFK routes an **approve or deny this single call** request through the phone channel, racing the keyboard fallback. Telegram displays an inline choice with the operation and input preview. Approval permits only that call, not every future operation of the same type.
 
-`afk schedule` manages a persistent list of tasks the daemon runs on a cron expression. Tasks are stored in `~/.afk/config/schedules.json` and live-synced to a running daemon when the port file is available.
+The default approval window is five minutes, starting when the request is actually shown. Denial, cancellation, no reachable operator, an invalid response, or timeout refuses the call. Subagents cannot obtain their own high-risk approval through this gate; they must report the blocker to the parent.
 
-```bash
-# Add a task
-afk schedule add \
-  --name "nightly tests" \
-  --command "run the test suite; if it fails, diagnose the failure and open a fix PR" \
-  --cron "0 2 * * *"
+<Callout type="warn">
+The gate is a best-effort classifier, not a shell sandbox. A command's risk classification does not replace a clear task boundary. Do not use `bypassPermissions` as a substitute for autonomous mode's safety posture, and do not assume the classifier catches every possible shell side effect.
+</Callout>
 
-# List all tasks
-afk schedule list
+The daemon has a different contract: it bypasses ordinary interactive permission prompts, but separately applies the autonomous high-risk gate with phone approval disabled. High-risk operations are refused immediately rather than left waiting for a human. A task may disable itself through a narrowly scoped exception; that is not general permission to modify other schedules.
 
-# Disable without removing
-afk schedule disable <id>
+## Check what Done means
 
-# Re-enable
-afk schedule enable <id>
+Ask for a terminal state and evidence you can inspect:
 
-# Remove permanently
-afk schedule remove <id>
+| State | What you should receive |
+| --- | --- |
+| Done | The result, changed artifacts, verification performed, and anything deliberately deferred. |
+| Blocked | The external dependency and exact unblock condition. |
+| Asking | One precise decision needed from you. |
+| Interrupted | A preserved checkpoint for resuming halted work. |
 
-# Inspect recent runs
-afk schedule logs <id>
-```
+A successful process exit or an agent saying Done does not certify the task's correctness. For code work, require meaningful tests or checks **after the last change**.
 
-Source: `src/cli/commands/schedule.ts`.
+For REPL-to-Telegram reporting, `telegram.verifyDone: true` enables an evidence check. It looks for successful evidence-producing tool calls and, when code changed, a recognized successful verification step afterward. An unsupported Done claim is labeled **Done (unverified)** rather than treated as proven.
 
-### Trigger modes
+Daemon completion notifications use `daemon.verifyDone`, enabled by default unless explicitly set to `false`. That daemon check is narrower: it looks for a successful evidence-producing tool name in the turn. It is not equivalent to independently validating the artifact or proving that a test ran after the final edit.
 
-Pass `--trigger` to `schedule add` to control when the task fires:
+See [verification](/guides/verification) for stronger completion checks and [observability](/guides/observability) for durable traces.
 
-| Trigger | Behavior |
-|---|---|
-| `cron` | Fires on the cron expression only (default) |
-| `sessionstart` | Fires once when the daemon boots |
-| `both` | Fires at boot and on the cron expression |
+## Avoid unresolved commands
 
-`--sessionstart-cooldown-ms` (env: `AFK_SESSIONSTART_COOLDOWN_MS`) adds a delay between task fires so the daemon doesn't hammer on rapid restarts.
+AFK injects an instruction at session start to resolve values before handing you runnable commands, or explicitly flag values it cannot discover. The REPL also has a Stop hook that scans shell-like output blocks for unresolved placeholders such as `YOUR_API_KEY`, `REPLACE_ME`, and angle-bracket tokens.
 
-### Notification policy
+When detected, it injects a correction asking the model to resolve or visibly mark them. This detector is REPL-only, skips subagents, and is bounded to two correction injections per session. It does not block output or guarantee that every placeholder will be caught. Headless chat, daemon, and Telegram receive the prevention instruction, not this rendered-code-block scanner.
 
-Control when Telegram notifications fire per task:
+Before running any handed-off command, check that it names real resources and that its effect matches your intent.
+
+## Set budgets and time boundaries
+
+USD budgeting is opt-in. `AFK_MAX_BUDGET_USD` is unset by default, not a built-in five-dollar allowance. Where provider cost accounting is available, crossing a configured ceiling aborts the turn. Subscription runs may not report a meaningful dollar cost, so a dollar cap is not a universal spending guarantee.
 
 ```bash
-afk schedule add \
-  --name "daily PR review" \
-  --command "/review --auto" \
-  --cron "0 9 * * 1-5" \
-  --notify always     # always | failure | never
+AFK_MAX_BUDGET_USD=2.00 afk daemon --once \
+  --task "Run the test suite and report the outcome without changing files" \
+  --timeout-ms 600000
 ```
 
-## Pull queue (`afk queue`)
+`AFK_TASK_BUDGET` configures a per-task token budget. `AFK_MAX_OUTPUT_TOKENS` caps individual responses; the old `AFK_MAX_TOKENS` variable is inert. For one-shot chat, `--max-budget-usd` and `--task-budget` are available as flags. The daemon does not expose those two flags; use its environment configuration instead.
 
-`afk queue` lets you enqueue tasks that a daemon running in `--trigger pull` mode will drain.
-Tasks are persisted as JSON files in `~/.afk/state/queue/` and consumed one-by-one on the
-daemon's poll interval (30 seconds).
+Use `--timeout-ms` to bound a daemon tick. Use `runAt` and `expiresAt` to bound a schedule's window, and a pinned `cwd` to stop a service-launched task from searching an unintended directory. See [usage and cost](/guides/usage-and-cost) for provider-specific accounting and limits.
 
-### Subcommands
+## Keep supervision separate from scheduling
 
-| Subcommand | Description |
-|---|---|
-| `afk queue add <command>` | Enqueue a command for the pull-trigger daemon to execute |
-| `afk queue list` | List all pending queued tasks in FIFO order |
-| `afk queue remove <id>` | Remove a pending task by id |
-| `afk queue clear` | Remove all pending tasks from the queue |
-
-`add` accepts one option:
-
-| Flag | Description |
-|---|---|
-| `--notify-on <mode>` | When to send a Telegram notification: `failure` \| `always` \| `never` |
-
-### Typical workflow
+A minimal bounded daemon run is:
 
 ```bash
-# 1. Start the daemon in pull mode (no cron needed)
-afk daemon --trigger pull
-
-# 2. Enqueue tasks from another terminal (or a script) while the daemon runs
-afk queue add "/review 1234 --post github" --notify-on always
-afk queue add "/diagnose the failing integration test on main" --notify-on failure
-
-# Tasks are picked up and executed in order on the next poll (≤30s)
+afk daemon --once --task "Inspect the repository and write a local health report"
 ```
 
-The daemon prints `✔ Daemon in pull mode` on start and processes each queued file in
-sequence-number order, deleting it after the task completes.
+`--once` fires one tick and exits. Without `--once`, the daemon is a scheduler process, not an interactive conversation that ends when one task reaches Done. A plain `afk daemon` can load saved schedules; it does not invent a default task.
 
-## Putting it together
+Create routine work with `afk schedule add`, inspect it with `afk schedule list`, and use execution history to verify actual runs. For event-driven submissions, `afk queue add` feeds a daemon started with `--trigger pull`. Notification delivery requires configured Telegram routing and the task's `notifyOn` policy; it is not guaranteed merely because a daemon exists.
 
-A complete setup for a nightly unattended run:
+## Related
 
-```bash
-# ~/.afk/config/afk.env
-ANTHROPIC_API_KEY=sk-ant-...
-TELEGRAM_BOT_TOKEN=1234567890:ABC...
-AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
-AFK_MAX_BUDGET_USD=3.00
-AFK_TASK_BUDGET=150000
-
-# Add a nightly task
-afk schedule add \
-  --name "nightly report" \
-  --command "check open PRs, run tests, and send a summary via Telegram" \
-  --cron "0 3 * * *" \
-  --notify always
-
-# Start the daemon (it will pick up the schedule)
-afk daemon
-```
-
-The daemon reads the schedule file at startup, runs tasks at their cron times, and pushes a Telegram notification on completion. If spend hits `AFK_MAX_BUDGET_USD`, the turn aborts and the notification surfaces the error.
-
-## Tips
-
-- Run `afk doctor` before leaving the daemon unattended — it validates keys, paths, and provider connectivity.
-- `afk status` reports bypass-mode state, model, and connection health.
-- Logs write to `~/.afk/logs/`. The daemon state directory is `~/.afk/state/daemon/`.
-- To install the daemon as a persistent macOS service that survives reboots, use the `/service-setup` skill.
+<Cards>
+<Card title="Schedule tasks" href="/guides/scheduling" description="Manage recurring work, one-shots, retries, and queued prompts." />
+<Card title="Run as a service" href="/guides/run-as-service" description="Keep the daemon and bot supervised across terminal exits." />
+<Card title="Background processes" href="/guides/background-processes" description="Keep session-owned shell commands running while you work." />
+<Card title="Headless chat" href="/guides/headless" description="Capture structured results from scripts and CI." />
+<Card title="Remote dispatch" href="/guides/remote-dispatch" description="Run bounded work on another machine." />
+</Cards>

@@ -67,6 +67,7 @@ import { registerConfigCommand } from './commands/config-command.js';
 import { registerDaemonCommand } from './commands/daemon.js';
 import { registerWebCommand } from './commands/web.js';
 import { registerQueueCommand } from './commands/queue.js';
+import { registerEventsCommand } from './commands/events.js';
 import { registerLoginCommand } from './commands/login-command.js';
 import { registerPluginCommand } from './commands/plugin.js';
 import { registerMarketplaceCommand } from './commands/marketplace.js';
@@ -93,8 +94,10 @@ import { registerTranscriptCommand } from './commands/transcript.js';
 import { registerInsightsCommand } from './commands/insights.js';
 import { registerCapturesCommand } from './commands/captures.js';
 import { registerDefectsCommand } from './commands/defects.js';
+import { registerAcpCommand } from './commands/acp.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
 import { loadConfig } from './config.js';
+import { deferAfkMdSizeWarnings, flushDeferredAfkMdSizeWarnings } from './config/afk-md-tier.js';
 import { installCredentialGate } from './first-run.js';
 import { getVersion } from './version.js';
 import {
@@ -131,6 +134,7 @@ registerConfigCommand(program);
 registerDaemonCommand(program);
 registerWebCommand(program);
 registerQueueCommand(program);
+registerEventsCommand(program);
 registerInteractiveCommand(program);
 registerLoginCommand(program);
 registerPluginCommand(program);
@@ -160,6 +164,7 @@ registerTranscriptCommand(program);
 registerInsightsCommand(program);
 registerCapturesCommand(program);
 registerDefectsCommand(program);
+registerAcpCommand(program);
 
 // Add aliases
 program.commands.find((c) => c.name() === 'chat')?.alias('c');
@@ -182,6 +187,12 @@ Examples:
 // Commander parses options before this hook and before command action side effects.
 installCredentialGate(program);
 
+// Non-REPL commands print deferred AFK.md size warnings before their own
+// output; the REPL drains them itself after its screen clear.
+program.hook('preAction', (_thisCommand, actionCommand) => {
+  if (actionCommand.name() !== 'interactive') flushDeferredAfkMdSizeWarnings();
+});
+
 export { needsCredentialGate, runFirstRunDetector } from './first-run.js';
 
 // Parse and execute — only when run directly as CLI (not imported by tests)
@@ -202,6 +213,10 @@ if (isDirectRun) {
     // so checking opts after parse would also need the inverted key.
     // Restrict the search to args that start with `--` to avoid false matches
     // on a flag's value argument (e.g. `afk chat "--no-update-check"`).
+    // Buffer AFK.md size warnings from this pre-parse load: the REPL would
+    // erase them with its screen clear. Flushed by the preAction hook below
+    // (non-REPL commands) or by drainBootWarnings after the clear (REPL).
+    deferAfkMdSizeWarnings();
     const config = loadConfig();
     const noCheckArg = process.argv.slice(2).some((a) => a === '--no-update-check');
     const policy = noCheckArg ? ('off' as const) : config.updatePolicy;
@@ -240,6 +255,15 @@ if (isDirectRun) {
 
     // For non-interactive commands (afk chat, afk status, etc.), print the
     // update banner immediately — those commands don't do a screen clear.
+    //
+    // Two detection strategies are used here intentionally:
+    //   1. argv-based (argv.length <= 2, argv[2] === 'interactive'|'i'): runs
+    //      BEFORE program.parseAsync() so Commander option/command state is not
+    //      yet populated — this is the only mechanism available at this point.
+    //   2. Commander name-based (actionCommand.name() !== 'interactive'): used
+    //      in the preAction hook below, AFTER Commander has parsed the argv.
+    //      Both strategies are correct for their respective call sites; argv is
+    //      consulted only pre-parse, Commander state only post-parse.
     const isInteractiveInvocation =
       process.argv.length <= 2 ||
       process.argv[2] === 'interactive' ||

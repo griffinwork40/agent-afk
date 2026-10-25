@@ -1,9 +1,19 @@
 /**
- * Innermost retry tier: single-401 token refresh and replay.
+ * Innermost retry tier: single-401/403 token refresh and replay.
  *
- * Extracted verbatim from `retry-layer.ts` (#824 split); the class keeps a
- * `yield*` delegate. Behavior is unchanged — see {@link RetryTierContext} for
- * why the tier reads live accessors instead of captured fields.
+ * 401 Unauthorized: the token itself is invalid or expired. Refreshing
+ * re-reads the OS keychain and rebuilds the SDK client.
+ *
+ * 403 Forbidden (seat removed / subscription inactive): the token is valid
+ * but the account lacks API access — typically because the premium seat was
+ * removed during an account swap. Refreshing picks up a different account's
+ * token if the operator already ran `afk login` in a side terminal; if the
+ * keychain still holds the same token, the replay re-403s and surfaces
+ * cleanly. Both paths attempt exactly one refresh-and-replay.
+ *
+ * Extracted from `retry-layer.ts` (#824 split); the class keeps a `yield*`
+ * delegate. See {@link RetryTierContext} for why the tier reads live
+ * accessors instead of captured fields.
  *
  * @module agent/providers/anthropic-direct/query/auth-retry-tier
  */
@@ -32,7 +42,27 @@ export function isRetryableAuth(ctx: RetryTierContext, error: Error): boolean {
 }
 
 /**
- * Inner tier: on a single 401, refresh once and replay. Deduplicates
+ * A 403 may be recoverable in OAuth mode when the operator has already
+ * switched accounts via `afk login` in another terminal.
+ *
+ * Common 403 causes: seat/subscription removed, billing lapsed, org-policy
+ * block, or the transient `oauth_not_allowed_for_organization` race (#3467).
+ * All get one opportunistic refresh attempt in OAuth mode: if the keychain
+ * now holds a different account's token, the replay succeeds; if not, the
+ * error surfaces immediately. In API-key mode no refresher is wired, so
+ * this returns false and the 403 surfaces without retry.
+ */
+export function isRefreshablePermissionDenied(ctx: RetryTierContext, error: Error): boolean {
+  return (
+    ctx.authMode === 'oauth' &&
+    ctx.tokenRefresher !== undefined &&
+    'status' in error &&
+    (error as unknown as { status: number }).status === 403
+  );
+}
+
+/**
+ * Inner tier: on a single 401 or 403, refresh once and replay. Deduplicates
  * concurrent refresh calls via the layer's shared `refreshPromise`.
  */
 export async function* turnWithAuthRetry(
@@ -44,7 +74,10 @@ export async function* turnWithAuthRetry(
 
   for await (const event of runTurn(runInput)) {
     if (isClosed()) return;
-    if (event.type === 'error' && isRetryableAuth(ctx, event.error)) {
+    if (
+      event.type === 'error' &&
+      (isRetryableAuth(ctx, event.error) || isRefreshablePermissionDenied(ctx, event.error))
+    ) {
       authError = event;
       break;
     }

@@ -24,7 +24,7 @@ function makeSource(over: Partial<SourceState> = {}): SourceState {
   return {
     startedAt: NOW - 60_000,
     lastEventAt: NOW,
-    stats: { tokens: 0, toolUses: 0 },
+    stats: { tokens: 0, toolUses: 0, seenToolUseIds: new Set<string>() },
     contentBuffer: '',
     done: false,
     errored: false,
@@ -38,7 +38,7 @@ function activeChild(agentType: string, over: Partial<SourceState> = {}): Source
   return makeSource({
     agentType,
     lastProgressSummary: `round 2: Read ${agentType}.ts`,
-    stats: { tokens: 100, toolUses: 4 },
+    stats: { tokens: 100, toolUses: 4, seenToolUseIds: new Set<string>() },
     ...over,
   });
 }
@@ -77,7 +77,7 @@ describe('ChildActivityTracker.select', () => {
 
   it('falls back to the tool-call count when no round headline has arrived', () => {
     const sources = new Map<string, SourceState>([
-      ['a', makeSource({ agentType: 'sees', stats: { tokens: 0, toolUses: 7 } })],
+      ['a', makeSource({ agentType: 'sees', stats: { tokens: 0, toolUses: 7, seenToolUseIds: new Set<string>() } })],
     ]);
     expect(new ChildActivityTracker().select(sources, NOW)?.clause).toBe('7 tool calls');
   });

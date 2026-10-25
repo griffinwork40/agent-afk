@@ -804,9 +804,8 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     });
     const events = await collect(q);
     expect(createCalls).toHaveLength(2);
-    // New contract (fix #3963): wind-down keeps tool defs + tool_choice:'none'
-    expect(createCalls[1]!.args.tools).toBeDefined();
-    expect(createCalls[1]!.args.tool_choice).toBe('none');
+    // Wind-down keeps the identical tools array (prefix-cache stability).
+    expect(createCalls[1]!.args.tools).toEqual(createCalls[0]!.args.tools);
     const toolMessages = (createCalls[1]!.args.messages as Array<{ role: string; content: string }>).filter(m => m.role === 'tool');
     expect(109000 + Buffer.byteLength(JSON.stringify(toolMessages)) / 3 + 4096).toBeLessThan(128000);
     expect(events.some(e => e.type === 'assistant.message' && e.text.includes('Partial findings'))).toBe(true);
@@ -815,8 +814,8 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     vi.unstubAllEnvs();
   });
 
-  it('caps tool rounds at an explicit maxToolUseIterations, then runs a tools-stripped wind-down round', async () => {
-    // Explicit cap of 3 → 3 tool rounds, then ONE tools-stripped wind-down round
+  it('caps tool rounds at an explicit maxToolUseIterations, then runs a non-dispatching wind-down round', async () => {
+    // Explicit cap of 3 → 3 tool rounds, then ONE non-dispatching wind-down round
     // where the model answers in text (no silent stop). Mirrors anthropic-direct's
     // graceful cap; the shared policy lives in shared/tool-loop-cap.ts.
     const fixture = makeDispatcher();
@@ -839,16 +838,14 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     });
     const events = await collect(q);
 
-    // 3 tool-use rounds + 1 tools-stripped wind-down round = 4 model calls.
+    // 3 tool-use rounds + 1 wind-down round = 4 model calls.
     expect(createCalls.length).toBe(4);
     expect(fixture.handlerCalls).toHaveLength(3); // no duplicated side effects
     const warningMessages = createCalls[1]!.args.messages as Array<{ content: unknown }>;
     expect(warningMessages.some(m => typeof m.content === 'string' && m.content.includes('Deliver useful findings now'))).toBe(true);
-    // The first (tool) round advertised tools; the wind-down round (last) did not.
+    // Every round, including the wind-down (last), advertised the SAME tools.
     expect(createCalls[0]!.args.tools?.length ?? 0).toBeGreaterThan(0);
-    // New contract (fix #3963): wind-down keeps tool defs + tool_choice:'none'
-    expect(createCalls[3]!.args.tools).toBeDefined();
-    expect(createCalls[3]!.args.tool_choice).toBe('none');
+    expect(createCalls[3]!.args.tools).toEqual(createCalls[0]!.args.tools);
     // The wind-down produced a real final assistant message (not a silent stop).
     const assistantMsg = events.find((e) => e.type === 'assistant.message');
     expect(assistantMsg?.type === 'assistant.message' ? assistantMsg.text : '').toContain(
@@ -896,7 +893,7 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
 
     it('winds down with SOFT_DEADLINE_WIND_DOWN when a round boundary falls past the deadline', async () => {
       // Round 1 dispatches a tool that burns the whole budget; the boundary
-      // check then fires and round 2 is the tools-stripped wind-down.
+      // check then fires and round 2 is the wind-down.
       const fixture = makeDispatcher({
         onHandlerCall: () => {
           vi.setSystemTime(Date.now() + 61_000);
@@ -915,12 +912,11 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
       });
       const events = await collect(q);
 
-      // Exactly ONE tools-stripped extra round — not an unbounded loop.
+      // Exactly ONE extra wind-down round — not an unbounded loop — and it
+      // keeps the identical tools array.
       expect(createCalls.length).toBe(2);
       expect(createCalls[0]!.args.tools?.length ?? 0).toBeGreaterThan(0);
-      // New contract (fix #3963): wind-down keeps tool defs + tool_choice:'none'
-      expect(createCalls[1]!.args.tools).toBeDefined();
-      expect(createCalls[1]!.args.tool_choice).toBe('none');
+      expect(createCalls[1]!.args.tools).toEqual(createCalls[0]!.args.tools);
 
       // The model's synthesis is delivered rather than lost to a hard abort.
       const assistantMsg = events.find((e) => e.type === 'assistant.message');
@@ -1019,6 +1015,31 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
       expect(windDownMsgs.some((m) => m.content === WIND_DOWN_NOTE)).toBe(true);
       expect(windDownMsgs.some((m) => m.content === SOFT_DEADLINE_NOTE)).toBe(false);
     });
+  });
+
+  it('a blocking Stop-hook segment restarts roundsUsed at 1 (subagent round counting treats 1 then 1 as two rounds)', async () => {
+    const fixture = makeDispatcher();
+    const stopTurn = (text: string): ScriptedTurn => ({
+      chunks: [
+        { choices: [{ delta: { content: text } }] },
+        { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+      ],
+    });
+    // Segment 1: one tool round, then stop. Stop hook continues. Segment 2: one tool round, then stop.
+    scriptedTurns = [toolCallTurn('s1'), stopTurn('one'), toolCallTurn('s2'), stopTurn('two')];
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk', source: 'config' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('go'),
+      config: baseConfig(),
+      toolDispatcher: fixture.dispatcher,
+    });
+    let ends = 0;
+    q.setBeforeTurnEnd(async () => (++ends === 1 ? { continueWith: 'keep going' } : undefined));
+    const events = await collect(q);
+    expect(fixture.handlerCalls).toHaveLength(2);
+    expect(events.flatMap((e) => (e.type === 'progress' ? [e.progress.roundsUsed] : []))).toEqual([1, 1]);
   });
 
   it('runs uncapped at top level — past the former hard-coded 50-round limit (no maxToolUseIterations)', async () => {

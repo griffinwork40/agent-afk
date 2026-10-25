@@ -343,20 +343,29 @@ export function buildReadOnlyReconProvider(
   // value is already a subset of RECON, so readOnlyBash/readOnlyMemory below
   // still hold regardless of what is passed.
   allowedTools?: readonly string[],
+  // Fork context's workspace store (#4073). RECON_ALLOWED_TOOLS grants
+  // workspace_publish / workspace_query on purpose, but a provider only
+  // advertises and handles them when it holds a store, so without this the
+  // grant was dead at the depth cap. The allowlist stays the authority: a
+  // store never grants a tool the allowlist omits (see grantsTool). Undefined
+  // when workspace is disabled (AFK_WORKSPACE_DISABLED).
+  workspaceStore?: WorkspaceStore,
 ): ModelProvider {
   // Materialize the allowlist per call so test/runtime mutation of the shared
   // array doesn't bleed across siblings (mirrors buildPhaseRestrictedProvider).
   const permissions = { allowedTools: [...(allowedTools ?? RECON_ALLOWED_TOOLS)] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
+  const store = workspaceStore !== undefined ? { workspaceStore } : {};
   if (route === 'openai-compatible') {
     return new OpenAICompatibleProvider({
       permissions,
       readOnlyBash: true,
       readOnlyMemory: true,
       ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
+      ...store,
     });
   }
-  return new AnthropicDirectProvider({ permissions, readOnlyBash: true, readOnlyMemory: true });
+  return new AnthropicDirectProvider({ permissions, readOnlyBash: true, readOnlyMemory: true, ...store });
 }
 
 /**
@@ -711,9 +720,11 @@ export function buildSkillRestrictedProvider(
   // Item 4 (PR #1986): when present, the workspace store is threaded into the
   // provider so agents whose declared allowlist includes workspace_publish /
   // workspace_query retain access even when their tool surface is restricted.
-  // The allowedTools list is the authority — the store is only wired when the
-  // agent has already declared workspace tool access. Trailing optional so all
-  // existing positional callers are unaffected.
+  // Contract (#4073): callers pass the fork context's store unconditionally.
+  // The allowedTools list is the authority — a store on a provider whose
+  // allowlist omits the workspace tools grants nothing (permissions drive both
+  // schemas and the dispatcher gate; grantsTool reports false). Trailing
+  // optional so all existing positional callers are unaffected.
   workspaceStore?: WorkspaceStore,
 ): ModelProvider {
   // Materialise once per fork so runtime array mutations don't bleed across siblings.
@@ -760,16 +771,22 @@ export function buildPhaseRestrictedProvider(
   // values here. The `_` prefix silences `noUnusedParameters` until then.
   _role: 'read-only',
   model: AgentModelInput | undefined,
+  // Fork context's workspace store (#4073). READ_ONLY_PHASE_TOOLS lists
+  // workspace_publish / workspace_query deliberately (the workspace is
+  // ephemeral per root session), but the provider only advertises and handles
+  // them when it holds a store. Undefined when workspace is disabled.
+  workspaceStore?: WorkspaceStore,
 ): ModelProvider {
   // The allowlist is materialized once per fork so any test or runtime
   // mutation of the array doesn't bleed across sibling subagents.
   const permissions = { allowedTools: [...READ_ONLY_PHASE_TOOLS] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
+  const store = workspaceStore !== undefined ? { workspaceStore } : {};
   if (route === 'openai-compatible') {
-    return new OpenAICompatibleProvider({ permissions });
+    return new OpenAICompatibleProvider({ permissions, ...store });
   }
   // 'anthropic' / 'anthropic-direct' / fallback all route here. Mirrors the
   // resolveProvider() default to keep the read-only path consistent with
   // the unrestricted path.
-  return new AnthropicDirectProvider({ permissions });
+  return new AnthropicDirectProvider({ permissions, ...store });
 }

@@ -151,7 +151,7 @@ describe('expireHandoff', () => {
     }));
     await writeHandoff(record('q-resumed', 25 * HOUR), handoffsDir);
     expect(await expireHandoff('q-resumed', { handoffsDir, queueDir, now: NOW })).toBe(true);
-    // recoverExpiredLeases ran: exhausted attempts → dead-letter, not stranded in leased/
+    // reclaimSingleLease ran: exhausted attempts → dead-letter, not stranded in leased/
     expect(getTaskRecord('q-resumed', resumeDir)?.state).toBe('dead-letter');
   });
 
@@ -165,7 +165,7 @@ describe('expireHandoff', () => {
     }));
     await writeHandoff(record('q-retry', 25 * HOUR), handoffsDir);
     expect(await expireHandoff('q-retry', { handoffsDir, queueDir, now: NOW })).toBe(true);
-    // recoverExpiredLeases ran: attempts < maxAttempts → re-enqueued into resume queue
+    // reclaimSingleLease ran: attempts < maxAttempts → re-enqueued into resume queue
     expect(listPending(resumeDir).map((t) => t.id)).toContain('q-retry');
   });
 
@@ -225,7 +225,7 @@ describe('expireHandoff', () => {
 
     await expireHandoff('q-parked', { handoffsDir, queueDir, now: NOW });
 
-    // recoverExpiredLeases ran after setLeaseState restored the lease (#3880):
+    // reclaimSingleLease ran after setLeaseState restored the lease (#3880):
     // attempts:1 >= maxAttempts:1 → dead-lettered, not stranded in leased/
     expect(getTaskRecord('q-parked', queueDir)?.state).toBe('dead-letter');
   });
@@ -247,7 +247,7 @@ describe('expireHandoff', () => {
 
     await expireHandoff('q-parked-retry', { handoffsDir, queueDir, now: NOW });
 
-    // recoverExpiredLeases ran: attempts < maxAttempts → re-enqueued
+    // reclaimSingleLease ran: attempts < maxAttempts → re-enqueued
     expect(listPending(queueDir).map((t) => t.id)).toContain('q-parked-retry');
   });
 

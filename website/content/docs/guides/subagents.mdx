@@ -1,324 +1,88 @@
 ---
-title: "Subagents & Delegation"
-description: "How to delegate work to subagents: the agent tool, background mode, /bgsub, the compose DAG, and when to delegate vs. stay inline."
+title: "Delegate tasks to subagents"
+description: "Dispatch independent child sessions, parallel DAGs, and background work with explicit scopes and budgets."
 ---
 
-Agent AFK can fork child sessions — subagents — that run isolated tasks in parallel or sequence. This guide covers the mechanics: the `agent` tool, background mode, the `compose` DAG, and the decision rules for when to delegate vs. stay inline.
+A subagent is a child session with its own context window. Delegate multi-file investigation, independent verification, or parallel work so the main conversation receives only a concise result. Each child needs a self-contained brief because it does not inherit the parent's conversation.
 
-## How subagents work
+<Steps>
+<Step>Ask AFK to use its `agent` tool for a bounded task, with the expected output and stopping condition in `prompt`.</Step>
+<Step>Use foreground mode when you need the result this turn. Use `mode: "background"` only when you can keep working without it.</Step>
+<Step>Verify consequential findings against their cited sources before acting.</Step>
+</Steps>
 
-Subagents are child sessions that run independently. Each inherits permissions from the parent and runs the same tool surface. What it does not inherit is context — every subagent starts with zero prior conversation.
-
-### Subagents are non-interactive
-
-A forked subagent has no operator surface of its own — it returns findings to its parent, which
-owns the human relationship. So subagents run **non-interactive** by default:
-
-- The `ask_question` tool is stripped from a subagent's toolset entirely — it cannot block on the
-  operator. It must proceed on a stated assumption or return a **Blocked** / **Asking** result to
-  the parent.
-- A path-approval prompt (file access outside the granted roots) is auto-denied rather than
-  surfaced — pre-authorize the path in the parent or run in [bypass mode](/configuration/permissions).
-- MCP elicitations are auto-declined.
-
-The parent session decides what to do with a subagent's Blocked/Asking result — including
-re-dispatching with wider grants or asking you directly.
-
-**Always include in a subagent brief:**
-- Objective
-- Relevant file paths and constraints
-- Expected deliverable (format, length)
-- What **not** to do and when to stop
-
-A subagent brief with missing context produces unreliable output. Synthesize what the subagent needs; don't assume it can infer from the parent conversation.
-
-## The `agent` tool
-
-The primary dispatch mechanism is the built-in `agent` tool. Pass a `prompt` describing the work:
-
-```
-agent({
-  prompt: "Read the retry logic in src/http/client.ts and explain the backoff strategy in ≤150 words. Cite file:line for each claim.",
-  model: "haiku",          // optional — right-size the model
-  max_turns: 5             // optional — bound the budget
-})
+```json
+{"prompt":"Inspect the retry logic. Return a short answer with file:line evidence and what you did not check.","agent_type":"Explore","max_tool_use_iterations":30}
 ```
 
-The tool forks a child session, runs it to completion, and returns the compressed result to the parent. The parent's context window receives the final message only — not the child's internal reasoning or tool call log.
+An `agent_type` chooses a [named agent](/guides/named-agents) with a supplied system prompt and enforced tool allowlist. Omit it for a general child. The parent can override a type's default model and budget. Children inherit the parent's permissions but cannot ask you a question directly; path-approval requests and MCP elicitations are declined. They return a Blocked or Asking result for the parent to resolve. A child does not receive a separate MCP manager.
 
-### Model selection
+## Dispatch parameters
 
-You can dispatch subagents on cheaper models when the task doesn't need full capability:
-
-| Model | Best for |
+| Parameter | Effect |
 |---|---|
-| `haiku` | Fast lookups, simple summarisation, file reads |
-| `sonnet` | General investigation, multi-file analysis |
-| `opus` | Complex reasoning, long-horizon planning |
+| `prompt` | Required self-contained objective, relevant files, constraints, and deliverable. |
+| `agent_type` | Named agent type; `subagent_type` is an alias. Unknown types fail with a list of available types. |
+| `model` | Override the model for this child. A different-model foreground result gets a provenance header naming child and parent models. |
+| `max_turns` | Conversation turn cap; omitted means no turn cap unless the named type defines one. |
+| `max_tool_use_iterations` | Tool-use **round** cap; set `0` to disable it. A parallel batch of tool calls counts as one round. |
+| `mode` | `foreground` by default, or `background` for immediate job ID and later delivery. |
+| `cwd` | Absolute child working directory. Defaults to the parent's; must not be a root or home ancestor. |
+| `readRoots` | Extra absolute file or directory read grants alongside inherited scope. Re-grant for grandchildren. |
+| `writeRoots` | Extra absolute write grants alongside the child cwd in confined sessions; not compatible with worktree isolation. |
+| `isolation` | `worktree` creates a managed checkout for a write-capable child; cannot be combined with `cwd` or `writeRoots`. |
+| `attachments` | Up to eight inbound image IDs or absolute image paths; let the runtime resolve bytes, not pasted base64. |
+| `progress_events` | Grants an opted-in child `emit_progress` for structured progress delivered to the parent. |
 
-### Foreground vs. background
+A pinned `cwd` confines the child to that checkout in confined sessions. `readRoots` and `writeRoots` add access without replacing its normal scope; roots have no confinement effect on a previously unconfined session with no explicit cwd or worktree isolation. `readRoots` can accompany isolation, while `writeRoots` cannot. For an image in your prompt, pass the attachment name or ID to the child; see [Images](/guides/images).
 
-By default `agent` is **foreground**: the parent waits for the child to finish before continuing.
+## Parallel composition
 
-Pass `mode: "background"` to fire-and-forget. The tool returns a `jobId` immediately. The parent can keep working and join the result later:
+Use `compose` for a directed acyclic graph of up to 20 child tasks. Independent nodes start in parallel; an edge `{ from: "research", to: "report" }` waits for `research` before starting `report`. Nodes are leaves and cannot dispatch further `agent`, `skill`, or `compose` calls. Upstream outputs are passed to downstream prompts as explicitly untrusted data. Cycles fail validation. Fail-fast is on by default; set `fail_fast: false` when independent surviving results are still useful.
 
-```
-// Dispatch background job
-agent({ prompt: "...", mode: "background" })
-// → returns { jobId: "abc123" }
-
-// Later, in the REPL:
-/bgsub:join abc123
-```
-
-Use background mode for long investigations where the result isn't needed in the current turn — for example, running a security audit while the main session continues implementing a feature.
-
-## `/bgsub` — background job management
-
-In the REPL, background subagent jobs are surfaced through the `/bgsub` namespace:
-
-```
-/bgsub:join <jobId>    # wait for and return the result
+```json
+{"nodes":[{"id":"research","prompt":"Find relevant code and report citations","agent_type":"Explore","max_tool_rounds":30},{"id":"tests","prompt":"Find coverage gaps and report citations","max_tool_rounds":50},{"id":"report","prompt":"Summarize both findings"}],"edges":[{"from":"research","to":"report"},{"from":"tests","to":"report"}]}
 ```
 
-The status bar at the bottom of the REPL shows running background task counts.
+Each node can override the following, without changing sibling nodes:
 
-Source: `src/cli/background-status-bar.ts`, `src/cli/commands/bg.ts`.
+| Node parameter | Effect |
+|---|---|
+| `model`, `agent_type` | Select a model and a named agent's prompt and tool grants. |
+| `max_turns`, `max_tool_rounds` | Cap turns or tool-use rounds for this node; `max_tool_rounds` overrides the compose-level `max_tool_rounds_per_node` (default 50). |
+| `cwd`, `readRoots`, `writeRoots` | Pin a directory or add absolute read/write grants for this node. |
+| `attachments` | Forward up to eight named images or absolute image paths. |
+| `isolation: "worktree"` | Give a write-capable node its own managed checkout; incompatible with `cwd` and `writeRoots`. |
 
-### `afk bg` — CLI background job inspection
+`node_timeout_ms` bounds each node's runtime. A timed-out node can surface partial findings; siblings continue unless failure policy cancels them. See [Worktrees](/guides/worktrees) for setup and preservation of isolated checkouts.
 
-From the terminal, inspect persisted background job logs with the `afk bg` command:
+## Background results and live inspection
 
-```bash
-afk bg list              # list all jobs (most recent first, --max <n> to limit)
-afk bg tail <jobId>      # stream live events (--from-start to replay first)
-afk bg replay <jobId>    # replay all events, then exit
-```
+A background `agent` returns a job ID immediately. On completion, the REPL automatically shows a notice and injects a `background-subagent-result` into the next model turn. Telegram delivers the result to its chat. End your turn instead of polling; `/bgsub:join` manually retrieves or replays the full result. A REPL injection is capped at 16 KB and names the join command when truncated. `AFK_BG_AUTO_DELIVER=0` opts out of REPL auto-delivery. If the active goal changed while the child ran, the delivered result is labelled `superseded="true"` to warn that its conclusion may no longer fit the current objective.
 
-Jobs are persisted to `~/.afk/state/bg/` even after the parent REPL exits. Use `afk bg` to check status, review logs, or re-stream a job's output from disk. Complements `/bgsub:join` when you need access outside an active REPL session.
+In the REPL, `/tasks` lists running, recently completed, and logged children. Select one with Enter or run `/tasks:view <id>` to see its conversation and live output; Esc returns, and `/tasks:cancel <id>` cancels a running child. During a streaming parent turn, Tab opens the live task view. There you can type a message and press Enter to send it to the running child, then Esc to return. For a model-created background job, the parent can instead call `send_message_to_agent` with the job ID; user-backgrounded jobs are not steerable by that tool. A child dispatched with `progress_events: true` can call `emit_progress`; updates arrive in a later parent turn. Sibling children can share findings through `workspace_publish` and `workspace_query`, or subscribe to matching workspace entries. For persisted background job event logs outside the REPL, use `afk bg list`, `afk bg tail <jobId>`, or `afk bg replay <jobId>`; these commands can read prior logs after the parent process exits, but the job itself does not survive that exit.
 
-## The `compose` tool — DAG orchestration
+## Budget, timeouts, and recovery
 
-For structured multi-agent workflows, the `compose` tool dispatches up to 20 subagent nodes with explicit dependency edges. Independent nodes run in parallel; dependent nodes wait.
+Unnamed `agent` calls have no tool-round cap by default. `general-purpose` defaults to 150, and read-only named types to 50. Internal skill and compose forks default to 50. At a round cap, AFK gives the child one final tool-free response to summarize partial findings rather than killing it mid-tool. For multi-file implementation and testing, give the child a larger explicit budget rather than relying on the read-only default. Foreground child turns have a 45-minute wall-clock bound; background children have 60 minutes. The idle watchdog aborts a child after eight minutes without observable progress by default; it pauses while tools run or a provider communicates a legitimate rate-limit wait. `AFK_SUBAGENT_IDLE_TIMEOUT_MS=0` disables the idle bound, not the wall-clock bound.
 
-```
-compose({
-  nodes: [
-    { id: "security", prompt: "Audit src/api for authz and injection bugs. List each finding with file:line." },
-    { id: "coverage", prompt: "Find untested branches in src/api. List each with file:line." },
-    { id: "report",   prompt: "Combine the security and coverage findings into one prioritised punch-list." }
-  ],
-  edges: [
-    { from: "security", to: "report" },
-    { from: "coverage", to: "report" }
-  ]
-})
-```
+| Variable | Purpose |
+|---|---|
+| `AFK_MAX_NESTING_DEPTH` | Maximum child generations, default 3; 0 disables delegation tools. |
+| `AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT` | Optional simultaneous children per parent, up to 20. |
+| `AFK_MAX_CONCURRENT_AGENTS` | Optional simultaneously running children across one session tree, up to 64. |
+| `AFK_MAX_TOTAL_AGENTS` | Optional lifetime spawn count across one session tree, up to 200. |
 
-Dependencies are declared as `edges` (`{ from, to }` — "from must finish before to starts"), not as a field on the node. Here `security` and `coverage` have no incoming edges, so they run in parallel; `report` waits for both. If any node fails and fail-fast is enabled (the default), downstream nodes are cancelled rather than running with incomplete inputs.
+The three tree-wide budget variables are opt-in; each stops a dispatch when its configured limit is reached. `get_runtime_state({ view: "subagents" })` shows active handles and, when enough history exists, a 30-day `subagentOutcomeSummary` grouped by model, agent type, and depth. It includes success rate, cap-hit rate, and median latency for groups with at least three runs, useful when choosing a larger budget or a different type.
 
-**Limits and failure behavior:**
-- Maximum 20 nodes per `compose` call
-- Cycles are rejected at dispatch time
-- Fail-fast cancels all downstream nodes on first failure — the parent sees which nodes ran and which were skipped
+`AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT=1` lets forked children park on a usage-limit 429 instead of failing immediately; it is off by default. The environment default is ignored for daemon children because there may be no human to change accounts, although an explicit caller setting can override that. An interrupted parallel wave can produce a `[wave-resume]` offer at the next interactive session start: it lists unsettled units, missing worktrees, and dependencies. This **does not** automatically re-dispatch work or accept a yes/no reply. Re-dispatch ready units deliberately after checking their listed working directories. Unattended sessions show offers only with `AFK_WAVE_RESUME_UNATTENDED=1`.
 
-Source: `src/agent/tools/compose-executor.ts`, `src/agent/dag.ts`.
+Cancelling a parent cascades to its running children. A child failure reports to its parent, not automatically to all siblings unless compose's fail-fast policy applies. Ask for concise answers with file and line references, then independently check high-risk conclusions.
 
-## How cancellation works
+## Related
 
-When you cancel a session, all running subagents stop immediately. The rules:
-
-- **Parent abort cascades down** — aborting the parent cancels all running children.
-- **Child abort notifies up but does not auto-abort the parent** — a failed subagent surfaces an error to the parent; the parent decides whether to continue.
-- **Abort beats hook decisions** — if an abort signal fires while a hook is deciding, abort wins.
-
-This means you can cancel a daemon session or a REPL turn and all its child work stops immediately. A single broken subagent in a `compose` DAG does not bring down the orchestrator unless it's in a dependency chain.
-
-## When to delegate vs. stay inline
-
-**Delegate when the work would:**
-- Read or grep more than 3 files inline
-- Verify a claim independently from the chain that produced it
-- Investigate a failing test or unexplained behavior
-- Run two or more independent investigations that could happen in parallel
-- Consume more main-session context than the subagent's compressed answer would
-
-**Stay inline when:**
-- The task is a single-file edit or localized fix visible in fewer than 2 reads
-- The answer is conversational or requires no file access
-- The user explicitly asked for a direct tool call
-- Dispatch overhead exceeds the work itself
-
-Source: `AGENTS.md` (Delegation section).
-
-### Right-sizing the budget
-
-Subagents should have explicit budgets. Before dispatching:
-
-- Set `max_turns` on focused investigations (`max_turns: 5` for a quick lookup)
-- Choose the cheapest sufficient model (`haiku` for reads, `sonnet` for multi-file analysis)
-- For wide fan-outs, dispatch in bounded waves rather than all at once — a burst of parallel children can hit provider rate limits and cascade into timeouts
-
-## Subagent output
-
-Subagents return their final assistant message verbatim. Structure the brief to ask for compressed output:
-
-```
-"...Return: answer (1–2 sentences), evidence with file:line citations, confidence (high/medium/low), and any unresolved questions."
-```
-
-For typed output, the `SubagentManager` accepts optional Zod schemas — the subagent's output is validated before it reaches the parent. Malformed output surfaces as an error rather than silently passing through.
-
-## Verifying subagent output
-
-High-stakes subagent findings should not be trusted blindly. Use the `/shadow-verify` skill to dispatch parallel adversarial verifiers that re-derive 2–3 key claims from scratch using tool calls. Any disagreement is flagged before you act on the result.
-
-See the [Verification guide](/guides/verification) for the full workflow.
-
-## Child-to-parent progress events
-
-By default a running background subagent is opaque to its parent — the parent only learns the result when the child finishes. Opt into progress events to get live updates at each tool-call boundary while the child is still running.
-
-### Enabling `emit_progress`
-
-Pass `progress_events: true` when dispatching:
-
-```
-agent({
-  prompt: "Run the full test suite and summarise failures...",
-  mode: "background",
-  progress_events: true
-})
-// → returns { jobId: "abc123" }
-```
-
-This grants the child an extra `emit_progress` tool not available on non-opted-in subagents.
-
-### The `emit_progress` tool (child-side)
-
-When `progress_events: true` is set, the child calls:
-
-```
-emit_progress({
-  message: "Running unit tests — 142/500 complete, 3 failures so far.",
-  phase: "testing",        // optional label for the current stage
-  metadata: { passed: 142, failed: 3 }  // optional structured payload
-})
-// → { delivered: true }
-```
-
-Fields:
-- `message` (required) — free-text description of current status. Capped at 2048 bytes; truncated at the UTF-8 byte boundary if exceeded.
-- `phase` (optional) — short label for the current stage (e.g. `"scanning"`, `"testing"`, `"summarising"`).
-- `metadata` (optional) — arbitrary key/value object for structured data.
-
-### Delivery to the parent
-
-Each event is delivered to the parent's **next user turn** as a `<child-progress>` XML envelope:
-
-```xml
-<child-progress subagentId="sub_abc123" phase="testing" timestamp="2026-09-17T12:00:00.000Z">
-  Running unit tests — 142/500 complete, 3 failures so far.
-</child-progress>
-```
-
-Events are buffered in a ring per handle; the oldest are evicted on overflow rather than blocking the child. If the parent's abort signal has already fired, `emit_progress` returns `{ delivered: false, reason: "parent_aborted" }` and is otherwise a no-op.
-
-This is the reverse direction of `send_message_to_agent` (parent → child). Together they form a bidirectional steering channel.
-
-Source: `src/agent/tools/subagent/emit-progress.ts`, `src/agent/subagent/fork-progress-events.ts`.
-
-## Steering a running background child
-
-The parent can inject a message into a running background subagent at its next tool-call boundary using `send_message_to_agent`. This lets you redirect, correct, or update context in a child without cancelling and re-dispatching it.
-
-```
-send_message_to_agent({
-  jobId: "abc123",
-  message: "The spec changed — focus only on the auth module, skip everything else."
-})
-// → "Steering message queued for background job abc123."
-```
-
-The message arrives as a synthetic user turn before the child's next tool round. The child sees it the same way it would see any other instruction and can adjust its plan mid-execution.
-
-### Constraints
-
-- **Background jobs only** — foreground subagents are steered by the human via the interrupt picker (Ctrl+C → Steer), not through this tool.
-- **Model-created jobs only** — jobs that were user-backgrounded (the operator pressed Ctrl+B) are user-owned and the tool refuses them with a clear error.
-- **Same-session only** — a parent session cannot steer a job belonging to a different concurrent session.
-- **Anthropic provider only** — steering requires the provider's inter-round hook (`setBeforeNextRound`). OpenAI-compatible providers do not wire this hook; the tool returns a descriptive error rather than silently dropping the message.
-- **Terminal jobs** — if the child has already completed or failed, the tool returns a non-error acknowledgement (the job is done; no message is queued).
-
-Source: `src/agent/tools/subagent/send-message.ts`, `src/agent/tools/schemas.background-steer.ts`.
-
-## Workspace subscriptions
-
-Sibling agents in a `compose` DAG share a workspace via `workspace_publish` and `workspace_query`. Polling with `workspace_query` works, but a child that calls `workspace_subscribe` receives matching entries **pushed** to it at each tool-call boundary without repeated queries.
-
-### Subscribing
-
-```
-workspace_subscribe({
-  subject: "auth",          // optional — substring filter on entry subject
-  type: "finding"           // optional — restrict to one entry type
-})
-// → { subscriptionId: "ws_abc", active: true }
-```
-
-Both filters are optional. Omitting them subscribes to all entries published by any sibling in the same session.
-
-### Delivery
-
-Entries matching the subscription are accumulated in a ring buffer and delivered at the next tool-call boundary as a `<workspace-delivery>` envelope:
-
-```xml
-<workspace-delivery subscriptionId="ws_abc">
-  { "id": 7, "type": "finding", "subject": "auth refresh", "content": "..." }
-</workspace-delivery>
-```
-
-No polling needed — the child just reads normal tool-result context in its next round. If the ring fills before the child drains it, the oldest entry is evicted (dropped count is traced).
-
-### Availability
-
-`workspace_subscribe` is only available on **forked children** — the tool is not registered on top-level REPL, one-shot chat, Telegram, or daemon surfaces. The `workspace_query` poll is always available.
-
-The subscription is cancelled automatically when the child's handle is torn down.
-
-Source: `src/agent/workspace/workspace-tools.ts`, `src/agent/subagent/workspace-subscription-wiring.ts`.
-
-## Subagent result sidecar spill
-
-When a foreground subagent's final message exceeds the configured byte threshold, AFK does not silently truncate it. Instead, the full output is spilled to a sidecar file and the parent receives a head+tail slice with a pointer to the full text:
-
-```
-[Subagent output was 98304 bytes — full result at
-~/.afk/state/sessions/<sessionId>/subagent-handoffs/<subagentId>.txt.
-Use read_file to retrieve it.]
-```
-
-The parent can then call `read_file` on that path to retrieve the complete output.
-
-### Threshold
-
-The default cap is **32 KB** (`AFK_SUBAGENT_RESULT_CAP_BYTES=32768`). Tune it with:
-
-```bash
-AFK_SUBAGENT_RESULT_CAP_BYTES=65536   # raise to 64 KB
-AFK_SUBAGENT_RESULT_CAP_BYTES=0       # disable the cap entirely
-```
-
-Setting it to `0` disables the cap — the full result is returned to the parent verbatim, which can blow up the parent's context window if the child produces large output.
-
-### Spill layout
-
-Sidecar files are written under the parent session's state directory:
-
-```
-~/.afk/state/sessions/<sessionId>/subagent-handoffs/<subagentId>.txt
-```
-
-Both `sessionId` and `subagentId` are path-sanitized before the file is written. Spill is best-effort — if the write fails (disk full, permissions), the parent still receives the truncated view, but without the file pointer.
-
-Source: `src/agent/tools/subagent/foreground-promotion.result-cap.ts`.
+<Cards>
+<Card title="Use named agents" href="/guides/named-agents" description="Create and scope specialized child roles." />
+<Card title="Manage worktrees" href="/guides/worktrees" description="Isolate write-capable children in Git checkouts." />
+<Card title="Forward images" href="/guides/images" description="Attach named images to child tasks." />
+</Cards>

@@ -36,6 +36,7 @@ describe('renderWorkspacePreamble', () => {
     const output = renderWorkspacePreamble([makeEntry()]);
     expect(output).toContain('# Workspace context');
     expect(output).toContain('workspace_publish');
+    expect(output).toContain('only if it is available to you');
   });
 
   it('renders entry id and type', () => {
@@ -212,5 +213,60 @@ describe('injectWorkspacePreamble', () => {
     const result = injectWorkspacePreamble(config, [makeEntry()]);
     expect(result.model).toBe('haiku');
     expect(result.maxTokens).toBe(512);
+  });
+});
+
+// ── tool access (#4060) ───────────────────────────────────────────────────────
+
+describe('workspace preamble tool access (#4060)', () => {
+  const baseConfig: AgentConfig = { model: 'sonnet', systemPrompt: 'Base.' };
+  const NONE = { publish: false, query: false };
+  const ALL = { publish: true, query: true };
+
+  it('injects nothing into an empty workspace when the child cannot publish', () => {
+    const result = injectWorkspacePreamble(baseConfig, [], NONE);
+    expect(result).toBe(baseConfig);
+  });
+
+  it('also injects nothing when only workspace_query is granted and the workspace is empty', () => {
+    expect(injectWorkspacePreamble(baseConfig, [], { publish: false, query: true })).toBe(baseConfig);
+  });
+
+  it('renders findings with no workspace tool names when neither tool is granted', () => {
+    const result = injectWorkspacePreamble(baseConfig, [makeEntry()], NONE);
+    expect(result.systemPrompt).toContain('# Workspace context');
+    expect(result.systemPrompt).toContain('The cache layer uses LRU eviction.');
+    expect(result.systemPrompt).not.toContain('workspace_publish');
+    expect(result.systemPrompt).not.toContain('workspace_query');
+  });
+
+  it('names only the granted tool in a populated preamble', () => {
+    const queryOnly = renderWorkspacePreamble([makeEntry()], { publish: false, query: true });
+    expect(queryOnly).toContain('workspace_query');
+    expect(queryOnly).not.toContain('workspace_publish');
+    const publishOnly = renderWorkspacePreamble([makeEntry()], { publish: true, query: false });
+    expect(publishOnly).toContain('workspace_publish');
+    expect(publishOnly).not.toContain('workspace_query');
+  });
+
+  it('states the calls plainly in the cold-start hint when both tools are granted', () => {
+    const result = injectWorkspacePreamble(baseConfig, [], ALL);
+    expect(result.systemPrompt).toContain('# Workspace (shared agent scratchpad)');
+    expect(result.systemPrompt).toContain('Call `workspace_publish` when you:');
+    expect(result.systemPrompt).toContain('Call `workspace_query`');
+    expect(result.systemPrompt).not.toContain('is available');
+  });
+
+  it('omits workspace_query from the cold-start hint when only publish is granted', () => {
+    const result = injectWorkspacePreamble(baseConfig, [], { publish: true, query: false });
+    expect(result.systemPrompt).toContain('workspace_publish');
+    expect(result.systemPrompt).not.toContain('workspace_query');
+  });
+
+  it('keeps the legacy hedged text byte-for-byte when access is unknown', () => {
+    expect(injectWorkspacePreamble(baseConfig, []).systemPrompt).toContain(
+      'If `workspace_publish` is available, call it when you:',
+    );
+    expect(renderWorkspacePreamble([makeEntry()])).toContain('only if it is available to you');
   });
 });

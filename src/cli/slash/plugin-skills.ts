@@ -54,6 +54,11 @@ export {
   extractHintFromDescription,
   type PluginSkillHarvest,
 } from './plugin-skills/flags.js';
+export {
+  isPluginInitPending,
+  awaitPluginInit,
+  setInitBarrier,
+} from './plugin-skills/state.js';
 export { initialSkillsCmd } from './plugin-skills/listing.js';
 export {
   makeForwardHandler,

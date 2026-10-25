@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "5.321.10",
+  "version": "5.335.1",
   "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -61,6 +61,14 @@
     "audit:width:list": "tsx scripts/check-terminal-width.ts --list",
     "scan:env": "tsx scripts/render-env-registry.ts",
     "scan:env:check": "tsx scripts/render-env-registry.ts --check",
+    "scan:cli": "tsx scripts/lib/isolated-reference.ts cli",
+    "scan:cli:check": "tsx scripts/lib/isolated-reference.ts cli --check",
+    "scan:slash": "tsx scripts/lib/isolated-reference.ts slash",
+    "scan:slash:check": "tsx scripts/lib/isolated-reference.ts slash --check",
+    "scan:config": "tsx scripts/lib/isolated-reference.ts config",
+    "scan:config:check": "tsx scripts/lib/isolated-reference.ts config --check",
+    "scan:docs-coverage:check": "tsx scripts/check-docs-coverage.ts",
+    "docs:links:check": "tsx scripts/check-docs-links.ts",
     "audit:filesize": "tsx scripts/check-file-size.ts",
     "audit:filesize:check": "tsx scripts/check-file-size.ts --check",
     "audit:filesize:list": "tsx scripts/check-file-size.ts --list",
@@ -75,6 +83,8 @@
     "audit:posix:update": "tsx scripts/check-posix-guard.ts --update-baseline",
     "audit:module-state": "tsx scripts/audit-module-state.ts",
     "audit:module-state:check": "tsx scripts/audit-module-state.ts --check",
+    "audit:clones": "jscpd --config .jscpd.json",
+    "audit:clones:check": "tsx scripts/check-new-clones.ts",
     "fix:pins": "tsx scripts/update-hash-pins.ts",
     "fix:pins:check": "tsx scripts/update-hash-pins.ts --check",
     "stats:tools": "tsx scripts/count-tool-calls.ts",
@@ -87,7 +97,8 @@
     "experiment:workspace": "tsx scripts/run-workspace-ab-test.ts",
     "backfill:preexisting": "tsx scripts/backfill-preexisting-ledger.ts",
     "check:audits": "tsx scripts/check-audits.ts",
-    "prepare": "node scripts/install-pre-push-hook.mjs || true"
+    "prepare": "node scripts/install-pre-push-hook.mjs || true",
+    "regen:generated": "tsx scripts/regen-generated.ts"
   },
   "keywords": [
     "ai-agent",
@@ -129,7 +140,7 @@
   },
   "packageManager": "pnpm@11.28.2",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.132.1",
+    "@anthropic-ai/sdk": "^0.134.0",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@mozilla/readability": "^0.6.0",
     "@vscode/ripgrep": "^1.18.0",
@@ -151,6 +162,7 @@
     "telegraf": "^4.16.3",
     "turndown": "^7.2.4",
     "undici": "^8.11.2",
+    "vscode-jsonrpc": "^9.0.3",
     "wrap-ansi": "^10.0.0",
     "zod": "^4.3.6"
   },
@@ -162,6 +174,7 @@
     "@vitest/coverage-v8": "^5.0.3",
     "@xterm/headless": "^6.0.0",
     "esbuild": "^0.28.0",
+    "jscpd": "5.4.1",
     "node-pty": "^1.1.0",
     "tsx": "^4.19.2",
     "typescript": "^6.0.3",

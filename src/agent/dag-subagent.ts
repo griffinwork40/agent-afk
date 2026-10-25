@@ -133,6 +133,12 @@ export interface SubagentDAGNode {
    */
   provider?: ModelProvider;
   /**
+   * Default-tier model fallback forwarded verbatim to `forkSubagent` (see
+   * subagent/handle.model-fallback.ts). Set by the compose executor only for
+   * nodes whose model came from the default tier.
+   */
+  modelFallback?: import('./subagent/fork-types.js').ForkSubagentOptions['modelFallback'];
+  /**
    * This node's resolved nesting depth (`parent depth + 1`). When set,
    * forwarded into the fork config so the identity preamble
    * (`identity-preamble.ts`) can emit the correct at-cap / may-delegate line.
@@ -192,6 +198,22 @@ export interface SubagentDAGOptions {
    * absent. Seeded by the compose executor from its own `currentCwd`.
    */
   anchorCwd?: string;
+  /**
+   * Session-level default child model (tier 3 of {@link resolveChildModel}).
+   * When a node's `model` field is absent, this beats the hardcoded `'sonnet'`
+   * floor — matching the precedence chain the agent-tool and compose paths use.
+   * Seeded by the compose executor from its own `ctx.defaultSubagentModel`.
+   * Direct {@link runSubagentDAG} callers (skills, mint phases) should forward
+   * their own `defaultSubagentModel`; omitting it falls through to the floor.
+   */
+  defaultSubagentModel?: AgentModelInput;
+  /**
+   * Parent session model — safety net for the model-resolution chain (tier 4
+   * of {@link resolveChildModel}). When both `defaultSubagentModel` and the
+   * node's own `model` are absent, the parent model is preferred over the
+   * hardcoded `'sonnet'` floor. Seeded by compose from `ctx.defaultModel`.
+   */
+  defaultModel?: AgentModelInput;
 }
 
 type PartialNode = DAGRunResult['partial'][number];
@@ -245,6 +267,8 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
 
   // Side-channel: nodes that succeeded but wound down early (#2970).
   const partialNodes: PartialNode[] = [];
+  // Side-channel: per-node worktree setup failure notices (#3661).
+  const setupNotices: Record<string, string> = {};
 
   const dagNodes: DAGNode[] = nodes.map((originalSpec) => ({
     id: originalSpec.id,
@@ -254,12 +278,13 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
       const result = await recoverDagNode(originalSpec.id,
         () => dispatchDagNode(originalSpec, inputs, nodeSignal, options, softDeadlineForNode, ++dagIsolationCounter),
         nodeSignal, originalSpec.replaySafe === true && originalSpec.canUseTool !== undefined, options.traceWriter);
+      if (result.setupNotice) setupNotices[originalSpec.id] = result.setupNotice;
       if (result.status !== 'succeeded') {
         const reason = nodeSignal.reason;
         const throwable = reason instanceof TimeoutError
           ? new Error(`Subagent ${originalSpec.id} aborted: ${reason.message}`, result.error ? { cause: result.error } : {})
           : result.error ?? new Error(`Subagent ${originalSpec.id} ${result.status}`);
-        throw attachSubagentContext(throwable, { partialOutput: result.partialOutput, subagentId: result.id });
+        throw attachSubagentContext(throwable, { partialOutput: result.partialOutput, subagentId: result.id, setupNotice: result.setupNotice });
       }
       recordIfPartial(partialNodes, originalSpec.id, result.stopReason);
       if (result.output !== undefined) return result.output;
@@ -270,5 +295,9 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
 
   // runDAG's own `partial` is always [] (it has no notion of partial output).
   const dagResult = await runDAG({ nodes: dagNodes, edges }, signal, { failFast, nodeTimeoutMs });
-  return { ...dagResult, partial: partialNodes };
+  return {
+    ...dagResult,
+    partial: partialNodes,
+    ...(Object.keys(setupNotices).length > 0 ? { setupNotices } : {}),
+  };
 }

@@ -1,0 +1,139 @@
+---
+title: "Undo file edits and rewind conversations"
+description: "Rewind the conversation, the files the agent edited, or both to an earlier prompt, and keep git as your outer safety net."
+---
+
+`/rewind` can rewind the conversation, the files the agent edited, or both. In the interactive REPL, afk saves a file's state before the agent's first write to it in each turn, so it can put files back to how they were at any earlier prompt.
+
+<Callout type="warn">
+File rewind covers edits made with `write_file`, `edit_file`, and `patch_apply`. It does not undo shell commands, API requests, sent messages, subagent edits, or other external effects. Inspect the workspace before resending an earlier prompt.
+</Callout>
+
+## Rewind to an earlier prompt
+
+<Steps>
+<Step>
+
+Wait until the current turn has stopped, then run `/rewind`.
+
+</Step>
+<Step>
+
+Select an earlier user message from the picker, then choose what to rewind:
+
+- **Conversation only** removes that prompt and everything after it, and loads its text into your input to edit and resend.
+- **Files only** restores files to how they were just before that prompt, and keeps the conversation.
+- **Conversation and files** does both. Files are restored first, and the conversation is rewound only if every file was restored.
+
+</Step>
+<Step>
+
+For a file rewind, review the list of files that will change, then confirm. Nothing on disk changes until you confirm.
+
+</Step>
+</Steps>
+
+`/rewind conversation`, `/rewind files`, and `/rewind both` skip the menu. Pressing Esc twice at an empty, idle prompt runs `/rewind conversation`.
+
+Rewinding to a prompt undoes every later turn's file edits too, not only that prompt's. A file the agent created after that point is deleted.
+
+If a file was changed outside the agent since afk last saw it, for example by you in your editor, the preview marks it. You then choose whether to overwrite those changes or keep them. Files kept this way are reported as not restored, so a **Conversation and files** rewind then leaves the conversation alone. Run `/rewind conversation` if you want to rewind it anyway.
+
+The files option is unavailable for prompts from before a `--resume`, a `/model` switch, or a compaction that replaced them. It is also unavailable when checkpoints are turned off.
+
+### Turn file checkpoints off
+
+Set `fileCheckpoints` to `false` in `afk.config.json`:
+
+```json
+{ "fileCheckpoints": false }
+```
+
+Conversation rewind keeps working. Other surfaces (one-shot `afk chat`, Telegram, the daemon) do not save file checkpoints.
+
+### Storage and retention
+
+Checkpoints live under the AFK state directory at `file-checkpoints/<sessionId>/`, with identical content stored once per session. A cleanup pass at session start removes whole sessions older than 14 days, then the oldest sessions until the total is under 1 GiB. It never removes the running session, anything touched in the last hour, or a session mid-restore. `AFK_FILE_CHECKPOINT_MAX_AGE_DAYS`, `AFK_FILE_CHECKPOINT_MAX_BYTES`, and `AFK_FILE_CHECKPOINT_RETENTION_DISABLE` adjust or disable it. Checkpoints are not a security boundary against another process running as your user.
+
+## Restore file checkpoints from the SDK
+
+For applications embedding afk, file checkpointing is an `AgentConfig` option, off by default, implemented for both providers. Checkpoints save a file's state before the first supported write to that path in a turn. Supported tools are `write_file`, `edit_file`, and a non-dry-run `patch_apply`. Shell changes are not captured.
+
+<Steps>
+<Step>
+
+Create a session with checkpointing enabled:
+
+```ts
+import { AgentSession } from 'agent-afk';
+
+const session = new AgentSession({
+  model: 'sonnet',
+  enableFileCheckpointing: true,
+});
+```
+
+</Step>
+<Step>
+
+Keep the completed turn's `metadata.userMessageId`. It is the public checkpoint target, not the conversation picker's numerical turn index.
+
+```ts
+const reply = await session.sendMessage(
+  'Create a short draft in draft.txt using write_file.'
+);
+const checkpointId = reply.metadata?.userMessageId;
+```
+
+</Step>
+<Step>
+
+Preview the restore, review its paths, then explicitly apply it:
+
+```ts
+if (!checkpointId) throw new Error('No checkpoint target was returned.');
+
+const preview = await session.rewindFiles(checkpointId, { dryRun: true });
+if (!preview.canRewind) throw new Error(preview.error);
+console.log(preview.filesChanged);
+
+// Apply only after your application or user has approved the preview.
+const restored = await session.rewindFiles(checkpointId);
+if (!restored.canRewind) throw new Error(restored.error);
+console.log(restored.filesChanged);
+
+await session.close();
+```
+
+</Step>
+</Steps>
+
+In a streaming application, the `done` event's metadata carries the same checkpoint ID. Stop the turn before restoring.
+
+### What a file restore does
+
+Restoring a checkpoint puts every tracked path back to its state at the start of that turn, including paths that only later turns touched. It writes the saved bytes and mode, or deletes the file if it did not exist yet. Current write grants and protected-path rules are rechecked. A historical checkpoint does not grant new access.
+
+Restoration is per-file, not transactional, but never silently partial. Every path is attempted, and each one that could not be restored is listed in `failures`, with `canRewind: false`. Paths changed outside the agent since the last recorded state are listed in `conflicts` and are left alone unless you pass `{ overwriteConflicts: true }`.
+
+## Keep git as the outer safety net
+
+Before a significant change, start from a known commit and use a feature branch or [managed worktree](/guides/worktrees). Git covers changes made through shell tools as well as typed file tools, provided you actually commit or otherwise preserve the work.
+
+Inspect first:
+
+```sh
+git status --short
+git diff
+git diff --staged
+```
+
+Use the diff to distinguish the agent's changes from your own before restoring anything. Untracked files, ignored files, and external effects are not protected merely because you are in a git repository. Preserve anything irreplaceable before a destructive restore or worktree removal.
+
+## Related
+
+<Cards>
+  <Card title="Use managed worktrees" href="/guides/worktrees" description="Isolate agent edits from your primary checkout." />
+  <Card title="Use the TypeScript SDK" href="/sdk" description="Embed sessions and inspect completed-turn metadata." />
+  <Card title="Verify agent work" href="/guides/verification" description="Check the resulting state before accepting a change." />
+</Cards>

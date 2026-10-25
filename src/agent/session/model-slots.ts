@@ -40,11 +40,16 @@
 
 import { env } from '../../config/env.js';
 
-/** The four fixed capability-tier positions. */
-export type SlotName = 'local' | 'small' | 'medium' | 'large';
+/**
+ * The fixed capability-tier positions plus the `subagent` routing slot.
+ * `subagent` is not a capability tier — it is a routing policy that overrides
+ * the default model used when forking subagents (`agent`, `skill`, `compose`).
+ * When unconfigured (empty id), subagent dispatch falls through to `medium`.
+ */
+export type SlotName = 'local' | 'small' | 'medium' | 'large' | 'subagent';
 
-/** Ordered list of the canonical slot names (cheapest → most capable). */
-export const SLOT_NAMES: readonly SlotName[] = ['local', 'small', 'medium', 'large'] as const;
+/** Ordered list of the canonical slot names (cheapest → most capable), plus `subagent`. */
+export const SLOT_NAMES: readonly SlotName[] = ['local', 'small', 'medium', 'large', 'subagent'] as const;
 
 /**
  * Per-slot provider family. Optional override for the id-inferred provider —
@@ -92,6 +97,15 @@ export interface ModelSlotBinding {
    * at load time; rejected at the config_set write path.
    */
   contextWindow?: number;
+  /**
+   * Optional output-token cap override. When set, {@link maxOutputTokensOverrideFor}
+   * returns this value instead of the built-in table / default. Useful for
+   * self-hosted OpenAI-compatible models whose real reply cap differs from the
+   * 64k {@link DEFAULT_MAX_OUTPUT} fallback (e.g. a Qwen3 server capped at 32k).
+   * Must be a positive integer ≤ 10_000_000. Invalid values are silently ignored
+   * at load time; rejected at the config_set write path.
+   */
+  maxOutputTokens?: number;
 }
 
 /** Full set of resolved tier bindings. */
@@ -146,6 +160,15 @@ export const CLAUDE_FABLE_5_1_ID = 'claude-fable-5-1';
  */
 export const GROK_FLAGSHIP_ID = 'grok-4.5';
 
+// OpenAI family flagship constants — the concrete target for each family
+// short alias (sol/luna/astra/terra). Same discipline as the Claude constants
+// above: bump one line when a new flagship ships; the alias table, `/model`
+// picker, and provider routing all follow from these definitions.
+export const GPT_SOL_ID = 'gpt-6.1-sol';
+export const GPT_LUNA_ID = 'gpt-6-luna';
+export const GPT_ASTRA_ID = 'gpt-6-astra';
+export const GPT_TERRA_ID = 'gpt-5.6-terra';
+
 /**
  * Default tier bindings — an unconfigured install behaves identically to the
  * pre-slots `MODEL_MAP`. `model-resolution.ts` derives its `MODEL_MAP` from the
@@ -157,6 +180,7 @@ export const DEFAULT_SLOT_BINDINGS: ModelSlots = {
   small: { id: CLAUDE_HAIKU_ID },
   medium: { id: CLAUDE_SONNET_ID },
   large: { id: CLAUDE_OPUS_ID },
+  subagent: { id: '' },
 };
 
 /**
@@ -198,12 +222,27 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // GROK_FLAGSHIP_ID so upgrading the default Grok model is a one-line
   // change. Not a capability tier: `grok` always resolves to one pinned id.
   grok: GROK_FLAGSHIP_ID,
+  // OpenAI family aliases — stable short handles that track the GPT_*_ID
+  // constants above. Same pattern as the Claude aliases: each names ONE
+  // concrete model and is never rebound by user slot config.
+  sol: GPT_SOL_ID,
+  luna: GPT_LUNA_ID,
+  astra: GPT_ASTRA_ID,
+  terra: GPT_TERRA_ID,
 };
 
 // Curated picker hint lists live in the sibling file to keep this file within
 // the 350-code-line ceiling. Re-exported here so all existing importers keep
 // working without path changes.
-export { OPENAI_MODEL_HINTS, MODEL_ALIASES_HINT } from './model-slots.hints.js';
+export { OPENAI_MODEL_HINTS } from './model-slots.hints.js';
+import { getModelAliasesHint } from './model-slots.hints.js';
+/**
+ * Eagerly built at module-evaluation time by calling {@link getModelAliasesHint}.
+ * The lazy/cached pattern lives inside that function (model-slots.hints.ts) to
+ * avoid the circular-init TDZ between this file and its sibling; this constant
+ * itself is NOT lazy — it is populated on first import of model-slots.ts.
+ */
+export const MODEL_ALIASES_HINT: readonly string[] = getModelAliasesHint();
 
 /**
  * Process-global resolved bindings, installed by `loadConfig()` via
@@ -261,6 +300,7 @@ function envOverrides(): Record<SlotName, EnvSlotOverride> {
     small: readEnvSlot(env.AFK_MODEL_SMALL, env.AFK_MODEL_SMALL_BASE_URL, env.AFK_MODEL_SMALL_API_KEY),
     medium: readEnvSlot(env.AFK_MODEL_MEDIUM, env.AFK_MODEL_MEDIUM_BASE_URL, env.AFK_MODEL_MEDIUM_API_KEY),
     large: readEnvSlot(env.AFK_MODEL_LARGE, env.AFK_MODEL_LARGE_BASE_URL, env.AFK_MODEL_LARGE_API_KEY),
+    subagent: readEnvSlot(env.AFK_MODEL_SUBAGENT, env.AFK_MODEL_SUBAGENT_BASE_URL, env.AFK_MODEL_SUBAGENT_API_KEY),
   };
 }
 
@@ -291,6 +331,7 @@ export function computeSlotBindings(
     if (apiKey) binding.apiKey = apiKey;
     const contextWindow = file?.contextWindow;
     if (contextWindow !== undefined) binding.contextWindow = contextWindow;
+    if (file?.maxOutputTokens !== undefined) binding.maxOutputTokens = file.maxOutputTokens;
     out[slot] = binding;
   }
   return out;
@@ -319,10 +360,10 @@ export function slotForInput(input: string, bindings: ModelSlots = getSlotBindin
   const lowered = input.trim().toLowerCase();
   if (!lowered || lowered === AUTO_SENTINEL) return undefined;
   for (const slot of SLOT_NAMES) {
-    const name = bindings[slot].name;
+    const name = bindings[slot]?.name;
     if (name && name.trim().toLowerCase() === lowered) return slot;
   }
-  if (lowered === 'local' || lowered === 'small' || lowered === 'medium' || lowered === 'large') {
+  if (lowered === 'local' || lowered === 'small' || lowered === 'medium' || lowered === 'large' || lowered === 'subagent') {
     return lowered;
   }
   return undefined;
@@ -353,7 +394,8 @@ export function resolveBinding(
   // A raw id that matches a configured slot's own id carries that slot's
   // provider/baseUrl/apiKey. Prefer the first match in SLOT_NAMES order.
   for (const s of SLOT_NAMES) {
-    if (bindings[s].id.trim().toLowerCase() === trimmed && trimmed) return bindings[s];
+    const b = bindings[s];
+    if (b && b.id.trim().toLowerCase() === trimmed && trimmed) return b;
   }
   return { id: input };
 }
@@ -417,44 +459,10 @@ export function parseModelsConfig(raw: unknown): Partial<Record<SlotName, ModelS
   return out;
 }
 
-function normalizeSlotProvider(value: unknown): SlotProvider | undefined {
-  if (typeof value !== 'string') return undefined;
-  const lowered = value.trim().toLowerCase();
-  if (lowered === 'anthropic' || lowered === 'anthropic-direct') return 'anthropic';
-  if (lowered === 'openai' || lowered === 'openai-compatible') return 'openai';
-  if (lowered === 'chatgpt-oauth' || lowered === 'chatgpt') return 'chatgpt-oauth';
-  if (lowered === 'xai') return 'xai';
-  if (lowered === 'xai-oauth' || lowered === 'xai_oauth') return 'xai-oauth';
-  return undefined;
-}
-
-function parseStringField(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-/**
- * Reject control characters (CRLF, NUL, tab, DEL, etc.) in binding string
- * fields — mirrors the env-var path's newline rejection in `coerceEnvValue`.
- * `parseStringField` itself stays lenient (it is shared with the loader path,
- * which intentionally ignores rather than throws on malformed input).
- */
-function hasControlChars(value: string): boolean {
-  // eslint-disable-next-line no-control-regex
-  return /[\x00-\x1f\x7f]/.test(value);
-}
-
-/**
- * Names an agent-assigned binding `name` may not shadow — the built-in slot
- * keys, the fixed-identity aliases ({@link DIRECT_MODEL_ALIASES}, which now
- * includes the `haiku`/`sonnet`/`opus`/`*_1m` handles), and the `auto` sentinel.
- * Without this check an agent could set `models.small.name = "large"` to route
- * an operator-typed "large" to the cheap tier.
- */
-const RESERVED_NAMES: ReadonlySet<string> = new Set([
-  ...SLOT_NAMES,
-  AUTO_SENTINEL,
-  ...Object.keys(DIRECT_MODEL_ALIASES),
-]);
+// Re-exported from sibling (350-line ceiling — see model-slots.coerce.ts).
+export { coerceSlotBindingInput } from './model-slots.coerce.js';
+// Shared low-level helpers (moved from inline copies — see #4120).
+import { normalizeSlotProvider, parseStringField } from './model-slots.utils.js';
 
 /** Max accepted contextWindow override (10M tokens). Values above are ignored at load / rejected at write. */
 export const MAX_CONTEXT_WINDOW_OVERRIDE = 10_000_000;
@@ -471,29 +479,8 @@ function parseContextWindow(value: unknown): number | undefined {
   return n;
 }
 
-/**
- * Return the context-window override for a concrete model id (already resolved),
- * scanning all active slot bindings. Returns `undefined` when no binding carries
- * a matching `contextWindow`. Used by `contextLimitFor` in `model-limits.ts` to
- * honour per-slot overrides on the real provider path (the provider passes the
- * resolved concrete id, not the tier alias).
- *
- * Tie-breaking: when two slots bind the SAME id but different `contextWindow`
- * values, the first slot in `SLOT_NAMES` order (`local → small → medium → large`)
- * wins. This is deterministic and intentional — the lower-tier slot is more
- * user-configured and more specific. Add `contextWindow` only to the tier you
- * intend to raise; a second binding with a different value will silently lose.
- */
-export function contextWindowOverrideFor(
-  concreteId: string,
-  bindings: ModelSlots = getSlotBindings(),
-): number | undefined {
-  for (const slot of SLOT_NAMES) {
-    const b = bindings[slot];
-    if (b.contextWindow !== undefined && b.id === concreteId) return b.contextWindow;
-  }
-  return undefined;
-}
+// Re-exported from sibling (350-line ceiling — see model-slots.output-override.ts).
+export { maxOutputTokensOverrideFor, contextWindowOverrideFor } from './model-slots.output-override.js';
 
 /** Slots for which we've already emitted a JSON-string recovery warning. */
 const warnedJsonStringSlots = new Set<string>();
@@ -593,94 +580,11 @@ function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | und
     if (apiKey) binding.apiKey = apiKey;
     const cw = parseContextWindow(obj['contextWindow']);
     if (cw !== undefined) binding.contextWindow = cw;
+    const mot = parseContextWindow(obj['maxOutputTokens']);
+    if (mot !== undefined) binding.maxOutputTokens = mot;
     return binding;
   }
   return undefined;
 }
 
-/**
- * Strict WRITER-path validation for a model-slot binding supplied to the config
- * mutation engine (config_set tool / `afk config set`). Unlike {@link parseBinding}
- * — which leniently ignores malformed fields when LOADING afk.config.json — this
- * surfaces actionable errors so a bad `config set models.large {...}` is rejected
- * rather than silently written.
- *
- * Rejects two credential-sensitivity fields from the plaintext-JSON agent-writable path:
- *   1. `apiKey` — a secret; belongs in afk.env via `afk config env set AFK_MODEL_<TIER>_API_KEY`.
- *   2. `baseUrl` — an endpoint redirect that carries the paired API key + the full
- *      conversation to wherever it points; belongs in afk.env via `afk config env set
- *      AFK_MODEL_<TIER>_BASE_URL` (human-gated, same rule as the `*_BASE_URL` suffix
- *      protection in {@link ../../config/settable-keys.ts}).
- *
- * Without these rejections an agent could silently rewrite runtime credentials or
- * endpoints into plaintext afk.config.json, bypassing the deliberately human-gated
- * env-var surface.
- *
- * Contract: {@link parseBinding} (the LOADER) still reads `baseUrl`/`apiKey` from
- * afk.config.json so hand-edited files and env-var overrides remain functional at
- * runtime — only the agent-writable WRITE path is gated.
- */
-export function coerceSlotBindingInput(
-  raw: unknown,
-): { ok: true; value: ModelSlotBinding } | { ok: false; error: string } {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { ok: false, error: 'model binding must be an object with at least an "id"' };
-  }
-  const obj = raw as Record<string, unknown>;
-  if ('apiKey' in obj || 'api_key' in obj) {
-    return {
-      ok: false,
-      error:
-        'per-slot API keys are credentials; set AFK_MODEL_<TIER>_API_KEY via `afk config env set` instead of afk.config.json',
-    };
-  }
-  if ('baseUrl' in obj || 'base_url' in obj) {
-    return {
-      ok: false,
-      error:
-        'per-slot baseUrl is an endpoint-redirect credential vector; set AFK_MODEL_<TIER>_BASE_URL via `afk config env set` instead of afk.config.json',
-    };
-  }
-  const id = parseStringField(obj['id']);
-  if (!id) return { ok: false, error: 'model binding requires a non-empty "id"' };
-  if (hasControlChars(id)) {
-    return { ok: false, error: 'model binding "id" must not contain control characters' };
-  }
-  const binding: ModelSlotBinding = { id };
-  const name = parseStringField(obj['name']);
-  if (name) {
-    if (hasControlChars(name)) {
-      return { ok: false, error: 'model binding "name" must not contain control characters' };
-    }
-    if (RESERVED_NAMES.has(name.trim().toLowerCase())) {
-      return {
-        ok: false,
-        error: `model binding "name" must not shadow a built-in alias ("${name}")`,
-      };
-    }
-    binding.name = name;
-  }
-  if (obj['provider'] !== undefined && obj['provider'] !== '') {
-    const provider = normalizeSlotProvider(obj['provider']);
-    if (!provider) {
-      return {
-        ok: false,
-        error:
-          'model binding "provider" must be one of: anthropic, openai (aliases: anthropic-direct, openai-compatible)',
-      };
-    }
-    binding.provider = provider;
-  }
-  if (obj['contextWindow'] !== undefined && obj['contextWindow'] !== '') {
-    const raw = obj['contextWindow'];
-    const n = typeof raw === 'number' ? raw : Number(raw);
-    if (!Number.isInteger(n) || n <= 0 || n > MAX_CONTEXT_WINDOW_OVERRIDE) {
-      return {
-        ok: false,
-        error: `model binding "contextWindow" must be a positive integer ≤ ${MAX_CONTEXT_WINDOW_OVERRIDE.toLocaleString()} (got ${JSON.stringify(raw)})`,
-      };
-    }
-    binding.contextWindow = n;
-  }
-  return { ok: true, value: binding };
-}
+

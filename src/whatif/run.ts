@@ -447,7 +447,7 @@ export async function runWhatif(
           concurrency: options.concurrency,
           maxTurns: options.maxTurns,
           episodeTimeoutMs: options.episodeTimeoutMs,
-          maxUsdRemaining: options.maxUsd - analystCostUsd,
+          maxUsdRemaining: options.maxUsd - analystCostUsd - (baselineSampleResult?.agentCostUsd ?? 0),
           changeKinds,
         },
         onProgress: deps.onProgress,

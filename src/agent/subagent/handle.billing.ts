@@ -15,6 +15,14 @@ export interface RunBillingContext {
   total?: BillingUsage;
   reported?: BillingUsage;
   terminalOutcome?: SubagentUnsuccessfulOutcome;
+  /**
+   * Cumulative USD cost across ALL turns of the run (initial + drain turns),
+   * accumulated from each `done` event's `metadata.totalCostUsd`. Replaces
+   * the last-turn-only `lastMsg.metadata.totalCostUsd` in the success path
+   * so `subagentCostUsd` in `session_sealed` reflects the full run cost.
+   * `undefined` when no provider reports pricing (e.g. unknown/local models).
+   */
+  cumulativeCostUsd?: number;
 }
 
 const sub = (a: number, b: number): number => Math.max(0, a - b);
@@ -43,7 +51,14 @@ export function takeUnreportedBilling(context: RunBillingContext): BillingUsage 
   return delta;
 }
 
-/** Report billing only and return cumulative lifecycle fields when a delta exists. */
+/**
+ * Report billing (and cost) for an unsuccessful run and return cumulative
+ * lifecycle fields when a delta exists.
+ *
+ * `context.cumulativeCostUsd` is forwarded as the `costUsd` argument so
+ * failed and cancelled children contribute their spend to the parent's
+ * `subagentRunningCostUsd` accumulator — fixing #3882 cause 1.
+ */
 export function settleUnreportedBilling<T>(
   handle: SubagentHandleImpl<T>,
   outcome: SubagentUnsuccessfulOutcome,
@@ -51,7 +66,7 @@ export function settleUnreportedBilling<T>(
 ): ReturnType<typeof billingLifecycleFields> {
   const billing = takeUnreportedBilling(context);
   if (billing === undefined) return {};
-  handle.onSubagentSucceeded?.({ billing, outcome }, undefined);
+  handle.onSubagentSucceeded?.({ billing, outcome }, context.cumulativeCostUsd);
   return billingLifecycleFields(context.total);
 }
 

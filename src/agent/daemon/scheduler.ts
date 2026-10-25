@@ -16,7 +16,7 @@ import { appendFileSync } from 'node:fs';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
 import { recoverDaemonQueues } from './pull-recovery.js';
-import { startHandoffMaintenance, type HandoffMaintenanceHandle } from './handoff-maintenance.js';
+import { startHandoffMaintenance, type HandoffMaintenanceHandle, type HandoffMaintenanceOpts } from './handoff-maintenance.js';
 import { getQueueDir, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import type { TraceWriter } from '../trace/index.js';
@@ -49,7 +49,7 @@ import { errorMessage } from '../../utils/errors.js';
 import { makeCwdErrorRecord, snapshotInFlightTasks, makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { ensureTelemetrySink, probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
-import { evaluateRunAtGate, applyAutoDisable } from './scheduler.runat-gate.js';
+import { evaluateRunAtGate, applyAutoDisable, warnMalformedDate } from './scheduler.runat-gate.js';
 import { overlapKeyOf } from './handoff-resume-context.js';
 
 export interface SchedulerOptions {
@@ -421,15 +421,16 @@ export class CronScheduler {
    */
   startHandoffMaintenance(intervalMs?: number): void {
     if (this.handoffMaintenance !== undefined) return;
-    this.handoffMaintenance = startHandoffMaintenance({
+    const maintenanceOpts: HandoffMaintenanceOpts = {
       queueDir: this.queueDir,
-      ...(this.options.handoffsDir !== undefined ? { handoffsDir: this.options.handoffsDir } : {}),
-      ...(this.options.bot !== undefined ? { bot: this.options.bot } : {}),
-      ...(intervalMs !== undefined ? { intervalMs } : {}),
-      drainResumeQueue: (resumeDir) => this.pullTick(resumeDir),
-      ...((this.options.pullPollIntervalMs ?? 0) > 0 ? { recoverMainQueue: () => recoverDaemonQueues(this.queueDir) } : {}),
-      isInFlight: (id) => this.inFlightTasks.has(id),
-    });
+      ...(this.options.handoffsDir !== undefined && { handoffsDir: this.options.handoffsDir }),
+      ...(this.options.bot !== undefined && { bot: this.options.bot }),
+      ...(intervalMs !== undefined && { intervalMs }),
+      drainResumeQueue: (resumeDir: string) => this.pullTick(resumeDir),
+      ...((this.options.pullPollIntervalMs ?? 0) > 0 && { recoverMainQueue: () => recoverDaemonQueues(this.queueDir) }),
+      isInFlight: (id: string) => this.inFlightTasks.has(id),
+    };
+    this.handoffMaintenance = startHandoffMaintenance(maintenanceOpts);
   }
 
   /** One dequeue-and-run tick against `queueDir` (pull queue or resume queue). */
@@ -490,6 +491,11 @@ export class CronScheduler {
       }
       if (gateResult.kind === 'not-yet') {
         // Silent skip — no telemetry write; pre-fire polling is noise-free.
+        return gateResult.record;
+      }
+      if (gateResult.kind === 'malformed') {
+        warnMalformedDate(task.taskId, gateResult.field, gateResult.value);
+        this.writeTelemetry(gateResult.record, task);
         return gateResult.record;
       }
 

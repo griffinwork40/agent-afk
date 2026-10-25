@@ -14,6 +14,7 @@ import type { AgentModelInput } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
 import type { DelegationBudget } from '../../../agent/tools/delegation-budget.js';
+import { mintModelFallback } from './model-fallback.js';
 
 const VerifyModeOutputSchema = z.object({
   status: z.enum(['PASS', 'FAIL']),
@@ -76,6 +77,7 @@ async function forkVerifyMode(
     },
     idPrefix: `mint-verify-${mode}`,
     agentType: `mint-verify-${mode}`,
+    ...mintModelFallback(parentSessionId),
     outputSchema: VerifyModeOutputSchema,
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });

@@ -9,6 +9,7 @@ import type { MascotBar } from './mascot-bar.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import { installHistorySubmissionTracker } from './surface-setup.history-tracking.js';
 import { buildSuggestConfig } from './surface-setup.suggest-config.js';
+import { buildSuggestionJournalRecorder } from './surface-setup.suggest-record.js';
 import { buildOutputViewerCallback } from './surface-setup.viewer-callback.js';
 import {
   buildOpenEditorCallback,
@@ -87,6 +88,9 @@ export async function setupSurface(
     // under AFK_DEBUG=1; a no-op otherwise so normal sessions stay silent and
     // the compositor's stdout frame is never disturbed.
     onError: (err) => debugLog('[afk suggest] Tier-2 completion failed:', err),
+    // Persist AI suggestions (generated + accepted/dismissed) to the session
+    // journal as `suggestion` marks; see surface-setup.suggest-record.ts.
+    onRecord: buildSuggestionJournalRecorder(ctx.session),
   });
 
   // Session-scoped submission tracker (see surface-setup.history-tracking.ts).

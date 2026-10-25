@@ -13,8 +13,8 @@ describe('XaiProvider.complete — endpoint isolation', () => {
 
   beforeEach(() => {
     completeSpy = vi
-      .spyOn(OpenAICompatibleProvider.prototype, 'complete')
-      .mockResolvedValue('ok');
+      .spyOn(OpenAICompatibleProvider.prototype, 'completeWithStop')
+      .mockResolvedValue({ text: 'ok', stopReason: 'end' });
     setDefaultsSpy = vi
       .spyOn(OpenAICompatibleProvider.prototype, 'setEndpointDefaults')
       .mockImplementation(() => undefined);

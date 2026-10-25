@@ -7,6 +7,7 @@ vi.mock('../tools/nesting.js', () => ({
 import {
   injectSubagentIdentityPreamble,
   renderSubagentIdentityPreamble,
+  WORKTREE_STASH_RULE,
 } from './identity-preamble.js';
 import type { AgentConfig } from '../types/config-types.js';
 
@@ -16,6 +17,9 @@ const AT_CAP = 'You are at the maximum nesting depth';
 const MAY_NEST = 'Dispatch\nfurther subagents only when';
 const DENY_ALL = 'Nested dispatch is not permitted for this agent';
 const SCOPED_PREFIX = 'agent_type is required and must be one of:';
+const STASH_RULE = 'Never run `git stash`';
+const WORKTREE_CWD = '/repo/.afk-worktrees/my-branch';
+const ROOT_CWD = '/repo/src';
 
 describe('renderSubagentIdentityPreamble', () => {
   it('always states the audience, even with no facts known', () => {
@@ -97,6 +101,7 @@ describe('renderSubagentIdentityPreamble', () => {
     expect(out).toContain('git-investigator');
     expect(out).toContain('web-researcher');
     expect(out).toContain('A bare dispatch with no agent_type is not permitted here');
+    expect(out).toContain('Do not delegate your ordinary research to another research-agent or Explore agent');
     expect(out).not.toContain(DENY_ALL);
   });
 
@@ -122,6 +127,62 @@ describe('renderSubagentIdentityPreamble', () => {
     const scopedIdx = out.indexOf(SCOPED_PREFIX);
     expect(mayNestIdx).toBeGreaterThan(-1);
     expect(scopedIdx).toBeGreaterThan(mayNestIdx);
+  });
+
+  // ── worktree stash rule ───────────────────────────────────────────────────
+
+  it('emits worktree stash rule when cwd is inside a linked worktree', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      cwd: WORKTREE_CWD,
+    });
+    expect(out).toContain(STASH_RULE);
+    expect(out).toContain('refs/stash');
+    expect(out).toContain('git diff > <file-in-worktree>');
+  });
+
+  it('does NOT emit worktree stash rule when cwd is a normal (non-worktree) path', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      cwd: ROOT_CWD,
+    });
+    expect(out).not.toContain(STASH_RULE);
+  });
+
+  it('does NOT emit worktree stash rule when cwd is absent', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+    });
+    expect(out).not.toContain(STASH_RULE);
+  });
+
+  it('WORKTREE_STASH_RULE export matches the emitted sentence', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      cwd: WORKTREE_CWD,
+    });
+    expect(out).toContain(WORKTREE_STASH_RULE);
+  });
+
+  it('stash rule appears after nesting-depth section (correct ordering)', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      cwd: WORKTREE_CWD,
+    });
+    const nestIdx = out.indexOf('Dispatch');
+    const stashIdx = out.indexOf(STASH_RULE);
+    expect(nestIdx).toBeGreaterThan(-1);
+    expect(stashIdx).toBeGreaterThan(nestIdx);
   });
 
   it('executor rejection message and preamble names are consistent (single-source invariant)', () => {
@@ -206,5 +267,29 @@ describe('injectSubagentIdentityPreamble', () => {
     const sp = out.systemPrompt as string;
     expect(sp).toContain(DENY_ALL);
     expect(sp).not.toContain(SCOPED_PREFIX);
+  });
+
+  it('injects stash rule when config.cwd is a worktree path', () => {
+    const cfg = {
+      systemPrompt: 'TASK PROMPT',
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      cwd: WORKTREE_CWD,
+    } as AgentConfig;
+    const sp = injectSubagentIdentityPreamble(cfg).systemPrompt as string;
+    expect(sp).toContain(STASH_RULE);
+  });
+
+  it('does NOT inject stash rule when config.cwd is a non-worktree path', () => {
+    const cfg = {
+      systemPrompt: 'TASK PROMPT',
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      cwd: ROOT_CWD,
+    } as AgentConfig;
+    const sp = injectSubagentIdentityPreamble(cfg).systemPrompt as string;
+    expect(sp).not.toContain(STASH_RULE);
   });
 });

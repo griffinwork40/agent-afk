@@ -35,6 +35,7 @@ function makeStats(): SessionStats {
 interface FakeSession {
   listRewindTargets: Mock;
   rewindConversation: Mock;
+  rewindFiles?: Mock;
 }
 
 function makeCtx(session: FakeSession): { ctx: SlashContext; lines: string[]; suspend: Mock; resume: Mock } {
@@ -174,5 +175,175 @@ describe('/rewind slash handler', () => {
 
     expect(result).toBe('continue');
     expect(lines.find((l) => l.startsWith('WARN:'))).toContain('not supported');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// conversation | files | both (#4271)
+// ---------------------------------------------------------------------------
+
+describe('/rewind with file checkpoints', () => {
+  beforeEach(() => {
+    (renderSelector as Mock).mockReset();
+  });
+
+  const linked = [
+    { turnIndex: 4, preview: 'second question', checkpointTurnId: 'ckpt-2' },
+    { turnIndex: 0, preview: 'first question', checkpointTurnId: 'ckpt-1' },
+  ];
+  const rewound = { rewound: true, reloadText: 'second question', messagesBefore: 6, messagesAfter: 4 };
+
+  function session(rewindFiles: Mock): FakeSession {
+    return {
+      listRewindTargets: vi.fn().mockReturnValue(linked),
+      rewindConversation: vi.fn().mockResolvedValue(rewound),
+      rewindFiles,
+    };
+  }
+
+  it('both: previews files, restores on confirm, then rewinds the conversation', async () => {
+    const rewindFiles = vi.fn()
+      .mockResolvedValueOnce({ canRewind: true, filesChanged: ['/w/a.ts', '/w/b.ts', '/w/new.ts'] })
+      .mockResolvedValueOnce({ canRewind: true, filesChanged: ['/w/a.ts', '/w/b.ts', '/w/new.ts'], insertions: 3, deletions: 4 });
+    const s = session(rewindFiles);
+    const { ctx, lines } = makeCtx(s);
+    // prompt #0 → mode "Conversation and files" (2) → "Restore these files" (0)
+    (renderSelector as Mock).mockResolvedValueOnce(0).mockResolvedValueOnce(2).mockResolvedValueOnce(0);
+
+    const result = await getRewindCmd().handler(ctx, '');
+
+    expect(rewindFiles).toHaveBeenNthCalledWith(1, 'ckpt-2', { dryRun: true });
+    expect(rewindFiles).toHaveBeenNthCalledWith(2, 'ckpt-2', { overwriteConflicts: false });
+    // The preview lists every file before anything is restored.
+    for (const p of ['/w/a.ts', '/w/b.ts', '/w/new.ts']) expect(lines.some((l) => l.includes(p))).toBe(true);
+    expect(lines.findIndex((l) => l.includes('/w/new.ts'))).toBeLessThan(lines.findIndex((l) => l.startsWith('SUCCESS:Restored 3 files')));
+    expect(s.rewindConversation).toHaveBeenCalledWith(4);
+    expect(result).toEqual({ kind: 'prefill', message: 'second question' });
+  });
+
+  it('files: restores files but leaves the conversation alone', async () => {
+    const rewindFiles = vi.fn()
+      .mockResolvedValueOnce({ canRewind: true, filesChanged: ['/w/a.ts'] })
+      .mockResolvedValueOnce({ canRewind: true, filesChanged: ['/w/a.ts'], insertions: 1, deletions: 0 });
+    const s = session(rewindFiles);
+    const { ctx } = makeCtx(s);
+    (renderSelector as Mock).mockResolvedValueOnce(1).mockResolvedValueOnce(0);
+
+    const result = await getRewindCmd().handler(ctx, 'files');
+
+    expect(rewindFiles).toHaveBeenCalledWith('ckpt-1', { overwriteConflicts: false });
+    expect(s.rewindConversation).not.toHaveBeenCalled();
+    expect(result).toBe('continue');
+  });
+
+  it('both: a per-file failure is reported and the conversation is NOT rewound', async () => {
+    const rewindFiles = vi.fn()
+      .mockResolvedValueOnce({ canRewind: true, filesChanged: ['/w/a.ts', '/w/b.ts'] })
+      .mockResolvedValueOnce({
+        canRewind: false, filesChanged: ['/w/a.ts'], insertions: 1, deletions: 0,
+        failures: [{ path: '/w/b.ts', error: 'permission denied' }], error: 'Rewind failed at /w/b.ts',
+      });
+    const s = session(rewindFiles);
+    const { ctx, lines } = makeCtx(s);
+    (renderSelector as Mock).mockResolvedValueOnce(0).mockResolvedValueOnce(0);
+
+    const result = await getRewindCmd().handler(ctx, 'both');
+
+    expect(lines.some((l) => l === 'ERROR:Not restored: /w/b.ts: permission denied')).toBe(true);
+    expect(lines.some((l) => l.startsWith('WARN:Conversation not rewound'))).toBe(true);
+    expect(s.rewindConversation).not.toHaveBeenCalled();
+    expect(result).toBe('continue');
+  });
+
+  it('conflicts offer overwrite vs keep, and keep passes overwriteConflicts:false', async () => {
+    const rewindFiles = vi.fn()
+      .mockResolvedValueOnce({ canRewind: true, filesChanged: ['/w/a.ts'], conflicts: ['/w/a.ts'] })
+      .mockResolvedValueOnce({ canRewind: false, filesChanged: [], failures: [{ path: '/w/a.ts', error: 'changed outside the agent' }] });
+    const s = session(rewindFiles);
+    const { ctx, lines } = makeCtx(s);
+    (renderSelector as Mock).mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+
+    await getRewindCmd().handler(ctx, 'files');
+
+    expect((renderSelector as Mock).mock.calls[1]![0]).toHaveLength(3);
+    expect(lines.some((l) => l.includes('/w/a.ts') && l.includes('changed outside the agent since'))).toBe(true);
+    expect(rewindFiles).toHaveBeenLastCalledWith('ckpt-2', { overwriteConflicts: false });
+  });
+
+  it('both: keeping files changed outside the agent still rewinds the conversation', async () => {
+    const rewindFiles = vi.fn()
+      .mockResolvedValueOnce({ canRewind: true, filesChanged: ['/w/a.ts', '/w/b.ts'], conflicts: ['/w/a.ts'] })
+      .mockResolvedValueOnce({
+        canRewind: false, filesChanged: ['/w/b.ts'], insertions: 1, deletions: 0,
+        failures: [{ path: '/w/a.ts', error: 'changed outside the agent since the last recorded state; not overwritten' }],
+      });
+    const s = session(rewindFiles);
+    const { ctx, lines } = makeCtx(s);
+    (renderSelector as Mock).mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+
+    const result = await getRewindCmd().handler(ctx, 'both');
+
+    expect(lines.some((l) => l === 'INFO:Kept 1 file changed outside the agent.')).toBe(true);
+    expect(lines.some((l) => l.startsWith('ERROR:'))).toBe(false);
+    expect(s.rewindConversation).toHaveBeenCalledWith(4);
+    expect(result).toEqual({ kind: 'prefill', message: 'second question' });
+  });
+
+  it('cancelling the confirm changes nothing', async () => {
+    const rewindFiles = vi.fn().mockResolvedValueOnce({ canRewind: true, filesChanged: ['/w/a.ts'] });
+    const s = session(rewindFiles);
+    const { ctx } = makeCtx(s);
+    (renderSelector as Mock).mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+
+    expect(await getRewindCmd().handler(ctx, 'both')).toBe('continue');
+    expect(rewindFiles).toHaveBeenCalledTimes(1);
+    expect(s.rewindConversation).not.toHaveBeenCalled();
+  });
+
+  it('conversation mode (Esc-Esc) never touches files and skips the mode menu', async () => {
+    const rewindFiles = vi.fn();
+    const s = session(rewindFiles);
+    const { ctx } = makeCtx(s);
+    (renderSelector as Mock).mockResolvedValueOnce(0);
+
+    const result = await getRewindCmd().handler(ctx, 'conversation');
+
+    expect(renderSelector).toHaveBeenCalledTimes(1);
+    expect(rewindFiles).not.toHaveBeenCalled();
+    expect(result).toEqual({ kind: 'prefill', message: 'second question' });
+  });
+
+  it('files mode on a prompt without a checkpoint warns instead of guessing', async () => {
+    const rewindFiles = vi.fn();
+    const s: FakeSession = {
+      listRewindTargets: vi.fn().mockReturnValue([{ turnIndex: 0, preview: 'q' }]),
+      rewindConversation: vi.fn(), rewindFiles,
+    };
+    const { ctx, lines } = makeCtx(s);
+    (renderSelector as Mock).mockResolvedValueOnce(0);
+
+    expect(await getRewindCmd().handler(ctx, 'files')).toBe('continue');
+    expect(rewindFiles).not.toHaveBeenCalled();
+    expect(lines.some((l) => l.startsWith('WARN:No file checkpoint'))).toBe(true);
+  });
+
+  it('rejects an unknown mode argument', async () => {
+    const s = session(vi.fn());
+    const { ctx, lines } = makeCtx(s);
+    expect(await getRewindCmd().handler(ctx, 'everything')).toBe('continue');
+    expect(renderSelector).not.toHaveBeenCalled();
+    expect(lines.some((l) => l.includes('Usage: /rewind'))).toBe(true);
+  });
+
+  it('nothing changed since the prompt: files mode reports it without a confirm step', async () => {
+    const rewindFiles = vi.fn().mockResolvedValueOnce({ canRewind: true, filesChanged: [] });
+    const s = session(rewindFiles);
+    const { ctx, lines } = makeCtx(s);
+    (renderSelector as Mock).mockResolvedValueOnce(0);
+
+    await getRewindCmd().handler(ctx, 'files');
+
+    expect(renderSelector).toHaveBeenCalledTimes(1);
+    expect(lines.some((l) => l.includes('No file changes to restore'))).toBe(true);
   });
 });

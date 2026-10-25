@@ -1,0 +1,166 @@
+---
+title: "Migrate from Claude Code or Codex"
+description: "Grant afk permission to live-read existing plugins and skills, then verify the differences in hooks and runtime behavior."
+---
+
+`afk migrate` brings compatible assets from Claude Code or Codex into AFK by recording trust settings. It does **not** move or copy your source installation: AFK reads the trusted directories again in future sessions, so later source changes can become visible without another migration.
+
+## Preview, grant trust, and verify
+
+<Steps>
+<Step>
+### Preview what is detected
+
+```bash
+afk migrate --dry-run
+```
+
+This detects supported installations and prints the `importFrom` settings it would write. To select one source:
+
+```bash
+afk migrate claude-code --dry-run
+afk migrate codex --dry-run
+```
+
+`--from claude-code` and `--from codex` are equivalent source selectors.
+</Step>
+<Step>
+### Apply the intended import
+
+```bash
+afk migrate claude-code
+```
+
+Review the listed plugins and skills, then confirm the interactive trust prompt. In a noninteractive shell, applying requires `--yes`; without it, the command makes no change. Do not use that flag until you have reviewed the preview.
+
+To include detected Claude Code MCP servers, preview their executable commands separately:
+
+```bash
+afk migrate claude-code --mcp --dry-run
+```
+
+Then rerun without `--dry-run` if you intend to grant that access.
+</Step>
+<Step>
+### Open a new AFK session
+
+```bash
+afk doctor
+afk
+```
+
+Check the discovered assets:
+
+```text
+/skills
+/agents
+/mcp
+/tools
+```
+
+Try one low-risk skill before relying on the imported workflow for unattended work.
+</Step>
+</Steps>
+
+## What gets imported
+
+| Source | Live-read assets |
+| --- | --- |
+| Claude Code | Plugins under `~/.claude/plugins/`, skills under `~/.claude/skills/`, and optionally detected JSON MCP configuration |
+| Codex | Plugins and skills under its home directory, plus skills under `~/.agents/skills/` |
+
+Codex home defaults to `~/.codex`; an absolute `CODEX_HOME` override is honored. Source plugin enabled/disabled state is consulted during discovery.
+
+For Claude Code MCP, detection checks `~/.claude/mcp.json`, `~/.claude/.mcp.json`, and `~/.claude/claude-code/mcp.json`, using the first existing candidate. It is not a universal scan of every historical Claude Code configuration location. If your servers are not detected, configure them directly in AFK's `mcp.json`.
+
+<Callout type="warn">
+MCP import is off by default because servers can execute commands when a session starts. Codex `config.toml` MCP entries are currently detected for the preview only; `--mcp` does not load them and records their MCP toggle as false. Add those servers manually to AFK's JSON MCP configuration.
+</Callout>
+
+Migration is not a conversion of chat history, active sessions, goals, memory, permission policy, provider settings, or all source-tool preferences. Configure those deliberately in AFK. Authentication reuse is a separate provider feature, not evidence that migration copied credentials.
+
+### Where trust is stored
+
+The command updates user-global `afk.config.json` with an `importFrom` block such as:
+
+```json
+{
+  "importFrom": {
+    "claude-code": {
+      "plugins": true,
+      "skills": true,
+      "mcp": false
+    }
+  }
+}
+```
+
+The actual booleans depend on detected assets and flags. Project-local configuration cannot grant this trust. Repeated migrations add permissions but do not silently clear an earlier opt-in, so rerunning without `--mcp` does not revoke a previous MCP grant.
+
+To stop importing an asset type, change its toggle in user-global configuration and start a new session. Removing that trust does not uninstall or delete the source tool's files.
+
+## Compatible command and skill files
+
+Claude Code plugin `commands/*.md` files become user-invoked slash commands:
+
+| File | Command |
+| --- | --- |
+| `commands/deploy.md` | `/deploy` |
+| `commands/review/security.md` | `/review:security` |
+
+Names come from paths, not a `name` frontmatter field. Plain Markdown command bodies can work without frontmatter. Commands appear in `/skills`, but are not automatically added to the model-facing skill-routing catalog. Collision handling may expose a namespaced command, so inspect the listing rather than assuming a bare name wins.
+
+For `skills/<name>/SKILL.md`, `when-to-use` describes when the model should choose the skill:
+
+```markdown
+---
+name: review-schema
+description: Review a database schema change
+when-to-use: When a task changes tables, indexes, or migration ordering
+---
+
+Read the migration and verify its rollback plan before recommending approval.
+```
+
+`whenToUse` and `when_to_use` are also recognized spellings. The hint is routing context, not a deterministic trigger or a guarantee that a skill runs automatically. Other supported fields, such as allowed tools and model selection, still need to match the capabilities available in AFK.
+
+Use `/reload-plugins` after editing Markdown skill or command files. JavaScript plugin entrypoints run once per process; restart for changes to executable setup code.
+
+## Hook compatibility is selective
+
+AFK understands Claude Code-style command-hook groups and common tool-name matchers:
+
+| Matcher | AFK behavior |
+| --- | --- |
+| `Bash` | Matches `bash` |
+| `Edit` or `MultiEdit` | Matches the corresponding AFK editing tools |
+| `Edit\|Write` | Pipe-separated exact-name alternatives, including aliases |
+| `Web.*` | Anchored bare regular expression, checked against AFK names and aliases |
+| `/^bash$/` | Explicit regular expression against the AFK tool name |
+| `*` or an omitted matcher | Matches any tool |
+
+A hook's `timeout` is interpreted as seconds when `timeout_ms` is absent. `timeout_ms` takes precedence, and the effective command-hook timeout is capped at 30 seconds. Explicit regex flags that maintain match state are stripped.
+
+Only `type: "command"` entries are supported by this configuration loader. Claude Code hook types such as `http`, `mcp_tool`, `prompt`, and `agent` are skipped with a warning. Shell commands that depend on another tool's payload fields or directory layout may still need adaptation.
+
+Installed plugin `hooks/hooks.json` files require the separate user-global `enablePluginHooks: true` trust setting. User-authored AFK shell hooks use `enableShellHooks`; project hooks also need `allowProjectHooks`. Migration does not blindly copy Claude Code's global settings hooks into AFK. Review those definitions and place them in AFK's supported configuration layers if needed.
+
+<Callout type="warn">
+Compatible matcher syntax is not permission to run every imported script. Review commands, environment access, event semantics, and expected JSON input before enabling hooks. Restart after hook changes; `/reload-plugins` is not a general hook-reload command.
+</Callout>
+
+## Differences to expect
+
+1. AFK is a separate runtime with its own configuration and state under `~/.afk/`. Imported directories are trusted sources, not the new location of AFK's own state.
+2. Tool names and available tools differ. Compatibility aliases help with hook matchers and skill metadata, but a prompt that requires an unavailable tool must be revised.
+3. Provider and model choices matter. A workflow written for Claude may run through an OpenAI-compatible endpoint in AFK, with different vision, context, and tool-call capabilities.
+4. Imported plugin code can execute at activation. Review manifest `main`, MCP commands, and hooks as code, not merely as documentation.
+5. Session and checkpoint portability is not implied. Finish or preserve work in the original tool, then start an AFK session with an explicit task and relevant files.
+
+## Related
+
+<Cards>
+<Card title="Connect MCP and plugins" href="/guides/mcp-plugins" description="Configure servers and inspect extension lifecycle behavior." />
+<Card title="Configure hooks" href="/guides/hooks" description="Review hook trust and event contracts." />
+<Card title="Write custom skills" href="/skills/custom" description="Adapt skill metadata and prompts for AFK." />
+</Cards>

@@ -26,7 +26,7 @@ export const MISC_ENV_REGISTRY = [
   },
   {
     name: 'AFK_READ_DENYLIST',
-    description: 'Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read, and that the bash-restriction hook refuses to let a shell command reference on interactive surfaces (REPL, Telegram) — on headless surfaces (afk chat, daemon) bash fails open regardless of this list. A leading ~/ is expanded (~user/ is not — spell those absolutely). Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed. One built-in exception exists: ~/.afk/config/mcp.json (the MCP registry) IS readable — paths listed here outrank that carve-out, so set this to ~/.afk/config/mcp.json if your registry holds inline secrets rather than ${VAR} placeholders.',
+    description: 'Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read, and that the bash-restriction hook refuses to let a shell command reference on interactive surfaces (REPL, Telegram) — on headless surfaces (afk chat, daemon) bash fails open regardless of this list. A leading ~/ is expanded (~user/ is not — spell those absolutely). Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed. Built-in READ-only exceptions: ~/.afk/config/mcp.json (the MCP registry), ~/.afk/config/schedules.json, ~/.ssh/config, ~/.ssh/known_hosts, and SSH public keys (direct *.pub children of ~/.ssh, symlink-resolved). Paths listed here outrank every exception — e.g. set this to ~/.afk/config/mcp.json if your registry holds inline secrets rather than ${VAR} placeholders, or to ~/.ssh to re-deny all of ~/.ssh. Bash honors the exceptions only for provably read-only commands (cat/grep/head/… pipelines with no redirection); writes stay blocked on every surface.',
     type: 'string',
     required: false,
     example: '/Users/me/project/.env:/Users/me/secrets',
@@ -260,6 +260,54 @@ export const MISC_ENV_REGISTRY = [
     type: 'string',
     required: false,
     example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_STEER_MODE',
+    description:
+      'Controls when a typed-ahead REPL message is delivered to the model during a multi-round ' +
+      'turn. "boundary" (opt-in): drain the compositor queue at every tool-round boundary, so a ' +
+      'correction typed during tool execution reaches the model on the NEXT tool round rather than ' +
+      'waiting for the whole turn to end. "turn-end" (default): existing behaviour — the message ' +
+      'is delivered as its own turn once the current turn finishes. The "boundary" mode is gated ' +
+      'behind this env var during soak (issue #3897). Note: the user-yield contract ' +
+      '(wait_for / exit_plan_mode) relies on "turn-end" semantics; those tools tell the model ' +
+      '"end your turn so the message is delivered first", which is only accurate in "turn-end" ' +
+      'mode. In "boundary" mode the message arrives mid-turn and the yield notice is redundant ' +
+      'but harmless — the tool still returns early, the model still sees the message.',
+    type: 'string',
+    required: false,
+    default: 'turn-end',
+    example: 'boundary',
+    category: 'misc',
+  },
+
+  // ── Observability / OTLP export ───────────────────────────────────────────
+  {
+    name: 'AFK_OTLP_ENDPOINT',
+    description:
+      'OTLP/HTTP endpoint URL for live trace export (e.g. http://localhost:4318/v1/traces). ' +
+      'When set, `afk trace export-otlp` POSTs the converted OTLP/JSON payload to this ' +
+      'endpoint after converting the witness trace. A dead or unreachable endpoint never ' +
+      'blocks or fails the command — the error is printed to stderr and the command still ' +
+      'exits 0. Equivalent to passing `--endpoint <url>` on the command line; the flag ' +
+      'takes precedence when both are provided.',
+    type: 'string',
+    required: false,
+    example: 'http://localhost:4318/v1/traces',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_OTLP_HEADERS',
+    description:
+      'Comma-separated list of `Key=Value` HTTP headers appended to every OTLP/HTTP push ' +
+      'request made by `afk trace export-otlp` when `AFK_OTLP_ENDPOINT` or `--endpoint` ' +
+      'is set. Typical use: bearer tokens and tenant identifiers required by managed ' +
+      'collectors (e.g. Grafana Cloud, Honeycomb). Values that contain a literal comma must ' +
+      'be percent-encoded (%2C). Example: `Authorization=Bearer <tok>,X-Org=acme`.',
+    type: 'string',
+    required: false,
+    example: 'Authorization=Bearer tok123,X-Org=acme',
     category: 'misc',
   },
 ] as const satisfies readonly EnvVarMeta[];

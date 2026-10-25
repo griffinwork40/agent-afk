@@ -14,7 +14,7 @@ import type { InteractiveCtx } from './shared.js';
 
 vi.mock('../../../agent/trace/factory.js', () => ({ createDefaultTraceWriter: vi.fn() }));
 vi.mock('./bootstrap-session-builder.js', () => ({ buildAgentSession: vi.fn() }));
-vi.mock('../../slash/plugin-skills.js', () => ({ autoRegisterPluginPassthroughs: vi.fn(async () => undefined) }));
+vi.mock('../../slash/plugin-skills.js', () => ({ autoRegisterPluginPassthroughs: vi.fn(async () => undefined), setInitBarrier: vi.fn() }));
 let dir: string;
 let oldState: string | undefined;
 beforeEach(async () => {

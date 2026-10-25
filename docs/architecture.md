@@ -66,7 +66,7 @@ The plugin surface writes to `~/.claude/agent-framework/` independently — no s
 
 ## System prompt discovery
 
-The base system prompt is **layered**. The framework prompt (`system-prompt.md`, inlined into the bundle at publish-build) is the unconditional foundation; the resolved operator overlay is **appended** on top of it beneath an `# Operator configuration` header — it never replaces the framework base. `resolveBaseSystemPrompt()` (`src/cli/shared-helpers.ts`) performs the layering for every top-level surface (one-shot `chat`, REPL, Telegram, farm), and `composeSystemPrompt()` is the pure compose primitive.
+The base system prompt is **layered**. The framework prompt (`system-prompt.md`, inlined into the bundle at publish-build) is the unconditional foundation; the resolved operator overlay is **appended** on top of it beneath an `# Operator configuration` header — it never replaces the framework base. `resolveBaseSystemPrompt()` is defined in `src/cli/system-prompt.ts` and re-exported from `src/cli/shared-helpers.ts`; it performs the layering for one-shot `chat`, REPL, and farm surfaces. Telegram uses `composeSystemPrompt()` directly with a boot-time overlay; the daemon carries no framework prompt and no AFK.md overlay. `composeSystemPrompt()` is the pure compose primitive.
 
 `loadConfig()` resolves the **operator overlay** across three tiers (highest wins); `loadConfig().systemPrompt` is that overlay alone (unchanged — it does not include the framework base):
 
@@ -74,10 +74,10 @@ The base system prompt is **layered**. The framework prompt (`system-prompt.md`,
 |------|--------|----------------------|
 | 1 | `AFK_SYSTEM_PROMPT` env | `env:AFK_SYSTEM_PROMPT` |
 | 2 | `afk.config.json` (cwd → `~/.afk/config/` → legacy) | `file:<abs>` |
-| 3 | `AFK.md` (cwd → `$AFK_HOME/`) | `afk-md:<abs>` |
+| 3 | `AFK.md` — both `$AFK_HOME/AFK.md` (user) and `<cwd>/AFK.md` (project) concatenated, user-scope first; project section wins on conflict | `afk-md:<abs>` (one tier) or `afk-md:<user>+afk-md:<project>` (both) |
 | — | None | `undefined` |
 
-`AFK.md` is plain markdown, no frontmatter. Empty/whitespace → treated as absent. The framework base is always present regardless of overlay tier, so an absent overlay just means the model gets the framework prompt alone. The composed prompt is sent to the Messages API as a raw string (never as an SDK preset).
+`AFK.md` is plain markdown, no frontmatter. Empty/whitespace → treated as absent. Exactly two candidate paths are probed (`$AFK_HOME/AFK.md` and `<cwd>/AFK.md`); there is no ancestor walk. The file is read once per session (memoized per cwd); the overlay is never truncated. When AFK.md actually supplies the prompt (not when it is shadowed by tier 1 or 2) and the composed overlay exceeds 10,000 estimated tokens, a one-shot warning is emitted to stderr at startup — in the REPL it is printed after the startup screen clear so it stays visible. The framework base is always present regardless of overlay tier, so an absent overlay just means the model gets the framework prompt alone. The composed prompt is sent to the Messages API as a raw string (never as an SDK preset).
 
 > **Escape hatch (not yet implemented):** every overlay appends — there is currently no way to fully replace the framework base. A future opt-out (e.g. `AFK_BASE_PROMPT=0`) would restore clean-slate behavior; until then the framework base is unconditional.
 
@@ -157,7 +157,7 @@ export const CHILD_ALLOWED_TOOLS = [
 ];
 ```
 
-A read-only skill's forked child uses the tighter `RECON_ALLOWED_TOOLS` instead (no `write_file`/`edit_file`; `bash` admitted only behind the mutating-command guard). With `AFK_READONLY_GIT_TOOL=1`, every read-only-bash surface (read-only skill forks, `bash: read-only` named agents, compose nodes running them) has `bash` replaced by the structured `git_read` tool (`src/agent/tools/readonly-git-surface.ts`), because the mutating-command guard is best-effort and was evaded by obfuscated writes (#3754). Override per-session by passing `config.tools.allowedTools` to `AgentSession`, or disable individual tools via `config.tools.disallowedTools`.
+A read-only skill's forked child uses the tighter `RECON_ALLOWED_TOOLS` instead (no `write_file`/`edit_file`; `bash` admitted only behind the mutating-command guard). With `AFK_READONLY_GIT_TOOL=1`, every read-only-bash surface has `bash` replaced by the structured `git_read` tool (`src/agent/tools/readonly-git-surface.ts`). This surface covers read-only skill forks, `bash: read-only` named agents, and compose nodes running them. The replacement is necessary because the mutating-command guard is best-effort and was evaded by obfuscated writes (#3754). Override per-session by passing `config.tools.allowedTools` to `AgentSession`, or disable individual tools via `config.tools.disallowedTools`.
 
 ## `AgentSession` API
 

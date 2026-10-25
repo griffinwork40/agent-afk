@@ -71,6 +71,7 @@ function makeSession(state: 'idle' | 'processing' | 'streaming' | 'compacting' |
     abortSignal: new AbortController().signal,
     getInputStreamRef: vi.fn().mockReturnValue({ pushUserMessage: vi.fn() }),
     abort: vi.fn(),
+    listRewindTargets: vi.fn().mockReturnValue([]),
   } as unknown as IAgentSession;
 }
 
@@ -190,6 +191,7 @@ describe('MessageHandler — compaction queuing', () => {
         getSession: vi.fn().mockResolvedValue(idleSession),
         getSessionIfExists: vi.fn().mockReturnValue(makeSession('processing')),
         resetSession: vi.fn(),
+        getStats: vi.fn(() => ({ model: 'sonnet' })),
       };
       const handler = new MessageHandler(
         mockBot as any,
@@ -199,7 +201,7 @@ describe('MessageHandler — compaction queuing', () => {
       );
 
       const { ctx } = makeCompactCtx(chatId);
-      handler.enqueueCompact({ chatId }, ctx);
+      handler.enqueueSlash({ chatId }, ctx, '/compact');
 
       // Drain the queue — processCompactDirect should call session.compact()
       await handler.drainQueue({ chatId });
@@ -216,83 +218,26 @@ describe('MessageHandler — compaction queuing', () => {
   // The handler must re-enqueue the compact rather than surface the misleading
   // "Nothing to compact (session-busy)" no-op and drop the request.
   // -------------------------------------------------------------------------
+  // Group D (Stage 5): the shared /compact runs under the route's turn
+  // reservation, so a turn cannot start mid-compact (the old session-busy
+  // TOCTOU). A drain that finds the session busy re-queues instead.
   describe('Group D — queued /compact drains while session is busy', () => {
-    it('re-enqueues the compact (does not reply no-op) when compact() returns session-busy', async () => {
+    it('re-enqueues the compact without compacting when the session is busy at drain', async () => {
       const chatId = 11;
-      const busySession = makeSession('idle');
-      (busySession.compact as any).mockResolvedValue({
-        compacted: false,
-        reason: 'session-busy',
-        messagesBefore: 0,
-        messagesAfter: 0,
-      });
+      const busySession = makeSession('processing');
       const sessionManager = {
         getSession: vi.fn().mockResolvedValue(busySession),
-        getSessionIfExists: vi.fn().mockReturnValue(makeSession('processing')),
-        resetSession: vi.fn(),
+        getSessionIfExists: vi.fn().mockReturnValue(busySession),
+        getStats: vi.fn(),
       };
-      const handler = new MessageHandler(
-        mockBot as any,
-        sessionManager as any,
-        new Set(),
-        vi.fn()
-      );
-
-      const { ctx, replies } = makeCompactCtx(chatId);
-      handler.enqueueCompact({ chatId }, ctx);
+      const handler = new MessageHandler(mockBot as any, sessionManager as any, new Set(), vi.fn());
+      const { ctx } = makeCompactCtx(chatId);
+      handler.enqueueSlash({ chatId }, ctx, '/compact');
       await handler.drainQueue({ chatId });
-
-      // compact() was attempted once and returned session-busy
-      expect(busySession.compact).toHaveBeenCalledOnce();
-      // No misleading no-op reply surfaced to the user
-      expect(replies).toHaveLength(0);
-      // The compact item is still queued, awaiting the next drain
-      expect((handler as any).messageQueues.get(String(chatId))).toHaveLength(1);
-      expect((handler as any).messageQueues.get(String(chatId))[0].type).toBe('compact');
-    });
-
-    it('completes the re-enqueued compact on a subsequent drain once the session is idle', async () => {
-      const chatId = 12;
-      // First compact() attempt: session-busy. Second: success.
-      const session = makeSession('idle');
-      (session.compact as any)
-        .mockResolvedValueOnce({
-          compacted: false,
-          reason: 'session-busy',
-          messagesBefore: 0,
-          messagesAfter: 0,
-        })
-        .mockResolvedValueOnce({
-          compacted: true,
-          messagesBefore: 10,
-          messagesAfter: 3,
-        });
-      const sessionManager = {
-        getSession: vi.fn().mockResolvedValue(session),
-        getSessionIfExists: vi.fn().mockReturnValue(makeSession('processing')),
-        resetSession: vi.fn(),
-      };
-      const handler = new MessageHandler(
-        mockBot as any,
-        sessionManager as any,
-        new Set(),
-        vi.fn()
-      );
-
-      const { ctx, replies } = makeCompactCtx(chatId);
-      handler.enqueueCompact({ chatId }, ctx);
-
-      // First drain: busy → re-enqueue, no reply.
-      await handler.drainQueue({ chatId });
-      expect(replies).toHaveLength(0);
-
-      // Second drain (session now idle): compact succeeds, success reply sent.
-      await handler.drainQueue({ chatId });
-      expect(session.compact).toHaveBeenCalledTimes(2);
-      expect(replies).toHaveLength(1);
-      expect(replies[0]).toContain('📦');
-      // Queue is now empty.
-      expect((handler as any).messageQueues.get(String(chatId)) ?? []).toHaveLength(0);
+      expect(busySession.compact).not.toHaveBeenCalled();
+      const queue = (handler as any).messageQueues.get(String(chatId));
+      expect(queue).toHaveLength(1);
+      expect(queue[0]).toMatchObject({ type: 'slash', text: '/compact' });
     });
   });
 });

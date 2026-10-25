@@ -71,7 +71,14 @@ export function redactSecrets(text: string): string {
     // The `bearer` keyword itself is captured so its original casing is preserved
     // in the replacement (e.g. `authorization: bearer …` keeps lower-case `bearer`
     // rather than being rewritten to Title-case by a literal replacement string).
-    .replace(/\b(bearer)\s+(?!(?:of|to|the|an?|tokens?)\b)\S{8,}/gi, '$1 [REDACTED]')
+    //
+    // NOTE: the stopword lookahead uses `\s` (not `\b`) because `\b` fires at a
+    // hyphen boundary — `token-abc12345` has a `\b` after `token`, so the old
+    // `\b`-terminated lookahead incorrectly matched `token` in that string and
+    // suppressed redaction of `Bearer token-abc12345`. Using `\s` requires the
+    // stopword to be followed by actual whitespace, so hyphenated tokens like
+    // `token-abc12345` or `the-quick-brown` are no longer false-positives (issue #3967).
+    .replace(/\b(bearer)\s+(?!(?:of|to|the|an?|tokens?)\s)\S{8,}/gi, '$1 [REDACTED]')
     // Authorization: Bearer <token>  (case-insensitive header — full label
     // preserved via capture group so `authorization: bearer …` is not rewritten
     // to Title-case. Belt-and-suspenders over the bare-bearer rule above; fires

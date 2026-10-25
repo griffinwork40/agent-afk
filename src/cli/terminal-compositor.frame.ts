@@ -48,6 +48,7 @@ import {
 import { buildFrameLines, buildPickerFrameLines } from './terminal-compositor.frame.lines.js';
 import { computeFramePosition } from './terminal-compositor.frame.position.js';
 import { contentBand } from './render/measure.js';
+import { recordRenderedFrame } from './terminal-compositor.reflow-shift.js';
 import { contentHugAnchor, contentHugBandReserve, contentHugTargetBottom } from './terminal-compositor.content-hug.js';
 
 /**
@@ -109,6 +110,8 @@ export interface FrameHost {
   /** Frame placement regime — see {@link FramePlacementMode}. */
   placementMode: FramePlacementMode;
   lastKnownRows: number;
+  /** See field doc on the class (terminal-compositor.ts). @internal */
+  lastKnownCols: number;
   /** True while commitAbove is executing (Phase 1 → Phase 3). Guards Phase 2
    *  repaints from applying content-following, which would misplace the frame
    *  and cause Phase 3 to write into the banner zone. */
@@ -155,6 +158,7 @@ export function repaint(self: FrameHost): void {
   // expand vs shrink.
   self.flushResizeGhostErase();
   self.lastKnownRows = self.stdout.rows ?? 24;
+  self.lastKnownCols = self.stdout.columns ?? 80;
   // F1 (retained-logical-source re-wrap): re-wrap the retained band at the
   // CURRENT width before EITHER downstream consumer reads it this repaint —
   // preserveRowsBeforeFrameRender's eviction paints (called below and from
@@ -259,6 +263,7 @@ export function repaint(self: FrameHost): void {
   // anchorRow floor.
   const renderFloor = hug && targetBottomRow < absoluteBottom ? desiredTopRow : self.anchorRow;
   self.logUpdate.render(frame, targetBottomRow, renderFloor);
+  recordRenderedFrame(self, frame, targetBottomRow, self.stdout.columns ?? 80);
   self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, targetBottomRow);
 }
 
@@ -296,8 +301,9 @@ function repaintPickerFrame(self: FrameHost): void {
     self.scrollRegion,
     contentHugBandReserve(self, self.stdout.rows ?? 24),
   );
+  const { margin } = contentBand(self.stdout.columns ?? 80);
   const frameLines = buildPickerFrameLines(
-    chrome, layout.trimmedOverlay, layout.renderGap, pickerRows, contentBand(self.stdout.columns ?? 80).margin,
+    chrome, layout.trimmedOverlay, layout.renderGap, pickerRows, margin,
   );
   // Empty-frame guard: when the picker's renderRows() is empty and no
   // chrome is active, frameLines is []. The CupFrameRenderer clamps
@@ -339,5 +345,6 @@ function repaintPickerFrame(self: FrameHost): void {
   }
   const renderFloor = bottomRow < absoluteBottom ? desiredTopRow : self.anchorRow;
   self.logUpdate.render(frame, bottomRow, renderFloor);
+  recordRenderedFrame(self, frame, bottomRow, self.stdout.columns ?? 80);
   self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, bottomRow);
 }

@@ -6,6 +6,10 @@
  * inter-round boundary (after the batch, before the next model request) instead
  * of waiting for the next turn.
  *
+ * When `AFK_STEER_MODE=boundary`, typed-ahead REPL messages are also drained at
+ * every tool-round boundary (Part of #3897). The default (`turn-end`) preserves
+ * the existing behaviour where a queued message runs as its own turn.
+ *
  * Settled background-process envelopes (`<background-process-result>`) ride
  * the same boundary. Invariant: an envelope for a job that settles mid-turn
  * must reach the model INSIDE that turn when a later tool round exists;
@@ -18,11 +22,12 @@
  * process-job-notifier.ts) and bounded by its MAX_PENDING, so they bypass the
  * peer AdmissionQueue byte accounting, but they obey the same human barrier.
  *
- * Peer messages and process envelopes ONLY. A human queued-user-message (typed + Enter while a turn
- * runs) is never injected here: it stays in the compositor queue and runs as
- * its own turn at end of turn, which the yield-to-user contract
- * (`agent/tools/user-yield.ts`) relies on. It still takes priority: while one
- * is pending, peers are held back so the user's turn runs first.
+ * Peer messages and process envelopes ONLY by default. When `AFK_STEER_MODE=boundary`
+ * a human queued-user-message is also drained here (Part of #3897). In the default
+ * `turn-end` mode the message stays in the compositor queue and runs as its own turn,
+ * which the yield-to-user contract (`agent/tools/user-yield.ts`) relies on. It still
+ * takes priority: while one is pending (in `turn-end` mode), peers are held back so
+ * the user's turn runs first.
  *
  * Barriers preventing peer injection:
  *   - Any human queued-user-message is present in the compositor → peer waits.
@@ -57,12 +62,15 @@ import { renderPeerMessageBlock } from '../../../agent/peer/envelope.js';
 import type { InteractiveCtx } from './shared.js';
 import type { InputSurface } from '../../input/input-surface.js';
 import { prependTurnInjections, type InjectionSource } from './loop-iteration.injections.js';
+import { env } from '../../../config/env.js';
+import type { TraceSink } from '../../../agent/trace/index.js';
 
 /**
- * Minimal compositor surface: a read-only probe of the human queue.
+ * Minimal compositor surface used by the peer boundary.
  *
- * Contract: deliberately has no peek/reserve/drop members, so the boundary
- * cannot consume the human queue (see the module doc for why).
+ * `hasPendingSubmission` is always required. `peekQueuedText` and `dropQueued`
+ * are optional extensions used only when `AFK_STEER_MODE=boundary` is set
+ * (Part of #3897); their absence is safe — the feature simply stays off.
  */
 export interface BoundaryCompositor {
   /**
@@ -71,11 +79,34 @@ export interface BoundaryCompositor {
    * injection and defer to the human turn.
    */
   hasPendingSubmission(): boolean;
+  /**
+   * Snapshot the queued text-only messages without consuming them.
+   * Returns `undefined` when nothing is queued, when queued payloads contain
+   * attachments (which can't ride a text-only boundary carrier), or when the
+   * joined text is blank. Only used when `AFK_STEER_MODE=boundary`.
+   */
+  peekQueuedText?(): { readonly text: string; readonly preview: string; readonly payloads: readonly unknown[] } | undefined;
+  /**
+   * Drop exactly the payloads captured in a prior `peekQueuedText` snapshot,
+   * after their text has been delivered. Only used when `AFK_STEER_MODE=boundary`.
+   */
+  dropQueued?(snapshot: { readonly text: string; readonly preview: string; readonly payloads: readonly unknown[] }): number;
 }
 
 /** Minimal session surface: only what boundary needs. */
 export interface BoundarySession {
   setBeforeNextRound?: (cb: (() => string | undefined) | undefined) => void;
+}
+
+/**
+ * Steering mode resolved from `AFK_STEER_MODE`. Defaults to `turn-end`.
+ * Only `boundary` enables mid-turn human-queue drain (Part of #3897).
+ */
+export type SteerMode = 'boundary' | 'turn-end';
+
+/** Read and validate `AFK_STEER_MODE` from the environment. */
+export function resolveSteerMode(): SteerMode {
+  return env.AFK_STEER_MODE === 'boundary' ? 'boundary' : 'turn-end';
 }
 
 /**
@@ -98,6 +129,18 @@ export interface PeerBoundaryOpts {
    * the human barrier). Absent when the session has no process registry.
    */
   processJobNotifier?: InjectionSource;
+  /**
+   * Steering mode for this boundary. When `boundary`, the callback also drains
+   * the human compositor queue at each tool-round boundary (Part of #3897).
+   * Defaults to `turn-end` (existing behaviour preserved).
+   */
+  steerMode?: SteerMode;
+  /**
+   * Trace sink — reserved for future boundary-specific witness events.
+   * The `queued_user_message` event is emitted by the provider loop (inter-round)
+   * when it consumes the steering text, not here (avoids duplicate trace rows).
+   */
+  traceWriter?: TraceSink;
 }
 
 /**
@@ -134,20 +177,65 @@ export function installPeerBoundary(opts: PeerBoundaryOpts): () => void {
   const callback = (): string | undefined => {
     const compositor = getCompositor();
 
-    // ── 1. Human barrier check ───────────────────────────────────────────────
-    // Invariant: the boundary NEVER consumes the human queue. A message the
-    // user typed + Entered mid-turn is delivered at END OF TURN by the
+    // ── 1. Human barrier / steering-mode check ──────────────────────────────
+    // In default `turn-end` mode the boundary NEVER consumes the human queue.
+    // A message typed + Entered mid-turn is delivered at END OF TURN by the
     // compositor's `→ idle` drain, as its own turn. The yield-to-user contract
     // (`agent/tools/user-yield.ts`) depends on this: a yielding tool such as
     // wait_for tells the model "end your turn so the message is delivered
     // first", which is only true if nothing pulls the message in mid-turn.
-    // History: #2810 drained human text here too, so a queued message landed
-    // after ANY tool round (bash, compose, ...) and the yield notice lied.
+    //
+    // In `boundary` mode (AFK_STEER_MODE=boundary, Part of #3897) the human
+    // message IS drained here, ahead of peer messages.  Attachment-bearing
+    // payloads still fall through to their normal turn — peekQueuedText()
+    // returns undefined for them, so they are never silently dropped.
     //
     // hasPendingSubmission() is true for ANY human payload: text, attachment,
     // image, slash command. peekQueuedText() alone returns undefined for image-
     // bearing payloads, so it would wrongly let peers past the barrier.
     const humanPending = opts.isQueuedHumanTurn?.() === true || (compositor?.hasPendingSubmission() ?? false);
+
+    // ── 1a. Boundary-mode human drain (AFK_STEER_MODE=boundary) ─────────────
+    // Invariant: only text-only queued messages are drained here. Attachment-
+    // bearing payloads (peekQueuedText → undefined) are left for the normal
+    // idle drain so images remain intact. Double-delivery is prevented by
+    // dropQueued — once the text is handed to the provider loop the payloads
+    // are removed from the compositor queue before the next → idle transition.
+    if (opts.steerMode === 'boundary' && humanPending && compositor !== null && compositor !== undefined) {
+      const snapshot = compositor.peekQueuedText?.();
+      if (snapshot !== undefined) {
+        // Invariant: command-shaped submissions (slash commands `/…` and shell
+        // passthroughs `!…`) must NOT be drained mid-turn. They require the
+        // normal REPL dispatch path (loop-iteration.ts:204-212) which handles
+        // slash resolution, shell execution, and plugin forwarding. Draining
+        // them here would send raw command text to the model, bypassing
+        // dispatch and potentially disclosing local shell commands/secrets.
+        const trimmed = snapshot.text.trimStart();
+        if (trimmed.startsWith('/') || trimmed.startsWith('!')) {
+          // Leave the queue intact for the normal turn-end path.
+          // Fall through to the peer-delivery section below; the human barrier
+          // (humanPending=true) will block peers as usual.
+        } else {
+          // Drop BEFORE returning so the compositor's → idle transition does not
+          // re-deliver the same text as a separate turn.
+          compositor.dropQueued?.(snapshot);
+          // Note: the `queued_user_message` trace event is emitted by the provider
+          // loop (anthropic-direct/loop/inter-round.ts, openai-compatible/query/
+          // turn-driver.ts) when it consumes the steeringText — not here. This
+          // avoids duplicate witness rows.
+          //
+          // Return immediately: the human message IS the content for this boundary.
+          // Peers are deferred; they will be delivered at the next boundary or the
+          // next-turn fallback, maintaining the invariant that the user's message
+          // is always seen before peer content.
+          return snapshot.text;
+        }
+      }
+      // No text-only snapshot (attachment-bearing or blank), or command-shaped
+      // text that must go through REPL dispatch → fall through to the normal
+      // peer-delivery path below; the human payload stays queued.
+    }
+
     // Human barrier active → skip peers entirely this boundary. They stay in
     // the notifier buffer so the user's queued turn runs first; the next-turn
     // drain (or a later boundary) delivers them.
@@ -301,6 +389,10 @@ export function applyDeferPeers(
  * builds the opts object from live getters on `ctx` and `surface`, installs the
  * first boundary, and returns the queue plus a `reinstall` function for the
  * `/resume` swap path.
+ *
+ * Reads `AFK_STEER_MODE` once at call time and threads it into `PeerBoundaryOpts`
+ * so the callback drains the human queue mid-turn when `boundary` mode is active
+ * (Part of #3897).
  */
 export function setupPeerBoundary(
   ctx: InteractiveCtx,
@@ -310,6 +402,24 @@ export function setupPeerBoundary(
   processJobNotifier?: InjectionSource,
 ): { admissionQueue: AdmissionQueue; reinstall: () => void } {
   const admissionQueue = new AdmissionQueue();
+  const steerMode = resolveSteerMode();
+  // One-time warning: boundary mode requires peekQueuedText/dropQueued on the
+  // compositor. If the compositor lacks them the feature silently stays off,
+  // which is correct but surprising — surface it once so the operator knows.
+  if (steerMode === 'boundary') {
+    const comp = surface.getCompositor() as BoundaryCompositor | null;
+    if (comp) {
+      const missing: string[] = [];
+      if (!comp.peekQueuedText) missing.push('peekQueuedText');
+      if (!comp.dropQueued) missing.push('dropQueued');
+      if (missing.length > 0) {
+        process.stderr.write(
+          '[afk] warning: AFK_STEER_MODE=boundary is set but the compositor does not expose ' +
+          `${missing.join(', ')} — mid-turn human-queue drain will be inactive.\n`,
+        );
+      }
+    }
+  }
   const opts: PeerBoundaryOpts = {
     getSession: () => ctx.session.current as BoundarySession | undefined,
     getCompositor: () => surface.getCompositor() as BoundaryCompositor | null,
@@ -317,6 +427,8 @@ export function setupPeerBoundary(
     admissionQueue,
     isQueuedHumanTurn,
     processJobNotifier,
+    steerMode,
+    traceWriter: ctx.traceWriter,
   };
   let dispose = installPeerBoundary(opts);
   const reinstall = () => { dispose = reinstallPeerBoundary(opts, dispose); };

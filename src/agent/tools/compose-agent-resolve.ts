@@ -242,9 +242,28 @@ export function resolveComposeNodeAgent(
 
 /** Resolve the body fallback before appending the leaf notice. */
 export function resolveComposeAgentPrompt(agent: ResolvedComposeAgent, basePrompt: string): string {
-  // Invariant: notice-only instructions must never suppress the base/operator fallback.
+  // Invariant: the effective leaf allowlist, not inherited generic tool guidance,
+  // governs which calls can succeed. Keep the notice after the base fallback.
   const base = agent.systemPrompt ?? basePrompt;
-  return agent.leafNotice ? `${base}\n\n${agent.leafNotice}` : base;
+  const withLeafNotice = agent.leafNotice ? `${base}\n\n${agent.leafNotice}` : base;
+  if (agent.namedAgentAllowedTools === undefined) return withLeafNotice;
+  // Invariant: render from the SAME effective list the provider advertises.
+  // buildComposeNodeProvider intersects CHILD_ALLOWED_TOOLS (minus
+  // COMPOSE_LEAF_STRIPPED_TOOLS) with namedAgentAllowedTools; mirror that
+  // here so the prompt suffix never names a tool the provider withholds.
+  const leafTools = CHILD_ALLOWED_TOOLS.filter((t) => !COMPOSE_LEAF_STRIPPED_TOOLS.has(t));
+  const effectiveTools = leafTools.filter((t) => agent.namedAgentAllowedTools!.includes(t));
+  // Name tools that are NOT in the effective list as examples of forbidden
+  // tools — only if they are absent, so we never discourage a tool that is
+  // actually allowed (#4012: previously hardcoded bash/workspace_query here
+  // even when the named agent grants them).
+  const exampleForbidden = ['bash', 'workspace_query'].filter((t) => !effectiveTools.includes(t));
+  const forbiddenClause =
+    exampleForbidden.length > 0
+      ? `Do not call ${exampleForbidden.join(', ')}, or other tools unless they appear in this list; `
+      : 'Do not call tools that do not appear in this list; ';
+  return `${withLeafNotice}\n\nThis compose node can use only these tools: ${effectiveTools.join(', ') || '(none)'}. ` +
+    `${forbiddenClause}use available read tools or return the missing capability to the parent.`;
 }
 
 /**

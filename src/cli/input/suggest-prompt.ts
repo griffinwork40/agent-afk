@@ -23,7 +23,8 @@
 import { basename } from 'node:path';
 import { redactSecrets } from '../../agent/redact-secrets.js';
 import { buildUserArc, extractOutcome } from './suggest-prompt.context.js';
-import type { CompleteRequest, SuggestContext } from './suggest-types.js';
+import type { CompleteFn, CompleteRequest, SuggestContext } from './suggest-types.js';
+import { dropPartialWord, normalizeReply } from './suggest-reply.js';
 
 // Re-export so callers that imported extractOutcome from here still work.
 export { extractOutcome } from './suggest-prompt.context.js';
@@ -252,7 +253,7 @@ export type PromptCompleteRequest = CompleteRequest;
 /** Collaborators injected by the engine so this module stays provider-agnostic. */
 export interface PromptSuggestionDeps {
   /** Resolve the completion function, or null when the provider cannot complete. */
-  resolveComplete(model: string): ((req: PromptCompleteRequest) => Promise<string>) | null;
+  resolveComplete(model: string): CompleteFn | null;
   /** Suggestion-class model id for this session. */
   model: string;
   /** Hard abort budget in milliseconds. */
@@ -318,7 +319,12 @@ export async function generatePromptSuggestion(
     // newlines, so scrubbing first would splice a two-line reply into one long
     // line and defeat the multi-line rejection in isValidPromptSuggestion.
     // Structure is judged first, control characters second, empty result last.
-    const candidate = normalizePromptSuggestion(raced.raw);
+    // A reply cut at the token cap ends mid-word: drop that word rather than
+    // proposing a sentence that stops halfway through one (see ./suggest-reply).
+    const reply = normalizeReply(raced.raw);
+    const candidate = normalizePromptSuggestion(
+      reply.truncated ? dropPartialWord(reply.text) : reply.text,
+    );
     if (candidate === null) return null;
     // Echo guard: discard exact parrot echoes of the user's last input.
     // The LLM context includes the transcript tail (via buildPromptSuggestionUser),

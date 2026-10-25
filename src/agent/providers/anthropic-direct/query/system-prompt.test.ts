@@ -153,6 +153,32 @@ describe('assembleSystemPrompt — top-level order', () => {
     expect(out).toContain('sess-123');
   });
 
+  it('appends agentTypeListing after the manifest when provided (#4217)', () => {
+    const out = assembleSystemPrompt(
+      buildStableSystemPrefix({ ...FULL, manifest: 'MANIFEST', agentTypeListing: 'AGENT_LISTING' }),
+      '/x',
+      IDENTITY,
+    );
+    const iManifest = out.indexOf('MANIFEST');
+    const iListing = out.indexOf('AGENT_LISTING');
+    expect(iListing).toBeGreaterThan(iManifest);
+  });
+
+  it('omits agentTypeListing when it is empty or absent (#4217 absent-tool gate)', () => {
+    const withEmpty = assembleSystemPrompt(
+      buildStableSystemPrefix({ ...FULL, manifest: 'MANIFEST', agentTypeListing: '' }),
+      '/x',
+      IDENTITY,
+    );
+    const withAbsent = assembleSystemPrompt(
+      buildStableSystemPrefix({ ...FULL, manifest: 'MANIFEST' }),
+      '/x',
+      IDENTITY,
+    );
+    expect(withEmpty).not.toContain('Available agent types');
+    expect(withAbsent).not.toContain('Available agent types');
+  });
+
   it('skips toolBase when it is empty (#3359 unnamed-worker dedupe)', () => {
     // When resolveToolSystemPrompt returns '' for isUnnamedWorker=true, the
     // assembly must not produce a leading blank line — the first section is

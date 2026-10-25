@@ -91,6 +91,59 @@ describe('classifyDoneEvidence', () => {
   it('returns "no-code-changes" for an empty event list', () => {
     expect(classifyDoneEvidence([])).toBe('no-code-changes');
   });
+
+  // Regression: #3822 — a bash command that matches isVerificationCommand AND
+  // is mutating (redirect / tee) must advance lastMutationIndex so a subsequent
+  // write invalidates the earlier verification.  The else-if short-circuit meant
+  // isVerificationCommand won and lastMutationIndex was never updated.
+  it('#3822: "pnpm test > results.txt" is both a verification command and a write — lastMutationIndex must advance', () => {
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
+      // pnpm test prefix matches isVerificationCommand; > results.txt is also a write.
+      // classifyBashCommand marks this mutating (output redirection to a real path).
+      { toolName: 'bash', input: 'pnpm test > results.txt', isError: false },
+    ];
+    // The test did NOT run cleanly against a clean file — it also wrote results.txt.
+    // The write must advance lastMutationIndex so no later clean verification exists.
+    expect(classifyDoneEvidence(events)).toBe('unverified');
+  });
+
+  it('#3822: "pnpm test 2>&1 | tee test-log.txt" — tee write after test must be unverified', () => {
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
+      { toolName: 'bash', input: 'pnpm test 2>&1 | tee test-log.txt', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('unverified');
+  });
+
+  // F2: verify that test-path args containing FS-verb substrings (rm, mv) do
+  // NOT trigger false 'unverified' classification — the narrow SHELL_WRITE_OPERATOR
+  // check must not match word-boundary tokens inside path components.
+  it('edit_file then pnpm test src/rm.test.ts → verified (path arg must not trigger false mutation)', () => {
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/agent/done-evidence.ts', isError: false },
+      { toolName: 'bash', input: 'pnpm test src/rm.test.ts', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+
+  it('edit_file then vitest src/mv-files.test.ts → verified (path arg must not trigger false mutation)', () => {
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/agent/done-evidence.ts', isError: false },
+      { toolName: 'bash', input: 'vitest src/mv-files.test.ts', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
+
+  it('#3822: read-only bash (grep, cat, git status) after edit+test must remain verified', () => {
+    // False-positive guard: read-only commands must not be treated as mutations.
+    const events: ToolEventMin[] = [
+      { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+      { toolName: 'bash', input: 'grep -r foo src/', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('verified');
+  });
 });
 
 // ---------------------------------------------------------------------------

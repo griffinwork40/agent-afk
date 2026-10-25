@@ -1,0 +1,138 @@
+---
+title: "Keep afk running as a service"
+description: "Install the daemon or Telegram bot under your operating system's service supervisor."
+---
+
+Install a service when the daemon or Telegram bot should start on login and recover from crashes without an open terminal. AFK manages the platform-specific configuration for you; a service supervises the process, while schedules decide what work the daemon runs.
+
+## Install and verify
+
+<Steps>
+<Step>
+### Configure the work first
+
+Set up [Telegram](/surfaces/telegram) before installing the bot. For a daemon, create [schedules](/guides/scheduling) and pin their working directories before installing it. Service processes do not inherit your interactive shell setup, so store persistent configuration through [AFK configuration](/configuration/editing-config).
+</Step>
+<Step>
+### Install the service you need
+
+```bash
+afk service install daemon
+```
+
+For phone supervision, install the bot too:
+
+```bash
+afk service install telegram
+```
+
+Recognized names are `daemon` and `telegram`. Installation registers and starts the service. `--dry-run` writes its configuration without registering it, so it still changes a file. `--no-watch` disables automatic restart on development-tree rebuilds where supported.
+</Step>
+<Step>
+### Check the running process
+
+```bash
+afk service list
+afk service status
+```
+
+Status shows the supervisor label, running state, PID when available, configuration path, log path, and running version when known. Inspect the log if it is installed but not running.
+</Step>
+</Steps>
+
+## Platform behavior
+
+<Tabs items={['macOS', 'Linux', 'Windows']}>
+<Tab value="macOS">
+
+AFK installs per-user launchd LaunchAgents in `~/Library/LaunchAgents/`, with labels such as `com.afk.daemon`. They start on login and are kept alive by launchd. These are user agents, not system boot daemons; logging out or shutting down is not a way to keep an interactive session alive.
+
+Development-tree installs can watch built entrypoints and restart after a rebuild. Packaged installs should be restarted after updating. Use `afk service` rather than maintaining a second hand-written LaunchAgent.
+
+</Tab>
+<Tab value="Linux">
+
+AFK installs systemd user units in `~/.config/systemd/user/`, such as `afk-daemon.service`. The backend uses `systemd --user` scope, not a root system service. Units restart on exit and are enabled for the user session. Development installs may also get companion path units for rebuild detection.
+
+Always-on operation across logout or reboot requires user lingering. Follow the installer message about `loginctl enable-linger`; authorization depends on your distribution. File logging uses systemd's `append:` support, which requires systemd 240 or newer. The installer warns if the version is old or cannot be detected.
+
+</Tab>
+<Tab value="Windows">
+
+AFK registers per-user Windows Task Scheduler tasks named `AFK-daemon` and `AFK-telegram`. They use a logon trigger and your interactive user token, without elevated privileges. The task requests restart on failure, allows running on battery, and has no execution-time limit.
+
+This is a logged-in-user task, not a Windows service running before login. Automatic restart on development rebuild is not supported by this backend. Use `afk restart` after updates.
+
+</Tab>
+</Tabs>
+
+## Restart and update
+
+```bash
+# Restart every installed AFK service
+afk restart
+
+# Restart just the daemon
+afk restart daemon
+
+# Equivalent longer form
+afk service restart daemon
+```
+
+Restart first refreshes the managed configuration when it has drifted, then restarts the process. A configuration-upgrade warning is reported even if the process restart itself succeeds. With no name, every installed service is attempted, not just the first one.
+
+`afk restart` manages only services installed through `afk service install`. A bot started by hand with `afk telegram start` is different; use `afk telegram restart` for that case.
+
+After installing a new AFK version, check:
+
+```bash
+afk --version
+afk service status daemon
+```
+
+If the running and installed versions differ, status prints a version-skew warning with a restart command. An older process without version information is shown as unknown rather than assumed current. Updating files on disk does not prove that a running process has loaded them.
+
+`afk service upgrade daemon` re-renders the managed configuration without itself restarting the service. A normal `afk service restart daemon` already performs that refresh, so it is usually the simplest update path.
+
+### Update policy
+
+The `updatePolicy` configuration key controls update checks:
+
+| Value | Behavior |
+| --- | --- |
+| `notify` | Notify about available releases. |
+| `auto` | Permit best-effort automatic updates within the current major version. |
+| `off` | Disable update checks. |
+
+`auto` never silently crosses a major version. A major release requires an explicit upgrade because it may contain breaking changes. See [configuration](/configuration/overview) for policy setup and [installation](/installation) for your installation method's update procedure. Restart services and check version skew after an update.
+
+## Find logs and remove a service
+
+By default the combined service logs are:
+
+```text
+~/.afk/logs/service-daemon.log
+~/.afk/logs/service-telegram.log
+```
+
+`afk service status` prints the actual paths, including any configured runtime-home override. On POSIX shells, inspect daemon output with:
+
+```bash
+tail -n 100 ~/.afk/logs/service-daemon.log
+```
+
+To stop supervision and remove its managed configuration:
+
+```bash
+afk service uninstall daemon
+```
+
+Uninstalling a service is separate from removing saved schedules. Do not leave another manually started daemon or bot running against the same resources while diagnosing a service install.
+
+## Related
+
+<Cards>
+<Card title="Schedule tasks" href="/guides/scheduling" description="Choose recurring, startup, and one-shot work for the daemon." />
+<Card title="Run without a human" href="/guides/unattended-runs" description="Set permissions, notifications, and verification expectations." />
+<Card title="CLI reference" href="/reference/cli" description="Look up the complete service and restart command syntax." />
+</Cards>

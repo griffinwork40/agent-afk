@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { detectDestructiveCommands } from './safe-destruct-detect.js';
+import { maskHookCommandData } from './hook-command-data.js';
 import { createReleaseBoundaryDetect, detectReleaseBoundaryCommands } from './release-boundary-detect.js';
 
 const payload = 'Mention git reset --hard and npm publish here';
@@ -172,6 +173,53 @@ describe('hook command data exemptions (#3762)', () => {
     it('still detects real operations after a multiline quoted arg', () => {
       const cmd = "git commit -m 'safe body\nno triggers'\nnpm publish";
       expect(detectReleaseBoundaryCommands(cmd)).toContain('npm-publish');
+    });
+  });
+
+  describe('sequential exempt heredocs and large-scale input (#4031)', () => {
+    it('correctly masks multiple sequential exempt heredoc blocks (K=3)', () => {
+      const blocks = Array.from({ length: 3 }, (_, k) =>
+        `cat >file${k}.txt <<'EOF'\nline-a-${k}\nline-b-${k}\nEOF`);
+      const command = blocks.join('\n');
+      const result = maskHookCommandData(command);
+      const resultLines = result.split('\n');
+      // Each heredoc header should be preserved; bodies should be blanked.
+      for (let k = 0; k < 3; k++) {
+        expect(result).not.toContain(`line-a-${k}`);
+        expect(result).not.toContain(`line-b-${k}`);
+      }
+      // Delimiter lines are preserved.
+      expect(resultLines.filter(l => l === 'EOF')).toHaveLength(3);
+    });
+
+    it('correctly masks 5 sequential exempt heredoc blocks', () => {
+      const blocks = Array.from({ length: 5 }, (_, k) =>
+        `tee out${k}.txt <<'EOF'\ndata-${k}\nEOF`);
+      const command = blocks.join('\n');
+      const result = maskHookCommandData(command);
+      for (let k = 0; k < 5; k++) {
+        expect(result).not.toContain(`data-${k}`);
+      }
+      // Should not trigger any false-positive detections.
+      expect(detectDestructiveCommands(command)).toEqual([]);
+    });
+
+    it('handles large-scale input (50k heredoc lines) without RangeError', () => {
+      // This would have hit RangeError with push.apply or blown up with O(K²·B) concat.
+      const bodyLines = Array.from({ length: 50_000 }, (_, i) => `line-${i}`).join('\n');
+      const command = `cat >big.txt <<'EOF'\n${bodyLines}\nEOF`;
+      const start = performance.now();
+      const result = maskHookCommandData(command);
+      const elapsed = performance.now() - start;
+      // Body lines should be blanked.
+      expect(result).not.toContain('line-0');
+      expect(result).not.toContain('line-49999');
+      // Header + blank lines + delimiter.
+      const lines = result.split('\n');
+      expect(lines[0]).toBe("cat >big.txt <<'EOF'");
+      expect(lines[lines.length - 1]).toBe('EOF');
+      // Should complete quickly (well under 5s even on slow CI).
+      expect(elapsed).toBeLessThan(5000);
     });
   });
 });

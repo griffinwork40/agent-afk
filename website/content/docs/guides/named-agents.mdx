@@ -1,0 +1,59 @@
+---
+title: "Use and define named agents"
+description: "Give recurring subagent tasks a reusable prompt, model default, and enforced tool scope."
+---
+
+Named agents let you reuse a specialist role instead of repeating its instructions on every dispatch. Use `agent_type` in an `agent` call, or on an individual `compose` node, when a task needs a specific prompt or a restricted set of tools.
+
+<Steps>
+<Step>Define a Markdown file at `.afk/agents/reviewer.md` in your project:</Step>
+</Steps>
+
+```md
+---
+name: reviewer
+description: Review code changes without modifying files
+tools: Read, Grep, Glob
+model: sonnet
+maxToolUseIterations: 50
+---
+
+Review the requested changes. Return findings with file and line references. Do not modify files.
+```
+
+<Steps>
+<Step>Start a new session so the agent registry picks up the file.</Step>
+<Step>Ask AFK to dispatch an `agent` with `agent_type: "reviewer"` and a task-specific `prompt`.</Step>
+</Steps>
+
+The body becomes the child's system prompt. `name` and `description` are required. The filename does not determine the agent type. `tools` is an allowlist, while `disallowedTools` removes tools from the declared list or inherited child surface. Both accept Claude Code tool names such as `Read`, `Grep`, and `Bash`; unknown names are dropped. If `tools` is omitted, the agent inherits the ordinary child tool surface. `model`, `maxTurns`, and `maxToolUseIterations` set defaults that explicit dispatch parameters can override. `bash: read-only` additionally gates shell commands if Bash is allowed. Unsupported long-tail fields, including `skills`, `mcpServers`, `hooks`, `background`, and `isolation`, do not take effect; the loader warns about them.
+
+## Built-in types
+
+| Type | Purpose and scope |
+|---|---|
+| `research-agent` | Read-only research with file search, web access, memory search, and scoped dispatch to `git-investigator`. |
+| `git-investigator` | Read-only Git history investigation; its Bash access is gated to nonmutating commands. |
+| `general-purpose` | Exploration and changes with the full child tool surface. |
+| `Explore` | Fast read-only file discovery and code search, without shell or write tools. |
+
+The general-purpose type defaults to 150 tool-use rounds; the three read-only types default to 50. An unnamed `agent` has no tool-round cap by default. Built-ins do not pin a model: your subagent model policy applies unless the dispatch overrides it.
+
+## Locations and precedence
+
+The registry scans Markdown files recursively at session startup. From lowest to highest precedence: built-ins, installed plugin `agents/` files, user-wide `~/.afk/agents/`, project `.claude/agents/`, project `.afk/agents/`, then programmatic `AgentSessionConfig.agents`. Plugin types are namespaced as `plugin:agent`, so a plugin named `example` with `agents/reviewer.md` is dispatched as `example:reviewer`. A duplicate name in one directory keeps the first file found and warns. Project `.afk/agents/` wins over `.claude/agents/` with a warning when both define the same name.
+
+<Callout type="warn">
+A custom agent can shadow a built-in by declaring its name. AFK warns when this happens because the replacement can remove a built-in's read-only tool restrictions. Check the resolved agent type before using bundled workflows that expect a restricted built-in.
+</Callout>
+
+## Let a named agent delegate selectively
+
+A named agent can only delegate if its allowed tools include `Agent` or `Task`. Declare `tools: Read, Grep, Agent(git-investigator)` to allow nesting only into `git-investigator`. A bare `Agent` allows any named type; `Agent()` allows none. Nesting still obeys the session depth and delegation budgets. Plugin-contributed agents use the same enforcement under their namespaced types. Forked children do not receive an MCP manager, so listing MCP tool names in an agent file does not make MCP tools available to them.
+
+## Related
+
+<Cards>
+<Card title="Delegate tasks to subagents" href="/guides/subagents" description="Dispatch, budgets, and parallel composition." />
+<Card title="Control tool access" href="/guides/tool-access" description="Understand grants and permissions." />
+</Cards>

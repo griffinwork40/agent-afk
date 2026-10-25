@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node `^22.22.2 || ^24.15.0 || >=26.0.0` (jsdom 30's floor; keep `engines.node` in sync with it), pnpm 11 only (pinned via `package.json#packageManager`; lockfile is pnpm-specific; dependency build scripts must be allowlisted under `allowBuilds` in `pnpm-workspace.yaml`, and `dashboard/` has its own copy). CI publishes with `npm publish`/`npm version`, not the pnpm equivalents; see the Invariant in `.github/workflows/publish.yml`.
+Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node `^22.22.2 || ^24.15.0 || >=26.0.0` (jsdom 30's floor; keep `engines.node` in sync with it), pnpm 11 only (pinned via `package.json#packageManager`; lockfile is pnpm-specific; dependency build scripts must be allowlisted under `allowBuilds` in `pnpm-workspace.yaml`, and `dashboard/` has its own copy). Releases are cut via `scripts/release.mjs` (bumps version, rewrites CHANGELOG, tags, and pushes atomically); CI then publishes via `.github/workflows/publish.yml` on the tag push — run `pnpm release patch|minor|major` from `main`, never `npm version` or `pnpm version` directly.
 
 ## Commands
 
@@ -28,9 +28,11 @@ pnpm scan:env:check                                # CI gate: docs/env-registry.
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color> outside src/cli/palette.ts (--list to find sites)
 pnpm audit:filesize:check                          # 350-code-line ceiling (comments/blanks excluded), ratcheted against .filesize-baseline.json — CI runs it but NON-blocking (`|| true`) until #2206 lands; treat a failure as yours to fix
 pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values; add --allow-growth --reason "<text>" to record a deliberate increase)
+pnpm regen:generated                               # resolve all generated-file merge conflicts in one step (union baselines, re-run all regenerators, git-add results)
 pnpm audit:funcsize:check                          # CI gate: 200-line function ceiling (AST-measured), ratcheted against .funcsize-baseline.json
 pnpm audit:funcsize:update                         # regenerate the function baseline after an extraction (add --allow-growth --reason "<text>" to record a deliberate increase)
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
+pnpm audit:clones:check                            # CI gate: no NEW copy-paste clones vs origin/main (jscpd, .jscpd.json; needs the origin/main ref; `pnpm audit:clones` lists all; opt out with // jscpd:ignore-start/-end + reason)
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
 pnpm audit:deps                                    # CI gate: pnpm audit --audit-level=critical --prod
 pnpm check:audits                                  # run all deterministic CI audit gates locally (full-scan; exit 0=pass, 1=some failed, 2=all failed→broken env)
@@ -73,13 +75,13 @@ Both gaps — the dispatch prompt and the child's full conversation — are cove
 
 Journal writes go through an async `SerialQueue`, so a SIGKILL can lose queued records. A graceful abort calls `journal.flush()` before exit (`src/agent/session/agent-session.ts`), bounding the loss window.
 
-~~Residual trace gap~~ (**closed #3714**): normal shutdown cascade-aborts and drains children for up to 5 seconds before sealing. `cancel()` now stores its cancellation trace-emit promise in `_pendingCancellationWrite` on the handle (`src/agent/subagent/handle.ts`). The owning session collects these via `AgentConfig.getPendingChildTerminalWrites` and passes them to `TraceWriter.seal()`, which awaits them (all-settled, with the write gate still open, for both `NdjsonTraceWriter` and `InMemoryTraceWriter`) BEFORE appending `session_sealed` — so child cancellation rows land before the seal record even when the drain has timed out or was not configured. That wait is itself bounded (`SEAL_PENDING_WRITES_TIMEOUT_MS`, 5s, `src/agent/trace/pending-writes.ts`): a wedged child trace sink whose write never settles is abandoned with a stderr warning naming the count, its `cancelled` row is missing, and `session_sealed` is still written — so worst-case shutdown is two bounds (drain + seal), never a hang. The first late-write failure per writer (any write that still arrives after the seal) is still reported to stderr.
+~~Residual trace gap~~ (**closed #3714**): normal shutdown cascade-aborts and drains children for up to 5 seconds before sealing. `cancel()` now stores its cancellation trace-emit promise in `_pendingCancellationWrite` on the handle (`src/agent/subagent/handle.ts`). The owning session collects these via `AgentConfig.getPendingChildTerminalWrites` and passes them to `TraceWriter.seal()`, which awaits them (all-settled, with the write gate still open, for both `NdjsonTraceWriter` and `InMemoryTraceWriter`) BEFORE appending `session_sealed` — so child cancellation rows land before the seal record even when the drain has timed out or was not configured. That wait is itself bounded (`SEAL_PENDING_WRITES_TIMEOUT_MS`, 5s, `src/agent/trace/pending-writes.ts`): a wedged child trace sink whose write never settles is abandoned with a stderr warning naming the count, its `cancelled` row is missing, and `session_sealed` is still written — so worst-case shutdown is two bounds (drain + seal, 10s total), never a hang. The first late-write failure per writer (any write that still arrives after the seal) is still reported to stderr.
 
 **Witness retention.** The tree is no longer unbounded (`src/agent/witness-sweep.ts`, #849). A sweep runs at root-session start — fire-and-forget beside `capJsonlBySize`, never able to fail construction — and evicts **whole session directories**, first any whose newest content is older than `AFK_WITNESS_MAX_AGE_DAYS` (default **30**), then oldest-first until the tree fits `AFK_WITNESS_MAX_BYTES` (default **2 GiB**). `AFK_WITNESS_RETENTION_DISABLE=1` turns it off entirely. Three properties are load-bearing and each has a test: the **active session is excluded by identity** (its witness label, never by timestamp); anything whose newest content is inside a 1-hour grace window is never evicted, which covers the concurrent REPL/daemon/telegram sessions this process cannot enumerate; and liveness is judged by the **newest mtime across a directory's contents, not the directory's own mtime** — POSIX does not bump a directory's mtime when an existing file inside it is appended to, so a long-running session that creates no new sidecars looks ancient and an mtime-only sweep would delete a live trace. Cost is bounded twice over: the sweep is deferred 5s off the construction path and `.unref()`ed (so a short-lived process never pays for it), and a `.last-sweep` stamp in the witness root caps it at one walk every 6 hours rather than one per session start.
 
 ### Subagent tool-round budget
 
-The unit of the budget cap is **tool-use rounds**, not tool calls — 5 parallel calls in one reply consume 1 round, not 5. Default ceiling: **50 rounds per fork**; `0` = unbounded. Hitting the cap triggers a wind-down round (tools stripped from the next reply) rather than a kill, so the child returns partial work instead of dying mid-sentence. Each child is told its own budget at dispatch via the preamble injected by `src/agent/subagent/budget-preamble.ts`, and is told it IS a subagent (reply goes to the dispatching agent, no human reachable, whether it may nest further) by `src/agent/subagent/identity-preamble.ts`; both are applied at `assembleChildConfig`, and every identity line is derived from the child's resolved config so it is never false for that child. Full history and rationale: `docs/subagent-tool-budget.md`.
+The unit of the budget cap is **tool-use rounds**, not tool calls — 5 parallel calls in one reply consume 1 round, not 5. Default ceiling: **50 rounds per fork**; `0` = unbounded. Hitting the cap triggers a wind-down round (anthropic-direct strips tools from the next request; openai-compatible keeps the identical tools array for prefix-cache stability but never dispatches a call from that round, see `openai-compatible/query/wind-down-final.ts`) rather than a kill, so the child returns partial work instead of dying mid-sentence. Each child is told its own budget at dispatch via the preamble injected by `src/agent/subagent/budget-preamble.ts`, and is told it IS a subagent (reply goes to the dispatching agent, no human reachable, whether it may nest further) by `src/agent/subagent/identity-preamble.ts`; both are applied at `assembleChildConfig`, and every identity line is derived from the child's resolved config so it is never false for that child. Full history and rationale: `docs/subagent-tool-budget.md`. A capped child can be resumed with its full history via `continuation_chain_id`: `docs/subagent-continuation.md`.
 
 ## Architecture
 
@@ -211,7 +213,9 @@ it), and when a baselined path disappears. Regenerate it with
 you pass `--allow-growth --reason "<why>"` — shrinks and removals are always
 allowed. It carries
 `-merge` in `.gitattributes`, so resolve conflicts by regenerating, never
-by editing conflict markers.
+by editing conflict markers. **Run `pnpm regen:generated` after resolving any
+code conflicts** — it unions both sides of all conflicted baselines, re-runs
+every regenerator, and stages the results in one step.
 
 A split is only behaviour-preserving if state stays singular:
 `pnpm audit:module-state:check` fails when the same module-scope singleton or
@@ -248,7 +252,7 @@ must hold in mind. `pnpm audit:funcsize:list` ranks the current worst.
 
 The Windows CI leg runs only on main pushes and `windows-compat`-labelled PRs, so
 `tests/posix-guard.test.ts` enforces a static Windows guard inside **`pnpm test`**
-(ubuntu CI and auto-release) on every PR (#703). AST rules in
+(ubuntu CI and publish.yml) on every PR (#703). AST rules in
 `scripts/lib/posix-guard-rules.ts`: **R1** a literal `/bin/sh`/`sh`/`bash` as the
 command of `execFile`/`spawn`/`exec` or as `shell:` in product code (use
 `resolveShell()` from `src/utils/resolve-shell.ts`); **R2** `mkdtemp` on a

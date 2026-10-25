@@ -1,155 +1,121 @@
-/**
- * `GET /api/sessions/:id/stream` — the SSE transport for a live session.
- *
- * Extracted from `routes.ts` to keep every source file under the 350-line
- * ceiling; this is the whole streaming concern, moved verbatim.
- */
-
+/** GET /api/sessions/:id/stream — generation-aware durable ledger SSE. */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { readLedger, tailLedger } from '../agent/session-ledger.js';
+import { tailLedger } from '../agent/session-ledger.js';
 import { formatSseFrame, SSE_END_FRAME } from './sse-protocol.js';
 import { header, requireValidSessionId, SECURITY_HEADERS } from './routes.js';
 import { errorMessage } from '../utils/errors.js';
+import type { ChoiceBroker } from './choice-broker.js';
+import type { ChoiceSsePayload } from './shared/choice-wire.js';
+import type { LiveBroker } from './live-broker.js';
+import type { LiveSsePayload } from './shared/live-wire.js';
 
-/** Heartbeat cadence; keeps intermediaries from idling out a quiet stream. */
 const HEARTBEAT_MS = 15_000;
 
-/**
- * Invariant: SSE resume is replay-then-tail, and the replay source is the
- * session LEDGER, which is a lossy projection rather than a transcript
- * (assistant text capped, tool inputs truncated, and successful tool output
- * never persisted at all). The `replay: true` marker on replayed frames is what
- * lets the browser render "result not available after refresh" instead of
- * presenting an empty string as though it were the real output. Dropping that
- * flag would silently turn a known gap into a confident lie.
+/** IDs qualify the 1-based ledger position with its inode generation. A clear
+ * atomically replaces the file, so old reconnect cursors can never skip new
+ * records. One reader handles replay + tail (no handoff race). Reset seals are
+ * nonterminal; other tabs receive reset before any replacement-generation data.
  */
 export async function handleStream(
   req: IncomingMessage,
   res: ServerResponse,
   sessionId: string,
   streams?: Set<AbortController>,
+  choices?: ChoiceBroker,
+  live?: LiveBroker,
 ): Promise<void> {
-  // Invariant: validate BEFORE writing the 200 head. Once the event-stream
-  // header is sent the status can no longer be changed, so the 400 has to
-  // happen here or not at all.
   if (!requireValidSessionId(res, sessionId)) return;
-
   res.writeHead(200, {
     ...SECURITY_HEADERS,
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-store',
     connection: 'keep-alive',
-    // Defeats proxy buffering, which otherwise holds frames until a buffer
-    // fills and makes a live stream look hung.
     'x-accel-buffering': 'no',
   });
-  // Invariant: `writeHead` only BUFFERS the head; Node sends it with the first
-  // body write. A brand-new session has no ledger yet, so neither replay nor
-  // tail writes anything until the first prompt (or the 15s heartbeat), and the
-  // browser's `fetch()` stays unresolved, pinning the dashboard on
-  // "Connecting to session...". Flushing commits the 200 immediately.
   res.flushHeaders();
 
-  const lastEventId = header(req, 'last-event-id');
-  let seq = Number.parseInt(lastEventId ?? '0', 10);
-  if (!Number.isFinite(seq) || seq < 0) seq = 0;
-  const resumeFrom = seq;
-
-  // Invariant: the SSE event id is the record's 1-based POSITION IN THE LEDGER
-  // FILE, never a per-connection emit counter. `Last-Event-ID` resume is
-  // implemented as `position <= resumeFrom -> skip`, so the id must mean the
-  // same thing on every connection. A counter that advanced only on emitted
-  // records made a single missed record permanently unreachable (its true
-  // position stayed <= resumeFrom forever) and simultaneously re-sent an
-  // already-seen record, because every later id sat one below its true
-  // position.
-  //
-  // Invariant: the tail is aborted through `controller`, and that abort is the
-  // ONLY thing that can stop `tailLedger`. Its loop guard is
-  // `while (!signal?.aborted && !sawClosed)`, so without a signal the sole exit
-  // was a terminal `closed` record: a client that disconnected from a quiet
-  // session leaked a 250ms poll timer plus an `fs.watch` handle for the life of
-  // the process, and because the response never ended, `server.close()` never
-  // completed either. The consumer-side `closed` check cannot substitute — it
-  // only runs once the generator yields, which a quiet session never does.
+  // Old unqualified cursors cannot identify a generation. Safely replay rather
+  // than silently dropping records after a clear (legacy upgrade only).
+  const cursor = /^(\d+-\d+(?:-\d+)?):(\d+)$/.exec(header(req, 'last-event-id') ?? '');
+  const cursorGeneration = cursor?.[1];
+  const cursorPosition = Number(cursor?.[2] ?? 0);
+  let generation: string | undefined;
+  let position = 0;
+  let replay = true;
   const controller = new AbortController();
   streams?.add(controller);
-
   let closed = false;
+  // Id-less ephemeral notifications never advance the durable ledger cursor.
+  const writeChoice = (event: ChoiceSsePayload): void => {
+    if (!closed) res.write(formatSseFrame({ data: event }));
+  };
+  const unsubscribe = choices?.subscribe(sessionId, writeChoice);
+  // Invariant: live text frames are id-less and held back until the durable
+  // replay has caught up, then a snapshot of the OPEN segments is written.
+  // Sending them earlier would let replayed older-turn `assistant{seg}`
+  // records match (and replace) the current turn's drafts. Sealed segments
+  // need no live copy: their durable records are already in the ledger tail.
+  let liveReady = false;
+  const writeLive = (event: LiveSsePayload): void => {
+    if (!closed && liveReady) res.write(formatSseFrame({ data: event }));
+  };
+  const writeLiveSnapshot = (): void => {
+    if (!live) return;
+    for (const frame of live.snapshot(sessionId)) writeLive(frame);
+  };
+  const unsubscribeLive = live?.subscribe(sessionId, writeLive);
   const heartbeat = setInterval(() => {
     if (!closed) res.write(': ping\n\n');
   }, HEARTBEAT_MS);
-
   const finish = (): void => {
     if (closed) return;
     closed = true;
     clearInterval(heartbeat);
     controller.abort();
     streams?.delete(controller);
+    unsubscribe?.();
+    unsubscribeLive?.();
     res.end();
   };
   req.on('close', finish);
 
   try {
-    // Phase 1 — replay the history that exists right now, tracking how many
-    // records that was so the live phase can pick up at exactly that position.
-    let replayCount = 0;
-    for await (const record of readLedger(sessionId)) {
-      replayCount += 1;
-      if (replayCount <= resumeFrom) continue;
-      if (closed) return;
-      res.write(formatSseFrame({ id: String(replayCount), data: { record, replay: true } }));
-    }
-
-    // Phase 2 — tail from the START of the file, skipping the records phase 1
-    // already accounted for.
-    //
-    // Invariant: `fromStart: true` is what closes the replay-to-tail gap. The
-    // default (`fromStart: false`) re-stats the file and begins at whatever EOF
-    // happens to be at that instant, so any record appended after phase 1
-    // drained but before that stat was dropped — silently, and permanently once
-    // the positional id advanced past it. Re-reading from offset 0 with one
-    // continuous cursor cannot skip a record; a record written during the
-    // handoff simply lands past `replayCount` and is emitted live, which is
-    // what it is. The cost is one extra sequential read of an append-only file.
-    let position = 0;
     for await (const record of tailLedger(sessionId, {
       fromStart: true,
       signal: controller.signal,
+      onCaughtUp: () => {
+        replay = false;
+        liveReady = true;
+        writeLiveSnapshot();
+      },
+      onGeneration: (next) => {
+        const changed = generation !== undefined;
+        const staleCursor = cursorGeneration !== undefined && cursorGeneration !== next;
+        if (!closed && (changed || staleCursor)) {
+          res.write(formatSseFrame({ data: { reset: true } }));
+          // Subscription must precede replay to avoid losing live requests,
+          // but its initial snapshot may now have been erased by this reset.
+          choices?.replayPending(sessionId, writeChoice);
+          // The client dropped its drafts on reset; rebuild open segments.
+          writeLiveSnapshot();
+        }
+        generation = next;
+        position = 0;
+      },
     })) {
       position += 1;
-      // Already delivered (or deliberately skipped) during replay.
-      if (position <= replayCount || position <= resumeFrom) continue;
+      if (generation === cursorGeneration && position <= cursorPosition) continue;
       if (closed) return;
-      res.write(formatSseFrame({ id: String(position), data: { record, replay: false } }));
+      // replay:true is load-bearing: ledger tool results are lossy, not a
+      // substitute for the full original result available only in live memory.
+      res.write(formatSseFrame({ id: `${generation}:${position}`, data: { record, replay } }));
     }
-
-    // Invariant: reaching here means `tailLedger` RETURNED, and there are only
-    // two ways it can. Its loop guard is `while (!signal?.aborted && !sawClosed)`,
-    // so either the session wrote a terminal `closed` record (a genuine end) or
-    // something aborted the signal (this client disconnected, or the server is
-    // shutting down). Only the first is a session end, and the two must not be
-    // conflated: the socket closing looks identical from the browser either way,
-    // so a client that treated every stream end as terminal would stop resuming
-    // after a network drop, while one that treated every end as a drop
-    // reconnected forever against an ended session — which is what shipped. The
-    // signal check is the discriminator, and it is checked ALONGSIDE `closed`
-    // because the two abort paths differ: `finish()` sets `closed` on client
-    // disconnect, whereas `server.stop()` aborts the controller directly and
-    // never touches it.
     if (!closed && !controller.signal.aborted) {
       res.write(formatSseFrame({ data: SSE_END_FRAME }));
     }
   } catch (err) {
-    if (!closed) {
-      res.write(
-        formatSseFrame({
-          data: { error: errorMessage(err) },
-        }),
-      );
-    }
+    if (!closed) res.write(formatSseFrame({ data: { error: errorMessage(err) } }));
   } finally {
     finish();
   }
 }
-

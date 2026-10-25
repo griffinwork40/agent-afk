@@ -54,6 +54,7 @@ import {
   denialReason as _denialReason,
 } from './dispatcher.core-exec.js';
 import type { CoreExecDeps } from './dispatcher.core-exec.js';
+import { resolveMcpServerStates, resolveMaxOutputBytes, type GetMcpServerStates } from './dispatcher.mcp-states.js';
 import { isYieldableTool, type UserAttention } from './user-yield.js';
 import { isDetachableTool, type DetachableToolRegistry } from './detach-bash.js';
 import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
@@ -166,6 +167,8 @@ export interface SessionToolDispatcherOptions {
    * shared-array semantics for readRoots/writeRoots.
    */
   env?: Record<string, string>;
+  /** Live MCP server states. MCP-aware unknown-tool messages (#4064). */
+  getMcpServerStates?: GetMcpServerStates;
   /** Stable session identifier written to audit-log entries. */
   sessionId?: string;
   /**
@@ -401,6 +404,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
 
   /** Advisory same-error strategy nudge; per dispatcher, see strategy-nudge.ts. */
   private readonly strategyNudger = new StrategyNudger();
+  private readonly _getMcpServerStates: GetMcpServerStates;
 
 
 
@@ -442,12 +446,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // Central output cap: only a positive finite number arms the backstop; any
     // other value (undefined, 0, negative, NaN) leaves it off — matching the
     // top-level default of "no central capping".
-    this.maxOutputBytes =
-      typeof opts.maxOutputBytes === 'number' &&
-      Number.isFinite(opts.maxOutputBytes) &&
-      opts.maxOutputBytes > 0
-        ? opts.maxOutputBytes
-        : undefined;
+    this.maxOutputBytes = resolveMaxOutputBytes(opts.maxOutputBytes);
+    this._getMcpServerStates = resolveMcpServerStates(opts.getMcpServerStates);
     this._allowAll = opts.allowAll === true;
     this.spawnedPidRegistry = opts.spawnedPidRegistry;
     this.userAttention = opts.userAttention;
@@ -773,6 +773,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       callHandlerContext: (call) => this.callHandlerContext(call),
       gateDeps: () => this.gateDeps(),
       toolDefs: this.toolDefs,
+      getMcpServerStates: this._getMcpServerStates,
       tmpdirScope: this._env?.['TMPDIR'],
     };
   }

@@ -387,6 +387,12 @@ export interface UpdateHandoffAnswerOpts {
  * @throws If no record exists for the taskId.
  * @returns UpdateHandoffResult — won: true if this caller claimed the record.
  */
+/** Prefix of the error message thrown by {@link updateHandoffAnswer} when the
+ *  record no longer exists.  Consumers (e.g. the web-server race handler) must
+ *  match against this constant rather than a hand-rolled string literal so that
+ *  a rename here is caught at compile time instead of silently at runtime. */
+export const HANDOFF_STORE_NO_RECORD_PREFIX = 'handoff-store: no record found' as const;
+
 export async function updateHandoffAnswer(
   taskId: string,
   answer: unknown,
@@ -401,7 +407,7 @@ export async function updateHandoffAnswer(
     // Re-read record inside lock.
     const existing = await readHandoff(taskId, handoffsDir);
     if (existing === null) {
-      throw new Error(`handoff-store: no record found for taskId ${taskId}`);
+      throw new Error(`${HANDOFF_STORE_NO_RECORD_PREFIX} for taskId ${taskId}`);
     }
 
     // Guard — another winner may have landed between our EEXIST check

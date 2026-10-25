@@ -35,6 +35,8 @@ export const SessionPhaseNameSchema = z.enum([
   'ttfb_timeout',
   'usage_limit_pause',
   'usage_limit_resume',
+  // Turn-start OAuth account adoption. See SessionPhaseName JSDoc in types.ts.
+  'credential_swap',
   // Mid-stream overload (529) exhaustion park/unpark. See SessionPhaseName
   // JSDoc in types.ts — wall-clock bounded, no reset deadline to key on.
   'overload_pause',
@@ -117,6 +119,10 @@ export const SessionPhaseNameSchema = z.enum([
   // PreToolUse blocks on the same gate key trip the breaker. metadata carries
   // { tool, count, fork } where fork is true for forked children.
   'hook_block_repeat_tripped',
+  // Post-cancel late billing delta (#3931). See SessionPhaseName JSDoc in
+  // types.session-phase.ts. metadata: { subagentId, provider, uncachedInput,
+  // cacheRead, cacheWrite, output }. At most one per cancelled run.
+  'billing_settled',
   // Streaming connection opener diagnostics (opt-in AFK_CONNECT_RETRY_BUDGET_MS).
   // Must mirror the SessionPhaseName union in types.session-phase.ts;
   // session-phase.test.ts parity enforces it.
@@ -128,6 +134,17 @@ export const SessionPhaseNameSchema = z.enum([
   // parity enforces it.
   'context_pressure_wind_down',
   'catalog_model_upgrade',
+  // Default-tier subagent model rejected → one re-run on the parent model
+  // (subagent/handle.model-fallback.ts). metadata: { subagentId, fromModel,
+  // toModel, reason }. Must mirror types.session-phase.ts.
+  'subagent_model_fallback',
+  // Round-cap delivery notice silently dropped — tail message shape did not
+  // allow injection. See SessionPhaseName JSDoc in types.session-phase.ts.
+  // metadata: { provider, round }
+  'round_cap_notice_dropped',
+  // Continuation chain settling ended degraded (continuation-dispatch.ts).
+  // metadata: { chainId, childId, reason }. Must mirror types.session-phase.ts.
+  'continuation_settle_degraded',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

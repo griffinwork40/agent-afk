@@ -64,8 +64,15 @@ describe('dead-zone integration: checkProgressBannerStaleness -> registered prog
         hasPending: () => false,
         getOverlay: () => '',
         checkElapsedDisplayNeedsUpdate: () => false,
-        addStartWithAgentContext: (_id: string, _kind: string, label: string) =>
-          laneCalls.push(label),
+        // The stall annotation is update-only (annotateIfPresent) and checks
+        // for live child agents first; this stub models a present row with
+        // no children.
+        annotateIfPresent: (_id: string, _kind: string, label: string) => {
+          laneCalls.push(label);
+          return true;
+        },
+        countLiveChildAgents: () => 0,
+        hasEntry: () => true,
         addResult: () => {},
       },
       streamingMarkdownRef: { current: null },

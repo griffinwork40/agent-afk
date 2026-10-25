@@ -97,6 +97,8 @@ export interface DAGRunResult {
    * incomplete `stopReason` (e.g. `SOFT_DEADLINE_WIND_DOWN`).
    */
   partial: Array<{ id: string; stopReason: string }>;
+  /** Per-node worktree setup failure notices, keyed by node ID. */
+  setupNotices?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------

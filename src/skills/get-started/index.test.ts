@@ -57,6 +57,7 @@ describe('get-started prompt body', () => {
     // Capability setup delegates to the existing setup sub-skills.
     expect(body).toContain('/telegram-setup');
     expect(body).toContain('/service-setup');
+    expect(body).toContain('afk browser connect');
     // Project context (/init) MUST be recommended before the save point (/clear).
     const initIdx = body.indexOf('/init');
     const clearIdx = body.indexOf('/clear');

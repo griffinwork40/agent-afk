@@ -1,130 +1,187 @@
 ---
-title: "Headless & Machine-Readable Output"
-description: "Stream JSON events from `afk chat` into scripts, CI pipelines, and shell tools."
+title: "Run afk from scripts and CI"
+description: "Read prompts from stdin and consume JSON or NDJSON output from one-shot chat."
 ---
 
-`afk chat` supports a structured streaming output format for headless consumers — CI pipelines, shell scripts, or wrapper programs that need to process AFK's response programmatically rather than read a human-formatted terminal display.
+Use `afk chat` when a script, CI job, or wrapper needs a single agent request without a REPL. Choose one JSON response for a completed result or newline-delimited JSON for streaming events.
 
-## `--format stream-json`
+## Capture a structured run
+
+<Steps>
+<Step>
+### Choose an output format
 
 ```bash
-afk chat "<message>" --format stream-json
+afk chat "Summarize this repository without changing files" --format json > result.json
 ```
 
-Writes the raw `OutputEvent` stream to **stdout** as [NDJSON](https://ndjson.org/) (newline-delimited JSON) — one event object per line. No spinner, no ANSI colour codes, no markdown rendering. Stdout contains only valid JSON lines.
+For events as they happen:
 
-## OutputEvent schema
+```bash
+afk chat "Summarize this repository without changing files" \
+  --format stream-json > run.ndjson 2> run.log
+```
 
-> This is the canonical reference for the `--format stream-json` event schema, jq recipes, and parsing examples. [`surfaces/chat`](../surfaces/chat) links here for the full specification.
+`stream-json` writes one `OutputEvent` JSON object per line to stdout without markdown rendering or ANSI colors. Initialization and diagnostic messages belong on stderr. Keep those streams separate when parsing.
+</Step>
+<Step>
+### Pass larger prompts through stdin
 
-Full event schema: `src/agent/types/session-types.ts`.
+```bash
+printf '%s\n' 'Inspect the current diff and report risks without modifying files.' \
+  | afk chat - --format stream-json > review.ndjson
+```
 
-- `OutputEvent` — top-level discriminated union
-- `MessageChunk` — discriminated union (payload of `chunk` events), defined in `src/agent/types/message-types.ts`
+An omitted message also reads piped stdin. `-` explicitly selects stdin; a supplied message argument takes precedence over piped input. Empty or whitespace-only input is rejected.
+</Step>
+<Step>
+### Check both execution and task outcome
 
-| `type` | Additional fields | Notes |
-|---|---|---|
-| `chunk` | `chunk: MessageChunk` | Streaming text/tool fragment |
-| `message` | `message: { content: string; timestamp: string }` | Complete assistant message |
-| `done` | `metadata?: ResponseMetadata` | Always the final event in a successful turn |
-| `error` | `error: { message: string; ... }` | Fatal error; process exits with code 1 |
-| `progress` | `progress: { taskId, description, totalTokens, ... }` | Subagent progress (may be absent on simple turns) |
-| `suggestion` | `suggestion: string` | Prompt suggestion from the model |
-| `panel` | `spec: { kind, title?, body }` | Skill-emitted card/panel |
-| `paused` | `reason: 'usage-limit'; resetsAt?: string; accountId?` | OAuth usage-limit hit; `resetsAt` is ISO-8601 |
-| `resumed` | `hotSwapped: boolean; accountId?` | Resumed after pause |
+An emitted `error` event sets exit status 1. A normally completed run exits 0. Missing input and invalid session flags also fail, sometimes before an event stream exists, so read stderr too.
 
-`Date` fields (e.g. `paused.resetsAt`) are serialized as ISO-8601 strings.
+A `done` event means the model turn ended, not that your business goal was achieved. Inspect the final answer, metadata, and verification evidence before publishing or advancing a pipeline.
+</Step>
+</Steps>
 
-Source: `docs/headless.md`.
+## JSON response
 
-## Example NDJSON transcript
+`--format json` returns one object rather than the event stream. Its core fields are `success`, `model`, `message`, and `timestamp`. Best-effort fields include `costUsd`, `durationMs`, `inputTokens`, and `outputTokens`.
 
-A minimal single-turn exchange:
+When available, `sessionId`, `witnessLabel`, and `tracePath` identify the exact session and witness record. Do not locate evidence by guessing that the newest file on disk belongs to your run: other sessions may be running concurrently. Missing metadata fields are not zero values or proof of tracing failure.
+
+```bash
+jq -r '.message' result.json
+jq '{sessionId, tracePath, costUsd}' result.json
+```
+
+The `success` field describes the returned response envelope. It is not independent verification of the assistant's claims.
+
+## Streaming events
+
+The stream uses AFK-native NDJSON, not server-sent events or OpenAI's streaming wire format. Consumers should branch on `type` and tolerate new event types and absent optional fields.
+
+| Event `type` | Useful fields and behavior |
+| --- | --- |
+| `chunk` | `chunk` is a `MessageChunk`, including `content`, `thinking`, `tool_use`, `tool_use_detail`, and `tool_result` variants. |
+| `message` | A complete message with `role`, `content`, optional `timestamp`, and optional metadata. |
+| `done` | Optional `metadata` includes session ID, stop reason, usage, duration, and cost when provided. |
+| `error` | `error.message` and `error.name` describe a fatal failure. |
+| `progress` | Subagent progress, including task ID, description, token/tool counts, and duration. May be absent. |
+| `suggestion` | A model-generated prompt suggestion. |
+| `panel` | Skill-emitted display payload in `spec`, including `kind`, optional title, and body. |
+| `notice` | Display-only `text` with a semantic `kind`, such as truncation or refusal. |
+| `stream_retry` | The provider is re-streaming a model round. Reset the current round's accumulated text to avoid duplicates. |
+| `rate_limit` | A backoff marker, optionally with `retryAfterMs`. Unlike `stream_retry`, it does not invalidate text already received. |
+| `tool-activity` | `activeCount` and `activeToolUseIds` describe currently running tools. |
+| `paused` | Usage-limit pause; may include reset time, account, provider, `autoResume`, and wait deadline. |
+| `resumed` | Resume marker with `hotSwapped` and optional account ID. |
+| `subagent_lifecycle` | Child session status such as started, succeeded, failed, or cancelled. |
+| `background_job` | Job transition and job ID. |
+| `plan_mode` | Plan-mode transition. |
+
+Date values are serialized as ISO 8601 strings. The full TypeScript unions are `OutputEvent` in `src/agent/types/session-types.ts` and `MessageChunk` in `src/agent/types/message-types.ts`; use the [SDK](/sdk) when embedding a typed consumer.
+
+A simplified content exchange looks like this:
 
 ```json
 {"type":"chunk","chunk":{"type":"content","content":"Hello"}}
 {"type":"chunk","chunk":{"type":"content","content":", world!"}}
-{"type":"message","message":{"content":"Hello, world!","timestamp":"2024-06-01T12:00:01.234Z"}}
+{"type":"message","message":{"role":"assistant","content":"Hello, world!","timestamp":"2026-10-17T12:00:01.234Z"}}
 {"type":"done","metadata":{"durationMs":812,"usage":{"input_tokens":14,"output_tokens":5}}}
 ```
 
-A turn that hits a usage-limit pause:
+A usage pause may produce:
 
 ```json
-{"type":"paused","reason":"usage-limit","resetsAt":"2024-06-01T13:00:00.000Z"}
+{"type":"paused","reason":"usage-limit","resetsAt":"2026-10-17T13:00:00.000Z","autoResume":true}
 {"type":"resumed","hotSwapped":false}
 {"type":"chunk","chunk":{"type":"content","content":"Continuing after the pause."}}
 {"type":"done"}
 ```
 
-## Consuming with `jq`
+Do not assume every pause will resume. Inspect `autoResume`, handle a later error, and apply your own job timeout.
+
+## Parse with jq
+
+Read captured output to avoid losing the agent's exit status in a pipeline:
 
 ```bash
-# Print only the text content of chunk events
-afk chat "summarise this repo" --format stream-json \
-  | jq -r 'select(.type == "chunk" and .chunk.type == "content") | .chunk.content'
+# Streamed text fragments
+jq -r 'select(.type == "chunk" and .chunk.type == "content") | .chunk.content' run.ndjson
 
-# Extract final token usage
-afk chat "summarise the staged diff" --format stream-json \
-  | jq 'select(.type == "done") | .metadata.usage'
+# Final usage, when present
+jq 'select(.type == "done") | .metadata.usage' run.ndjson
 
-# Detect tool-use events in the stream
-afk chat "list files" --format stream-json \
-  | jq 'select(.type == "chunk" and .chunk.type == "tool_use")'
+# Detailed tool invocations
+jq 'select(.type == "chunk" and .chunk.type == "tool_use_detail")' run.ndjson
 
-# Exit-code-aware pipeline: stream-json exits 1 on error, 0 on done
-afk chat "build the project" --format stream-json | tee run.ndjson
-echo "exit: $?"
+# Complete messages, rather than partial deltas
+jq -r 'select(.type == "message") | .message.content' run.ndjson
 ```
 
-## Parsing in Node/TypeScript
+For live filtering, add `--unbuffered` to jq. If piping a live AFK process into `tee`, enable your shell's `pipefail` support or explicitly preserve the AFK process's exit code. Without that, `$?` usually reports `tee`'s status, not AFK's.
 
-```typescript
+## Parse in Node.js
+
+This consumer checks the process exit status as well as stream completion:
+
+```javascript
 import { createInterface } from 'node:readline';
 import { spawn } from 'node:child_process';
 
-const proc = spawn('afk', ['chat', 'say hi', '--format', 'stream-json']);
+const proc = spawn('afk', ['chat', 'Summarize this repository', '--format', 'stream-json'], {
+  stdio: ['ignore', 'pipe', 'inherit'],
+});
+const exited = new Promise((resolve, reject) => {
+  proc.once('error', reject);
+  proc.once('close', (code) => resolve(code));
+});
+let done = false;
+let failed = false;
 const rl = createInterface({ input: proc.stdout });
-
 for await (const line of rl) {
-  const event = JSON.parse(line); // type: OutputEvent
-  if (event.type === 'chunk' && event.chunk.type === 'content') {
-    process.stdout.write(event.chunk.content);
-  }
-  if (event.type === 'done') break;
+  const event = JSON.parse(line);
+  if (event.type === 'message') console.log(event.message.content);
+  if (event.type === 'done') done = true;
   if (event.type === 'error') {
-    console.error('AFK error:', event.error.message);
-    process.exit(1);
+    failed = true;
+    console.error(event.error.message);
   }
 }
+const code = await exited;
+if (code !== 0 || failed || !done) process.exitCode = 1;
 ```
 
-## Session persistence and resume
+If you render deltas instead of complete messages, also implement `stream_retry` handling so repeated rounds do not duplicate text.
 
-`--format stream-json` is compatible with session persistence. Pass `--resume`, `--continue`, or `--session-id` exactly as you would with text output:
+## Resume deliberately
+
+`--session-id` assigns a **new** session UUID. It is not a resume flag. An existing ID is rejected; use `--resume` to continue a saved session. `--resume`, `--continue`, and `--session-id` are mutually exclusive.
+
+This POSIX-shell example creates and then resumes a persistent session:
 
 ```bash
-# Start a session and record its ID
-afk chat "start reviewing PR 1234" --format stream-json | tee run1.ndjson
-
-# Resume later
-afk chat "now post your findings as a PR comment" --format stream-json --session-id <id> | tee run2.ndjson
+session_id=$(node -p 'require("node:crypto").randomUUID()')
+afk chat "Inspect the repository without changing files" \
+  --session-id "$session_id" --format stream-json > first.ndjson
+afk chat "Summarize the main risks you found" \
+  --resume "$session_id" --format stream-json > second.ndjson
 ```
 
-## Scope and limitations
+`--continue` selects the most recent persisted session in the current working directory. For automation, explicit IDs avoid ambiguity when multiple runs share a directory. Session persistence, when requested, is subject to successful teardown; retain your output and inspect stderr's resume instructions.
 
-- **Output only** — `--format stream-json` affects output. The `<message>` argument is still a plain string.
-- **AFK-native format** — The event format is AFK-specific — it is not OpenAI's streaming (SSE) format.
-- **`afk chat` only** — the REPL (`afk i`) and daemon (`afk daemon`) do not support `--format stream-json`; they have their own output channels.
-- **Exit codes** — process exits `0` on `done`, `1` on `error`. Use this in pipelines to detect failures without parsing JSON.
+## Limits and permissions
 
-## Use cases
+`--format` controls output only. Input remains a plain prompt string, not a streamed conversation protocol. The `--stream` flag is currently inert; use `--format stream-json` for machine-readable streaming.
 
-**CI pipelines:** capture the full event stream to a file, then parse `done.metadata.usage` for cost reporting or assert on `message.content` for regression tests.
+These formats belong to `afk chat`, not the REPL or daemon. The chat command accepts `--max-budget-usd`, `--task-budget`, `--max-turns`, and `--permission-mode`; choose explicit limits and permissions for CI rather than relying on interactive prompts that nobody can answer. See [permissions](/configuration/permissions) and the [CLI reference](/reference/cli).
 
-**Shell wrappers:** filter for `chunk` events and stream the text content to another process — use AFK as a general-purpose LLM text processor in a pipeline.
+`--post telegram`, `--post github`, or both can publish the final answer. Those are external effects, not output formatting. Only enable them when the run is authorized to publish; GitHub also accepts `--post-pr` to select the PR.
 
-**Monitoring:** watch for `error` events to detect and alert on agent failures without reading logs.
+## Related
 
-**Cost tracking:** collect `done.metadata.usage` across runs and aggregate with standard JSON tools (`jq`, `mlr`, `csvkit`).
+<Cards>
+<Card title="Chat surface" href="/surfaces/chat" description="Configure one-shot chat requests and session options." />
+<Card title="Run without a human" href="/guides/unattended-runs" description="Set boundaries and verify unattended completion." />
+<Card title="Observability" href="/guides/observability" description="Find the trace and journal for a particular run." />
+</Cards>

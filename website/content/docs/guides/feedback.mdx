@@ -1,0 +1,81 @@
+---
+title: "Give feedback and report bugs"
+description: "Rate a session locally or prepare a public bug report with a small, reviewable environment summary."
+---
+
+Use feedback when the result was good or bad, and a bug report when afk itself behaved incorrectly. Session ratings stay in local outcome records; bug reports go to the public project issue tracker only when you submit or confirm them.
+
+## Rate the current session
+
+After a model has replied and the session has an ID, run:
+
+```text
+/good The targeted tests passed and the change solved the problem.
+/bad The agent changed unrelated files and did not run the tests.
+```
+
+The note is optional. `/good` records the session as succeeded, and `/bad` records it as failed. These are explicit session-outcome votes, not labels on a single sentence or a request to continue working. Before a session ID is assigned, afk asks you to wait for the first reply rather than guessing which session you meant.
+
+### Telegram commands and thumbs
+
+Telegram supports `/good` and `/bad` for that chat's active session. You can also add a 👍 or 👎 reaction to a mapped bot reply. A new thumbs-up records success; a new thumbs-down records failure. Removing an emoji does not retract a vote, and an unchanged reaction adds no new vote.
+
+Reaction lookup is kept in a bounded in-memory map of recent bot replies. After a bot restart or eviction of an old message, its reaction may no longer map to a session. Use the commands for the current chat session when a reaction cannot be associated. Group reaction delivery also depends on the bot's Telegram privileges.
+
+## Prepare a bug report
+
+<Steps>
+<Step>
+
+Run `/bug` with a short description of the failure:
+
+```text
+/bug The REPL stopped repainting after resizing the terminal.
+```
+
+</Step>
+<Step>
+
+Open the printed, prefilled GitHub link. The command itself does not post an issue. Review the text and the GitHub account you are signed in as.
+
+</Step>
+<Step>
+
+Add the smallest reproduction, expected behavior, actual behavior, and any safe error excerpt. Submit the form only when the contents are appropriate for a public issue.
+
+</Step>
+</Steps>
+
+The report includes afk version, Node version, OS, current model, and session ID when available. It does **not** automatically attach your working directory, transcript, tool output, or trace contents. Long descriptions can be shortened to fit the URL limit; the command warns when this happens.
+
+<Callout type="warn">
+Reports are public. A prefilled URL can also enter browser history before you submit. The description passes through best-effort secret redaction, but you must still remove credentials, personal data, private source, and confidential logs yourself.
+</Callout>
+
+## File directly with GitHub CLI
+
+In the interactive REPL, use a leading `--file` flag and a description:
+
+```text
+/bug --file The REPL stopped repainting after resizing the terminal.
+```
+
+This needs `gh` installed and authenticated to GitHub. afk shows a confirmation with the target repository, posting account, title, labels, and a bounded body preview. Press Enter to file or Esc to cancel. Nothing is filed before confirmation. A bug label is requested only when your account has sufficient repository permissions.
+
+Without an interactive confirmation surface, or if GitHub CLI is missing, unauthenticated, or fails to create the issue, afk falls back to the prefilled link. `/bug --file` without a description asks you to supply one.
+
+## Where the feedback goes
+
+Ratings are persisted in the session's verified outcome record under `~/.afk/agent-framework/outcomes/<sessionId>.json` by default. They include an `explicit_feedback` vote, timestamp, and your note (or `operator` when no note was supplied). Telegram reaction evidence is recorded as `thumbs_reaction`. The strong explicit vote settles the outcome rather than relying only on inferred completion signals.
+
+Those local ratings are not automatically published as GitHub issues. `/bug` targets the public `griffinwork40/agent-afk` repository; ordinary `/bug` opens the submission path through a URL, while confirmed `/bug --file` uses your GitHub CLI account.
+
+When a report needs more evidence, inspect a trace or transcript locally first and select only the relevant safe excerpt. A session ID identifies the run but does not upload its artifacts for you.
+
+## Related
+
+<Cards>
+  <Card title="Inspect sessions and traces" href="/guides/observability" description="Find evidence for a reproducible report." />
+  <Card title="Troubleshoot common errors" href="/troubleshooting/common-errors" description="Check known failure modes before filing." />
+  <Card title="Use Telegram" href="/surfaces/telegram" description="Understand chat sessions and bot controls." />
+</Cards>

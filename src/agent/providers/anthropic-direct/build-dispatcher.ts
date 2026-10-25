@@ -50,6 +50,7 @@ import type { ToolPermissionConfig } from '../../tools/permissions.js';
 import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
+import { sortMcpSchemas } from '../../tools/schemas.order.js';
 
 /** Per-call options — the session-scoped half of the dispatcher inputs. */
 export interface BuildDispatcherOptions {
@@ -315,9 +316,11 @@ export function buildDispatcher(
     // plan-exit schema is appended last, RESIDENT whenever planExitControls is
     // present (top-level); query.ts filters it out of the advertised tool list
     // on non-plan turns so the model sees it only when it is actionable.
+    // MCP segment sorted by name (#4198): deterministic across connection
+    // orders so prefix-cache hits are not broken by MCP registration order.
     schemas: [
       ...deps.schemas,
-      ...mcpSchemas,
+      ...sortMcpSchemas(mcpSchemas),
       ...(planExitControls ? [exitPlanModeTool] : []),
     ],
     // Session hook registry via the one canonical resolver (query-scoped
@@ -383,5 +386,11 @@ export function buildDispatcher(
       ? { detachRegistry: opts.detachRegistry }
       : {}),
     ...(opts?.processJobs !== undefined ? { processJobs: opts.processJobs } : {}),
+    // #4064: MCP-aware unknown-tool messages. Forward a live accessor so that
+    // when a model calls mcp__<server>__<tool> for a failed server the response
+    // names the server and its error instead of the generic "tool does not exist".
+    getMcpServerStates: deps.mcpManager
+      ? () => deps.mcpManager!.getServerStates()
+      : () => [],
   });
 }

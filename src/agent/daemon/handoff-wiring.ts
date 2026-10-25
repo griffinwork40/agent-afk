@@ -289,7 +289,7 @@ export async function recoverPendingHandoffs(
           ? record.question['type'] as string
           : 'text';
         const choices = Array.isArray(record.question['choices'])
-          ? record.question['choices'] as string[]
+          ? record.question['choices'] as readonly string[]
           : undefined;
         const parts = [
           `🔔 Reminder: daemon task still waiting for your answer`,
@@ -300,6 +300,9 @@ export async function recoverPendingHandoffs(
         const replyMarkup = buildHandoffReplyMarkup(qType, record.taskId, choices);
         if (!replyMarkup && choices && choices.length > 0) {
           parts.push(`Options: ${truncateForNotify(choices.join(', '))}`);
+        }
+        if (!replyMarkup) {
+          parts.push(`\nReply to this task's next run to provide your answer.`);
         }
         void pushIfConfigured(parts.join('\n'), { replyMarkup }).catch(() => undefined);
       }
@@ -321,7 +324,7 @@ export async function recoverPendingHandoffs(
  * Answers larger than this are rejected to avoid writing unbounded data to disk.
  * Deeper schema validation is deferred to PR 3 when the answer is consumed.
  */
-const MAX_ANSWER_BYTES = 64 * 1024; // 64 KB
+export const MAX_ANSWER_BYTES = 64 * 1024; // 64 KB
 
 /**
  * Record a human answer for a pending handoff and clean up.

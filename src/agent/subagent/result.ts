@@ -13,6 +13,7 @@ import type { BillingUsage } from '../provider.js';
 import { cappedHandoffFields, type CappedHandoff } from './capped-handoff.js';
 import { extractStructuredOutput } from '../output-extractor.js';
 import { parseSignal, type Signal } from '../signal-block.js';
+import { parseTerminalState } from '../outcomes/terminal-state.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 import { CONTEXT_PRESSURE_WIND_DOWN } from '../providers/shared/context-pressure.js';
@@ -51,6 +52,38 @@ export type SubagentStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'canc
  * only ever appears on a genuinely truncated run.
  */
 export const STREAM_INCOMPLETE = 'stream_incomplete';
+
+/**
+ * True when `stopReason` represents a genuine terminal reason — i.e. the child
+ * reached a real final-answer stop (not a tool stop, not a budget cap, not an
+ * incomplete-stream sentinel). Used by the buffered-partial branch in
+ * `handle.streaming.ts` to decide whether a pre-existing `_lastStopReason`
+ * from a previous tool round should be preserved or overwritten.
+ *
+ * A tool-stop reason (`'tool_use'`, `'tool_calls'`) is explicitly NOT terminal:
+ * it means "the provider stopped to run tools" and must never be kept as the
+ * final stop reason when the NEXT round is aborted mid-stream. Budget-cap and
+ * wind-down sentinels ({@link TOOL_USE_LOOP_CAPPED}, {@link SOFT_DEADLINE_WIND_DOWN},
+ * {@link CONTEXT_PRESSURE_WIND_DOWN}, {@link OVERLOAD_EXHAUSTED}) are also not
+ * terminal in this sense — they should be overwritten with
+ * {@link STREAM_INCOMPLETE} on an abort. Only canonical "the model finished
+ * speaking" reasons count as terminal here.
+ *
+ * The empty-`_lastStopReason` case (`undefined`) is treated as non-terminal so
+ * that a handle that has never been stamped by `processDoneEvent` also gets
+ * {@link STREAM_INCOMPLETE} written — same as before.
+ */
+export function isTerminalStopReason(s: string | undefined): boolean {
+  return (
+    s === 'end_turn' ||
+    s === 'stop' ||
+    s === 'stop_sequence' ||
+    s === 'pause_turn' ||
+    s === 'max_tokens' ||
+    s === 'length' ||
+    s === 'max_output_tokens'
+  );
+}
 
 /**
  * True when `stopReason` indicates the subagent did NOT reach a clean final
@@ -263,11 +296,72 @@ export interface SubagentResult<T = unknown> extends Partial<CappedHandoff> {
    * when the provider reported no stop reason.
    */
   stopReason?: string;
+  /**
+   * D6 continuation chain metadata, stamped by the `agent` tool's chain wiring
+   * on results delivered through the background registry (background and
+   * promoted runs), so `join()` / registry readers see the chain id
+   * structurally. Absent for runs dispatched without a continuation registry.
+   */
+  continuation?: {
+    chainId: string;
+    roundsCharged: number;
+    maxRounds: number;
+    continuations: number;
+    maxContinuations: number;
+    continuable: boolean;
+  };
+  /**
+   * Human-readable notice describing a worktree setup step that failed or was
+   * skipped for this node (e.g. a repo-declared setup script that exited
+   * non-zero). Set by `dispatchDagNode` when the node ran with
+   * `isolation:"worktree"` and `describeWorktreeSetupFailure` returned a
+   * non-empty string. Surfaced here as a dedicated field so callers can act on
+   * it regardless of whether `message.content` is a plain string — the
+   * previous approach of prepending the notice to `content` silently dropped it
+   * for `outputSchema` nodes and failed/cancelled nodes (#3660).
+   */
+  setupNotice?: string;
+  /**
+   * Set when the child ended its turn with an **Asking** terminal state,
+   * yielding a question to the parent instead of completing. The parent should
+   * answer and either continue the chain (via `continuation_chain_id`) or
+   * re-dispatch a fresh agent with the child's summary and the answer.
+   */
+  needsInput?: {
+    question: string;
+    summary?: string;
+    assumption?: string;
+    onceAnswered?: string;
+  };
+}
+
+/**
+ * Parse the Asking terminal-state block from message content, if present.
+ * Returns a `needsInput` value or `undefined`. Pure helper; exported for tests.
+ */
+export function detectNeedsInput(
+  content: string,
+): SubagentResult['needsInput'] | undefined {
+  const ts = parseTerminalState(content);
+  if (ts?.kind !== 'asking') return undefined;
+  // SEC-2: require a parsed Question bullet. rawBody is child-controlled free
+  // text (~8 KB) that would be injected into the parent's tool_result as an
+  // authoritative question. Treat a missing Question bullet as a malformed
+  // yield — return undefined so the caller sees no yield (#4297).
+  if (ts.question === undefined) return undefined;
+  return {
+    question: ts.question,
+    ...(ts.assumption !== undefined && { assumption: ts.assumption }),
+    ...(ts.followup !== undefined && { onceAnswered: ts.followup }),
+  };
 }
 
 /**
  * Build a SubagentResult from a successful message.
  * If an outputSchema is provided, attempts extraction and parsing.
+ * When the message ends with an Asking terminal-state block the result is
+ * tagged with `needsInput` and schema validation is bypassed (a yielding child
+ * cannot also satisfy a schema).
  */
 export function buildResultFromMessage<T>(
   id: string,
@@ -280,7 +374,21 @@ export function buildResultFromMessage<T>(
   const sig = parseSignal(message.content);
   const signal = sig.ok ? sig.signal : undefined;
 
-  if (!outputSchema) {
+  // Detect Asking terminal state before schema validation: a yielding child
+  // cannot satisfy an outputSchema, so skip validation when needsInput is set.
+  // Invariant: extract text blocks rather than JSON.stringify — parseTerminalState
+  // splits on '\n', and JSON.stringify produces single-line JSON that collapses
+  // every block into one line, silently breaking detection for extended-thinking
+  // models whose content is ContentBlock[] (#4297 SEC-1/F-C3).
+  const contentStr = typeof message.content === 'string'
+    ? message.content
+    : (message.content as Array<{ type: string; text?: string }>)
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text ?? '')
+        .join('\n');
+  const needsInput = detectNeedsInput(contentStr);
+
+  if (!outputSchema || needsInput !== undefined) {
     return {
       id,
       status,
@@ -289,6 +397,7 @@ export function buildResultFromMessage<T>(
       trace,
       ...(signal !== undefined && { signal }),
       ...(stopReason !== undefined && { stopReason }),
+      ...(needsInput !== undefined && { needsInput }),
     };
   }
 
@@ -357,11 +466,13 @@ export function describeFailure(result: Pick<SubagentResult, 'status' | 'error'>
 export interface SubagentExecutionError extends Error {
   partialOutput?: unknown;
   subagentId?: string;
+  /** Propagated from {@link SubagentResult.setupNotice} so compose's failure formatter can surface it. */
+  setupNotice?: string;
 }
 
 export function attachSubagentContext(
   err: Error,
-  context: { partialOutput?: unknown; subagentId?: string },
+  context: { partialOutput?: unknown; subagentId?: string; setupNotice?: string },
 ): SubagentExecutionError {
   const wrapped = err as SubagentExecutionError;
   if (context.partialOutput !== undefined && context.partialOutput !== null) {
@@ -369,6 +480,9 @@ export function attachSubagentContext(
   }
   if (context.subagentId !== undefined) {
     wrapped.subagentId = context.subagentId;
+  }
+  if (context.setupNotice !== undefined) {
+    wrapped.setupNotice = context.setupNotice;
   }
   return wrapped;
 }

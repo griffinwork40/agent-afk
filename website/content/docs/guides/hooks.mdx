@@ -1,0 +1,198 @@
+---
+title: "Customize afk with hooks"
+description: "Run checks, rewrite tool inputs, and add context at afk lifecycle boundaries."
+---
+
+Hooks run your checks at defined session, prompt, subagent, and tool boundaries. Use them to enforce a workflow before an operation, observe its result, or give the model context it would otherwise miss.
+
+## Write your first hook
+
+This example blocks the `image_generate` tool with a clear explanation. It does not attempt to sandbox every way an image could be created.
+
+<Steps>
+<Step>
+
+Create `.afk/hooks/check-image.cjs` in your project:
+
+```js
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { input += chunk; });
+process.stdin.on('end', () => {
+  const event = JSON.parse(input);
+  if (event.tool_name === 'image_generate') {
+    process.stdout.write(JSON.stringify({
+      decision: 'block',
+      reason: 'Image generation is disabled for this project. Use an existing asset.',
+      hookSpecificOutput: {
+        additionalContext: 'Do not retry through another image service.'
+      }
+    }));
+  }
+});
+```
+
+</Step>
+<Step>
+
+Add the hook to your project's `afk.config.json`, preserving any existing settings:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "image_generate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .afk/hooks/check-image.cjs",
+            "timeout_ms": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+</Step>
+<Step>
+
+In your user-global `~/.afk/config/afk.config.json`, opt into your own shell hooks and trusted project hooks:
+
+```json
+{
+  "enableShellHooks": true,
+  "allowProjectHooks": true
+}
+```
+
+Restart the session after changing file-based hook configuration. These trust flags must be in a user-global file. Setting them in a project does not authorize that project's commands.
+
+</Step>
+<Step>
+
+Test the script without running an agent or creating an image:
+
+```sh
+printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"image_generate","tool_input":{}}' | node .afk/hooks/check-image.cjs
+```
+
+You should see a JSON object with `decision: "block"` and the explanation. When invoked by afk, this decision prevents the tool handler from running and returns the context in the blocked tool result.
+
+</Step>
+</Steps>
+
+<Callout type="warn">
+Hooks execute code as your user account. Review a project's or plugin's commands before enabling its trust gate. Shell-hook errors and timeouts are not a universal fail-closed security boundary.
+</Callout>
+
+## Where hooks are configured
+
+Hook arrays are concatenated in this order, not replaced:
+
+| Source | Required user-global opt-in |
+| --- | --- |
+| `~/.afk/config/afk.config.json` | `enableShellHooks: true` |
+| `~/.afk/config/settings.json` | `enableShellHooks: true` |
+| Project `afk.config.json` | Both `enableShellHooks` and `allowProjectHooks` |
+| Project `.afk/settings.json` | Both `enableShellHooks` and `allowProjectHooks` |
+| Installed plugin `hooks/hooks.json` | `enablePluginHooks: true`, independent of `enableShellHooks` |
+
+Paths under `~/.afk` follow `AFK_HOME` if you set it. A user-global `settings.json` belongs in the `config` directory, not at the AFK home root. afk does not automatically load arbitrary Claude Code settings files from another application's home.
+
+The loader understands the Claude Code `hooks.json` structure for supported events and `command` hooks. Other hook types, such as `prompt`, `agent`, `http`, and `mcp_tool`, are skipped with warnings. This is format compatibility, not support for every Claude Code hook behavior.
+
+## Block, approve, or observe
+
+A command receives JSON on stdin. Exit `0` to allow the operation and optionally return a JSON decision. Exit `2` to block, using stderr as the reason. Other nonzero exits warn and return no blocking decision.
+
+```json
+{
+  "decision": "block",
+  "reason": "Run the test suite before continuing."
+}
+```
+
+`continue: false` is another blocking form. `decision: "approve"` means this hook accepts the operation; it does not bypass subsequent hooks or normal permissions.
+
+Only pre-operation events can prevent the operation. For example, `PreToolUse` can block a tool and `SubagentStart` can prevent a fork. A `PostToolUse` observer cannot undo a completed tool call. See the [event reference](/reference/hooks) for event-specific behavior.
+
+## Rewrite a tool input
+
+A `PreToolUse` command can return `hookSpecificOutput.updatedInput`:
+
+```json
+{
+  "hookSpecificOutput": {
+    "updatedInput": {
+      "command": "git status --short",
+      "timeout_ms": 10000,
+      "run_in_background": false
+    }
+  }
+}
+```
+
+This replaces the whole input object. Return every field the tool needs, not just changed fields. The rewritten input still passes through normal validation and permission checks. Match this example to `bash`, not every tool.
+
+Hooks run in registration order against the original input. They do not see one another's rewrites. The last provided rewrite wins, and any blocking decision prevents the rewrite from being applied. `updatedInput` on other events is ignored.
+
+## Inject useful context
+
+Shell commands return context as `hookSpecificOutput.additionalContext`. In-process handlers return `injectContext` directly.
+
+| Event | Delivery |
+| --- | --- |
+| `SessionStart` | Prepended to the top-level session's first user message, not every subagent's first prompt |
+| `UserPromptSubmit` | Prepended to the submitted REPL prompt before the turn starts |
+| `PreToolUse` | Appended to the final tool result, including a blocked result |
+| `SubagentStop` | Foreground `agent` and forked skill callers can append it to the returned tool result in the same turn; other supported parent paths queue it for the next real prompt |
+| `Stop` | Nonblocking context is saved for the next user turn on REPL and Telegram; one-shot surfaces have no next prompt and drop it |
+
+Multiple nonblocking context strings are joined in registration order. A blocking hook short-circuits the chain, so do not depend on earlier accumulated context surviving a later block. For a `PreToolUse` block, return the needed context on the blocking decision itself. Subagent context is suppressed when the parent is aborting; do not assume every background or compose path delivers it.
+
+## Ask the agent to continue before finishing
+
+`Stop` fires when a top-level turn is about to finish. It is not the same as session teardown, which uses `SessionEnd`. A blocking `Stop` decision sends its reason back to the model for another round in the same turn on both providers, including unattended surfaces.
+
+The per-turn continuation cap is `AFK_STOP_HOOK_MAX_CONTINUATIONS`, default `2`. Set it to `0` to disable continuation while retaining the Stop notification. The cap is shared across hooks. Abort and runtime-imposed endings do not become endless continuation loops.
+
+Shell hooks receive `stop_hook_active` and `continuation` so they can avoid asking for the same correction repeatedly. Keep Stop hooks fast: their registry deadline is five seconds per handler. `additionalContext` on an approving Stop result is next-turn context, not a request for same-turn continuation.
+
+## Plugin hooks
+
+Installed and enabled plugins can contribute `hooks/hooks.json`. The command environment includes `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PROJECT_DIR` for compatible script paths.
+
+User-global controls let you narrow this behavior:
+
+```json
+{
+  "enablePluginHooks": true,
+  "disabledPluginHooks": {
+    "team-checks": ["Stop", "PreToolUse:Bash"]
+  },
+  "pluginHookEnv": {
+    "team-checks": ["TEAM_CHECKS_MODE"]
+  }
+}
+```
+
+`disabledPluginHooks` uses the plugin manifest name. An event name suppresses all its matcher groups for that plugin; `Event:matcher` suppresses a group whose matcher string is exactly equal. `pluginHookEnv` forwards only explicitly listed variables to that plugin, subject to protected-credential exclusions. Ordinary shell environment variables and credentials are not all inherited automatically. See [configuration keys](/reference/config-keys) for these controls.
+
+Code-backed plugin entrypoints can also declare handlers through `api.registerHook(event, handler)`. The host installs declarations on future session registries and on the already-created REPL registry during activation, without requiring another restart for that activation. This is not a general file watcher for edited `hooks.json` files. Programmatic plugin handlers cannot opt out of their timeout with `longRunning`.
+
+## Repeated blocks and troubleshooting
+
+Three consecutive `PreToolUse` blocks on the same tool, without a successful tool call between them, trip the hook-block repeat breaker. A fork reports a `hook-block-repeat` failure; a top-level session gets an escalation telling it to stop retrying and report the blocker. Changing a path or flag does not make the underlying policy disappear.
+
+If a hook seems inactive, check its trust gate, configuration path, event name, matcher, command path, and timeout. Tool matchers accept names such as `bash`, compatible aliases such as `Bash`, pipe lists, and regular expressions. They are applied only to the three tool events, not to session or prompt events.
+
+## Related
+
+<Cards>
+  <Card title="Hook event reference" href="/reference/hooks" description="Check payload fields, return values, matching, and deadlines." />
+  <Card title="Configure permissions" href="/configuration/permissions" description="Combine hooks with approval and path controls." />
+  <Card title="Use MCP and plugins" href="/guides/mcp-plugins" description="Install and configure extension capabilities." />
+</Cards>

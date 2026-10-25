@@ -17,7 +17,7 @@ import type { SubagentProgressSink, OutputEvent } from '../types/session-types.j
 import type { TraceSink } from '../trace/index.js';
 import type { Surface } from '../awareness/types.js';
 import type { PhaseRole } from '../tools/nesting.js';
-import type { MessageJournal } from '../journal/index.js';
+import type { MessageJournal, JournalMessage } from '../journal/index.js';
 
 export interface ForkParent {
   sessionId?: string;
@@ -136,6 +136,19 @@ export interface ForkSubagentOptions<T = unknown> {
   denyElicitations?: boolean;
 
   /**
+   * Subagent continuation (docs/subagent-continuation.md, D1/D8/D10). When
+   * set, the child starts from `messages` (the fold of the chain's latest
+   * child journal, applied as `resumeMessages`). It still resumes the
+   * parent's session id like every fork. Absent on every ordinary fork.
+   */
+  continuation?: {
+    messages: JournalMessage[];
+    chainId: string;
+    continuationOf: string;
+    continuationIndex: number;
+  };
+
+  /**
    * When true, the child's tool surface gains the `emit_progress` tool,
    * letting it push structured progress events to the parent at the parent's
    * next user-turn boundary. Events are buffered in a ring buffer (capacity 20)
@@ -182,6 +195,24 @@ export interface ForkSubagentOptions<T = unknown> {
    * Undefined = unscoped (no restriction emitted). Empty array = deny-all.
    */
   nestedAgentAllowlist?: readonly string[];
+  /**
+   * Default-tier model fallback (see ../subagent/handle.model-fallback.ts).
+   * Set ONLY when the child's model came from the default tier
+   * (`resolveChildModel` source `'default'`/`'floor'`) and the parent model
+   * differs — use {@link defaultTierModelFallback} to derive it. When the
+   * child's first model request is rejected with a typed ModelRejectedError
+   * before any progress, the handle re-runs once on `model`. `buildProvider`
+   * rebuilds a caller-constructed provider for the fallback model; without
+   * it a pre-built provider is reused only when it is the same family.
+   */
+  /**
+   * When `true`, the child's identity preamble includes the yield-and-resume
+   * paragraph (Asking block format). Defaults to `false`. Set `true` only at
+   * foreground agent-tool and skill-fork call sites; compose/DAG nodes and
+   * background children must not yield (#4297 F-C2).
+   */
+  yieldEnabled?: boolean;
+  modelFallback?: { model: string; buildProvider?: (model: string) => import('../provider.js').ModelProvider };
 }
 
 /**

@@ -180,6 +180,22 @@ export const MODEL_ENV_REGISTRY = [
     category: 'process',
   },
   {
+    name: 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC',
+    description: 'Per-provider override for AFK_MAX_CONCURRENT_SUBAGENT_CALLS applied to fan-out waves whose tasks run on the Anthropic provider (anthropic-direct). When set, takes precedence over the global AFK_MAX_CONCURRENT_SUBAGENT_CALLS for those waves. Unset = use the global value. Accepted range 1-32; out-of-range or unparseable input falls back to the global. Part of #3886.',
+    type: 'number',
+    required: false,
+    example: '3',
+    category: 'process',
+  },
+  {
+    name: 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI',
+    description: 'Per-provider override for AFK_MAX_CONCURRENT_SUBAGENT_CALLS applied to fan-out waves whose tasks run on the OpenAI-compatible provider (openai-compatible). When set, takes precedence over the global AFK_MAX_CONCURRENT_SUBAGENT_CALLS for those waves. Unset = use the global value. Accepted range 1-32; out-of-range or unparseable input falls back to the global. Part of #3886.',
+    type: 'number',
+    required: false,
+    example: '5',
+    category: 'process',
+  },
+  {
     name: 'AFK_MAX_CONCURRENT_BACKGROUND_JOBS',
     description: 'Maximum background subagent jobs running simultaneously in one registry. Default 10; accepted range 1-64; out-of-range or unparseable input falls back to the default.',
     type: 'number',

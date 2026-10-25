@@ -12,6 +12,7 @@ import { loadAgentRegistry } from './registry.js';
 import { builtinAgents } from './builtins.js';
 import { resolveAgentToolAccess } from './resolve.js';
 import { CHILD_ALLOWED_TOOLS, RECON_ALLOWED_TOOLS } from '../tools/nesting.js';
+import { isReadOnlyGitToolEnabled } from '../tools/readonly-git-surface.js';
 
 const fsMocks = vi.hoisted(() => ({ readFileSync: vi.fn() }));
 
@@ -52,13 +53,15 @@ describe('loadAgentRegistry', () => {
     expect(registry.get('git-investigator')?.bashReadOnly).toBe(true);
     expect(registry.get('general-purpose')?.source).toBe('builtin');
     expect(registry.get('Explore')?.source).toBe('builtin');
-    // research-agent keeps its vendored read-only contract PLUS two
-    // registry-entry grants: `memory_search` (read-only archive access — see
-    // the #883 test below) and the scoped git-investigator dispatch grant
-    // (matches the vendored prompt frontmatter; resolve.ts turns
-    // Agent(git-investigator) into nestedAgentTypes and the executor restricts
-    // research-agent to dispatching only git-investigator).
-    expect(registry.get('research-agent')?.definition.tools).toEqual([
+    // research-agent keeps its vendored read-only contract PLUS registry-entry
+    // grants: `memory_search` (read-only archive access — see the #883 test
+    // below), the scoped git-investigator dispatch grant (matches the vendored
+    // prompt frontmatter; resolve.ts turns Agent(git-investigator) into
+    // nestedAgentTypes and the executor restricts research-agent to dispatching
+    // only git-investigator), and — when AFK_READONLY_GIT_TOOL is on (#4059) —
+    // `git_read` so research-agent can answer git questions directly without the
+    // nested hop.
+    const expectedResearchTools = [
       'Read',
       'Grep',
       'Glob',
@@ -66,7 +69,9 @@ describe('loadAgentRegistry', () => {
       'WebSearch',
       'memory_search',
       'Agent(git-investigator)',
-    ]);
+      ...(isReadOnlyGitToolEnabled() ? ['git_read'] : []),
+    ];
+    expect(registry.get('research-agent')?.definition.tools).toEqual(expectedResearchTools);
     // Anti-runaway bound: the read-only research/review builtins carry an
     // explicit tool-use-round cap so the uncapped agent-tool dispatch path
     // cannot let them loop forever and die opaquely when cut off mid-run.
@@ -121,15 +126,18 @@ describe('loadAgentRegistry', () => {
   // Drift-catcher: builtins never pin a model. A definition-level `model`
   // outranks the operator's subagent policy in resolveChildModel, so a pinned
   // builtin silently overrides AFK_DEFAULT_SUBAGENT_MODEL (and routes local-only
-  // setups to Anthropic). Only absent or 'inherit' are allowed.
-  it('no builtin pins a model (absent or inherit only)', () => {
+  // setups to Anthropic). Only `undefined` is allowed — `'inherit'` resolves to
+  // `parentModel` in child-config.helpers.ts, which takes named-agent precedence
+  // over `defaultSubagentModel`, producing the same operator-policy bypass as an
+  // explicit pin (the bypass closed by #3926).
+  it('no builtin pins a model (undefined only)', () => {
     const builtins = builtinAgents();
     expect(builtins.size).toBeGreaterThan(0);
     for (const [name, entry] of builtins) {
       const model = entry.definition.model;
       expect(
-        model === undefined || model === 'inherit',
-        `builtin ${name} pins model ${String(model)}; remove it so dispatch follows operator policy`,
+        model === undefined,
+        `builtin ${name} sets model to ${String(model)}; remove it so dispatch follows operator policy`,
       ).toBe(true);
     }
   });
@@ -159,6 +167,35 @@ describe('loadAgentRegistry', () => {
       // The grant must not have widened the read-only contract on the way in.
       for (const forbidden of ['write_file', 'edit_file', 'bash', 'memory_update']) {
         expect(resolved.allowedTools, `${forbidden} leaked on ${surface}`).not.toContain(forbidden);
+      }
+    }
+  });
+
+  // Regression guard for git_read reachability through resolveAgentToolAccess.
+  //
+  // When AFK_READONLY_GIT_TOOL is on, researchAgentRegistryGrants() adds
+  // git_read to the declared tools array. resolveAgentToolAccess must pass it
+  // through to the effective set — it was previously dropped fail-closed
+  // because git_read was absent from KNOWN_AFK_TOOL_NAMES (#4196).
+  // When the flag is off, git_read must be absent (no silent widening).
+  it('git_read survives resolveAgentToolAccess for research-agent iff AFK_READONLY_GIT_TOOL=1', () => {
+    const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn: () => {} });
+    const entry = registry.get('research-agent');
+    expect(entry).toBeDefined();
+
+    for (const [surface, pool] of [
+      ['read-only skill child (ground-state)', RECON_ALLOWED_TOOLS],
+      ['ordinary child', CHILD_ALLOWED_TOOLS],
+    ] as const) {
+      const resolved = resolveAgentToolAccess(entry!, [...pool]);
+      if (isReadOnlyGitToolEnabled()) {
+        expect(resolved.allowedTools, `git_read unreachable on ${surface} with flag on`).toContain(
+          'git_read',
+        );
+      } else {
+        expect(resolved.allowedTools, `git_read present on ${surface} with flag off`).not.toContain(
+          'git_read',
+        );
       }
     }
   });

@@ -77,6 +77,12 @@ export type SessionPhaseName =
   // 2-hour cap surfacing the error) — so a lone `usage_limit_pause` is expected.
   | 'usage_limit_pause'
   | 'usage_limit_resume'
+  // The SDK client was rebuilt because the credential store held a different
+  // OAuth token than the live client (the operator ran `claude login`, or
+  // another process rotated the shared entry). Single event, no duration;
+  // metadata carries `source` ('turn-start' | 'compaction'), `accountId`, and
+  // `oldAccountId`. Emitted only on an actual token change (swapped === true).
+  | 'credential_swap'
   // Mid-stream overload (529) exhaustion park/unpark (#762). Distinct from
   // `usage_limit_pause` — that brackets an OAuth subscription window with an
   // authoritative reset deadline; a 529 carries NO reset timestamp, so this pair
@@ -294,7 +300,38 @@ export type SessionPhaseName =
   // metadata: { agentType, strippedTools (comma-separated list) }
   | 'compose_leaf_tools_stripped'
   /** Hook-block repeat breaker trip (#3736). metadata: { tool, count, fork }. */
-  | 'hook_block_repeat_tripped';
+  | 'hook_block_repeat_tripped'
+  // Post-cancel late billing settled after the `cancelled` lifecycle row was
+  // already written (#3931). Emitted only when spend accrued AFTER cancel()
+  // emitted its row — i.e. a `done` drained on interrupt. Carries cumulative
+  // run totals (not a delta) in `metadata` (`subagentId`, `provider`,
+  // `uncachedInput`, `cacheRead`, `cacheWrite`, `output`); consumers derive
+  // the post-cancel delta by subtracting the `cancelled` row's watermark.
+  // At most one per run; only emitted when the delta is non-zero.
+  | 'billing_settled'
+  // Default-tier subagent model was rejected by the backend (a typed
+  // ModelRejectedError, classified from structured provider error fields)
+  // before the child made any progress, and the handle re-ran it once on the
+  // parent session model (subagent/handle.model-fallback.ts). Emitted once,
+  // before the retry starts. `metadata`: `subagentId`, `fromModel`, `toModel`,
+  // `reason` (≤200 chars of the provider error). Only forks whose model came
+  // from the default tier are eligible; explicit models fail loudly.
+  | 'subagent_model_fallback'
+  // The round-cap delivery notice (roundDeliveryNotice) could not be injected
+  // into any valid message position — the tail message shape did not allow it
+  // (e.g. anthropic: tail was not a user message; openai: no string-content
+  // tool message to carry it). PURE OBSERVABILITY — the notice was
+  // silently dropped before this event existed; now a trace row is written so
+  // operators can detect the gap. `metadata` carries `provider` and `round`.
+  | 'round_cap_notice_dropped'
+  // A subagent-continuation chain's post-result bookkeeping (settling) ended
+  // degraded (tools/subagent/continuation-dispatch.ts settleTerminal): the
+  // child journal flush timed out or failed (the link does not advance), the
+  // write-capable chain's workspace checkpoint is unavailable (the next
+  // continuation is refused fail-closed), or an unexpected error forced the
+  // fallback record. In-flight still clears. `metadata`: `chainId`, `childId`,
+  // `reason` ('flush_timeout' | 'checkpoint_unavailable' | 'error').
+  | 'continuation_settle_degraded';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

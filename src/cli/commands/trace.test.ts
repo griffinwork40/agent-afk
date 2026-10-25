@@ -761,6 +761,65 @@ describe('formatTrace — summed total with child closures (#3891)', () => {
   });
 });
 
+describe('formatTrace — hook_decision riskCategory rendering (#3900)', () => {
+  const seal: EventObj = {
+    ts: '2026-06-05T12:35:00.500Z',
+    seq: 99,
+    kind: 'session_sealed',
+    payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.500Z' },
+  };
+
+  it('renders [riskCategory] bracket on a BLOCK hook_decision line', () => {
+    const event: EventObj = {
+      ts: '2026-06-05T12:30:00.000Z',
+      seq: 1,
+      kind: 'hook_decision',
+      payload: {
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        blockedTool: 'write_file',
+        reason: 'workspace-write: path is inside workspace',
+        riskCategory: 'workspace-write',
+      },
+    };
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([event, seal])));
+    expect(out).toContain('BLOCK PreToolUse write_file [workspace-write]');
+  });
+
+  it('renders [riskCategory] bracket on an approve hook_decision line', () => {
+    const event: EventObj = {
+      ts: '2026-06-05T12:30:00.000Z',
+      seq: 1,
+      kind: 'hook_decision',
+      payload: {
+        hookEvent: 'PreToolUse',
+        decision: 'approve',
+        reason: 'carve-out',
+        riskCategory: 'bash-mutating',
+      },
+    };
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([event, seal])));
+    expect(out).toContain('approve PreToolUse [bash-mutating]');
+  });
+
+  it('omits the bracket when riskCategory is absent (backward compat)', () => {
+    const event: EventObj = {
+      ts: '2026-06-05T12:30:00.000Z',
+      seq: 1,
+      kind: 'hook_decision',
+      payload: {
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        blockedTool: 'bash',
+        reason: 'plan mode: writes disabled',
+      },
+    };
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([event, seal])));
+    expect(out).toContain('BLOCK PreToolUse bash');
+    expect(out).not.toMatch(/\[.*\]/); // no category bracket
+  });
+});
+
 describe('formatTrace — fmtErrorHead truncates without splitting emoji', () => {
   it('does not split an emoji at the 120-code-point display cut', () => {
     // Construct an errorHead that is exactly 119 ASCII chars + an emoji.

@@ -42,6 +42,7 @@ import { palette } from '../../palette.js';
 import type { SlashCommand, SlashContext, SlashResult, Writer } from '../types.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { resolveRepoRoot } from '../../../utils/git.js';
+import { writeTable } from '../output-blocks.js';
 
 const execFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
 
@@ -116,38 +117,47 @@ async function renderList(
 
   const myPid = process.pid;
 
-  out.line();
-  out.line(palette.bold('Worktrees'));
-  out.line(
-    palette.dim(
-      '  ' +
-        'PATH'.padEnd(45) +
+  writeTable(out, {
+    title: 'Worktrees',
+    columns: ['Path', 'Owner', 'Age', 'Verdict', 'Prune?', 'This session'],
+    rows: candidates.map((c) => [
+      c.path, c.owner, formatAge(c.ageMs), c.verdict,
+      verdictWouldPrune(c.verdict), ownerships.get(c.path) === myPid ? 'yes' : '',
+    ]),
+  }, () => {
+    out.line();
+    out.line(palette.bold('Worktrees'));
+    out.line(
+      palette.dim(
         '  ' +
-        'OWNER'.padEnd(12) +
-        '  ' +
-        'AGE'.padEnd(5) +
-        '  ' +
-        'VERDICT'.padEnd(22) +
-        '  ' +
-        'PRUNE?',
-    ),
-  );
+          'PATH'.padEnd(45) +
+          '  ' +
+          'OWNER'.padEnd(12) +
+          '  ' +
+          'AGE'.padEnd(5) +
+          '  ' +
+          'VERDICT'.padEnd(22) +
+          '  ' +
+          'PRUNE?',
+      ),
+    );
 
-  for (const c of candidates) {
-    const ownerPid = ownerships.get(c.path);
-    const isMine = ownerPid === myPid;
-    const marker = isMine ? palette.brand('→ ') : '  ';
-    const pathDisplay = c.path.slice(-44).padEnd(45);
-    const owner = c.owner.padEnd(12);
-    const age = formatAge(c.ageMs).padEnd(5);
-    const verdict = c.verdict.padEnd(22);
-    const wouldPrune = verdictWouldPrune(c.verdict);
-    const verdictColored = verdictColor(c.verdict, verdict);
-    out.line(`${marker}${pathDisplay}  ${owner}  ${age}  ${verdictColored}  ${wouldPrune}`);
-  }
-  out.line();
-  out.line(palette.dim('  → this session'));
-  out.line();
+    for (const c of candidates) {
+      const ownerPid = ownerships.get(c.path);
+      const isMine = ownerPid === myPid;
+      const marker = isMine ? palette.brand('→ ') : '  ';
+      const pathDisplay = c.path.slice(-44).padEnd(45);
+      const owner = c.owner.padEnd(12);
+      const age = formatAge(c.ageMs).padEnd(5);
+      const verdict = c.verdict.padEnd(22);
+      const wouldPrune = verdictWouldPrune(c.verdict);
+      const verdictColored = verdictColor(c.verdict, verdict);
+      out.line(`${marker}${pathDisplay}  ${owner}  ${age}  ${verdictColored}  ${wouldPrune}`);
+    }
+    out.line();
+    out.line(palette.dim('  → this session'));
+    out.line();
+  });
 }
 
 async function gatherOwnerships(

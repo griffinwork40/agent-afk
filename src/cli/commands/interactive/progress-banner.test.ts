@@ -475,6 +475,63 @@ describe('progress-banner — terminal width clamping', () => {
       emitSubagentCompletion(writer, info('sa-default'));
       expect(committed).toHaveLength(1);
     });
+
+    // Teardown-race: the SubagentStop hook fires AFTER teardownTurn resets
+    // suppressSubagentCompletion to false, but the tool lane already rendered
+    // the Done row during the turn (renderedSubagentIds was populated then).
+    // Without the set-based guard the duplicate Channel B line would slip through.
+    it('suppresses a completion whose Done row the tool lane already rendered (teardown race)', () => {
+      const { writer, committed } = makeWriter();
+      // Simulate armAndWire: flag true + fresh id set for the new turn.
+      writer.suppressSubagentCompletion = true;
+      writer.renderedSubagentIds = new Set();
+
+      // Simulate finalizeSubagent recording the id when it commits the Done row.
+      writer.renderedSubagentIds.add('late-grandchild');
+
+      // Simulate teardownTurn resetting the turn-scoped flag (but NOT the set).
+      writer.suppressSubagentCompletion = false;
+
+      // Now the SubagentStop hook fires — the flag is false, but the id is in the set.
+      emitSubagentCompletion(writer, info('late-grandchild'));
+      expect(committed).toHaveLength(0);
+    });
+
+    it('does not suppress a new completion whose id is not in renderedSubagentIds', () => {
+      const { writer, committed } = makeWriter();
+      writer.suppressSubagentCompletion = false;
+      writer.renderedSubagentIds = new Set(['other-agent']);
+      // 'background-job' was never rendered by the tool lane — should surface.
+      emitSubagentCompletion(writer, info('background-job'));
+      expect(committed).toHaveLength(1);
+      expect(stripAnsi(committed[0]!)).toContain('background-job');
+    });
+
+    // Error-path teardown-race: mirrors the done-path variant above but via
+    // the error branch (settleSubagentError) which also calls
+    // renderedSubagentIds.add. Without the set-based guard the Channel B
+    // completion line would slip through after teardownTurn resets
+    // suppressSubagentCompletion to false, producing a duplicate ✓ line for
+    // a subagent that the tool lane already rendered with an error row.
+    it('suppresses a completion whose Error row the tool lane already rendered (error-path teardown race)', () => {
+      const { writer, committed } = makeWriter();
+      // Simulate armAndWire: flag true + fresh id set for the new turn.
+      writer.suppressSubagentCompletion = true;
+      writer.renderedSubagentIds = new Set();
+
+      // Simulate the error branch recording the id (mirrors settleSubagentError
+      // → stream-renderer-subagent.ts 'error' case which calls
+      // ctx.completionWriter.renderedSubagentIds.add(sourceId)).
+      writer.renderedSubagentIds.add('errored-grandchild');
+
+      // Simulate teardownTurn resetting the turn-scoped flag (but NOT the set).
+      writer.suppressSubagentCompletion = false;
+
+      // Now the SubagentStop hook fires — the flag is false, but the id is in
+      // the set because the error path already recorded it.
+      emitSubagentCompletion(writer, info('errored-grandchild'));
+      expect(committed).toHaveLength(0);
+    });
   });
 });
 

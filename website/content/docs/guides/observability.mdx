@@ -1,176 +1,86 @@
 ---
-title: "Observability"
-description: "Inspect what a run did: witness traces (afk trace), full-text transcript search (afk transcript), and the /transcript slash command."
+title: "Inspect a session's evidence"
+description: "Use witness traces, message journals, facets, and transcript search to understand what an agent did."
 ---
 
-Agent AFK records durable evidence of every unattended run so you can review exactly what happened — without watching the terminal. There are two complementary inspection surfaces: the **witness trace** (structured NDJSON of each event as it happened) and the **transcript search index** (full-text search over saved session Markdown files).
+AFK records a witness trace of actions, a message journal of conversation and tool content, and a searchable Markdown transcript. Start with the trace when you need to reconstruct a run, then choose the journal or transcript when you need the actual words.
 
-## Witness traces (`afk trace`)
+## Inspect a run
 
-Every agent session appends an append-only NDJSON record to:
+<Steps>
+<Step>
 
-```
-~/.afk/state/witness/<session-label>/trace.jsonl
-```
-
-The `<session-label>` defaults to a UUID but can be a human-readable name when the caller supplies one (for example, when resuming a known session). `afk trace list` shows the label for each recorded session.
-
-The file is written event-by-event during the run, so it survives crashes and partially-written tails are tolerated — malformed trailing lines are counted and skipped, never fatal.
-
-### What a trace records
-
-Each line is a JSON event with a `kind`, a monotonic `seq`, a timestamp `ts`, and a `payload`. The recorded kinds are:
-
-| Kind | What it captures |
-|---|---|
-| `tool_call` | Every tool invocation: name, duration, result size, error flag, subagent id |
-| `hook_decision` | Hook blocks, approvals, approval-gate outcomes, and injected-context deliveries, with the reason. Plain allow/pass-through dispatches are not written individually |
-| `hook_summary` | Once per session, just before the seal: hook dispatch counts by hook event x decision (`allow` for pass-through), covering the root session and its subagents. Absent on crashed or older traces, which means unknown, not zero |
-| `subagent_lifecycle` | Subagent start / success / failure / cancel, with cost and turn count |
-| `background_agent` | Background job start, completion, failure, cancel, and join |
-| `budget` | Cost checkpoints against the configured ceiling |
-| `abort` | Abort origin and cascade count |
-| `compaction` | Context-window compaction: messages before/after, estimated tokens saved |
-| `closure` | Session end reason, final turn count, cost, and the provider `stop_reason` |
-| `claim` | Agent-emitted claims: assertion text, confidence, evidence count |
-| `browser_event` | Browser tool actions and their status |
-| `session_phase` | Latency waterfall (init, TTFB, etc.) — hidden by default, shown with `--all` |
-| `session_sealed` | Final seal status, subagent count, cost (written at clean close) |
-
-### `afk trace list`
-
-List all sessions that have a trace, most recent first:
+Find the session and read its trace:
 
 ```bash
 afk trace list
+afk trace show latest
+afk trace show latest --results
 ```
 
-Prints `<timestamp>  <session-label>` rows. Pass `-n` / `--max` to cap the output (default 20, max 200):
+`afk trace list --max 50` increases the listing from its default 20 sessions. `afk trace show [session]` accepts a session label or ID; omit it for the most recently written trace. `--all` includes low-signal phases and paired tool starts, `--limit 40` shows only the last 40 displayed events, and `--json` emits raw NDJSON.
+
+</Step>
+<Step>
+
+Narrow an investigation to errors or blocks:
 
 ```bash
-afk trace list --max 50
+afk witness read latest --errors
+afk witness read latest --kinds hook_decision,hook_summary --json
+afk witness search "permission-denied" --sessions 50
 ```
 
-### `afk trace show`
+`afk witness read` filters one session by event kind, tool name (`--tool bash`), or errors. `afk witness search` searches recent traces by case-insensitive substring and supports `--kinds` and `--since`. Unlike transcript search, these queries match event payloads, not the full conversation.
 
-Pretty-print a session's trace for human review. With no argument, shows the **most recently written** trace:
+</Step>
+<Step>
 
-```bash
-afk trace show            # latest run
-afk trace show <session>  # a specific session label or id
-```
-
-**Options:**
-
-| Flag | Meaning |
-|---|---|
-| `--all` | Include low-signal events (latency phases, paired tool-call `started` lines) |
-| `--json` | Emit the raw NDJSON unchanged — pipe to `jq` for programmatic inspection |
-| `-n, --limit <N>` | Show only the last N rendered events |
-
-The default view filters out `session_phase` events and paired tool-call `started` lines — keeping the output scannable. Orphaned `started` events (a tool that began but never returned) are always shown because they indicate a crash or abort mid-call.
-
-### Debugging with traces
-
-Common patterns:
-
-```bash
-# Did the last run finish cleanly?
-afk trace show | grep -E "SEALED|closure"
-
-# What tools ran, and did any error?
-afk trace show | grep "tool"
-
-# Which subagents were launched and how did they end?
-afk trace show | grep "subagent"
-
-# Full latency waterfall
-afk trace show --all | grep "phase"
-
-# Raw dump for scripting
-afk trace show --json | jq '.kind'
-```
-
-Because the trace is written live, you can tail it while a long run is in progress:
-
-```bash
-tail -f ~/.afk/state/witness/<session-label>/trace.jsonl | jq .
-```
-
----
-
-## Transcript search (`afk transcript`)
-
-In addition to structured traces, AFK saves every session as a plain Markdown transcript at:
-
-```
-~/.afk/state/transcripts/<iso-timestamp>.md
-```
-
-The `afk transcript` commands build and query an **SQLite FTS5 full-text index** over these files — a high-recall complement to the curated fact archive searched by `memory_search`.
-
-### Build the index
-
-The index is not built automatically. Run this once (and re-run whenever you want to catch up on new sessions):
+Search what was said across sessions:
 
 ```bash
 afk transcript reindex
+afk transcript search 'daemon AND cron'
+afk transcript search '"rate limit"' --limit 3
 ```
 
-Output: `Indexed N transcripts.` The operation is idempotent — safe to run repeatedly. It replaces the index atomically.
+Reindex on demand after new sessions. The SQLite FTS5 index supports exact phrases, `term*`, `AND`, and `OR`; results include a matching excerpt. Inside the REPL, `/transcript` opens the current session's Markdown transcript in your pager.
 
-### `afk transcript search`
+</Step>
+</Steps>
 
-Search the index with an FTS5 query:
+## What the witness trace contains
 
-```bash
-afk transcript search <query>
-```
+A trace lives under `$AFK_STATE_DIR/witness/<session-label>/trace.jsonl` (normally under `~/.afk/state/witness/`). It records chronological events with kind, sequence, timestamp, and payload. `tool_call` rows capture the tool name, timing, byte counts, success or error, and an optional short redacted `errorHead` on failure. They do **not** contain full arguments, complete results, or conversation text. Other kinds include `hook_decision`, `hook_summary`, `subagent_lifecycle`, `budget`, `abort`, `compaction`, `browser_event`, `closure`, and `session_sealed`. A `session_id_assigned` phase connects the trace label to the provider session ID on newer traces.
 
-**Option:**
+Subagent events share the root session's trace. Their `subagentId` identifies the actor; concurrent child events interleave, so whole-file order is not one child's execution sequence. Hook pass-through allowances do not each create a `hook_decision` row. A sealed session's `hook_summary` counts them; no summary on a live, crashed, or older trace means unknown, not zero.
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `-n, --limit <N>` | `10` | Maximum results (1–1000) |
+`afk trace show latest --evasion` runs a read-only block-evasion and lost-work analysis. It groups automatic hard blocks and flags a later tool in the same broad effect class within the default 10 tool calls; use `--evasion-window 20` to adjust the window. **Candidates are not proof of a bypass.** Trace data does not identify target files, URLs, or shell arguments, and unrelated calls may have the same effect class. The lost-work signal suggests a blocked effect was not recovered before closure, not that the underlying task was impossible.
 
-**FTS5 query syntax** (passed verbatim to SQLite):
+For MCP startup timing, inspect `afk trace show --all`. `mcp_connect_start` and `mcp_connect_done` bracket connection, including daemon sessions. Where a trace writer is attached to the MCP manager, `mcp_server_start` and `mcp_server_done` help isolate slow servers. The `done` phase also fires if connection throws; it is not a success verdict. See [MCP and plugins](/guides/mcp-plugins).
 
-| Syntax | Meaning |
-|---|---|
-| `worktree` | Any transcript containing the word `worktree` |
-| `"afk trace"` | Exact phrase match |
-| `trace*` | Prefix match — `trace`, `traces`, `traced`, … |
-| `subagent AND cost` | Both terms must appear |
-| `telegram OR slack` | Either term |
+Skill-forked subagent tool calls and permission denials are attributed to that child in the shared trace. Filter failed `tool_call` rows by `subagentId` and inspect `failureClass` (for example, `permission-denied`); a trace receipt's `toolCalls.refused` tallies permission denials, hook blocks, and policy refusals without treating expected refusals as ordinary bugs. Subagent start rows carry `agentType` and at most the first 80 characters of `promptHead`. There is **no** `AFK_CAPTURE_SUBAGENT_PROMPTS` switch in the current code: full dispatch prompts live in the child journal, not the witness row.
 
-**Examples:**
+## Retrieve full messages and tool results
 
-```bash
-# Find sessions where you discussed rate limiting
-afk transcript search "rate limit"
+The root message journal is `$AFK_STATE_DIR/sessions/<session-id>/journal.jsonl`; child journals are in that session's `subagents/<subagent-id>.jsonl`. They contain the conversation, full tool inputs and results, and the child's dispatch prompt. Large content can be stored in referenced blobs. Journal entries support resume and fork, but asynchronous writes can be lost on abrupt process termination. Set `AFK_MESSAGE_JOURNAL_DISABLED=1` only if you deliberately do not want this record.
 
-# Find any transcript mentioning the daemon scheduler
-afk transcript search "daemon AND cron"
+`afk trace show latest --results` associates tool calls with complete results from the message journal; `--results-lines 0` removes the default per-result line limit. A trace from before journaling, or with journaling disabled, cannot reconstruct missing output. Treat journal data as sensitive: it may contain user text and full tool arguments. For a shell command whose displayed output was capped, `afk captures list` locates any retained full output file (captures are stored under the witness directory when output exceeds 100 KB). There is no `afk bash search` command.
 
-# Find recent sessions mentioning a specific function name
-afk transcript search "resolveBaseSystemPrompt"
+## Ask an agent to inspect its own history
 
-# Limit to top 3 results
-afk transcript search "MCP server" --limit 3
-```
+Inside a session, ask for a narrow `read_witness` query, such as `kinds: ["tool_call"]`, `tool_name: "bash"`, `errors_only: true`, `limit: 20`. Use `where: {"payload.decision":"block"}` with `kinds: ["hook_decision"]` to find blocks. `search_witness` searches recent sessions by substring and excludes the calling session by default; pass `include_current_session: true` if needed. It caps results at 200 and can narrow by date, kind, tool, or an exact-match `where` filter. Neither tool exposes full messages or tool results.
 
-Each result shows the session timestamp, filename, and an FTS5-extracted snippet around the match. A malformed FTS5 query (e.g. an unclosed quote) throws a descriptive error rather than silently returning nothing.
+For a compact, validated summary instead, ask the agent to call `get_facet` with `session: "latest"` or `"current"`. Facets include tool counts, error categories, subagent invocations, outcome, world changes, and available cost data. `latest` prefers a sealed session in the caller's current working directory; if none exists it falls back globally. Inspect `cwd_mismatch` before treating it as the same project. `fields` limits top-level output but `session_cwd`, `is_current_session`, and `cwd_mismatch` are always included. Use [memory](/guides/memory) for curated facts, not as a replacement for trace forensics.
 
----
+## Retention and limits
 
-## The `/transcript` slash command
+A best-effort sweep at root session startup keeps witness data bounded to 30 days and 2 GiB by default, evicting **whole** old session directories. It protects the active session and directories with content updated within the last hour; a stamp limits sweeps to once every six hours. Tune `AFK_WITNESS_MAX_AGE_DAYS` or `AFK_WITNESS_MAX_BYTES`, or disable eviction with `AFK_WITNESS_RETENTION_DISABLE=1`. A separate sweep retains flat session sidecars for 30 days or up to 1,000 files by default, and also ages out per-session data directories. Its controls are `AFK_SESSION_MAX_AGE_DAYS`, `AFK_SESSION_MAX_COUNT`, and `AFK_SESSION_RETENTION_DISABLE`. Retention means old traces and journals may no longer be available when you investigate them.
 
-Inside an interactive REPL session (`afk i`), the `/transcript` slash command opens the **current session's** Markdown transcript in your `$PAGER`:
+## Related
 
-```
-/transcript
-```
-
-This is useful for reviewing your conversation so far without leaving the session. For searching across past sessions, use `afk transcript search` described above.
-
-See the [Interactive REPL](/surfaces/repl) page for the full list of slash commands.
+<Cards>
+<Card title="Review tool access" href="/guides/tool-access" description="Understand permission boundaries and denials." />
+<Card title="Improve recurring failures" href="/guides/self-improvement" description="Turn trace patterns into reviewable cards and evals." />
+<Card title="Inspect usage and cost" href="/guides/usage-and-cost" description="Read current headroom and session costs." />
+</Cards>

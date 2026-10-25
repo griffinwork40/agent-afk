@@ -21,6 +21,8 @@ import { parseTraceContent, type SessionRead } from '../reader.js';
 import {
   detectToolFailureDensity,
   makeSlug,
+  normalizeErrorHead,
+  MAX_ERROR_CLUSTERS,
   DEFAULT_TOOL_FAILURE_MIN_FAILURES,
   DEFAULT_TOOL_FAILURE_MIN_RATE,
 } from './tool-failure-density.js';
@@ -49,6 +51,7 @@ function toolPair(
     resultBytes?: number;
     circuitBreaker?: boolean;
     failureClass?: string;
+    errorHead?: string;
   } = {},
 ): string[] {
   const started = JSON.stringify({
@@ -68,6 +71,7 @@ function toolPair(
   };
   if (opts.circuitBreaker === true) completedPayload['circuitBreaker'] = true;
   if (opts.failureClass !== undefined) completedPayload['failureClass'] = opts.failureClass;
+  if (opts.errorHead !== undefined) completedPayload['errorHead'] = opts.errorHead;
   const completed = JSON.stringify({
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
     seq: seqCounter++,
@@ -568,5 +572,270 @@ describe('detectToolFailureDensity — failureClass exclusion', () => {
     ];
     const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
     expect(r.evidence[0]?.annotation).toContain('class=timeout');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeErrorHead — unit tests
+// ---------------------------------------------------------------------------
+
+describe('normalizeErrorHead — ID normalization', () => {
+  it('collapses toolu_ IDs', () => {
+    expect(normalizeErrorHead('tool use toolu_01AbcDef failed')).toBe(
+      'tool use <id> failed',
+    );
+  });
+
+  it('collapses bg- IDs', () => {
+    expect(normalizeErrorHead('background job bg-abc123 timed out')).toBe(
+      'background job <id> timed out',
+    );
+  });
+
+  it('collapses call_ IDs', () => {
+    expect(normalizeErrorHead('call_XYZ789 returned error')).toBe('<id> returned error');
+  });
+
+  it('collapses sess- IDs', () => {
+    expect(normalizeErrorHead('session sess-abc timed out')).toBe('session <id> timed out');
+  });
+
+  it('two calls with different toolu_ IDs land in the same cluster', () => {
+    const a = normalizeErrorHead('Error in toolu_01Abc: permission denied');
+    const b = normalizeErrorHead('Error in toolu_99ZZZ: permission denied');
+    expect(a).toBe(b);
+  });
+});
+
+describe('normalizeErrorHead — path normalization', () => {
+  it('collapses absolute Unix paths', () => {
+    expect(normalizeErrorHead('File not found: /Users/alice/project/foo.ts')).toBe(
+      'File not found: <path>',
+    );
+  });
+
+  it('collapses /tmp paths', () => {
+    expect(normalizeErrorHead('Cannot read /tmp/afk-scratch-1234')).toBe(
+      'Cannot read <path>',
+    );
+  });
+
+  it('two failures with different absolute paths land in the same cluster', () => {
+    const a = normalizeErrorHead('ENOENT: /Users/alice/.afk/state/foo');
+    const b = normalizeErrorHead('ENOENT: /Users/bob/.afk/state/bar');
+    expect(a).toBe(b);
+  });
+});
+
+describe('normalizeErrorHead — duration normalization', () => {
+  it('collapses ms durations', () => {
+    expect(normalizeErrorHead('timed out after 5000ms')).toBe('timed out after <dur>');
+  });
+
+  it('collapses s durations', () => {
+    expect(normalizeErrorHead('elapsed 4.5s exceeded limit')).toBe(
+      'elapsed <dur> exceeded limit',
+    );
+  });
+
+  it('two timeouts with different durations land in the same cluster', () => {
+    const a = normalizeErrorHead('Tool timed out after 30000ms');
+    const b = normalizeErrorHead('Tool timed out after 60000ms');
+    expect(a).toBe(b);
+  });
+});
+
+describe('normalizeErrorHead — quoted value normalization', () => {
+  it('collapses double-quoted values', () => {
+    expect(normalizeErrorHead('Unknown key "some-dynamic-value" in schema')).toBe(
+      'Unknown key <val> in schema',
+    );
+  });
+
+  it('collapses single-quoted values', () => {
+    expect(normalizeErrorHead("Cannot find module 'some/path/to/module'")).toBe(
+      'Cannot find module <val>',
+    );
+  });
+
+  it('two errors differing only in quoted value land in the same cluster', () => {
+    const a = normalizeErrorHead('Field "userId" is required');
+    const b = normalizeErrorHead('Field "sessionId" is required');
+    expect(a).toBe(b);
+  });
+});
+
+describe('normalizeErrorHead — digit run normalization', () => {
+  it('collapses standalone digit runs ≥2 digits', () => {
+    expect(normalizeErrorHead('exit code 127 from process')).toBe(
+      'exit code # from process',
+    );
+  });
+
+  it('single digit is left alone', () => {
+    expect(normalizeErrorHead('retry attempt 3 failed')).toBe('retry attempt 3 failed');
+  });
+
+  it('two errors with different exit codes land in the same cluster', () => {
+    const a = normalizeErrorHead('Process exited with code 127');
+    const b = normalizeErrorHead('Process exited with code 137');
+    expect(a).toBe(b);
+  });
+});
+
+describe('normalizeErrorHead — combined / idempotent', () => {
+  it('applies all transformations together', () => {
+    const raw =
+      'toolu_01Abc failed at /Users/alice/repo after 5000ms: "file missing"';
+    expect(normalizeErrorHead(raw)).toBe('<id> failed at <path> after <dur>: <val>');
+  });
+
+  it('is idempotent — normalizing twice gives the same result', () => {
+    const raw = 'Error in toolu_XYZ: /tmp/foo took 300ms';
+    const once = normalizeErrorHead(raw);
+    expect(normalizeErrorHead(once)).toBe(once);
+  });
+
+  it('empty string stays empty', () => {
+    expect(normalizeErrorHead('')).toBe('');
+  });
+
+  it('whitespace-only input becomes empty string', () => {
+    expect(normalizeErrorHead('   ')).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// errorClusters in card detail
+// ---------------------------------------------------------------------------
+
+describe('detectToolFailureDensity — errorClusters in detail', () => {
+  it('emits errorClusters when errorHead is present on failures', () => {
+    resetSeq();
+    const lines = [
+      ...toolPair('a', 'Bash', {
+        isError: true,
+        errorHead: 'ENOENT: no such file or directory /Users/alice/foo.ts',
+      }),
+      ...toolPair('b', 'Bash', {
+        isError: true,
+        errorHead: 'ENOENT: no such file or directory /Users/bob/bar.ts',
+      }),
+      ...toolPair('c', 'Bash', {
+        isError: true,
+        errorHead: 'permission denied: /tmp/secret',
+      }),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    const clusters = r.detail['errorClusters'] as Array<{
+      normalized: string;
+      count: number;
+      sample: string;
+    }>;
+    expect(Array.isArray(clusters)).toBe(true);
+    // The two ENOENT errors should collapse to one cluster.
+    const enoent = clusters.find((c) => c.normalized.includes('ENOENT'));
+    expect(enoent).toBeDefined();
+    expect(enoent!.count).toBe(2);
+    // Sample must be a raw (un-normalized) errorHead.
+    expect(enoent!.sample).toContain('/Users/');
+  });
+
+  it('clusters are sorted by descending count', () => {
+    resetSeq();
+    // 3 ENOENT failures + 1 permission-denied failure → ENOENT cluster first.
+    const lines = [
+      ...toolPair('a', 'Bash', { isError: true, errorHead: 'ENOENT at /Users/a/f1.ts' }),
+      ...toolPair('b', 'Bash', { isError: true, errorHead: 'ENOENT at /Users/b/f2.ts' }),
+      ...toolPair('c', 'Bash', { isError: true, errorHead: 'ENOENT at /Users/c/f3.ts' }),
+      ...toolPair('d', 'Bash', { isError: true, errorHead: 'permission denied: /tmp/x' }),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    const clusters = r.detail['errorClusters'] as Array<{ count: number }>;
+    expect(clusters[0]!.count).toBeGreaterThanOrEqual(clusters[1]!.count);
+  });
+
+  it('caps clusters at MAX_ERROR_CLUSTERS', () => {
+    resetSeq();
+    // Produce 8 distinct cluster keys (each failure has a unique non-collapsible message).
+    const lines: string[] = [];
+    const distinctMessages = [
+      'alpha error occurred',
+      'beta error occurred',
+      'gamma error occurred',
+      'delta error occurred',
+      'epsilon error occurred',
+      'zeta error occurred',
+      'eta error occurred',
+      'theta error occurred',
+    ];
+    for (let i = 0; i < distinctMessages.length; i++) {
+      lines.push(...toolPair(`f-${i}`, 'Bash', { isError: true, errorHead: distinctMessages[i] }));
+    }
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    const clusters = r.detail['errorClusters'] as unknown[];
+    expect(clusters.length).toBeLessThanOrEqual(MAX_ERROR_CLUSTERS);
+  });
+
+  it('emits empty errorClusters when no failures carry errorHead', () => {
+    resetSeq();
+    const lines = [
+      ...toolPair('a', 'Bash', { isError: true }),
+      ...toolPair('b', 'Bash', { isError: true }),
+      ...toolPair('c', 'Bash', { isError: true }),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    expect(r.detail['errorClusters']).toEqual([]);
+  });
+
+  it('errorClusters each carry normalized, count, and sample fields', () => {
+    resetSeq();
+    const lines = [
+      ...toolPair('a', 'Bash', { isError: true, errorHead: 'timeout after 30000ms' }),
+      ...toolPair('b', 'Bash', { isError: true, errorHead: 'timeout after 60000ms' }),
+      ...toolPair('c', 'Bash', { isError: true, errorHead: 'timeout after 90000ms' }),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    const clusters = r.detail['errorClusters'] as Array<{
+      normalized: string;
+      count: number;
+      sample: string;
+    }>;
+    expect(clusters).toHaveLength(1);
+    const c = clusters[0]!;
+    expect(typeof c.normalized).toBe('string');
+    expect(typeof c.count).toBe('number');
+    expect(typeof c.sample).toBe('string');
+    // All three collapse to the same cluster.
+    expect(c.count).toBe(3);
+    // The normalized form should not contain raw ms numbers.
+    expect(c.normalized).not.toMatch(/\d{4,}/);
+    // The sample is raw — still contains the original ms value.
+    expect(c.sample).toMatch(/\d+ms/);
+  });
+
+  it('failures without errorHead do not affect cluster counts', () => {
+    resetSeq();
+    // 2 failures with errorHead (same cluster) + 1 without.
+    const lines = [
+      ...toolPair('a', 'Bash', { isError: true, errorHead: 'ENOENT: /tmp/foo' }),
+      ...toolPair('b', 'Bash', { isError: true, errorHead: 'ENOENT: /tmp/bar' }),
+      ...toolPair('c', 'Bash', { isError: true }), // no errorHead
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    const clusters = r.detail['errorClusters'] as Array<{ count: number }>;
+    // Only the 2 with errorHead cluster; the headless one is excluded.
+    expect(clusters[0]!.count).toBe(2);
+  });
+
+  it('detector version is v3', () => {
+    resetSeq();
+    const lines = [
+      ...toolPair('a', 'Bash', { isError: true }),
+      ...toolPair('b', 'Bash', { isError: true }),
+      ...toolPair('c', 'Bash', { isError: true }),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    expect(r.detail['detector']).toBe('tool-failure-density@v3');
   });
 });

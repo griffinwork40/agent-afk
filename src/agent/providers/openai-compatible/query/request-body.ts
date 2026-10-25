@@ -27,19 +27,8 @@ import {
 export interface RequestBodyInputs {
   model: string;
   messages: OpenAIMessage[];
-  /**
-   * Tools to advertise this turn.
-   *
-   * Fix #3963 (fix 1): wind-down rounds keep the tool definitions and set
-   * `tool_choice: "none"` rather than stripping tools entirely.  Servers that
-   * only parse tool-call markup when a `tools` array is present would otherwise
-   * echo `<tool_call>` markup as plain text.  `undefined` still means "no tools
-   * at all" (non-tool-capable turns); `windDown: true` means "tools present but
-   * model must not call them".
-   */
+  /** Tools to advertise this turn; undefined when none are available. Wind-down rounds send the same array. */
   activeTools: OpenAIFunctionTool[] | undefined;
-  /** When true, send `tool_choice: "none"` alongside the tool definitions. */
-  windDown?: boolean;
   maxOutputTokens: number | undefined;
   effort: EffortLevel | undefined;
   /** Sampling temperature forwarded to the API. Omit for server default. */
@@ -78,7 +67,6 @@ export function buildResponsesRequestBody(
   if (args.isChatGptBackend) requestBody['store'] = false;
   if (req.tools && req.tools.length > 0) {
     requestBody['tools'] = req.tools;
-    if (args.windDown) requestBody['tool_choice'] = 'none';
   }
   // Forward reasoning effort for o-series models via the Responses API's
   // `reasoning: { effort }` shape.
@@ -107,8 +95,6 @@ export function buildChatCompletionsRequestBody(args: RequestBodyInputs): Record
   // some providers reject the request.
   if (args.activeTools && args.activeTools.length > 0) {
     requestBody['tools'] = args.activeTools;
-    // Fix #3963 (fix 1): wind-down rounds keep tool defs but forbid tool calls.
-    if (args.windDown) requestBody['tool_choice'] = 'none';
   }
   // Forward reasoning effort for o-series models via Chat Completions'
   // `reasoning_effort` field.

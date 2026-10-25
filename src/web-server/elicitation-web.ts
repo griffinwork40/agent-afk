@@ -68,6 +68,11 @@ export class WebElicitationBridge {
     return () => this.listeners.delete(listener);
   }
 
+  /** Look up the session that owns a pending request (undefined when unknown). */
+  sessionFor(id: string): string | undefined {
+    return this.waiters.get(id)?.pending.sessionId;
+  }
+
   /**
    * Answer a pending request. Returns false when the id is unknown (already
    * answered, aborted, or never existed) so the route can reply 404 instead of

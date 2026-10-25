@@ -13,6 +13,7 @@ import type { Message } from '../types.js';
 import {
   buildResultFromMessage,
   isIncompleteStopReason,
+  isTerminalStopReason,
   annotateIfIncomplete,
   incompleteToolResultFields,
   STREAM_INCOMPLETE,
@@ -196,6 +197,49 @@ describe('isIncompleteStopReason — partial-result classification', () => {
   it('is false for a genuinely unrelated provider stop reason', () => {
     expect(isIncompleteStopReason('stop_sequence')).toBe(false);
     expect(isIncompleteStopReason('pause_turn')).toBe(false);
+  });
+});
+
+describe('isTerminalStopReason — buffered-partial branch stale-reason gate (#3965)', () => {
+  // Clean model-finished-speaking reasons — must be preserved when a prior
+  // round's stop reason is stamped and the next round is aborted mid-stream.
+  it.each(['end_turn', 'stop', 'stop_sequence', 'pause_turn'])(
+    'is true for canonical terminal reason %s',
+    (r) => { expect(isTerminalStopReason(r)).toBe(true); },
+  );
+
+  // Truncation sentinels: a prior round ended at the output-token cap. If the
+  // NEXT round then aborts, we could argue either way, but consistency with the
+  // existing zero-output branch (which unconditionally overwrites) wins: an
+  // output-token truncation in a previous round does not mean the CURRENT abort
+  // is clean. We include them here to document the decision explicitly.
+  it.each(['max_tokens', 'length', 'max_output_tokens'])(
+    'is true for truncation sentinel %s (prior round capped; preserved over STREAM_INCOMPLETE)',
+    (r) => { expect(isTerminalStopReason(r)).toBe(true); },
+  );
+
+  // Tool stops must never be preserved — they are inter-round, not terminal.
+  it.each(['tool_use', 'tool_calls'])(
+    'is false for tool-stop reason %s',
+    (r) => { expect(isTerminalStopReason(r)).toBe(false); },
+  );
+
+  // Budget-cap and wind-down sentinels must also be overwritten.
+  it('is false for undefined (no prior stamp)', () => {
+    expect(isTerminalStopReason(undefined)).toBe(false);
+  });
+
+  it('is false for STREAM_INCOMPLETE itself', () => {
+    expect(isTerminalStopReason(STREAM_INCOMPLETE)).toBe(false);
+  });
+
+  it('is false for budget-cap and wind-down sentinels', () => {
+    // These are "incomplete" reasons — a prior round that wound down should
+    // not suppress STREAM_INCOMPLETE on an abort in the next round.
+    expect(isTerminalStopReason('tool_use_loop_capped')).toBe(false);
+    expect(isTerminalStopReason('soft_deadline_wind_down')).toBe(false);
+    expect(isTerminalStopReason('context_pressure_wind_down')).toBe(false);
+    expect(isTerminalStopReason('overload_exhausted')).toBe(false);
   });
 });
 

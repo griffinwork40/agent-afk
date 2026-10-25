@@ -112,6 +112,11 @@ async function runEpisodes(
       // that slips through both dispatch guards and enters inflight is still
       // counted by the dispatch loop, so adding it here would double-count
       // when budget.exceeded flips between dispatch and execution (#3920).
+      // NOTE: a task that slips through BOTH dispatch guards and then hits
+      // budget.exceeded inside runTask is counted by neither guard (an
+      // under-count).  truncatedByBudget remains correct (skippedByBudget > 0
+      // or inflight tasks that returned early both set it), but skippedByBudget
+      // itself may be one low in that edge case.
       if (signal?.aborted || budget.exceeded) { return; }
       const trace = await runner.run(task.env, task.ep, task.s, runnerOpts);
       allTraces.push(trace);
@@ -300,7 +305,7 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
 
   onProgress?.({ stage: 'run', message: `Running ${episodes.length} episodes × 2 envs × ${samples} samples` });
 
-  const { allTraces, truncatedByBudget, failedEpisodes, armTotals } = await runEpisodes(
+  const { allTraces, truncatedByBudget, failedEpisodes, armTotals, skippedByBudget } = await runEpisodes(
     episodes, baseline, candidate, samples, concurrency, maxUsdRemaining,
     runner, runnerOpts, signal, onProgress,
   );
@@ -431,6 +436,7 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
       judge: { name: judge.name, external: judge.external, crossCheckAgreement },
       predictionAccuracy: accuracy,
       truncatedByBudget,
+      skippedByBudget,
       failedEpisodes,
       judgeFailures,
       failedEpisodeRecords,

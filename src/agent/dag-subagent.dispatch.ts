@@ -3,13 +3,12 @@ import type { SubagentDAGNode, SubagentDAGOptions } from './dag-subagent.js';
 import type { SubagentResult } from './subagent/result.js';
 import type { SpawnReceipt } from './tools/delegation-budget.js';
 import { appendImageBlocks } from './content/image-blocks.js';
-import { createIsolatedWorktree } from './tools/handlers/worktree-managed.js';
-import { describeWorktreeSetupFailure } from './worktree/worktree-setup.js';
+import { setupIsolationWorktree } from './tools/subagent-executor.execute-once.helpers.js';
 import { teardownBackgroundWorktree } from './tools/handlers/worktree-managed.background.js';
-import { errorMessage } from '../utils/errors.js';
 import { debugLog } from '../utils/debug.js';
 import { isTooBroadRoot, ungatedSensitiveRoot } from './tools/subagent/root-validation.js';
 import { realpathSafe } from './tools/handlers/_cwd-utils.js';
+import { resolveChildModel } from './subagent/resolve-child-model.js';
 
 /**
  * Invariant: validate that a DAG node's `cwd`, `readRoots`, and `writeRoots` pass the
@@ -58,6 +57,29 @@ function validateDagNodeRoots(spec: SubagentDAGNode): void {
 }
 
 
+/** Contract: adapt shared setup to DAG's lazy prompts and already-assigned counter. */
+async function setupDagIsolation(
+  spec: SubagentDAGNode, anchorCwd: string | undefined, nodeSignal: AbortSignal,
+  isolationCounter: number, budgetReceipt: SpawnReceipt | undefined,
+) {
+  const childConfig: { cwd?: string } = {};
+  const iso = await setupIsolationWorktree({
+    parsed: { prompt: '', mode: 'foreground', id_prefix: `compose-${spec.id}` },
+    currentCwd: anchorCwd, isolationCounterRef: { value: isolationCounter - 1 },
+    childConfig, childWriteCapable: true, probe: undefined,
+    budgetReceipt, signal: nodeSignal, dagNodeId: spec.id,
+  });
+  const build = spec.promptBuilder;
+  const notice = iso.setupNotice;
+  return {
+    ...iso,
+    spec: {
+      ...spec, cwd: childConfig.cwd,
+      ...(notice !== undefined ? { promptBuilder: (i: Record<string, unknown>) => `${notice}\n\n${build(i)}` } : {}),
+    },
+  };
+}
+
 export async function dispatchDagNode(
   originalSpec: SubagentDAGNode, inputs: Record<string, unknown>, nodeSignal: AbortSignal,
   options: SubagentDAGOptions, softDeadlineForNode: number, isolationCounter: number,
@@ -90,51 +112,37 @@ export async function dispatchDagNode(
     dagNodeBudgetReceipt = delegationBudget.recordSpawn(parentSession.sessionId ?? '');
   }
 
-  // isolation:"worktree" — create a fresh managed git worktree before
-  // forking so this node's writes/tests never collide with siblings sharing
-  // the parent tree. Mirrors the isolation pipeline in subagent-executor.ts.
-  // Foreground compose nodes (the only mode on the DAG path) tear down in the
-  // finally block below. Dirty / commits-ahead trees are preserved and locked.
+  // Invariant: DAG isolation always creates a foreground worktree, including
+  // read-only nodes. Retain node-specific slugs/errors and caller-owned teardown.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
-  let setupNotice: string | undefined; // #3601: failed repo-declared setup
+  let setupNotice: string | undefined;
   if (spec.isolation === 'worktree') {
-    const effectiveCwd = anchorCwd ?? process.cwd();
-    try {
-      const iso = await createIsolatedWorktree({
-        cwd: effectiveCwd,
-        slugHint: `iso-compose-${spec.id}-${isolationCounter}-${Math.random().toString(36).slice(2, 8)}`,
-        signal: nodeSignal,
-      });
-      // Override the node's cwd with the worktree path so the fork runs there.
-      // Mutually-exclusive with spec.cwd — enforced at parse time.
-      spec = { ...spec, cwd: iso.path };
-      // Best-effort setup (#3601): tell the node its tree may lack deps.
-      setupNotice = describeWorktreeSetupFailure(iso.setup, iso.path);
-      const notice = setupNotice;
-      if (notice !== undefined) {
-        const build = spec.promptBuilder;
-        spec = { ...spec, promptBuilder: (i) => `${notice}\n\n${build(i)}` };
-      }
-      isolationTeardown = { repoRoot: iso.repoRoot, worktreePath: iso.path };
-    } catch (err) {
-      // Fail loud: never silently fall back to the shared tree — that
-      // reintroduces the cross-contamination bug isolation exists to prevent.
-      const message = errorMessage(err);
-      dagNodeBudgetReceipt?.rollback();
-      dagNodeBudgetReceipt = undefined;
-      throw new Error(
-        `Failed to create isolated worktree for DAG node "${spec.id}": ${message}. ` +
-        `isolation:"worktree" requires the session to run inside a git repository.`,
-      );
-    }
+    const iso = await setupDagIsolation(spec, anchorCwd, nodeSignal, isolationCounter, dagNodeBudgetReceipt);
+    isolationTeardown = iso.teardown;
+    setupNotice = iso.setupNotice;
+    spec = iso.spec;
   }
+
+  // Stage 3 (#4042): resolve the node model through the shared four-tier chain
+  // (callSite → namedAgent → defaultSubagentModel → defaultModel → 'sonnet')
+  // instead of the inline `spec.model ?? 'sonnet'` that skipped tiers 3 and 4.
+  // Compose pre-resolves spec.model via resolveChildModel before building the
+  // DAG node, so callSiteModel here is always set for compose nodes. Direct
+  // library callers (skills, mint phases) that omit spec.model now honour
+  // options.defaultSubagentModel and options.defaultModel instead of silently
+  // falling to 'sonnet'.
+  const resolvedNodeModel = resolveChildModel({
+    callSiteModel: typeof spec.model === 'string' ? spec.model : undefined,
+    defaultSubagentModel: typeof options.defaultSubagentModel === 'string' ? options.defaultSubagentModel : undefined,
+    defaultModel: typeof options.defaultModel === 'string' ? options.defaultModel : undefined,
+  });
 
   let handle: Awaited<ReturnType<typeof manager.forkSubagent>>;
   try {
     handle = await manager.forkSubagent({
       parent: { sessionId: parentSession.sessionId, messageJournal: parentSession.messageJournal },
       config: {
-        model: spec.model ?? 'sonnet',
+        model: resolvedNodeModel,
         systemPrompt: spec.systemPrompt,
         ...(spec.canUseTool !== undefined ? { canUseTool: spec.canUseTool } : {}),
         ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
@@ -176,6 +184,7 @@ export async function dispatchDagNode(
       // not supply an explicit display label.
       agentType: spec.agentType ?? spec.idPrefix ?? `dag-${spec.id}`,
       ...(spec.parentId !== undefined ? { parentId: spec.parentId } : {}),
+      ...(spec.modelFallback !== undefined ? { modelFallback: spec.modelFallback } : {}),
     });
   } catch (forkErr) {
     // Item 2: rollback ALL budget counters on fork failure — the child
@@ -221,12 +230,23 @@ export async function dispatchDagNode(
       prompt = spec.promptBuilder(inputs);
     }
     const result = await handle.runToResult(prompt);
-    // #3601: surface a failed setup to the compose caller too, not just the node.
-    const text = result.message?.content;
-    if (setupNotice !== undefined && result.message !== undefined && typeof text === 'string') {
-      return { ...result, message: { ...result.message, content: `${setupNotice}\n\n${text}` } };
+    // V1 safety net: compose/DAG nodes cannot yield — a yielding node looks
+    // like a successful completion to the DAG executor, so downstream nodes
+    // would proceed on partial data. Fail-fast so the error is surfaced
+    // immediately rather than silently propagating a bad result.
+    if (result.needsInput !== undefined) {
+      throw new Error(
+        `DAG node ${handle.id} yielded Asking — compose nodes cannot yield in v1. ` +
+        `Question: ${result.needsInput.question}`,
+      );
     }
-    return result;
+    // #3601 / #3660: attach setupNotice as a dedicated field on the result so
+    // the DAG layer (dag-subagent.ts) can propagate it through DAGRunResult
+    // regardless of return path. The notice is already injected into the node's
+    // prompt via setupDagIsolation's wrapped promptBuilder; duplicating it into
+    // message.content caused a double-prepend on nodes that also produce
+    // plain-string content, so we attach it as a dedicated field instead.
+    return setupNotice !== undefined ? { ...result, setupNotice } : result;
   } finally {
     nodeSignal.removeEventListener('abort', onNodeAbort);
     await handle.teardown().catch(() => undefined);

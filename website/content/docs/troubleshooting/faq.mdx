@@ -1,0 +1,83 @@
+---
+title: "Find answers to common questions"
+description: "Understand where AFK stores data, what it sends to providers, and how to operate it on your own machines."
+---
+
+These answers cover everyday installation, privacy, billing, and deployment questions. If something is already failing, start with [diagnostics](/troubleshooting) or [common errors](/troubleshooting/common-errors).
+
+## Where does AFK store my data?
+
+The default runtime home is `~/.afk/`. Configuration lives in `config/`, session records and journals in `state/sessions/`, witness traces in `state/witness/`, and process logs in `logs/`. `AFK_HOME` changes the runtime home; `AFK_STATE_DIR` can move the state directory separately. Projects can also contain a local `.afk/` directory. See [observability](/guides/observability) and [configuration](/configuration/overview).
+
+## Is my code sent to a model provider?
+
+Content included in a model request goes to the selected provider or endpoint. That can include your prompt, instructions, conversation history, images, and file contents or command output read by tools. Selecting a local model changes where inference runs; it does not automatically disable network tools, MCP servers, plugins, or cloud subagents. Use [tool access controls](/guides/tool-access) and verify every [model slot](/configuration/model-slots) for sensitive work.
+
+## What stays on disk, and what is safe to share?
+
+Session journals can contain full messages and tool results. Traces record actions and timing, while screenshots and captures can contain additional private information. Treat these as sensitive, review them before sharing, and do not attach credential files. `/bug` includes basic environment information but does not attach your transcript or trace automatically. See [diagnostics](/troubleshooting).
+
+## Does AFK itself require a paid account?
+
+AFK is an open-source application; inference is supplied separately. You can use provider API billing, supported subscription OAuth, or your own local server. API calls, image tools, and external services may incur charges according to their providers. A local model can avoid cloud inference charges, but still uses your hardware and electricity. See [usage and cost](/guides/usage-and-cost).
+
+## Where can I see usage and cost?
+
+Use `/cost` for the current session's cost information and `/usage` or `afk usage` for provider subscription windows and headroom. These are different measurements. A displayed cost estimate is not a provider invoice, and a subscription percentage is not a cross-session dollar total. See [usage and cost](/guides/usage-and-cost).
+
+## Can I run offline with a local model?
+
+Yes, if the model server and every capability you need are local. Configure an OpenAI-compatible or supported Anthropic-compatible local endpoint, load a model that supports the required tool calling, and avoid tools or delegations that need the internet. `afk doctor` can probe custom model-slot endpoints. See [local models](/guides/local-models).
+
+## Do I need Claude Code installed?
+
+No. AFK runs its own agent loop and can use a provider API key without Claude Code. It can also reuse supported existing credentials and explicitly import selected skills or plugins from other tools. Installing AFK does not turn it into a Claude Code subprocess. See [how it works](/how-it-works) and [migration](/guides/migrate).
+
+## Can I use my ChatGPT or Grok subscription?
+
+AFK supports ChatGPT OAuth through Codex CLI's authentication store and xAI subscription OAuth through `afk provider auth xai login`. Supported models and account entitlements differ from API access. ChatGPT token refresh remains owned by Codex. See [authentication and providers](/troubleshooting/auth-and-providers).
+
+## How do I update AFK?
+
+Check first, then install the update:
+
+```bash
+afk update --check
+afk update
+```
+
+`afk update --pin <version>` selects a specific version, where `<version>` is a valid semantic version. If a persistent service still runs a different installation, inspect `afk service status` and use the service management workflow rather than starting duplicate processes. See [installation](/installation) and [services](/guides/run-as-service).
+
+## How do I uninstall AFK without losing my sessions?
+
+First inspect `afk service list` and uninstall any AFK services you installed using `afk service uninstall` with the service's listed name. Then remove the package using the package manager that installed it. For an npm global installation:
+
+```bash
+npm uninstall -g agent-afk
+```
+
+Package removal is separate from removing `~/.afk/`. Keep that directory if you want your configuration and history; back it up before deliberately deleting runtime data. Do not delete an authentication store owned by another tool. See [installation](/installation).
+
+## How do I use Telegram?
+
+Run `afk telegram setup` and follow the token and allowed-chat setup. Only authorize chats you control. Use `afk telegram status` and `afk telegram logs` to inspect the managed bot. Telegram messages and replies travel through Telegram as well as the selected model provider. See [Telegram](/surfaces/telegram).
+
+## Can I leave AFK running on a server?
+
+Yes. Use `afk chat` for a single non-interactive task, the daemon for scheduled work, or a managed service for a persistent process. Configure credentials and permissions for the service account rather than assuming it inherits your interactive shell environment. Set budgets and notifications before leaving it unattended. See [headless operation](/guides/headless), [unattended runs](/guides/unattended-runs), and [services](/guides/run-as-service).
+
+## Why does a resumed SDK session forget earlier messages?
+
+Automatic journal loading requires an explicit `resume` id and an available message journal. `sessionId` alone does not request restoration. Explicit `resumeMessages` or `resumeHistory`, `persistSession: false`, and a disabled journal change that behavior. See the [SDK resume guide](/sdk).
+
+## Is permission mode a shell sandbox?
+
+No. Path containment and tool policy are not an operating-system sandbox for arbitrary shell commands. Review what each mode guarantees before allowing access to sensitive repositories or credentials. For untrusted work, use an appropriate machine, container, or other isolation boundary in addition to AFK policy. See [safety](/concepts/safety) and [permissions](/configuration/permissions).
+
+## Related
+
+<Cards>
+  <Card title="Installation" href="/installation" description="Install, update, and choose an operating environment." />
+  <Card title="Diagnose a problem" href="/troubleshooting" description="Run doctor and gather evidence before reporting a bug." />
+  <Card title="How AFK works" href="/how-it-works" description="Understand sessions, providers, tools, and storage." />
+</Cards>

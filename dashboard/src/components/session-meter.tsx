@@ -37,14 +37,16 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
-/** Compact top-bar metrics strip showing cost, tokens, duration. */
+/**
+ * Compact header metrics strip: cost · tokens · duration.
+ * Zeros are hidden — the meter is invisible until the first turn completes.
+ * One instance lives in the app.tsx header only; the transcript no longer
+ * renders a second sticky copy (P1-4 fix: metrics shown twice).
+ */
 export function SessionMeter({ totals, className }: { totals?: SessionTotals; className?: string }) {
-  if (!totals) {
-    return (
-      <div className={cn('flex items-center gap-2 text-xs text-muted-foreground', className)}>
-        <span className="text-[10px] italic">No metrics yet</span>
-      </div>
-    );
+  // Hide entirely when there are no meaningful values yet.
+  if (!totals || (totals.costUsd === 0 && totals.durationMs === 0 && totals.turns === 0)) {
+    return null;
   }
 
   const totalTokens =
@@ -52,19 +54,32 @@ export function SessionMeter({ totals, className }: { totals?: SessionTotals; cl
     (totals.outputTokens ?? 0) +
     (totals.cacheReadTokens ?? 0);
 
+  const parts: React.ReactNode[] = [];
+
+  if (totals.turns > 0) {
+    parts.push(<Metric key="turns" label="turns" value={String(totals.turns)} />);
+  }
+
+  if (totals.costUsd > 0) {
+    if (parts.length > 0) parts.push(<Separator key="sep-cost" />);
+    parts.push(<Metric key="cost" label="cost" value={`$${totals.costUsd.toFixed(4)}`} />);
+  }
+
+  if (totalTokens > 0) {
+    if (parts.length > 0) parts.push(<Separator key="sep-tok" />);
+    parts.push(<Metric key="tokens" label="tokens" value={fmtTokens(totalTokens)} />);
+  }
+
+  if (totals.durationMs > 0) {
+    if (parts.length > 0) parts.push(<Separator key="sep-dur" />);
+    parts.push(<Metric key="duration" label="duration" value={fmtDuration(totals.durationMs)} />);
+  }
+
+  if (parts.length === 0) return null;
+
   return (
-    <div className={cn('flex flex-wrap items-center gap-2', className)}>
-      <Metric label="turns" value={String(totals.turns)} />
-      <Separator />
-      <Metric label="cost" value={`$${totals.costUsd.toFixed(4)}`} />
-      {totalTokens > 0 && (
-        <>
-          <Separator />
-          <Metric label="tokens" value={fmtTokens(totalTokens)} />
-        </>
-      )}
-      <Separator />
-      <Metric label="duration" value={fmtDuration(totals.durationMs)} />
+    <div className={cn('flex flex-nowrap items-center gap-2 whitespace-nowrap', className)}>
+      {parts}
     </div>
   );
 }

@@ -1,0 +1,128 @@
+---
+title: "Work with images"
+description: "Attach screenshots, inspect local images, and explicitly request image generation or editing."
+---
+
+Use images when a screenshot, diagram, or visual reference communicates more than a text description. AFK can send inbound images to a vision-capable model, read local image files, and generate or edit images through OpenAI image services.
+
+## Attach an image and ask a question
+
+<Tabs items={['REPL', 'Telegram', 'Local file']}>
+<Tab value="REPL">
+
+<Steps>
+<Step>
+### Copy an image to the clipboard
+
+Copy the actual image or screenshot, not only its filename. On macOS, clipboard reading uses native tools; on Linux it uses `wl-paste` for Wayland or `xclip` for X11. Native Windows clipboard-image reading is not implemented by this path.
+</Step>
+<Step>
+### Paste into afk
+
+Use `Ctrl+V` for the explicit clipboard-image action. Terminal paste such as macOS `Cmd+V` can also trigger image detection when the terminal sends bracketed-paste events. Check for an attachment indicator before submitting.
+</Step>
+<Step>
+### Add the question and submit
+
+```text
+Find the alignment problem in this screenshot. Explain it before changing CSS.
+```
+
+The submitted turn includes the image and your text. If clipboard detection fails, save the screenshot to disk and use the local-file path instead.
+</Step>
+</Steps>
+
+</Tab>
+<Tab value="Telegram">
+
+Send a photo to the bot and put your question in the caption. The photo path accepts JPEG, PNG, GIF, or WebP after checking the downloaded bytes, with a 5 MiB limit. Send it as a photo rather than assuming an image sent as a generic document takes the same path.
+
+In groups configured to require mentions, address the bot in the caption or reply to its message. Photo input follows the same session routing and access checks as ordinary messages.
+
+</Tab>
+<Tab value="Local file">
+
+Ask the agent to call `view_image` on a file it is allowed to read:
+
+```text
+Use view_image to inspect ./screenshots/dashboard.png and describe the visual regression.
+```
+
+This does not require copying image bytes into the prompt. The agent resolves the path and reads the file through the image tool. A typed path is a request to read a file, not necessarily an attachment already sent with your message.
+
+</Tab>
+</Tabs>
+
+## Name images and forward them to subagents
+
+Inbound images receive stable session-scoped IDs, shown to the agent in markers such as:
+
+```text
+[image img_a1b2c3 · image/png · 240 KB]
+```
+
+You can call images “before” and “after” in your prompt and ask the coordinator to keep those labels straight. Runtime IDs are assigned from image content; this is not a separate user-facing rename command.
+
+For delegation, the `agent` tool and individual `compose` tasks accept `attachments`: up to **8** inbound image IDs or absolute image paths. The runtime resolves and forwards the bytes. Ask explicitly for the image to accompany the task:
+
+```text
+Ask a visual-review subagent to compare the before and after screenshots. Forward both attached images, not just your description of them.
+```
+
+Do not paste base64 into a dispatch prompt. IDs belong to the current session and should not be treated as permanent cross-session file references. Use a durable path when a later session needs the same image.
+
+## Inspect with `view_image`
+
+`view_image` accepts PNG, JPEG, GIF, and WebP. It makes no image-generation API call, but viewing the pixels consumes model context and can incur the model provider's normal inference cost. The file must be inside allowed read roots; protected credential paths remain blocked.
+
+The inline payload is limited to **2 MiB of base64** and **8,000 pixels in either dimension**. Oversized images return an omission notice rather than pixels. Crop or resize the source and try again.
+
+A vision-capable model is required. Both Anthropic and the OpenAI-compatible provider have image transport paths; for OpenAI-compatible tool results, pixels are delivered in a follow-up user message rather than in the text-only tool-result message. A text-only model or endpoint cannot inspect the pixels merely because the tool returned a filename.
+
+## Generate an image
+
+Ask for `image_generate` explicitly and specify your desired artifact:
+
+```text
+Generate one 1536x1024 image with gpt-image-1 at medium quality: a clean monochrome diagram of a three-stage ingestion pipeline. Save the PNG under ./artifacts/. Do not generate alternatives.
+```
+
+The tool accepts a prompt, model, size, quality, output format, and optional output path. Supported model choices are `gpt-image-1` (default), `gpt-image-1-mini`, `gpt-image-1.5`, and `gpt-image-2`. Sizes are `1024x1024`, `1024x1536`, `1536x1024`, or `auto`; quality is `low`, `medium`, `high`, or `auto`; formats are PNG, WebP, or JPEG.
+
+The default output directory is `.afk/generated-images/` under the working directory. By default the tool returns a saved path and metadata, **not inline pixels**. Request `inspect: true` only when the agent needs to evaluate the result in the same turn. Oversized inline results are still saved but returned without the pixels.
+
+## Edit an existing image
+
+```text
+Use image_edit on ./artifacts/pipeline.png. Keep the composition and labels, but replace the blue background with white. Save a new PNG rather than overwriting the original.
+```
+
+`image_edit` takes a prompt and `image_paths`, plus model, size, quality, format, and optional output path. It accepts up to **16** local PNG, JPEG, or WebP references, each at most **25 MiB**. GIF is supported by `view_image`, not by this edit input path. References must exist and pass read-root policy.
+
+The edited image is saved to disk and returned by path. Use `view_image` afterwards when visual verification matters.
+
+## Credentials, limits, and cost
+
+<Callout type="warn">
+Generation and editing send prompts, and for edits reference images, to an external service. API-key requests incur OpenAI image charges separately from the chat model's usage. Ask for a bounded number of results and do not upload private reference images without authorization. Inspection also adds model input cost.
+</Callout>
+
+| Setting | Purpose |
+| --- | --- |
+| `AFK_IMAGE_API_KEY` | Dedicated OpenAI image API key; preferred over general OpenAI credentials |
+| `AFK_IMAGE_SESSION_LIMIT` | Default 10 operations per session for each operation type |
+| `AFK_IMAGE_ALLOW_DAEMON` | Set exactly `1` to permit image operations in daemon/cron tasks |
+
+Generation and editing use **separate counters**, even though the same environment variable sets their limit. Ten edits do not consume the generation counter. Both tools require a session context and record their external effects.
+
+Without a dedicated key, generation uses the OpenAI credential chain, including API-key sources and supported ChatGPT subscription OAuth. Subscription generation uses its own backend route and account limits. **Editing does not support ChatGPT subscription OAuth** and requires an API key, such as `AFK_IMAGE_API_KEY`, `OPENAI_API_KEY`, or API-key credentials stored by Codex.
+
+The default daemon block prevents unattended image spend. Opting in removes that block, not service pricing or account quotas. See [API keys](/configuration/api-keys) for credential handling and [environment variables](/reference/environment-variables) for setting descriptions.
+
+## Related
+
+<Cards>
+<Card title="Delegate to subagents" href="/guides/subagents" description="Pass visual references with a bounded task." />
+<Card title="Choose a model" href="/configuration/models-providers" description="Use a provider and model that support vision." />
+<Card title="Track usage and cost" href="/guides/usage-and-cost" description="Separate model inference from image-service charges." />
+</Cards>

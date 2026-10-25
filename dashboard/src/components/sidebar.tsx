@@ -1,42 +1,36 @@
 import { cn } from '@/lib/utils';
 import type { SessionSummary } from '@/types/api';
 import { SessionCard } from './session-card';
-import {
-  MessageSquare,
-  Brain,
-  Calendar,
-  Briefcase,
-  Settings,
-  PanelLeftClose,
-  PanelLeft,
-} from 'lucide-react';
-
-type NavItem = 'sessions' | 'memory' | 'schedules' | 'jobs' | 'settings';
-
-const navItems: { id: NavItem; label: string; icon: React.ReactNode }[] = [
-  { id: 'sessions', label: 'Sessions', icon: <MessageSquare className="size-4" /> },
-  { id: 'memory', label: 'Memory', icon: <Brain className="size-4" /> },
-  { id: 'schedules', label: 'Schedules', icon: <Calendar className="size-4" /> },
-  { id: 'jobs', label: 'Jobs', icon: <Briefcase className="size-4" /> },
-  { id: 'settings', label: 'Settings', icon: <Settings className="size-4" /> },
-];
+import { Plus, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { listNavItems } from '@/lib/nav-registry';
 
 export function Sidebar({
   sessions,
   pendingSessionIds,
+  busySessionIds,
   selectedSessionId,
   onSelectSession,
+  onResumeSession,
   activeNav,
   onNavChange,
   collapsed,
   onToggleCollapse,
+  onNewSession,
+  starting = false,
+  runningSessionId,
 }: {
+  onNewSession?: () => void;
+  starting?: boolean;
+  runningSessionId?: string | null;
   sessions: SessionSummary[];
   pendingSessionIds: Set<string>;
+  busySessionIds?: Set<string>;
   selectedSessionId: string | null;
   onSelectSession: (id: string) => void;
-  activeNav: NavItem;
-  onNavChange: (nav: NavItem) => void;
+  /** Called when user clicks Resume on a readonly session card. */
+  onResumeSession?: (sessionId: string) => void;
+  activeNav: string;
+  onNavChange: (nav: string) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
 }) {
@@ -44,7 +38,8 @@ export function Sidebar({
     <aside
       className={cn(
         'flex h-full shrink-0 flex-col border-r bg-card transition-[width] duration-200',
-        collapsed ? 'w-14' : 'w-72',
+        collapsed ? 'w-72 md:w-14' : 'w-72',
+        'max-w-[85vw]',
       )}
     >
       {/* Header */}
@@ -57,7 +52,7 @@ export function Sidebar({
         )}
         <button
           onClick={onToggleCollapse}
-          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="hidden rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:block"
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {collapsed ? (
@@ -68,9 +63,17 @@ export function Sidebar({
         </button>
       </div>
 
+      {onNewSession && (
+        <button onClick={onNewSession} disabled={starting} title="Start a new chat"
+          className="mx-2 mt-3 flex min-h-10 items-center justify-center gap-2 rounded-lg bg-brand px-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+          <Plus className="size-4 shrink-0" />
+          {!collapsed && (starting ? 'Starting…' : 'New chat')}
+        </button>
+      )}
+
       {/* Navigation */}
       <nav className="flex flex-col gap-0.5 p-2">
-        {navItems.map((item) => (
+        {listNavItems().map((item) => (
           <button
             key={item.id}
             onClick={() => onNavChange(item.id)}
@@ -81,8 +84,10 @@ export function Sidebar({
                 : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
             )}
             title={collapsed ? item.label : undefined}
+            aria-label={item.label}
+            aria-current={activeNav === item.id ? 'page' : undefined}
           >
-            {item.icon}
+            <item.icon className="size-4" aria-hidden="true" />
             {!collapsed && <span>{item.label}</span>}
           </button>
         ))}
@@ -102,8 +107,11 @@ export function Sidebar({
                   key={s.id}
                   session={s}
                   pendingSessionIds={pendingSessionIds}
+                  busySessionIds={busySessionIds}
                   selected={selectedSessionId === s.id}
+                  running={runningSessionId === s.id}
                   onSelect={onSelectSession}
+                  onResume={onResumeSession}
                 />
               ))}
             </div>

@@ -19,12 +19,13 @@
  * @module agent/tools/subagent/root-validation
  */
 
-import { isAbsolute, parse as parsePath, relative as relativePath } from 'node:path';
+import { isAbsolute, parse as parsePath, relative as relativePath, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { realpathSafe } from '../handlers/_cwd-utils.js';
 import { getAfkHome, getAfkStateDir } from '../../../paths.js';
 import { warnAfkHomeRejectedOnce } from '../afk-home-warn.js';
 import { deriveRestrictedSubstrings } from '../hooks/bash-restriction-hook.js';
+import { isReadDenied, READ_DENYLIST_ENTRY_MARKER } from '../handlers/read-denylist.js';
 
 // Home targets for the shared breadth guard below. Computed once at module
 // scope — `homedir()` is stable per process, so there is no need to
@@ -153,4 +154,121 @@ export function ungatedSensitiveRoot(candidate: string): string | undefined {
     }
   }
   return undefined;
+}
+
+export type RootField = 'cwd' | 'readRoots' | 'writeRoots';
+export type RootValidationCaller = { kind: 'agent' } | { kind: 'compose'; nodeId: string };
+type RootFailure = 'empty' | 'absolute' | 'segments' | 'breadth' | 'denied' | 'sensitive';
+
+/** Contract: preserve each dispatch surface's wording, not just its rejection set. */
+function rootError(
+  caller: RootValidationCaller, field: RootField, value: unknown,
+  failure: RootFailure, detail?: string,
+): Error {
+  const quoted = JSON.stringify(value);
+  if (caller.kind === 'compose') {
+    const label = `Node "${caller.nodeId}" ${field}`;
+    const entry = field === 'cwd' ? label : `${label} entry`;
+    switch (failure) {
+      case 'empty': return new Error(`${label} ${field === 'cwd' ? 'must be a non-empty string' : 'entries must be non-empty strings'}`);
+      case 'absolute': return new Error(`${entry} must be an absolute path (got "${value}")`);
+      case 'segments': return new Error(`${entry} must not contain ".." segments`);
+      case 'breadth': return new Error(`${entry} is too broad (filesystem root, home, or an ancestor of home/AFK dirs): ${field === 'cwd' ? `"${value}"` : quoted}`);
+      case 'sensitive': return new Error(`${entry} would un-gate credential root "${detail}": ${field === 'cwd' ? `"${value}"` : quoted}`);
+      case 'denied': return new Error(`${entry} must not target a protected/credential path (matches ${READ_DENYLIST_ENTRY_MARKER} ${detail}), got: ${quoted}`);
+    }
+  }
+  const label = `Agent tool ${field}${field === 'cwd' ? '' : ' entries'}`;
+  switch (failure) {
+    case 'empty': return new Error(`${label} must be non-empty strings, got: ${quoted}`);
+    case 'absolute': return new Error(`${label} must be ${field === 'cwd' ? 'an absolute path' : 'absolute paths'}, got: ${quoted}`);
+    case 'segments': return new Error(`${label} must not contain '..' segments, got: ${quoted}`);
+    case 'denied': return new Error(`${label} must not target a protected/credential path (matches ${READ_DENYLIST_ENTRY_MARKER} ${detail}), got: ${quoted}`);
+    case 'breadth': {
+      if (field === 'cwd') return new Error(
+        `Agent tool cwd must not be a filesystem root, your home directory, ` +
+        `or an ancestor of it (checked after resolving symlinks) — pass a ` +
+        `specific subdirectory instead. If the child only needs to READ files ` +
+        `outside its tree (dotfiles, ~/.config), do NOT move cwd there: leave ` +
+        `cwd alone and grant those paths via readRoots. Got: ${quoted}`,
+      );
+      if (field === 'writeRoots') return new Error(
+        `Agent tool writeRoots entries must not be a filesystem root, your home ` +
+        `directory, or an ancestor of it (checked after resolving symlinks) — ` +
+        `grant a specific subdirectory instead, got: ${quoted}`,
+      );
+      return new Error(
+        `Agent tool readRoots entries must not be a filesystem root, your home directory, ` +
+        `or an ancestor of it (checked after resolving symlinks) — grant specific ` +
+        `subdirectories, or the individual FILES you need: a single file is a valid ` +
+        `read root and grants exactly that file, which is how to reach home-root ` +
+        `dotfiles (e.g. "<home>/.zshrc", "<home>/.gitconfig") without granting the ` +
+        `home directory. Got: ${quoted}`,
+      );
+    }
+    case 'sensitive': {
+      if (field === 'cwd') return new Error(
+        `Agent tool cwd must not be at or above a credential root the bash ` +
+        `restriction protects (${detail}) — anchoring the child there would ` +
+        `silently drop that whole tree out of its bash gate. Pass a directory ` +
+        `outside it. Got: ${quoted}`,
+      );
+      return new Error(
+        `Agent tool ${field} entries must not be at or above a credential root ` +
+        `the bash restriction protects (${detail}) — granting it would silently ` +
+        `drop that whole tree out of the child's bash gate. Grant a narrower ` +
+        (field === 'writeRoots' ? `subdirectory instead. Got: ${quoted}` :
+          `subdirectory, or the individual FILES you need: a single file is a valid ` +
+          `read root and grants exactly that file. Got: ${quoted}`),
+      );
+    }
+  }
+}
+
+/**
+ * Contract: validate one path without rewriting the returned spelling or requiring
+ * existence/a directory (single-file roots and not-yet-created paths are valid).
+ * Agent cwd is already string/blank-normalized by readOptionalString; array entries
+ * are not. Compose rejects whitespace entries, agent arrays reject only empty ones.
+ * Invariant: keep historical precedence. Agent normalizes before breadth (both
+ * forms), denylist (arrays only), then sensitive-root checks. Compose interleaves
+ * breadth/sensitive checks per raw/real form, then checks the denylist for arrays.
+ * Neither surface applies the read denylist to cwd.
+ */
+export function validateRootPath(
+  value: unknown, field: RootField, caller: RootValidationCaller,
+): string {
+  if (caller.kind === 'compose' || field !== 'cwd') {
+    // Invariant: agent cwd skips this guard because readOptionalString
+    // (input-parse.roots.ts) has already coerced blank/non-string values to
+    // undefined, so only a valid non-empty string reaches here. Skipping keeps
+    // the 'empty' error reserved for explicit empty strings on array fields; a
+    // value that slipped the upstream normalization would get 'absolute' instead.
+    if (typeof value !== 'string' || (caller.kind === 'compose' ? value.trim().length : value.length) === 0) {
+      throw rootError(caller, field, value, 'empty');
+    }
+  }
+  const entry = value as string;
+  if (!isAbsolute(entry)) throw rootError(caller, field, entry, 'absolute');
+  if (entry.split(/[/\\]/).includes('..')) throw rootError(caller, field, entry, 'segments');
+  const resolved = caller.kind === 'agent' ? resolvePath(entry) : entry;
+  const real = realpathSafe(resolved);
+  if (caller.kind === 'compose') {
+    for (const form of [...new Set([resolved, real])]) {
+      if (isTooBroadRoot(form)) throw rootError(caller, field, entry, 'breadth');
+      const sensitive = ungatedSensitiveRoot(form);
+      if (sensitive !== undefined) throw rootError(caller, field, entry, 'sensitive', sensitive);
+    }
+  } else if (isTooBroadRoot(resolved) || isTooBroadRoot(real)) {
+    throw rootError(caller, field, entry, 'breadth');
+  }
+  if (field !== 'cwd') {
+    const denied = isReadDenied(resolved);
+    if (denied.denied) throw rootError(caller, field, entry, 'denied', denied.matched);
+  }
+  if (caller.kind === 'agent') {
+    const sensitive = ungatedSensitiveRoot(resolved);
+    if (sensitive !== undefined) throw rootError(caller, field, entry, 'sensitive', sensitive);
+  }
+  return entry;
 }

@@ -144,28 +144,15 @@ describe('buildResponsesRequestBody', () => {
   });
 });
 
-// Fix #3963 (fix 1): wind-down rounds keep tool defs and set tool_choice:"none"
-describe('wind-down tool_choice:none — Chat Completions', () => {
-  it('sets tool_choice:none and keeps tools when windDown:true', () => {
+// Wind-down rounds send the same tools array — no tool_choice override.
+// Safety lives in the turn driver (wind-down-final.ts); the request body
+// is identical to a normal round so prefix caches stay valid.
+describe('wind-down tools passthrough — Chat Completions', () => {
+  it('includes tools and never sets tool_choice', () => {
     const body = buildChatCompletionsRequestBody({
       model: 'gpt-4o',
       messages: MESSAGES,
       activeTools: TOOLS,
-      windDown: true,
-      maxOutputTokens: undefined,
-      effort: undefined,
-      temperature: undefined,
-    });
-    expect(body['tools']).toBe(TOOLS);
-    expect(body['tool_choice']).toBe('none');
-  });
-
-  it('omits tool_choice when windDown is false/absent', () => {
-    const body = buildChatCompletionsRequestBody({
-      model: 'gpt-4o',
-      messages: MESSAGES,
-      activeTools: TOOLS,
-      windDown: false,
       maxOutputTokens: undefined,
       effort: undefined,
       temperature: undefined,
@@ -174,12 +161,11 @@ describe('wind-down tool_choice:none — Chat Completions', () => {
     expect('tool_choice' in body).toBe(false);
   });
 
-  it('omits both tools and tool_choice when activeTools is undefined', () => {
+  it('omits tools when activeTools is undefined', () => {
     const body = buildChatCompletionsRequestBody({
       model: 'gpt-4o',
       messages: MESSAGES,
       activeTools: undefined,
-      windDown: true,
       maxOutputTokens: undefined,
       effort: undefined,
       temperature: undefined,
@@ -189,23 +175,8 @@ describe('wind-down tool_choice:none — Chat Completions', () => {
   });
 });
 
-describe('wind-down tool_choice:none — Responses API', () => {
-  it('sets tool_choice:none and keeps tools when windDown:true', () => {
-    const body = buildResponsesRequestBody({
-      model: 'gpt-4o',
-      messages: MESSAGES,
-      activeTools: TOOLS,
-      windDown: true,
-      maxOutputTokens: undefined,
-      effort: undefined,
-      temperature: undefined,
-      isChatGptBackend: false,
-    });
-    expect(body['tools']).toBeDefined();
-    expect(body['tool_choice']).toBe('none');
-  });
-
-  it('omits tool_choice when windDown is absent', () => {
+describe('wind-down tools passthrough — Responses API', () => {
+  it('includes tools and never sets tool_choice', () => {
     const body = buildResponsesRequestBody({
       model: 'gpt-4o',
       messages: MESSAGES,

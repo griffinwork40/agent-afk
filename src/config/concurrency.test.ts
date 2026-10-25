@@ -129,3 +129,91 @@ describe('concurrency settings', () => {
     });
   });
 });
+
+// ── Per-provider subagent concurrency resolver (#3886) ────────────────────────
+
+describe('resolveMaxConcurrentSubagentCallsForProvider', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('returns the global default when no per-provider key is set and provider is undefined', async () => {
+    const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
+    expect(resolveMaxConcurrentSubagentCallsForProvider(undefined)).toBe(
+      DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+    );
+  });
+
+  it('returns the global default when provider is unknown (e.g. xai)', async () => {
+    const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
+    expect(resolveMaxConcurrentSubagentCallsForProvider('xai')).toBe(
+      DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+    );
+  });
+
+  it('returns the global default when anthropic-direct key is unset', async () => {
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC', undefined);
+    const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
+    expect(resolveMaxConcurrentSubagentCallsForProvider('anthropic-direct')).toBe(
+      DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+    );
+  });
+
+  it('uses AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC when set and provider matches', async () => {
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC', '3');
+    const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
+    expect(resolveMaxConcurrentSubagentCallsForProvider('anthropic-direct')).toBe(3);
+  });
+
+  it('uses AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI when set and provider matches', async () => {
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI', '5');
+    const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
+    expect(resolveMaxConcurrentSubagentCallsForProvider('openai-compatible')).toBe(5);
+  });
+
+  it('ANTHROPIC key does not affect openai-compatible resolution', async () => {
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC', '2');
+    const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
+    expect(resolveMaxConcurrentSubagentCallsForProvider('openai-compatible')).toBe(
+      DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+    );
+  });
+
+  it('OPENAI key does not affect anthropic-direct resolution', async () => {
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI', '2');
+    const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
+    expect(resolveMaxConcurrentSubagentCallsForProvider('anthropic-direct')).toBe(
+      DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+    );
+  });
+
+  it('falls back to global when the per-provider value is invalid', async () => {
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC', 'bad');
+    // Set a distinct global cap so we confirm fallback reaches it rather
+    // than accidentally matching the hardcoded default (8).
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS', '3');
+    const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
+    expect(resolveMaxConcurrentSubagentCallsForProvider('anthropic-direct')).toBe(3);
+  });
+
+  it('falls back to global when per-provider value is above the ceiling', async () => {
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC', String(MAX_CONCURRENT_SUBAGENT_CALLS_CEILING + 1));
+    // Distinct global cap to verify fallback targets it.
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS', '4');
+    const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
+    expect(resolveMaxConcurrentSubagentCallsForProvider('anthropic-direct')).toBe(4);
+  });
+
+  it('per-provider overrides global when both are set', async () => {
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS', '6');
+    vi.stubEnv('AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC', '2');
+    const { resolveMaxConcurrentSubagentCallsForProvider } = await freshConcurrency();
+    // anthropic-direct uses the provider-specific cap
+    expect(resolveMaxConcurrentSubagentCallsForProvider('anthropic-direct')).toBe(2);
+    // unknown provider falls back to the global override
+    expect(resolveMaxConcurrentSubagentCallsForProvider('xai')).toBe(6);
+  });
+});

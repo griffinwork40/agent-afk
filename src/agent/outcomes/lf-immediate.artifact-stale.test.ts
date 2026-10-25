@@ -137,10 +137,9 @@ describe('lfVerification – bash write after passing test (Scenario 4)', () => 
     ];
 
     const vote = lfVerification(turns, NOW);
-    // Option 1 fix: lastWriteIdx advances past the test → no verification found → null.
-    // Option 2 (content-hash, out of scope) would produce vote -1.
-    // Both satisfy: not a positive verification.
-    expect(vote === null || vote.vote !== 1).toBe(true);
+    // #3822 fixed via Option 1: mutating bash advances lastWriteIdx past the
+    // test run, so no verification is found after the last write → null.
+    expect(vote).toBeNull();
   });
 
   /**

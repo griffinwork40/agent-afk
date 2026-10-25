@@ -17,6 +17,7 @@ import type {
   ProviderQuery,
   ProviderQueryArgs,
   ProviderCompleteArgs,
+  ProviderCompleteResult,
 } from '../../provider.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
 import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
@@ -47,13 +48,15 @@ import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspac
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
+import { grantsWorkspacePrompt, providerGrantsTool } from '../shared/tool-grant.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
+import { sortMcpSchemas } from '../../tools/schemas.order.js';
 import { applyReadOnlyGitPermissions, readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
-import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
+import { completeWithWireWithStop, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
@@ -133,11 +136,6 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this._stateStore = opts.stateStore;
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas, ...readOnlyGitSchemas()];
-    // Executor-supplied `agent` def advertises named agent types when a
-    // registry is wired — parity with anthropic-direct (see agents/tool-def.ts).
-    if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
-    if (opts.skillExecutor) schemas.push(skillTool);
-    if (opts.composeExecutor) schemas.push(composeTool);
     if (opts.readOnlyMemory === true) {
       schemas.push(memorySearchTool);
     } else {
@@ -155,6 +153,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // SubagentHandleImpl wiring (setSubscribeHandler) not yet supported by this provider.
     // Only publish + query are advertised; subscribe goes through anthropic-direct only.
     schemas.push(...(this.workspaceStore !== undefined ? [workspacePublishTool, workspaceQueryTool] : []), getRuntimeStateTool);
+    // Nesting tools — placed AFTER memory/state/get_runtime_state (#4217) so
+    // variation in their schemas (present vs absent at max depth, or a
+    // different `agent_type` property when a registry is wired) invalidates
+    // the fewest cached tokens. Executor-supplied `agent` def advertises
+    // named agent types when a registry is wired — parity with
+    // anthropic-direct (see agents/tool-def.ts).
+    if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
+    if (opts.skillExecutor) schemas.push(skillTool);
+    if (opts.composeExecutor) schemas.push(composeTool);
     // Custom (consumer-registered) tool schemas are appended last so their
     // names never silently shadow a builtin. A custom schema whose name
     // collides with an already-present builtin (or an earlier custom tool) is
@@ -313,13 +320,23 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const spw = buildSystemPromptWiring({
       config,
       skillExecutor: this.providerOpts.skillExecutor ?? undefined,
-      hasWorkspaceStore: this.workspaceStore !== undefined,
+      workspacePromptEnabled: grantsWorkspacePrompt((toolName) => this.grantsTool(toolName)),
       readOnlyMemory: this.providerOpts.readOnlyMemory,
       readOnlyState: this.providerOpts.readOnlyState,
       resolvedSessionId: resolvedSession.id,
       surface: this.providerOpts.surface ?? 'cli',
       getCurrentCwd: () => _currentCwd,
       runtimeStateSource,
+      // Dynamic agent-type listing injected into the volatile system-prompt tail
+      // rather than the tool description, preserving prefix-cache stability across
+      // sessions that differ only in their agent sets (#4217).
+      // Gate on the agent tool being both registered (this.schemas: executor wired
+      // at construction) and granted by this provider's permissions, the same
+      // #4060 grant answer the workspace section uses, so the prompt never lists
+      // agent types for a tool the model cannot call.
+      agentTypeListing: this.schemas.some((s) => s.name === 'agent') && this.grantsTool('agent')
+        ? (this.providerOpts.subagentExecutor?.describeAgentTypeListing?.() ?? '')
+        : '',
     });
 
     const patchedConfig: typeof config = { ...config, systemPrompt: spw.initialSystemPrompt };
@@ -412,12 +429,21 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // schema appended last, RESIDENT whenever planExitControls is present
       // (top-level); query.ts drops it from the advertised tools on non-plan
       // turns so the model sees it only when it is actionable.
-      schemas: [...baseSchemas, ...mcpSchemas, ...(planExitControls ? [exitPlanModeTool] : [])],
+      // MCP segment sorted by name (#4198): deterministic across connection
+      // orders so prefix-cache hits are not broken by MCP registration order.
+      schemas: [...baseSchemas, ...sortMcpSchemas(mcpSchemas), ...(planExitControls ? [exitPlanModeTool] : [])],
       // Session hook registry via the one canonical resolver (query-scoped
       // config registry wins over any constructor-provided one). Mirrors
       // AnthropicDirectProvider; the required key on the dispatcher options
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
+      // #4064: MCP-aware unknown-tool messages. Forward a live accessor so that
+      // when a model calls mcp__<server>__<tool> for a failed server the response
+      // names the server and its error instead of the generic "tool does not exist".
+      // Mirrors AnthropicDirectProvider build-dispatcher.ts:389-391.
+      getMcpServerStates: this.providerOpts.mcpManager
+        ? () => this.providerOpts.mcpManager!.getServerStates()
+        : () => [],
     };
     // MCP + custom-tool unions, then operator denies LAST (shared with
     // AnthropicDirectProvider; invariant in tools/permissions-compose.ts).
@@ -533,6 +559,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
     return this.grantManager.getGrants();
   }
 
+  /** See {@link ModelProvider.grantsTool}. Same permissions + store the dispatcher uses. */
+  grantsTool(toolName: string): boolean {
+    return providerGrantsTool(toolName, this.providerOpts.permissions, this.workspaceStore !== undefined);
+  }
+
   close(): void {
     // Only close owned stores; the workspace store is always injected.
     if (!this._injectedMemoryStore) {
@@ -556,6 +587,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
    * `args.baseUrl` overrides the construction option when both are present.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
+    return (await this.completeWithStop(args)).text;
+  }
+
+  /** {@link complete} plus the stop reason (see ModelProvider.completeWithStop). */
+  async completeWithStop(args: ProviderCompleteArgs): Promise<ProviderCompleteResult> {
     const input: OpenAIOneShotInput = {
       model: args.model ?? 'gpt-4o-mini',
       system: args.system,
@@ -569,7 +605,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // setEndpointDefaults) so complete() matches query() credentials.
     if (this._defaultHeaders !== undefined) input.defaultHeaders = this._defaultHeaders;
     if (args.signal) input.signal = args.signal;
-    return completeWithWire(input);
+    return completeWithWireWithStop(input);
   }
 }
 

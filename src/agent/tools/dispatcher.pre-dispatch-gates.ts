@@ -51,7 +51,7 @@ import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
 import { isBackgroundBashLaunch } from './bash-background-flag.js';
-import { isReadOnlyGitToolEnabled, READONLY_BASH_DISABLED_REASON } from './readonly-git-surface.js';
+import { isReadOnlyGitToolEnabled, READONLY_BASH_DISABLED_REASON, readOnlyBashDenialOverride } from './readonly-git-surface.js';
 import { isPeerToolBlocked, peerToolChildDenial } from './peer-tool-gate.js';
 import type { HookBlockRepeatState } from './hook-block-repeat-breaker.js';
 import { applyHookBlockRepeatGate as applyHookBlockRepeat } from './dispatcher.hook-block-repeat-gate.js';
@@ -637,7 +637,7 @@ export async function runPreDispatchGates(
   // 2. Permission check
   const permResult = checkToolPermission(call.name, deps.permissions);
   if (!permResult.allowed) {
-    const reason = deps.denialReason(call.name, permResult.reason);
+    const reason = readOnlyBashDenialOverride(call.name, deps.readOnlyBash) ?? deps.denialReason(call.name, permResult.reason);
     await emitPreToolUseBlock(call.name, reason, deps);
     return { content: reason, isError: true, failureClass: 'permission-denied' };
   }

@@ -342,6 +342,25 @@ describe('classifyRisk — bash safe', () => {
     expect(classifyRisk('bash', { command: 'wget --spider https://example.com/health' }, ctx)).toBe('safe');
   });
 
+  // ── mutation-guard: classifyBashCommand override (#3846) ─────────────────
+  // These commands match a BASH_SAFE prefix at command position but carry a
+  // mutating flag/argument that classifyBashCommand's tokenizer catches. The
+  // safe-table match must NOT win; the mutation guard must escalate to high.
+  it('curl -I … -X "POST" → high (quoted method overrides curl -I safe prefix)', () => {
+    // Golden case from issue #3846 comment: classifyRisk previously returned
+    // 'safe' because 'curl -I' matched the safe table, but classifyBashCommand
+    // correctly flags -X "POST" (quoted method) as mutating. Both must agree.
+    expect(
+      classifyRisk('bash', { command: 'curl -I https://example.com -X "POST"' }, ctx),
+    ).toBe('high');
+  });
+
+  it('curl -sI … -X DELETE → high (silent HEAD prefix + mutating method)', () => {
+    expect(
+      classifyRisk('bash', { command: 'curl -sI https://api.example.com/resource -X DELETE' }, ctx),
+    ).toBe('high');
+  });
+
   // Mutating gh subcommands must NOT be safe-listed
   it('gh pr merge → medium (mutating, not safe-listed)', () => {
     expect(classifyRisk('bash', { command: 'gh pr merge 123 --squash' }, ctx)).toBe('medium');
@@ -353,6 +372,28 @@ describe('classifyRisk — bash safe', () => {
 
   it('gh pr comment → medium (mutating, not safe-listed)', () => {
     expect(classifyRisk('bash', { command: 'gh pr comment 123 --body "LGTM"' }, ctx)).toBe('medium');
+  });
+
+  // ── known residuals (Tier-2, #4103) ──────────────────────────────────────
+  // classifyBashCommand's FS_MUTATING regex matches bare unquoted FS-verb args
+  // of safe-listed readers — e.g. `grep -rn truncate src/` is classified
+  // mutating and escalated to `high` even though `truncate` is a grep search
+  // term, not a command invocation. This is safe-side (over-gates: prompts the
+  // user, never silently allows a write). The 17-verb FS_MUTATING set includes
+  // truncate, tee, dd, mv, cp, rm, …; CMD_START-anchoring fix tracked in #3846.
+  it('grep -rn truncate src/ → high (known Tier-2 over-gate, safe-side)', () => {
+    expect(classifyRisk('bash', { command: 'grep -rn truncate src/' }, ctx)).toBe('high');
+  });
+
+  it('grep -rn rsync src/ → high (known Tier-2 over-gate, same FS_MUTATING set)', () => {
+    // `rsync` is in the 17-verb FS_MUTATING set but absent from BASH_MEDIUM/
+    // BASH_HIGH, so a grep arg of `rsync` reaches the classifyBashCommand guard
+    // and triggers the same CMD_START-unanchored over-gate as `truncate` above.
+    expect(classifyRisk('bash', { command: 'grep -rn rsync src/' }, ctx)).toBe('high');
+  });
+
+  it('grep -rn dd src/ → high (known Tier-2 over-gate, same FS_MUTATING set)', () => {
+    expect(classifyRisk('bash', { command: 'grep -rn dd src/' }, ctx)).toBe('high');
   });
 });
 
@@ -505,6 +546,11 @@ describe('classifyRisk — other tools', () => {
 
   it('remote_agent → high (arbitrary remote execution, bypassPermissions default)', () => {
     expect(classifyRisk('remote_agent', { host: 'cm', prompt: 'rm -rf /' }, ctx)).toBe('high');
+  });
+
+  // Finding 6: agent tool with host set must also be high risk
+  it('agent with host → high (same SSH transport as remote_agent)', () => {
+    expect(classifyRisk('agent', { host: 'myhost', prompt: 'hi' }, ctx)).toBe('high');
   });
   it('send_telegram → medium', () => {
     expect(classifyRisk('send_telegram', { message: 'hello' }, ctx)).toBe('medium');
@@ -869,10 +915,9 @@ describe('classifyRisk — #3534 word-start matrix', () => {
   });
 
   it('separator-evasion reason names the matched word', () => {
-    expect(classifyRiskDetailed('bash', { command: 'rm\t-rf x' }, ctx)).toEqual({
-      level: 'high',
-      reason: "bash-pattern: matched 'rm'",
-    });
+    expect(classifyRiskDetailed('bash', { command: 'rm\t-rf x' }, ctx)).toEqual(
+      expect.objectContaining({ level: 'high', reason: "bash-pattern: matched 'rm'" }),
+    );
   });
 
   // Regression guard for issue #3659: SEPARATOR_EVASION lookahead did not
@@ -1355,10 +1400,9 @@ describe('classifyRiskDetailed — reasons for each high category', () => {
   });
 
   it('bash-pattern names the matched token', () => {
-    expect(classifyRiskDetailed('bash', { command: 'sudo ls' }, ctx)).toEqual({
-      level: 'high',
-      reason: "bash-pattern: matched 'sudo'",
-    });
+    expect(classifyRiskDetailed('bash', { command: 'sudo ls' }, ctx)).toEqual(
+      expect.objectContaining({ level: 'high', reason: "bash-pattern: matched 'sudo'" }),
+    );
   });
 
   it('schedule-mutation', () => {
@@ -1368,10 +1412,9 @@ describe('classifyRiskDetailed — reasons for each high category', () => {
   });
 
   it('mcp-destructive-verb names the verb', () => {
-    expect(classifyRiskDetailed('mcp__postgres__drop_table', {}, ctx)).toEqual({
-      level: 'high',
-      reason: 'mcp-destructive-verb: drop',
-    });
+    expect(classifyRiskDetailed('mcp__postgres__drop_table', {}, ctx)).toEqual(
+      expect.objectContaining({ level: 'high', reason: 'mcp-destructive-verb: drop' }),
+    );
   });
 
   it('worktree force remove and web_request DELETE carry reasons', () => {
@@ -1463,5 +1506,164 @@ describe('classifyRisk — AFK_HOME inside temp root blocks carve-out', () => {
   it('write to sibling temp fixture outside AFK_HOME → safe (carve-out still works)', () => {
     const target = path.join(sibling, 'scratch.txt');
     expect(classifyRisk('write_file', { file_path: target }, ws3Ctx)).toBe('safe');
+  });
+});
+
+// ── RiskCategory (#3900) ─────────────────────────────────────────────────────
+// Every classifyRiskDetailed verdict must carry a `category` field that names
+// the broad rule family. These tests assert the expected category for one
+// representative path per category value — ensuring the field is always present
+// and that the mapping is stable.
+
+describe('classifyRiskDetailed — category field (#3900)', () => {
+  const ctx: RiskContext = { cwd: '/workspace', workspaceRoot: '/workspace' };
+
+  it('bash BASH_HIGH pattern → bash-destructive', () => {
+    const v = classifyRiskDetailed('bash', { command: 'rm -rf /' }, ctx);
+    expect(v.category).toBe('bash-destructive');
+  });
+
+  it('bash BASH_MEDIUM pattern → bash-mutating', () => {
+    const v = classifyRiskDetailed('bash', { command: 'git push origin main' }, ctx);
+    expect(v.category).toBe('bash-mutating');
+  });
+
+  it('bash BASH_SAFE pattern → read-only', () => {
+    const v = classifyRiskDetailed('bash', { command: 'git status' }, ctx);
+    expect(v.category).toBe('read-only');
+  });
+
+  it('bash unknown command → bash-mutating (default-medium)', () => {
+    const v = classifyRiskDetailed('bash', { command: 'some-unknown-tool --flag' }, ctx);
+    expect(v.category).toBe('bash-mutating');
+  });
+
+  it('bash run_in_background safe → bash-background', () => {
+    const v = classifyRiskDetailed(
+      'bash',
+      { command: 'pnpm test', run_in_background: true },
+      ctx,
+    );
+    expect(v.category).toBe('bash-background');
+  });
+
+  it('read_file → read-only', () => {
+    expect(classifyRiskDetailed('read_file', {}, ctx).category).toBe('read-only');
+  });
+
+  it('send_telegram → outbound-message', () => {
+    expect(classifyRiskDetailed('send_telegram', {}, ctx).category).toBe('outbound-message');
+  });
+
+  it('remote_agent → remote-exec', () => {
+    expect(classifyRiskDetailed('remote_agent', {}, ctx).category).toBe('remote-exec');
+  });
+
+  // Finding 6: agent+host must classify as remote-exec
+  it('agent with host → remote-exec category', () => {
+    expect(classifyRiskDetailed('agent', { host: 'myhost', prompt: 'hi' }, ctx).category).toBe('remote-exec');
+  });
+
+  it('mcp__db__delete → mcp-destructive', () => {
+    expect(classifyRiskDetailed('mcp__db__delete', {}, ctx).category).toBe('mcp-destructive');
+  });
+
+  it('mcp__server__query (no destructive verb) → mcp-unknown', () => {
+    expect(classifyRiskDetailed('mcp__server__query', {}, ctx).category).toBe('mcp-unknown');
+  });
+
+  it('create_schedule → schedule-mutation', () => {
+    expect(classifyRiskDetailed('create_schedule', {}, ctx).category).toBe('schedule-mutation');
+  });
+
+  it('worktree list → read-only', () => {
+    expect(classifyRiskDetailed('worktree', { action: 'list' }, ctx).category).toBe('read-only');
+  });
+
+  it('worktree create → worktree-mutation', () => {
+    expect(classifyRiskDetailed('worktree', { action: 'create' }, ctx).category).toBe('worktree-mutation');
+  });
+
+  it('worktree remove --force → worktree-mutation (high)', () => {
+    const v = classifyRiskDetailed('worktree', { action: 'remove', force: true }, ctx);
+    expect(v.level).toBe('high');
+    expect(v.category).toBe('worktree-mutation');
+  });
+
+  it('browser_open → browser-action', () => {
+    expect(classifyRiskDetailed('browser_open', {}, ctx).category).toBe('browser-action');
+  });
+
+  it('browser_observe → read-only', () => {
+    expect(classifyRiskDetailed('browser_observe', {}, ctx).category).toBe('read-only');
+  });
+
+  it('browser_screenshot → read-only', () => {
+    expect(classifyRiskDetailed('browser_screenshot', {}, ctx).category).toBe('read-only');
+  });
+
+  it('browser_close → read-only', () => {
+    expect(classifyRiskDetailed('browser_close', {}, ctx).category).toBe('read-only');
+  });
+
+  it('edit_file → workspace-write', () => {
+    const v = classifyRiskDetailed('edit_file', { file_path: '/workspace/foo.ts' }, ctx);
+    expect(v.category).toBe('workspace-write');
+  });
+
+  it('patch_apply → workspace-write', () => {
+    const v = classifyRiskDetailed('patch_apply', { changes: [{ path: '/workspace/foo.ts' }] }, ctx);
+    expect(v.category).toBe('workspace-write');
+  });
+
+  it('web_scrape → network-mutation', () => {
+    expect(classifyRiskDetailed('web_scrape', {}, ctx).category).toBe('network-mutation');
+  });
+
+  it('web_request DELETE → network-mutation (high)', () => {
+    const v = classifyRiskDetailed('web_request', { method: 'DELETE' }, ctx);
+    expect(v.level).toBe('high');
+    expect(v.category).toBe('network-mutation');
+  });
+
+  it('web_request GET → read-only', () => {
+    expect(classifyRiskDetailed('web_request', { method: 'GET' }, ctx).category).toBe('read-only');
+  });
+
+  it('web_request POST → network-mutation (medium)', () => {
+    const v = classifyRiskDetailed('web_request', { method: 'POST' }, ctx);
+    expect(v.level).toBe('medium');
+    expect(v.category).toBe('network-mutation');
+  });
+
+  it('wait_for file → read-only', () => {
+    expect(classifyRiskDetailed('wait_for', { type: 'file' }, ctx).category).toBe('read-only');
+  });
+
+  it('wait_for url → network-mutation', () => {
+    expect(classifyRiskDetailed('wait_for', { type: 'url' }, ctx).category).toBe('network-mutation');
+  });
+
+  it('write_file inside workspace → workspace-write', () => {
+    const v = classifyRiskDetailed('write_file', { file_path: '/workspace/foo.ts' }, ctx);
+    expect(v.category).toBe('workspace-write');
+  });
+
+  it('unknown novel tool → unknown (safe default)', () => {
+    const v = classifyRiskDetailed('some_future_tool', {}, ctx);
+    expect(v.level).toBe('safe');
+    expect(v.category).toBe('unknown');
+  });
+});
+
+// ---- RISK_CATEGORIES ↔ trace schema sync -----------------------------------
+describe('RISK_CATEGORIES ↔ trace schema sync', () => {
+  it('every RiskCategory is accepted by the trace Zod schema', async () => {
+    const { RISK_CATEGORIES } = await import('./risk-classifier.js');
+    const { z } = await import('zod');
+    const schema = z.enum(RISK_CATEGORIES);
+    for (const cat of RISK_CATEGORIES) {
+      expect(schema.safeParse(cat).success).toBe(true);
+    }
   });
 });

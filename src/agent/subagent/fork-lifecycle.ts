@@ -29,6 +29,8 @@ export interface EmitForkStartedArgs {
   promptHead: string | undefined;
   effectiveAgentType: string | undefined;
   effectiveResolvedAgentType: string | undefined;
+  /** D10: continuation chain fields, present only on continuation forks. */
+  continuation?: { chainId: string; continuationOf: string; continuationIndex: number } | undefined;
 }
 
 /**
@@ -55,6 +57,7 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
     promptHead,
     effectiveAgentType,
     effectiveResolvedAgentType,
+    continuation,
   } = args;
 
   const modelString =
@@ -62,6 +65,13 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
       ? effectiveChildModel
       : JSON.stringify(effectiveChildModel);
 
+  // Invariant: fire-and-forget — emitSubagentLifecycle is best-effort trace
+  // observability. Awaiting here would block forkSubagent's hot path. The
+  // underlying NdjsonTraceWriter serializes all writes through an internal
+  // FIFO queue, so the started row will precede any cancelled row emitted by
+  // the same writer — but the subagent drain (getPendingChildTerminalWrites)
+  // does NOT collect this promise; it only collects _pendingCancellationWrite.
+  // Pre-existing intentional pattern — flagged in advisory #3811.
   void emitSubagentLifecycle(effectiveTraceWriter, {
     transition: 'started',
     subagentId: id,
@@ -87,6 +97,9 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
     // can be grouped by budget straight from the trace.
     ...(typeof childConfig.maxToolUseIterations === 'number'
       ? { maxToolUseIterations: childConfig.maxToolUseIterations }
+      : {}),
+    ...(continuation !== undefined
+      ? { chainId: continuation.chainId, continuationOf: continuation.continuationOf, continuationIndex: continuation.continuationIndex }
       : {}),
   });
 

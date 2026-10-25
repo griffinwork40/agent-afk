@@ -34,7 +34,13 @@ import type { ProgressEvent } from '../../agent/types.js';
 import { checkTtfbAnnotation, type TtfbTickCtx } from './stream-renderer-ttfb.js';
 
 const PAUSE_THRESHOLD_MS = 30_000;
-const WAITING_LABEL_PREFIX = ' · waiting ';
+export const WAITING_LABEL_PREFIX = ' · waiting ';
+/**
+ * Label for a parent whose own stream is silent only because it is blocked on
+ * live child agents — distinct from {@link WAITING_LABEL_PREFIX} so a parent
+ * awaiting children never reads as a hang.
+ */
+export const AWAITING_LABEL_PREFIX = ' · awaiting ';
 const K = 375;
 
 /**
@@ -266,7 +272,9 @@ export function subscribeToResize(
  * Per-source state machine:
  *   - If done or errored: skip (no-op).
  *   - If elapsed > PAUSE_THRESHOLD_MS: increment stalledTicks, then update
- *     pause-annotation label (soft warning).
+ *     pause-annotation label (soft warning) — `· awaiting N children` (and no
+ *     tick accrual) while the source has live child agents in the lane.
+ *     See tickStalledSource for the update-only / no-ghost invariant.
  *   - At stalledTicks === 2K (750 × 80ms = 60s): inject synthetic timed-out
  *     result and set source.done = true.
  *
@@ -283,47 +291,7 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
   for (const [sourceId, source] of ctx.sources) {
     if (source.done || source.errored || !source.syntheticAgentToolUseId) continue;
     const elapsed = now - source.lastEventAt;
-    if (elapsed > PAUSE_THRESHOLD_MS) {
-      source.stalledTicks += 1;
-      // Use >= not === — if the counter ever overshoots 2K (e.g. from a
-      // future refactor that increments in more than one place), the cutoff
-      // must still fire. Strict equality would silently never trigger.
-      if (source.stalledTicks >= K * 2) {
-        // Hard cutoff at 2K ticks (60s): auto-settle with synthetic timed-out result.
-        if (isDebugEnabled()) {
-          process.stderr.write(
-            `[stream-renderer] auto_settle_timeout ${JSON.stringify({ sourceId, elapsedMs: elapsed, syntheticAgentToolUseId: source.syntheticAgentToolUseId })}\n`,
-          );
-        }
-        // Invariant: isError MUST be true. This row is a renderer-side give-up,
-        // not a result. Nothing here touches the sub-agent's AbortController —
-        // it may still be running, and often is: a forge qualify sub-agent has
-        // been observed auto-settling here at ~90s and then failing for real
-        // ~18 minutes later. Passing false makes doneGlyph() paint a green
-        // success check on a row whose own label reads "[no-result — timed
-        // out]", so a 20-minute failure renders as a 90-second success. The
-        // glyph must agree with the label. If a real result arrives later,
-        // finalizeSubagent overwrites this row, so a transient error mark
-        // self-heals; a false success does not.
-        ctx.toolLane.addResult(
-          source.syntheticAgentToolUseId,
-          syntheticResult('[no-result — timed out]', true),
-        );
-        source.done = true;
-        changed = true;
-      } else {
-        // Soft warning (any stalled tick < 2K): keep annotation fresh.
-        const label = source.agentType ?? sourceId;
-        const annotation = WAITING_LABEL_PREFIX + formatDuration(elapsed);
-        if (source.pauseAnnotation !== annotation) {
-          source.pauseAnnotation = annotation;
-          ctx.toolLane.addStartWithAgentContext(
-            source.syntheticAgentToolUseId, 'Agent', `(${label})${annotation}`, undefined,
-          );
-          changed = true;
-        }
-      }
-    }
+    if (elapsed > PAUSE_THRESHOLD_MS && tickStalledSource(ctx, sourceId, source, elapsed)) changed = true;
   }
   // Elapsed-counter invalidation: mark the tool-lane dirty whenever any
   // in-flight entry's displayed second has advanced. Silent commands (those
@@ -360,4 +328,71 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
   }
 
   return changed;
+}
+
+/** Format the `· awaiting N child(ren)` annotation. */
+function awaitingAnnotation(liveChildren: number): string {
+  return `${AWAITING_LABEL_PREFIX}${liveChildren} ${liveChildren === 1 ? 'child' : 'children'}`;
+}
+
+/**
+ * Advance one stalled source by one tick (elapsed > PAUSE_THRESHOLD_MS).
+ * Returns true when the lane changed.
+ *
+ * Invariants:
+ *  - Annotation is UPDATE-ONLY (`annotateIfPresent`). An absent lane entry
+ *    means this agent's block was already committed — usually absorbed into
+ *    an ancestor's flushSource block — and re-creating it would leave a ghost
+ *    root that later commits below the parent's Done row.
+ *  - A parent with live child agents in the lane is not hung: it is labelled
+ *    `· awaiting N children`, its stall counter is held at 0, and the hard
+ *    cutoff never fires for it. The cutoff clock restarts only once every
+ *    child has settled and the parent itself stays silent for 2K ticks.
+ */
+function tickStalledSource(
+  ctx: LifecycleContext,
+  sourceId: string,
+  source: SourceState,
+  elapsed: number,
+): boolean {
+  const syntheticId = source.syntheticAgentToolUseId;
+  if (!syntheticId) return false;
+  const liveChildren = ctx.toolLane.countLiveChildAgents(syntheticId);
+  if (liveChildren === 0) source.stalledTicks += 1;
+  else source.stalledTicks = 0;
+  // Use >= not === — if the counter ever overshoots 2K (e.g. from a
+  // future refactor that increments in more than one place), the cutoff
+  // must still fire. Strict equality would silently never trigger.
+  if (source.stalledTicks >= K * 2) {
+    // Hard cutoff at 2K ticks (60s): auto-settle with synthetic timed-out result.
+    if (isDebugEnabled()) {
+      process.stderr.write(
+        `[stream-renderer] auto_settle_timeout ${JSON.stringify({ sourceId, elapsedMs: elapsed, syntheticAgentToolUseId: syntheticId })}\n`,
+      );
+    }
+    // Invariant: isError MUST be true. This row is a renderer-side give-up,
+    // not a result. Nothing here touches the sub-agent's AbortController —
+    // it may still be running, and often is: a forge qualify sub-agent has
+    // been observed auto-settling here at ~90s and then failing for real
+    // ~18 minutes later. Passing false makes doneGlyph() paint a green
+    // success check on a row whose own label reads "[no-result — timed
+    // out]", so a 20-minute failure renders as a 90-second success. The
+    // glyph must agree with the label. If a real result arrives later,
+    // finalizeSubagent overwrites this row, so a transient error mark
+    // self-heals; a false success does not.
+    const present = ctx.toolLane.hasEntry(syntheticId);
+    if (present) ctx.toolLane.addResult(syntheticId, syntheticResult('[no-result — timed out]', true));
+    source.done = true;
+    return present;
+  }
+  // Soft warning (any stalled tick < 2K): keep annotation fresh.
+  const annotation = liveChildren > 0
+    ? awaitingAnnotation(liveChildren)
+    : WAITING_LABEL_PREFIX + formatDuration(elapsed);
+  if (source.pauseAnnotation === annotation) return false;
+  // Record the annotation even when the row is gone so the heartbeat path's
+  // `pauseAnnotation !== undefined` reset of stalledTicks still fires.
+  source.pauseAnnotation = annotation;
+  const label = source.agentType ?? sourceId;
+  return ctx.toolLane.annotateIfPresent(syntheticId, 'Agent', `(${label})${annotation}`);
 }

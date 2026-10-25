@@ -109,14 +109,14 @@ describe('anthropic-direct: turn budgets survive a retry-tier replay', () => {
 
     expect(refresher).toHaveBeenCalledOnce();
     expect(call).toBe(4);
-    // The 4th request is the wind-down: tools stripped.
-    expect(tools[3]).toBeUndefined();
+    // The 4th request is the wind-down: tools KEPT for cache preservation (#4072).
+    expect(tools[3]).toBeDefined();
     expect(completedOf(events).usage.stopReason).toBe(SOFT_DEADLINE_WIND_DOWN);
   });
 
   it('tool-round cap counts rounds from before the replay', async () => {
     // Cap = 2 rounds. One round before the 401, one after: the cap is spent, so
-    // the next request must be the tools-stripped wind-down.
+    // the next request must be the wind-down (tools kept for cache preservation, #4072).
     const tools: unknown[] = [];
     let call = 0;
     createMock.mockImplementation((params: { tools?: unknown }) => {
@@ -134,8 +134,13 @@ describe('anthropic-direct: turn budgets survive a retry-tier replay', () => {
     const events = await drain(query);
 
     expect(call).toBe(4);
-    expect(tools[3]).toBeUndefined();
+    // Wind-down keeps tools for prefix-cache preservation (#4072).
+    expect(tools[3]).toBeDefined();
     expect(completedOf(events).usage.stopReason).toBe('tool_use_loop_capped');
+    // Subagent runtime round counting (handle.streaming countRuntimeRounds)
+    // relies on this: a replay never re-emits an equal roundsUsed; values keep
+    // rising by one per round across the replay.
+    expect(events.flatMap((e) => (e.type === 'progress' ? [e.progress.roundsUsed] : []))).toEqual([1, 2]);
   });
 
   it("turn usage includes the pre-replay rounds (no silent undercount)", async () => {
@@ -164,7 +169,7 @@ describe('anthropic-direct: turn budgets survive a retry-tier replay', () => {
     // "thinking" (no first byte) when the 60s deadline passes — simulated by
     // advancing the clock inside messages.create. The in-flight round is not
     // cut off; its tools run; the very next boundary arms the wind-down, and the
-    // wind-down request is sent with tools stripped. No extra tool round.
+    // wind-down request is sent with tools KEPT (prefix-cache fix #4072). No extra tool round.
     advanceInTool = 10_000;
     const tools: unknown[] = [];
     let call = 0;
@@ -187,7 +192,7 @@ describe('anthropic-direct: turn budgets survive a retry-tier replay', () => {
 
     expect(call).toBe(3);
     expect(tools[1]).toBeDefined(); // the in-flight round was a normal round
-    expect(tools[2]).toBeUndefined(); // the next request is the wind-down
+    expect(tools[2]).toBeDefined(); // wind-down keeps tools (#4072)
     const msg = events.find((e) => e.type === 'assistant.message');
     expect(msg?.type === 'assistant.message' ? msg.text : '').toContain('Here is what I have.');
     expect(completedOf(events).usage.stopReason).toBe(SOFT_DEADLINE_WIND_DOWN);
@@ -286,9 +291,9 @@ describe('anthropic-direct: turn budgets survive an overload-park replay', () =>
 
     // The overload exhaustion terminal should be swallowed (park recovered).
     expect(events.some((e) => e.type === 'turn.completed' && e.usage.stopReason === OVERLOAD_EXHAUSTED)).toBe(false);
-    // The wind-down request (call 6) must have no tools — deadline was expired.
+    // The wind-down request (call 6) keeps tools for cache preservation (#4072).
     expect(call).toBe(6);
-    expect(tools[5]).toBeUndefined();
+    expect(tools[5]).toBeDefined();
     expect(completedOf(events).usage.stopReason).toBe(SOFT_DEADLINE_WIND_DOWN);
   });
 });

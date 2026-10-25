@@ -1,99 +1,57 @@
 ---
-title: "Custom Skills"
-description: "Author your own skills using SKILL.md, and understand how user-scope and plugin skills are discovered."
+title: "Create a custom skill"
+description: "Write SKILL.md instructions with routing hints, positional arguments, and optional model visibility controls."
 ---
 
-You can extend AFK with your own skills without touching the core codebase. A custom skill is a directory containing a `SKILL.md` file. Drop it in the right place and it auto-registers as a slash command the next time you start a session.
+A custom skill is a named `SKILL.md` procedure that you can invoke with a slash command. Put one under `~/.afk/skills/` for every project, or under `<cwd>/.afk/skills/` for one project. It is discovered when a session starts.
 
-## Directory layout
+## Create one
 
-```
-~/.afk/skills/
-  my-skill/
-    SKILL.md          ← required
-    prompts/          ← optional; for multi-prompt TS skills only
-      system.md
-```
+<Steps>
+<Step>Create a directory named `review-note` inside the appropriate `skills/` folder.</Step>
+<Step>Add `SKILL.md` with the frontmatter and body below. The `name` must match its directory.</Step>
+<Step>Start a new REPL session, type `/skills` to inspect it, then invoke `/review-note notes.md concise`.</Step>
+</Steps>
 
-The directory name **must match** the `name` field in `SKILL.md`. Both must follow the agentskills.io v1 spec: 1–64 characters, lowercase `a-z`, `0-9`, and hyphens only, no leading/trailing/consecutive hyphens.
-
-## The `SKILL.md` file
-
-`SKILL.md` is a Markdown file with a YAML frontmatter block followed by the skill's instruction body.
-
-```markdown
+````markdown
 ---
-name: my-skill
-description: One-sentence description of what this skill does (max 1024 chars).
-argument-hint: "<required-arg> [--optional-flag]"
+name: review-note
+description: Review a note and suggest a concise revision.
+when-to-use: When a user asks for editorial review of a note.
+argument-hint: "<file> [style]"
+context: load
 ---
 
-Your skill instructions go here. In the default `load` mode this body is returned
-to the current session as instructions for the running agent to follow; in `fork`
-mode it becomes the system prompt for a fresh sub-agent. Write it as a set of
-instructions for the model to follow.
+Read `${1}`. Revise it in the style `${2}` if supplied.
+The complete caller input is `$ARGUMENTS`.
+````
 
-Use $ARGUMENTS to reference the caller's input anywhere in the body.
+The `when-to-use` hint helps the model route to the skill and appears in the REPL's selected skill hint. The description remains the short listing label. `argument-hint` explains expected input; it is not a parser. Name and directory must match the skill-name rules: 1 to 64 lowercase letters, digits, or single internal hyphens. A skill needs a nonempty body and a description no longer than 1,024 characters.
+
+## Arguments and execution
+
+`$ARGUMENTS` and `$ARGUMENT` insert the entire raw argument string. **`${1}`, `${2}`, and so on** insert one-indexed, shell-style positional tokens: quoted words stay together. Braces are required; bare `$1` is left alone so shell examples and currency are not rewritten. A missing positional remains literal, which makes a mistaken invocation visible. Placeholders are expanded for both `load` and `fork` skill paths. These substitutions form model instructions, **not** shell escaping; validate input before using it in commands.
+
+`context: load` (the default) returns instructions to the current agent with its existing context. `context: fork` gives a child session its own context window and passes arguments to it. `${SKILL_ROOT}` resolves to the skill directory when you need bundled files. Plugin skills can be packaged in an installed plugin's `skills/<name>/SKILL.md` directory. Name collisions with other origins get a namespaced fallback such as `user:review-note`.
+
+## Keep a skill manual-only
+
+Add `disable-model-invocation: true` to its `SKILL.md` frontmatter to omit it from the model-facing skill manifest while retaining direct slash invocation. To hide existing skill names without editing their files, set the human-only `skills.hidden` array in `afk.config.json`:
+
+```json
+{
+  "skills": {
+    "hidden": ["review-note", "example-plugin:publish"]
+  }
+}
 ```
 
-**Required frontmatter fields:**
+Bare names also match plugin-qualified names with that suffix. The agent's `config_set` cannot change `skills.hidden`. Hiding is a routing control, not a security boundary: it does not remove an explicitly invoked skill or revoke its tools. See [Configuration keys](/reference/config-keys).
 
-| Field | Notes |
-|---|---|
-| `name` | Must match the parent directory name |
-| `description` | Shown in `/help` and tab-complete (max 1,024 chars) |
+## Related
 
-**Optional frontmatter fields:**
-
-| Field | Notes |
-|---|---|
-| `argument-hint` | Short usage hint shown next to the skill name |
-| `context` | `load` (default for SKILL.md skills) or `fork` — see below |
-
-### Execution mode: `fork` vs `load`
-
-By default, a `SKILL.md` skill runs in `load` mode: AFK returns the SKILL.md body to the **current** session as instructions, and the agent already running carries them out with its existing tools and context window. It adds no fork latency and supports progressive disclosure — best for small, self-contained steps.
-
-Opt into `fork` mode with `context: fork` in the frontmatter. AFK then starts a child session with the SKILL.md body as its system prompt and the caller's input as the first user message; the child runs independently with its own context window. Prefer `fork` for anything that reads many files, loops, or would otherwise crowd the caller's context.
-
-## Where skills are discovered
-
-AFK scans two directories at session start:
-
-| Location | Origin tag | Notes |
-|---|---|---|
-| `~/.afk/skills/` | `user` | Global across all projects |
-| `<cwd>/.afk/skills/` | `project` | Per-project; discovered from the working directory |
-
-Both scans are lazy (run once per session start, not at module load) to avoid blocking the CLI with filesystem I/O.
-
-### Name collision
-
-If your skill's name is already taken by a built-in or an earlier-scanned skill of a **different** origin, it registers under the namespaced fallback `<origin>:<name>` (e.g. `user:mint`). The earlier registrant keeps the bare name. A same-origin re-scan is idempotent.
-
-## Plugin packaging
-
-If you want to distribute a skill as part of a plugin, place it at:
-
-```
-~/.afk/plugins/<plugin-name>/skills/<skill-name>/SKILL.md
-```
-
-Plugin skills are discovered automatically at session start. They appear in slash-command listings and `/help` when the plugin is installed.
-
-`SKILL_ROOT` resolves to the skill's own directory so you can reference bundled files. In `fork` mode it's injected as an environment variable into the child session; in the default `load` mode, `${SKILL_ROOT}` is expanded in-place in the body text before it's delivered. Either way, reference it in shell commands inside your SKILL.md body:
-
-```markdown
-Run the following command: bash "${SKILL_ROOT}/scripts/process.sh" $ARGUMENTS
-```
-
-## Authoring tips
-
-- **Be explicit about the task.** The body is an instruction set, not reference documentation. Write it as directives: "Read the file at…", "Output a JSON object with…".
-- **Keep load-mode skills small.** A large SKILL.md body in `load` mode spends your current-context token budget. Prefer `fork` for anything that reads multiple files or loops.
-- **Use `$ARGUMENTS` for caller input.** The placeholder is substituted before the body is delivered to the sub-agent. You can use it anywhere in the body.
-- **Name fields must be exact.** A mismatched name (frontmatter `name` ≠ directory name) causes the skill to be skipped silently with a warning on stderr: `[afk] skipping skill <dir>: name field "..." does not match parent directory name "..."`.
-
-## Example template
-
-For user-authored skills, the single-file `SKILL.md` approach above is the recommended pattern.
+<Cards>
+<Card title="Skills overview" href="/skills/overview" description="Understand where skills come from and how they run." />
+<Card title="Bundled skills" href="/skills/bundled" description="Find shipped SKILL.md examples." />
+<Card title="Configuration keys" href="/reference/config-keys" description="Look up skills.hidden and other operator settings." />
+</Cards>

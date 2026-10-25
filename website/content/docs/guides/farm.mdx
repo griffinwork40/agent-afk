@@ -1,0 +1,44 @@
+---
+title: "Try a task on several branches in parallel"
+description: "Use afk farm to compare independent attempts in isolated Git worktrees."
+---
+
+`afk farm` gives the same task to several agents, each in its own Git worktree and branch. Use it to compare approaches before choosing which branch to keep. It scores successful attempts and prints the branch names and worktree paths so you can inspect the results yourself.
+
+<Steps>
+<Step>In a Git repository, start three parallel attempts:</Step>
+</Steps>
+
+```bash
+afk farm "speed up the search endpoint" --branches 3
+```
+
+<Steps>
+<Step>Read the summary, inspect the resulting branches and worktrees, then decide what to integrate. The farm does not merge a winner for you.</Step>
+</Steps>
+
+Each branch starts from `HEAD` by default. A branch must make at least one commit to count as successful. The summary shows each attempt's status, commit count, branch ref, and worktree path. With scoring enabled, successful branches are ranked by test results, lint, and lines-of-code change. No passing tests produces a warning; a high rank is not a substitute for your review. The command exits with a failure code if any branch fails or if it detects changed files in the source checkout.
+
+| Option | Use |
+|---|---|
+| `-n, --branches <number>` | Number of attempts, 1 through 16; default 3. |
+| `--labels <labels>` | Comma-separated labels, exactly one per branch. |
+| `-m, --model <model>` | Model for the attempts; defaults to the configured model. |
+| `--base-ref <ref>` | Start from a ref other than `HEAD`. |
+| `--cwd <path>` | Choose a different source repository. |
+| `--fail-fast` | Stop remaining attempts when one fails; otherwise keep independent attempts running. |
+| `--no-score` | Skip post-run tests, lint, and size scoring. |
+| `--no-memory`, `--no-digest` | Skip the farm-run memory fact or the Telegram completion digest. |
+
+Scoring runs successful branches sequentially to avoid several test suites competing for memory. The digest is sent only when Telegram is configured. See the [CLI reference](/reference/cli) for the remaining options, including score timeout and task slug.
+
+<Callout type="warn">
+A farm creates branches and worktrees and may run tests, write a cross-session memory fact, and send a Telegram digest. Inspect the repository and use `--no-memory --no-digest` if those completion effects are not wanted. Check the branches before removing any worktrees.
+</Callout>
+
+## Related
+
+<Cards>
+<Card title="Manage worktrees" href="/guides/worktrees" description="Inspect and preserve isolated checkouts." />
+<Card title="Delegate tasks to subagents" href="/guides/subagents" description="Parallel dispatch inside an active session." />
+</Cards>

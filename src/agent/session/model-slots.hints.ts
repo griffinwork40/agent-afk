@@ -3,17 +3,12 @@
  *
  * Extracted from `model-slots.ts` to keep that file within the 350-code-line
  * ceiling. Import these from `model-slots.ts` (which re-exports them); do not
- * import this file directly — it intentionally does NOT import from
- * `model-slots.ts` to avoid a circular dependency.
- *
- * The tier names and alias keys are inlined here rather than imported.  When
- * `model-slots.ts` changes {@link SLOT_NAMES} or {@link DIRECT_MODEL_ALIASES},
- * update the inlined copies below accordingly (they are pure string literals
- * with no runtime risk of drift — the type-checker would catch a mismatch if
- * the exported types were used).
+ * import this file directly.
  *
  * @module agent/session/model-slots.hints
  */
+
+import { SLOT_NAMES, DIRECT_MODEL_ALIASES } from './model-slots.js';
 
 /**
  * Curated OpenAI model ids surfaced in the `/model` picker. Wire ids only —
@@ -38,33 +33,45 @@ export const OPENAI_MODEL_HINTS: readonly string[] = [
   'gpt-5.5',
 ];
 
-// Invariant: these must stay in sync with SLOT_NAMES and
-// Object.keys(DIRECT_MODEL_ALIASES) in model-slots.ts.  They are inlined to
-// avoid a circular import (model-slots → model-slots.hints → model-slots).
-const _SLOT_NAMES = ['local', 'small', 'medium', 'large'] as const;
-const _DIRECT_ALIAS_KEYS = [
-  'opus', 'opus_1m', 'opus-5.5', 'opus-5.5_1m',
-  'sonnet', 'sonnet_1m',
-  'haiku',
-  'fable',
-  'grok',
-] as const;
+// Lazily built on first use to avoid the circular-init TDZ: model-slots.hints
+// is imported by model-slots.ts before SLOT_NAMES / DIRECT_MODEL_ALIASES have
+// finished initialising. Using a getter defers array construction until the
+// first call, by which point the circular initialisation is complete.
+// Pattern mirrors model-slots.coerce.ts:26-41.
+let _slotNames: readonly string[] | undefined;
+function getSlotNames(): readonly string[] {
+  return (_slotNames ??= [...SLOT_NAMES]);
+}
+
+let _directAliasKeys: readonly string[] | undefined;
+function getDirectAliasKeys(): readonly string[] {
+  return (_directAliasKeys ??= Object.keys(DIRECT_MODEL_ALIASES));
+}
+
+let _modelAliasesHint: readonly string[] | undefined;
 
 /**
  * User-facing model handles shown by the `/model` picker (REPL + Telegram) and
  * accepted by name. DERIVED from three stable layers:
- *   1. Capability TIERS (local/small/medium/large)
+ *   1. Capability TIERS (local/small/medium/large/subagent)
  *   2. Fixed-identity Claude/xAI aliases (haiku/sonnet/opus/fable/grok/…)
  *   3. Curated OpenAI wire ids ({@link OPENAI_MODEL_HINTS})
  *
  * The three-part ordering keeps Claude/tier handles at the top (most users),
  * followed by OpenAI models. Raw wire ids and `org/model` ids are also accepted
  * at the `/model` surface — this list is the discoverable subset, not the whole
- * acceptable set. Both the CLI (`/model`) and Telegram surfaces import it rather
- * than re-declaring it; it is the single source of truth for the picker.
+ * acceptable set. Both the CLI (`/model`) and Telegram surfaces import
+ * {@link MODEL_ALIASES_HINT} (re-exported from `model-slots.ts`) rather than
+ * re-declaring it; it is the single source of truth for the picker.
+ *
+ * Returned as a real array built lazily on first call to avoid the
+ * circular-init TDZ (see module comment). Callers receive a plain array;
+ * consumed by `model-slots.ts` as {@link MODEL_ALIASES_HINT}.
  */
-export const MODEL_ALIASES_HINT: readonly string[] = [
-  ..._SLOT_NAMES,
-  ..._DIRECT_ALIAS_KEYS,
-  ...OPENAI_MODEL_HINTS,
-];
+export function getModelAliasesHint(): readonly string[] {
+  return (_modelAliasesHint ??= [
+    ...getSlotNames(),
+    ...getDirectAliasKeys(),
+    ...OPENAI_MODEL_HINTS,
+  ]);
+}

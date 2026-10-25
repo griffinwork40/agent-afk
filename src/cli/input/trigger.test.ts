@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync, existsSync, promises as fsp } from 'fs';
+import { mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, promises as fsp } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -43,6 +43,9 @@ beforeEach(() => {
   writeFileSync(join(tmpRoot, 'beta.ts'), 'b');
   mkdirSync(join(tmpRoot, 'src'));
   writeFileSync(join(tmpRoot, 'src', 'index.ts'), 'c');
+  // Symlink fixture for C-1: symlinked directory must get trailing '/'
+  mkdirSync(join(tmpRoot, 'real-dir'));
+  symlinkSync(join(tmpRoot, 'real-dir'), join(tmpRoot, 'link-dir'));
   invalidateFileScanCache();
   resetRegistry();
   registerAll();
@@ -361,6 +364,21 @@ describe('buildFileCandidates — pure core (no I/O)', () => {
     expect(vals).toContain('@readme.md');
   });
 
+  it('symlink-to-directory stub: isSymbolicLink()=true + isDirectory()=true → trailing slash', () => {
+    // Simulate what the async scan path produces after stat-resolution:
+    // a wrapped dirent where isDirectory() returns true even though the
+    // underlying entry is a symlink. buildFileCandidates must not stat.
+    const symlinkDirEntry: FileDirent = {
+      name: 'link-dir',
+      isDirectory: () => true,
+      isSymbolicLink: () => true,
+    };
+    const entries = [symlinkDirEntry, dirent('readme.md')];
+    const vals = buildFileCandidates(entries, '', tmpRoot).map((c) => c.value);
+    expect(vals).toContain('@link-dir/');
+    expect(vals).toContain('@readme.md');
+  });
+
   it('hides dotfiles unless the leaf prefix itself starts with a dot', () => {
     const entries = [dirent('.hidden'), dirent('visible.ts')];
     expect(buildFileCandidates(entries, '', tmpRoot).map((c) => c.value)).toEqual(['@visible.ts']);
@@ -429,9 +447,23 @@ describe('filterFileCandidatesAsync', () => {
     expect(vals).toContain('@alpha.txt');
   });
 
-  it('directory entries get a trailing slash (Dirent-derived, no statSync)', async () => {
+  it('directory entries get a trailing slash (Dirent-derived, no statSync for plain dirs)', async () => {
+    const statSpy = vi.spyOn(fsp, 'stat');
     const vals = (await filterFileCandidatesAsync('sr', tmpRoot)).map((c) => c.value);
     expect(vals).toContain('@src/');
+    // Plain directory entries must NOT trigger a stat call.
+    expect(statSpy).not.toHaveBeenCalledWith(expect.stringContaining('src'));
+  });
+
+  it('symlinked directory gets a trailing slash after async stat resolution', async () => {
+    const vals = (await filterFileCandidatesAsync('link', tmpRoot)).map((c) => c.value);
+    expect(vals).toContain('@link-dir/');
+  });
+
+  it('broken symlink is kept as a file (no trailing /), promise does NOT reject', async () => {
+    symlinkSync(join(tmpRoot, 'nowhere-target'), join(tmpRoot, 'broken-link'));
+    const vals = (await filterFileCandidatesAsync('broken', tmpRoot)).map((c) => c.value);
+    expect(vals).toEqual(['@broken-link']);
   });
 
   it('fs error → empty candidates, promise does NOT reject', async () => {
@@ -503,6 +535,11 @@ describe('invalidateFileScanCache', () => {
 });
 
 describe('filterFileCandidates — sync path warms the shared cache', () => {
+  it('broken symlink is kept as a file (no trailing /)', () => {
+    symlinkSync(join(tmpRoot, 'nowhere-target'), join(tmpRoot, 'broken-link'));
+    expect(filterFileCandidates('broken', tmpRoot).map((c) => c.value)).toEqual(['@broken-link']);
+  });
+
   it('a sync scan populates the cache so a later async lookup is a hit', async () => {
     filterFileCandidates('al', tmpRoot);
     const spy = vi.spyOn(fsp, 'readdir');

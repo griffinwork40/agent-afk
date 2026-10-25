@@ -264,6 +264,43 @@ describe('emitClosureEvent', () => {
       expect(ev.payload.lastStopReason).toBe('max_tokens');
     }
   });
+
+  it('stamps subagentId onto the closure payload when the session is a child (#3932)', async () => {
+    // Verifies the stamping line in closure-emitter.ts is reachable and writes
+    // the field — the synthetic closureChild() helper in cost.test.ts AC1 cannot
+    // catch a deletion of this line.
+    const writer = new InMemoryTraceWriter();
+    await emitClosureEvent(writer, {
+      ...baseSignals,
+      subagentId: 'child-abc',
+      finalTurnCount: 1,
+      finalCostUsd: 0.5,
+      runningTokens: { input: 10, output: 5, cacheRead: 0, cacheCreation: 0 },
+    });
+
+    expect(writer.events).toHaveLength(1);
+    const ev = writer.events[0];
+    expect(ev?.kind).toBe('closure');
+    if (ev?.kind === 'closure') {
+      expect(ev.payload.subagentId).toBe('child-abc');
+    }
+  });
+
+  it('omits subagentId for a root session (no subagentId input) (#3932)', async () => {
+    const writer = new InMemoryTraceWriter();
+    await emitClosureEvent(writer, {
+      ...baseSignals,
+      finalTurnCount: 1,
+      finalCostUsd: 0.5,
+      runningTokens: zeroTokens,
+    });
+
+    const ev = writer.events[0];
+    expect(ev?.kind).toBe('closure');
+    if (ev?.kind === 'closure') {
+      expect(ev.payload.subagentId).toBeUndefined();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

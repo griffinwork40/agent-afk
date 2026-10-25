@@ -1,0 +1,138 @@
+---
+title: "Understand sessions and context"
+description: "Learn how sessions, journals, resuming, and compaction preserve your work."
+---
+
+A session holds a conversation, its selected model, tool permissions, usage, and runtime state. The REPL, one-shot chat, daemon, Telegram, and web interface use the same `AgentSession` harness, but each surface decides when to create, reuse, or close a session. A new message in an ongoing conversation is a new turn, not necessarily a new session.
+
+## Continue work without starting over
+
+<Steps>
+<Step>
+### Find a saved conversation
+
+In the REPL, run:
+
+```text
+/resume
+```
+
+On an interactive terminal this opens a searchable session picker and a conversation preview. Without an interactive picker, it lists saved sessions. The REPL can swap to the selected session; surfaces without that capability print a launch command instead.
+</Step>
+<Step>
+### Review what happened
+
+```text
+/history
+```
+
+Resume and history replay render prior messages, tool calls, and tool results from the message journal when available. This is a display of recorded work, not a second execution of the tools.
+</Step>
+<Step>
+### Branch before exploring a different direction
+
+```text
+/fork
+```
+
+The original conversation stays active. The fork receives a new session identity and a copy of the current conversation state. AFK prints the exact resume command and, when supported by your local terminal, opens a new tab or window. Live subagents and background jobs are not copied. A conversation fork is not a git worktree: use [worktrees](/guides/worktrees) if you also need isolated files.
+</Step>
+</Steps>
+
+## What the journal preserves
+
+The message journal stores user and assistant messages, structured tool inputs, and full tool results. Large payloads can live in separate blob files referenced by the journal. Each journaled child session has its own subagent journal, rather than writing into the parent's conversation.
+
+By default the files live under `~/.afk/state/sessions/`:
+
+```text
+sessions/<sessionId>/
+  journal.jsonl
+  events.jsonl
+  subagents/<subagentId>.jsonl
+  blobs/
+```
+
+The journal and witness trace serve different purposes. The journal records conversation content for resume and replay. The witness trace records events such as tool timing, success, failure, and hook decisions for [observability](/guides/observability).
+
+Journal records are append-only. Compaction changes the reconstructed conversation sent to the model, while the older records remain available for audit. Display replay retains earlier output across compaction rather than replacing everything you saw with a summary. Clear and rewind operations deliberately affect the displayed history.
+
+<Callout type="warn">
+The journal is not a redacted transcript. Treat it and its blobs as sensitive local data. Writes are queued, so a process killed abruptly can lose the most recent queued records. `AFK_MESSAGE_JOURNAL_DISABLED=1` disables journaling; older sessions and sessions without a journal fall back to the less complete sidecar history.
+</Callout>
+
+## Context is the model's working memory
+
+A context window is the finite input and output capacity of the selected model. Instructions, conversation, tool definitions, and tool results all consume space. Saving a long journal does not make the entire journal fit into the next request.
+
+Use `/compact` to reclaim context while keeping the current task, or `/clear` to start a fresh conversation. Before either, have the agent write important decisions and remaining work into project files if you need a durable handoff.
+
+```text
+/compact
+```
+
+Compaction summarizes older conversation and keeps recent turns. The default keep window is two fresh user turns. At sufficiently high context usage, it can shrink toward one turn so a short conversation containing large tool exchanges can still be summarized. Tool calls and their results stay paired. Empty or failed summaries do not replace the history.
+
+Automatic compaction uses the same machinery when enabled. Its trigger also accounts for the selected model's output headroom, so it is not universally a fixed percentage of the advertised context window.
+
+### Microcompaction and delegated findings
+
+Microcompaction reclaims large, older tool results without a model call. It replaces result content with a small marker while keeping the tool call and result identity. This can help even when a single long turn leaves no older user turn to summarize.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `AFK_COMPACT_KEEP_LAST_TURNS` | `2` | Recent user turns retained during summarization |
+| `AFK_COMPACT_SHRINK_FRACTION` | `0.7` | Fullness at which an otherwise ineffective keep window can shrink |
+| `AFK_MICROCOMPACT_TOOL_RESULT_BYTES` | `2048` | Minimum ordinary result size eligible for clearing |
+| `AFK_MICROCOMPACT_KEEP_LAST` | `4` | Most recent tool results protected regardless of size |
+| `AFK_MICROCOMPACT_DELEGATION_BYTES` | `16384` | Higher clearing threshold for `agent`, `compose`, and `skill` results |
+
+The higher delegation threshold protects compact findings that were expensive to produce. It is preferential retention, not a guarantee that every subagent result remains forever.
+
+### Compaction across providers
+
+History compaction is shared across the Anthropic and OpenAI-compatible implementations. When you switch models across providers, the router transfers the live journal representation when available, preserving tool calls and results subject to the target provider's supported content types. Without that representation it falls back to text history. Switching providers does not itself mean that every earlier message is summarized.
+
+`AFK_COMPACT_MODEL` selects the summarizer independently of the conversation model. It accepts a model ID or configured slot alias, including a model on another supported provider. The target needs its own working credentials. A failed cross-provider summary is reported rather than silently retried on the conversation model.
+
+<Callout type="warn">
+Cross-provider compaction sends the transcript to the summarizer's provider. AFK emits a privacy warning on first cross-provider use. Choose the summarizer with the same data-handling care as the main model; see [models and providers](/configuration/models-providers).
+</Callout>
+
+## Read context warnings early
+
+The REPL footer escalates as context fills:
+
+| Usage | Footer behavior |
+|---|---|
+| At most 50% | No context warning line |
+| Above 50% | Usage information |
+| At least 80% | Approaching-limit warning |
+| At least 95% | Near-limit warning |
+| At least 100% | Over-limit warning |
+
+Compact, finish the current task, or start a fresh session before hitting the limit. Context usage is different from account quota or billed tokens.
+
+The model also receives a short `[vitals]` awareness note during tool rounds. It includes local time, elapsed turn time, and any soft deadline; context appears from 50% usage. For eligible root sessions, Claude subscription usage appears from 80%, with a burn-rate estimate or reset time when available. High fields are marked at 90%. Missing data is omitted, not guessed. `AFK_VITALS=0` disables these notes. They are runtime information, not user instructions.
+
+## Temporary files and retention
+
+Each session gets a private temporary directory for spawned shells, with child sessions nested under their dispatching parent's directory. AFK supplies it through `TMPDIR`, `TMP`, and `TEMP` to shell and test processes. It is created lazily and cleaned up on close when owned by the process. This reduces accidental interference between concurrent sessions; it is not an OS sandbox or durable artifact storage. `AFK_SESSION_TMPDIR_DISABLE=1` restores the inherited shared temp directory.
+
+Saved state is not kept indefinitely:
+
+| Data | Default retention | Controls |
+|---|---|---|
+| Session JSON sidecars | 30 days, then a 1,000-file count cap | `AFK_SESSION_MAX_AGE_DAYS`, `AFK_SESSION_MAX_COUNT` |
+| Session directories with journals and blobs | Age-based, using the same 30-day setting | `AFK_SESSION_MAX_AGE_DAYS` |
+| Witness directories | 30 days and a total 2 GiB cap | `AFK_WITNESS_MAX_AGE_DAYS`, `AFK_WITNESS_MAX_BYTES` |
+
+Sweeps protect the active session and recently touched data, and run at most once every six hours. Session directory retention also preserves ancestors needed by surviving fork journals. `AFK_SESSION_RETENTION_DISABLE=1` or `AFK_WITNESS_RETENTION_DISABLE=1` disables the respective sweep. Export important records separately if you require a long-term archive.
+
+## Related
+
+<Cards>
+<Card title="Use the REPL" href="/surfaces/repl" description="Continue conversations and use interactive controls." />
+<Card title="Inspect recorded work" href="/guides/observability" description="Read journals, traces, and session evidence." />
+<Card title="Environment variables" href="/reference/environment-variables" description="Look up compaction, journal, and retention settings." />
+</Cards>

@@ -80,7 +80,7 @@ describe('TerminalCompositor — resize while disarmed', () => {
   it('EXPAND while disarmed resets geometry so first armed repaint uses new dimensions', async () => {
     stdout.rows = 24;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
-    type Internals = { disarmRows: number };
+    type Internals = { disarmRows: number; disarmCols: number };
     try {
       await c.arm();
       c.repaint();
@@ -98,6 +98,9 @@ describe('TerminalCompositor — resize while disarmed', () => {
 
       // arm() should have consumed the snapshot (reset to 0).
       expect(internals.disarmRows).toBe(0);
+      // disarmCols must also be reset (#4203: handleDisarmWindowResize zeroed
+      // disarmRows but not disarmCols; both must be cleared together).
+      expect(internals.disarmCols).toBe(0);
       // The frame should render at the new expanded bottom row (39 = 40-1),
       // NOT at the old position (23 = 24-1). This is the core assertion:
       // without the fix, the renderer's stale previousTopRow/previousLineCount
@@ -153,6 +156,65 @@ describe('TerminalCompositor — resize while disarmed', () => {
       // The frame should render at the FINAL size (rows=36 → bottom=35).
       const out = writes.all();
       expect(out).toContain('\x1b[35;1H');
+    } finally {
+      c.disarm();
+    }
+  });
+
+  it('EXPAND while disarmed with simultaneous column narrowing inflates pendingResizeErase', async () => {
+    // Regression for #4054 item 1: handleDisarmWindowResize was computing
+    // `bottom` as `disarmRows - 1 - extraRows` (logical rows only), without
+    // applying reflowedPhysicalRows inflation. When the EXPAND also narrowed
+    // columns, DECAWM autowrap reflows old rows wider than newCols into
+    // ceil(oldCols/newCols) physical rows, so the un-inflated erase range
+    // under-erases ghost rows above the logical top.
+    //
+    // Scenario: 24 rows × 200 cols → 40 rows × 80 cols while disarmed.
+    // Old rows painted at 200 cols reflow to ceil(200/80)=3 physical rows each
+    // on the 80-col terminal. logicalRows = disarmRows-1 = 23 (top=1..23),
+    // so physicalRows = 23×3 = 69 — bottom should be 69, clamped by
+    // flushResizeGhostErase to the new viewport (40).
+    stdout.rows = 24;
+    stdout.columns = 200;
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    type Internals = {
+      pendingResizeErase: { top: number; bottom: number; origin?: string } | null;
+      lastKnownCols: number;
+    };
+    try {
+      await c.arm();
+      c.repaint();
+      // After repaint, lastKnownCols should be 200.
+      expect((c as unknown as Internals).lastKnownCols).toBe(200);
+
+      c.disarm();
+
+      // Expand rows AND narrow columns while disarmed.
+      stdout.rows = 40;
+      stdout.columns = 80;
+
+      writes.clear();
+      await c.arm();
+
+      // pendingResizeErase.bottom must be inflated: logicalRows=23,
+      // rowsPerOldRow=ceil(200/80)=3, physicalRows=69, bottom=1+69-1=69.
+      const internals = c as unknown as Internals;
+      // The snapshot was consumed by arm()'s repaint, so read it from the
+      // emitted ghost-erase escapes instead.
+      const out = writes.all();
+      // With inflation the erase must reach above row 23 (the un-inflated
+      // logical bottom). Row 24 must be erased (first row beyond logical top).
+      expect(out, 'inflated ghost-erase must erase rows beyond logical bottom').toContain(
+        `\x1b[24;1H\x1b[2K`,
+      );
+      // Upper-bound clamp: flushResizeGhostErase clamps bottom to liveRows (40),
+      // so row 40 IS erased but row 41 is NOT (would be off-screen).
+      expect(out, 'ghost-erase must reach the new viewport bottom (row 40)').toContain(
+        `\x1b[40;1H\x1b[2K`,
+      );
+      expect(out, 'ghost-erase must not exceed the new viewport (row 41 must not appear)').not.toContain(
+        `\x1b[41;1H\x1b[2K`,
+      );
     } finally {
       c.disarm();
     }

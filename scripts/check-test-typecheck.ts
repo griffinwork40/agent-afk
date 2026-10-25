@@ -47,8 +47,19 @@ const ERROR_TS_RE = /^.*error TS\d+:/m;
  * Option/config diagnostics invalidate the semantic error count. Besides TS6xxx,
  * TS18002 (empty files list) and TS18003 (no inputs) can hide the entire suite.
  * Do not match all TS18xxx: that range also contains ordinary semantic errors.
+ *
+ * Parser-emitted TS1xxx codes (TS1003, TS1005, TS1109, TS1110, TS1127, TS1128,
+ * TS1136, TS1138, TS1146, TS1161, TS1185, TS1351, TS1440) indicate broken syntax
+ * that can suppress semantic analysis in the affected file, yielding a misleadingly
+ * low error count. Only these parser codes are matched — other TS1xxx codes
+ * (e.g. TS1055, TS1058, TS1064) are semantic diagnostics that coexist with normal
+ * type errors and must not be rejected.
  */
-const CONFIG_DIAGNOSTIC_RE = /^.*error TS(?:6\d+|18002|18003):/m;
+const PARSER_TS1_CODES = '1003|1005|1109|1110|1127|1128|1136|1138|1146|1161|1177|1178|1185|1351|1438|1440';
+const CONFIG_DIAGNOSTIC_RE = new RegExp(
+  `^.*error TS(?:${PARSER_TS1_CODES}|6\\d+|18002|18003):`,
+  'm',
+);
 
 /** Shared by the CLI and its tests; importing this script does not run main(). */
 export function detectConfigDiagnosticLines(output: string): string[] {
@@ -116,7 +127,7 @@ function measureErrors(): number {
   const configLines = detectConfigDiagnosticLines(output);
   if (configLines.length > 0) {
     process.stderr.write(
-      `\u2717 lint:tests:check — option/config diagnostics detected (TS6xxx, TS18002, TS18003).\n` +
+      `\u2717 lint:tests — option/config diagnostics detected (parser TS1xxx, TS6xxx, TS18002, TS18003).\n` +
         `  These errors can prevent semantic type-checking, making the gate blind.\n` +
         `  Fix the tsconfig.test.json configuration first:\n` +
         configLines
@@ -203,6 +214,33 @@ function runCheck(): void {
 
 // ── Mode: update ──────────────────────────────────────────────────────────────
 
+/**
+ * Pure helper: given the previous baseline, the current measured error count,
+ * and the growth flags, compute the new baseline to write.
+ *
+ * Exported for unit testing without running tsc.
+ *
+ * Reason-carry contract:
+ *   - allowGrowth + reason         → new reason stamped (growth explicitly approved)
+ *   - !allowGrowth, count shrinks  → reason dropped (growth it justified is gone)
+ *   - !allowGrowth, count unchanged → previous.reason carried forward (approval still valid)
+ *   - !allowGrowth, count grows    → caller rejects before reaching here
+ */
+export function computeNewBaseline(
+  previous: Baseline & { fileExisted: boolean },
+  current: number,
+  allowGrowth: boolean,
+  reason: string,
+): Baseline {
+  const newBaseline: Baseline = { errors: current };
+  if (allowGrowth && reason && current > previous.errors) {
+    newBaseline.reason = reason;
+  } else if (current === previous.errors && previous.reason?.trim()) {
+    newBaseline.reason = previous.reason;
+  }
+  return newBaseline;
+}
+
 function runUpdate(allowGrowth: boolean, reason: string): void {
   const previous = readBaseline();
   const current = measureErrors();
@@ -216,10 +254,7 @@ function runUpdate(allowGrowth: boolean, reason: string): void {
     process.exit(1);
   }
 
-  const newBaseline: Baseline = { errors: current };
-  if (allowGrowth && reason) newBaseline.reason = reason;
-
-  writeBaseline(newBaseline);
+  writeBaseline(computeNewBaseline(previous, current, allowGrowth, reason));
 
   const delta = current - previous.errors;
   const sign = delta > 0 ? '+' : '';

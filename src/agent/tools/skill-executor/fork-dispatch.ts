@@ -21,7 +21,8 @@ import type { ToolCall, ToolResult } from '../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import { DEFAULT_READ_ONLY_SKILLS } from '../nesting.js';
 import { applyParentCredentialFallback } from '../child-credential.js';
-import { resolveChildModel } from '../../subagent/resolve-child-model.js';
+import { resolveChildModel, defaultTierModelFallback } from '../../subagent/resolve-child-model.js';
+import type { ForkSubagentOptions } from '../../subagent/fork-types.js';
 import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
 import { getCurrentSink } from '../../_lib/skill-sink-channel.js';
 import { loadSkillPrompts } from '../../../skills/_lib/prompt-loader.js';
@@ -141,11 +142,12 @@ export async function executeForkedRegistrySkill(
   // directly from the agent layer (resolveCredentialForModel), so no
   // injection is required. `ctx.resolveApiKeyForModel` acts as an
   // optional override for callers that need a custom strategy (e.g. tests).
-  const skillChildModel = resolveChildModel({
+  const skillChildResolved = resolveChildModel({
     callSiteModel: skill.model,
     defaultSubagentModel: ctx.defaultSubagentModel,
     defaultModel: ctx.defaultModel,
-  });
+  }, { withSource: true });
+  const skillChildModel = skillChildResolved.model;
   const skillChildApiKey = applyParentCredentialFallback({
     childModel: skillChildModel,
     resolved: ctx.resolveApiKeyForModel
@@ -170,9 +172,7 @@ export async function executeForkedRegistrySkill(
   // SubagentManager.forkSubagent's emitSubagentLifecycle no-ops (it reads
   // options.config.traceWriter, not the manager's).
   const journalView: JournalParentHolder = {};
-  const { childConfig, childManager } = buildForkedChildConfig(
-    internals,
-    {
+  const skillBaseConfig = {
       model: skillChildModel,
       systemPrompt,
       // Invariant: skill-dispatch sub-agents must not inherit the
@@ -190,7 +190,10 @@ export async function executeForkedRegistrySkill(
       // so a bare excludeName catches all namespaced aliases and vice-versa.
       skillDispatchName: skill.name,
       ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
-    } as AgentConfig,
+    } as AgentConfig;
+  const { childConfig, childManager } = buildForkedChildConfig(
+    internals,
+    skillBaseConfig,
     call.signal,
     readOnly,
     undefined,
@@ -209,6 +212,10 @@ export async function executeForkedRegistrySkill(
     idPrefix: `skill-fork-${skill.name}`,
     parentId: call.id,
     args,
+    modelFallback: skillForkModelFallback(
+      defaultTierModelFallback(skillChildResolved, ctx.defaultModel),
+      (m) => buildForkedChildConfig(internals, { ...skillBaseConfig, model: m }, call.signal, readOnly, undefined, journalView).childConfig.provider,
+    ),
     noOutputError: 'Forked skill failed with no output',
     errorPrefix: 'Forked skill execution error',
   });
@@ -245,11 +252,12 @@ export async function executePluginSkill(
   // `skill.model ?? ...`). Without the leading `model ??` term a plugin skill
   // pinned to e.g. `model: opus` was silently downgraded to the session
   // default subagent model.
-  const pluginChildModel = resolveChildModel({
+  const pluginChildResolved = resolveChildModel({
     callSiteModel: model,
     defaultSubagentModel: ctx.defaultSubagentModel,
     defaultModel: ctx.defaultModel,
-  });
+  }, { withSource: true });
+  const pluginChildModel = pluginChildResolved.model;
   const pluginChildApiKey = applyParentCredentialFallback({
     childModel: pluginChildModel,
     resolved: ctx.resolveApiKeyForModel
@@ -327,6 +335,10 @@ export async function executePluginSkill(
     idPrefix: `skill-${skillName}`,
     parentId: call.id,
     args,
+    modelFallback: skillForkModelFallback(
+      defaultTierModelFallback(pluginChildResolved, ctx.defaultModel),
+      (m) => buildForkedChildConfig(internals, { ...baseAgentConfig, model: m }, call.signal, readOnly, allowedTools, journalView).childConfig.provider,
+    ),
     noOutputError: 'Plugin skill failed with no output',
     errorPrefix: 'Plugin skill execution error',
   });
@@ -367,6 +379,8 @@ export async function runForkedSkillToResult(
     idPrefix: string;
     parentId: string;
     args: string | undefined;
+    /** Default-tier model fallback (see subagent/handle.model-fallback.ts). */
+    modelFallback?: ForkSubagentOptions['modelFallback'];
     noOutputError: string;
     errorPrefix: string;
   },
@@ -380,6 +394,7 @@ export async function runForkedSkillToResult(
     idPrefix,
     parentId,
     args,
+    modelFallback,
     noOutputError,
     errorPrefix,
   } = params;
@@ -416,9 +431,11 @@ export async function runForkedSkillToResult(
     handle = await manager.forkSubagent({
       parent: internals.ctx.parentSession,
       config: childConfig,
+      yieldEnabled: true, // foreground skill-fork dispatch (#4297 F-C2)
       idPrefix,
       parentId,
       agentType: label,
+      ...(modelFallback !== undefined ? { modelFallback } : {}),
     });
     // Nested forks of this skill child journal via ITS journal (forSubagent),
     // and carry ITS id as their parentSessionId (#2442 child-attribution).
@@ -476,4 +493,26 @@ export async function runForkedSkillToResult(
     // where skillBudgetReceipt was cleared, so this is a no-op there.
     skillBudgetReceipt?.release();
   }
+}
+
+/**
+ * Attach a provider rebuild to a skill fork's default-tier fallback. The
+ * skill child's provider is built for its default model's family by
+ * `buildForkedChildConfig`; the fallback model may be another family, so the
+ * retry re-runs that SAME builder (same permissions, executors, bash gate,
+ * journal view) keyed to the fallback model and takes its provider.
+ */
+function skillForkModelFallback(
+  fallback: { model: string } | undefined,
+  rebuild: (model: string) => AgentConfig['provider'],
+): ForkSubagentOptions['modelFallback'] {
+  if (fallback === undefined) return undefined;
+  return {
+    ...fallback,
+    buildProvider: (model) => {
+      const provider = rebuild(model);
+      if (provider === undefined) throw new Error(`model-fallback: no provider rebuilt for "${model}"`);
+      return provider;
+    },
+  };
 }

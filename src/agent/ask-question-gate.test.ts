@@ -115,4 +115,25 @@ describe('createAskQuestionGate', () => {
       elicitationRouter.uninstall();
     }
   });
+
+  it('passes sessionId as sessionKey so concurrent sessions do not see each other\'s handlers', () => {
+    elicitationRouter.uninstall();
+    const notify = vi.fn();
+    const gate = createAskQuestionGate({ notify });
+    const keyA = 'gate-session-A';
+    const keyB = 'gate-session-B';
+
+    elicitationRouter.installForSession(keyA, async () => ({ action: 'decline' as const }));
+    try {
+      // Session A has a handler — gate must pass (no block)
+      const ctxA: HookContext = { event: 'PreToolUse', toolName: 'ask_question', sessionId: keyA };
+      expect(gate(ctxA)).toEqual({});
+
+      // Session B has no handler — gate must block even though session A's handler is installed
+      const ctxB: HookContext = { event: 'PreToolUse', toolName: 'ask_question', sessionId: keyB };
+      expect(gate(ctxB).decision).toBe('block');
+    } finally {
+      elicitationRouter.uninstallForSession(keyA);
+    }
+  });
 });

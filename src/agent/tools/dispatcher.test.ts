@@ -282,6 +282,62 @@ describe('SessionToolDispatcher', () => {
     });
   });
 
+  // #4064 — MCP-aware unknown-tool messages
+  describe('MCP-aware unknown-tool messages (#4064)', () => {
+    function makeMcpDispatcher(mcpStates: { serverName: string; status: string; error?: string }[]) {
+      return new SessionToolDispatcher({
+        handlers: new Map([['echo', echoHandler()]]),
+        schemas: [...builtinToolSchemas],
+        permissions: { allowedTools: ['echo'] },
+        hookRegistry: undefined,
+        getMcpServerStates: () => mcpStates,
+      });
+    }
+
+    it('names the failed server when calling mcp__<failed-server>__tool', async () => {
+      const dispatcher = makeMcpDispatcher([
+        { serverName: 'cm-data', status: 'error', error: 'spawn ENOENT' },
+      ]);
+      const result = await dispatcher.execute(makeCall({ name: 'mcp__cm-data__search' }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('cm-data');
+      expect(result.content).toContain('spawn ENOENT');
+      expect(result.content).toContain('Do NOT retry');
+    });
+
+    it('does NOT use the MCP-aware message for a healthy server', async () => {
+      const dispatcher = makeMcpDispatcher([
+        { serverName: 'cm-data', status: 'connected' },
+      ]);
+      const result = await dispatcher.execute(makeCall({ name: 'mcp__cm-data__search' }));
+      expect(result.isError).toBe(true);
+      // Falls through to the generic unknown-tool message
+      expect(result.content).toContain('Unknown tool');
+    });
+
+    it('falls through to generic message when no MCP manager is wired', async () => {
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map([['echo', echoHandler()]]),
+        schemas: [...builtinToolSchemas],
+        permissions: { allowedTools: ['echo'] },
+        hookRegistry: undefined,
+        // no getMcpServerStates
+      });
+      const result = await dispatcher.execute(makeCall({ name: 'mcp__any-server__tool' }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('Unknown tool');
+    });
+
+    it('uses generic message for non-mcp__ tool names even with failed servers', async () => {
+      const dispatcher = makeMcpDispatcher([
+        { serverName: 'cm-data', status: 'error', error: 'timeout' },
+      ]);
+      const result = await dispatcher.execute(makeCall({ name: 'nonexistent_tool' }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('Unknown tool "nonexistent_tool"');
+    });
+  });
+
   it('catches handler throws and returns isError', async () => {
     const throwing: ToolHandler = async () => {
       throw new Error('handler kaboom');

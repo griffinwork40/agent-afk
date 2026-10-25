@@ -25,7 +25,7 @@ function routeLabel(
   return ctx.opts.auth.source === 'chatgpt-oauth' ? 'codex-subscription' : 'openai-api';
 }
 
-/** Full results are journaled before this bounded, tools-stripped synthesis view. */
+/** Full results are journaled before this bounded synthesis view (tools stay advertised; nothing is dispatched). */
 export function windDownForContextPressure(ctx: TurnDriverContext, appendedAt: number): boolean {
   const subscriptionPath = ctx.opts.auth.source === 'chatgpt-oauth';
   const limit = contextLimitFor(ctx.currentModel, subscriptionPath);

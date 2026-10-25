@@ -10,6 +10,7 @@
 import type { SlashCommand, SlashContext, SlashResult } from './types.js';
 import type { ImageAttachment } from '../input/attachments.js';
 import type { SlashRegistryView } from '../input-highlight.js';
+import { withCommandRequirements, missingCapabilities, capabilityReason } from './capabilities.js';
 
 const commands: Map<string, SlashCommand> = new Map();
 const aliases: Map<string, string> = new Map();
@@ -33,7 +34,7 @@ export function register(cmd: SlashCommand): void {
   if (commands.has(cmd.name)) {
     throw new Error(`Slash command already registered: ${cmd.name}`);
   }
-  commands.set(cmd.name, cmd);
+  commands.set(cmd.name, withCommandRequirements(cmd));
   for (const alias of cmd.aliases ?? []) {
     if (aliases.has(alias) || commands.has(alias)) {
       throw new Error(`Slash alias collides: ${alias}`);
@@ -208,6 +209,14 @@ export async function dispatch(
       ctx.out.warn(`Unknown command: ${parsed.name}  (type /help for commands)`);
     }
     return { handled: true, result: 'continue' };
+  }
+
+  if (ctx.capabilities !== undefined) {
+    const missing = missingCapabilities(cmd, ctx.capabilities);
+    if (missing.length > 0) {
+      ctx.out.warn(`${cmd.name} is unavailable: ${missing.map(capabilityReason).join('; ')}`);
+      return { handled: true, result: 'continue' };
+    }
   }
 
   const atts = attachments ?? [];

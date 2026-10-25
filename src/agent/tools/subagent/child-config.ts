@@ -19,6 +19,8 @@
  * @module agent/tools/subagent/child-config
  */
 
+import { defaultTierModelFallback, type ChildModelSource } from '../../subagent/resolve-child-model.js';
+import type { ForkSubagentOptions } from '../../subagent/fork-types.js';
 import { SubagentManager } from '../../subagent.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
@@ -120,6 +122,8 @@ export interface BuildChildConfigArgs {
    * the chain holds to maxDepth. See SubagentExecutorContext.workspaceStore.
    */
   workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: import('../../tools/delegation-budget.js').DelegationBudget;
+  /** Root-session continuation chains (D2); nested executors share the root's. */
+  continuationRegistry?: import('../../subagent/continuation-registry.js').ContinuationRegistry;
   /**
    * Hook registry (#3442) for the depth-2+ child {@link SubagentManager}
    * (whose stub parent carries none) and the recursive child executor's ctx,
@@ -182,32 +186,29 @@ export interface BuildChildConfigResult {
    * resolved value.
    */
   nestedAgentAllowlist: readonly string[] | undefined;
+  /** Provenance tier that chose childConfig.model — for default-tier fallback. */
+  childModelSource: ChildModelSource;
+  /** `forkSubagent({ modelFallback })` value: set only for a default-tier child (see handle.model-fallback.ts). */
+  modelFallback: ForkSubagentOptions['modelFallback'];
 }
 
 /**
- * Build the child `AgentConfig` and wire nested dispatch (child manager +
- * executor + provider). Returns the config plus the mutable child parent
- * session the caller backfills with `handle.id` after `forkSubagent`.
+ * Steps 1-5 of child config construction (model, tools, budgets, credential,
+ * base config) WITHOUT nesting wiring. Use with {@link completeChildConfigNesting}
+ * when isolation setup must run between config construction and nesting wiring
+ * so the nesting objects receive the resolved worktree cwd, not the
+ * pre-isolation parent cwd (#4374).
  */
-export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigResult {
-  const { parsed, namedAgent, depth, maxDepth, currentCwd, signal, defaultConfig, createChildExecutor } = args;
+export function buildChildConfigWithoutNesting(args: BuildChildConfigArgs) {
+  const { parsed, namedAgent, depth, maxDepth, defaultConfig } = args;
 
-  // 1. Model + provider family
-  const { childModel, childIsOpenAI } = resolveChildModelAndProvider(
+  const { childModel, childIsOpenAI, childModelSource } = resolveChildModelAndProvider(
     parsed, namedAgent, args.defaultSubagentModel, args.parentModel,
   );
-
-  // 2. Tool allowlist, bash gate, write-capability, side-effect-free
   const { resolvedAccess, effectiveAllowedTools, effectiveReadOnlyBash, childWriteCapable, childSideEffectFree } =
     resolveChildToolAccess(namedAgent, args.allowedTools, args.readOnlyBash, args.agentRegistry);
-
-  // 3. Turn + tool-round budgets
   const { effectiveMaxTurns, effectiveMaxToolUseIterations } = resolveChildBudgets(parsed, namedAgent);
-
-  // 4. API key
   const resolvedChildApiKey = resolveChildCredential(childModel, args.resolveApiKeyForModel, defaultConfig.apiKey);
-
-  // 5. Base config object (provider wired below)
   const childConfig = buildBaseChildConfig(
     parsed, namedAgent, defaultConfig,
     childModel, childIsOpenAI, resolvedChildApiKey,
@@ -215,11 +216,51 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     depth, maxDepth,
   );
 
-  // 6. Nesting wiring: child manager + executor + provider (or restricted fallback)
-  const { childParentSession, childManager } = wireChildNesting({
+  return { childConfig, childModel, childWriteCapable, childSideEffectFree, resolvedAccess, effectiveAllowedTools, effectiveReadOnlyBash, childModelSource };
+}
+
+/**
+ * Complete child config construction by wiring depth-2+ nesting (child
+ * SubagentManager + SubagentExecutor + provider) and assembling the
+ * model-fallback descriptor.
+ *
+ * `nestingCwd` is the cwd the nesting objects should inherit. For worktree-
+ * isolated dispatches, pass the worktree path (set by
+ * {@link setupIsolationWorktree}) so depth-2+ forks inherit the worktree,
+ * not the parent repo root (#4374). For non-isolated dispatches, pass
+ * `args.currentCwd` (unchanged).
+ */
+export function completeChildConfigNesting(
+  args: BuildChildConfigArgs,
+  pre: ReturnType<typeof buildChildConfigWithoutNesting>,
+  nestingCwd: string | undefined,
+): BuildChildConfigResult {
+  const { childConfig, childModel, childWriteCapable, childSideEffectFree, resolvedAccess, effectiveAllowedTools, effectiveReadOnlyBash, childModelSource } = pre;
+
+  const { childParentSession, childManager, rebuildProvider } = wireChildNesting({
     args, childConfig, effectiveAllowedTools, effectiveReadOnlyBash,
-    resolvedAccess, depth, maxDepth, signal, currentCwd, createChildExecutor,
+    resolvedAccess, depth: args.depth, maxDepth: args.maxDepth,
+    signal: args.signal, currentCwd: nestingCwd, createChildExecutor: args.createChildExecutor,
   });
 
-  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist: resolvedAccess?.nestedAgentTypes };
+  const fallback = defaultTierModelFallback({ model: childModel, source: childModelSource }, args.parentModel);
+  const modelFallback = fallback === undefined
+    ? undefined
+    : { ...fallback, ...(rebuildProvider !== undefined ? { buildProvider: rebuildProvider } : {}) };
+
+  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist: resolvedAccess?.nestedAgentTypes, childModelSource, modelFallback };
+}
+
+/**
+ * Build the child `AgentConfig` and wire nested dispatch (child manager +
+ * executor + provider). Returns the config plus the mutable child parent
+ * session the caller backfills with `handle.id` after `forkSubagent`.
+ *
+ * Convenience wrapper that calls {@link buildChildConfigWithoutNesting} +
+ * {@link completeChildConfigNesting} in sequence. Use the two-phase API
+ * directly when isolation setup must interleave (#4374).
+ */
+export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigResult {
+  const pre = buildChildConfigWithoutNesting(args);
+  return completeChildConfigNesting(args, pre, args.parsed.cwd ?? args.currentCwd);
 }

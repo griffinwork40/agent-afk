@@ -2,13 +2,11 @@
  * Model selector dropdown for the React dashboard.
  *
  * Fetches the model list from GET /api/models (with a static fallback) and
- * renders a styled <select>. Fires onSelect on mount and on every change.
- *
- * Port of src/web-server/frontend/model-selector.ts to React + Tailwind.
- * The badge helper is a bonus used by SessionCard.
+ * renders a controlled <select>. Fires onSelect only on deliberate changes.
+ * Uses the same ordered, deduped data as the /model picker (via groups).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import type { ModelInfo } from '@/types/api';
@@ -21,8 +19,6 @@ const DEFAULT_MODELS: readonly ModelInfo[] = [
   { id: 'haiku', label: 'Haiku' },
   { id: 'opus', label: 'Opus' },
 ];
-
-const DEFAULT_MODEL_ID = 'sonnet';
 
 // ---- badge colour map ---------------------------------------------------------
 
@@ -62,18 +58,27 @@ interface ModelSelectorProps {
   /** Currently selected model id. */
   current?: string;
   className?: string;
+  disabled?: boolean;
 }
 
-export function ModelSelector({ onSelect, current, className }: ModelSelectorProps) {
-  const [models, setModels] = useState<readonly ModelInfo[]>(DEFAULT_MODELS);
-  const initialFired = useRef(false);
+interface ModelGroup {
+  label: string;
+  rows: Array<{ id: string; name: string; aliases: string[] }>;
+}
 
-  // Fetch the real model list once.
+export function ModelSelector({ onSelect, current, className, disabled }: ModelSelectorProps) {
+  const [models, setModels] = useState<readonly ModelInfo[]>(DEFAULT_MODELS);
+  const [serverDefault, setServerDefault] = useState<string>();
+
+  // Fetch the real model list once — use groups for deduped ordered data.
   useEffect(() => {
     let cancelled = false;
-    apiFetch<{ models: ModelInfo[] }>('/api/models')
+    apiFetch<{ models: ModelInfo[]; groups?: ModelGroup[]; default?: string }>('/api/models')
       .then((data) => {
-        if (!cancelled && data.models.length > 0) setModels(data.models);
+        if (cancelled) return;
+        // Prefer flat models list (already deduped and ordered by the server).
+        if (data.models?.length > 0) setModels(data.models);
+        if (data.default) setServerDefault(data.default);
       })
       .catch(() => {
         // Swallow -- fallback list is already set.
@@ -81,18 +86,12 @@ export function ModelSelector({ onSelect, current, className }: ModelSelectorPro
     return () => { cancelled = true; };
   }, []);
 
-  // Fire onSelect on mount with the initial value.
-  const selected = current ?? DEFAULT_MODEL_ID;
-  useEffect(() => {
-    if (!initialFired.current) {
-      initialFired.current = true;
-      onSelect(selected);
-    }
-  }, [onSelect, selected]);
+  // Mounting or loading a session must not mutate its provider model.
+  const selected = current ?? serverDefault ?? '';
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
-      onSelect(e.target.value);
+      if (e.target.value) onSelect(e.target.value);
     },
     [onSelect],
   );
@@ -101,14 +100,18 @@ export function ModelSelector({ onSelect, current, className }: ModelSelectorPro
     <div className={cn('relative inline-flex items-center', className)}>
       <select
         value={selected}
+        disabled={disabled}
         onChange={handleChange}
         aria-label="Model"
         className={cn(
-          'appearance-none rounded-md border bg-secondary pl-2 pr-7 py-1',
+          'max-w-44 appearance-none rounded-md border bg-secondary pl-2 pr-7 py-1',
           'text-xs font-medium text-secondary-foreground',
           'cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring',
         )}
       >
+        {!models.some((m) => m.id === selected) && (
+          <option value={selected} disabled={!selected}>{selected || 'Server default'}</option>
+        )}
         {models.map((m) => (
           <option key={m.id} value={m.id}>
             {m.label}

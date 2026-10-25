@@ -10,7 +10,7 @@ import { mkdir, appendFile } from 'fs/promises';
 import { join } from 'path';
 import { loadSkillPrompts } from '../_lib/prompt-loader.js';
 import type { SkillExecutionContext } from '../index.js';
-import { resolveChildModel } from '../../agent/subagent/resolve-child-model.js';
+import { resolveChildModel, defaultTierModelFallback } from '../../agent/subagent/resolve-child-model.js';
 import { SubagentManager } from '../../agent/subagent.js';
 import { runWave } from '../../agent/subagent/wave.js';
 import type { IAgentSession } from '../../agent/types.js';
@@ -82,6 +82,7 @@ async function runInspectors(
   sessionId: string,
   skillCallId: string | undefined,
   inspectorTools: Set<string>,
+  modelFallback?: { model: string },
 ): Promise<Verdict[]> {
   if (configs.length === 0) return [];
 
@@ -106,6 +107,7 @@ async function runInspectors(
         },
         idPrefix: `inspector-${cfg.type}`,
         agentType: `inspector-${cfg.type}`,
+        ...(modelFallback !== undefined ? { modelFallback } : {}),
         outputSchema: z.array(VerdictSchema),
         ...(skillCallId ? { parentId: skillCallId } : {}),
       }),
@@ -249,10 +251,12 @@ export async function handler(
   ctx?: SkillExecutionContext,
 ): Promise<AuditFitResult> {
   const apiKey = ctx?.apiKey;
-  const subagentModel = resolveChildModel({
+  const resolvedSubagentModel = resolveChildModel({
     defaultSubagentModel: ctx?.defaultSubagentModel,
     defaultModel: ctx?.defaultModel,
-  });
+  }, { withSource: true });
+  const subagentModel = resolvedSubagentModel.model;
+  const modelFallback = defaultTierModelFallback(resolvedSubagentModel, ctx?.defaultModel);
   const skillCallId = ctx?.callId;
   const inputObj = typeof input === 'object' && input !== null ? input : {};
   const parsed = AuditFitInputSchema.parse(inputObj);
@@ -329,7 +333,7 @@ export async function handler(
   }
 
   const allVerdicts = await runInspectors(
-    inspectorConfigs, manager, subagentModel, sessionId, skillCallId, inspectorTools,
+    inspectorConfigs, manager, subagentModel, sessionId, skillCallId, inspectorTools, modelFallback,
   );
 
   const { inventory, misfits } = aggregateVerdicts(allVerdicts);

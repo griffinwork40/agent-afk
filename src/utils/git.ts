@@ -10,6 +10,38 @@ import { execFileSync } from 'node:child_process';
 import { dirname, isAbsolute, resolve as resolvePath } from 'node:path';
 import { execFileAsync, type ExecFileAsync } from './exec-file.js';
 
+// ---------------------------------------------------------------------------
+// Module-scope memoization cache for resolveRepoRootSync
+// ---------------------------------------------------------------------------
+
+/**
+ * LRU-style cache for `resolveRepoRootSync` results, keyed by `"<mode>:<cwd>"`.
+ *
+ * **Lifetime assumption**: this cache is valid for the lifetime of the current
+ * OS process. It is safe for short-lived CLI invocations (a user types `afk
+ * resume`, the process exits). Long-running daemon processes should be aware
+ * that the cached root may become stale if the user's working directory is
+ * moved, deleted, or re-initialised as a different git repository between
+ * invocations. In practice the daemon resolves the current session's repo root
+ * once at startup; subsequent calls with the same cwd hit the cache and avoid
+ * blocking the event loop. If you need fresh results, pass a no-op
+ * `execFileSync` that throws to bypass the cache, or call
+ * `clearRepoRootSyncCache()` directly.
+ *
+ * **Eviction**: capped at {@link REPO_ROOT_CACHE_MAX} entries (LRU). Each new
+ * unique `(mode, cwd)` pair inserts at the front; once the cap is reached the
+ * oldest entry is evicted. This bounds memory growth in long-running processes
+ * that serve many distinct working directories (e.g. the daemon handling
+ * sessions started from many different projects).
+ */
+const REPO_ROOT_CACHE_MAX = 10;
+const repoRootSyncCache = new Map<string, string>();
+
+/** @internal Exposed for testing only — clears the module-scope memoization cache. */
+export function clearRepoRootSyncCache(): void {
+  repoRootSyncCache.clear();
+}
+
 /**
  * Minimal shape expected by the injectable `execFile` option of
  * `resolveRepoRoot`. Compatible with the `ExecFileFn` type defined in
@@ -128,6 +160,16 @@ export async function resolveRepoRoot(options?: ResolveRepoRootOptions): Promise
 /**
  * Resolve the git repository root synchronously.
  *
+ * Results are memoized in a module-scope LRU cache (cap:
+ * {@link REPO_ROOT_CACHE_MAX}) keyed by `"<mode>:<cwd>"`. The cache is
+ * bypassed when a custom `execFileSync` is supplied (test injection path) so
+ * unit tests see fresh results without leaking state across test cases.
+ *
+ * **Cache lifetime**: valid for the current OS process. Safe for short-lived
+ * CLI invocations. Daemon callers should note that a cached root becomes stale
+ * if the working directory is moved or re-initialised between calls. Use
+ * `clearRepoRootSyncCache()` to flush when needed.
+ *
  * When `options.fallback` is provided it is returned instead of throwing when
  * `git rev-parse` fails. This preserves the "return cwd on failure" semantics
  * used by spine-hook and the `/spine` slash command.
@@ -135,9 +177,23 @@ export async function resolveRepoRoot(options?: ResolveRepoRootOptions): Promise
 export function resolveRepoRootSync(options?: ResolveRepoRootSyncOptions): string {
   const cwd = options?.cwd ?? process.cwd();
   const mode = options?.mode ?? 'show-toplevel';
-  const execSync: ExecFileSyncForGit = options?.execFileSync ?? execFileSync;
+  const customExec = options?.execFileSync;
+  const execSync: ExecFileSyncForGit = customExec ?? execFileSync;
+
+  // Only use the module-scope cache when no custom executor is injected.
+  // Injected executors are test stubs; bypassing the cache keeps tests hermetic.
+  const cacheKey = `${mode}:${cwd}`;
+  if (!customExec && repoRootSyncCache.has(cacheKey)) {
+    // LRU promotion: delete then re-insert so this key sorts as most-recently-used.
+    // Map iteration order is insertion order; eviction targets the first (oldest) key.
+    const cached = repoRootSyncCache.get(cacheKey)!;
+    repoRootSyncCache.delete(cacheKey);
+    repoRootSyncCache.set(cacheKey, cached);
+    return cached;
+  }
 
   try {
+    let result: string;
     if (mode === 'git-common-dir') {
       const raw = execSync('git', ['rev-parse', '--git-common-dir'], {
         cwd,
@@ -146,7 +202,7 @@ export function resolveRepoRootSync(options?: ResolveRepoRootSyncOptions): strin
       }).trim();
       if (!raw) throw new Error('Not in a git repository.');
       const absoluteGitDir = isAbsolute(raw) ? raw : resolvePath(cwd, raw);
-      return dirname(absoluteGitDir);
+      result = dirname(absoluteGitDir);
     } else {
       const root = execSync('git', ['rev-parse', '--show-toplevel'], {
         cwd,
@@ -154,8 +210,23 @@ export function resolveRepoRootSync(options?: ResolveRepoRootSyncOptions): strin
         stdio: ['ignore', 'pipe', 'ignore'],
       }).trim();
       if (!root) throw new Error('Not in a git repository.');
-      return root;
+      result = root;
     }
+
+    // Invariant: Map-as-LRU promotion ordering. `Map.keys().next().value`
+    // evicts the oldest entry ONLY because every cache hit above promotes via
+    // delete-then-reinsert (the `has()` path returns early, but a future read
+    // path must preserve this). Without promotion, a frequently-accessed key
+    // inserted early would be evicted first despite being hot.
+    if (!customExec) {
+      if (repoRootSyncCache.size >= REPO_ROOT_CACHE_MAX) {
+        const oldest = repoRootSyncCache.keys().next().value;
+        if (oldest !== undefined) repoRootSyncCache.delete(oldest);
+      }
+      repoRootSyncCache.set(cacheKey, result);
+    }
+
+    return result;
   } catch (err) {
     if (options?.fallback !== undefined) return options.fallback;
     if (err instanceof Error && err.message === 'Not in a git repository.') throw err;

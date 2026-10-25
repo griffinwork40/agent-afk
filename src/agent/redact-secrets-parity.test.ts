@@ -145,6 +145,29 @@ describe('false-positive narrowing — bare Bearer rule (issue #3934 item 1)', (
     expect(result).toContain('[REDACTED]');
   });
 
+  it('DOES redact an exactly 8-char token (floor boundary)', () => {
+    const result = redactSecrets('Bearer abcdef01');
+    expect(result).not.toContain('abcdef01');
+    expect(result).toContain('[REDACTED]');
+  });
+
+  it('does NOT redact a 7-char token (below floor)', () => {
+    const result = redactSecrets('Bearer abcdef0');
+    expect(result).toBe('Bearer abcdef0');
+  });
+
+  it('DOES redact a hyphenated stopword-prefixed token (Bearer token-abc12345)', () => {
+    const result = redactSecrets('Bearer token-abc12345');
+    expect(result).not.toContain('token-abc12345');
+    expect(result).toContain('[REDACTED]');
+  });
+
+  it('DOES redact a hyphenated stopword-prefixed token (Bearer the-quick-brown-fox)', () => {
+    const result = redactSecrets('Bearer the-quick-brown-fox');
+    expect(result).not.toContain('the-quick-brown-fox');
+    expect(result).toContain('[REDACTED]');
+  });
+
   it('preserves bearer casing in replacement (no Title-case forced)', () => {
     const result = redactSecrets('authorization: bearer abcdef0123456789');
     expect(result).toBe('authorization: bearer [REDACTED]');

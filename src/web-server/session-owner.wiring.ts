@@ -19,6 +19,7 @@ import { createDefaultTraceWriter, type CreatedTraceWriter } from '../agent/trac
 import { BackgroundAgentRegistry } from '../agent/background-registry.js';
 import { McpManager, loadMcpConfig } from '../agent/mcp/index.js';
 import { connectMcpTraced } from '../agent/mcp/connect-traced.js';
+import { prewarmWebMcp, takeWebMcpManager } from './session-owner.mcp-warm.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../config/import-sources.js';
 import { WorkspaceStore } from '../agent/workspace/index.js';
 import {
@@ -33,6 +34,7 @@ import type { TraceWriter } from '../agent/trace/index.js';
 import type { TraceSink } from '../agent/trace/writer.js';
 import { makeDeferredParentProxy } from '../agent/session/deferred-parent-proxy.js';
 import { pendingChildBillingStreams } from '../agent/session/manager-shutdown-config.js';
+import type { FastModeController } from '../agent/fast-mode.js';
 
 /** Everything `SessionOwner.create` needs beyond the base `AgentConfig`. */
 export interface WebSessionWiring {
@@ -61,6 +63,8 @@ export interface WireWebSessionOptions {
   rawPromptSource: string | undefined;
   /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
   operatorOverlay?: string | undefined;
+  /** Shared with the command adapter so /fast changes actual provider requests. */
+  fastModeController?: FastModeController;
 }
 
 /**
@@ -80,7 +84,7 @@ export async function wireWebSession(
   const traceSink: TraceSink | undefined = traceWriter;
 
   // -- 2. MCP servers ---------------------------------------------------------
-  const mcpManager = await loadWebMcpManager(cwd, traceSink);
+  const mcpManager = await takeWebMcpManager(cwd, traceSink, (sink) => loadWebMcpManager(cwd, sink));
 
   // -- 3. Memory + workspace stores -------------------------------------------
   const memoryStore = new MemoryStore();
@@ -122,6 +126,7 @@ export async function wireWebSession(
     composeExecutor: executors.composeExecutor,
     ...(mcpManager !== undefined ? { mcpManager } : {}),
     workspaceStore,
+    ...(opts.fastModeController !== undefined ? { fastModeController: opts.fastModeController } : {}),
     surface: 'web',
   });
 
@@ -184,6 +189,11 @@ export interface WebSessionWiringInternal extends WebSessionWiring {
 // ---------------------------------------------------------------------------
 // MCP loader (mirrors telegram/mcp-session.ts for the web surface)
 // ---------------------------------------------------------------------------
+
+/** Connect a warm MCP spare for `cwd` (see session-owner.mcp-warm.ts). */
+export function prewarmWebSessionMcp(cwd: string): () => Promise<void> {
+  return prewarmWebMcp(cwd, (sink) => loadWebMcpManager(cwd, sink));
+}
 
 async function loadWebMcpManager(
   cwd: string,

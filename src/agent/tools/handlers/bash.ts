@@ -52,6 +52,7 @@ function parseBashInput(input: unknown): {
   timeout_ms: number;
   background: boolean;
   explicitTimeout: boolean;
+  clampedTimeoutWarning: string | undefined;
 } {
   if (typeof input !== 'object' || input === null) {
     throw new Error('Input must be an object');
@@ -72,17 +73,46 @@ function parseBashInput(input: unknown): {
   const maxTimeout = background ? MAX_PROCESS_MAX_RUNTIME_MS : 600000;
 
   let timeout_ms = 120000; // default 2 minutes
+  let clampedTimeoutWarning: string | undefined;
   if (bashInput.timeout_ms !== undefined) {
-    if (typeof bashInput.timeout_ms !== 'number') {
+    if (
+      typeof bashInput.timeout_ms !== 'number' ||
+      Number.isNaN(bashInput.timeout_ms)
+    ) {
       throw new Error('timeout_ms must be a number');
     }
-    if (bashInput.timeout_ms < 0 || bashInput.timeout_ms > maxTimeout) {
-      throw new Error(`timeout_ms must be between 0 and ${maxTimeout}`);
+    if (bashInput.timeout_ms < 0) {
+      throw new Error(`timeout_ms must be >= 0 (values above ${maxTimeout} are clamped)`);
     }
-    timeout_ms = bashInput.timeout_ms;
+    if (bashInput.timeout_ms > maxTimeout) {
+      // Clamp over-max values to the ceiling rather than rejecting — the model
+      // asked for a long timeout; honouring the maximum intent is more useful
+      // than hard-failing the call with a validation error.
+      clampedTimeoutWarning = `timeout_ms ${bashInput.timeout_ms} exceeds the maximum (${maxTimeout}); clamped to ${maxTimeout}.`;
+      timeout_ms = maxTimeout;
+    } else {
+      timeout_ms = bashInput.timeout_ms;
+    }
   }
+  // NOTE: this guard is logically unreachable after a background clamp.
+  // When background===true, maxTimeout===MAX_PROCESS_MAX_RUNTIME_MS (86400000 ms).
+  // Any timeout_ms > maxTimeout is clamped TO maxTimeout (≥1000), and any
+  // timeout_ms ≤ maxTimeout that is also < 1000 would have to be a small
+  // positive value (1–999). That path is still guarded here defensively, but
+  // the clamp branch above (line 87) can never produce a sub-1000 value.
   if (background && bashInput.timeout_ms !== undefined && timeout_ms < 1000) {
     throw new Error('timeout_ms must be at least 1000 with run_in_background');
+  }
+  // Emit telemetry AFTER the min-1000 guard so the event is only recorded
+  // when the input is fully validated and the clamped value is final.
+  // Previously emitted before the guard, creating an implicit ordering
+  // dependency (advisory finding from PR #4022 review).
+  if (clampedTimeoutWarning) {
+    void appendRoutingDecision({
+      event: 'tool.bash_timeout_clamped',
+      tool: 'bash',
+      mode: background ? 'background' : 'foreground',
+    });
   }
 
   return {
@@ -90,6 +120,7 @@ function parseBashInput(input: unknown): {
     timeout_ms,
     background,
     explicitTimeout: bashInput.timeout_ms !== undefined,
+    clampedTimeoutWarning,
   };
 }
 
@@ -108,6 +139,44 @@ function makeTailBuffer(context: ToolHandlerContext | undefined): RollingTailBuf
       // Contract: callback must not throw, but we swallow defensively.
     }
   });
+}
+
+/**
+ * Format a clamped-timeout warning into a tool result.
+ *
+ * For **background** results (JSON-parseable payload from `startBackgroundBash`),
+ * embeds the warning as a `warning` field inside the JSON so `JSON.parse` on the
+ * content after the `\n\n` separator still produces a valid object.
+ *
+ * For **foreground** results, checks whether the content is a detach placeholder
+ * (JSON with `status === 'detached'`). If so, embeds the warning inside that JSON.
+ * Otherwise, prepends the warning as a string prefix (the existing behavior).
+ *
+ * Contract: returns a `{ content: string; isError?: boolean }` object. The
+ * `content` field is always a valid JSON string when the input was JSON, and
+ * always contains `[Warning]` when `clampedTimeoutWarning` is non-empty.
+ */
+function formatClampedWarningResult(
+  result: { content: string; isError?: boolean },
+  clampedTimeoutWarning: string,
+  /** When true, treats JSON with status==='detached' specially (foreground path). */
+  isForegroundPath: boolean,
+): { content: string; isError?: boolean } {
+  // Try to parse the result as JSON — if it parses, embed the warning inside.
+  try {
+    const parsed = JSON.parse(result.content) as Record<string, unknown>;
+    // For the foreground path, only embed if it's a detach placeholder.
+    if (isForegroundPath && parsed['status'] !== 'detached') {
+      // Not a detach placeholder — fall through to string-prefix below.
+    } else {
+      parsed['warning'] = clampedTimeoutWarning;
+      return { ...result, content: `[Warning] ${clampedTimeoutWarning}\n\n${JSON.stringify(parsed, null, 2)}` };
+    }
+  } catch {
+    /* Not JSON — fall through to string-prefix below. */
+  }
+  // String-prefix fallback (existing behavior).
+  return { ...result, content: `[Warning] ${clampedTimeoutWarning}\n\n${result.content}` };
 }
 
 /**
@@ -212,7 +281,7 @@ export function createBashHandler(
   }
 
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
-    let { command, timeout_ms, background, explicitTimeout } = parseBashInput(input);
+    let { command, timeout_ms, background, explicitTimeout, clampedTimeoutWarning } = parseBashInput(input);
 
     if (signal.aborted) {
       return { content: 'Command aborted', isError: true };
@@ -234,11 +303,15 @@ export function createBashHandler(
     // Background launch: supervised by the session's ProcessJobRegistry and
     // returned immediately. timeout_ms is the max runtime (default 2 h).
     if (background) {
-      return startBackgroundBash(command, explicitTimeout ? timeout_ms : undefined, context, cwd);
+      const bgResult = await startBackgroundBash(command, explicitTimeout ? timeout_ms : undefined, context, cwd);
+      if (clampedTimeoutWarning) {
+        return formatClampedWarningResult(bgResult, clampedTimeoutWarning, false);
+      }
+      return bgResult;
     }
 
     const startedAt = Date.now();
-    return new Promise((resolve) => {
+    const rawResult = await new Promise<{ content: string; isError?: boolean; truncated?: boolean; capturePath?: string; durationMs?: number; exitCode?: number }>((resolve) => {
       let resolved = false;
 
       // Live rolling tail buffer — ephemeral TUI chrome only, never model-facing.
@@ -343,6 +416,10 @@ export function createBashHandler(
 
       attachErrorHandler({ proc, context, cwd, startedAt, settle });
     });
+    if (clampedTimeoutWarning) {
+      return formatClampedWarningResult(rawResult, clampedTimeoutWarning, true);
+    }
+    return rawResult;
   };
 }
 

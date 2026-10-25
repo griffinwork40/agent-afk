@@ -18,7 +18,7 @@ export const gitReadTool: AnthropicToolDef = {
   concurrencySafe: true,
   description:
     'Run a read-only git query in the session working directory without a shell. ' +
-    'Subcommands: status, log, diff, show, grep, tag (listing), branch (listing), blame, ls-files, rev-parse. ' +
+    `Subcommands: ${GIT_READ_SUBCOMMANDS.join(', ')}. ` +
     'Only an allowlisted set of options is accepted per subcommand (e.g. log: --oneline, --stat, ' +
     '--max-count=N, --since=…, --author=…, --format=…; diff: --cached, --stat, --name-only). ' +
     'Revisions (HEAD~3, main..HEAD, a SHA, v1.2.0) go in `args`; file paths go in `paths` and must stay ' +

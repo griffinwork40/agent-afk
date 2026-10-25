@@ -1,131 +1,101 @@
 ---
-title: "Quickstart"
-description: "Install Agent AFK globally via npm, configure your Anthropic API key, and run your first agentic terminal session in under two minutes."
+title: "Get started with afk"
+description: "Install afk, authenticate with a model provider, and start a useful session in your project."
 ---
 
-## Prerequisites
+Use this path to ask afk a useful question about a project without changing files. You need a supported Node.js version, npm, and access to a model provider. This example uses an Anthropic API key or an existing Claude credential.
 
-- **Node.js ≥ 22** — check with `node --version`
-- An **Anthropic API key** (or run `afk login` for browser-based OAuth)
+<Steps>
+<Step>
+### Install
 
-## Install
+Check Node.js, then install the package:
 
 ```bash
+node --version
 npm install -g agent-afk
-```
-
-Confirm the binary is on your `PATH`:
-
-```bash
 afk --version
 ```
 
-To update to the latest published version at any time:
+Supported Node.js versions are `^22.22.2 || ^24.15.0 || >=26.0.0`. For platform details and shell setup, see [Installation](/installation).
+</Step>
 
-```bash
-afk update              # installs latest via npm install -g
-afk update --check      # check for a newer version without installing
-afk update --pin 1.2.3  # install a specific semver instead of latest
-```
-
-`afk upgrade` is an alias for `afk update`.
-
-## Set your API key
-
-The simplest path is an environment variable:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-Add that line to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.) to make it permanent.
-
-Alternatively, write it to Agent AFK's env config file so it's scoped to `afk` only:
-
-```bash
-echo "ANTHROPIC_API_KEY=sk-ant-..." >> ~/.afk/config/afk.env
-```
-
-Or keep the key out of your shell history with a masked prompt:
-
-```bash
-afk config env set ANTHROPIC_API_KEY   # prompts without echoing the value
-```
-
-Or use the OAuth flow (no API key required — authenticates via `console.anthropic.com`):
+<Step>
+### Authenticate
 
 ```bash
 afk login
 ```
 
-If you already have Claude Code installed, `claude login` also works — AFK reads the credential Claude Code writes to your system keychain.
+On an unconfigured install, this checks for an existing Anthropic credential. If none is found, it prompts for an Anthropic API key or OAuth token without displaying what you type, then saves it in `~/.afk/config/afk.env`.
 
-## Smoke test
+`afk login` does not open a browser OAuth flow. If you already use Claude Code, afk can reuse a supported credential from `claude login`. For OpenAI, other providers, or local models, follow [API keys and authentication](/configuration/api-keys) instead.
+</Step>
 
-Verify the installation and provider connectivity:
+<Step>
+### Open your project and ask a bounded question
 
-```bash
-afk chat "hello"
-afk doctor       # environment self-check: Node version, API key, paths, config
-```
-
-`afk doctor` will flag any missing keys, path problems, or provider connectivity issues.
-
-## Your first session
-
-For a one-shot question:
+In your terminal, change into the project you want afk to inspect. Then run:
 
 ```bash
-afk chat "summarise the last 10 git commits in this repo"
+afk --permission-mode default "Explain what this project does and where its main entry points are. Do not modify files or run installation commands."
 ```
 
-For an interactive REPL with full tool access (bash, file ops, web fetch, subagents):
+The quoted text is submitted as the first message. The REPL stays open so you can ask follow-up questions. The explicit `default` permission mode enables path containment and approvals for file access outside granted roots.
 
-```bash
-afk i
-```
-
-Inside the REPL, type a message and press Enter. Use `/help` to list slash commands.
-
-<Callout type="info">
-`afk i` is an alias for `afk interactive`. The REPL is the default command — running `afk`
-with no subcommand also starts the REPL.
+<Callout type="warn">
+New CLI installations otherwise start in `bypassPermissions`, not approval mode. Even `default` is not an OS sandbox or a confirmation prompt for every shell command. Start with a trusted project and read [Permissions](/configuration/permissions).
 </Callout>
+</Step>
+
+<Step>
+### Continue, then exit
+
+Try a follow-up such as:
+
+```text
+Which test would you run first to check a small change here?
+```
+
+Type `/help` to see commands, or `/exit` to leave. Sessions autosave, so you can return with `/resume` in a later REPL session.
+</Step>
+</Steps>
+
+## Prefer a single response?
+
+Use `chat` for one prompt without staying in an interactive session:
+
+```bash
+afk chat "Explain what this project does. Do not modify files." --permission-mode default
+```
+
+See [One-shot chat](/surfaces/chat) for piping, output formats, and scripting.
 
 ## Choose a model
 
-The default model is the `medium` capability tier — Claude Sonnet on an
-unconfigured install. Override per-command:
+Override the model for a single launch:
 
 ```bash
-afk chat "explain this stack trace" --model opus
-afk i --model haiku
+afk chat "Explain this project's structure. Do not modify files." --model opus --permission-mode default
+afk i --model haiku --permission-mode default
 ```
 
-| Alias | Description |
-|---|---|
-| `fable` | Most capable — hardest reasoning, 1M context |
-| `opus` | Complex reasoning, multi-step planning |
-| `sonnet` | Balanced speed and capability |
-| `haiku` | Fast and cheap, good for simple tasks |
+`sonnet`, `opus`, `haiku`, and `fable` are model aliases. Capability slots such as `small`, `medium`, and `large` let you configure which model each tier uses. In the REPL, `/model` opens a picker. See [Models and providers](/configuration/models-providers) before switching to a provider that needs different credentials.
 
-## Coming from Claude Code or Codex?
+## If setup fails
 
-If you already have plugins, skills, or MCP servers installed in Claude Code or Codex, import them into AFK with a single command:
+Run the environment and configuration checks:
 
 ```bash
-afk migrate             # auto-detects Claude Code and Codex; prompts before writing
-afk migrate --dry-run   # preview what would be imported without changing anything
-afk migrate --mcp       # also import MCP servers (discloses each server's command first)
-afk migrate -y          # skip the confirmation prompt (CI / non-interactive)
+afk doctor
 ```
 
-Rather than copying files, `afk migrate` records a trust grant in `afk.config.json`. AFK then live-reads the source tool's directories every session — plugins installed in Claude Code tomorrow appear in AFK tomorrow without re-running the command. MCP import is opt-in (`--mcp`) because MCP servers auto-run a command on session start.
+Use [Authentication troubleshooting](/troubleshooting/auth-and-providers) if the first model request fails. A successful `afk --version` only confirms the executable is installed, not that a provider is authenticated.
 
-## Next steps
+## Related
 
-- **[How It Works](/how-it-works)** — session lifecycle, provider routing, terminal states
-- **[Interactive REPL](/surfaces/repl)** — slash commands, plan mode, background tasks
-- **[One-Shot Chat](/surfaces/chat)** — pipe-friendly, headless streaming
-- **[Daemon](/surfaces/daemon)** — cron scheduling, unattended runs
-- **[Telegram](/surfaces/telegram)** — bot setup and supervision
+<Cards>
+  <Card title="Run your first session" href="/first-session" description="Tour slash commands, permissions, interrupting, and resuming." />
+  <Card title="Install and update afk" href="/installation" description="Platform requirements, shell completion, and updates." />
+  <Card title="Choose models and providers" href="/configuration/models-providers" description="Use a different provider or switch models for your task." />
+</Cards>

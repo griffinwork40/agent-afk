@@ -1,181 +1,144 @@
 ---
-title: "Web Dashboard"
-description: "afk web serves a local browser UI for live agent sessions — streaming output, schedule management, background job inspection, and slash-command dispatch."
+title: "Use afk in your browser"
+description: "Start a local dashboard to run sessions, approve tools, manage schedules, and inspect agent activity."
 ---
 
-The web dashboard is a browser-based surface for Agent AFK. It serves a local HTTP server that streams session output in real time, lets you send prompts and approve tool use from a browser tab, and exposes schedule and background-job management alongside cross-session memory search.
+`afk web` serves a local browser dashboard for AFK. Use it to run several sessions from one process, watch streaming output, approve tool requests, and manage schedules without a terminal conversation.
+
+## Start the dashboard
+
+<Steps>
+<Step>
+### Launch from the project you want to work in
 
 ```bash
 afk web
 ```
 
-By default the server binds to `127.0.0.1:4141` and opens a browser tab automatically.
+The server binds to `127.0.0.1:4141` and opens a browser automatically. If that port is busy, it uses an available port and prints the actual address. Use `afk web --no-open` if you prefer to open the printed URL yourself.
 
-## Common options
+</Step>
+<Step>
+### Start a session and send a prompt
 
-```bash
-afk web --port 4242               # listen on a different port
-afk web --host 0.0.0.0            # bind all interfaces (requires --token)
-afk web --token my-secret-token   # fix the bearer token across restarts
-afk web --no-open                 # start the server without opening a browser tab
-afk web --model opus              # model for sessions started from the browser
-afk web --bypass-permissions      # skip tool-approval prompts for browser-started sessions
-```
+Use **New Session** in the header, type your request, and press **Enter**. Use **Shift+Enter** for a newline. Browser-created sessions default to the directory where you started the server and the server's configured model. Start with `afk web --model opus` to choose that model explicitly.
 
-Press **Ctrl+C** to stop the server. All in-flight sessions are closed before the process exits.
+</Step>
+<Step>
+### Review output and approvals
 
-## What gets served
+The transcript streams as the agent works. Respond to approval cards when a tool needs consent. Use **Stop** to interrupt the current turn without closing the session.
 
-`afk web` is a React single-page app bundled into the package. The server hands the bundle to any browser that presents a valid credential, then acts as the API backend for that page.
+Press **Ctrl+C** in the server terminal when finished. AFK closes its owned sessions before stopping the HTTP server.
 
-The server uses bearer-token auth, but the token flows differently for the initial page load versus API calls:
+</Step>
+</Steps>
 
-- **Initial page load** — The startup URL carries `?token=<64-hex-chars>`. The browser sends this once so the server can set a session cookie. After that the cookie authenticates subsequent navigations without the token appearing in every URL.
-- **API calls** — Every `/api/*` request must include `Authorization: Bearer <token>` in the request header. The browser-side app attaches this automatically using the token it received on page load. Query-string tokens are never accepted for API calls.
+## Sessions you can control
 
-The token is minted fresh on each run and printed in the startup URL:
+| Session type | What you can do |
+|---|---|
+| Owned by this `afk web` process | Send prompts, invoke skills, approve requests, and interrupt turns. |
+| Discovered from another process's on-disk session data | Read the transcript and watch updates. Prompts and approvals must happen in the owning process. |
 
-```
-✔ afk web listening on http://127.0.0.1:4141
-  http://127.0.0.1:4141/?token=<64-hex-chars>
-```
+Completed turns in browser-created sessions are saved and can appear in the REPL's `/resume` list. Stopping the server ends the live sessions, not their completed saved history. An interrupted or failed turn is not saved as a completed turn.
 
-The URL the auto-open path passes to your OS launcher carries a one-time handoff nonce instead (`?k=`), so the real bearer token never appears in your process table or shell history.
+### Streaming and queued messages
 
-## Sessions
+The browser uses an authenticated Server-Sent Events stream that replays session events and then tails them live. Reconnects use the last event identifier to avoid replaying already received events.
 
-The sessions view lists every AFK session the server can see — both sessions it started itself (owned) and any sessions discovered on disk from other processes (attached read-only).
-
-**Owned sessions** are those started by this `afk web` process. They are fully drivable: you can send prompts, invoke skills, approve elicitations, and interrupt a running turn from the browser.
-
-**Attached sessions** are sessions from another process (a REPL, daemon, or Telegram bot) whose ledger files exist on disk. The browser can stream their output but cannot send prompts or approve tool use — those operations require an in-process elicitation handler that lives in the other process's memory.
-
-### Starting a session
-
-Click **New session** to start a fresh agent session inside the `afk web` process. The session runs in the directory you launched the server from, using the model you specified (defaulting to `afk.config.json` or the `AFK_MODEL` env var).
-
-### Streaming output
-
-Session output is delivered over Server-Sent Events. The browser opens a `fetch`-based event stream to `/api/sessions/:id/stream` — using `fetch` rather than the native `EventSource` API because `EventSource` cannot send an `Authorization` header, and query-string tokens land in browser history. The stream replays the ledger from the beginning on connect, then tails it live. Reconnecting after a network drop resumes from the last-seen event using `Last-Event-ID`.
-
-### Sending prompts
-
-Type a message in the input box and press Enter to send it to the active session. The server returns HTTP 202 immediately and runs the turn asynchronously; output arrives over the SSE stream. If a turn is already in flight the server returns 409 — wait for it to finish or press **Stop** first.
-
-### Interrupting a turn
-
-**Stop** sends `POST /api/sessions/:id/interrupt`. The session's current turn is soft-stopped; the session remains open and you can send another prompt afterward.
+When a turn is running, **Enter** queues your message in the composer. You can edit, reorder, or remove queued messages; they are sent one at a time as turns finish. The server itself rejects a direct prompt submission to a busy session with HTTP `409`, so API clients must wait rather than assume requests are queued server-side.
 
 ### Tool approvals
 
-When a tool use requires consent, the browser renders an approval card. Clicking **Approve** or **Decline** resolves the pending elicitation immediately. The pending list is updated over the same SSE stream that delivers session output.
+Approval cards let you accept or decline requests raised inside this server process. The browser polls the pending-approval endpoint every second. Requests from a separate REPL, daemon, or Telegram process do not become controllable here.
 
-<Callout type="info">
-Only tools running inside THIS `afk web` process can be approved from the browser. Elicitations raised by a REPL or daemon session in another process are handled there and do not appear in the web UI.
+Browser-created sessions use `default` permission mode unless you start the server with `--bypass-permissions`. That flag automatically approves tool use and should be reserved for a trusted environment.
+
+## Slash-command autocomplete
+
+Type `/` at the beginning of the composer to see command suggestions. Keep typing to filter by command-name prefix. The dropdown shows up to eight matches with descriptions and highlights its active suggestion.
+
+Use the arrow keys to choose a command and **Enter** to insert it, or click a suggestion. Selection inserts the command and a trailing space; add arguments and press **Enter** again to send. Suggestions stop once you type a space after the command. Namespaced skill commands retain their full name.
+
+Autocomplete is a discovery aid, not a guarantee that a command can run on the web surface:
+
+| Input | Result |
+|---|---|
+| Registered skill command, including plugin skills | Uses the structured skill invocation path and available preflight. |
+| Unknown command | HTTP `422`, with a suggestion when available. |
+| Terminal-only command | HTTP `422` explaining that the command requires the REPL. |
+| Other registered native commands or ordinary text | Passed to the model as text, not executed as a terminal command. |
+
+Terminal-only commands include `/clear`, `/compact`, `/editor`, `/exit`, `/fast`, `/font-size`, `/fork`, `/keys`, `/model`, `/reauth`, `/resume`, `/rewind`, `/sh`, `/theme`, and `/thinking`. Their aliases are checked too.
+
+The suggestions come from `GET /api/commands`, using the shared slash registry. The browser clears its local cache when the tab becomes visible again, but the server memoizes its command inventory. Restart the server after installing skills if the inventory remains stale.
+
+## Other dashboard views
+
+### Schedules
+
+View, create, edit, enable, disable, and delete tasks, and inspect their execution history. The dashboard uses the same schedule store as `afk daemon` and the scheduling tools. Changes are live-synced to a running daemon when reachable; editing a schedule does not itself start a daemon.
+
+### Background jobs
+
+Inspect background subagent jobs, including their identifiers, status, prompt, and timing. This view is read-only and does not provide cancellation controls.
+
+### Memory
+
+Search cross-session memory and filter by `preference`, `convention`, `decision`, or `learning`. The memory API supports a result limit. Its hot-memory endpoint returns the current hot-context content and usage statistics, not simply a list of the newest facts.
+
+## Common options
+
+| Flag | Environment fallback | Default or behavior |
+|---|---|---|
+| `--port`, `-p` | `AFK_WEB_PORT` | `4141`; falls back to an available port if occupied. |
+| `--host`, `-H` | `AFK_WEB_HOST` | `127.0.0.1`. Non-loopback binding requires an explicit token. |
+| `--token` | `AFK_WEB_TOKEN` | A fresh random token per run when omitted. |
+| `--no-open` | None | Do not launch a browser. |
+| `--model`, `-m` | Configured model | Model for sessions started from the browser. |
+| `--bypass-permissions` | None | Automatically approve tools in browser-created sessions. |
+
+Flags take precedence over their corresponding environment variables.
+
+```bash
+afk web --port 4242 --model opus --no-open
+```
+
+To keep the same token across restarts, supply a nonempty `AFK_WEB_TOKEN` from your environment or secret manager. Treat it as an agent-control credential. Avoid putting literal credentials in commands that will be retained in shell history.
+
+## Authentication and network safety
+
+<Callout type="warn">
+This server can run tools and edit files. It is a local HTTP service, not a hosted multi-user security boundary. Keep its token and startup URL private, and prefer a trusted tunnel over exposing the port directly to a network.
 </Callout>
 
-## Slash commands
+AFK applies three protections:
 
-You can type slash commands directly into the prompt input. The server classifies the input before it reaches the model:
+1. Every `/api/*` request requires `Authorization: Bearer` authentication, compared in constant time. Query-string tokens and cookies cannot authenticate API requests.
+2. A present `Origin` header on a non-GET API request must match an allowed server origin. A missing Origin is allowed for non-browser clients, which still need the bearer token.
+3. Binding outside loopback requires an explicitly supplied token through `--token` or `AFK_WEB_TOKEN`. An automatically minted token does not satisfy this check.
 
-| Classification | What happens |
-|---|---|
-| **Skill command** (e.g. `/mint`, `/diagnose`) | Runs the skill via the structured dispatch path — same preflights and payload the REPL uses |
-| **Unknown command** | Returns 422 with a did-you-mean suggestion when one exists |
-| **REPL-only command** | Returns 422 explaining the command cannot run on this surface |
-| **Everything else** | Sent as plain text to the model |
+A wildcard bind such as `0.0.0.0` still restricts browser Origin checks to loopback origins. Accessing it through an arbitrary LAN hostname can therefore fail even with a valid token. Do not treat a wildcard bind as automatic remote-browser support.
 
-Commands that drive terminal machinery — `/clear`, `/compact`, `/exit`, `/font-size`, `/fork`, `/keys`, `/model`, `/reauth`, `/resume`, `/rewind`, `/sh`, `/theme`, `/thinking` — are rejected by the server as REPL-only. All skill-based slash commands, including plugin skills, work normally.
+### How the browser signs in
 
-Autocomplete is populated by `GET /api/commands`, which walks the same slash-command registry the REPL uses. On the first request the registry is loaded and memoized for the lifetime of the process.
+The terminal prints a URL containing `?token=`. Opening it bootstraps the page with the bearer token. Automatic browser opening instead uses a single-use `?k=` handoff nonce, avoiding the live bearer token in the OS launcher's arguments.
 
-## Schedules
+The browser stores the bearer token in origin-scoped session storage and removes the credential query parameters from the address bar. A separate opaque cookie unlocks static assets on reload; it does not contain the bearer token. A cookie-only document load does not reveal the token, and API calls still require the authorization header.
 
-The schedules view reads and writes `~/.afk/config/schedules.json` — the same file the `create_schedule` tool and `afk daemon` use. Changes made from the browser are live-synced to a running daemon when one is reachable.
+After a server restart with a newly generated token, reopen the new printed URL. Old URLs and credentials no longer authenticate. Responses include `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and a restrictive same-origin Content Security Policy.
 
-From the browser you can:
+## Limits and troubleshooting
 
-- View all scheduled tasks and their cron expressions
-- Create new schedules
-- Edit an existing schedule's cron, command, enabled state, and notify settings
-- Enable or disable a schedule with one click
-- Delete a schedule
-- View execution history for any task
+The browser is not a replacement for every REPL command. Use the REPL for terminal-specific controls and for sessions owned by that REPL process. The web server can own multiple live sessions, but stopping it stops those sessions.
 
-## Background jobs
+If a source checkout reports **Web UI bundle not built**, the server needs its frontend assets. Build the web UI with `pnpm build:web-ui` in the source project, then retry. An installed package normally includes the bundle.
 
-The background jobs view reads the job log that background subagents write to disk. Each entry shows the job id, status (running / completed / failed), the prompt it was dispatched with, and timing. The view is read-only — background jobs cannot be cancelled from the browser.
+## Related
 
-## Memory search
-
-The browser can search cross-session memory via `GET /api/memory/search?q=...`. Results can be filtered by category (`preference`, `convention`, `decision`, `learning`) and limited in count. `GET /api/memory/hot` returns the most-recently-written facts — the same set the agent injects into new sessions as hot context.
-
-## Configuration
-
-### Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `AFK_WEB_PORT` | `4141` | Port to listen on. Falls back to an ephemeral port if taken. |
-| `AFK_WEB_HOST` | `127.0.0.1` | Bind address. A non-loopback value is refused unless `AFK_WEB_TOKEN` (or `--token`) is also set. |
-| `AFK_WEB_TOKEN` | _(random per run)_ | Bearer token. Set this to fix the token across restarts. Setting it is also what unlocks non-loopback binds. |
-
-### CLI flags
-
-Flags override the corresponding env vars:
-
-```bash
-afk web -p 4242                  # --port
-afk web -H 0.0.0.0               # --host (requires --token)
-afk web --token <value>          # fix bearer token
-afk web -m claude-opus-4-5       # --model for browser-started sessions
-```
-
-### Fixing the token
-
-By default the bearer token is minted fresh on each `afk web` run, so any saved bookmark or script that embeds the token stops working after a restart. To keep a stable URL:
-
-```bash
-# In afk.env or your shell profile:
-export AFK_WEB_TOKEN=<your-chosen-token>
-```
-
-### Non-loopback binds
-
-Binding to `0.0.0.0` or any non-loopback address is deliberately refused unless an explicit token is supplied:
-
-```bash
-# This will fail:
-afk web --host 0.0.0.0
-
-# This works:
-afk web --host 0.0.0.0 --token <your-token>
-# or with AFK_WEB_TOKEN set in the environment.
-```
-
-The warning printed on startup reminds you that a non-loopback bind exposes an agent that can run tools and edit files. Prefer a tunnel (e.g. Tailscale, ngrok) over direct port exposure.
-
-## Security model
-
-The web surface applies three independent checks on every request:
-
-1. **Bearer token** — every `/api/*` call must include `Authorization: Bearer <token>`. Compared in constant time.
-2. **Origin validation** — every non-GET request must carry an `Origin` header that matches this server's own origin. This is defence against CSRF: a page open in your browser on another site can POST to `localhost`, and the bearer token would not be attached by the browser in that case, but Origin validation catches it anyway as a second line of defence.
-3. **Bind-time token requirement** — a non-loopback bind is rejected at startup unless the operator explicitly provided a token, so `--host 0.0.0.0` can never silently publish an agent with a token printed only to your terminal scrollback.
-
-All responses include `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and a `Content-Security-Policy` that restricts scripts to same-origin bundles.
-
-## Comparing web and REPL
-
-| | REPL | Web dashboard |
-|---|---|---|
-| **Input** | Terminal, keyboard-driven | Browser form |
-| **Output** | Streamed markdown to terminal | Streamed SSE to browser |
-| **Tool approvals** | Inline approval prompt | Browser approval card |
-| **Slash commands** | Full set including REPL-only | Skill commands only |
-| **Sessions** | One per REPL process | Multiple per `afk web` process |
-| **Background sessions** | Ctrl+B to background | Visible as read-only attached sessions |
-| **Schedule management** | `create_schedule` tool | Schedules view in the browser |
-| **Memory** | `memory_search` tool | Memory search view |
-| **Persistence** | Session survives terminal close when resumed | Sessions end when the server stops |
-| **Auth** | None (local process) | Bearer token on every API call |
+<Cards>
+<Card title="Interactive REPL" href="/surfaces/repl" description="Use terminal controls and the full slash-command surface." />
+<Card title="Schedule tasks" href="/guides/scheduling" description="Understand schedule execution and daemon requirements." />
+<Card title="Permissions" href="/configuration/permissions" description="Choose which tool actions need approval." />
+</Cards>

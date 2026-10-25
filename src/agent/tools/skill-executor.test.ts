@@ -2791,10 +2791,12 @@ describe('SkillExecutor', () => {
 
       expect(result.isError).toBeUndefined();
       expect(result.content).toBe('restricted output');
+      // Trailing undefined = ctx.workspaceStore (none on this executor), #4073.
       expect(buildRestrictedSpy).toHaveBeenCalledWith(
         ['read_file', 'grep', 'glob', 'list_directory'],
         'sonnet',
         false,
+        undefined,
         undefined,
       );
     });
@@ -2853,7 +2855,8 @@ describe('SkillExecutor', () => {
       // the child is restricted to the declared subset (`write_file` dropped: not
       // in RECON) instead of silently receiving the full RECON superset. The
       // readOnlyBash + readOnlyMemory gates are still baked in by the builder.
-      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, ['read_file', 'bash']);
+      // Trailing undefined = ctx.workspaceStore (none on this executor), #4073.
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, ['read_file', 'bash'], undefined);
       expect(restrictedSpy).not.toHaveBeenCalled();
     });
 
@@ -2894,7 +2897,7 @@ describe('SkillExecutor', () => {
       const result = await executor.execute(makeCall({ name: 'recon-no-tools' }));
 
       expect(result.isError).toBeUndefined();
-      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, [...RECON_ALLOWED_TOOLS]);
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, [...RECON_ALLOWED_TOOLS], undefined);
     });
 
     it('does NOT call buildSkillRestrictedProvider when allowedTools is absent', async () => {
@@ -2971,6 +2974,7 @@ describe('SkillExecutor', () => {
         ['read_file', 'grep'],
         'sonnet',
         false,
+        undefined,
         undefined,
       );
     });
@@ -3282,5 +3286,56 @@ describe('SkillExecutor — hidden skills stay dispatchable (slash path round-tr
     const result = await executor.execute(makeCall({ name: 'model-ok-skill' }));
 
     expect(result.isError).toBeUndefined();
+  });
+});
+
+describe('inline skill ALS context (plugin peer API)', () => {
+  // Regression: skill-executor.ts invoked skill.handler() INLINE without
+  // wrapping in runWithPluginSessionContext, so pluginSessionContext.getStore()
+  // returned undefined inside any inline handler that tried to call peer-API
+  // methods (listSessions / sendToSession). The fix wraps the handler call in
+  // runWithPluginSessionContext(parentSession.sessionId, ...) so the ALS
+  // carries the correct session id for the duration of the handler.
+  beforeEach(() => {
+    _resetRegistry();
+    clearTrustedSkillNamesForTesting();
+  });
+  afterEach(() => {
+    clearTrustedSkillNamesForTesting();
+  });
+
+  it('pluginSessionContext.getStore() returns the parent sessionId inside an inline handler', async () => {
+    const { pluginSessionContext } = await import('../plugins/plugin-session-context.js');
+
+    let capturedStoreValue: string | undefined = 'NOT_SET';
+    registerSkill({
+      name: 'als-context-skill',
+      description: 'test',
+      handler: vi.fn().mockImplementation(async () => {
+        capturedStoreValue = pluginSessionContext.getStore();
+        return 'ok';
+      }),
+    });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'als-parent-session-id',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+    });
+
+    const result = await executor.execute(makeCall({ name: 'als-context-skill' }));
+
+    expect(result.isError).toBeUndefined();
+    // The ALS must carry the parent session id, not undefined.
+    expect(capturedStoreValue).toBe('als-parent-session-id');
+  });
+
+  it('pluginSessionContext.getStore() returns undefined outside any handler (baseline)', async () => {
+    const { pluginSessionContext } = await import('../plugins/plugin-session-context.js');
+    // Outside a runWithPluginSessionContext call, getStore() must be undefined —
+    // proving the test above is not a false-positive from ambient ALS state.
+    expect(pluginSessionContext.getStore()).toBeUndefined();
   });
 });

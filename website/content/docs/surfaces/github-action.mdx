@@ -1,0 +1,138 @@
+---
+title: "Run afk in GitHub Actions"
+description: "Use the run-afk composite action to send a prompt in CI and capture the assistant response."
+---
+
+The `run-afk` composite action installs AFK and runs one `afk chat` prompt inside a GitHub Actions job. Use it for repository summaries, checks, or other bounded automation, then pass the assistant's text to another step or save it as a file. It is a step-level action, not a reusable workflow called at the job level.
+
+## Run a repository summary
+
+<Steps>
+<Step>
+### Add a provider secret
+
+Create a repository or environment secret named `ANTHROPIC_API_KEY` with your Anthropic API key. The example below passes it only to the AFK step. For other providers, use the matching input and model from the table below.
+
+</Step>
+<Step>
+### Add a workflow
+
+Save this as `.github/workflows/afk-summary.yml`:
+
+```yaml
+name: AFK repository summary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Summarize with AFK
+        id: afk
+        uses: griffinwork40/agent-afk/.github/actions/run-afk@e00643d70df29d053ce0f893725201e1afe4ea7e
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          afk-version: '5.322.12'
+          node-version: '22'
+          model: sonnet
+          prompt: |
+            Read the repository and summarize its purpose, main components,
+            and documented test commands. Do not modify files, run repository
+            scripts, commit, push, or publish anything.
+          output-file: afk-summary.md
+
+      - name: Add the response to the job summary
+        env:
+          AFK_RESPONSE: ${{ steps.afk.outputs.response }}
+        run: printf '%s\n' "$AFK_RESPONSE" >> "$GITHUB_STEP_SUMMARY"
+```
+
+The action revision and the installed npm package are pinned separately. Update the full action commit SHA and `afk-version` deliberately when adopting a newer release.
+
+</Step>
+<Step>
+### Run it on trusted code
+
+Run **AFK repository summary** from the repository's Actions tab on a trusted branch. The AFK step prints its response to the job log, exposes it as `steps.afk.outputs.response`, and writes `afk-summary.md` in the checkout. The final step adds the text to the workflow summary.
+
+</Step>
+</Steps>
+
+<Callout type="warn">
+A prompt asking for read-only behavior is not a security boundary. AFK can run tools with the runner's access. Use trusted repository content, minimal credentials, and an isolated runner. Do not expose provider secrets to untrusted pull request code or use `pull_request_target` to check out and execute an untrusted head revision.
+</Callout>
+
+## Inputs
+
+These are the inputs declared by `.github/actions/run-afk/action.yml`. Only `prompt` is marked required, but the run also requires at least one effective provider API key.
+
+| Input | Default | Purpose |
+|---|---|---|
+| `prompt` | Required | Message passed to `afk chat`. Supports a YAML multiline literal. |
+| `anthropic-api-key` | Empty | Sets `ANTHROPIC_API_KEY` when nonempty. Use for Anthropic models. |
+| `openai-api-key` | Empty | Sets `OPENAI_API_KEY` when nonempty. Choose a compatible model explicitly. |
+| `xai-api-key` | Empty | Sets `XAI_API_KEY` when nonempty. Use for Grok in API-key mode. |
+| `afk-version` | `latest` | npm package version or dist-tag. `local` builds from the action's source checkout instead. |
+| `node-version` | `22` | Node.js version installed with `actions/setup-node`; it must satisfy the chosen AFK release's engines requirement. |
+| `model` | Empty | Forwarded as `--model` when set. Otherwise AFK uses its configured default. |
+| `working-directory` | `.` | Directory in which `afk chat` runs. Its project `AFK.md` is picked up as the operator overlay. |
+| `output-file` | Empty | Optional response-file path, relative to `working-directory`. |
+
+For this documented release, Node must satisfy `^22.22.2 || ^24.15.0 || >=26.0.0`. The `22` input selects the current release in that major, rather than pinning an older incompatible patch.
+
+The action does not expose inputs for arbitrary CLI flags, a cost budget, permission mode, or posting comments. Set supported AFK environment variables or project configuration where appropriate, and consult [headless runs](/guides/headless) when you need a custom invocation.
+
+### Credential precedence
+
+A nonempty provider-key input overrides the corresponding inherited environment variable. An empty input preserves a key already present in job or workflow `env`. After applying that precedence, the action fails if all three provider keys are empty; keys that remain empty are unset before AFK starts.
+
+Pass keys with GitHub secrets, never literal YAML values. Supplying an OpenAI or xAI key does not by itself select that provider's model, so set `model` accordingly. Provider calls may incur charges.
+
+## Outputs and failures
+
+| Output | Contents |
+|---|---|
+| `response` | The plain assistant message extracted from the final JSON object's `message` field. |
+
+Internally, the action runs `afk chat --format json`, captures stdout, and leaves stderr visible in the job log. It extracts the text rather than returning the entire JSON payload, so the output does not contain AFK's cost or trace metadata. The same text is printed to the log and optionally written to `output-file`.
+
+A nonzero chat exit code fails the step and is reported in a workflow error annotation. Missing or malformed JSON, or a missing string `message` field, also fails the step. Successful execution is not a guarantee that generated code is correct; run your own tests and checks before accepting changes.
+
+The output file is overwritten if it exists. Its parent directory must already exist; the action does not create directories. Saving a file in the workspace does not upload it as an artifact, commit it, or publish it.
+
+<Callout type="info">
+Treat model output as untrusted data in downstream steps. Pass `steps.afk.outputs.response` through an environment variable and print it with `printf`, as in the example. Do not interpolate it directly into a shell `run` script or execute it as code.
+</Callout>
+
+## Permissions and safety
+
+For a repository-reading task, start with `contents: read` and disable checkout credential persistence. The action itself does not require write permission to your repository and does not automatically create commits, PRs, or comments. If your task intentionally publishes changes, grant only the specific additional permissions it requires and review that workflow separately.
+
+The composite action routes prompt and other shell-consumed inputs through environment variables and quoted arguments instead of embedding expressions directly in shell source. Provider keys are exported as environment variables, not CLI arguments. Its internal third-party actions are pinned to full commit SHAs. Its multiline GitHub output delimiter is randomly generated to reduce output-injection risk.
+
+These protections do not make repository scripts, model instructions, or agent-generated output safe to execute. The assistant response is logged, so do not ask the agent to print secrets. Prefer disposable hosted runners over a persistent self-hosted machine containing unrelated credentials.
+
+## Build AFK from a source checkout
+
+Use `afk-version: local` when testing AFK itself. In this mode the action skips npm installation and its pnpm setup step, resolves the AFK source root from the action's own location, runs `pnpm run build:dist`, and invokes `node dist/cli.mjs` directly.
+
+You must first check out AFK's source, install a compatible Node version and pnpm 11, and run `pnpm install --frozen-lockfile` in that source checkout. Then invoke `./.github/actions/run-afk` with `afk-version: local`. This mode does not build an arbitrary consumer repository just because it is the `working-directory`.
+
+## Related
+
+<Cards>
+<Card title="One-shot chat" href="/surfaces/chat" description="Understand the command used by the composite action." />
+<Card title="Headless runs" href="/guides/headless" description="Use structured output and custom automation wrappers." />
+<Card title="API keys" href="/configuration/api-keys" description="Choose provider credentials and authentication methods." />
+</Cards>

@@ -918,3 +918,117 @@ describe('isLockContention', () => {
     }
   });
 });
+
+// ── ISO date validation (#3585) ──────────────────────────────────────────────
+
+describe('ISO date validation on addSchedule / updateSchedule', () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) rmSyncRetry(tmpDir);
+  });
+
+  const base = { name: 'ISO Test', command: '/cmd', cron: '* * * * *', enabled: true as const };
+
+  // addSchedule — runAt
+  it('addSchedule rejects non-ISO runAt (locale format)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    expect(() => addSchedule({ ...base, runAt: '01/02/2027' }, path)).toThrow(
+      /runAt must be a valid ISO 8601/,
+    );
+  });
+
+  it('addSchedule rejects overflowing runAt (2026-02-30)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    expect(() => addSchedule({ ...base, runAt: '2026-02-30' }, path)).toThrow(
+      /runAt must be a valid ISO 8601/,
+    );
+  });
+
+  it('addSchedule accepts a valid ISO runAt', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    const cfg = addSchedule({ ...base, runAt: '2027-06-15T12:00:00Z' }, path);
+    expect(cfg.runAt).toBe('2027-06-15T12:00:00Z');
+  });
+
+  // addSchedule — expiresAt
+  it('addSchedule rejects non-ISO expiresAt (locale format)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    expect(() => addSchedule({ ...base, expiresAt: '01/02/2027' }, path)).toThrow(
+      /expiresAt must be a valid ISO 8601/,
+    );
+  });
+
+  it('addSchedule rejects overflowing expiresAt (2026-02-30)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    expect(() => addSchedule({ ...base, expiresAt: '2026-02-30' }, path)).toThrow(
+      /expiresAt must be a valid ISO 8601/,
+    );
+  });
+
+  it('addSchedule accepts a valid ISO expiresAt', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    const cfg = addSchedule({ ...base, expiresAt: '2027-12-31' }, path);
+    expect(cfg.expiresAt).toBe('2027-12-31');
+  });
+
+  // updateSchedule — runAt
+  it('updateSchedule rejects non-ISO runAt (locale format)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ ...base, name: 'Update ISO' }, path);
+    expect(() => updateSchedule('update-iso', { runAt: '01/02/2027' }, path)).toThrow(
+      /runAt must be a valid ISO 8601/,
+    );
+  });
+
+  it('updateSchedule rejects overflowing runAt (2026-02-30)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ ...base, name: 'Update ISO2' }, path);
+    expect(() => updateSchedule('update-iso2', { runAt: '2026-02-30' }, path)).toThrow(
+      /runAt must be a valid ISO 8601/,
+    );
+  });
+
+  it('updateSchedule accepts runAt: null to clear', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ ...base, name: 'Clear RunAt', runAt: '2027-06-15T12:00:00Z' }, path);
+    const result = updateSchedule('clear-run-at', { runAt: null }, path);
+    expect(result?.runAt).toBeUndefined();
+  });
+
+  it('updateSchedule rejects non-ISO expiresAt (locale format)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ ...base, name: 'Expire ISO' }, path);
+    expect(() => updateSchedule('expire-iso', { expiresAt: '01/02/2027' }, path)).toThrow(
+      /expiresAt must be a valid ISO 8601/,
+    );
+  });
+
+  it('updateSchedule rejects overflowing expiresAt (2026-02-30)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ ...base, name: 'Expire ISO2' }, path);
+    expect(() => updateSchedule('expire-iso2', { expiresAt: '2026-02-30' }, path)).toThrow(
+      /expiresAt must be a valid ISO 8601/,
+    );
+  });
+
+  it('updateSchedule accepts expiresAt: null to clear', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-iso-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ ...base, name: 'Clear Expires', expiresAt: '2027-12-31' }, path);
+    const result = updateSchedule('clear-expires', { expiresAt: null }, path);
+    expect(result?.expiresAt).toBeUndefined();
+
+  });
+});

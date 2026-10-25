@@ -3,32 +3,28 @@ title: "Build with the SDK"
 description: "Use Agent AFK as a TypeScript library: drive the agent loop with query(), AgentSession, custom tools, subagents, and provider routing from your own code."
 ---
 
-Agent AFK is not just a CLI. The `agent-afk` package ships a typed programmatic surface, so
-you can embed the same agent loop the `afk` binary runs — multi-provider routing, tools,
-subagents, permissions, structured output — directly inside your own TypeScript.
-
-The npm package declares a proper library entry (`main`, `types`, and an `exports` map), so a
-plain `import { query } from 'agent-afk'` resolves without building from source.
-
-<Callout type="info">
-You configure the whole loop — prompts, gates, routing, tools, and terminal behavior. The
-package is plain TypeScript: the code you import is the code you can read and change.
-</Callout>
+Embed AFK's agent loop in a TypeScript application when you need programmatic tools, structured responses, or a persistent conversation. Import the public API from `agent-afk`; the package includes JavaScript and type declarations, so you do not need a source checkout.
 
 ## Install
 
-```bash
-npm install agent-afk
-```
-
-Set a provider credential the same way the CLI does — the simplest path is an environment
-variable that the default (Anthropic) provider reads when you don't pass `apiKey` explicitly:
+<Steps>
+<Step>
+### Add the library
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+pnpm add agent-afk zod
 ```
 
-Requires **Node.js ≥ 22**. See the [Quickstart](/quickstart) for OAuth and alternative
+`zod` is used by the structured-output and custom-tool examples. The package root exports the public SDK; there is no public `agent-afk/sdk` subpath.
+</Step>
+<Step>
+### Configure your provider credential
+
+Use your existing `ANTHROPIC_API_KEY` environment variable or pass `apiKey` from your application's secret store. Do not hardcode a credential in source.
+</Step>
+</Steps>
+
+Requires Node.js **`^22.22.2 || ^24.15.0 || >=26.0.0`**. See the [Quickstart](/quickstart) for OAuth and alternative
 credential paths, and [Models & Providers](/configuration/models-providers) for non-Anthropic
 backends.
 
@@ -39,7 +35,7 @@ There are two ways to drive the loop. Pick by whether you need conversation stat
 | | `query()` / `queryText()` / `queryStructured()` | `new AgentSession(...)` |
 |---|---|---|
 | Shape | One-shot functions | Long-lived object |
-| State | None — constructs, runs, and closes a session for you | Holds history across turns |
+| State | Fresh session per call, with optional resume | Holds history across turns |
 | Lifecycle | Managed automatically (always closes) | You call `close()` |
 | Use when | A single prompt-to-answer call | Multi-turn conversations, runtime control, hot model swaps |
 
@@ -47,7 +43,7 @@ Both accept the same options bag and route through the same provider layer.
 
 ## One-shot queries
 
-### queryText — prompt in, string out
+### queryText: prompt in, string out
 
 The simplest possible call. Returns the final assistant text as a `Promise<string>`:
 
@@ -63,7 +59,7 @@ console.log(answer);
 If you omit `model`, the one-shot helpers default to `sonnet`. If you omit `apiKey`, the
 Anthropic provider reads `ANTHROPIC_API_KEY` from the environment.
 
-### query — stream events as they arrive
+### query: stream events as they arrive
 
 `query()` returns an async generator of `OutputEvent`s. Text arrives as `chunk` events; iterate
 and print the content deltas as they stream:
@@ -81,14 +77,13 @@ for await (const event of query('Write a haiku about async generators.', { model
 <Callout type="warn">
 The streamed text lives at `event.chunk.content` on `{ type: 'chunk' }` events whose
 `chunk.type === 'content'`. This is the `OutputEvent` union (see the
-[event reference](#streaming-event-reference) below) — not the lower-level provider event
+[event reference](#streaming-event-reference) below), not the lower-level provider event
 stream. Guard on both discriminants before reading `content`.
 </Callout>
 
-The generator **always** closes the underlying session when the loop ends — on normal
-completion, an early `break`, or a thrown error — so you never leak a session.
+The generator closes its underlying session in `finally`, on normal completion, an early `break`, or a thrown error. Finish or explicitly close the iterator rather than abandoning it.
 
-### queryStructured — validated JSON out
+### queryStructured: validated JSON out
 
 Pass a [Zod](https://zod.dev) schema and get back a parsed, validated value of that type. AFK
 extracts JSON from the response and, if it fails validation, re-prompts with the validation
@@ -121,19 +116,20 @@ with `model` made optional. `queryStructured` additionally accepts `maxRetries` 
 
 ```ts
 await queryText('...', {
-  model: 'opus',            // AgentModelInput — alias or full id; defaults to 'sonnet'
+  model: 'opus',            // Alias or full id; defaults to 'sonnet'
   systemPrompt: 'You are a terse assistant.',
   maxTurns: 20,
-  tools: { allowedTools: ['read_file', 'grep', 'glob'] },
-  customTools: [getWeather],  // in-process tools — see "Custom tools" below
-  canUseTool,                 // permission hook — see "Permissions" below
+  // Restrict execution with a permission callback, not config.tools.
+  canUseTool: async (name) => ['read_file', 'grep', 'glob'].includes(name)
+    ? { behavior: 'allow' }
+    : { behavior: 'deny', message: 'Only repository reads are allowed.' },
   maxBudgetUsd: 0.50,
 });
 ```
 
 ## Stateful sessions
 
-`AgentSession` holds conversation state across turns. **The constructor is synchronous** —
+`AgentSession` holds conversation state across turns. **The constructor is synchronous**;
 initialization runs internally and every `send*` call awaits it, so you can construct and
 immediately send:
 
@@ -143,8 +139,8 @@ import { AgentSession } from 'agent-afk';
 const session = new AgentSession({
   model: 'sonnet',                          // required
   systemPrompt: 'You are a pair-programming assistant.',
-  tools: { allowedTools: ['read_file', 'bash', 'edit_file'] },
-  // apiKey is optional — falls back to ANTHROPIC_API_KEY
+  // Configure canUseTool if you need to restrict tool execution.
+  // apiKey is optional; falls back to ANTHROPIC_API_KEY
 });
 ```
 
@@ -178,7 +174,7 @@ const files = await session.sendMessageStructured(
 await session.close(); // release the session when done
 ```
 
-Conversation state accumulates across all three — turn 2 sees turn 1.
+Conversation state accumulates across all three: turn 2 sees turn 1.
 
 ### Runtime control
 
@@ -194,8 +190,8 @@ await session.close();                          // tear down and free resources
 Cap spend with `maxBudgetUsd`. Once cumulative cost crosses the ceiling, AFK raises a
 `BudgetExceededError` (exported from `agent-afk`; it carries `runningCostUsd` and
 `maxBudgetUsd`). How it reaches you depends on how you drive the turn: `sendMessage` and
-`sendMessageStructured` **throw** it, while the streaming paths — `query()` and
-`sendMessageStream()` — surface it as an `error` event (`event.type === 'error'`) instead of
+`sendMessageStructured` **throw** it, while the streaming paths, `query()` and
+`sendMessageStream()`, surface it as an `error` event (`event.type === 'error'`) instead of
 throwing. Wire an `AbortSignal` to cancel externally:
 
 ```ts
@@ -209,6 +205,49 @@ const session = new AgentSession({
 
 // elsewhere: controller.abort() cancels any in-flight work
 ```
+
+## Restore a conversation from its journal
+
+Pass the previous session's id as `resume`. When you have not supplied your own history, `AgentSession` loads the on-disk journal before the first provider request. Tool calls and tool results are restored alongside text.
+
+```ts
+import { AgentSession, queryText, loadJournalMessages } from 'agent-afk';
+
+const first = new AgentSession({ model: 'sonnet' });
+let savedId: string | undefined;
+try {
+  await first.sendMessage('Remember that the project codename is Cedar.');
+  savedId = first.sessionId;
+} finally {
+  // Finish journal writes before constructing a reader for the next session.
+  await first.close();
+}
+if (!savedId) throw new Error('The provider did not assign a session id.');
+
+// Optional inspection through a helper exported from the package root.
+const messages = loadJournalMessages(savedId);
+console.log(`Stored messages: ${messages?.length ?? 0}`);
+
+const answer = await queryText('What is the project codename?', {
+  model: 'sonnet',
+  resume: savedId,
+});
+console.log(answer);
+```
+
+The same `resume` option works on a new `AgentSession`, `query()`, and `queryStructured()`. The journal normally lives under `~/.afk/state/sessions/`; the resumed process must use the same runtime state location.
+
+| Condition | Behavior |
+|---|---|
+| Explicit `resumeMessages` or `resumeHistory` | Your supplied context wins, even if empty |
+| `sessionId` without `resume` | Names the session; does not load prior conversation |
+| `persistSession: false` | Disables this automatic disk restoration |
+| `AFK_MESSAGE_JOURNAL_DISABLED=1` | Journal restoration is disabled |
+| Missing or empty journal | Continues without automatically loaded context |
+| Malformed journal that throws during hydration | Warns on stderr and continues without prior context |
+| Forked child configuration | Uses its parent/fork context path, not this root-session auto-load |
+
+SDK `continue` does not perform the CLI's latest-session lookup. Resolve the intended id in your application and pass `resume`. If missing history is unacceptable, check `loadJournalMessages` before submitting the next prompt and stop if it returns no usable history.
 
 ## Custom tools
 
@@ -225,8 +264,12 @@ const getWeather = tool(
   'Get the current temperature for a city.',
   z.object({ city: z.string() }),
   async ({ city }, _signal) => {
-    const tempC = await lookupTemp(city);
-    return { content: `It is ${tempC}°C in ${city}.` };
+    // Demonstration data. Replace with your application's lookup.
+    const temperatures: Record<string, number> = { Oslo: 8, Paris: 18 };
+    const tempC = temperatures[city];
+    return tempC === undefined
+      ? { isError: true, content: `No temperature available for ${city}.` }
+      : { content: `It is ${tempC}°C in ${city}.` };
   },
 );
 
@@ -236,7 +279,7 @@ const answer = await queryText('What should I wear in Oslo today?', {
 ```
 
 Return `{ content: string }` on success, or `{ isError: true, content: string }` to signal a
-failure the model can react to. Input validation happens for you — the wrapper safe-parses and
+failure the model can react to. Input validation happens for you: the wrapper safe-parses and
 returns a structured error rather than throwing on a bad payload.
 
 Pass custom tools via `customTools` on either `AgentConfig` (for `AgentSession`) or the one-shot
@@ -248,7 +291,7 @@ const session = new AgentSession({ model: 'sonnet', customTools: [getWeather] })
 
 <Callout type="warn">
 Built-in tools win on name collision. A custom tool named `bash` or `write_file` cannot shadow
-the built-in of the same name — choose a distinct name. Custom tools are gated by the same
+the built-in of the same name. Choose a distinct name. Custom tools are gated by the same
 `PreToolUse`/`PostToolUse` permission checks as built-ins.
 </Callout>
 
@@ -270,7 +313,6 @@ const handle = await manager.forkSubagent({
   agentType: 'todo-scanner',                // required display label
   config: {
     model: 'haiku',                         // right-size the child
-    tools: { allowedTools: ['read_file', 'grep', 'glob'] },
   },
   outputSchema: z.object({ todos: z.array(z.string()) }),
   phaseRole: 'read-only',                   // optional: hard read-only tool boundary
@@ -284,12 +326,13 @@ if (result.status === 'succeeded') {
 }
 
 await handle.teardown();
+await parent.close();
 ```
 
 `handle.run(prompt)` returns the final `Message`; `handle.runToResult(prompt)` returns a
 `SubagentResult<T>` with `status`, the validated `output`, the raw `message`, and any `error` or
 `schemaError`. Passing `phaseRole: 'read-only'` enforces a read-only tool allowlist at the
-dispatcher gate — the child physically cannot mutate the repo.
+dispatcher gate. This blocks repository mutation tools, not an operating-system sandbox.
 
 For the higher-level `agent` tool, background dispatch, and the `compose` DAG that the CLI
 exposes, see the [Subagents & Delegation guide](/guides/subagents).
@@ -302,25 +345,21 @@ The `agent`, `skill`, and `compose` tools are opt-in for SDK sessions. A bare `n
 
 | Surface | `agent` | `skill` | `compose` |
 |---|---|---|---|
-| REPL (`afk interactive`) | always on | always on | always on |
-| `afk chat` (one-shot) | always on | always on | always on |
-| Telegram bot | always on | always on | always on |
-| Daemon | always on | always on | always on |
-| `afk web` (web surface) | always on | always on | always on |
+| REPL, chat, Telegram, daemon, web | wired by surface | wired by surface | wired by surface |
 | SDK default (bare `new AgentSession`) | off | off | off |
 | SDK with `executors` | per toggle | per toggle | per toggle |
 
-Pass `opts` to `createWiredExecutors` to control which tools the model sees. When `opts` is omitted, all three are enabled. When it is supplied, an omitted toggle means off:
+Surface wiring is not a guarantee of access: tool filters, permission modes, and nesting limits still apply. Pass `opts` to `createWiredExecutors` to control which tools the model sees. When `opts` is omitted, all three are enabled, but you must still provide `config.hookRegistry`. When `opts` is supplied, an omitted toggle means off:
 
 ```ts
 import { createWiredExecutors, AgentSession } from 'agent-afk';
 
-// Build the bundle — one per AgentSession.
-const { executors, dispose } = createWiredExecutors(
-  { model: 'sonnet', apiKey: process.env.ANTHROPIC_API_KEY },
+// Build one bundle per AgentSession.
+const { executors } = createWiredExecutors(
+  { model: 'sonnet' },
   {
     agent: true,                              // expose agent tool
-    skill: ['search', 'my-plugin:review'],   // expose skill tool, allowlisted names only
+    skill: true,                             // enable discovered skills
     compose: true,                            // expose compose tool
     pluginConfigs: [],                        // no ~/.afk/plugins scan (the default)
     unattended: true,                         // run without SubagentStart/Stop hooks
@@ -328,11 +367,15 @@ const { executors, dispose } = createWiredExecutors(
 );
 
 const session = new AgentSession({ model: 'sonnet', executors });
-const reply = await session.sendMessage('Summarize open TODOs under src/.');
-await session.close(); // drains the bundle; dispose() is an idempotent alternative
+try {
+  const reply = await session.sendMessage('Summarize open TODOs under src/.');
+  console.log(reply.content);
+} finally {
+  await session.close(); // drains the bundle; factory dispose() is idempotent too
+}
 ```
 
-`queryText` and `query` accept `executors` via `QueryOptions`. Build a fresh bundle per call because one bundle binds to exactly one session:
+`queryText`, `query`, and `queryStructured` accept `executors` via their options. Build a fresh bundle per call because one bundle binds to exactly one session:
 
 ```ts
 import { createWiredExecutors, queryText } from 'agent-afk';
@@ -354,64 +397,67 @@ console.log(answer);
 
 `createWiredExecutors` refuses to build a bundle unless one of these conditions is met:
 
-- `opts.hookRegistry` is a `HookRegistry` instance.
+- `opts.hookRegistry` supplies an object implementing the `HookRegistry` interface.
 - `config.hookRegistry` (on the `AgentConfig` passed as the first argument) is set.
 - `opts.unattended: true` is explicitly provided.
 
-With `unattended: true` and no registry, the bundle runs without `SubagentStart`/`SubagentStop` hooks -- nothing is silently constructed. The fail-closed default prevents silent drops of audit hooks that a production caller expects to fire at every nesting depth.
+With `unattended: true` and no registry, the bundle runs without `SubagentStart`/`SubagentStop` hooks. Nothing is silently constructed. The fail-closed default prevents silent drops of audit hooks that a production caller expects to fire at every nesting depth.
 
 ### Skill allowlist: exact-match semantics
 
 Pass a `string[]` as `opts.skill` to enable the tool AND restrict it to the listed names. Each entry must match the skill name exactly as the model would call it:
 
-- A bare name like `'search'` authorizes only `search` -- not `my-plugin:search`.
+- A bare name like `'search'` authorizes only `search`, not `my-plugin:search`.
 - A plugin skill is requested by its namespaced name (`<plugin>:<skill>`, e.g. `'my-plugin:review'`) and must be listed verbatim; there is no prefix or suffix matching.
-- The allowlist applies at every nesting depth -- a skill dispatched by another skill inherits the same gate.
+- The allowlist applies at every nesting depth: a skill dispatched by another skill inherits the same gate.
 
 ### `pluginConfigs`: default `[]` (no home-directory discovery)
 
-Unlike the CLI surfaces, SDK sessions do NOT scan `~/.afk/plugins` by default. `pluginConfigs` defaults to `[]`, meaning no plugins are loaded and no home-directory discovery runs. Pass an explicit list of `SdkPluginConfig` entries to opt in to specific plugins.
+Unlike CLI executor wiring, this factory does not scan `~/.afk/plugins` or imported plugin roots by default. `pluginConfigs` defaults to `[]`; pass explicit local plugin entries to opt in. This isolation rule concerns the executor bundle, not every other discovery mechanism in an embedded session.
 
 ### Fields ignored on the SDK executor path
 
-Two `AgentConfig` fields are silently warned and ignored when building a bundle:
+Two `AgentConfig` fields are ignored when building a bundle. Supply `opts.warn` to receive their warnings; its default is a no-op:
 
 - `config.agents`: named agents come from the built-in/user/project registry and `pluginConfigs`. Pass agent definitions through `pluginConfigs`, not through the session config.
-- `config.mcpServers`: MCP tools require a caller-owned `config.mcpManager`. Build and pass a manager instance directly; the executor path does not construct one from the server list.
+- `config.mcpServers`:
+  - **Executor path** (SDK bundles via `createWiredExecutors`): MCP tools require a caller-owned `config.mcpManager` — pass a pre-built manager instance. The executor path does not construct one from the server list.
+  - **Root `AgentSession`** (direct use without executors): `mcpServers` is honoured; the session builds, connects, and owns the manager automatically. A caller-supplied `mcpManager` is never disconnected by the SDK on session close. Failures surface in `mcpServerStatus()` / `waitForInitialization()`. SDK-built servers default to the trusted user-global layer (no project env-containment).
 
 ### Budget: tree-wide, checked at child completion
 
-`AgentConfig.maxBudgetUsd` covers the cumulative cost of the root session AND all its subagent children. Child cost is accumulated at child completion -- not mid-flight -- so a child that finishes just over the ceiling raises `BudgetExceededError` on the NEXT tool call in the parent, not mid-child.
+With the wired executors, `AgentConfig.maxBudgetUsd` counts root turn cost plus recorded successful child completion cost against one ceiling. When that recorded total reaches the ceiling, the parent aborts with `BudgetExceededError`. A running child can overshoot before its completion is recorded. This is not a provider-side billing limit, and unknown or unreported cost cannot enforce a dollar cap.
 
 ### Background jobs unavailable
 
-The `bash` tool's `run_in_background: true` flag is not available on the `sdk` surface. SDK sessions use the synchronous tool path only.
+Background subagent jobs are unavailable through this factory, so their cancellation, steering, and health tools are not exposed by its executor bundle. The `bash` tool's `run_in_background: true` flag is also unavailable on the `sdk` surface. Use foreground execution or manage long-lived processes outside the embedded session.
 
 ### One bundle per session
 
 A `SessionExecutors` bundle binds to exactly one `AgentSession`. Passing the same bundle to a second session (or a second `queryText` call) throws before any rewiring happens. Call `createWiredExecutors` once per session:
 
 ```ts
+import { AgentSession, createWiredExecutors } from 'agent-afk';
+
 // WRONG: reusing a bundle throws on the second bind
-const { executors } = createWiredExecutors({ model: 'sonnet' }, { unattended: true });
+const { executors } = createWiredExecutors({ model: 'sonnet' }, { agent: true, unattended: true });
 const s1 = new AgentSession({ model: 'sonnet', executors }); // ok
 const s2 = new AgentSession({ model: 'sonnet', executors }); // throws
 
 // RIGHT: fresh bundle per session
 function makeSession() {
-  const { executors } = createWiredExecutors({ model: 'sonnet' }, { unattended: true });
+  const { executors } = createWiredExecutors({ model: 'sonnet' }, { agent: true, unattended: true });
   return new AgentSession({ model: 'sonnet', executors });
 }
 ```
 
 ### Process-level environment caps
 
-Depth, nesting, and credential resolution are process-global. `AFK_MAX_NESTING_DEPTH` (and the other `AFK_*` env caps) apply to SDK-spawned subagents exactly as they do to CLI ones. API keys are resolved through the same credential resolver the agent layer uses -- not re-read from the session config at every depth.
+`AFK_MAX_NESTING_DEPTH` also applies to SDK-spawned subagents. Environment settings and model-slot bindings are process-global, so do not use conflicting global configurations for concurrent embedded sessions. The bundle uses the agent-layer credential resolver for child models; pass explicit session credentials only to the provider they belong to.
 
 ## Providers and models
 
-AFK routes each session to a provider based on the model id. You rarely need to touch this — the
-model string is enough — but the routing is inspectable:
+AFK routes each session to a provider based on the model id. Usually the model string is enough, but you can inspect routing:
 
 ```ts
 import { providerForModel, resolveProvider } from 'agent-afk';
@@ -425,22 +471,31 @@ providerForModel('Qwen/Qwen2.5-72B');  // 'openai-compatible' (any org/model id)
 |---|---|
 | `claude-*`, `opus`, `sonnet`, `haiku`, `auto`, `local-*` | `anthropic-direct` |
 | `gpt-*`, `o1*` / `o3*` / `o4*`, `codex-*`, and any `org/model` id (contains `/`) | `openai-compatible` |
+| `grok-*` | `xai` (authentication selects API key or OAuth unless forced) |
+
+These are default routing rules. Explicit provider selection, slot bindings, and custom endpoints can change the result.
 
 `resolveProvider()` returns a fresh provider instance for a model; `providerForModel()` returns
 just the provider name. To inject your own backend (or a mock in tests), pass a `provider`
 instance directly on the config:
 
 ```ts
-import { AgentSession } from 'agent-afk';
-import { myCustomProvider } from './my-provider.js';
+import { AgentSession, type ModelProvider } from 'agent-afk';
 
-const session = new AgentSession({ model: 'sonnet', provider: myCustomProvider });
+// Your application supplies an implementation of the exported interface.
+function createSession(provider: ModelProvider) {
+  return new AgentSession({ model: 'sonnet', provider });
+}
 ```
 
 See [Models & Providers](/configuration/models-providers) for the full routing rules and local
 OpenAI-compatible runners (MLX, llama.cpp, vLLM, Ollama).
 
 ## Permissions
+
+<Callout type="warn">
+Do not use `AgentConfig.tools.allowedTools` or `disallowedTools` as a security boundary on the direct SDK path. Those fields do not reach the direct providers' dispatcher permission lists. Use `canUseTool`, or inject a provider with its own enforced permissions. AFK's tool policy is not an operating-system shell sandbox.
+</Callout>
 
 Intercept every tool call with a `canUseTool` hook. The `createCanUseToolHook()` helper builds
 one from simple allow/deny/ask rules and returns a function you pass straight to the config:
@@ -452,27 +507,29 @@ const canUseTool = createCanUseToolHook({
   rules: {
     defaultMode: 'allow',
     tools: {
-      bash: 'deny',            // runtime tool names (snake_case) — not "Bash"
+      bash: 'deny',            // runtime tool names (snake_case), not "Bash"
       edit_file: 'deny',
       write_file: 'ask',
     },
   },
-  onAsk: async ({ toolName, input }) => {
-    // resolve interactively, from a policy, etc.
-    return { behavior: 'allow' };
+  onAsk: async ({ toolName }) => {
+    // Replace with your own approval UI. Deny if no approval is available.
+    return { behavior: 'deny', reason: `Approval required for ${toolName}` };
   },
-  onDecision: (ctx, decision) => log(ctx.toolName, decision.behavior),
+  onDecision: (ctx, decision) => console.log(ctx.toolName, decision.behavior),
 });
 
 const session = new AgentSession({ model: 'sonnet', canUseTool });
 ```
 
 <Callout type="warn">
-Rule keys must be AFK **runtime** tool names in snake_case — `bash`, `edit_file`, `write_file`,
-`read_file` — not the PascalCase display names. A key that doesn't match a real runtime name
+Rule keys must be AFK **runtime** tool names in snake_case: `bash`, `edit_file`, `write_file`,
+`read_file`, not the PascalCase display names. A key that doesn't match a real runtime name
 silently falls through to `defaultMode`; a `Bash` key with `defaultMode: 'allow'` **fails open**
 and the tool you meant to block still runs.
 </Callout>
+
+The helper's `ask` rule falls through to allow if you omit `onAsk`. Provide a handler when approval must be mandatory.
 
 For coarser control, set `permissionMode` on the config (`'default'`, `'acceptEdits'`,
 `'plan'`, `'bypassPermissions'`). See [Permissions](/configuration/permissions) for the full
@@ -489,7 +546,7 @@ variants:
 | `message` | `event.message` (a `Message`) | A complete message emitted during the turn |
 | `done` | `event.metadata?` | The turn finished; metadata carries usage/cost |
 | `error` | `event.error` (an `Error`) | The turn failed |
-| `paused` / `resumed` | reason / account info | Provider hit a usage limit and is waiting to auto-resume |
+| `paused` / `resumed` | reason / account info | A usage limit was reported or a wait ended; inspect `autoResume` before assuming replay |
 
 Read text with the two-level guard shown throughout this page:
 
@@ -507,20 +564,20 @@ helpers). Commonly used fields:
 | Field | Type | Notes |
 |---|---|---|
 | `model` | `AgentModelInput` | Required for `AgentSession`. Alias (`sonnet`) or full id |
-| `apiKey` | `string` | Optional — falls back to the provider's env credential |
-| `systemPrompt` | `string` | Appended to the framework base as an operator overlay |
-| `maxTurns` | `number` | Cap the agentic loop length |
-| `tools` | `{ allowedTools?, disallowedTools? }` | Tool allow/deny lists (runtime names) |
+| `apiKey` | `string` | Optional, falls back to the provider's credential resolution |
+| `systemPrompt` | `string` | Your system instructions, assembled with runtime tool and context instructions |
+| `maxTurns` | `number` | Cap session turns; use `maxToolUseIterations` for tool-use rounds |
+| `tools` | `{ allowedTools?, disallowedTools? }` | Not an enforcement boundary on the direct SDK path; use `canUseTool` |
 | `customTools` | `CustomToolDef[]` | In-process tools from `tool()` |
-| `mcpServers` | record | External MCP servers (stdio / http / sse) |
+| `executors` | `SessionExecutors` | Opt-in dispatch bundle, one per session |
 | `canUseTool` | `CanUseTool` | Per-call permission hook |
 | `permissionMode` | `PermissionMode` | `default` / `acceptEdits` / `plan` / `bypassPermissions` |
 | `maxBudgetUsd` | `number` | Throw `BudgetExceededError` past this spend |
 | `abortSignal` | `AbortSignal` | External cancellation |
 | `provider` | `ModelProvider` | Inject a custom/mock backend |
-| `resume` / `forkSession` / `persistSession` | — | Session continuity controls |
+| `resume` / `forkSession` / `persistSession` | string / boolean / boolean | Session continuity controls |
 
-The full type (with ~40 exported type aliases) ships with the package — your editor's
+The full type ships with the package; your editor's
 autocomplete on the `agent-afk` import is the authoritative reference.
 
 ## Full example
@@ -556,7 +613,7 @@ try {
 }
 ```
 
-## Next steps
+## Related
 
 <Cards>
   <Card title="Subagents & Delegation" href="/guides/subagents" description="The agent tool, background mode, and the compose DAG." />

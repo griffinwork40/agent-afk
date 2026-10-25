@@ -41,7 +41,7 @@ JSONL, one record per line, `v: 1`. Types: `src/agent/journal/types.ts`.
 | `meta` | `sessionId`, `writerId`, `subagentId?`, `provider?`, `model?`, `cwd?`, `forkedFrom?` | none (written once per writer open) |
 | `append` | `index`, `message` | `array[index] = message` (`index === length`) |
 | `truncate` | `length`, `reason?` | `array.length = length` |
-| `mark` | `label`, `detail?` | none (annotation: compact, rewind, clear, resume, fork, model_switch) |
+| `mark` | `label`, `detail?` | none (annotation: compact, rewind, clear, resume, fork, model_switch, suggestion) |
 
 **Invariant:** folding records in file order reproduces the provider's
 in-memory message array. Records are never rewritten; a truncate leaves the
@@ -179,6 +179,18 @@ back to its text `shadowHistory`, as before.
   `src/agent/session/journal-lifecycle.ts`.
 - A resumed session gets `mark('resume')`; `/model` gets `mark('model_switch')`
   only when the resolved model actually changes.
+- REPL AI suggestions are journaled as `mark('suggestion', detail)` with
+  `detail: JournalSuggestionDetail` (`src/agent/journal/types.ts`):
+  `event` is `generated` (the suggestion model returned a usable proposal),
+  `accepted` (Tab, or a final word-nibble that exhausts the ghost),
+  `word_accepted` (partial nibble that leaves ghost text remaining), or `dismissed` (Esc on
+  an empty-prompt proposal); `source` is `completion` (inline continuation) or
+  `prompt` (empty-prompt next action). `text` and `buffer` pass through
+  `redactSecrets` first. History-sourced ghost text is not AI output and is not
+  recorded. A `generated` with no later accept was ignored. Producers:
+  `src/cli/input/suggest-tier2.ts`, `suggest-prompt-state.ts`,
+  `src/cli/terminal-compositor.ghost.record.ts`; wiring in
+  `src/cli/commands/interactive/surface-setup.ts`.
 - Journal `length` is read from the on-disk fold on first access after the id
   resolves, so a resumed process appends at the right index.
 

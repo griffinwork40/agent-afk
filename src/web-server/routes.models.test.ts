@@ -25,6 +25,28 @@ function makeRes(): { res: ServerResponse; json: () => { status: number; body: u
 
 describe('routes.models', () => {
   describe('handleListModels', () => {
+    it('returns the launch default and resolved human-readable alias labels', () => {
+      const { res, json } = makeRes();
+      handleListModels(res, 'haiku');
+      const body = json().body as { default: string; models: Array<{ id: string; label: string }> };
+      expect(body.default).toBe('haiku');
+      expect(body.models.find((model) => model.id === 'haiku')?.label).toMatch(/haiku · Claude Haiku \d/);
+    });
+
+    it('includes raw launch models outside the starter list', () => {
+      const { res, json } = makeRes();
+      handleListModels(res, 'org/custom');
+      expect(json().body).toMatchObject({ default: 'org/custom', models: expect.arrayContaining([{ id: 'org/custom', label: 'org/custom' }]) });
+    });
+
+    it('labels extended-context aliases and includes the slash model catalogue', () => {
+      const { res, json } = makeRes();
+      handleListModels(res, 'haiku');
+      const body = json().body as { models: Array<{ id: string; label: string }> };
+      expect(body.models.find((model) => model.id === 'opus_1m')?.label).toMatch(/Claude Opus .*1M context/);
+      expect(body.models.find((model) => model.id === 'grok')?.label).toContain('grok-');
+    });
+
     it('returns 200', () => {
       const { res, json } = makeRes();
       handleListModels(res);

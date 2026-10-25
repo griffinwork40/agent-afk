@@ -152,6 +152,29 @@ describe('createReleaseBoundaryDetect (two-tier hook)', () => {
     expect(decision.reason).toContain('dry-run');
   });
 
+  // ── Compound dry-run: only release segments need --dry-run flag ──────────
+  it('npm publish --dry-run && echo done is exempt (non-release segment ignored)', () => {
+    // `echo done` does not match any release pattern — must not veto exemption.
+    const decision: HookDecision = hook(preCtx('npm publish --dry-run && echo done'));
+    expect(decision.decision).toBe('approve');
+    expect(decision.reason).toContain('dry-run');
+  });
+
+  it('git commit -m "--dry-run"; npm publish is NOT exempt (real publish present)', () => {
+    // The quoted --dry-run is inside a -m value (harmless segment), but the
+    // second segment `npm publish` matches and has no dry-run flag → blocked.
+    const decision: HookDecision = hook(preCtx('git commit -m "--dry-run"; npm publish'));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('npm-publish');
+  });
+
+  it('npm publish --dry-run; npm publish is blocked (second segment is real)', () => {
+    // First segment is dry-run (exempt), but second segment is a real publish.
+    const decision: HookDecision = hook(preCtx('npm publish --dry-run; npm publish'));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('npm-publish');
+  });
+
   // ── Quoted strings: read-only tools with publish keyword must not block ────
   it.each([
     ["rg 'npm publish' README.md"],

@@ -1,7 +1,7 @@
 /**
  * Evidence-gate policy for durable memory writes.
  *
- * Prototype, opt-in behind `AFK_MEMORY_EVIDENCE_GATE=1`. Goal: stop uncited
+ * On by default; set `AFK_MEMORY_EVIDENCE_GATE=0/false/no/off` to disable. Goal: stop uncited
  * agent claims about the codebase from silently becoming future ground truth.
  *
  * The existing fact `category` already encodes the classification the gate

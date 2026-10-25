@@ -17,6 +17,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SlashContext, SessionStats } from '../types.js';
+import { clearRepoRootSyncCache } from '../../../utils/git.js';
 
 // ── Temp state directory ──────────────────────────────────────────────────────
 // Shared across tests in one run; reset per-test in beforeEach.
@@ -122,6 +123,9 @@ beforeEach(async () => {
   mkdirSync(tmpStateDir, { recursive: true });
   mkdirSync(tmpRepoDir, { recursive: true });
   vi.clearAllMocks();
+  // Flush the module-scope LRU cache so stale entries from prior tests
+  // (keyed on process.cwd()) cannot short-circuit the execFileSync mock.
+  clearRepoRootSyncCache();
 
   // Default: git rev-parse --git-common-dir returns tmpRepoDir/.git so that
   // resolveRepoRootSync (mode: 'git-common-dir') → dirname() → tmpRepoDir.

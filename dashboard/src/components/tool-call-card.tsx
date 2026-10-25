@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useContext, memo } from 'react';
 import {
   FileSearch,
   FilePen,
@@ -13,6 +13,8 @@ import {
   AlertCircle,
   ChevronRight,
 } from 'lucide-react';
+import { toolSummary } from '@/lib/tool-summary';
+import { ToolSummaryCwd } from '@/lib/tool-summary-context';
 import { cn } from '@/lib/utils';
 import { Collapse } from './collapse';
 import { DiffViewer } from './diff-viewer';
@@ -100,7 +102,7 @@ function DurationBadge({ ms, live }: { ms?: number; live?: number }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 /** Collapsible card for a single tool invocation. */
-export function ToolCallCard({
+export const ToolCallCard = memo(function ToolCallCard({
   toolUseId,
   name,
   inputPreview,
@@ -135,6 +137,8 @@ export function ToolCallCard({
 
   const { Icon, colorClass } = getCategoryIcon(name);
   const hasOutput = diff || outputUnavailable || (output && output.trim().length > 0);
+  const cwd = useContext(ToolSummaryCwd);
+  const summary = toolSummary(name, inputPreview, cwd);
   const trimmedInput = inputPreview.trim();
 
   return (
@@ -148,11 +152,14 @@ export function ToolCallCard({
       <div className="flex items-center gap-2 px-3 py-2">
         <Icon className={cn('h-3.5 w-3.5 shrink-0', colorClass)} />
         <span className="font-mono text-xs font-medium text-foreground">{name}</span>
+        <span className="text-xs text-foreground">{status === 'ok' ? 'Done' : status === 'error' ? 'Error' : 'Running'}</span>
         <div className="ml-auto flex items-center gap-1.5">
           <DurationBadge ms={durationMs} live={status === 'running' ? liveSeconds : undefined} />
           <StatusIcon status={status} />
         </div>
       </div>
+
+      {summary && <p data-tool-summary title={summary} className="px-3 pb-2 truncate font-mono text-xs text-foreground">{summary}</p>}
 
       {/* ── Input preview ───────────────────────────────────────────────── */}
       {trimmedInput.length > 0 && (
@@ -207,4 +214,4 @@ export function ToolCallCard({
       )}
     </div>
   );
-}
+});

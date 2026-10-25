@@ -34,6 +34,7 @@
 import { normalizeToolToken } from '../plugins/tool-injector.js';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
+import { WORKSPACE_TOOL_NAMES } from '../workspace/workspace-tools.js';
 import type { RegisteredAgent, ResolvedAgentToolAccess } from './types.js';
 
 // Invariant: mirrors KNOWN_AFK_TOOL_NAMES in skills/_agents/to-definition.ts —
@@ -43,7 +44,19 @@ import type { RegisteredAgent, ResolvedAgentToolAccess } from './types.js';
 const KNOWN_AFK_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...BUILTIN_TOOL_NAMES,
   ...AWARENESS_TOOL_NAMES,
+  // workspace_publish / workspace_query (#4073): every child without a `tools:`
+  // list already gets them via CHILD_ALLOWED_TOOLS, so declaring them only
+  // narrows. Before this they were dropped as unknown, which made a declared
+  // workspace grant impossible.
+  ...WORKSPACE_TOOL_NAMES,
   'memory_search',
+  // git_read (#4059): not in builtinToolSchemas (conditional on
+  // AFK_READONLY_GIT_TOOL), but declared in research-agent's tools array when
+  // the flag is on. Without this entry normalizeToolToken drops it fail-closed,
+  // silently denying the grant that builtins.ts already wired. Listed
+  // unconditionally: flag-gating lives at the grant site, so this recognizer
+  // must be flag-agnostic.
+  'git_read',
   'agent',
   'skill',
 ]);

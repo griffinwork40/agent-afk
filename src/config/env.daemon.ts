@@ -85,6 +85,20 @@ export const DAEMON_ENV_REGISTRY = [
     category: 'daemon',
   },
 
+  // ── GitHub event poller (`afk events github`) ────────────────────────────
+  {
+    name: 'AFK_EVENTS_GITHUB_POLL_MS',
+    description:
+      'Poll interval in milliseconds for `afk events github`. Overrides the --interval flag. ' +
+      'Must be >= 5000. Default 60000 (1 minute). ' +
+      'Part of #3896 (event-triggered runs).',
+    type: 'number',
+    required: false,
+    default: '60000',
+    example: '30000',
+    category: 'daemon',
+  },
+
   // ── Web UI (`afk web`) ────────────────────────────────────────────────────
   {
     name: 'AFK_WEB_PORT',

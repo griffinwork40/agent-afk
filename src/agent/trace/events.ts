@@ -30,6 +30,7 @@ import { SessionBillingSchema } from './events.billing.js';
 import { CompactionPayloadInputSchema, CompactionPayloadPersistedSchema } from './events.compaction.js';
 import { SessionPhasePayloadSchema } from './events.session-phase.js';
 import { ToolFailureClassSchema, SubagentLifecyclePayloadSchema } from './events.subagent-lifecycle.js';
+import { RISK_CATEGORIES } from '../risk-classifier.js';
 
 export {
   BackgroundAgentCancelledPayloadSchema,
@@ -150,6 +151,11 @@ export const HookDecisionPayloadSchema = z.object({
   approvalOutcome: z
     .enum(['carve-out', 'approved', 'denied', 'unrecognised', 'timeout', 'decline', 'cancel', 'hard-block'])
     .optional(),
+  /**
+   * Named risk category from the classifier (#3900). Set by the AFK mode gate
+   * on every PreToolUse verdict. Absent on other hook events and pre-#3900 traces.
+   */
+  riskCategory: z.enum(RISK_CATEGORIES).optional(),
 });
 
 /** Mirrors `HookSummaryPayload` in ./types (see ./hook-tally.ts). */

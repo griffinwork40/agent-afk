@@ -183,6 +183,81 @@ describe('multi-line outcome spine continuity (hiddenLineCount + tailPreview)', 
 });
 
 // ---------------------------------------------------------------------------
+// D: no stacked spine-only separator rows between consecutive nested commits
+// ---------------------------------------------------------------------------
+
+describe('flushSource — no consecutive separator-only rows for nested agents (defect D)', () => {
+  /**
+   * Defect D: flushSource appends scrollbackSeparator(depth) after every
+   * per-agent commit. At depth > 0 that is a dim spine string (│  per
+   * ancestor). When several nested agents complete without an agentResultSummary
+   * their flushSource returns ONLY the separator (no block), so N consecutive
+   * such commits produce N consecutive spine-only rows in the scrollback.
+   *
+   * Trigger conditions:
+   *  - Leaf agents have no agentResultSummary set (blockLines=[])
+   *  - Their parent agents have headerEmitted=true and no remaining children
+   *    → flushSource(parent) returns just [separator]
+   *  - Multiple such parents complete in sequence → stacking
+   *
+   * Contract after fix: no two consecutive elements in the combined output of
+   * multiple flushSource calls may both be separator-only rows (every non-empty
+   * char is │ or space, after ANSI-strip).
+   *
+   * Topology used (3-level, 3 mid-agents each with a leaf flushed first):
+   *   ◉ skill (live)
+   *   │ ├─ Agent(orch)
+   *   │ │  ├─ Agent(mid1) → [Agent(mid1_leaf)]   ← leaf flushed first
+   *   │ │  ├─ Agent(mid2) → [Agent(mid2_leaf)]   ← leaf flushed first
+   *   │ │  ╰─ Agent(mid3) → [Agent(mid3_leaf)]   ← leaf flushed first
+   *   then mid1/mid2/mid3 flushed → each returns only ["│  │"] → stacking
+   */
+  function isSpineOnlyRow(line: string): boolean {
+    const plain = stripAnsi(line).trimEnd();
+    // A separator-only row consists solely of │ and spaces (no other chars).
+    return plain.length > 0 && /^[│ ]+$/.test(plain);
+  }
+
+  it('nested agents with no summary flushed after children produce no back-to-back spine-only rows', () => {
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('skill-1', 'skill', '(root)', undefined);
+    lane.addStartWithAgentContext('orch', 'Agent', '(orch)', 'skill-1');
+
+    for (const mid of ['mid1', 'mid2', 'mid3']) {
+      lane.addStartWithAgentContext(mid, 'Agent', `(${mid})`, 'orch');
+      const leaf = `${mid}_leaf`;
+      lane.addStartWithAgentContext(leaf, 'Agent', `(${leaf})`, mid);
+      lane.addResult(leaf, makeResult('done'));
+      // No setAgentResultSummary — this is the trigger condition
+      lane.addResult(mid, makeResult('done'));
+      // No setAgentResultSummary for mid either
+    }
+
+    // Flush leaves first (triggers headerEmitted=true on ancestors)
+    // then flush parents — each parent returns only [separator]
+    const order = ['mid1_leaf', 'mid2_leaf', 'mid3_leaf', 'mid1', 'mid2', 'mid3'];
+    const combined: string[] = [];
+    for (const id of order) {
+      combined.push(...lane.flushSource(id));
+    }
+
+    // Check no two consecutive elements are both spine-only rows.
+    for (let i = 0; i < combined.length - 1; i++) {
+      const curr = combined[i]!;
+      const next = combined[i + 1]!;
+      if (isSpineOnlyRow(curr) && isSpineOnlyRow(next)) {
+        throw new Error(
+          `Consecutive spine-only rows at indices ${i} and ${i + 1}:\n` +
+          `  [${i}] ${JSON.stringify(curr)}\n` +
+          `  [${i + 1}] ${JSON.stringify(next)}\n` +
+          `Full output:\n${combined.map((l, idx) => `  [${idx}] ${JSON.stringify(l)}`).join('\n')}`,
+        );
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Depth-graded spine dimming — spineChalk() / colorizeIndent() coverage
 // ---------------------------------------------------------------------------
 
@@ -304,5 +379,121 @@ describe('spineChalk / colorizeIndent — depth-graded spine dimming', () => {
     } finally {
       palette.spineTone0 = savedT0;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4329 — orphan roots when parent commits over running children
+// ---------------------------------------------------------------------------
+
+/**
+ * Acceptance test for #4329.
+ *
+ * Topology: root → child → grandchild, grandchild finishes last.
+ *
+ *   ◉ Agent(root)        ← root finishes first, flushSource absorbs root+child
+ *   │ ╰─ Agent(child)    ← child is still running when root flushes
+ *   │    ╰─ Read         ← grandchild tool, calls after root absorbed child
+ *
+ * Without the fix: after flushSource('rootId') deletes 'childId' from the
+ * lane, the grandchild's next tool call via addStartWithAgentContext(...,
+ * 'childId') re-inserts an entry with a dangling agentContext. That entry
+ * then surfaces as an orphan root in committed scrollback.
+ *
+ * With the fix (Direction 2 — track absorbed ids): flushSource records
+ * 'childId' in absorbedIds; addStartWithAgentContext silently drops any
+ * call whose agentContext is absorbed.
+ */
+describe('#4329 — no orphan roots when parent flushSource absorbs a still-running child', () => {
+  it('addStartWithAgentContext drops entries whose agentContext was absorbed', () => {
+    const lane = new ToolLane();
+
+    // Build root → child → grandchild topology
+    lane.addStartWithAgentContext('rootId',  'Agent', '(root)',  undefined);
+    lane.addStartWithAgentContext('childId', 'Agent', '(child)', 'rootId');
+    lane.addStartWithAgentContext('gcTool1', 'Read',  '"a.ts"',  'childId');
+    lane.addResult('gcTool1', makeResult('line 1'));
+
+    // Root completes and is flushed — this deletes rootId AND childId from
+    // the lane (BFS collects all descendants). childId is now absorbed.
+    lane.setAgentResultSummary('root', 'Done');
+    lane.addResult('rootId', makeResult('root done'));
+    lane.flushSource('rootId');
+
+    // Verify child was absorbed
+    expect(lane.isAbsorbed('childId'), 'childId must be absorbed after flushSource(rootId)').toBe(true);
+
+    // The lane should be empty (root + child + gcTool1 all removed)
+    expect(lane.hasPending(), 'lane must be empty after flushSource of root').toBe(false);
+
+    // Grandchild keeps running and emits another tool call with parentId=childId.
+    // Pre-fix: this would re-insert an entry with agentContext='childId' (dangling).
+    // Post-fix: the call is silently dropped.
+    lane.addStartWithAgentContext('gcTool2', 'Bash', '"ls"', 'childId');
+
+    // The lane must still be empty — no orphan entry was created.
+    expect(lane.hasPending(), 'lane must remain empty — no orphan entry for absorbed parent').toBe(false);
+  });
+
+  it('flush() at turn end leaves no entries referencing a deleted agentContext', () => {
+    const lane = new ToolLane();
+
+    lane.addStartWithAgentContext('rootId',  'Agent', '(root)',  undefined);
+    lane.addStartWithAgentContext('childId', 'Agent', '(child)', 'rootId');
+    lane.addStartWithAgentContext('gcTool1', 'Read',  '"a.ts"',  'childId');
+    lane.addResult('gcTool1', makeResult('line 1'));
+
+    // Root flushes first (child still running)
+    lane.setAgentResultSummary('rootId', 'Done');
+    lane.addResult('rootId', makeResult('root done'));
+    const scrollback = lane.flushSource('rootId');
+
+    // Scrollback from flushSource must contain the root block
+    expect(scrollback.join('\n')).toContain('root');
+
+    // Grandchild emits more tool events — must be silently dropped
+    lane.addStartWithAgentContext('gcTool2', 'Bash', '"ls"',     'childId');
+    lane.addStartWithAgentContext('gcTool3', 'Write', '"b.ts"',  'childId');
+
+    // Dispose-time flush must produce nothing (lane was already empty)
+    const disposeLines = lane.flush().filter((l) => l.trim().length > 0);
+    expect(
+      disposeLines,
+      `No orphan blocks expected at turn end; got: ${JSON.stringify(disposeLines)}`,
+    ).toHaveLength(0);
+  });
+
+  it('absorbed set clears on flush() so the next turn starts fresh', () => {
+    const lane = new ToolLane();
+
+    lane.addStartWithAgentContext('rootId', 'Agent', '(root)', undefined);
+    lane.addStartWithAgentContext('childId', 'Agent', '(child)', 'rootId');
+    lane.addResult('rootId', makeResult('done'));
+    lane.flushSource('rootId');
+    expect(lane.isAbsorbed('childId')).toBe(true);
+
+    // Full flush (turn end) clears the absorbed set
+    lane.flush();
+    expect(lane.isAbsorbed('childId'), 'absorbedIds must be cleared after flush()').toBe(false);
+
+    // A new turn can use the same synthetic ids without being silently dropped
+    lane.addStartWithAgentContext('childId', 'Agent', '(child-turn2)', undefined);
+    expect(lane.hasPending(), 'new-turn entry must be accepted after absorbedIds cleared').toBe(true);
+  });
+
+  it('non-absorbed agentContext entries are still accepted normally', () => {
+    const lane = new ToolLane();
+
+    // Two parallel roots — flushing one must not block the other
+    lane.addStartWithAgentContext('rootA', 'Agent', '(A)', undefined);
+    lane.addStartWithAgentContext('rootB', 'Agent', '(B)', undefined);
+    lane.addStartWithAgentContext('childA', 'Read', '"a.ts"', 'rootA');
+    lane.addResult('rootA', makeResult('done'));
+    lane.flushSource('rootA');
+
+    // rootB and its children should still be insertable
+    lane.addStartWithAgentContext('childB', 'Read', '"b.ts"', 'rootB');
+    expect(lane.hasPending(), 'rootB children must still be accepted').toBe(true);
+    expect(lane.isAbsorbed('rootB'), 'rootB must NOT be absorbed').toBe(false);
   });
 });

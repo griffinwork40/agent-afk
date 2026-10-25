@@ -85,6 +85,17 @@ export const PATHS_ENV_REGISTRY = [
     category: 'process',
   },
   {
+    name: '__CFBundleIdentifier',
+    description:
+      'macOS-only, set by the OS: bundle id of the app that launched this process (e.g. the terminal). ' +
+      'Read by the real-Chrome probe to name the app that needs Files & Folders access to Google Chrome ' +
+      'on macOS 27+. A hint only — under tmux it reflects the app that started the tmux server.',
+    type: 'string',
+    required: false,
+    example: 'com.apple.Terminal',
+    category: 'process',
+  },
+  {
     name: 'USERPROFILE',
     description: 'Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32.',
     type: 'string',
@@ -115,6 +126,26 @@ export const PATHS_ENV_REGISTRY = [
   {
     name: 'MSYSTEM',
     description: 'Set by Git Bash environments (e.g. MINGW64). Signals that bash.exe is already on PATH in resolve-shell.ts.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'CHROME_CONFIG_HOME',
+    description:
+      'Linux only. When set, Chrome stores its profile under $CHROME_CONFIG_HOME/<channel-dir> instead of ' +
+      '$XDG_CONFIG_HOME/<channel-dir>. Mirrors the override that chrome-devtools-mcp/Puppeteer apply when ' +
+      'locating DevToolsActivePort so the real-Chrome probe checks the same path.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'XDG_CONFIG_HOME',
+    description:
+      'Linux XDG base-dir spec override for per-user config files. When set (and CHROME_CONFIG_HOME is not), ' +
+      'Chrome stores its profile under $XDG_CONFIG_HOME/<channel-dir>. Mirrors the override that ' +
+      'chrome-devtools-mcp/Puppeteer apply when locating DevToolsActivePort.',
     type: 'string',
     required: false,
     category: 'process',
