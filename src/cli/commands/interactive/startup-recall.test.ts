@@ -180,11 +180,37 @@ describe('renderStartupRecall — suppression', () => {
     const result = renderStartupRecall({ ...BASE_OPTS });
     expect(result).toBeUndefined();
   });
+
+  it('skips unsealed sessions (no end_time) and returns undefined when no sealed match', () => {
+    setupSingleSession({
+      sessionId: 'live-session',
+      cwd: '/some/project',
+      facet: makeFacet({ end_time: undefined as unknown as string }),
+    });
+
+    const result = renderStartupRecall({ ...BASE_OPTS });
+    expect(result).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Happy path — formatted output
 // ---------------------------------------------------------------------------
+
+describe('renderStartupRecall — cwd matching', () => {
+  it('matches cwd with JSON-escaped backslashes (Windows paths)', () => {
+    const winCwd = 'C:\\Users\\foo\\project';
+    setupSingleSession({
+      sessionId: 'win-sess',
+      cwd: winCwd,
+      facet: makeFacet(),
+    });
+
+    const result = renderStartupRecall({ ...BASE_OPTS, cwd: winCwd });
+    expect(result).toBeDefined();
+    expect(result).toContain('Done');
+  });
+});
 
 describe('renderStartupRecall — formatted output', () => {
   it('contains the outcome label for fully_achieved', () => {

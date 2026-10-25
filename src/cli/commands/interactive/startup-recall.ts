@@ -56,7 +56,10 @@ function extractCwdFromHead(filePath: string): string | undefined {
   try {
     const head = readFileHead(filePath);
     const match = head.match(/"cwd"\s*:\s*"([^"]*)"/);
-    return match?.[1];
+    // Decode JSON escape sequences (backslash paths on Windows, Unicode escapes)
+    // so the comparison against opts.cwd uses the real path, not raw JSON bytes.
+    if (!match) return undefined;
+    try { return JSON.parse('"' + match[1] + '"'); } catch { return match[1]; }
   } catch {
     return undefined;
   }
@@ -98,7 +101,8 @@ function findLatestCwdSession(
 
     try {
       const facet = getOrDeriveFacet(id);
-      if (facet) return facet;
+      // Skip unsealed (live) sessions — end_time is set only on session seal.
+      if (facet && facet.end_time) return facet;
     } catch {
       // Corrupt or derivation failure — skip.
     }
