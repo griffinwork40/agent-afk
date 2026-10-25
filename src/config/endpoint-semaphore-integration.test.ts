@@ -47,7 +47,9 @@ describe('stream lifetime serialisation (spec 6)', () => {
     await Promise.all([task(20), task(20)]);
 
     expect(intervals).toHaveLength(2);
-    const [a, b] = intervals.sort((x, y) => x[0] - y[0]);
+    const sorted = intervals.sort((x, y) => x[0] - y[0]);
+    const a = sorted[0]!;
+    const b = sorted[1]!;
 
     // The second task must NOT start before the first finishes:
     // b.start >= a.end (allowing 2 ms for timer granularity).
@@ -115,6 +117,49 @@ describe('stream lifetime serialisation (spec 6)', () => {
 
     // Slot is still held by the first acquirer; release it.
     sem.release();
+    expect(sem.activeCount).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slot-leak-on-throw: createStream failure must not strand the semaphore
+// ---------------------------------------------------------------------------
+
+describe('slot leak on stream-creation failure', () => {
+  it('semaphore slot is released when the stream factory throws after acquire', async () => {
+    const sem = getEndpointSemaphore('http://localhost:11434/v1', 1)!;
+    expect(sem.activeCount).toBe(0);
+
+    // Simulate the pattern in wrapCreateStreamWithSemaphore / createWithEndpointSemaphore:
+    // acquire → createStream throws → we must release.
+    const wrapAndFail = async () => {
+      await sem.acquire();
+      let rawStream: AsyncIterable<unknown>;
+      try {
+        // Simulated stream factory that rejects (e.g. HTTP 401 before first byte).
+        rawStream = await Promise.reject(new Error('connection refused'));
+      } catch (e) {
+        sem.release();
+        throw e;
+      }
+      // Generator that holds the slot — only reached on success.
+      return (async function* semaphoreHeld() {
+        try { yield* rawStream; }
+        finally { sem.release(); }
+      })();
+    };
+
+    await expect(wrapAndFail()).rejects.toThrow('connection refused');
+
+    // The slot MUST be released — activeCount back to 0.
+    expect(sem.activeCount).toBe(0);
+
+    // Semaphore must be immediately reusable.
+    let recovered = false;
+    await sem.acquire();
+    recovered = true;
+    sem.release();
+    expect(recovered).toBe(true);
     expect(sem.activeCount).toBe(0);
   });
 });

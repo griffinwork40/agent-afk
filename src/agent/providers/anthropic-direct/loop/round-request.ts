@@ -109,7 +109,15 @@ async function createWithEndpointSemaphore(
 
   // Wrap the stream so the slot is held until the iterable is exhausted or
   // errors — not just until the HTTP connection is accepted.
-  const rawStream = await createWithRetry(...args);
+  // Guard: if createWithRetry rejects before the generator is constructed the
+  // acquired slot would leak permanently. Release on throw, then re-throw.
+  let rawStream: Awaited<ReturnType<typeof createWithRetry>>;
+  try {
+    rawStream = await createWithRetry(...args);
+  } catch (e) {
+    sem.release();
+    throw e;
+  }
   return (async function* semaphoreHeld() {
     try {
       yield* rawStream;

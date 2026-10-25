@@ -64,6 +64,9 @@ class CountingSemaphore implements EndpointSemaphore {
   }
 
   acquire(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      return Promise.reject(new DOMException('Semaphore acquire aborted', 'AbortError'));
+    }
     if (this._activeCount < this.limit) {
       this._activeCount += 1;
       return Promise.resolve();

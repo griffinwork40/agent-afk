@@ -172,7 +172,15 @@ function wrapCreateStreamWithSemaphore<TEvent>(
         },
       });
     }
-    const rawStream = await createStream(streamSignal);
+    // Guard: if createStream rejects before the generator is constructed the
+    // acquired slot would leak permanently. Release on throw, then re-throw.
+    let rawStream: Awaited<ReturnType<typeof createStream>>;
+    try {
+      rawStream = await createStream(streamSignal);
+    } catch (e) {
+      sem.release();
+      throw e;
+    }
     return (async function* semaphoreHeld() {
       try {
         yield* rawStream;

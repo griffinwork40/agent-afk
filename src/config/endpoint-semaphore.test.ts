@@ -61,6 +61,20 @@ describe('getEndpointSemaphore', () => {
   });
 });
 
+describe('CountingSemaphore.acquire — pre-aborted signal (fast path)', () => {
+  it('rejects immediately on a pre-aborted signal even when a slot is available', async () => {
+    const sem = getEndpointSemaphore('http://localhost:11434/v1', 2)!;
+    expect(sem.activeCount).toBe(0); // slot IS available
+
+    const ac = new AbortController();
+    ac.abort(); // abort BEFORE calling acquire
+
+    await expect(sem.acquire(ac.signal)).rejects.toThrow(/AbortError|aborted/i);
+    // Slot must not have been consumed.
+    expect(sem.activeCount).toBe(0);
+  });
+});
+
 describe('withEndpointSemaphore', () => {
   it('runs fn directly when sem is null (no-op when unconfigured)', async () => {
     let called = false;
