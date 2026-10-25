@@ -69,7 +69,7 @@ export interface SandboxResult {
 /** Returns the root of the git repo containing `dir`, or null if none. */
 function findGitRoot(dir: string): string | null {
   try {
-    const root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    const root = execFileSync('git', ['--no-optional-locks', 'rev-parse', '--show-toplevel'], {
       cwd: dir,
       stdio: ['ignore', 'pipe', 'ignore'],
       encoding: 'utf8',

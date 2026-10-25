@@ -50,7 +50,7 @@ export interface ReconsiderResult {
  */
 async function allCommitsPushed(execFile: ExecFileFn, worktreePath: string): Promise<boolean> {
   try {
-    const r = await execFile('git', ['-C', worktreePath, 'log', '--oneline', '@{upstream}..HEAD']);
+    const r = await execFile('git', ['--no-optional-locks', '-C', worktreePath, 'log', '--oneline', '@{upstream}..HEAD']);
     return r.stdout.trim() === '';
   } catch {
     return false; // fail safe — keep locked when probe fails

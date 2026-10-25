@@ -12,18 +12,26 @@ Entries in the [Unreleased] section may include a short commit hash suffix
 ## [Unreleased]
 
 ### Added
+- dynamic startup recall + ambient dashboard (#4397) (3a4908ef2)
 - add /usage-awareness toggle to control model visibility of subscription usage (#4402) (4fe650879)
 
 ### Fixed
+- stale comments, fail-closed gate parity, provider gate tests (#4223) (619e4c371)
+- narrow stampLastContent to UserMessageParam | AssistantMessageParam for SDK v1.x (9e52858ed)
 - use git_read-compatible flag forms in state survey (#4390) (a76a99e67)
 
 ### Changed
+- bump @anthropic-ai/sdk from 0.134.0 to 1.1.0 (4c77cbc4f)
+- bump the prod-minor-patch group across 1 directory with 4 updates (efaf9f731)
 - bump the dev-minor-patch group with 3 updates (#4383) (eaec2cd7f)
-- bump pnpm/action-setup (#4384) (0d634bf4f)
 - bump vscode-jsonrpc from 9.0.3 to 10.0.0 (#4385) (771decc5a)
+- bump pnpm/action-setup (#4384) (0d634bf4f)
 - bump github/codeql-action/analyze from 3.39.1 to 4.39.1 (#4387) (88feeb9c6)
 - bump github/codeql-action/init from 3.39.1 to 4.39.1 (#4388) (4717c274d)
 - bump actions/checkout from 4.4.0 to 7.0.1 (#4389) (481ac0f76)
+- bump the dashboard-dev-minor-patch group (d3d80ea03)
+- bump lucide-react (71a40f056)
+- bump the fumadocs group in /website with 3 updates (68eb10254)
 
 ## [5.336.0] - 2026-10-25
 
