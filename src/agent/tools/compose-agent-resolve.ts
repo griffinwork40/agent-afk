@@ -117,6 +117,18 @@ export interface ResolvedComposeAgent {
    * pre-dispatch implementation-intent gate in compose. Set only when true.
    */
   readOnly?: true;
+  /**
+   * Named agent's `maxTurns` frontmatter field. Forwarded so `buildComposeDagNode`
+   * can apply the same call-site > named-agent precedence that the agent-tool path
+   * enforces via `resolveChildBudgets` (#4042 Stage 3 budget parity).
+   * Omitted when the definition does not declare a turn budget.
+   */
+  namedAgentMaxTurns?: number;
+  /**
+   * Named agent's `maxToolUseIterations` frontmatter field. Same precedence
+   * chain as `namedAgentMaxTurns`.
+   */
+  namedAgentMaxToolUseIterations?: number;
 }
 
 /**
@@ -187,6 +199,18 @@ export function resolveComposeNodeAgent(
   const defModel = agent.definition.model;
   if (typeof defModel === 'string' && defModel !== 'inherit') {
     result.namedAgentModel = defModel;
+  }
+
+  // Budget defaults: named agent's `maxTurns` / `maxToolUseIterations`
+  // frontmatter fields. Forwarded so buildComposeDagNode can apply the same
+  // call-site > named-agent > unlimited precedence chain that the agent-tool
+  // path enforces via resolveChildBudgets (#4042 Stage 3 budget parity).
+  // Only set when the definition supplies a positive value.
+  if (typeof agent.definition.maxTurns === 'number' && agent.definition.maxTurns > 0) {
+    result.namedAgentMaxTurns = agent.definition.maxTurns;
+  }
+  if (typeof agent.definition.maxToolUseIterations === 'number' && agent.definition.maxToolUseIterations > 0) {
+    result.namedAgentMaxToolUseIterations = agent.definition.maxToolUseIterations;
   }
 
   // Bash restriction: forwarded independently of the allowlist (a
