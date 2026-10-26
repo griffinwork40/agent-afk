@@ -20,6 +20,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getTraceDir } from '../../../paths.js';
 import { readLedger } from '../../session-ledger.js';
+import { readSessionMeta } from '../../session/session-meta.js';
 import { listTraces, resolveLatestSession } from '../../trace/listing.js';
 import { resolveSessionByName } from '../../trace/session-name-resolver.js';
 import type { TraceEvent } from '../../trace/index.js';
@@ -160,17 +161,28 @@ async function resolveTracePath(
     // getTraceDir calls validateSessionId which rejects path-traversal.
     let tp = join(getTraceDir(id), 'trace.jsonl');
     if (!existsSync(tp)) {
-      try {
-        for await (const rec of readLedger(id)) {
-          if (rec.kind !== 'meta') continue;
-          if (rec.traceLabel === null) return { tracePath: tp, disabledNote: id };
-          if (typeof rec.traceLabel === 'string' && rec.traceLabel.length > 0) {
-            const relabeled = join(getTraceDir(rec.traceLabel), 'trace.jsonl');
-            if (existsSync(relabeled)) tp = relabeled;
-          }
-          break;
+      // Fast path: read traceLabel from session-meta.json (#4429). Falls back
+      // to the ledger JSONL scan for pre-sidecar sessions.
+      const sideMeta = readSessionMeta(id);
+      if (sideMeta !== null) {
+        if (sideMeta.traceLabel === null) return { tracePath: tp, disabledNote: id };
+        if (typeof sideMeta.traceLabel === 'string' && sideMeta.traceLabel.length > 0) {
+          const relabeled = join(getTraceDir(sideMeta.traceLabel), 'trace.jsonl');
+          if (existsSync(relabeled)) tp = relabeled;
         }
-      } catch { /* ledger unreadable — return best-effort path */ }
+      } else {
+        try {
+          for await (const rec of readLedger(id)) {
+            if (rec.kind !== 'meta') continue;
+            if (rec.traceLabel === null) return { tracePath: tp, disabledNote: id };
+            if (typeof rec.traceLabel === 'string' && rec.traceLabel.length > 0) {
+              const relabeled = join(getTraceDir(rec.traceLabel), 'trace.jsonl');
+              if (existsSync(relabeled)) tp = relabeled;
+            }
+            break;
+          }
+        } catch { /* ledger unreadable — return best-effort path */ }
+      }
     }
     return { tracePath: tp, disabledNote: undefined };
   };

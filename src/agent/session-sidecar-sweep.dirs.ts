@@ -28,6 +28,7 @@ import { open, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { newestMtimeAndBytes } from './_lib/dir-newest-mtime.js';
 import { isSafeLedgerSessionId } from '../paths.js';
+import { readSessionMeta } from './session/session-meta.js';
 
 export interface SessionDirSweepOptions {
   root: string;
@@ -44,8 +45,22 @@ interface DirRecord { id: string; path: string; newestMtimeMs: number; active?: 
 /** Bytes read from the head of journal.jsonl to find the `meta` record. */
 const META_HEAD_BYTES = 8 * 1024;
 
-/** The `forkedFrom.sessionId` in a journal's first (meta) line, if any. */
+/**
+ * Return the `forkedFrom` parent session id for the session whose directory is
+ * `dir`. Reads session-meta.json first (O(1)) when available; falls back to
+ * scanning the head of journal.jsonl for pre-sidecar sessions (#4429).
+ */
 async function readForkParent(dir: string): Promise<string | undefined> {
+  // Extract the session id from the directory name (last path segment).
+  const sessionId = dir.split('/').at(-1) ?? '';
+
+  // Fast path: session-meta.json sidecar (#4429).
+  if (sessionId) {
+    const sideMeta = readSessionMeta(sessionId);
+    if (sideMeta !== null) return sideMeta.forkedFrom;
+  }
+
+  // Fallback: scan the head of journal.jsonl for pre-sidecar sessions.
   let fh: Awaited<ReturnType<typeof open>> | undefined;
   try {
     fh = await open(join(dir, 'journal.jsonl'), 'r');

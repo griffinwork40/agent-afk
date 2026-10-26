@@ -307,7 +307,7 @@ export async function handleWebFork(
   if (journalSource) {
     try { await ctx.session.current.messageJournal?.flush(); } catch { /* best-effort */ }
     if (forkJournal(journalSource, forkId)) {
-      seedForkLedger(forkId, { model: String(ctx.stats.model), ...(ctx.stats.cwd ? { cwd: ctx.stats.cwd } : {}) });
+      seedForkLedger(forkId, { model: String(ctx.stats.model), ...(ctx.stats.cwd ? { cwd: ctx.stats.cwd } : {}), forkedFrom: journalSource });
     }
   }
 

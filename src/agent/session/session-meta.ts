@@ -38,6 +38,12 @@ export interface SessionMeta {
   startedAt?: number;
   /** Running afk package version. */
   afkVersion?: string;
+  /**
+   * Parent session id when this session is a `/fork` child. Undefined for
+   * top-level sessions. Used by the sidecar-sweep to protect fork parents
+   * from age-based eviction (#4429).
+   */
+  forkedFrom?: string;
 }
 
 // ---------------------------------------------------------------------------
