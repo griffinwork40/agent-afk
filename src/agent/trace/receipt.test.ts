@@ -637,7 +637,7 @@ describe('extractJournalSummary (#4427)', () => {
   it('handles text_ref blocks using preview', () => {
     const messages: JournalMessage[] = [{
       role: 'user',
-      content: [{ type: 'text_ref', ref: 'blobs/abc.txt', preview: 'spilled content preview' }],
+      content: [{ type: 'text_ref', ref: { path: 'blobs/abc.txt', bytes: 42, sha256: 'deadbeef', mediaType: 'text/plain' }, preview: 'spilled content preview' }],
     }];
     const summary = extractJournalSummary(messages, false)!;
     expect(summary.firstUserMessage).toBe('spilled content preview');
@@ -653,7 +653,7 @@ describe('generateReceipt with journalSummary (#4427)', () => {
       toolUseCount: 1,
       messageCount: 2,
     };
-    const receipt = generateReceipt([sealed()], {
+    const receipt = generateReceipt([sealed('succeeded')], {
       tracePath: '/tmp/trace.jsonl',
       witnessLabel: 'test-label',
       journalSummary: js,
@@ -663,7 +663,7 @@ describe('generateReceipt with journalSummary (#4427)', () => {
   });
 
   it('omits journalSummary and adds limitation when not provided', () => {
-    const receipt = generateReceipt([sealed()], {
+    const receipt = generateReceipt([sealed('succeeded')], {
       tracePath: '/tmp/trace.jsonl',
       witnessLabel: 'test-label',
     });

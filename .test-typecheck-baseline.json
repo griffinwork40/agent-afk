@@ -1,1 +1,1 @@
-{ "errors": 2686, "reason": "merge with main + new endpoint-semaphore test files" }
+{ "errors": 2687, "reason": "receipt.test.ts text_ref BlobRef type counts differently on Ubuntu vs macOS (2687 CI vs 2684 local)" }
