@@ -851,6 +851,7 @@ describe('classifyDestructiveGit', () => {
     ['git stash drop', 'git stash drop'],
     ['git stash clear', 'git stash clear'],
     ['git stash pop', 'git stash pop'],
+    ['git stash apply', 'git stash apply'],
   ];
   for (const [cmd, label] of destructive) {
     it(`classifies as destructive: ${label}`, () => {
@@ -862,8 +863,14 @@ describe('classifyDestructiveGit', () => {
 
   const safe: Array<[string, string]> = [
     ['git reset --soft', 'git reset --soft'],
+    ['git reset', 'git reset (bare — defaults to --mixed, non-destructive)'],
+    ['git reset --mixed', 'git reset --mixed'],
     ['git stash list', 'git stash list'],
     ['git stash show', 'git stash show'],
+    ['git stash push', 'git stash push (saves state, non-destructive)'],
+    ['git stash push -m "wip"', 'git stash push -m (saves state, non-destructive)'],
+    ['git stash save', 'git stash save (legacy alias for push, non-destructive)'],
+    ['git stash', 'bare git stash (implicit push, non-destructive)'],
     ['git commit -m "x"', 'git commit'],
     ['git push', 'git push'],
     ['git status', 'git status'],

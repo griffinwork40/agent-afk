@@ -416,7 +416,7 @@ export function destructiveGitSegmentReason(argv: readonly string[]): string | n
   }
   if (sub === 'stash') {
     const next = rest[0] ?? '';
-    if (next === 'drop' || next === 'clear' || next === 'pop') {
+    if (next === 'drop' || next === 'clear' || next === 'pop' || next === 'apply') {
       return `git stash ${next} (working-tree destructive)`;
     }
   }
