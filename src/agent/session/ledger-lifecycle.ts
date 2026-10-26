@@ -16,6 +16,7 @@ import { sessionLabelFromTracePath } from '../../paths.js';
 import { SessionLedgerWriter } from '../session-ledger.js';
 import type { OutputEvent } from '../types.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
+import { writeSessionMeta } from './session-meta.js';
 
 /**
  * Inputs for {@link LedgerLifecycle.ensure}. `getMetadata` is a lazy accessor so
@@ -61,16 +62,32 @@ export class LedgerLifecycle {
     if (!writer.active) return;
     this.writer = writer;
     const meta = ctx.getMetadata();
+    const traceLabel = sessionLabelFromTracePath(ctx.tracePath);
+    const model = meta.model ?? ctx.fallbackModel;
+    // Invariant: journal meta always carries cwd so receipts and facets can
+    // attribute sessions to a directory. The fallback to process.cwd() lives
+    // HERE, not in config.cwd at the surface sites, because config.cwd===undefined
+    // marks an UNCONFINED session for tool containment (see _cwd-utils.ts:119-128).
+    const effectiveCwd = meta.cwd ?? process.cwd();
     writer.record({
       kind: 'meta',
       sessionId: id,
-      model: meta.model ?? ctx.fallbackModel,
-      ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
+      model,
+      cwd: effectiveCwd,
       // Correlate this id-keyed ledger to its witness trace: fresh sessions
       // label the trace dir with a random UUID (not the session id), so the
       // ledger is the durable id→label bridge. `null` when tracing is
       // disabled/unwired, so absence is explicit rather than silent.
-      traceLabel: sessionLabelFromTracePath(ctx.tracePath),
+      traceLabel,
+    });
+    // Best-effort identity sidecar (#4429). Fire-and-forget: the await is
+    // intentionally dropped so session startup is never blocked by it.
+    void writeSessionMeta({
+      v: 1,
+      sessionId: id,
+      model,
+      cwd: effectiveCwd,
+      traceLabel,
     });
   }
 

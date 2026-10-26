@@ -106,6 +106,34 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
     lines.push('');
   }
 
+  if (r.journalSummary !== undefined) {
+    const js = r.journalSummary;
+    lines.push('## Conversation summary');
+    lines.push('');
+    if (js.textRedacted) {
+      lines.push('_Text fields redacted (AFK_RUN_RECEIPT_TEXT_DISABLED=1)._');
+      lines.push('');
+    }
+    if (js.firstUserMessage !== undefined) {
+      lines.push('**Request:**');
+      lines.push('');
+      lines.push(`> ${js.firstUserMessage.replace(/\n/g, '\n> ')}`);
+      lines.push('');
+    }
+    if (js.lastAssistantMessage !== undefined) {
+      lines.push('**Result:**');
+      lines.push('');
+      lines.push(`> ${js.lastAssistantMessage.replace(/\n/g, '\n> ')}`);
+      lines.push('');
+    }
+    if (js.toolNames.length > 0) {
+      lines.push(`**Tools used (${js.toolUseCount} calls):** ${js.toolNames.join(', ')}`);
+      lines.push('');
+    }
+    lines.push(`**Messages:** ${js.messageCount}`);
+    lines.push('');
+  }
+
   lines.push('## Limitations');
   lines.push('');
   for (const lim of r.limitations) lines.push(`- ${lim}`);

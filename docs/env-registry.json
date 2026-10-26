@@ -1039,6 +1039,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_RUN_RECEIPT_TEXT_DISABLED",
+      "description": "Suppress conversation-text fields (firstUserMessage, lastAssistantMessage) in the run receipt journalSummary. When set to 1, the receipt v2 journalSummary is still written but text fields are omitted and textRedacted is set to true. Tool names, counts, and all v1 fields are unaffected. Use when receipts are stored in shared locations or CI logs and prompt/response text is considered private.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
       "name": "AFK_SDK_SURFACE_WARN",
       "description": "Controls the one-time warning emitted when an SDK session (AgentSession / query() / queryText()) discovers skills but has no skillExecutor wired, meaning the model cannot invoke them. Set to 0 to silence the warning (useful when the reduced surface is intentional).",
       "type": "string",

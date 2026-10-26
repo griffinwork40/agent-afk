@@ -5,6 +5,7 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getReceiptsDir } from '../../paths.js';
 import {
+  extractJournalSummary,
   generateReceipt,
   parseTraceJsonl,
   receiptPathsFor,
@@ -12,8 +13,10 @@ import {
   renderReceiptMarkdown,
   runReceiptSessionEndHook,
   writeRunReceipt,
+  type JournalSummary,
   type RunReceipt,
 } from './receipt.js';
+import type { JournalMessage } from '../journal/types.js';
 import type { ClosureReason, ToolFailureClass, TraceEvent } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -402,7 +405,7 @@ describe('writeRunReceipt + runReceiptSessionEndHook (filesystem)', () => {
     expect(parsed.sessionId).toBe('sess-logical');
     expect(parsed.endReason).toBe('close');
     expect(parsed.toolCalls.errored).toBe(1);
-    expect(parsed.schemaVersion).toBe(1);
+    expect(parsed.schemaVersion).toBe(2);
   });
 
   it('returns null when the trace file is absent', async () => {
@@ -528,5 +531,189 @@ describe('renderReceiptMarkdown — cost rows', () => {
     const r: RunReceipt = { ...BASE_RECEIPT, cost: {} };
     const md = renderReceiptMarkdown(r);
     expect(md).not.toContain('Cost (USD');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Journal enrichment (v2) — #4427
+// ---------------------------------------------------------------------------
+
+const RECEIPT_BASE: RunReceipt = {
+  schemaVersion: RECEIPT_SCHEMA_VERSION,
+  generatedAt: '2026-10-25T00:00:00.000Z',
+  witnessLabel: 'sess-journal',
+  tracePath: '/w/sess-journal/trace.jsonl',
+  sessionId: 'sess-journal',
+  status: 'succeeded',
+  humanReviewRequired: false,
+  humanReviewReasons: [],
+  incomplete: false,
+  toolCalls: {
+    total: 0, succeeded: 0, errored: 0, erroredNotable: 0,
+    refused: 0, circuitBreakerHits: 0, byTool: {}, byFailureClass: {},
+  },
+  events: { total: 0, byKind: {} },
+  subagents: { started: 0, succeeded: 0, failed: 0, cancelled: 0 },
+  cost: {},
+  failures: [],
+  limitations: [],
+};
+
+function userMsg(text: string): JournalMessage {
+  return { role: 'user', content: [{ type: 'text', text }] };
+}
+
+function assistantMsg(text: string): JournalMessage {
+  return { role: 'assistant', content: [{ type: 'text', text }] };
+}
+
+function assistantWithTools(text: string, tools: string[]): JournalMessage {
+  return {
+    role: 'assistant',
+    content: [
+      ...tools.map((name) => ({
+        type: 'tool_use' as const,
+        id: `tu_${name}`,
+        name,
+        input: {},
+      })),
+      { type: 'text' as const, text },
+    ],
+  };
+}
+
+describe('extractJournalSummary (#4427)', () => {
+  it('returns undefined for null messages', () => {
+    expect(extractJournalSummary(null, false)).toBeUndefined();
+  });
+
+  it('returns undefined for empty array', () => {
+    expect(extractJournalSummary([], false)).toBeUndefined();
+  });
+
+  it('extracts first user message and last assistant message', () => {
+    const messages: JournalMessage[] = [
+      userMsg('hello world'),
+      assistantMsg('first reply'),
+      userMsg('followup'),
+      assistantMsg('final reply'),
+    ];
+    const summary = extractJournalSummary(messages, false)!;
+    expect(summary.firstUserMessage).toBe('hello world');
+    expect(summary.lastAssistantMessage).toBe('final reply');
+    expect(summary.messageCount).toBe(4);
+  });
+
+  it('truncates text beyond 500 chars', () => {
+    const longText = 'x'.repeat(600);
+    const messages: JournalMessage[] = [userMsg(longText), assistantMsg('ok')];
+    const summary = extractJournalSummary(messages, false)!;
+    expect(summary.firstUserMessage!.length).toBe(501); // 500 + ellipsis
+    expect(summary.firstUserMessage!.endsWith('\u2026')).toBe(true);
+  });
+
+  it('collects tool names in order and counts calls', () => {
+    const messages: JournalMessage[] = [
+      userMsg('do stuff'),
+      assistantWithTools('done', ['read_file', 'bash', 'read_file']),
+    ];
+    const summary = extractJournalSummary(messages, false)!;
+    expect(summary.toolNames).toEqual(['read_file', 'bash']);
+    expect(summary.toolUseCount).toBe(3);
+  });
+
+  it('suppresses text when textDisabled is true', () => {
+    const messages: JournalMessage[] = [
+      userMsg('secret prompt'),
+      assistantMsg('secret response'),
+    ];
+    const summary = extractJournalSummary(messages, true)!;
+    expect(summary.firstUserMessage).toBeUndefined();
+    expect(summary.lastAssistantMessage).toBeUndefined();
+    expect(summary.textRedacted).toBe(true);
+    expect(summary.messageCount).toBe(2);
+  });
+
+  it('handles text_ref blocks using preview', () => {
+    const messages: JournalMessage[] = [{
+      role: 'user',
+      content: [{ type: 'text_ref', ref: { path: 'blobs/abc.txt', bytes: 42, sha256: 'deadbeef', mediaType: 'text/plain' }, preview: 'spilled content preview' }],
+    }];
+    const summary = extractJournalSummary(messages, false)!;
+    expect(summary.firstUserMessage).toBe('spilled content preview');
+  });
+});
+
+describe('generateReceipt with journalSummary (#4427)', () => {
+  it('includes journalSummary when provided in meta', () => {
+    const js: JournalSummary = {
+      firstUserMessage: 'hello',
+      lastAssistantMessage: 'goodbye',
+      toolNames: ['bash'],
+      toolUseCount: 1,
+      messageCount: 2,
+    };
+    const receipt = generateReceipt([sealed('succeeded')], {
+      tracePath: '/tmp/trace.jsonl',
+      witnessLabel: 'test-label',
+      journalSummary: js,
+    });
+    expect(receipt.journalSummary).toEqual(js);
+    expect(receipt.limitations.some((l) => l.includes('No message journal'))).toBe(false);
+  });
+
+  it('omits journalSummary and adds limitation when not provided', () => {
+    const receipt = generateReceipt([sealed('succeeded')], {
+      tracePath: '/tmp/trace.jsonl',
+      witnessLabel: 'test-label',
+    });
+    expect(receipt.journalSummary).toBeUndefined();
+    expect(receipt.limitations.some((l) => l.includes('No message journal'))).toBe(true);
+  });
+
+  it('schemaVersion is 2', () => {
+    expect(RECEIPT_SCHEMA_VERSION).toBe(2);
+  });
+});
+
+describe('renderReceiptMarkdown with journalSummary (#4427)', () => {
+  it('renders conversation summary section', () => {
+    const r: RunReceipt = {
+      ...RECEIPT_BASE,
+      journalSummary: {
+        firstUserMessage: 'What is 2+2?',
+        lastAssistantMessage: 'The answer is 4.',
+        toolNames: ['bash', 'read_file'],
+        toolUseCount: 5,
+        messageCount: 4,
+      },
+    };
+    const md = renderReceiptMarkdown(r);
+    expect(md).toContain('## Conversation summary');
+    expect(md).toContain('What is 2+2?');
+    expect(md).toContain('The answer is 4.');
+    expect(md).toContain('bash, read_file');
+    expect(md).toContain('5 calls');
+    expect(md).toContain('**Messages:** 4');
+  });
+
+  it('renders redacted notice when textRedacted', () => {
+    const r: RunReceipt = {
+      ...RECEIPT_BASE,
+      journalSummary: {
+        toolNames: [],
+        toolUseCount: 0,
+        messageCount: 2,
+        textRedacted: true,
+      },
+    };
+    const md = renderReceiptMarkdown(r);
+    expect(md).toContain('Text fields redacted');
+    expect(md).not.toContain('**Request:**');
+  });
+
+  it('omits conversation summary when journalSummary absent', () => {
+    const md = renderReceiptMarkdown(RECEIPT_BASE);
+    expect(md).not.toContain('Conversation summary');
   });
 });

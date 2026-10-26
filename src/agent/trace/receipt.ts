@@ -32,6 +32,8 @@ import type { HookHandler } from '../hooks.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import { SessionCostAccumulator, type CostTokens, type SessionCostSource } from './cost.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
+import { loadJournalMessages } from '../journal/reader.js';
+import { extractJournalSummary, type JournalSummary } from './receipt.journal.js';
 import {
   BENIGN_FAILURE_CLASSES,
   type ClosureReason,
@@ -41,8 +43,9 @@ import {
 } from './types.js';
 
 export { renderReceiptMarkdown };
+export { extractJournalSummary, type JournalSummary } from './receipt.journal.js';
 
-export const RECEIPT_SCHEMA_VERSION = 1 as const;
+export const RECEIPT_SCHEMA_VERSION = 2 as const;
 
 // Invariant: the subset of exempt classes that represent a GATE refusing a
 // tool call — an allowlist/`canUseTool` deny (`permission-denied`), a
@@ -139,6 +142,8 @@ export interface RunReceipt {
   humanReviewRequired: boolean;
   humanReviewReasons: string[];
   limitations: string[];
+  /** Journal-derived summary (v2). Absent when the journal is missing or disabled. */
+  journalSummary?: JournalSummary;
 }
 
 /** Inputs to {@link generateReceipt} that are not derivable from the events. */
@@ -149,6 +154,8 @@ export interface ReceiptMeta {
   endReason?: string;
   /** Override "now" for deterministic tests. */
   now?: Date;
+  /** Journal-derived summary; threaded in from {@link writeRunReceipt}. */
+  journalSummary?: JournalSummary;
 }
 
 /**
@@ -326,6 +333,8 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
   ];
   if (status === 'unknown')
     limitations.push('No session_sealed record was present when this receipt was generated.');
+  if (meta.journalSummary === undefined)
+    limitations.push('No message journal was available; conversation text and tool call order are absent from this receipt.');
 
   const sc = costAcc.result();
   const cost: RunReceipt['cost'] = {
@@ -371,9 +380,9 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
     humanReviewRequired: reasons.length > 0,
     humanReviewReasons: reasons,
     limitations,
+    ...(meta.journalSummary !== undefined ? { journalSummary: meta.journalSummary } : {}),
   };
 }
-
 
 /** Options for {@link writeRunReceipt}. */
 export interface WriteRunReceiptOptions {
@@ -403,12 +412,19 @@ export async function writeRunReceipt(
   if (events.length === 0) return null;
 
   const paths = receiptPathsFor(opts.tracePath);
+  const journalSummary = opts.sessionId !== undefined
+    ? extractJournalSummary(
+        loadJournalMessages(opts.sessionId),
+        env.AFK_RUN_RECEIPT_TEXT_DISABLED === '1',
+      )
+    : undefined;
   const receipt = generateReceipt(events, {
     tracePath: opts.tracePath,
     witnessLabel: paths.label,
     ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
     ...(opts.reason !== undefined ? { endReason: opts.reason } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
+    ...(journalSummary !== undefined ? { journalSummary } : {}),
   });
 
   // Both writes use atomic-write primitives (tmp+rename, mkdirp built in).
