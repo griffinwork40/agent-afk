@@ -2705,7 +2705,7 @@ describe('SubagentExecutor', () => {
       const result = await executor.execute(makeCall());
 
       expect(result.isError).toBeUndefined();
-      expect(result.content).toBe(`subagent findings\n\n${nudge}`);
+      expect(result.content).toBe(`subagent findings\n\n---\n\n${nudge}`);
     });
 
     it('calls teardown with deferInjectContextToCaller: true (suppresses queue push)', async () => {
@@ -2745,7 +2745,7 @@ describe('SubagentExecutor', () => {
 
       const result = await exec.execute(makeCall());
 
-      expect(result.content).toBe(`body\n\n${nudge}`);
+      expect(result.content).toBe(`body\n\n---\n\n${nudge}`);
       // The mock handle does not fire the real SubagentStop → queue path, but
       // the executor must never itself push to either channel for this path.
       expect(queueSpy).not.toHaveBeenCalled();
@@ -2795,7 +2795,7 @@ describe('SubagentExecutor', () => {
       // The JSON payload is followed by the appended nudge, separated by \n\n.
       // The JSON prefix must still parse on its own.
       const [jsonPart, ...rest] = result.content.split('\n\n');
-      expect(rest.join('\n\n')).toBe(nudge);
+      expect(rest.join('\n\n')).toBe(`---\n\n${nudge}`);
       const payload = JSON.parse(jsonPart!);
       expect(payload.status).toBe('failed');
       expect(payload.error).toBe('kaboom');
