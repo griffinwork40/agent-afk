@@ -307,6 +307,15 @@ export async function handleWebFork(
   if (journalSource) {
     try { await ctx.session.current.messageJournal?.flush(); } catch { /* best-effort */ }
     if (forkJournal(journalSource, forkId)) {
+      // NOTE (#4454): `forkedFrom` here is `journalSource` — the provider SDK
+      // session id (ctx.session.current.sessionId), which diverges from
+      // `ctx.stats.sessionId` (the stable browser id) after /clear. The CLI
+      // sidecar store (forkStored.forkedFrom below) uses ctx.stats.sessionId
+      // instead. These two ids are each internally consistent within their own
+      // store (journal vs. sidecar), but cross-store joins (e.g. sweep-dirs
+      // reading forkedFrom from the sidecar and matching it against journal
+      // parent ids) will silently mismatch after a /clear. A proper fix
+      // requires unifying the id space across stores; tracked in #4454.
       seedForkLedger(forkId, { model: String(ctx.stats.model), ...(ctx.stats.cwd ? { cwd: ctx.stats.cwd } : {}), forkedFrom: journalSource });
     }
   }

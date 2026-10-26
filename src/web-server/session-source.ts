@@ -96,17 +96,22 @@ async function readLedgerHead(
     out.model = sideMeta.model;
   }
 
-  // Always scan the ledger for `title` (not stored in session-meta). If the
-  // sidecar gave us all identity fields we can stop once we have a title.
-  const needIdentity = out.cwd === undefined && out.surface === undefined && out.model === undefined;
+  // Always scan the ledger for `title` (not stored in session-meta). Track
+  // per-field need flags independently: `model` is non-optional on SessionMeta
+  // so a sidecar always sets it, but `cwd` and `surface` are optional and may
+  // still need backfilling from ledger `meta` records even when the sidecar
+  // provided `model`.
+  const needCwd = out.cwd === undefined;
+  const needSurface = out.surface === undefined;
+  const needModel = out.model === undefined;
   try {
     let seen = 0;
     for await (const rec of readLedger(sessionId)) {
       seen += 1;
-      if (rec.kind === 'meta' && needIdentity) {
-        if (rec.cwd !== undefined) out.cwd = rec.cwd;
-        if (rec.surface !== undefined) out.surface = rec.surface;
-        if (rec.model !== undefined) out.model = rec.model;
+      if (rec.kind === 'meta' && (needCwd || needSurface || needModel)) {
+        if (needCwd && rec.cwd !== undefined) out.cwd = rec.cwd;
+        if (needSurface && rec.surface !== undefined) out.surface = rec.surface;
+        if (needModel && rec.model !== undefined) out.model = rec.model;
       } else if (rec.kind === 'user' && out.title === undefined) {
         // Prefer `input` (the caller's own message, recorded when framework
         // context was prepended). Older ledgers lack it, so fall back to
@@ -120,9 +125,7 @@ async function readLedgerHead(
         // If extraction returned nothing (pure-boilerplate record), fall
         // through and let a subsequent user record supply the title.
       }
-      if (out.title !== undefined && (needIdentity
-        ? out.model !== undefined && (out.cwd !== undefined || out.surface !== undefined)
-        : true)) break;
+      if (out.title !== undefined && !needCwd && !needSurface && !needModel) break;
       if (seen >= HEAD_RECORD_SCAN_LIMIT) break;
     }
   } catch {
