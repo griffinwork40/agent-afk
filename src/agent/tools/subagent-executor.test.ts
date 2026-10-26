@@ -1959,7 +1959,10 @@ describe('SubagentExecutor', () => {
         input: { jobId: userJob.jobId, reason: 'obsolete' },
       }));
       expect(refused.isError).toBe(true);
-      expect(refused.content).toMatch(/backgrounded by the user/);
+      expect(refused.content).toMatch(/started directly by the user/);
+      expect(refused.content).not.toMatch(/send_message_to_agent/); // not suggested for 'user' provenance
+      expect(refused.content).not.toMatch(/Ctrl\+B/); // not a Ctrl+B job
+      expect(refused.content).toContain(`/bgsub:cancel ${userJob.jobId}`);
       expect(userHandle.cancelMock).not.toHaveBeenCalled();
       expect(registry.get(userJob.jobId)?.status).toBe('running');
 
