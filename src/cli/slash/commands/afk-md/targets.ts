@@ -47,7 +47,7 @@ export interface AfkMdTarget {
  * Forwarded as a live ESM re-export so any future change to the source
  * constant is automatically reflected here without an edit to this file.
  */
-export { OVERLAY_TOKEN_WARN_THRESHOLD as OVERLAY_TOKEN_WARN_THRESHOLD } from '../../../config/afk-md-tier.js';
+export { OVERLAY_TOKEN_WARN_THRESHOLD } from '../../../config/afk-md-tier.js';
 
 function isSameFile(a: string, b: string): boolean {
   if (a === b) return true;

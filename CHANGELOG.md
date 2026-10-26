@@ -11,6 +11,70 @@ Entries in the [Unreleased] section may include a short commit hash suffix
 
 ## [Unreleased]
 
+## [5.337.0] - 2026-10-25
+
+### Added
+- dynamic startup recall + ambient dashboard (#4397) (3a4908ef2)
+- add /usage-awareness toggle to control model visibility of subscription usage (#4402) (4fe650879)
+
+### Fixed
+- stale comments, fail-closed gate parity, provider gate tests (#4223) (619e4c371)
+- replace it.fails with pinned assertions in cross-classifier Section 3 (#3846) (ae2534944)
+- extend cross-classifier helpers to all four classifiers + add tier assertions (7df520797)
+- narrow stampLastContent to UserMessageParam | AssistantMessageParam for SDK v1.x (9e52858ed)
+- use git_read-compatible flag forms in state survey (#4390) (a76a99e67)
+
+### Changed
+- bump @anthropic-ai/sdk from 0.134.0 to 1.1.0 (4c77cbc4f)
+- bump the prod-minor-patch group across 1 directory with 4 updates (efaf9f731)
+- bump the dev-minor-patch group with 3 updates (#4383) (eaec2cd7f)
+- bump vscode-jsonrpc from 9.0.3 to 10.0.0 (#4385) (771decc5a)
+- bump pnpm/action-setup (#4384) (0d634bf4f)
+- bump github/codeql-action/analyze from 3.39.1 to 4.39.1 (#4387) (88feeb9c6)
+- bump github/codeql-action/init from 3.39.1 to 4.39.1 (#4388) (4717c274d)
+- bump actions/checkout from 4.4.0 to 7.0.1 (#4389) (481ac0f76)
+- bump the dashboard-dev-minor-patch group (d3d80ea03)
+- bump lucide-react (71a40f056)
+- bump the fumadocs group in /website with 3 updates (68eb10254)
+
+## [5.336.0] - 2026-10-25
+
+### Added
+- **LSP server pool**: persistent LspClient + LspServerPool with auto-detect, auto-install, and migrated code_symbols + post-edit diagnostics (#4272) (b4c1f012f)
+- **Plugin API**: add state store and peer messaging to PluginApi (afe6832e8)
+- cluster tool failures by normalized errorHead (#4229) (21ebc8518)
+- show background process counts in the health rail (9d7e043fa)
+
+### Fixed
+- context-pressure wind-down passes stale text or markup as answer (#3983) (37d910718)
+- only show table row separators after multi-line rows (#4391) (2f9e1d62b)
+- overwrite stale tool-stop reason on abort instead of preserving via ??= (#3965) (74dad4a3e)
+- normalize git_read count shorthand, empty pattern, and echoed subcommand (#4227) (6a49f9768)
+- widen log/rev-list allowlist and fix git-investigator prompt (59cdf065b)
+- worktree-isolated depth-2+ forks inherit correct write root (e91964135)
+- pin childSkillExecutorFactory cwd inheritance in worktree-isolated depth-2+ tests (553d5e192)
+- retire session from owner maps on /exit (8b5a08b5c)
+- bind plugin peer helpers to calling sessions (2cbcd5b24)
+- add sightingCount to track recurrence beyond evidence cap (6174b00be)
+- gate firstSeen/lastSeen update on new evidence, not scan wall clock (56acfe3df)
+- post-turn re-check for bg injections that land while a turn is claimed (fb380c038)
+- stamp STREAM_INCOMPLETE unconditionally in buffered-text branch (26fb5f1a9)
+
+## [5.335.1] - 2026-10-24
+
+### Fixed
+- adopt a Claude account switch at turn start, no /reauth needed (#4259) (4f14beed9)
+- improve chip color contrast for WCAG AA compliance (827e18173)
+- populate model field in WebSessionSummary (ec21c7659)
+- error-path teardown test, dedup test, and perf doc (64c03bb03)
+- address advisory findings from 2026-10-23 PR triage (75cf5c839)
+- address advisory findings from 2026-10-23 triage batch (a70bbeb67)
+- add --force to 401 hint and tighten classifier test (47d94075a)
+- short-option = guard and missing bash-lexer tests (fa37cbc02)
+- assert 60_000 fallback timeout, remove stray blank lines (b8c1dd82f)
+
+## [5.335.0] - 2026-10-24
+
 ### Added
 - **Web chat UI overhaul**: live token streaming with full-length answers (b57ad799a), ⌘K palette indexing sessions and commands (16e0cd196), responsive single-textarea composer with retry/edit wiring (82a5c54bd), one-tap new chat in the phone header (8884d3b5d), layout & navigation UX (edfced3d8), turn controls & composer (5d8a79d72), legible tool rows with collapsible code and fast long transcripts (469fae359), WorkingIndicator placeholder for slow turns (82b0deaba), D2 code highlighting and a11y fixes (293879196), D4 tool rows & shell polish (003b76546), E2 design-pass-2 non-streaming fixes (8905a006b)
 

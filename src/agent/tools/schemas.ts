@@ -117,7 +117,7 @@ import { codeSymbolsTool } from './schemas.lsp-symbols.js';
  * reuse on Anthropic prompt caching and local inference servers.
  *
  * The core segment = builtins not in any toolGroups() group, not
- * surface-filtered, and not send_telegram. It starts with the six LOCKED_TOOLS
+ * surface-filtered, not registry-filtered, and not send_telegram. It starts with the six LOCKED_TOOLS
  * builtins (read_file, write_file, edit_file, grep, glob, list_directory),
  * which LOCKED_TOOLS guarantees can never be disabled by operator config.
  * Every other core tool can still be disabled individually via tools.disabled

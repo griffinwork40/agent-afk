@@ -43,7 +43,7 @@ describe('classifyError — auth', () => {
     expect(result.exitCode).toBe(1);
     expect(result.userMessage).toContain('403');
     expect(result.userMessage).toContain('seat');
-    expect(result.hint).toContain('afk login');
+    expect(result.hint).toContain('afk login --force');
     // Must not leak raw SDK text
     expect(result.userMessage).not.toContain('Permission denied');
   });

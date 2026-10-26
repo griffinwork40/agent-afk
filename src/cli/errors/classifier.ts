@@ -106,7 +106,7 @@ export function classifyError(err: unknown): ClassifiedError {
     return {
       kind: 'auth',
       userMessage: 'Authentication failed. Check that your API key is valid and has not expired.',
-      hint: 'Verify the ANTHROPIC_API_KEY environment variable or run `afk login`.',
+      hint: 'Verify the ANTHROPIC_API_KEY environment variable or run `afk login --force`.',
       exitCode: 1,
       raw: err,
     };

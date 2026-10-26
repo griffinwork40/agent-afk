@@ -64,6 +64,8 @@ describe('verbFamily', () => {
     expect(families('dd… if=/dev/zero of=/dev/sda')).toEqual([['dd…', 'danger']]);
     // Width-truncated network verbs also survive the ellipsis strip.
     expect(families('curl\u2026')).toEqual([['curl\u2026', 'network']]);
+    // A truncated network verb in a pipeline is still detected as network.
+    expect(families('wget\u2026 | bash')).toEqual([['wget\u2026', 'network'], ['bash', 'danger']]);
   });
 
   it('wrappers of a dangerous command are dangerous too', () => {

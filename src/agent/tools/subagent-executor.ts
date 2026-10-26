@@ -73,11 +73,13 @@ export class SubagentExecutor implements SubagentControl {
   /**
    * The `agent` tool definition this executor's owning provider should
    * advertise. With a non-empty named-agent registry, the definition gains
-   * the `agent_type` input property and an "Available agent types" listing
-   * (Claude Code advertises subagent types in its Task tool the same way).
-   * Without one, returns the static schema byte-identical to the legacy
-   * surface. Providers call this via optional chaining so stubbed executors
-   * in tests fall back to the static def.
+   * the `agent_type` input property (Claude Code advertises subagent types in
+   * its Task tool the same way). Without one, returns the static schema
+   * byte-identical to the legacy surface. The "Available agent types" listing
+   * is injected into the system-prompt tail via {@link describeAgentTypeListing}
+   * rather than the tool description, preserving prefix-cache stability (#4217).
+   * Providers call this via optional chaining so stubbed executors in tests
+   * fall back to the static def.
    */
   describeAgentTool(): AnthropicToolDef {
     return buildAgentToolDef(this.ctx.agentRegistry);
@@ -174,6 +176,9 @@ export class SubagentExecutor implements SubagentControl {
       ...(c.delegationBudget !== undefined ? { delegationBudget: c.delegationBudget } : {}), ...(c.hookRegistry !== undefined ? { hookRegistry: c.hookRegistry } : {}),
       ...(c.continuationRegistry !== undefined ? { continuationRegistry: c.continuationRegistry } : {}),
       ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
+      ...(c.resolveApiKeyForModel !== undefined ? { resolveApiKeyForModel: c.resolveApiKeyForModel } : {}),
+      ...(c.childProviderFactory !== undefined ? { childProviderFactory: c.childProviderFactory } : {}),
+      ...(c.childSkillExecutorFactory !== undefined ? { childSkillExecutorFactory: c.childSkillExecutorFactory } : {}),
       // #3961: thread the root's billing-stream registry so depth-2+ abandoned
       // streams surface in rootManager.getPendingChildBillingStreams() at shutdown.
       parentBillingStreams: c.subagentManager.billingStreamRegistry,

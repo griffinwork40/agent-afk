@@ -132,10 +132,10 @@ export function SessionContent({
         {(folderName ?? currentModel) && (
           <p className="mt-2 flex items-center justify-center gap-2 text-xs text-muted-foreground">
             {folderName && (
-              <span className="rounded bg-secondary px-1.5 py-0.5 font-mono">{folderName}</span>
+              <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-foreground/70">{folderName}</span>
             )}
             {currentModel && (
-              <span className="rounded bg-secondary px-1.5 py-0.5 font-mono">{currentModel}</span>
+              <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-foreground/70">{currentModel}</span>
             )}
           </p>
         )}
@@ -225,8 +225,8 @@ export function WorkspaceChips({ cwd, model }: { cwd?: string; model?: string })
   if (!folder && !model) return null;
   return (
     <p className="mt-2 flex items-center justify-center gap-2 text-xs text-muted-foreground" data-testid="workspace-chips">
-      {folder && <span className="rounded bg-secondary px-1.5 py-0.5 font-mono" title={cwd} data-testid="folder-chip">{folder}</span>}
-      {model && <span className="rounded bg-secondary px-1.5 py-0.5 font-mono" data-testid="model-chip">{model}</span>}
+      {folder && <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-foreground/70" title={cwd} data-testid="folder-chip">{folder}</span>}
+      {model && <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-foreground/70" data-testid="model-chip">{model}</span>}
     </p>
   );
 }

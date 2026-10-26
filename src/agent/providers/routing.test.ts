@@ -719,8 +719,20 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
  *     → resolveBinding('subagent', bindings)  returns { id, provider, baseUrl, apiKey }
  */
 describe('subagent slot dispatch path resolution — integration (#4337)', () => {
+  let _savedSubagentEnv: string | undefined;
+
+  beforeEach(() => {
+    _savedSubagentEnv = process.env['AFK_DEFAULT_SUBAGENT_MODEL'];
+    delete process.env['AFK_DEFAULT_SUBAGENT_MODEL'];
+  });
+
   afterEach(() => {
     resetSlotBindings();
+    if (_savedSubagentEnv === undefined) {
+      delete process.env['AFK_DEFAULT_SUBAGENT_MODEL'];
+    } else {
+      process.env['AFK_DEFAULT_SUBAGENT_MODEL'] = _savedSubagentEnv;
+    }
   });
 
   it('configured subagent slot resolves through the full chain to the correct binding', () => {

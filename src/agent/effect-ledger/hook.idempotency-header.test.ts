@@ -146,6 +146,12 @@ describe('Scenario 2 / #3714 — idempotency-key header forwarding', () => {
     // Hook-level round-trip: call pre() twice with identical input from two
     // independent sessions so the dedup guard does not suppress the second
     // write, then assert both ledger records carry the same idempotency key.
+    //
+    // Invariant: the dedup guard in EffectStore.writePending() is scoped per
+    // sessionId+toolUseId, so two calls from different sessions (session-A /
+    // session-B) are treated as independent writes even when the logical
+    // request is identical. This is what lets us observe two ledger entries
+    // with the same key without the store silently dropping the second write.
     const { pre } = createEffectLedgerHooks(store);
     const inputArgs = { method: 'POST', url: 'https://api.example.com/orders', body: { item: 'widget', qty: 3 } };
 
@@ -170,6 +176,10 @@ describe('Scenario 2 / #3714 — idempotency-key header forwarding', () => {
     expect(records[0]!.idempotencyKey).toMatch(/^[0-9a-f]{64}$/);
 
     // Different methods produce different keys even with identical other fields.
+    // store2 is a separate EffectStore instance (different ledger file) so its
+    // in-memory dedup set is independent of `store` above — this is load-bearing:
+    // without a fresh store the PATCH write could be suppressed by the prior POST
+    // dedup entry if they shared state.
     const store2 = new EffectStore(join(dir, 'ledger2.jsonl'));
     const { pre: pre2 } = createEffectLedgerHooks(store2);
     const ctxPatch: PreToolUseContext = {

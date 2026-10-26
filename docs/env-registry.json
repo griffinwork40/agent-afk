@@ -503,6 +503,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_LSP_IDLE_SHUTDOWN_MS",
+      "description": "Idle window in milliseconds after which a pooled (persistent) language server with no requests is shut down (#4272). Servers are kept warm per workspace root and language so repeat LSP queries skip the cold start. Default 300000 (5 min). Idle timers never keep the process alive.",
+      "type": "number",
+      "required": false,
+      "default": "300000",
+      "example": "60000",
+      "category": "misc"
+    },
+    {
       "name": "AFK_LSP_SYMBOLS_TIMEOUT_MS",
       "description": "Hard timeout in milliseconds for code_symbols (go-to-definition / find-references) LSP queries (AFK_LSP_DIAGNOSTICS=1). Symbol queries can require a cold-start index build and therefore need a longer budget than the post-edit diagnostics timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS). Default 5000 (5 s). Raise for large monorepos where the first query triggers a full project load.",
       "type": "number",
@@ -725,6 +734,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_LARGE_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"large\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_LOCAL",
       "description": "Bind the \"local\" capability tier (cheapest/fastest, user-configured) to a model id. Overrides afk.config.json models.local. Point at a local Ollama, LM Studio, or any OpenAI-compatible shim.",
       "type": "string",
@@ -746,6 +763,14 @@
       "type": "string",
       "required": false,
       "example": "http://localhost:11434/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_LOCAL_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"local\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously (shared with any other slot targeting the same baseUrl). Useful for single-request local servers (Ollama, LM Studio, MLX). Unset = unlimited. Accepted range 1-32; out-of-range or unparseable input is ignored. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
       "category": "model"
     },
     {
@@ -773,6 +798,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_MEDIUM_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"medium\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_SMALL",
       "description": "Bind the \"small\" capability tier (cheap/fast) to a model id/alias. Overrides afk.config.json models.small.",
       "type": "string",
@@ -794,6 +827,14 @@
       "type": "string",
       "required": false,
       "example": "http://localhost:8080/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_SMALL_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"small\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
       "category": "model"
     },
     {

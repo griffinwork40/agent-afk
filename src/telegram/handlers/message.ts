@@ -18,7 +18,7 @@ import { forwardProvenancePrefix } from '../forward-provenance.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { handleDocumentMessage } from './document.js';
 import { drainBgInjections, prependToContent } from '../bg-injection.js';
-import { wakeIdleSessionImpl, type WakeIdleDeps } from './message.wake-idle.js';
+import { wakeIdleSessionImpl, postTurnWake, type WakeIdleDeps } from './message.wake-idle.js';
 import { addressedToBot } from './message.addressed-to-bot.js';
 import { reactionMap } from '../reaction-map.js';
 import { handlePhotoImpl } from './message.photo-handler.js';
@@ -607,6 +607,13 @@ export class MessageHandler {
         this.drainQueue(route).catch(err => this.log('Drain error:', err));
       }
       this.releaseClaim(routeKey(route));
+      // Post-turn re-check (#3974 medium): if onInjectable fired while this turn
+      // was claimed, wakeIdleSessionImpl returned early. Now that the claim is
+      // released, re-check so a settled bg result is not silently dropped until
+      // the next user message. Mirrors the REPL's surface.onAwaitingInput =
+      // tryAutoResume pattern. isClaimed is still > 0 when a drain hand-off is
+      // in flight, so postTurnWake safely no-ops in that case.
+      postTurnWake(route, this as unknown as WakeIdleDeps);
     }
   }
 

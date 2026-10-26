@@ -193,29 +193,22 @@ export interface BuildChildConfigResult {
 }
 
 /**
- * Build the child `AgentConfig` and wire nested dispatch (child manager +
- * executor + provider). Returns the config plus the mutable child parent
- * session the caller backfills with `handle.id` after `forkSubagent`.
+ * Steps 1-5 of child config construction (model, tools, budgets, credential,
+ * base config) WITHOUT nesting wiring. Use with {@link completeChildConfigNesting}
+ * when isolation setup must run between config construction and nesting wiring
+ * so the nesting objects receive the resolved worktree cwd, not the
+ * pre-isolation parent cwd (#4374).
  */
-export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigResult {
-  const { parsed, namedAgent, depth, maxDepth, currentCwd, signal, defaultConfig, createChildExecutor } = args;
+export function buildChildConfigWithoutNesting(args: BuildChildConfigArgs) {
+  const { parsed, namedAgent, depth, maxDepth, defaultConfig } = args;
 
-  // 1. Model + provider family
   const { childModel, childIsOpenAI, childModelSource } = resolveChildModelAndProvider(
     parsed, namedAgent, args.defaultSubagentModel, args.parentModel,
   );
-
-  // 2. Tool allowlist, bash gate, write-capability, side-effect-free
   const { resolvedAccess, effectiveAllowedTools, effectiveReadOnlyBash, childWriteCapable, childSideEffectFree } =
     resolveChildToolAccess(namedAgent, args.allowedTools, args.readOnlyBash, args.agentRegistry);
-
-  // 3. Turn + tool-round budgets
   const { effectiveMaxTurns, effectiveMaxToolUseIterations } = resolveChildBudgets(parsed, namedAgent);
-
-  // 4. API key
   const resolvedChildApiKey = resolveChildCredential(childModel, args.resolveApiKeyForModel, defaultConfig.apiKey);
-
-  // 5. Base config object (provider wired below)
   const childConfig = buildBaseChildConfig(
     parsed, namedAgent, defaultConfig,
     childModel, childIsOpenAI, resolvedChildApiKey,
@@ -223,10 +216,31 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     depth, maxDepth,
   );
 
-  // 6. Nesting wiring: child manager + executor + provider (or restricted fallback)
+  return { childConfig, childModel, childWriteCapable, childSideEffectFree, resolvedAccess, effectiveAllowedTools, effectiveReadOnlyBash, childModelSource };
+}
+
+/**
+ * Complete child config construction by wiring depth-2+ nesting (child
+ * SubagentManager + SubagentExecutor + provider) and assembling the
+ * model-fallback descriptor.
+ *
+ * `nestingCwd` is the cwd the nesting objects should inherit. For worktree-
+ * isolated dispatches, pass the worktree path (set by
+ * {@link setupIsolationWorktree}) so depth-2+ forks inherit the worktree,
+ * not the parent repo root (#4374). For non-isolated dispatches, pass
+ * `args.currentCwd` (unchanged).
+ */
+export function completeChildConfigNesting(
+  args: BuildChildConfigArgs,
+  pre: ReturnType<typeof buildChildConfigWithoutNesting>,
+  nestingCwd: string | undefined,
+): BuildChildConfigResult {
+  const { childConfig, childModel, childWriteCapable, childSideEffectFree, resolvedAccess, effectiveAllowedTools, effectiveReadOnlyBash, childModelSource } = pre;
+
   const { childParentSession, childManager, rebuildProvider } = wireChildNesting({
     args, childConfig, effectiveAllowedTools, effectiveReadOnlyBash,
-    resolvedAccess, depth, maxDepth, signal, currentCwd, createChildExecutor,
+    resolvedAccess, depth: args.depth, maxDepth: args.maxDepth,
+    signal: args.signal, currentCwd: nestingCwd, createChildExecutor: args.createChildExecutor,
   });
 
   const fallback = defaultTierModelFallback({ model: childModel, source: childModelSource }, args.parentModel);
@@ -235,4 +249,18 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     : { ...fallback, ...(rebuildProvider !== undefined ? { buildProvider: rebuildProvider } : {}) };
 
   return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist: resolvedAccess?.nestedAgentTypes, childModelSource, modelFallback };
+}
+
+/**
+ * Build the child `AgentConfig` and wire nested dispatch (child manager +
+ * executor + provider). Returns the config plus the mutable child parent
+ * session the caller backfills with `handle.id` after `forkSubagent`.
+ *
+ * Convenience wrapper that calls {@link buildChildConfigWithoutNesting} +
+ * {@link completeChildConfigNesting} in sequence. Use the two-phase API
+ * directly when isolation setup must interleave (#4374).
+ */
+export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigResult {
+  const pre = buildChildConfigWithoutNesting(args);
+  return completeChildConfigNesting(args, pre, args.parsed.cwd ?? args.currentCwd);
 }

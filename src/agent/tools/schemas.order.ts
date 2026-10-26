@@ -15,10 +15,11 @@
  * Invariant: every tool in the core segment (indices 0..INVARIANT_CORE_COUNT-1)
  * must NOT appear in any toolGroups() group, NOT be surface-filtered (e.g.
  * ask_question / terminal_font_size / clipboard_*), NOT be registry-filtered
- * (e.g. cancel_background_job / send_message_to_agent /
- * get_background_job_health are removed by filterBackgroundToolDefs when no
- * background registry is wired), and NOT be send_telegram (tail by
- * convention). A test in schemas.test.ts mechanically enforces this boundary.
+ * (e.g. send_message_to_agent is removed whenever subagentBackground=false;
+ * cancel_background_job and get_background_job_health are removed when both
+ * subagentBackground=false and processJobs=false), and NOT be send_telegram
+ * (tail by convention). A test in schemas.test.ts mechanically enforces this
+ * boundary.
  *
  * `INVARIANT_CORE_COUNT` pins how many leading entries of `builtinToolSchemas`
  * are invariant. A test asserts this value equals the actual count of tools
@@ -40,9 +41,10 @@ import type { AnthropicToolDef } from './types.js';
  * Contract: the core segment = builtins not in any toolGroups() group, not
  * surface-filtered (ask_question / terminal_font_size / clipboard_read /
  * clipboard_write are dropped on some surfaces), not registry-filtered
- * (cancel_background_job / send_message_to_agent / get_background_job_health
- * are removed by filterBackgroundToolDefs when no background registry is
- * wired), and not send_telegram (placed in the optional tail by convention).
+ * (send_message_to_agent is removed when subagentBackground=false;
+ * cancel_background_job and get_background_job_health are removed when
+ * subagentBackground=false AND processJobs=false), and not send_telegram
+ * (placed in the optional tail by convention).
  * These tools appear before any optional tool so that two sessions differing
  * only in which optional tools are enabled produce a byte-identical serialized
  * prefix for all core tools, maximising prefix-cache reuse.
@@ -70,10 +72,14 @@ import type { AnthropicToolDef } from './types.js';
  *     removes them; placed in core.
  *   - `worktree` / `config_get` / `config_set`: not in any disable group.
  *   - `remote_agent`: not in any disable group.
- *   - `cancel_background_job`, `send_message_to_agent`,
- *     `get_background_job_health`: removed by filterBackgroundToolDefs when no
- *     background registry is wired — they cannot be in the invariant core.
- *     Placed at the head of the optional tail instead.
+ *   - `cancel_background_job`, `get_background_job_health`: removed by
+ *     filterBackgroundToolDefs when subagentBackground=false AND
+ *     processJobs=false; kept when processJobs=true even without a subagent
+ *     registry. Cannot be in the invariant core; placed at the head of the
+ *     optional tail instead.
+ *   - `send_message_to_agent`: removed by filterBackgroundToolDefs whenever
+ *     subagentBackground=false (process jobs have no stdin). Cannot be in the
+ *     invariant core; placed at the head of the optional tail instead.
  *   - `gitReadTool` is opt-in (AFK_READONLY_GIT_TOOL flag) and lives in
  *     ALL_TOOL_SCHEMAS but not builtinToolSchemas, so it is NOT counted here.
  *   - Nesting tools (agentTool, skillTool, composeTool) are NOT in

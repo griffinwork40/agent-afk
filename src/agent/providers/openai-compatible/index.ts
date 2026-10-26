@@ -316,7 +316,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // cwd-/base-rebuild factories (#876, #2420). Extracted to system-prompt-wiring.ts
     // (#2711/#2721 ratchet fix) so query() stays within the function-size ceiling.
     // Ordering: [toolBase, userSystem?, memoryPrompt, workspace?, hotMemory?,
-    // goalPrompt?, envFragment, manifest?] — mirrors AnthropicDirectProvider.query().
+    // goalPrompt?, envFragment, manifest?, agentTypeListing?] — mirrors AnthropicDirectProvider.query().
     const spw = buildSystemPromptWiring({
       config,
       skillExecutor: this.providerOpts.skillExecutor ?? undefined,

@@ -12,15 +12,9 @@
  *   - Silent degradation: any error → structured error result, never throws.
  *   - TypeScript / JS only in this phase; Python (pyright) is a follow-up.
  *   - LSP server binary: `typescript-language-server --stdio` on PATH.
- *   - No persistent server — each call spawns, queries, and exits.
- *
- * LSP sequence for symbol lookup:
- *   1. Send `initialize` request.
- *   2. Send `initialized` notification.
- *   3. Send `textDocument/didOpen` with the file content.
- *   4. Send `textDocument/definition` or `textDocument/references` request.
- *   5. Await the response (id matches step-4 request id).
- *   6. Send `shutdown` + `exit`.
+ *   - Persistent server (#4272): queries share one warm server per
+ *     (workspace root, language) via `LspServerPool`; a crashed server is
+ *     evicted and the next query spawns a fresh one.
  *
  * Security: the input `filePath` is resolved through `resolveAndContain`
  * (read-denylist + root containment) before any file read or LSP query, and
@@ -30,22 +24,22 @@
  * @module agent/tools/handlers/lsp-symbols
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL, fileURLToPath } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { env } from '../../../config/env.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { decidePathAccess } from './path-policy.js';
 import type { ToolHandlerContext } from '../types.js';
-import {
-  encodeMessage,
-  killProc,
-  parseMessages,
-  languageIdForExt,
-  getSymbolsTimeoutMs,
-} from './lsp-shared.js';
+import { getSymbolsTimeoutMs, lspFailureMessage, readLspSource } from './lsp-shared.js';
+import { LspClientError } from '../../lsp/client.js';
 import { realpathSafe } from './_cwd-utils.js';
+import { withPooledFile } from '../../lsp/query.js';
+import {
+  DEFAULT_LSP_CMD,
+  TYPESCRIPT_SERVER_DEFINITION,
+  typescriptRootFor,
+  typescriptSpecFromCommand,
+} from '../../lsp/typescript-default.js';
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -70,16 +64,8 @@ export interface LspSymbolResult {
 /** Subcommand accepted by the `code_symbols` tool. */
 export type SymbolSubcommand = 'definition' | 'references';
 
-/**
- * Default LSP server command — shared by `queryLspSymbol` and `handleCodeSymbols`.
- *
- * The `as const` assertion intentionally narrows the exported type from
- * `readonly string[]` to `readonly ["typescript-language-server", "--stdio"]`.
- * This tuple type is strictly backward-compatible (the array is still iterable
- * and spreadable) and allows callers to rely on the exact literal values without
- * a runtime lookup. Override via the `serverCmd` parameter when testing.
- */
-export const DEFAULT_LSP_CMD = Object.freeze(['typescript-language-server', '--stdio'] as const);
+/** Default LSP server command — shared by `queryLspSymbol` and `handleCodeSymbols`. */
+export { DEFAULT_LSP_CMD };
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -154,170 +140,51 @@ export async function queryLspSymbol(
   signal?: AbortSignal,
 ): Promise<LspSymbolResult> {
   if (signal?.aborted) return { locations: [], error: 'Aborted' };
-  const timeoutMs = getSymbolsTimeoutMs();
-  const langId = languageIdForExt(path.extname(filePath));
-  if (!langId) {
-    return { locations: [], error: `Unsupported file type: ${path.extname(filePath)}` };
+  const ext = path.extname(filePath);
+  if (!TYPESCRIPT_SERVER_DEFINITION.languageIds[ext.toLowerCase()]) {
+    return { locations: [], error: `Unsupported file type: ${ext}` };
   }
-
-  let proc: ChildProcess | null = null;
-
-  return new Promise<LspSymbolResult>((resolve) => {
-    let settled = false;
-
-    // Declared before `done` so the closure inside `done` can reference it.
-    // Registered on the signal after `done` is defined.
-    const onAbort = () => done({ locations: [], error: 'Aborted' }); // eslint-disable-line @typescript-eslint/no-use-before-define
-
-    const done = (result: LspSymbolResult) => {
-      if (settled) return;
-      settled = true;
-      signal?.removeEventListener('abort', onAbort);
-      clearTimeout(timer);
-      if (proc) killProc(proc);
-      resolve(result);
-    };
-
-    const timer = setTimeout(() => {
-      if (env.AFK_DEBUG) {
-        process.stderr.write(`[afk:lsp-symbols] timeout after ${timeoutMs}ms — server did not respond\n`);
-      }
-      done({ locations: [], error: 'LSP symbols timed out (increase AFK_LSP_SYMBOLS_TIMEOUT_MS)' });
-    }, timeoutMs);
-    timer.unref();
-
-    // Honour abort signal: resolve immediately if the caller cancels.
-    signal?.addEventListener('abort', onAbort, { once: true });
-
-    readFile(filePath, 'utf8')
-      .then((fileContent) => {
-        if (settled) return;
-
-        const [cmd, ...args] = serverCmd as [string, ...string[]];
-        try {
-          proc = spawn(cmd, args, {
-            stdio: ['pipe', 'pipe', 'ignore'],
-            shell: process.platform === 'win32',
-          });
-        } catch (spawnErr) {
-          if (env.AFK_DEBUG) {
-            process.stderr.write(`[afk:lsp-symbols] spawn failed: ${String(spawnErr)}\n`);
-          }
-          done({ locations: [], error: 'Failed to spawn LSP server' });
-          return;
-        }
-
-        proc.on('error', (procErr) => {
-          if (env.AFK_DEBUG) {
-            process.stderr.write(`[afk:lsp-symbols] process error: ${String(procErr)}\n`);
-          }
-          done({ locations: [], error: 'LSP server process error' });
-        });
-
-        const uri = pathToFileURL(filePath).toString();
-        // Finding 5: send session cwd as rootUri so cross-file
-        // definition/references work instead of sending null.
-        const rootUri = rootDir ? pathToFileURL(rootDir).toString() : null;
-        let reqId = 0;
-        const chunks: Buffer[] = [];
-
-        const send = (msg: unknown) => {
-          try { proc!.stdin!.write(encodeMessage(msg)); } catch { /* stdin closed */ }
-        };
-
-        // 1. Initialize — with rootUri and workspaceFolders for cross-file support.
-        send({
-          jsonrpc: '2.0',
-          id: ++reqId,
-          method: 'initialize',
-          params: {
-            processId: process.pid,
-            rootUri,
-            ...(rootUri ? { workspaceFolders: [{ uri: rootUri, name: 'workspace' }] } : {}),
-            capabilities: {},
-          },
-        });
-
-        // 2. Initialized notification
-        send({ jsonrpc: '2.0', method: 'initialized', params: {} });
-
-        // 3. didOpen
-        send({
-          jsonrpc: '2.0',
-          method: 'textDocument/didOpen',
-          params: {
-            textDocument: { uri, languageId: langId, version: 1, text: fileContent },
-          },
-        });
-
-        // 4. Symbol request — LSP uses 0-based positions.
-        const symbolReqId = ++reqId;
-        const lspMethod = subcommand === 'definition'
-          ? 'textDocument/definition'
-          : 'textDocument/references';
-        const params: Record<string, unknown> = {
-          textDocument: { uri },
-          position: { line: line - 1, character: col - 1 },
-        };
-        if (subcommand === 'references') {
-          // includeDeclaration:false — report call-sites only; the declaration
-          // itself is a separate go-to-definition query.
-          params['context'] = { includeDeclaration: false };
-        }
-        send({ jsonrpc: '2.0', id: symbolReqId, method: lspMethod, params });
-
-        // 5. Read responses — wait for the reply whose id === symbolReqId.
-        proc.stdout!.on('data', (chunk: Buffer) => {
-          if (settled) return;
-          chunks.push(chunk);
-          const buf = Buffer.from(Buffer.concat(chunks));
-          const { messages, remaining } = parseMessages(buf);
-          chunks.length = 0;
-          chunks.push(remaining);
-
-          for (const msg of messages) {
-            if (typeof msg !== 'object' || msg === null) continue;
-            const m = msg as { id?: unknown; result?: unknown; error?: unknown };
-            if (m.id !== symbolReqId) continue;
-            // Skip messages that carry neither result nor error — not a valid
-            // JSON-RPC response for our request (e.g. a stray notification).
-            if (!('result' in m) && !('error' in m)) continue;
-
-            // 6. Graceful shutdown.
-            send({ jsonrpc: '2.0', id: ++reqId, method: 'shutdown', params: null });
-            send({ jsonrpc: '2.0', method: 'exit', params: null });
-
-            if (m.error !== undefined) {
-              done({ locations: [], error: 'LSP server returned an error' });
-              return;
-            }
-
-            const raw = m.result;
-            const locations: LspLocation[] = [];
-            if (Array.isArray(raw)) {
-              for (const item of raw) {
-                const loc = parseLocation(item);
-                if (loc) locations.push(loc);
-              }
-            } else if (raw !== null && raw !== undefined) {
-              const loc = parseLocation(raw);
-              if (loc) locations.push(loc);
-            }
-
-            done({ locations });
-            return;
-          }
-        });
-
-        proc.on('close', (code) => {
-          if (env.AFK_DEBUG) {
-            process.stderr.write(`[afk:lsp-symbols] server closed (code=${code ?? 'null'}) before responding\n`);
-          }
-          done({ locations: [], error: 'LSP server exited before responding' });
-        });
-      })
-      .catch(() => done({ locations: [], error: 'Failed to read source file' }));
-  });
+  const t0 = Date.now();
+  const budgetMs = getSymbolsTimeoutMs();
+  let content: string;
+  try {
+    content = await readLspSource(filePath, budgetMs, signal);
+  } catch (err) {
+    return { locations: [], error: err instanceof LspClientError
+      ? lspFailureMessage(err, 'LSP symbols timed out (increase AFK_LSP_SYMBOLS_TIMEOUT_MS)')
+      : 'Failed to read source file' };
+  }
+  const spec = typescriptSpecFromCommand(serverCmd);
+  const root = rootDir ?? typescriptRootFor(filePath);
+  const lspMethod = subcommand === 'definition' ? 'textDocument/definition' : 'textDocument/references';
+  // F4: subtract the time spent reading the file so the withPooledFile
+  // deadline covers the full budget, not just what remains after the read.
+  const elapsed = Date.now() - t0;
+  const timeoutMs = Math.max(0, budgetMs - elapsed);
+  try {
+    const raw = await withPooledFile(spec, filePath, content, { root, timeoutMs, signal }, (ctx) => {
+      const params: Record<string, unknown> = {
+        textDocument: { uri: ctx.sync.uri },
+        // LSP uses 0-based positions.
+        position: { line: line - 1, character: col - 1 },
+      };
+      // includeDeclaration:false — report call-sites only; the declaration
+      // itself is a separate go-to-definition query.
+      if (subcommand === 'references') params['context'] = { includeDeclaration: false };
+      return ctx.client.request<unknown>(lspMethod, params, { timeoutMs: ctx.remainingMs(), signal });
+    });
+    const items = Array.isArray(raw) ? raw : raw === null || raw === undefined ? [] : [raw];
+    const locations: LspLocation[] = [];
+    for (const item of items) {
+      const loc = parseLocation(item);
+      if (loc) locations.push(loc);
+    }
+    return { locations };
+  } catch (err) {
+    const error = lspFailureMessage(err, 'LSP symbols timed out (increase AFK_LSP_SYMBOLS_TIMEOUT_MS)');
+    if (env.AFK_DEBUG) process.stderr.write(`[afk:lsp-symbols] ${error}\n`);
+    return { locations: [], error };
+  }
 }
 
 /**

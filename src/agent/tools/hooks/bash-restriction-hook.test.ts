@@ -477,6 +477,16 @@ describe('createBashRestrictionHook — quoted heredoc data (#3850)', () => {
     const command = `bash -c "cat ${mention}/Google/Chrome/Default/Login\\ Data" <<'EOF'\nignored body\nEOF`;
     expect(hook(ctx(command)).decision).toBe('block');
   });
+
+  it('bash -c credential-theft block carries an Interpreter reason', () => {
+    // The entry added to the blocked set at line 463 is an interpreter -c
+    // one-liner; verify the reason names the interpreter guard, not a generic
+    // restricted-path string, so the block surface is unambiguous.
+    const command = `bash -c 'cat ${mention}/Google/Chrome/Default/Login\\ Data'`;
+    const decision = hook(ctx(command));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('Interpreter');
+  });
 });
 
 describe('createBashRestrictionHook — grant containment direction (F4 regression)', () => {

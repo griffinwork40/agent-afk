@@ -25,8 +25,10 @@ import type { WorktreeHandle, DeferredWorktree } from './interactive/worktree.js
 import { welcomeBanner } from '../render.js';
 import { printUpdateBanner } from '../update-checker.js';
 import { getVersion } from '../version.js';
-import { printFirstRunBanner } from './interactive/first-run.js';
+import { isFirstRun, printFirstRunBanner } from './interactive/first-run.js';
 import { drainBootWarnings } from './interactive/boot-warnings.js';
+import { renderStartupRecall } from './interactive/startup-recall.js';
+import { renderStartupDashboard } from './interactive/startup-dashboard.js';
 import { initTranscript } from './interactive/transcript.js';
 import type { TurnState } from './interactive/repl-loop.js';
 import type { ExitReasonRef } from './interactive/interactive.signal-handlers.js';
@@ -241,6 +243,7 @@ export interface StartupBannerParams {
   worktreeHandleRef: { current: WorktreeHandle | undefined };
   worktreeCwd: string | undefined;
   bootPruneNotice: string | undefined;
+  bootPruneRemovedCount?: number;
 }
 
 /**
@@ -249,7 +252,7 @@ export interface StartupBannerParams {
  * Called as the callback to measurePreArmAnchorRow.
  */
 export async function printStartupBanner(params: StartupBannerParams): Promise<void> {
-  const { ctx, worktreeHandleRef, worktreeCwd, bootPruneNotice } = params;
+  const { ctx, worktreeHandleRef, worktreeCwd, bootPruneNotice, bootPruneRemovedCount } = params;
   const notices = getAndClearUpdateNotices();
   if (notices !== null) {
     if (notices.pendingMessage !== null) process.stderr.write(notices.pendingMessage);
@@ -268,8 +271,25 @@ export async function printStartupBanner(params: StartupBannerParams): Promise<v
     hintLine: startupHintLine(),
   }));
   if (bootPruneNotice !== undefined) console.log(palette.dim(`  ${bootPruneNotice}`));
+
+  // Dynamic startup: recall (last session for this cwd) + ambient dashboard.
+  const firstRun = isFirstRun();
+  const tty = Boolean(process.stdout.isTTY);
+  const isResume = ctx.resumeTarget !== undefined;
+  const recallLine = renderStartupRecall({
+    cwd: worktreeCwd ?? process.cwd(),
+    isResume, isTTY: tty, isFirstRun: firstRun,
+    currentSessionId: ctx.session.current.sessionId,
+  });
+  if (recallLine) console.log(recallLine);
+  const dashboardLines = await renderStartupDashboard({
+    isTTY: tty, isFirstRun: firstRun,
+    bootPruneStaleCount: bootPruneRemovedCount,
+  });
+  for (const line of dashboardLines) console.log(line);
+
   if (ctx.resumeTarget) await printResumeBanner(ctx.stats, ctx.completionWriter);
-  printFirstRunBanner({ isTTY: Boolean(process.stdout.isTTY), isResume: ctx.resumeTarget !== undefined });
+  printFirstRunBanner({ isTTY: tty, isResume });
   drainBootWarnings(ctx.bootWarnings);
   console.log();
 }

@@ -31,6 +31,14 @@ export interface RunTurnInput {
   /** Effective Fast decision captured once at turn start. */
   fastMode?: boolean;
   baseUrl?: string;
+  /**
+   * Per-endpoint concurrency cap: at most this many concurrent model HTTP
+   * requests to the same `baseUrl` at once. Enforced via the process-global
+   * semaphore registry in `config/endpoint-semaphore.ts`. Populated from the
+   * resolved slot binding's `maxConcurrency` field. `undefined` = no cap
+   * (pre-#3886 behaviour). Part of #3886.
+   */
+  endpointConcurrency?: number;
   traceWriter?: import('../../trace/index.js').TraceSink;
   subagentId?: string;
   onUsageProgress?: (usage: ProviderUsage) => void;

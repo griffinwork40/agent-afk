@@ -379,6 +379,39 @@ export class SessionOwner {
     else this.pending.delete(sessionId);
   }
 
+  /**
+   * Remove an ended session from all owner maps and close it.
+   *
+   * Called by `handleWebExit` after the sidecar is persisted and the turn
+   * reservation is released, so the session is no longer drivable:
+   * - `listWebSessions` stops classifying it as live (owned set is empty)
+   * - prompt and command routes 409 with `session_not_owned`
+   * - a subsequent autosave cannot undo the exit by writing without `endedAt`
+   *
+   * In-flight SSE tails are unaffected: they tail the ledger FILE, not the
+   * in-memory session object, so they drain to completion regardless.
+   *
+   * Failures from `session.close()` are swallowed — the session is removed
+   * from the maps regardless, matching the semantics of `closeAll`.
+   */
+  retire(id: string): void {
+    this.cancelChoices?.(id);
+    const session = this.sessions.get(id);
+    this.owned.delete(id);
+    this.sessions.delete(id);
+    this.info.delete(id);
+    this.controls.delete(id);
+    this.pending.delete(id);
+    this.turns.delete(id);
+    this.autosavers.delete(id);
+    const mcpManager = this.mcpManagers.get(id);
+    this.mcpManagers.delete(id);
+    // Close async but do not await — retire() is called from a sync context
+    // (handleWebExit returns a CommandControl, not a Promise<void>).
+    if (session) session.close().catch(() => {});
+    if (mcpManager) mcpManager.disconnectAll().catch(() => {});
+  }
+
   /** Soft-interrupt an in-flight turn. The session stays usable afterwards. */
   async interrupt(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);

@@ -288,10 +288,18 @@ function resolveStreamResult<T>(
     // provider-stream close, or a provider that ended without a final
     // message). Mark the run non-clean so `runToResult` surfaces it as an
     // incomplete partial (via `stopReason`) instead of a silent success —
-    // consumers prepend a parent-visible marker (annotateIfIncomplete). Use
-    // `??=` so a real terminal stopReason (if one somehow arrived) is never
-    // clobbered; reaching here implies none did.
-    handle._lastStopReason ??= STREAM_INCOMPLETE;
+    // consumers prepend a parent-visible marker (annotateIfIncomplete).
+    //
+    // Use unconditional assignment (`=`, not `??=`): a stale tool-stop reason
+    // (`tool_use` / `tool_calls`) from the PREVIOUS completed round survives
+    // on `_lastStopReason` when an abort lands in the NEXT round before any
+    // `done` event is emitted. The `??=` guard preserved that stale reason,
+    // causing the run to report `succeeded` and `annotateIfIncomplete` to
+    // never fire (#3965). Any genuine terminal reason (end_turn / max_tokens /
+    // wind-down) that arrived would have produced a `message` event and exited
+    // via the `if (finalMessage) return finalMessage` branch above, so nothing
+    // worth preserving can reach here.
+    handle._lastStopReason = STREAM_INCOMPLETE;
     return { role: 'assistant', content: handle._lastStreamedContent, timestamp: new Date() };
   }
   // Invariant: both wind-down triggers return incomplete partials, never opaque
@@ -340,19 +348,16 @@ function resolveStreamResult<T>(
   // stopReason. A consumer's natural `status !== 'succeeded'` check now catches
   // the zero-output run, while describeFailure(result) still reads sensibly.
   //
-  // Invariant: stamp STREAM_INCOMPLETE UNCONDITIONALLY (`=`, not `??=`) before
-  // the throw so buildResultFromError surfaces stopReason:'stream_incomplete'
-  // on the failed result (letting callers distinguish a stream-incomplete
-  // failure from an ordinary error). This differs from the buffered-text branch
-  // above, which uses `??=` deliberately: a capped run that also streamed text
-  // reaches there with `tool_use_loop_capped` already set and must keep it.
-  // Nothing worth preserving can reach HERE — the cap case returned at the
-  // tool_use_loop_capped branch, and cancel/abort threw just above. Any
-  // stopReason still set is a clean terminal one (end_turn / max_tokens /
-  // interrupted) reached via an empty-text turn the stream consumer drops
-  // before emitting a `message` event (see stream-consumer 'assistant.message':
-  // `if (event.text)`); none of those describe this zero-output cutoff, so
-  // overwrite it.
+  // Invariant: stamp STREAM_INCOMPLETE UNCONDITIONALLY (`=`) before the throw
+  // so buildResultFromError surfaces stopReason:'stream_incomplete' on the
+  // failed result (letting callers distinguish a stream-incomplete failure from
+  // an ordinary error). Nothing worth preserving can reach HERE — the cap case
+  // returned at the tool_use_loop_capped branch, and cancel/abort threw just
+  // above. Any stopReason still set is a clean terminal one (end_turn /
+  // max_tokens / interrupted) reached via an empty-text turn the stream
+  // consumer drops before emitting a `message` event (see stream-consumer
+  // 'assistant.message': `if (event.text)`); none of those describe this
+  // zero-output cutoff, so overwrite it unconditionally.
   //
   // Do NOT downgrade this to a returned placeholder to "keep return, don't
   // throw" — throwing is precisely what makes the run classify 'failed'. The

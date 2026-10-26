@@ -19,6 +19,11 @@ export const gitReadTool: AnthropicToolDef = {
   description:
     'Run a read-only git query in the session working directory without a shell. ' +
     `Subcommands: ${GIT_READ_SUBCOMMANDS.join(', ')}. ` +
+    // The prompt steers models toward `--max-count=<N>` as the preferred form
+    // for count-limiting log/rev-list output. `-n <N>` and `-<N>` are also
+    // accepted as fallback shorthands (the count-shorthand normalizer in
+    // git-read.policy.ts rewrites them to `--max-count=<N>` before validation),
+    // but this is not advertised here to keep usage consistent.
     'Only an allowlisted set of options is accepted per subcommand (e.g. log: --oneline, --stat, ' +
     '--max-count=N, --since=…, --author=…, --format=…; diff: --cached, --stat, --name-only). ' +
     'Revisions (HEAD~3, main..HEAD, a SHA, v1.2.0) go in `args`; file paths go in `paths` and must stay ' +

@@ -238,7 +238,7 @@ describe('renderMarkdownToTerminal', () => {
      * header-to-data separator + 2 inter-row separators = 3 separator lines
      * starting with `├`.
      */
-    it('inserts thin separators between data rows', () => {
+    it('omits inter-row separators when all rows are single-line', () => {
       const sample = [
         '| A | B |',
         '|---|---|',
@@ -249,21 +249,23 @@ describe('renderMarkdownToTerminal', () => {
       ].join('\n');
       const out = stripAnsi(renderMarkdownToTerminal(sample));
       const separators = out.split('\n').filter((l) => l.startsWith('├'));
-      // 1 (header to first data row) + 2 (between the three data rows)
-      expect(separators).toHaveLength(3);
+      // Only the header-to-data separator; no inter-row separators.
+      expect(separators).toHaveLength(1);
     });
 
-    it('omits inter-row separator for single-data-row tables', () => {
-      const single = [
+    it('inserts separator after a multi-line row', () => {
+      // Force wrapping by rendering at a narrow width.
+      const sample = [
         '| A | B |',
         '|---|---|',
-        '| 1 | 2 |',
+        '| this text is long enough to wrap at a narrow width | 2 |',
+        '| 3 | 4 |',
         '',
       ].join('\n');
-      const out = stripAnsi(renderMarkdownToTerminal(single));
+      const out = stripAnsi(renderMarkdownToTerminal(sample, { maxWidth: 20 }));
       const separators = out.split('\n').filter((l) => l.startsWith('├'));
-      // Only the header to data separator. No inter-row separator.
-      expect(separators).toHaveLength(1);
+      // header-to-data + one after the wrapped row = 2
+      expect(separators).toHaveLength(2);
     });
 
     it('suppresses top chrome when consecutive tables have same structure', () => {

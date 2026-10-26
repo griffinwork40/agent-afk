@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "5.334.0",
+  "version": "5.337.0",
   "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -81,6 +81,7 @@
     "audit:posix:check": "tsx scripts/check-posix-guard.ts --check",
     "audit:posix:list": "tsx scripts/check-posix-guard.ts --list",
     "audit:posix:update": "tsx scripts/check-posix-guard.ts --update-baseline",
+    "audit:git-locks:check": "tsx scripts/check-git-read-flags.ts",
     "audit:module-state": "tsx scripts/audit-module-state.ts",
     "audit:module-state:check": "tsx scripts/audit-module-state.ts --check",
     "audit:clones": "jscpd --config .jscpd.json",
@@ -140,7 +141,7 @@
   },
   "packageManager": "pnpm@11.28.2",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.134.0",
+    "@anthropic-ai/sdk": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@mozilla/readability": "^0.6.0",
     "@vscode/ripgrep": "^1.18.0",
@@ -162,6 +163,7 @@
     "telegraf": "^4.16.3",
     "turndown": "^7.2.4",
     "undici": "^8.11.2",
+    "vscode-jsonrpc": "^10.0.0",
     "wrap-ansi": "^10.0.0",
     "zod": "^4.3.6"
   },
@@ -173,7 +175,7 @@
     "@vitest/coverage-v8": "^5.0.3",
     "@xterm/headless": "^6.0.0",
     "esbuild": "^0.28.0",
-    "jscpd": "5.4.1",
+    "jscpd": "5.4.2",
     "node-pty": "^1.1.0",
     "tsx": "^4.19.2",
     "typescript": "^6.0.3",

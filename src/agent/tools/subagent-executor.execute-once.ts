@@ -14,7 +14,7 @@ import type { ToolCall, ToolResult } from './types.js';
 import { resolveMaxNestingDepth } from './nesting.js';
 import { resolveNamedAgent } from './subagent-executor.execute-once.gates.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
-import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
+import { buildChildConfigWithoutNesting, completeChildConfigNesting, type BuildChildConfigArgs } from './subagent/child-config.js';
 import { backgroundTarget } from './subagent/background-delivery.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import type { StreamCutProbe } from '../subagent/stream-cut-retry.js';
@@ -136,29 +136,24 @@ export async function executeOnce(
     childCwd: parsed.cwd ?? currentCwd,
   });
 
-  const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist, modelFallback } = buildChildConfig({
-    parsed,
-    namedAgent,
-    depth,
-    maxDepth,
-    currentCwd,
+  // Phase 1: build base config (model, tools, budgets, credential) without
+  // nesting wiring. Nesting is deferred until after isolation setup so depth-2+
+  // forks inherit the worktree cwd, not the pre-isolation parent cwd (#4374).
+  const childConfigArgs: BuildChildConfigArgs = {
+    parsed, namedAgent, depth, maxDepth, currentCwd,
     ...(childInheritedReadRoots !== undefined ? { childInheritedReadRoots } : {}),
-    signal: call.signal,
-    defaultConfig: ctx.defaultConfig,
-    ...(ctx.resolveApiKeyForModel !== undefined ? { resolveApiKeyForModel: ctx.resolveApiKeyForModel } : {}),
-    defaultSubagentModel: ctx.defaultSubagentModel,
-    ...(ctx.childProviderFactory !== undefined ? { childProviderFactory: ctx.childProviderFactory } : {}),
-    ...(ctx.childSkillExecutorFactory !== undefined ? { childSkillExecutorFactory: ctx.childSkillExecutorFactory } : {}),
-    ...inheritedChildConfigArgs(),
-    createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
-  });
+    signal: call.signal, defaultConfig: ctx.defaultConfig, defaultSubagentModel: ctx.defaultSubagentModel,
+    ...inheritedChildConfigArgs(), createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
+  };
+  const preNesting = buildChildConfigWithoutNesting(childConfigArgs);
+  const { childConfig, childWriteCapable, childSideEffectFree } = preNesting;
 
   if (probe !== undefined) probe.sideEffectFree = childSideEffectFree;
 
   // Pre-dispatch implementation-intent gate (#3754): rejects implementation briefs sent to read-only named agents.
   { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.release(); return r; } }
 
-  // isolation:"worktree"
+  // isolation:"worktree" — may mutate childConfig.cwd to the worktree path.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
   let setupNotice: string | undefined; // #3601: failed repo-declared setup, surfaced to the parent too
   if (parsed.isolation === 'worktree') {
@@ -169,6 +164,15 @@ export async function executeOnce(
     if ('error' in isoResult) { budgetReceipt = undefined; return isoResult.error; }
     if (!('skipped' in isoResult)) { isolationTeardown = isoResult.teardown; setupNotice = isoResult.setupNotice; }
   }
+
+  // Phase 2: wire depth-2+ nesting with the RESOLVED cwd. For worktree-
+  // isolated dispatches this is the worktree path (set by setupIsolationWorktree
+  // above); for explicit-cwd dispatches it is parsed.cwd; otherwise the
+  // executor's own cwd. (#4374)
+  const nestingCwd = isolationTeardown !== undefined ? (childConfig.cwd ?? currentCwd) : (parsed.cwd ?? currentCwd);
+  const { childParentSession, childManager, nestedAgentAllowlist, modelFallback } = completeChildConfigNesting(
+    childConfigArgs, preNesting, nestingCwd,
+  );
 
   if (parsed.mode === 'background' && childConfig.timeoutMs === undefined) {
     childConfig.timeoutMs = SUBAGENT_BACKGROUND_TIMEOUT_MS;

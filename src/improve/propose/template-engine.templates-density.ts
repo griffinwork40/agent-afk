@@ -17,6 +17,100 @@ import type {
 import type { RootCauseClass, Severity } from '../schemas.js';
 
 // ---------------------------------------------------------------------------
+// Helpers — rootCauseClass inference and per-tool likelyFiles
+// ---------------------------------------------------------------------------
+
+/**
+ * Infer a `RootCauseClass` from the dominant error-cluster key.
+ *
+ * The cluster key is normalized (lowercase, ids/paths/numbers collapsed) so
+ * we match on stable keyword patterns rather than exact strings.
+ *
+ * Exported for unit testing.
+ */
+export function rootCauseFromClusterKey(key: string): RootCauseClass {
+  const k = key.toLowerCase();
+  // Hook / permission blocks
+  if (
+    k.includes('blocked by') ||
+    k.includes('permission denied') ||
+    k.includes('hook') ||
+    k.includes('guard') ||
+    k.includes('allowlist') ||
+    k.includes('denylist') ||
+    k.includes('not allowed')
+  ) return 'hook-overreach';
+  // Schema / input-shape rejections
+  if (
+    k.includes('invalid input') ||
+    k.includes('validation') ||
+    k.includes('schema') ||
+    k.includes('malformed') ||
+    k.includes('unexpected token') ||
+    k.includes('parse error')
+  ) return 'schema-too-strict';
+  // Stale reference / not-found
+  if (
+    k.includes('enoent') ||
+    k.includes('not found') ||
+    k.includes('no such file') ||
+    k.includes('does not exist') ||
+    k.includes('cannot find')
+  ) return 'tool-output-shape';
+  // Timeout
+  if (
+    k.includes('timed out') ||
+    k.includes('timeout') ||
+    k.includes('deadline')
+  ) return 'timeout-too-low';
+  return 'unknown';
+}
+
+/**
+ * Build tool-specific `likelyFiles` for a `tool-failure-density` card.
+ *
+ * When a handler file for the tool name exists under
+ * `src/agent/tools/handlers/`, it is surfaced first with high confidence.
+ * `dispatcher.ts` is always included as the fallback entry point.
+ *
+ * Exported for unit testing.
+ */
+export function likelyFilesForTool(toolName: string): readonly LikelyFile[] {
+  const files: LikelyFile[] = [];
+
+  if (toolName && toolName !== '<unknown>' && toolName !== '<the tool>') {
+    const handlerName = toolName.replace(/_/g, '-');
+    files.push({
+      path: `src/agent/tools/handlers/${handlerName}.ts`,
+      rationale: `Handler for the '${toolName}' tool. Read its error paths first — most isError: true returns originate here.`,
+      riskTier: 'moderate',
+      // Contract: confidence is 'medium' not 'high' because several tools share a
+      // handler file (e.g. create_schedule → schedules.ts, config_get → config-ops.ts).
+      // A reviewer should verify the path before acting on it.
+      confidence: 'medium',
+    });
+  }
+
+  files.push({
+    path: 'src/agent/tools/dispatcher.ts',
+    rationale:
+      'Tool dispatch core. Every isError: true path goes through here: hook block, permission denied, handler throw, unknown tool. Needed when the failure is a pre-handler rejection.',
+    riskTier: 'high',
+    confidence: 'medium',
+  });
+
+  files.push({
+    path: 'src/improve/scan/detectors/tool-failure-density.ts',
+    rationale:
+      'If the detector is flagging legitimate isError-as-signal behavior, tune the threshold here or document the tool as expected-failures.',
+    riskTier: 'safe',
+    confidence: 'low',
+  });
+
+  return files;
+}
+
+// ---------------------------------------------------------------------------
 // PatternTemplate interface (local mirror — the canonical copy lives in
 // template-engine.ts; each sibling declares it to avoid a circular import).
 // ---------------------------------------------------------------------------
@@ -38,6 +132,8 @@ interface PatternTemplate {
 export const toolFailureDensityTemplate: PatternTemplate = {
   rootCauseClass: 'unknown',
   hypothesis: (card) => {
+    // Wire helpers: use rootCauseFromClusterKey + likelyFilesForTool per-tool
+    // (rootCauseClass is set statically as fallback; proposeFromCard overrides it)
     const toolName = typeof card.detail['toolName'] === 'string' ? card.detail['toolName'] : '<unknown>';
     const failures = typeof card.detail['failureCount'] === 'number' ? card.detail['failureCount'] : '?';
     const total = typeof card.detail['totalCalls'] === 'number' ? card.detail['totalCalls'] : '?';
@@ -58,44 +154,60 @@ export const toolFailureDensityTemplate: PatternTemplate = {
   },
   fixSketch: (card) => {
     const toolName = typeof card.detail['toolName'] === 'string' ? card.detail['toolName'] : '<the tool>';
+    // H3 fix: convert underscore tool names to hyphenated handler filenames
+    // (e.g. read_file → read-file.ts, wait_for → wait-for.ts)
+    const handlerName = toolName.replace(/_/g, '-');
     const sessionIds = Array.isArray(card.detail['sessionIds']) ? (card.detail['sessionIds'] as string[]) : [];
     const firstId = sessionIds[0] ?? '<session-id>';
+    // M1 fix: sessionIds entries are durable session IDs (not witness labels),
+    // so the subagents/ path is correct when using the session ID directly.
+    // The witness label (random UUID under state/witness/) is separate from the
+    // session ID (under state/sessions/); card.detail.sessionIds holds session IDs.
     return [
       '## Diagnostic steps (do these first)',
       '',
-      `1. Inspect a representative failure trace: \`cat ~/.afk/state/witness/${firstId}/trace.jsonl | grep '"name":"${toolName}"' | tail -5\``,
+      // H2 fix: positional arg, not --session/--tool flags
+      `1. Read the error text from a representative failure: \`afk trace show ${firstId} --results | head -20\``,
+      `   The \`errorHead\` field on each \`tool_call.completed\` row contains the first ≤200 chars of the error — usually enough to name the cause without reading the full trace.`,
       `2. Look at the events immediately BEFORE each failure — what did the model send as input?`,
-      '3. The witness trace does not capture tool args verbatim. To see the actual input, check the session message history under `~/.afk/state/sessions/<sessionId>/`.',
+      `3. For child-session calls (where \`subagentId\` appears on the evidence row), full tool args are recorded in the subagent journal: \`~/.afk/state/sessions/${firstId}/subagents/<subagentId>.jsonl\`. ` +
+        `Use \`afk trace show ${firstId} --results\` to surface both the error text and the subagent context in one pass.`,
       '',
       '## Candidate fixes (human picks)',
       '',
-      `**Option A — handler bug.** Locate the tool implementation under \`src/agent/tools/handlers/\` and read its error paths. If a specific failure mode is reachable from common LLM inputs, fix the handler.`,
+      // H3 fix: use handlerName (underscores → hyphens) for the file path
+      `**Option A — handler bug.** Read \`src/agent/tools/handlers/${handlerName}.ts\` (or the closest match under \`handlers/\`) and inspect its error paths. If a specific failure mode is reachable from common LLM inputs, fix the handler.`,
       '',
       `**Option B — input shape too restrictive.** If the tool's input schema rejects inputs the model naturally produces, either loosen the schema or improve the schema's description so the model can comply.`,
       '',
-      `**Option C — permission/hook denial.** Check whether a PreToolUse hook or permission gate is rejecting the call. The dispatcher returns isError: true for hook blocks and permission denials (\`src/agent/tools/dispatcher.ts:337–352\`).`,
+      `**Option C — permission/hook denial.** Check whether a PreToolUse hook or permission gate is rejecting the call. The dispatcher returns isError: true for hook blocks and permission denials (\`src/agent/tools/dispatcher.ts\`).`,
       '',
       `**Option D — accept as normal.** Some tools intentionally return isError as a signal (e.g., grep finding nothing). If this is the case, mark the card resolved with a note explaining why, or tune the detector threshold via \`--tool-failure-min-rate\`.`,
     ].join('\n');
   },
+  // H1 fix: wire likelyFilesForTool so the template produces tool-specific
+  // likelyFiles at proposal time. The static array below is the default
+  // fallback; proposeFromCard must call likelyFilesForTool(toolName) to
+  // override it per-card. See proposeFromCard in template-engine.ts.
   likelyFiles: [
+    {
+      path: 'src/agent/tools/handlers/',
+      rationale:
+        'Tool handlers directory. The handler for the failing tool lives here (e.g. `handlers/bash.ts` for bash, `handlers/git-read.ts` for git-read). Read its error paths — most isError: true returns originate in the handler.',
+      riskTier: 'moderate',
+      confidence: 'high',
+    },
     {
       path: 'src/agent/tools/dispatcher.ts',
       rationale:
-        'Tool dispatch core. Every isError: true path goes through here: hook block, permission denied, handler throw, unknown tool. Read this to understand which class each failure falls into.',
+        'Tool dispatch core. Every isError: true path goes through here: hook block, permission denied, handler throw, unknown tool. Needed when the failure is a pre-handler rejection.',
       riskTier: 'high',
       confidence: 'medium',
     },
     {
-      path: 'src/agent/tools/handlers/',
-      rationale:
-        'Tool handlers. If a specific handler is buggy, the fix lives in the handler file matching the tool name (e.g. handlers/bash.ts for the Bash tool).',
-      riskTier: 'moderate',
-      confidence: 'medium',
-    },
-    {
       path: 'src/improve/scan/detectors/tool-failure-density.ts',
-      rationale: 'If the detector is flagging legitimate isError-as-signal behavior, tune the threshold here or document the tool as expected-failures.',
+      rationale:
+        'If the detector is flagging legitimate isError-as-signal behavior, tune the threshold here or document the tool as expected-failures.',
       riskTier: 'safe',
       confidence: 'low',
     },
@@ -104,6 +216,7 @@ export const toolFailureDensityTemplate: PatternTemplate = {
   validationPlan: {
     unitTests: [
       'pnpm test src/improve/scan/detectors/tool-failure-density',
+      'pnpm test src/improve/propose/template-engine.templates-density',
       'pnpm test src/agent/tools/dispatcher',
     ],
     evalCases: [],
@@ -112,8 +225,8 @@ export const toolFailureDensityTemplate: PatternTemplate = {
       'afk improve scan --only tool-failure-density --since 7d  # after fix, failure rate should drop',
     ],
     manualChecks: [
-      'Open the trace at the evidence seqs and read the failure annotations (resultBytes, durationMs).',
-      'Inspect the session message history for the actual tool input that triggered the failure.',
+      'Open the trace at the evidence seqs and read the errorHead annotations.',
+      'For child-session failures, check the subagent journal for full tool args.',
       'Decide which of the four root cause classes (handler bug / input shape / permission / detector noise) the failures belong to.',
     ],
   },

@@ -114,6 +114,12 @@ export interface AnthropicDirectQueryOptions {
   systemPrefix: ContentBlockParam[] | null;
   /** When set, called on 401 to obtain a fresh SDK client. Retry once. */
   tokenRefresher?: () => Promise<Anthropic | null>;
+  /**
+   * True when the session's OAuth credential was sourced from the credential
+   * store (macOS keychain / `~/.claude/.credentials.json`) rather than an env
+   * var or an explicit slot key. Forwarded to {@link RetryLayerOptions}.
+   */
+  credentialFromStore?: boolean;
   /** Extended thinking configuration forwarded to `messages.create`. */
   thinking?: import('@anthropic-ai/sdk/resources').ThinkingConfigParam;
   /**
@@ -144,6 +150,13 @@ export interface AnthropicDirectQueryOptions {
    * across all turns (see `isCacheEnabled({baseUrl})`).
    */
   baseUrl?: string;
+  /**
+   * Per-endpoint concurrency cap (from slot binding `maxConcurrency`). When
+   * set, at most N concurrent model HTTP requests to `baseUrl` are in flight
+   * at once — enforced by the process-global semaphore registry. Part of
+   * #3886. Unset = no cap.
+   */
+  endpointConcurrency?: number;
   /**
    * Hard cap on tool-use loop iterations within a single user turn, forwarded
    * to `runTurn` as `RunTurnInput.maxToolUseIterations`. Unset/`0` means no cap

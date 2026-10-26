@@ -57,6 +57,15 @@ import { emitQueuedUserMessage, emitSessionPhase } from '../../../trace/emit.js'
 import { emitTurnTerminal } from './turn-driver.emit-terminal.js';
 import { windDownFinalText } from './wind-down-final.js';
 
+/**
+ * Marker text emitted as the final assistant message when context pressure
+ * forces an incomplete wind-down (Fix #3963-B).
+ * Exported so tests can import the production definition instead of duplicating
+ * the literal.
+ */
+export const INCOMPLETE_MARKER =
+  'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
+
 /** Full context the inner turn driver needs from the owning query. */
 export interface TurnDriverContext extends IterationContext, FinishTurnContext {
   /** Abort coordinator — shared with the outer turn loop. */
@@ -285,6 +294,26 @@ async function pushAssistantAndCheckStopHook(
 
 
 /**
+ * Fold one round's provider usage into the running accumulator and update
+ * the context's last-usage snapshot. Extracted from `runTurnInner` to keep
+ * it under the 200-line function ceiling.
+ */
+function accumulateRoundUsage(
+  ctx: TurnDriverContext,
+  state: StreamState,
+  prior: ProviderUsage,
+): ProviderUsage {
+  const pricedModel = ctx.useOpenAIPricing ? ctx.currentModel : undefined;
+  const roundUsage = usageFromState(state, pricedModel, ctx.fastTier.confirmedFast());
+  const accumulated = sumProviderUsage(prior, roundUsage);
+  // Context-window footprint for this round; carries the last known value
+  // forward (never 0) when the round had no usage. See the helper's Contract.
+  accumulated.contextWindowTokens = roundContextWindowTokens(roundUsage, ctx.lastUsage);
+  ctx.lastUsage = accumulated;
+  return accumulated;
+}
+
+/**
  * Drive a single user turn through the model + tool loop.
  *
  * This is the body of `OpenAICompatibleQuery._runTurnInner`, extracted here so
@@ -390,13 +419,7 @@ export async function* runTurnInner(
         return;
       }
 
-      const pricedModel = ctx.useOpenAIPricing ? ctx.currentModel : undefined;
-      const roundUsage = usageFromState(result.state, pricedModel, ctx.fastTier.confirmedFast());
-      accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
-      // Context-window footprint for this round; carries the last known value
-      // forward (never 0) when the round had no usage. See the helper's Contract.
-      accumulatedUsage.contextWindowTokens = roundContextWindowTokens(roundUsage, ctx.lastUsage);
-      ctx.lastUsage = accumulatedUsage;
+      accumulatedUsage = accumulateRoundUsage(ctx, result.state, accumulatedUsage);
       if (result.text.length > 0) finalAssistantText = result.text;
       finalReasoningText = result.state.reasoningText;
       finalReasoningField = result.state.reasoningField;
@@ -446,7 +469,10 @@ export async function* runTurnInner(
       if (windDownForContextPressure(ctx, appendedAt)) {
         windDownReason = CONTEXT_PRESSURE_WIND_DOWN;
         if (!canSynthesizeUnderPressure(ctx, appendedAt)) {
-          finalAssistantText ||= 'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
+          // Fix #3963 (B): always overwrite finalAssistantText with the incomplete
+          // marker — the ||= would silently pass a stale planning sentence as the
+          // answer when an earlier round had text.
+          finalAssistantText = INCOMPLETE_MARKER;
           break;
         }
         continue;

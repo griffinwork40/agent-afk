@@ -18,6 +18,7 @@ import type {
   RuntimeView,
   RuntimeWorkspace,
 } from './types.js';
+import { isUsageAwarenessEnabled } from '../usage/usage-awareness-toggle.js';
 
 /**
  * Build a partial snapshot for the requested view. Returns only the keys
@@ -56,7 +57,7 @@ export function buildRuntimeSnapshot(
         tools: source.getTools(),
         subagents: source.getSubagents(),
         workspace: source.getWorkspace(),
-        usage: source.getUsage(),
+        ...(isUsageAwarenessEnabled() ? { usage: source.getUsage() } : {}),
         clock: snapshotClock(Date.now()),
         ...(summary.length > 0 ? { subagentOutcomeSummary: summary } : {}),
       };

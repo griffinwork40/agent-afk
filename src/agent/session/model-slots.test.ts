@@ -59,7 +59,7 @@ function clearEnv(): void {
   for (const k of ENV_KEYS) delete process.env[k];
 }
 
-function makeSlots(over: Partial<Record<'local' | 'small' | 'medium' | 'large', string>>): ModelSlots {
+function makeSlots(over: Partial<Record<'local' | 'small' | 'medium' | 'large' | 'subagent', string>>): ModelSlots {
   return {
     local: { id: over.local ?? DEFAULT_SLOT_BINDINGS.local.id },
     small: { id: over.small ?? DEFAULT_SLOT_BINDINGS.small.id },

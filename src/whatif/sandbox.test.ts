@@ -839,7 +839,7 @@ describe('SEC-011: worktree add/remove use execFileSync array args, not shell in
     expect(src).toContain("execFileSync('git', ['worktree', 'remove'");
 
     // findGitRoot must also use execFileSync (not execSync) — low: SEC-011 extension
-    expect(src).toContain("execFileSync('git', ['rev-parse', '--show-toplevel']");
+    expect(src).toContain("execFileSync('git', ['--no-optional-locks', 'rev-parse', '--show-toplevel']");
 
     // Neither helper should use execSync with a template literal containing 'worktree'
     // (the old shell-interpolated form was: execSync(`git worktree add --detach "${path}" HEAD`))

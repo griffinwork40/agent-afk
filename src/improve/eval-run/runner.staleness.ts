@@ -35,13 +35,13 @@ import { makeCheck } from './contracts.js';
 //   repeated-tool-use.ts:303    detector: 'repeated-tool-use@v1'
 //   closure-anomaly.ts:218      detector: 'closure-anomaly@v2'
 //   subagent-block.ts:184       detector: 'subagent-block@v1'
-//   tool-failure-density.ts:257 detector: 'tool-failure-density@v2'
+//   tool-failure-density.ts:324 detector: 'tool-failure-density@v3'
 //   subagent-read-denial.ts:261 detector: 'subagent-read-denial@v2'
 export const CURRENT_DETECTOR_VERSIONS: Readonly<Partial<Record<FailurePattern, string>>> = {
   'repeated-tool-use': 'repeated-tool-use@v1',
   'closure-anomaly': 'closure-anomaly@v2',
   'subagent-block': 'subagent-block@v1',
-  'tool-failure-density': 'tool-failure-density@v2',
+  'tool-failure-density': 'tool-failure-density@v3',
   'subagent-read-denial': 'subagent-read-denial@v2',
 };
 

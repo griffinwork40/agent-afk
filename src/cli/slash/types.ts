@@ -148,6 +148,12 @@ export interface SessionStats {
    * always seeds a value in production.
    */
   thinkingUi?: ThinkingUiMode;
+  /**
+   * Whether the model sees subscription usage info (vitals, fan-out notice,
+   * get_runtime_state). Toggled mid-session via `/usage-awareness`. Default
+   * `true` (on); `false` suppresses all three surfaces.
+   */
+  usageAwareness?: boolean;
   /** SDK session ID once initialized. Populated from ResponseMetadata. */
   sessionId?: string;
   /**

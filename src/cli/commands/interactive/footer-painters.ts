@@ -129,6 +129,7 @@ export function startFooterPainters(ctx: InteractiveCtx, verdictLedger: ReturnTy
   // together when any lower bar changes its row count.
   healthRail = new HealthRail({
     backgroundRegistry: ctx.backgroundRegistry,
+    processJobs: ctx.processJobs,
     getExtraRows: () => ctx.statusLine.getExtraRows(),
     getForegroundAgentCounts: makeForegroundCountsGetter(ctx.subagentManager, ctx.backgroundRegistry),
   });

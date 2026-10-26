@@ -215,6 +215,7 @@ export function flushCompletedRoots(
 
   for (const id of collected) {
     host.entries.delete(id);
+    host.absorbedIds.add(id);
   }
   host.order = host.order.filter((id) => !collected.has(id));
 

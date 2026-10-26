@@ -54,6 +54,21 @@ export function drainBgInjections(key: string): string {
 }
 
 /**
+ * Non-destructive check: returns true when the source for `key` has at least
+ * one pending injection. Used by `wakeIdleSessionImpl` (#3974) to guard
+ * against a no-op synthetic turn when the buffer is already empty — without
+ * consuming the buffer the way `drainBgInjections` would.
+ */
+export function hasBgInjections(key: string): boolean {
+  const source = sources.get(key);
+  if (!source) return false;
+  // TelegramBgResultNotifier exposes hasPendingInjections(); fall back to a
+  // drain-and-re-check is NOT done — only the typed path is used so the
+  // buffer is never consumed by the guard.
+  return (source as { hasPendingInjections?(): boolean }).hasPendingInjections?.() ?? false;
+}
+
+/**
  * Prepend `prefix` to a turn's content. Strings concatenate; content-block
  * arrays get a leading `text` block so image/document blocks stay intact.
  * Returns `content` unchanged when `prefix` is empty.

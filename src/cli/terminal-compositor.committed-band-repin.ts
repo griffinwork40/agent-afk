@@ -36,7 +36,7 @@ export function flushResizeGhostErase(self: CommittedBandHost): void {
   // Clamp to at least 1 so the loop body is always reachable. When
   // extraRows >= rows (degenerate: reserved footer fills the entire viewport),
   // maxRow degenerates to 1; flushResizeGhostErase still exits early because
-  // top > bottom after clamping (pending.top is always ≥ 1).
+  // top > bottom after clamping (pending.bottom < 1 in the degenerate case).
   const maxRow = Math.max(1, (self.stdout.rows ?? 24) - extraRows);
   const top = Math.max(1, pending.top);
   const bottom = Math.min(pending.bottom, maxRow);

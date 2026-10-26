@@ -1,1 +1,1 @@
-{ "errors": 2711, "reason": "B4 cancel test added in e48902c follows pre-existing SubagentExecutorContext pattern; one new grandfathered instance" }
+{ "errors": 2688 }

@@ -53,19 +53,20 @@ let _modelAliasesHint: readonly string[] | undefined;
 /**
  * User-facing model handles shown by the `/model` picker (REPL + Telegram) and
  * accepted by name. DERIVED from three stable layers:
- *   1. Capability TIERS (local/small/medium/large)
+ *   1. Capability TIERS (local/small/medium/large/subagent)
  *   2. Fixed-identity Claude/xAI aliases (haiku/sonnet/opus/fable/grok/…)
  *   3. Curated OpenAI wire ids ({@link OPENAI_MODEL_HINTS})
  *
  * The three-part ordering keeps Claude/tier handles at the top (most users),
  * followed by OpenAI models. Raw wire ids and `org/model` ids are also accepted
  * at the `/model` surface — this list is the discoverable subset, not the whole
- * acceptable set. Both the CLI (`/model`) and Telegram surfaces import it rather
- * than re-declaring it; it is the single source of truth for the picker.
+ * acceptable set. Both the CLI (`/model`) and Telegram surfaces import
+ * {@link MODEL_ALIASES_HINT} (re-exported from `model-slots.ts`) rather than
+ * re-declaring it; it is the single source of truth for the picker.
  *
  * Returned as a real array built lazily on first call to avoid the
  * circular-init TDZ (see module comment). Callers receive a plain array;
- * re-exported by `model-slots.ts` via {@link getModelAliasesHint}.
+ * consumed by `model-slots.ts` as {@link MODEL_ALIASES_HINT}.
  */
 export function getModelAliasesHint(): readonly string[] {
   return (_modelAliasesHint ??= [

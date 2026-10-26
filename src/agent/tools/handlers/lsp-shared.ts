@@ -1,68 +1,51 @@
 /**
- * Shared LSP wire-protocol helpers used by both `lsp-diagnostics.ts` (phase 1)
- * and `lsp-symbols.ts` (phase 2) of #3904.
- *
- * Extracted to eliminate cross-file duplication (jscpd clone gate) while keeping
- * both modules' public APIs unchanged.
+ * Shared helpers used by both `lsp-diagnostics.ts` (phase 1) and
+ * `lsp-symbols.ts` (phase 2) of #3904: env timeouts and pooled-query error
+ * mapping. The wire protocol itself lives in `agent/lsp/client.ts` (#4272).
  *
  * @module agent/tools/handlers/lsp-shared
  */
 
-import type { ChildProcess } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { env } from '../../../config/env.js';
-
-/** Encode a JSON-RPC message with LSP Content-Length framing. */
-export function encodeMessage(obj: unknown): Buffer {
-  const body = JSON.stringify(obj);
-  const header = `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n`;
-  return Buffer.concat([Buffer.from(header, 'utf8'), Buffer.from(body, 'utf8')]);
-}
-
-/** Kill a child process and close its stdin, ignoring errors. */
-export function killProc(proc: ChildProcess): void {
-  try { proc.stdin?.end(); } catch { /* ignore */ }
-  try {
-    // On win32, proc.kill() calls TerminateProcess on the direct child only.
-    // On POSIX, SIGTERM to the direct child is sufficient.
-    proc.kill();
-  } catch { /* ignore */ }
-}
+import { LspClientError } from '../../lsp/client.js';
 
 /**
- * Parse all complete LSP messages from `buf`. Returns parsed JSON objects and
- * the remaining unparsed bytes.
+ * Map a pooled-query failure to the handler-facing error string. Unknown
+ * errors (never expected) degrade to the generic server-error message.
  */
-export function parseMessages(buf: Buffer): { messages: unknown[]; remaining: Buffer } {
-  const messages: unknown[] = [];
-  let offset = 0;
-  while (offset < buf.length) {
-    const headerEnd = buf.indexOf('\r\n\r\n', offset);
-    if (headerEnd === -1) break;
-    const headerSection = buf.subarray(offset, headerEnd).toString('utf8');
-    const clMatch = headerSection.match(/Content-Length:\s*(\d+)/i);
-    if (!clMatch || clMatch[1] === undefined) break;
-    const contentLength = parseInt(clMatch[1], 10);
-    const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + contentLength;
-    if (bodyEnd > buf.length) break;
-    const body = buf.subarray(bodyStart, bodyEnd).toString('utf8');
-    try { messages.push(JSON.parse(body)); } catch { /* malformed — skip */ }
-    offset = bodyEnd;
+export function lspFailureMessage(err: unknown, timeoutMessage: string): string {
+  if (!(err instanceof LspClientError)) return 'LSP server returned an error';
+  switch (err.kind) {
+    case 'timeout': return timeoutMessage;
+    case 'aborted': return 'Aborted';
+    case 'spawn': return 'Failed to spawn LSP server';
+    case 'exited': return 'LSP server exited before responding';
+    case 'response': return err.message === 'Unsupported file type' ? err.message : 'LSP server returned an error';
   }
-  return { messages, remaining: buf.subarray(offset) };
 }
 
-/**
- * Map file extension to LSP languageId (TS/JS family).
- * Returns undefined for unsupported extensions.
- */
-export function languageIdForExt(ext: string): string | undefined {
-  switch (ext) {
-    case '.ts': return 'typescript';
-    case '.tsx': return 'typescriptreact';
-    case '.js': return 'javascript';
-    case '.jsx': return 'javascriptreact';
-    default: return undefined;
+/** Abort the I/O where supported AND race it: a stalled OS open may ignore abort. */
+export async function readLspSource(filePath: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new LspClientError('aborted', 'Aborted');
+  if (timeoutMs <= 0) throw new LspClientError('timeout', 'LSP source read timed out');
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    const fail = (kind: 'timeout' | 'aborted') => {
+      reject(new LspClientError(kind, kind === 'aborted' ? 'Aborted' : 'LSP source read timed out'));
+      controller.abort();
+    };
+    timer = setTimeout(() => fail('timeout'), timeoutMs);
+    onAbort = () => fail('aborted');
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([readFile(filePath, { encoding: 'utf8', signal: controller.signal }), guard]);
+  } finally {
+    clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
   }
 }
 

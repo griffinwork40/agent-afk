@@ -73,6 +73,7 @@ function makeCtx(stats: SessionStats, session?: ReturnType<typeof makeSession>):
 function makeOwner(newId = randomUUID()): SessionOwner {
   return {
     create: vi.fn().mockResolvedValue({ id: newId, cwd: '/tmp', model: 'sonnet', createdAt: new Date().toISOString() }),
+    retire: vi.fn(),
   } as unknown as SessionOwner;
 }
 
@@ -82,26 +83,52 @@ describe('handleWebExit', () => {
   it('returns { kind: exit }', async () => {
     const stats = makeStats();
     const ctx = makeCtx(stats);
-    const result = await handleWebExit({} as SessionOwner, stats.sessionId!, ctx);
+    const result = await handleWebExit(makeOwner(), stats.sessionId!, ctx);
     expect(result).toEqual({ kind: 'exit' });
   });
 
   it('emits an info message', async () => {
     const stats = makeStats();
     const ctx = makeCtx(stats);
-    await handleWebExit({} as SessionOwner, stats.sessionId!, ctx);
+    await handleWebExit(makeOwner(), stats.sessionId!, ctx);
     expect(ctx.out.info).toHaveBeenCalledWith(expect.stringContaining('Session ended'));
   });
 
   it('calls saveSession with closeTime and exit-command reason', async () => {
     const stats = makeStats();
     const ctx = makeCtx(stats);
-    await handleWebExit({} as SessionOwner, stats.sessionId!, ctx);
+    await handleWebExit(makeOwner(), stats.sessionId!, ctx);
     expect(mockSave).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: expect.any(String) }),
       stats.sessionId,
       { closeTime: true, exitReason: 'exit-command' },
     );
+  });
+
+  it('calls owner.retire with the sessionId after saving', async () => {
+    const stats = makeStats();
+    const ctx = makeCtx(stats);
+    const owner = makeOwner();
+    await handleWebExit(owner, stats.sessionId!, ctx);
+    expect(vi.mocked(owner.retire)).toHaveBeenCalledWith(stats.sessionId);
+    // retire must be called AFTER saveSession
+    const saveOrder = mockSave.mock.invocationCallOrder[0]!;
+    const retireOrder = vi.mocked(owner.retire).mock.invocationCallOrder[0]!;
+    expect(retireOrder).toBeGreaterThan(saveOrder);
+  });
+
+  it('after retire the session id is no longer in owner.owned (smoke)', async () => {
+    const stats = makeStats();
+    const id = stats.sessionId!;
+    const ctx = makeCtx(stats);
+    // Build a minimal SessionOwner stand-in with a real owned Set.
+    const owned = new Set([id]);
+    const owner = {
+      owned,
+      retire: vi.fn((sid: string) => { owned.delete(sid); }),
+    } as unknown as SessionOwner;
+    await handleWebExit(owner, id, ctx);
+    expect(owned.has(id)).toBe(false);
   });
 });
 

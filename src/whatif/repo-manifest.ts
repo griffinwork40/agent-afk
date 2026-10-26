@@ -124,7 +124,7 @@ export async function buildRepoManifest(cwd: string): Promise<RepoManifest> {
   let allLines: string[];
 
   try {
-    const { stdout } = await execFileAsync('git', ['ls-files'], {
+    const { stdout } = await execFileAsync('git', ['--no-optional-locks', 'ls-files'], {
       cwd,
       encoding: 'utf8',
       // No maxBuffer cap: the default (1 MB) was the source of ENOBUFS in

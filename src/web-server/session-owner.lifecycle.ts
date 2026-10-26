@@ -13,10 +13,10 @@
  *           with an id/name: creates a new owned session resumed from the
  *           stored sidecar and returns { kind:'navigate', sessionId }.
  *
- * /exit   — marks the session ended in its persisted sidecar and returns
- *           { kind:'exit' }. The session object stays in the owner map so
- *           in-flight SSE tails can drain; it is removed on the next create
- *           or server restart.
+ * /exit   — marks the session ended in its persisted sidecar, removes it
+ *           from the owner maps via `SessionOwner.retire`, and returns
+ *           { kind:'exit' }. In-flight SSE tails are unaffected because they
+ *           tail the ledger file, not the in-memory session object.
  *
  * Clipboard-using and terminal-spawn paths from the REPL fork handler are
  * replaced by the navigate control: the dashboard selects the new session.
@@ -45,7 +45,7 @@ import type { SessionOwner } from './session-owner.js';
  * appears as completed in the sidebar. Returns the wire exit control.
  */
 export async function handleWebExit(
-  _owner: SessionOwner,
+  owner: SessionOwner,
   sessionId: string,
   ctx: SlashContext,
 ): Promise<CommandControl> {
@@ -57,6 +57,10 @@ export async function handleWebExit(
     { closeTime: true, exitReason: 'exit-command' },
   );
   ctx.out.info('Session ended. Start a new session or select one from the sidebar.');
+  // Remove the session from all owner maps so prompt/command routes 409 and a
+  // later autosave cannot undo the exit. Called AFTER saveSession so the sidecar
+  // is durable before the AgentSession is torn down.
+  owner.retire(sessionId);
   return { kind: 'exit' };
 }
 

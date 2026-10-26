@@ -56,6 +56,7 @@ import { MCP_ENV_REGISTRY } from './env.mcp.js';
 import { MISC_ENV_REGISTRY } from './env.misc.js';
 import { MODEL_ENV_REGISTRY } from './env.model.js';
 import { MODEL_TIERS_ENV_REGISTRY } from './env.model-tiers.js';
+import { MODEL_SLOT_CONCURRENCY_ENV_REGISTRY } from './env.model-slot-concurrency.js';
 import { SUGGEST_ENV_REGISTRY } from './env.model-tiers.suggest.js';
 import { PATHS_ENV_REGISTRY } from './env.paths.js';
 import { PEER_ENV_REGISTRY } from './env.peer.js';
@@ -131,6 +132,7 @@ export const ENV_REGISTRY = [
   ...MODEL_ENV_REGISTRY,
   // Model tiers, timeouts, suggestions, legacy aliases (env.model-tiers.ts)
   ...MODEL_TIERS_ENV_REGISTRY,
+  ...MODEL_SLOT_CONCURRENCY_ENV_REGISTRY,
   // REPL suggestion vars (env.model-tiers.suggest.ts)
   ...SUGGEST_ENV_REGISTRY,
   // Memory GC env vars (env.memory-gc.ts)

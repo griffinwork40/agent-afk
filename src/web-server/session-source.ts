@@ -47,6 +47,8 @@ export interface WebSessionSummary {
   titleExplicit?: boolean;
   /** Liveness from presence records. Set for foreign sessions only. */
   alive?: boolean;
+  /** The model the session was started with (from the ledger meta record or sidecar). */
+  model?: string;
 }
 
 /** ~80-char cap on derived titles — matches {@link WebSessionSummary.title}. */
@@ -79,8 +81,8 @@ function truncateTitle(text: string): string {
  */
 async function readLedgerHead(
   sessionId: string,
-): Promise<{ cwd?: string; surface?: string; title?: string }> {
-  const out: { cwd?: string; surface?: string; title?: string } = {};
+): Promise<{ cwd?: string; surface?: string; title?: string; model?: string }> {
+  const out: { cwd?: string; surface?: string; title?: string; model?: string } = {};
   try {
     let seen = 0;
     for await (const rec of readLedger(sessionId)) {
@@ -88,6 +90,7 @@ async function readLedgerHead(
       if (rec.kind === 'meta') {
         if (rec.cwd !== undefined) out.cwd = rec.cwd;
         if (rec.surface !== undefined) out.surface = rec.surface;
+        if (rec.model !== undefined) out.model = rec.model;
       } else if (rec.kind === 'user' && out.title === undefined) {
         // Prefer `input` (the caller's own message, recorded when framework
         // context was prepended). Older ledgers lack it, so fall back to
@@ -101,7 +104,7 @@ async function readLedgerHead(
         // If extraction returned nothing (pure-boilerplate record), fall
         // through and let a subsequent user record supply the title.
       }
-      if (out.title !== undefined && (out.cwd !== undefined || out.surface !== undefined)) break;
+      if (out.title !== undefined && out.model !== undefined && (out.cwd !== undefined || out.surface !== undefined)) break;
       if (seen >= HEAD_RECORD_SCAN_LIMIT) break;
     }
   } catch {
@@ -239,6 +242,8 @@ export async function listWebSessions(
       if (sidecar.name !== undefined && sidecar.explicit) summary.titleExplicit = true;
       if (mtime !== undefined) summary.updatedAt = mtime.toISOString();
       if (mode === 'readonly' && aliveIds !== null) summary.alive = aliveIds.has(id);
+      const model = head.model;
+      if (model !== undefined) summary.model = model;
       return summary;
     }),
   );

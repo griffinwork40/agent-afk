@@ -49,4 +49,5 @@ See [editing configuration](/configuration/editing-config) for file locations an
 | `telegram.verifyDone` | boolean |  | human | Opt-in AFK "Done" verification gate (human-tier: a self-honesty check on the agent's own completion reporting — the agent must not be able to disable it on its own config, same rationale as enableShellHooks/permissionMode). |
 | `temperature` | number | 0 to 2 | agent | Sampling temperature. |
 | `theme` | enum | `dark`, `light`, `umber`, `auto` | agent | TUI color palette (dark \| light \| umber \| auto). Display-only; auto detects a light/dark background from the terminal and falls back to dark. umber matches the Umber terminal and is dark-only, so auto never selects it. |
+| `tools.usageAwareness` | boolean |  | agent | Whether the model sees subscription usage info (vitals, fan-out notice, get_runtime_state). Default: true. |
 | `updatePolicy` | enum | `notify`, `auto`, `off` | human | Self-update policy (human-tier: auto self-update is scope-widening). |

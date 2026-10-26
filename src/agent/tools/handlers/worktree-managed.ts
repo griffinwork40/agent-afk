@@ -49,7 +49,7 @@ export async function resolveRepoContext(
   execFile: ExecFileFn,
   cwd: string,
 ): Promise<RepoContext> {
-  const result = await execFile('git', ['-C', cwd, 'rev-parse', '--git-common-dir']);
+  const result = await execFile('git', ['--no-optional-locks', '-C', cwd, 'rev-parse', '--git-common-dir']);
   const raw = result.stdout.trim();
   if (!raw) throw new Error('Not in a git repository.');
   const absoluteGitDir = isAbsolute(raw) ? raw : resolve(cwd, raw);
@@ -147,7 +147,7 @@ export async function resolveAnchorBaseRef(
   try {
     const remoteRef = await detectRemoteDefaultRef(execFile, anchor);
     if (remoteRef !== undefined) {
-      const out = await execFile('git', ['-C', anchor, 'rev-parse', remoteRef]);
+      const out = await execFile('git', ['--no-optional-locks', '-C', anchor, 'rev-parse', remoteRef]);
       const sha = out.stdout.trim();
       if (sha) return sha;
     }
@@ -155,7 +155,7 @@ export async function resolveAnchorBaseRef(
 
   // Fall back to the local HEAD (backward-compat for repos with no remote).
   try {
-    const out = await execFile('git', ['-C', anchor, 'rev-parse', 'HEAD']);
+    const out = await execFile('git', ['--no-optional-locks', '-C', anchor, 'rev-parse', 'HEAD']);
     const sha = out.stdout.trim();
     if (sha) return sha;
   } catch { /* fall through to the literal ref */ }
@@ -223,7 +223,7 @@ export async function createManagedWorktree(
   // create over the rev-parse or the write.
   let baseSha = '';
   try {
-    const sha = await execFile('git', ['-C', repoRoot, 'rev-parse', baseRef]);
+    const sha = await execFile('git', ['--no-optional-locks', '-C', repoRoot, 'rev-parse', baseRef]);
     baseSha = sha.stdout.trim();
   } catch { /* non-fatal */ }
   try {
@@ -253,7 +253,7 @@ export async function isManagedWorktreeDirty(
   worktreePath: string,
 ): Promise<boolean> {
   try {
-    const status = await execFile('git', ['-C', worktreePath, 'status', '--porcelain']);
+    const status = await execFile('git', ['--no-optional-locks', '-C', worktreePath, 'status', '--porcelain']);
     return status.stdout.trim().length > 0;
   } catch {
     return true; // unreadable → treat as dirty (safe fallback)
@@ -272,9 +272,9 @@ export async function managedWorktreeCommitsAhead(
     const metaRaw = await fs.readFile(join(worktreePath, '.afk-worktree-meta.json'), 'utf-8');
     const meta = JSON.parse(metaRaw) as { baseSha?: string };
     if (!meta.baseSha) return 0;
-    const head = await execFile('git', ['-C', worktreePath, 'rev-parse', 'HEAD']);
+    const head = await execFile('git', ['--no-optional-locks', '-C', worktreePath, 'rev-parse', 'HEAD']);
     const count = await execFile('git', [
-      '-C', repoRoot, 'rev-list', `${meta.baseSha}..${head.stdout.trim()}`, '--count',
+      '--no-optional-locks', '-C', repoRoot, 'rev-list', `${meta.baseSha}..${head.stdout.trim()}`, '--count',
     ]);
     return parseInt(count.stdout.trim(), 10) || 0;
   } catch {
@@ -460,7 +460,7 @@ export function describePreserveReason(
  */
 async function probeUnpushedCommits(execFile: ExecFileFn, worktreePath: string): Promise<string> {
   try {
-    const r = await execFile('git', ['-C', worktreePath, 'log', '--oneline', '@{upstream}..HEAD']);
+    const r = await execFile('git', ['--no-optional-locks', '-C', worktreePath, 'log', '--oneline', '@{upstream}..HEAD']);
     return r.stdout.trim();
   } catch { return 'probe-failed'; }
 }

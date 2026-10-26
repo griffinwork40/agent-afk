@@ -208,10 +208,10 @@ async function resolveBaseRef(
   ref: string | undefined,
 ): Promise<{ sha: string; branch?: string }> {
   if (ref) {
-    const { stdout: sha } = await git(repoRoot, ['rev-parse', ref]);
+    const { stdout: sha } = await git(repoRoot, ['--no-optional-locks', 'rev-parse', ref]);
     return { sha };
   }
-  const { stdout: sha } = await git(repoRoot, ['rev-parse', 'HEAD']);
+  const { stdout: sha } = await git(repoRoot, ['--no-optional-locks', 'rev-parse', 'HEAD']);
   // Try to capture the symbolic branch name; falls through to undefined on detached HEAD.
   let branch: string | undefined;
   try {

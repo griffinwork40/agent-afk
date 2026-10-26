@@ -436,6 +436,20 @@ describe('listWebSessions', () => {
     expect(s0?.title).toBe('what are the local changes?');
   });
 
+  it('reports the model from the ledger meta record for a non-owned stored session', async () => {
+    writeLedger('foreign-with-model', [
+      metaLine('foreign-with-model', { cwd: '/tmp/x', surface: 'cli' }),
+      userLine('hello'),
+    ]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === 'foreign-with-model');
+
+    expect(entry).toBeDefined();
+    expect(entry?.mode).toBe('readonly');
+    expect(entry?.model).toBe('test-model');
+  });
+
   it('sorts a brand-new owned session (no ledger yet) first, above dated sessions', async () => {
     writeLedger('old', [metaLine('old'), userLine('older work')], Date.now() - 60_000);
     const sessions = await listWebSessions(new Set(['fresh-owned']));

@@ -38,16 +38,17 @@ function makeArgs(
 ): SystemPromptWiringArgs {
   return {
     config: {
+      model: 'sonnet',
       systemPrompt: { type: 'preset', preset: 'claude_code', append: APPEND },
-    },
-    hasSkillExecutor: false,
+    } as SystemPromptWiringArgs['config'],
+    skillExecutor: undefined,
     workspacePromptEnabled: false,
     readOnlyMemory: false,
     readOnlyState: false,
     resolvedSessionId: undefined,
     surface: 'cli',
     getCurrentCwd: () => '/test',
-    runtimeStateSource: { getWorkspace: () => undefined },
+    runtimeStateSource: { getWorkspace: () => undefined } as unknown as SystemPromptWiringArgs['runtimeStateSource'],
     ...overrides,
   };
 }
@@ -120,6 +121,45 @@ describe('buildSystemPromptWiring — agentTypeListing injection (#4217)', () =>
   });
 });
 
+describe('buildSystemPromptWiring — agent-type gate: grantsTool=false (#4220)', () => {
+  /**
+   * The gate in openai-compatible/index.ts:
+   *   `this.schemas.some(s => s.name === 'agent') && this.grantsTool('agent')`
+   * passes '' to buildSystemPromptWiring when either condition is false.
+   * These tests verify that buildSystemPromptWiring correctly suppresses the
+   * listing in both cases — the "grantsTool=false" path (#4220 item 2 & 3).
+   */
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('omits listing when agent schema present but grantsTool returns false (empty string passed)', () => {
+    // Simulates: this.schemas.some(s => s.name === 'agent') === true
+    // but this.grantsTool('agent') === false → caller passes agentTypeListing: ''
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({ agentTypeListing: '' }),
+    );
+    expect(initialSystemPrompt).not.toContain('Available agent types');
+  });
+
+  it('omits listing when agent schema absent (no executor wired) and grantsTool is irrelevant', () => {
+    // Simulates: this.schemas.some(s => s.name === 'agent') === false →
+    // gate short-circuits, caller passes agentTypeListing: undefined
+    const { initialSystemPrompt } = buildSystemPromptWiring(makeArgs());
+    expect(initialSystemPrompt).not.toContain('Available agent types');
+  });
+
+  it('includes listing only when both schema present and grantsTool returns true', () => {
+    // Simulates: schemas includes agent AND grantsTool('agent') === true →
+    // caller passes the real listing string.
+    const LISTING = 'Available agent types:\n- research-agent: Read-only research.';
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({ agentTypeListing: LISTING }),
+    );
+    expect(initialSystemPrompt).toContain('Available agent types');
+  });
+});
+
 describe('buildSystemPromptWiring — unnamed-worker toolBase dedupe guard (#3359)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -132,7 +172,7 @@ describe('buildSystemPromptWiring — unnamed-worker toolBase dedupe guard (#335
 
   it('unnamed worker: resolveToolSystemPrompt called with (undefined, true) and result not prepended', () => {
     const { initialSystemPrompt } = buildSystemPromptWiring(
-      makeArgs({ config: { isUnnamedWorker: true } }),
+      makeArgs({ config: { model: 'sonnet', isUnnamedWorker: true } as SystemPromptWiringArgs['config'] }),
     );
     // Verify the call site passes isSkillDispatch=undefined and isUnnamedWorker=true.
     expect(systemPromptMod.resolveToolSystemPrompt).toHaveBeenCalledWith(undefined, true);
