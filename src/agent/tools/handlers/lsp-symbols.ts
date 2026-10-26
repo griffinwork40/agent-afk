@@ -24,7 +24,6 @@
  * @module agent/tools/handlers/lsp-symbols
  */
 
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { env } from '../../../config/env.js';
 import { resolveAndContain } from './_cwd-utils.js';
@@ -138,12 +137,11 @@ export async function queryLspSymbol(
   installContext?: InstallContext,
 ): Promise<LspSymbolResult> {
   if (signal?.aborted) return { locations: [], error: 'Aborted' };
-  const ext = path.extname(filePath);
-  if (!TYPESCRIPT_SERVER_DEFINITION.languageIds[ext.toLowerCase()]) {
-    return { locations: [], error: `Unsupported file type: ${ext}` };
-  }
   const t0 = Date.now();
   const budgetMs = getSymbolsTimeoutMs();
+  const resolved = await resolveLspServer(filePath, { serverCmd, sessionRoot: rootDir, installContext });
+  if (resolved.kind === 'unavailable') return { locations: [], error: resolved.error };
+  const { spec, root } = resolved;
   let content: string;
   try {
     content = await readLspSource(filePath, budgetMs, signal);

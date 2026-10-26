@@ -21,7 +21,6 @@
  * @module agent/tools/handlers/lsp-diagnostics
  */
 
-import path from 'node:path';
 import { env } from '../../../config/env.js';
 import { getTimeoutMs, readLspSource } from './lsp-shared.js';
 import { awaitSyncDiagnostics, withPooledFile } from '../../lsp/query.js';
@@ -70,12 +69,14 @@ export function isLspDiagnosticsEnabled(): boolean {
  */
 export async function queryLspDiagnostics(
   filePath: string,
-  serverCmd: readonly string[] = DEFAULT_LSP_CMD,
+  serverCmd?: readonly string[],
   signal?: AbortSignal,
 ): Promise<LspDiagnostic[]> {
-  if (!TYPESCRIPT_SERVER_DEFINITION.languageIds[path.extname(filePath).toLowerCase()]) return [];
   const t0 = Date.now();
   const budgetMs = getTimeoutMs();
+  const resolved = await resolveLspServer(filePath, { serverCmd });
+  if (resolved.kind === 'unavailable') return [];
+  const { spec, root } = resolved;
   let content: string;
   try {
     content = await readLspSource(filePath, budgetMs, signal);
@@ -88,7 +89,7 @@ export async function queryLspDiagnostics(
     const elapsed = Date.now() - t0;
     const published = await withPooledFile(
       spec, filePath, content,
-      { root: typescriptRootFor(filePath), timeoutMs: Math.max(0, budgetMs - elapsed), signal },
+      { root, timeoutMs: Math.max(0, budgetMs - elapsed), signal },
       (ctx) => awaitSyncDiagnostics(ctx, signal),
     );
     return published ? published.diagnostics.filter(isObject).map(toDiagnostic) : [];

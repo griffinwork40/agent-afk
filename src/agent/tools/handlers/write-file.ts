@@ -198,7 +198,7 @@ const writeFileImpl = async (
     }
 
     const byteCount = Buffer.byteLength(content, 'utf8');
-    const lspSuffix = await appendLspDiagnostics(writeTarget, undefined, context?.resolveBase ?? cwd);
+    const lspSuffix = await appendLspDiagnostics(writeTarget);
     const successMsg = snapshotWarning
       ? `Wrote ${byteCount} bytes to ${file_path}\nWARNING: ${snapshotWarning}${lspSuffix}`
       : `Wrote ${byteCount} bytes to ${file_path}${lspSuffix}`;
