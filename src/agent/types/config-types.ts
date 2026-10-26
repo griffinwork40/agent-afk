@@ -934,6 +934,17 @@ export interface AgentConfig {
   isNonInteractive?: boolean;
 
   /**
+   * When true, the session is a trusted top-level interactive surface (REPL
+   * or Telegram) where a human can answer LSP install consent prompts. Set
+   * explicitly only in `bootstrap-session-builder.ts` (REPL) and
+   * `session-manager.session-builder.ts` (Telegram). Never set on daemon,
+   * cron, one-shot CLI, or forked subagents — the dispatcher enforces that
+   * contract structurally by AND-ing out `parentSessionId`/`subagentId`/
+   * `isNonInteractive` regardless of what is passed here.
+   */
+  lspInstallAllowed?: boolean;
+
+  /**
    * Opt-in automatic compaction. When the context window fills past the
    * configured threshold, `compact()` fires automatically at the next idle
    * turn boundary (no tool call in flight, not already compacting).

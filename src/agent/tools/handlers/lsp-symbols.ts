@@ -1,17 +1,17 @@
 /**
  * Opt-in LSP symbol lookup for the `code_symbols` tool (phase 2 of #3904).
  *
- * Exposes go-to-definition and find-references backed by the same
- * typescript-language-server plumbing introduced in phase 1
- * (`lsp-diagnostics.ts`). Off by default behind the same
+ * Exposes go-to-definition and find-references backed by the shared registry
+ * and pooled language-server transport (`lsp-diagnostics.ts`). Off by default behind the same
  * `AFK_LSP_DIAGNOSTICS` flag — no new env var is introduced; the flag
  * enables the whole LSP surface.
  *
  * Design constraints (mirrors phase 1):
- *   - Hard timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS, default 1500 ms).
+ *   - Hard query timeout (AFK_LSP_SYMBOLS_TIMEOUT_MS, default 5000 ms).
+ *     Human consent/install happen before the query budget starts.
  *   - Silent degradation: any error → structured error result, never throws.
- *   - TypeScript / JS only in this phase; Python (pyright) is a follow-up.
- *   - LSP server binary: `typescript-language-server --stdio` on PATH.
+ *   - Server/language/root selected by the shared registry.
+ *   - Missing servers can be installed only via the consent-aware install flow.
  *   - Persistent server (#4272): queries share one warm server per
  *     (workspace root, language) via `LspServerPool`; a crashed server is
  *     evicted and the next query spawns a fresh one.
@@ -24,7 +24,6 @@
  * @module agent/tools/handlers/lsp-symbols
  */
 
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { env } from '../../../config/env.js';
 import { resolveAndContain } from './_cwd-utils.js';
@@ -34,12 +33,10 @@ import { getSymbolsTimeoutMs, lspFailureMessage, readLspSource } from './lsp-sha
 import { LspClientError } from '../../lsp/client.js';
 import { realpathSafe } from './_cwd-utils.js';
 import { withPooledFile } from '../../lsp/query.js';
-import {
-  DEFAULT_LSP_CMD,
-  TYPESCRIPT_SERVER_DEFINITION,
-  typescriptRootFor,
-  typescriptSpecFromCommand,
-} from '../../lsp/typescript-default.js';
+import { DEFAULT_LSP_CMD } from '../../lsp/typescript-default.js';
+import type { InstallContext } from '../../lsp/server-spec.js';
+import { resolveLspServer } from './lsp-server.js';
+import { lspInstallContext } from './lsp-install-consent.js';
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -64,7 +61,7 @@ export interface LspSymbolResult {
 /** Subcommand accepted by the `code_symbols` tool. */
 export type SymbolSubcommand = 'definition' | 'references';
 
-/** Default LSP server command — shared by `queryLspSymbol` and `handleCodeSymbols`. */
+/** Legacy explicit TS command export; default resolution now uses the registry. */
 export { DEFAULT_LSP_CMD };
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
@@ -115,7 +112,7 @@ export function isLspSymbolsEnabled(): boolean {
 }
 
 /**
- * Query typescript-language-server for go-to-definition or find-references at
+ * Query the registered language server for go-to-definition or find-references at
  * a position in `filePath`.
  *
  * Returns `{ locations: [], error: '...' }` on any failure. Never throws.
@@ -124,8 +121,7 @@ export function isLspSymbolsEnabled(): boolean {
  * @param subcommand - `'definition'` or `'references'`.
  * @param line       - 1-based line number.
  * @param col        - 1-based column number.
- * @param rootDir    - Workspace root for rootUri (session cwd). When provided,
- *                     enables cross-file definition/references.
+ * @param rootDir    - Session root bounding the nearest-marker workspace walk.
  * @param serverCmd  - LSP server binary + args (injectable for tests).
  * @param signal     - Optional AbortSignal; resolves immediately with an error
  *                     when aborted before the LSP server responds.
@@ -136,16 +132,16 @@ export async function queryLspSymbol(
   line: number,
   col: number,
   rootDir?: string,
-  serverCmd: readonly string[] = DEFAULT_LSP_CMD,
+  serverCmd?: readonly string[],
   signal?: AbortSignal,
+  installContext?: InstallContext,
 ): Promise<LspSymbolResult> {
   if (signal?.aborted) return { locations: [], error: 'Aborted' };
-  const ext = path.extname(filePath);
-  if (!TYPESCRIPT_SERVER_DEFINITION.languageIds[ext.toLowerCase()]) {
-    return { locations: [], error: `Unsupported file type: ${ext}` };
-  }
   const t0 = Date.now();
   const budgetMs = getSymbolsTimeoutMs();
+  // Read source first so the deadline timer starts immediately and
+  // readFile is called synchronously in the async turn (before resolveLspServer).
+  // This preserves the test-observable ordering from the original design.
   let content: string;
   try {
     content = await readLspSource(filePath, budgetMs, signal);
@@ -154,8 +150,9 @@ export async function queryLspSymbol(
       ? lspFailureMessage(err, 'LSP symbols timed out (increase AFK_LSP_SYMBOLS_TIMEOUT_MS)')
       : 'Failed to read source file' };
   }
-  const spec = typescriptSpecFromCommand(serverCmd);
-  const root = rootDir ?? typescriptRootFor(filePath);
+  const resolved = await resolveLspServer(filePath, { serverCmd, sessionRoot: rootDir, installContext });
+  if (resolved.kind === 'unavailable') return { locations: [], error: resolved.error };
+  const { spec, root } = resolved;
   const lspMethod = subcommand === 'definition' ? 'textDocument/definition' : 'textDocument/references';
   // F4: subtract the time spent reading the file so the withPooledFile
   // deadline covers the full budget, not just what remains after the read.
@@ -229,7 +226,7 @@ export async function handleCodeSymbols(
 ): Promise<string> {
   if (!isLspSymbolsEnabled()) {
     return (
-      'code_symbols requires AFK_LSP_DIAGNOSTICS=1 and typescript-language-server on PATH. ' +
+      'code_symbols requires AFK_LSP_DIAGNOSTICS=1 and a supported language server. ' +
       'Set AFK_LSP_DIAGNOSTICS=1 to enable the LSP surface.'
     );
   }
@@ -246,8 +243,9 @@ export async function handleCodeSymbols(
     const rootDir = context?.resolveBase ?? cwd;
     const result = await queryLspSymbol(
       resolvedPath, input.subcommand, input.line, input.col, rootDir,
-      serverCmd ?? DEFAULT_LSP_CMD,
+      serverCmd,
       signal,
+      lspInstallContext(context, signal),
     );
     return formatSymbolResult(input.file_path, input.subcommand, input.line, input.col, result);
   } catch {
