@@ -22,6 +22,7 @@ import { readLedger } from '../agent/session-ledger.js';
 import { readLivePresenceFiles } from '../agent/awareness/presence.js';
 import { isPreamble, extractUserContent } from '../agent/session/preamble-strip.js';
 import { readSidecarNameInfo } from './session-name-head.js';
+import { readSessionMeta } from '../agent/session/session-meta.js';
 
 /** One agent session as the web UI's session list can render it. */
 export interface WebSessionSummary {
@@ -70,9 +71,11 @@ function truncateTitle(text: string): string {
 }
 
 /**
- * Best-effort head-of-ledger read: `cwd`/`surface` from the `meta` record and
- * `title` from the first `user` record, stopping after
- * {@link HEAD_RECORD_SCAN_LIMIT} records or once both are found.
+ * Best-effort identity read: `cwd`/`surface`/`model` from session-meta.json
+ * (O(1)) when present, falling back to a head-of-ledger scan for pre-sidecar
+ * sessions. `title` always comes from the ledger `user` record (session-meta
+ * does not store it). Stops the ledger scan once both `title` and all identity
+ * fields are found, or after {@link HEAD_RECORD_SCAN_LIMIT} records.
  *
  * Never throws. `readLedger` re-throws non-ENOENT filesystem errors (e.g. a
  * permission error), and a session's ledger content can be malformed or
@@ -83,11 +86,24 @@ async function readLedgerHead(
   sessionId: string,
 ): Promise<{ cwd?: string; surface?: string; title?: string; model?: string }> {
   const out: { cwd?: string; surface?: string; title?: string; model?: string } = {};
+
+  // Fast path: read identity fields from the sidecar (#4429). Pre-sidecar
+  // sessions return null and fall through to the JSONL scan below.
+  const sideMeta = readSessionMeta(sessionId);
+  if (sideMeta !== null) {
+    if (sideMeta.cwd !== undefined) out.cwd = sideMeta.cwd;
+    if (sideMeta.surface !== undefined) out.surface = sideMeta.surface;
+    out.model = sideMeta.model;
+  }
+
+  // Always scan the ledger for `title` (not stored in session-meta). If the
+  // sidecar gave us all identity fields we can stop once we have a title.
+  const needIdentity = out.cwd === undefined && out.surface === undefined && out.model === undefined;
   try {
     let seen = 0;
     for await (const rec of readLedger(sessionId)) {
       seen += 1;
-      if (rec.kind === 'meta') {
+      if (rec.kind === 'meta' && needIdentity) {
         if (rec.cwd !== undefined) out.cwd = rec.cwd;
         if (rec.surface !== undefined) out.surface = rec.surface;
         if (rec.model !== undefined) out.model = rec.model;
@@ -104,7 +120,9 @@ async function readLedgerHead(
         // If extraction returned nothing (pure-boilerplate record), fall
         // through and let a subsequent user record supply the title.
       }
-      if (out.title !== undefined && out.model !== undefined && (out.cwd !== undefined || out.surface !== undefined)) break;
+      if (out.title !== undefined && (needIdentity
+        ? out.model !== undefined && (out.cwd !== undefined || out.surface !== undefined)
+        : true)) break;
       if (seen >= HEAD_RECORD_SCAN_LIMIT) break;
     }
   } catch {

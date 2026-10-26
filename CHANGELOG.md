@@ -11,6 +11,39 @@ Entries in the [Unreleased] section may include a short commit hash suffix
 
 ## [Unreleased]
 
+## [5.338.1] - 2026-10-26
+
+### Fixed
+- add missing mock exports for chat.mcp and chat.trace-identity tests (f1b06cc0b)
+
+## [5.338.0] - 2026-10-26
+
+### Added
+- enrich general-purpose agent prompt with quality and parallelism guidance (#4451) (f14a54bb3)
+- three-value provenance for Ctrl+B steering (#4359) (ea29e3abc)
+- journal infrastructure — meta.cwd (#4426), receipt v2 (#4427), session-meta.json (#4429) (#4428) (e300f89a3)
+- per-slot endpoint concurrency cap for local model servers (#4190) (295a31643)
+
+### Fixed
+- release mascot band reservation between turns (be35eb357)
+- make error classifier provider-aware for auth and overloaded errors (872935aab)
+- retire() session before control, mirroring closeAll() ordering (a266f1990)
+- close WebSessionControl on retire, add test, fix comments (50b0a976c)
+- add colon to single-quote prefix class and regression test (41201fc44)
+- fix normalizer over-collapse, compound duration regex, and stale JSDoc (dad18fc86)
+- fix stop-reason terminal set gaps and stale comments (05fc0f3fb)
+- parallel-session safety fixes + CI audit gate (#4421) (ae2b0ccf6)
+- hydrate usageAwareness on resume + add slash command test (2f82cac49)
+- startup recall + dashboard follow-ups (4463df3d4)
+- widen wind-down markup regex and update stale comment (d92f0e2ad)
+- read rootCauseClass from failureClassBreakdown, hyphenate handler paths, medium confidence, integration test (741acf6e6)
+- wire tool-specific helpers into proposeFromCard; fix CLI flags and handler paths (c28433a00)
+- tool-failure-density template now produces tool-specific proposals (410db37fe)
+- rewrite shadow-verify nudge from advisory to action-gated imperative (#4447) (9dae4df52)
+
+### Changed
+- trim system-prompt overlay from 307 to 110 lines (6d2cbd61d)
+
 ## [5.337.0] - 2026-10-25
 
 ### Added

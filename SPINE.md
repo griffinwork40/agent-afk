@@ -13,7 +13,7 @@
 - **INV-006** (2026-09-17, spine-init): package.json advertises dist/index.d.ts as the public types entry point
 - **INV-007** (2026-09-17, spine-init): Audit scripts run against PREPARED SOURCE TREE, not compiled `dist/*.mjs`
 - **INV-008** (2026-09-17, spine-init): Audit contracts throw with every offending file:line on first failure; return success only when all pass
-- **INV-009** (2026-09-17, spine-init): File code-line ceiling is 350 LOC (comments/blanks excluded), ratcheted against `.filesize-baseline.json` (partially weakened to advisory/non-blocking in #1003; gate still emits violations but does not fail CI)
+- **INV-009** (2026-09-17, spine-init): File code-line ceiling is 350 LOC (comments/blanks excluded), ratcheted against `.filesize-baseline.json` (partially weakened to advisory/non-blocking in #1003; gate still emits violations but does not fail CI) (partially weakened 2026-10-26)
 - **INV-010** (2026-09-17, spine-init): Footer URL must be visible on every post regardless of content length
 - **INV-011** (2026-09-17, spine-init): When `AFK_RELEASE_THREADS_TOKEN` is set, it MUST route posts to the designated thread
 - **INV-012** (2026-09-17, spine-init): Pass postText to spawnSync as an argv element, NOT as part of a shell command string
