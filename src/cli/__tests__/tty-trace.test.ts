@@ -283,4 +283,28 @@ describe('tty-trace', () => {
     // Second call is a no-op — no extra header.
     expect(fs.lines.length).toBe(linesAfterFirst);
   });
+
+  // 16. Decoder state is clean after uninstall→reinstall
+  it('decoder state is clean after uninstall and reinstall (no stale U+FFFD)', () => {
+    // First session: write the first byte of a 2-byte UTF-8 sequence (0xC3 is the
+    // first byte of 'é' = 0xC3 0xA9), leaving the decoder with pending state.
+    const fs1 = makeFakeFsOps();
+    installTtyTrace(fs1);
+    process.stdout.write(Buffer.from([0xc3])); // incomplete 'é' prefix
+    uninstallTtyTrace();
+
+    // Second session: write plain ASCII only.
+    const fs2 = makeFakeFsOps();
+    installTtyTrace(fs2);
+    const before = fs2.lines.length; // skip header
+    process.stdout.write('ok');
+
+    const newLines = fs2.lines.slice(before);
+    expect(newLines.length).toBeGreaterThanOrEqual(1);
+    const evt = JSON.parse(newLines[0]!.trim()) as [number, string, string];
+    expect(evt[1]).toBe('o');
+    // A stale decoder would prepend U+FFFD before 'ok'; a fresh one yields 'ok'.
+    expect(evt[2]).not.toContain('\uFFFD');
+    expect(evt[2]).toContain('ok');
+  });
 });

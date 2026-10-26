@@ -61,7 +61,7 @@ let _fs: FsOps = nodeFs;
 
 // TextDecoder with fatal:false so incomplete multibyte sequences produce U+FFFD
 // rather than throwing — safe for tee-d chunks that split a codepoint boundary.
-const _decoder = new TextDecoder('utf-8', { fatal: false });
+let _decoder = new TextDecoder('utf-8', { fatal: false });
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -222,4 +222,5 @@ export function uninstallTtyTrace(): void {
   }
   _disabled = false;
   _fs = nodeFs;
+  _decoder = new TextDecoder('utf-8', { fatal: false });
 }

@@ -20,7 +20,8 @@
     "dist/",
     "scripts/postinstall.mjs",
     "NOTICE",
-    "assets/demo-placeholder.png"
+    "assets/demo-placeholder.png",
+    "scripts/tty-replay.ts"
   ],
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs || true",
