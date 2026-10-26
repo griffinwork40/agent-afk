@@ -35,6 +35,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { configureSqliteConnection } from '../storage/sqlite.js';
 import { existsSync } from 'node:fs';
 import { stat, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -232,8 +233,7 @@ export async function sweepMemoryGc(
     }
 
     try {
-      db.pragma('busy_timeout = 5000');
-
+      configureSqliteConnection(db);
       // Old installations have no trustworthy observation epoch. A sweep
       // must never initialize/migrate one itself, nor assume a release date.
       const hasMetadata = db.prepare(`SELECT 1 FROM sqlite_master

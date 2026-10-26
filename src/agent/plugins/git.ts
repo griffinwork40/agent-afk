@@ -284,7 +284,7 @@ export async function trackedChanges(repo: string, opts: GitOptions = {}): Promi
   const runner = opts.runner ?? defaultRunner;
   try {
     const { stdout } = await runner(
-      ['status', '--porcelain'],
+      ['--no-optional-locks', 'status', '--porcelain'],
       repo,
       opts.env,
     );

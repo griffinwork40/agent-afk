@@ -81,6 +81,7 @@
     "audit:posix:check": "tsx scripts/check-posix-guard.ts --check",
     "audit:posix:list": "tsx scripts/check-posix-guard.ts --list",
     "audit:posix:update": "tsx scripts/check-posix-guard.ts --update-baseline",
+    "audit:git-locks:check": "tsx scripts/check-git-read-flags.ts",
     "audit:module-state": "tsx scripts/audit-module-state.ts",
     "audit:module-state:check": "tsx scripts/audit-module-state.ts --check",
     "audit:clones": "jscpd --config .jscpd.json",

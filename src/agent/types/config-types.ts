@@ -138,6 +138,13 @@ export interface AgentConfig {
   baseUrl?: string;
 
   /**
+   * Per-endpoint concurrency cap resolved from the active slot's `maxConcurrency`
+   * by {@link applySlotCredentials}. When set, at most N concurrent model HTTP
+   * requests to `baseUrl` are in flight at once. Unset = no cap. Part of #3886.
+   */
+  endpointConcurrency?: number;
+
+  /**
    * Base URL for an OpenAI-compatible Chat Completions endpoint (optional).
    * Forwarded as the SDK's `baseURL` option when the openai-compatible
    * provider builds its client — overrides any construction-time default.

@@ -64,7 +64,7 @@ export async function fetchIfRemoteRef(repoRoot: string, ref: string, execFile: 
  */
 export async function resolveRefToSha(repoRoot: string, ref: string, execFile: ExecFileFn): Promise<string> {
   try {
-    const { stdout } = await execFile('git', ['-C', repoRoot, 'rev-parse', '--verify', `${ref}^{commit}`]);
+    const { stdout } = await execFile('git', ['--no-optional-locks', '-C', repoRoot, 'rev-parse', '--verify', `${ref}^{commit}`]);
     const sha = stdout.trim();
     if (sha.length === 0) throw new Error('empty rev-parse output');
     return sha;

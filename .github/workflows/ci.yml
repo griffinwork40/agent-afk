@@ -136,6 +136,15 @@ jobs:
       - name: Audit the 200-line function ceiling on functions this PR touches
         run: pnpm audit:funcsize:check --changed-vs origin/${{ github.base_ref || 'main' }}
 
+      - name: Audit --no-optional-locks discipline (git read commands must not take index.lock)
+        # Enforces that every git read-command call site (status, diff, log, show,
+        # blame, branch, tag, rev-parse, ls-files, ls-tree, rev-list) in src/ passes
+        # --no-optional-locks as a global flag before the subcommand. Without it, git
+        # takes an index.lock that causes spurious failures when two afk sessions work
+        # on the same repo concurrently. The canonical implementation lives in
+        # src/agent/tools/handlers/git-read.ts and exports GIT_READ_GLOBAL_ARGS.
+        run: pnpm audit:git-locks:check
+
       - name: Audit module-scope state duplication across sibling families
         # A split that re-declares a module-scope singleton or a process.on
         # registration in a sibling — instead of importing the original binding —

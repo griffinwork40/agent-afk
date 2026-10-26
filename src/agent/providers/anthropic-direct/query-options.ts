@@ -151,6 +151,13 @@ export interface AnthropicDirectQueryOptions {
    */
   baseUrl?: string;
   /**
+   * Per-endpoint concurrency cap (from slot binding `maxConcurrency`). When
+   * set, at most N concurrent model HTTP requests to `baseUrl` are in flight
+   * at once — enforced by the process-global semaphore registry. Part of
+   * #3886. Unset = no cap.
+   */
+  endpointConcurrency?: number;
+  /**
    * Hard cap on tool-use loop iterations within a single user turn, forwarded
    * to `runTurn` as `RunTurnInput.maxToolUseIterations`. Unset/`0` means no cap
    * (the top-level default); subagent forks pass a non-zero ceiling so a

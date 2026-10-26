@@ -59,7 +59,7 @@ async function getSourceRepoDirtyFiles(sourceCwd: string): Promise<string[]> {
   try {
     const { stdout } = await execFileAsync(
       'git',
-      ['-C', sourceCwd, 'status', '--porcelain'],
+      ['--no-optional-locks', '-C', sourceCwd, 'status', '--porcelain'],
       { maxBuffer: 4 * 1024 * 1024 },
     );
     if (!stdout.trim()) return [];

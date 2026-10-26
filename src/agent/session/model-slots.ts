@@ -106,6 +106,23 @@ export interface ModelSlotBinding {
    * at load time; rejected at the config_set write path.
    */
   maxOutputTokens?: number;
+  /**
+   * Maximum concurrent model requests for this slot's endpoint.
+   *
+   * When set, requests to the resolved endpoint (`baseUrl`) are serialised
+   * through a per-endpoint semaphore shared by all slots that target the same
+   * server. This lets a single-request local server (Ollama, LM Studio, MLX)
+   * receive at most N concurrent HTTP calls while leaving cloud-tier fan-outs
+   * fully parallel. Slots that share a `baseUrl` share one semaphore — the
+   * limit of the FIRST configured slot wins for the process lifetime.
+   *
+   * Also overridable via `AFK_MODEL_<TIER>_MAX_CONCURRENCY` (env wins over
+   * config file). Part of #3886.
+   *
+   * Must be a positive integer ≤ 32. Invalid values are silently ignored at
+   * load time; rejected at the config_set write path.
+   */
+  maxConcurrency?: number;
 }
 
 /** Full set of resolved tier bindings. */
@@ -273,16 +290,31 @@ function trimmedOrUndefined(value: string | undefined): string | undefined {
   return t.length > 0 ? t : undefined;
 }
 
+/** Ceiling for `AFK_MODEL_<TIER>_MAX_CONCURRENCY` (mirrors subagent ceiling). */
+export const MAX_SLOT_CONCURRENCY = 32;
+
 interface EnvSlotOverride {
   id?: string;
   baseUrl?: string;
   apiKey?: string;
+  maxConcurrency?: number;
+}
+
+function parseMaxConcurrency(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  const parsed = Number(trimmed);
+  if (/^\d+$/.test(trimmed) && Number.isInteger(parsed) && parsed >= 1 && parsed <= MAX_SLOT_CONCURRENCY) {
+    return parsed;
+  }
+  return undefined;
 }
 
 function readEnvSlot(
   id: string | undefined,
   baseUrl: string | undefined,
   apiKey: string | undefined,
+  maxConcurrency: string | undefined,
 ): EnvSlotOverride {
   const out: EnvSlotOverride = {};
   const i = trimmedOrUndefined(id);
@@ -291,16 +323,18 @@ function readEnvSlot(
   if (b) out.baseUrl = b;
   const k = trimmedOrUndefined(apiKey);
   if (k) out.apiKey = k;
+  const c = parseMaxConcurrency(maxConcurrency);
+  if (c !== undefined) out.maxConcurrency = c;
   return out;
 }
 
 function envOverrides(): Record<SlotName, EnvSlotOverride> {
   return {
-    local: readEnvSlot(env.AFK_MODEL_LOCAL, env.AFK_MODEL_LOCAL_BASE_URL, env.AFK_MODEL_LOCAL_API_KEY),
-    small: readEnvSlot(env.AFK_MODEL_SMALL, env.AFK_MODEL_SMALL_BASE_URL, env.AFK_MODEL_SMALL_API_KEY),
-    medium: readEnvSlot(env.AFK_MODEL_MEDIUM, env.AFK_MODEL_MEDIUM_BASE_URL, env.AFK_MODEL_MEDIUM_API_KEY),
-    large: readEnvSlot(env.AFK_MODEL_LARGE, env.AFK_MODEL_LARGE_BASE_URL, env.AFK_MODEL_LARGE_API_KEY),
-    subagent: readEnvSlot(env.AFK_MODEL_SUBAGENT, env.AFK_MODEL_SUBAGENT_BASE_URL, env.AFK_MODEL_SUBAGENT_API_KEY),
+    local: readEnvSlot(env.AFK_MODEL_LOCAL, env.AFK_MODEL_LOCAL_BASE_URL, env.AFK_MODEL_LOCAL_API_KEY, env.AFK_MODEL_LOCAL_MAX_CONCURRENCY),
+    small: readEnvSlot(env.AFK_MODEL_SMALL, env.AFK_MODEL_SMALL_BASE_URL, env.AFK_MODEL_SMALL_API_KEY, env.AFK_MODEL_SMALL_MAX_CONCURRENCY),
+    medium: readEnvSlot(env.AFK_MODEL_MEDIUM, env.AFK_MODEL_MEDIUM_BASE_URL, env.AFK_MODEL_MEDIUM_API_KEY, env.AFK_MODEL_MEDIUM_MAX_CONCURRENCY),
+    large: readEnvSlot(env.AFK_MODEL_LARGE, env.AFK_MODEL_LARGE_BASE_URL, env.AFK_MODEL_LARGE_API_KEY, env.AFK_MODEL_LARGE_MAX_CONCURRENCY),
+    subagent: readEnvSlot(env.AFK_MODEL_SUBAGENT, env.AFK_MODEL_SUBAGENT_BASE_URL, env.AFK_MODEL_SUBAGENT_API_KEY, undefined),
   };
 }
 
@@ -332,6 +366,9 @@ export function computeSlotBindings(
     const contextWindow = file?.contextWindow;
     if (contextWindow !== undefined) binding.contextWindow = contextWindow;
     if (file?.maxOutputTokens !== undefined) binding.maxOutputTokens = file.maxOutputTokens;
+    // env wins over file for maxConcurrency (same precedence as id/baseUrl/apiKey).
+    const maxConcurrency = e.maxConcurrency ?? file?.maxConcurrency;
+    if (maxConcurrency !== undefined) binding.maxConcurrency = maxConcurrency;
     out[slot] = binding;
   }
   return out;
@@ -582,6 +619,14 @@ function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | und
     if (cw !== undefined) binding.contextWindow = cw;
     const mot = parseContextWindow(obj['maxOutputTokens']);
     if (mot !== undefined) binding.maxOutputTokens = mot;
+    // maxConcurrency: load-time parse is lenient (ignore invalid, same as contextWindow).
+    const rawMc = obj['maxConcurrency'];
+    if (rawMc !== undefined) {
+      const mc = typeof rawMc === 'number' ? rawMc : Number(rawMc);
+      if (Number.isInteger(mc) && mc >= 1 && mc <= MAX_SLOT_CONCURRENCY) {
+        binding.maxConcurrency = mc;
+      }
+    }
     return binding;
   }
   return undefined;

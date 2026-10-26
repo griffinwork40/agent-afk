@@ -48,3 +48,19 @@ export function providerGrantsTool(
 export function grantsWorkspacePrompt(grantsTool: (toolName: string) => boolean): boolean {
   return grantsTool('workspace_publish') && grantsTool('workspace_query');
 }
+
+/**
+ * Fail-closed tool grant for an optional `grantsTool` callback (#4220).
+ *
+ * Returns `true` only when `grantsTool` is a function AND it explicitly
+ * returns `true` for the given tool name.  When `grantsTool` is `undefined`
+ * (e.g. an embedder that never wired permissions) the answer is `false` —
+ * the previous `?? true` fallback was fail-open and leaked prompt content
+ * for tools the embedder never intended to grant.
+ */
+export function grantsToolStrict(
+  grantsTool: ((toolName: string) => boolean) | undefined,
+  toolName: string,
+): boolean {
+  return grantsTool?.(toolName) === true;
+}

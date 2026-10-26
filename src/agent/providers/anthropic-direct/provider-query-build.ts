@@ -168,6 +168,7 @@ export function buildProviderQuery(
     ...(config.effort !== undefined ? { rawEffort: config.effort } : {}),
     ...(resolvedTemperature !== undefined ? { temperature: resolvedTemperature } : {}),
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
+    ...(config.endpointConcurrency !== undefined ? { endpointConcurrency: config.endpointConcurrency } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
     ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
     ...(config.hasWorkspacePreamble ? { hasWorkspacePreamble: true } : {}),

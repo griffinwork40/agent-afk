@@ -26,6 +26,7 @@ import type { GitStatusSampler } from '../../git-status-sampler.js';
 import { formatTurnSparkline } from '../../render/context-sparkline.js';
 import { quotaWindowsFromRecord, quotaWindowsFromSnapshot } from '../../quota-indicator.js';
 import { readUsageRecord, ANTHROPIC_OAUTH } from '../../../agent/usage/usage-snapshot.js';
+import { setUsageAwareness } from '../../../agent/usage/usage-awareness-toggle.js';
 import { palette } from '../../palette.js';
 import { replayTurns } from './turn-record-renderer.replay.js';
 
@@ -67,6 +68,12 @@ export function reseedStatsFromStored(
   // was added lack the field, deserializing as undefined despite the type.
   // Default to now so the status-line duration is 0, not NaN.
   stats.sessionStartTime = stored.startedAt ?? Date.now();
+  // Defense-in-depth: hydrate usageAwareness so the resume path stays in sync
+  // even if the config bootstrap path is skipped or extended in the future.
+  if (stored.usageAwareness !== undefined) {
+    stats.usageAwareness = stored.usageAwareness;
+    setUsageAwareness(stored.usageAwareness);
+  }
 }
 
 /**

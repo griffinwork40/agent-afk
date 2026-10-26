@@ -32,7 +32,7 @@ export interface DelegationProfileValues {
 
 // ─── Built-in presets ────────────────────────────────────────────────────────
 
-export const DELEGATION_PROFILES: Record<string, DelegationProfileValues> = {
+export const DELEGATION_PROFILES = Object.freeze({
   /**
    * `normal` — historic AFK defaults. No budget caps; depth 3.
    * This is the implicit behaviour when AFK_DELEGATION_PROFILE is unset.
@@ -66,7 +66,7 @@ export const DELEGATION_PROFILES: Record<string, DelegationProfileValues> = {
     maxConcurrentAgents: 8,
     maxTotalAgents: 16,
   },
-} as const;
+} as const);
 
 export type DelegationProfileName = keyof typeof DELEGATION_PROFILES;
 
@@ -88,7 +88,7 @@ export function resolveDelegationProfile(
   const name = raw.trim().toLowerCase();
   if (name === '') return undefined;
   if (!Object.hasOwn(DELEGATION_PROFILES, name)) return undefined;
-  const profile = DELEGATION_PROFILES[name];
+  const profile = DELEGATION_PROFILES[name as DelegationProfileName];
   if (profile === undefined) return undefined;
   return profile;
 }

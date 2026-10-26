@@ -58,7 +58,7 @@ export async function resolveWorktreePruneRoot(
 ): Promise<string | null> {
   if (override !== undefined && override.length > 0) return override;
   try {
-    const top = await execFile('git', ['rev-parse', '--show-toplevel'], { cwd });
+    const top = await execFile('git', ['--no-optional-locks', 'rev-parse', '--show-toplevel'], { cwd });
     const root = top.stdout.trim();
     return root.length > 0 ? root : null;
   } catch {

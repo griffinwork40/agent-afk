@@ -93,6 +93,10 @@ export interface StoredSession {
    *  pre-registry sidecars; a legacy `telegramChatId` migrates to one telegram
    *  binding so existing Telegram conversations resolve unchanged. */
   bindings?: SessionBinding[];
+  /** Whether the model sees subscription usage info. Absent on legacy sidecars
+   *  → runtime default (true). Persisted so the resume path can hydrate the
+   *  toggle without relying solely on the config bootstrap. */
+  usageAwareness?: boolean;
 }
 
 export interface SessionListEntry {
@@ -216,6 +220,7 @@ export function saveSession(
     totalTokens: stats.totalTokens,
     totalDurationMs: stats.totalDurationMs,
     turns: stats.turns,
+    ...(stats.usageAwareness !== undefined ? { usageAwareness: stats.usageAwareness } : {}),
   };
   // Validate write destination — pathForId(id) calls path.join() which does
   // NOT block traversal; `id = '../../evil'` would otherwise escape the
