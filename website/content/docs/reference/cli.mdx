@@ -60,6 +60,7 @@ Usage: `afk [options] [command]`
 | `insights` | Generate a local usage analytics report from AFK telemetry |
 | `captures` | List bash output captures — full output files written when a command produces more than 100 KB. Captures live under the witness directory and are evicted automatically by the 30-day / 2 GiB retention sweep. |
 | `defects` | Show top recurring pre-existing defects from the session ledger |
+| `receipt` | Manage run receipts — human- and machine-readable session summaries. |
 | `acp` | Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed, JetBrains, and other ACP clients) |
 
 ## `afk chat`
@@ -2521,6 +2522,41 @@ Guide: [self-improvement](/guides/self-improvement)
 | `--days <n>` | Lookback window in days | `"90"` |
 | `--top <n>` | Maximum clusters to show | `"10"` |
 | `--json` | Emit raw JSON (for scripting) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk receipt`
+
+Manage run receipts — human- and machine-readable session summaries.
+
+Usage: `afk receipt [options] [command]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `regenerate` | Rebuild existing receipts as v2 from the witness trace + message journal. By default (with --all) skips receipts already at the current schema version. |
+
+## `afk receipt regenerate`
+
+Rebuild existing receipts as v2 from the witness trace + message journal. By default (with --all) skips receipts already at the current schema version.
+
+Usage: `afk receipt regenerate [options]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--session <id>` | Regenerate receipt for a specific session id (repeatable) | `[]` |
+| `--all` | Enumerate all sessions under the state directory | `false` |
+| `--only-v1` | Skip receipts already at the current schema version (implied by --all) | `false` |
+| `--dry-run` | Print what would be regenerated without writing | `false` |
+| `--json` | Emit structured JSON output | `false` |
 | `-h, --help` | display help for command |  |
 
 ## `afk acp`

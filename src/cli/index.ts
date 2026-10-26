@@ -94,6 +94,7 @@ import { registerTranscriptCommand } from './commands/transcript.js';
 import { registerInsightsCommand } from './commands/insights.js';
 import { registerCapturesCommand } from './commands/captures.js';
 import { registerDefectsCommand } from './commands/defects.js';
+import { registerReceiptCommand } from './commands/receipt.js';
 import { registerAcpCommand } from './commands/acp.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
 import { loadConfig } from './config.js';
@@ -164,6 +165,7 @@ registerTranscriptCommand(program);
 registerInsightsCommand(program);
 registerCapturesCommand(program);
 registerDefectsCommand(program);
+registerReceiptCommand(program);
 registerAcpCommand(program);
 
 // Add aliases
