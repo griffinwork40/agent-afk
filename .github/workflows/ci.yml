@@ -145,6 +145,16 @@ jobs:
         # src/agent/tools/handlers/git-read.ts and exports GIT_READ_GLOBAL_ARGS.
         run: pnpm audit:git-locks:check
 
+      - name: Enforce three-layer import contract (Foundation ← Core/Infra ← Surfaces/Features)
+        # Forbids upward imports that would couple a lower layer to a higher one:
+        #   Rule 1 — Core/Infra (agent/, service/, skills/, …) must not import Surfaces (cli/, telegram/, web-server/)
+        #   Rule 2 — Foundation (config/, utils/) must not import Core/Infra, Surfaces, or Features
+        #   Rule 3 — Features (improve/, insights/, whatif/) must not import Surfaces
+        # Known pre-existing violations are allowlisted in scripts/audit-layer-imports.ts
+        # with tracking issues; the gate blocks any NEW violations from landing.
+        # See: issue #4457, decision fact #3548.
+        run: pnpm audit:layer:check
+
       - name: Audit module-scope state duplication across sibling families
         # A split that re-declares a module-scope singleton or a process.on
         # registration in a sibling — instead of importing the original binding —
