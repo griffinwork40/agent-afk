@@ -80,7 +80,7 @@ describe('TerminalCompositor — resize while disarmed', () => {
   it('EXPAND while disarmed resets geometry so first armed repaint uses new dimensions', async () => {
     stdout.rows = 24;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
-    type Internals = { disarmRows: number };
+    type Internals = { disarmRows: number; disarmCols: number };
     try {
       await c.arm();
       c.repaint();
@@ -98,6 +98,9 @@ describe('TerminalCompositor — resize while disarmed', () => {
 
       // arm() should have consumed the snapshot (reset to 0).
       expect(internals.disarmRows).toBe(0);
+      // disarmCols must also be reset (#4203: handleDisarmWindowResize zeroed
+      // disarmRows but not disarmCols; both must be cleared together).
+      expect(internals.disarmCols).toBe(0);
       // The frame should render at the new expanded bottom row (39 = 40-1),
       // NOT at the old position (23 = 24-1). This is the core assertion:
       // without the fix, the renderer's stale previousTopRow/previousLineCount
@@ -203,6 +206,14 @@ describe('TerminalCompositor — resize while disarmed', () => {
       // logical bottom). Row 24 must be erased (first row beyond logical top).
       expect(out, 'inflated ghost-erase must erase rows beyond logical bottom').toContain(
         `\x1b[24;1H\x1b[2K`,
+      );
+      // Upper-bound clamp: flushResizeGhostErase clamps bottom to liveRows (40),
+      // so row 40 IS erased but row 41 is NOT (would be off-screen).
+      expect(out, 'ghost-erase must reach the new viewport bottom (row 40)').toContain(
+        `\x1b[40;1H\x1b[2K`,
+      );
+      expect(out, 'ghost-erase must not exceed the new viewport (row 41 must not appear)').not.toContain(
+        `\x1b[41;1H\x1b[2K`,
       );
     } finally {
       c.disarm();

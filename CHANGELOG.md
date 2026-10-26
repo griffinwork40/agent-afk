@@ -11,6 +11,249 @@ Entries in the [Unreleased] section may include a short commit hash suffix
 
 ## [Unreleased]
 
+## [5.337.0] - 2026-10-25
+
+### Added
+- dynamic startup recall + ambient dashboard (#4397) (3a4908ef2)
+- add /usage-awareness toggle to control model visibility of subscription usage (#4402) (4fe650879)
+
+### Fixed
+- stale comments, fail-closed gate parity, provider gate tests (#4223) (619e4c371)
+- replace it.fails with pinned assertions in cross-classifier Section 3 (#3846) (ae2534944)
+- extend cross-classifier helpers to all four classifiers + add tier assertions (7df520797)
+- narrow stampLastContent to UserMessageParam | AssistantMessageParam for SDK v1.x (9e52858ed)
+- use git_read-compatible flag forms in state survey (#4390) (a76a99e67)
+
+### Changed
+- bump @anthropic-ai/sdk from 0.134.0 to 1.1.0 (4c77cbc4f)
+- bump the prod-minor-patch group across 1 directory with 4 updates (efaf9f731)
+- bump the dev-minor-patch group with 3 updates (#4383) (eaec2cd7f)
+- bump vscode-jsonrpc from 9.0.3 to 10.0.0 (#4385) (771decc5a)
+- bump pnpm/action-setup (#4384) (0d634bf4f)
+- bump github/codeql-action/analyze from 3.39.1 to 4.39.1 (#4387) (88feeb9c6)
+- bump github/codeql-action/init from 3.39.1 to 4.39.1 (#4388) (4717c274d)
+- bump actions/checkout from 4.4.0 to 7.0.1 (#4389) (481ac0f76)
+- bump the dashboard-dev-minor-patch group (d3d80ea03)
+- bump lucide-react (71a40f056)
+- bump the fumadocs group in /website with 3 updates (68eb10254)
+
+## [5.336.0] - 2026-10-25
+
+### Added
+- **LSP server pool**: persistent LspClient + LspServerPool with auto-detect, auto-install, and migrated code_symbols + post-edit diagnostics (#4272) (b4c1f012f)
+- **Plugin API**: add state store and peer messaging to PluginApi (afe6832e8)
+- cluster tool failures by normalized errorHead (#4229) (21ebc8518)
+- show background process counts in the health rail (9d7e043fa)
+
+### Fixed
+- context-pressure wind-down passes stale text or markup as answer (#3983) (37d910718)
+- only show table row separators after multi-line rows (#4391) (2f9e1d62b)
+- overwrite stale tool-stop reason on abort instead of preserving via ??= (#3965) (74dad4a3e)
+- normalize git_read count shorthand, empty pattern, and echoed subcommand (#4227) (6a49f9768)
+- widen log/rev-list allowlist and fix git-investigator prompt (59cdf065b)
+- worktree-isolated depth-2+ forks inherit correct write root (e91964135)
+- pin childSkillExecutorFactory cwd inheritance in worktree-isolated depth-2+ tests (553d5e192)
+- retire session from owner maps on /exit (8b5a08b5c)
+- bind plugin peer helpers to calling sessions (2cbcd5b24)
+- add sightingCount to track recurrence beyond evidence cap (6174b00be)
+- gate firstSeen/lastSeen update on new evidence, not scan wall clock (56acfe3df)
+- post-turn re-check for bg injections that land while a turn is claimed (fb380c038)
+- stamp STREAM_INCOMPLETE unconditionally in buffered-text branch (26fb5f1a9)
+
+## [5.335.1] - 2026-10-24
+
+### Fixed
+- adopt a Claude account switch at turn start, no /reauth needed (#4259) (4f14beed9)
+- improve chip color contrast for WCAG AA compliance (827e18173)
+- populate model field in WebSessionSummary (ec21c7659)
+- error-path teardown test, dedup test, and perf doc (64c03bb03)
+- address advisory findings from 2026-10-23 PR triage (75cf5c839)
+- address advisory findings from 2026-10-23 triage batch (a70bbeb67)
+- add --force to 401 hint and tighten classifier test (47d94075a)
+- short-option = guard and missing bash-lexer tests (fa37cbc02)
+- assert 60_000 fallback timeout, remove stray blank lines (b8c1dd82f)
+
+## [5.335.0] - 2026-10-24
+
+### Added
+- **Web chat UI overhaul**: live token streaming with full-length answers (b57ad799a), ⌘K palette indexing sessions and commands (16e0cd196), responsive single-textarea composer with retry/edit wiring (82a5c54bd), one-tap new chat in the phone header (8884d3b5d), layout & navigation UX (edfced3d8), turn controls & composer (5d8a79d72), legible tool rows with collapsible code and fast long transcripts (469fae359), WorkingIndicator placeholder for slow turns (82b0deaba), D2 code highlighting and a11y fixes (293879196), D4 tool rows & shell polish (003b76546), E2 design-pass-2 non-streaming fixes (8905a006b)
+
+### Fixed
+- settle() now drops current-turn sealed drafts when turn has ended (399fd1657)
+- promote git-cache hits to MRU via delete+re-insert (b51a08858)
+- move agent-type listing from tool description to system prompt for prefix-cache stability (a3f582b72)
+- prevent orphan roots when parent commits over running children (26cb94878)
+- resolve symlinked dirs + extract shouldFilePickerSubmit predicate (aa90c4c4c)
+- Enter on @file picker submits for files, navigates for directories (ac0cfa6db)
+- no blank frame between "Thinking" and the first answer text (e3def2bce)
+- transcript follows after Retry and send; ⌘K ranks command names first (501497883)
+- a reload keeps the transcript pinned to the bottom (27b3e485f)
+- sealed drafts only end the indicator for the current turn (b0cffc5ed)
+- mobile tables scroll sideways instead of wrapping rows tall (7600a116d)
+- welcome screen of an empty session shows folder and model (58f746f61)
+- /name shows exactly what was typed; no terminal hint on the web (7a6ab3318)
+- tool durations survive Retry and /rewind (e4e89fc4b)
+- no "Thinking 0s" flash under a finished answer (04b285d73)
+- picker Esc/Cancel/Select hands focus to the re-enabled composer (d908484ec)
+- highlighted code keeps its indentation (b5cb45bcc)
+- show an explicit /name verbatim; humanize only derived titles (2ed85556e)
+- layout scroll events no longer unpin the transcript (bab3a4d5c)
+- working indicator waits for visible text and shows Running <tool> (ce9fee658)
+- stream every turn live, not only the first after a reset (66c997225)
+- jump-to-latest button always visible when scrolled up (4421af279)
+- fix contrast violations in WorkingIndicator and session-model span (770933193)
+- grep/glob summaries keep the search pattern (8e843fb7c)
+- fix language label contrast in code-block header (2bd5f00ee)
+- boost contrast on Agent label and kbd shortcut chip (e2bfd9b68)
+- approval dismissal returns focus to the composer while a turn runs (b16d3e617)
+- spine grouping hung the tab on a `stopped` item (cdd937da9)
+- stamp stopReason 'interrupted' on a Stop that ends via the loop's terminal (6dcfece36)
+- idle live sessions stay "Idle", not "Done"; busy badge on mobile drawer (04ffaa2ac)
+- retry/edit are conversation-only rewinds of the newest prompt (3a68c04d1)
+- tighten /model picker radio selector to match sonnet alias not medium slot (3401991bc)
+- address advisory findings from multiple triage batches and reviews (35a87ece4) (d2b74ab3b) (edfc28665) (c9867b0db)
+- make git-common-dir relative-cwd assertion Windows-portable (92d9b2308)
+
+### Changed
+- model picker redesign + slash palette grouping (66d163f8b)
+- extract schedule/daemon routes from server.ts dispatch() (8b9105c42)
+
+## [5.334.0] - 2026-10-23
+
+### Added
+- add `subagent` routing slot for provider-independent subagent inference (#4324) (872115b62)
+
+### Fixed
+- SHA-pin all GitHub Actions, bump vite, cap daemon body size (2e5227d63)
+- add seenToolUseIds to child-activity-select test fixtures (f47fd70b0)
+- pin softprops/action-gh-release to SHA in publish workflow (4268ce8f0)
+- annotate actionName as string to satisfy TS2367 lint:tests ratchet (4ac3863bb)
+- fix LSP test timing and document DEFAULT_LSP_CMD type (fff9e2586)
+- fix bash lexer comments, guards, and test coverage (346b6cd5b)
+- fix blockReason backticks and add stash false-positive boundary test (4d1b22b94)
+- fix 403 hint and update transient-retry invariant comment (63540874c)
+- fix dangling JSDoc on completeWithWireWithStop (eb3d6c15a)
+- stamp renderedSubagentIds on error path to prevent duplicate Channel B lines (2bbf6d6f4)
+- stall annotation never re-creates flushed lane entries; label parents awaiting children (ea15ee44d)
+- suppress hook completion line for subagents the tool lane already rendered (5bd27e2e0)
+- do not stack spine-only separator rows between nested agent commits (6e7c92c9a)
+- count each subagent tool call once in Done summary (aa6f9bf26)
+- address advisory findings from #4292 review (78c03e423)
+- add subagent slot ENV_KEYS and dispatch integration test (46669f5fc)
+- fix vacuous tests and improve idempotency-header test coverage (8c5f3dc92)
+- add vote-sign guard and unit tests for collapseSingleCountVotes (9acf9c227)
+- bump ip-address 10.7.3 → 10.7.4 + dismiss 7 stale Dependabot alerts (#4336) (dc4c83a50)
+
+### Changed
+- replace inlined slot constants in hints.ts with lazy getters (7963a558d)
+
+## [5.333.0] - 2026-10-23
+
+### Added
+- warn at load time when AFK.md overlay exceeds 10k tokens (#4292) (aa4181981)
+
+### Fixed
+- raise macOS CI timeout, fix daemon teardown race, fix tailLedger flake (#4255) (fe358f8f7)
+- risk-classifier dd over-gate test + resize ghost-erase clamp assertions (#4253) (c0ccae422)
+- add cwd field to wait_for command conditions (#4237) (53e2679c9)
+- add handler tests for lost-outcome reconnect exhaustion framing (#3981) (30bd25dec)
+- status-line render nits and shadow-git observe decision filter (lane C) (#4210) (3bbd2c609)
+- fix release() test, stale comment, and inline invariant comment (#4243) (42c1fa9dc)
+- enforce maxBudgetUsd across REPL /clear cycles (cause 4) (#4280) (1f696573b)
+- deflake tailLedger via onCaughtUp synchronization barrier (#4332) (ce9a5a0d8)
+- guard disk roundtrip assertion with toBeDefined check (dbbeaf0c6)
+- handle Anthropic 403 with opportunistic token refresh (#4316) (870bf07f4)
+- add kind/startedAt to ToolEntry literals; use synthetic POSIX path in Windows-portable test (5020f67ea)
+- count fix_of_fix at most once toward the two-minor-negatives rule (#4289) (232bdee09)
+- shorten paths before SGR styling in grouped bash rows (83013a341)
+- run shortenPaths before styleBashCommand in grouped path (698963add)
+- correct false drain guarantee and overly-restrictive JSDoc (7f4915f72)
+- style grouped bash entries before flattening newlines (6f2a33a1f)
+- address remaining advisory findings from 2026-10-15 triage (52f0ba827)
+- pin Scenario 2 reconciliation tests (3575d334c)
+- clarify decideStatus JSDoc and add missing unsupported test (e80a28b6e)
+- stale comment, blockReason backticks, false-positive note, normalizeSeps early return, Windows tests, show-p tests (121feeb65)
+- re-export buildSubagentBlockCorpus from contracts.ts; fix stale JSDoc in contracts.test.ts (6bd809364)
+
+### Changed
+- remove deprecated completeWithWire wrapper (bc5589349)
+- pin Scenario 2 idempotency-key header forwarding defect (63be9cdbc)
+
+## [5.332.0] - 2026-10-22
+
+### Added
+- OpenAI family aliases (sol/luna/astra/terra) (#4310) (ed09d4eab)
+- /resume repo-root filtering, smarter naming, daemon exclusion (#4308) (ad8dc1d99)
+- web/CLI parity Stages 1-5: cross-surface slash commands, choices, lifecycle (/fork, /resume, /exit), structured /diff, session controls (#4295) (6a7043d2a)
+- /rewind conversation|files|both with cross-turn file restore (#4286) (2fd716087)
+- child-to-parent yield for foreground subagents (#4297) (7cb903fa3)
+
+### Fixed
+- await plugin init before "Unknown command" on early slash input (#4320) (e5fea17c0)
+- clear handler timeout, truncate echoed text, pin 504 shape (#4277) (62cb67efe)
+- scope picker row truncation to selection picker only (8503ce382)
+- address remaining advisory findings from Oct 14 triage (#3794) (a01e78715)
+- address PR #4310 review findings (713734ac2)
+- remove write-only pending-question-store (#4299) (728d32c01)
+- address remaining advisory findings from 2026-10-19 evening triage (#4301) (a82a9aaac)
+- bash lexer long wrapper options, pipe-ampersand, truncated verbs (#4303) (9c0037771)
+
+### Changed
+- stage 3 — use resolveChildModel in dispatchDagNode for model-resolution parity (#4288) (30b8993d7)
+
+## [5.330.0] - 2026-10-22
+
+### Added
+- emphasise and colour bash command words in the REPL tool lane (#4275) (4ff66f8d9)
+- Stage 0 of web/CLI parity: run native slash commands in afk web (#4246) (12e9e6e58)
+
+### Fixed
+- removeEventListener on abort, unconditional parseLocation assertions, AbortSignal tests, DEFAULT_LSP_CMD constant (#4241) (db873a09d)
+- emit mcp_server_status OutputEvent for embedder health UI (#4256) (bb6c99325)
+- reject TS1xxx syntax errors before baseline comparison (#3773) (#4260) (52e75bea0)
+- remove pnpm version: 9 from live-provider-tests.yml (#4236) (808fbfb7c)
+
+### Changed
+- pin Scenario 2 reconciliation – unknown→confirmed lifecycle (#4257) (2efeacc47)
+
+## [5.329.0] - 2026-10-22
+
+### Added
+- continue a capped subagent with its full prior conversation (#4263) (cd4599bc7)
+
+### Fixed
+- continuation hardening from #4263 final review (#4265) (1c6a2fb7f)
+- replace mismapped subagent-block contract with real hook-block detector probe (#4245) (f15e5f81d)
+- never silently drop the subagent round-cap notice (#4258) (d1a66c704)
+- decideStatus returns unsupported (not pass) when no replay handler exists (#4244) (6c14878e8)
+- block mutating git stash inside linked worktrees (#4249) (2fa896cfe)
+- handle.ts cancel comment, mint finally leak, disarmCols reset, manager truncation, redactSecrets test, composeTool pin (#4224) (c65852a6d)
+- telegram /insights help, logging, NaN guard, tests (#4211) (2daf01cd2)
+- checkEgress try/catch, atomic release push, unconditional breaker assertion, SlotProvider import type, stale AFK.md (#4221) (67ca3156c)
+- OTLP push hardening and test gaps (#4212) (dbebae914)
+- LSP symbol lookup hardening (abort, realpath, timeout, response checks) (#4213) (1c846bee0)
+- dashboard handoffs view polling, in-flight guard, types (#4216) (556d88844)
+- misc follow-ups: cli-reference tests, joinContinuation case, to-definition git_read (#4215) (c187df0b9)
+- agent host remote-path invariants and test accuracy (#4214) (aa0bce8f1)
+- move background-job tools to optional tail; fix schemas.order.ts JSDoc (#4222) (751979da9)
+- move agent-type listing from tool description to system prompt (#4219) (dd7410af9)
+
+### Changed
+- `POST /api/sessions/:id/prompt` now returns 422 for native slash commands (use `POST /api/sessions/:id/commands` instead), REPL-only commands, and unknown commands (#4246)
+- cover the round_cap_notice_dropped path (#4264) (075cd68be)
+
+## [5.328.2] - 2026-10-20
+
+### Fixed
+- SSRF host guard, timeout tests, botInfo fail-closed (#4145) (1688dc5d)
+- pin agent-tool error strings, fix DAG isolation test name, add Invariant comment, fix stale docstring (#4148) (5dca1d07)
+- move duplicated normalizeSlotProvider/parseStringField into model-slots.utils.ts (#4143) (d130f41b)
+- advisory findings from 2026-10-14 PR triage batch (#4002) (40d9bb2f)
+- make durationMs test deterministic — drop wall-clock margin (#4144) (0d244dbf)
+
+### Changed
+- remove the auto-release workflow; releases are manual (#4146) (e056015e)
+
 ## [5.328.1] - 2026-10-20
 
 ### Fixed

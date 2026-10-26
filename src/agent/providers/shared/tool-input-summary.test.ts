@@ -160,7 +160,7 @@ describe('summarizeToolInput — other tool shapes unchanged', () => {
   });
 
   it('surfaces a query/pattern/url/description with a leading space', () => {
-    expect(summarizeToolInput('grep', { pattern: 'foo' })).toBe(' foo');
+    expect(summarizeToolInput('grep', { pattern: 'foo' })).toBe(' "foo"');
     expect(summarizeToolInput('web_scrape', { url: 'https://x.com' })).toBe(' https://x.com');
   });
 
@@ -172,5 +172,17 @@ describe('summarizeToolInput — other tool shapes unchanged', () => {
     expect(summarizeToolInput('bash', undefined)).toBe('');
     expect(summarizeToolInput('bash', 'not-an-object')).toBe('');
     expect(summarizeToolInput('bash', {})).toBe('');
+  });
+});
+
+describe('summarizeToolInput: search tools keep their pattern', () => {
+  it('grep shows the quoted pattern and its path (the path alone used to win)', () => {
+    expect(summarizeToolInput('grep', { pattern: 'MAX_TEXT_LEN', path: '/repo/src' })).toBe(' "MAX_TEXT_LEN" in /repo/src');
+  });
+  it('glob without a path shows only the pattern', () => {
+    expect(summarizeToolInput('glob', { pattern: '**/*.ts' })).toBe(' "**/*.ts"');
+  });
+  it('a file tool still shows its path', () => {
+    expect(summarizeToolInput('read_file', { file_path: '/repo/a.ts' })).toBe(' /repo/a.ts');
   });
 });

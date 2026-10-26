@@ -41,10 +41,11 @@ export type LedgerPayload =
    * from `text`, so list views can title a session without parsing preambles.
    */
   | { kind: 'user'; text: string; input?: string }
-  /** A complete assistant message. */
-  | { kind: 'assistant'; text: string }
-  /** Extended-thinking block (clipped). */
-  | { kind: 'thinking'; text: string }
+  /** A complete assistant text segment. `seg` numbers the segment within its
+   *  turn (see session-ledger-segments.ts); absent on legacy records. */
+  | { kind: 'assistant'; text: string; seg?: number }
+  /** Extended-thinking block (coalesced per segment, clipped). */
+  | { kind: 'thinking'; text: string; seg?: number }
   /** A tool invocation starting. `input` is a preview, capped at source. */
   | { kind: 'tool'; toolName: string; toolUseId?: string; input: string }
   /** A failed tool result. */
@@ -109,8 +110,13 @@ export type LedgerPayload =
   /** Terminal record: the hosting process closed the session. */
   | { kind: 'closed'; reason?: string };
 
-/** Cap stored user/assistant/thinking text so a pasted file can't bloat the ledger. */
+/** Cap stored user/thinking text so a pasted file can't bloat the ledger. */
 export const MAX_TEXT_LEN = 8_000;
+/**
+ * Cap for assistant text. Far above any real answer: the web transcript renders
+ * the ledger record verbatim, so the old 8k cap silently cut long answers.
+ */
+export const MAX_ASSISTANT_TEXT_LEN = 256_000;
 /** Cap stored tool-input previews and tool result content. */
 export const MAX_TOOL_INPUT_LEN = 400;
 
@@ -120,14 +126,16 @@ export function clip(text: string, max: number): string {
 
 /**
  * Project an `OutputEvent` onto a ledger payload, or `null` for events the
- * ledger intentionally skips (text/thinking deltas, suggestions, stream-retry
- * markers, panel payloads).
+ * ledger intentionally skips (text deltas, suggestions, stream-retry markers,
+ * panel payloads). Stateless: `SessionLedgerWriter` routes assistant messages
+ * and text/thinking deltas through `SegmentTracker` instead, which coalesces
+ * them into per-segment records; this mapping remains for one-off callers.
  */
 export function projectOutputEvent(event: OutputEvent): LedgerPayload | null {
   switch (event.type) {
     case 'message':
       if (event.message.role !== 'assistant' || !event.message.content) return null;
-      return { kind: 'assistant', text: clip(event.message.content, MAX_TEXT_LEN) };
+      return { kind: 'assistant', text: clip(event.message.content, MAX_ASSISTANT_TEXT_LEN) };
     case 'chunk': {
       const chunk = event.chunk;
       if (chunk.type === 'tool_use_detail') {

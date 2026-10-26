@@ -62,6 +62,19 @@ describe('session-store', () => {
     expect((raw['turns'] as unknown[]).length).toBe(1);
   });
 
+  it('persists nameExplicit in the sidecar head (before turns) only for an explicit name', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'auto name me', 'ok', { totalCostUsd: 0, durationMs: 1, usage: { input_tokens: 1, output_tokens: 1 }, sessionId: 'sdk-auto' });
+    const auto = readFileSync(saveSession(stats), 'utf-8');
+    expect(auto).not.toContain('nameExplicit');
+    stats.name = 'chosen';
+    stats.nameExplicit = true;
+    const text = readFileSync(saveSession(stats), 'utf-8');
+    expect(text.indexOf('"nameExplicit": true')).toBeGreaterThan(0);
+    expect(text.indexOf('"nameExplicit": true')).toBeLessThan(text.indexOf('"turns"'));
+    expect(loadSession(saveSession(stats))!.nameExplicit).toBe(true);
+  });
+
   it('loadSession round-trips saved data', () => {
     const stats = createSessionStats('sonnet');
     recordTurn(stats, 'q', 'a', { totalCostUsd: 0.02, durationMs: 200, usage: { input_tokens: 20, output_tokens: 10 }, sessionId: 'sdk-xyz' });
@@ -342,9 +355,9 @@ describe('session-store — naming', () => {
     const stats = createSessionStats('sonnet');
     // recordTurn derives the name from the first user message.
     recordTurn(stats, 'Help me fix the Telegram resume bug', 'ok', { sessionId: 'sdk-auto' });
-    expect(stats.name).toBe('help-me-fix-the-telegram-resume');
+    expect(stats.name).toBe('help-me-fix-telegram-resume-bug');
     const path = saveSession(stats);
-    expect(loadSession(path)!.name).toBe('help-me-fix-the-telegram-resume');
+    expect(loadSession(path)!.name).toBe('help-me-fix-telegram-resume-bug');
   });
 
   it('does not overwrite an explicitly set name on later turns', () => {
@@ -418,7 +431,7 @@ describe('session-store — naming', () => {
   it('saving and renaming a session never forks a duplicate sidecar', () => {
     const stats = createSessionStats('sonnet');
     recordTurn(stats, 'hello world', 'hi', { sessionId: 'sdk-dup' });
-    expect(stats.name).toBe('hello-world');
+    expect(stats.name).toBe('world'); // 'hello' is a stop word
     const path = saveSession(stats);
     const dir = sessionsDirOf(path);
 

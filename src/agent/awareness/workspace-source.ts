@@ -94,7 +94,7 @@ export function gatherWorkspace(cwd: string): RuntimeWorkspace {
   // with exit 0, which must be read as "clean" (dirty:false, count:0), NOT
   // conflated with a failed status call. Without it, gitOutput collapses
   // empty→null and a clean checkout wrongly reports dirty:null/dirtyCount:null.
-  const statusRaw = gitOutput(cwd, ['status', '--porcelain'], true);
+  const statusRaw = gitOutput(cwd, ['--no-optional-locks', 'status', '--porcelain'], true);
   let dirty: boolean | null = false;
   let dirtyCount: number | null = 0;
   if (statusRaw !== null) {

@@ -29,7 +29,7 @@ function RunningHeader({ tools }: { tools: ToolCallCardProps[] }) {
   const current = runningIdx >= 0 ? runningIdx + 1 : tools.length;
 
   return (
-    <span className="animate-shimmer-pulse font-medium text-status-blocked">
+    <span className="animate-shimmer-pulse font-medium text-foreground">
       Running tool {current} of {tools.length}...
     </span>
   );
@@ -38,7 +38,7 @@ function RunningHeader({ tools }: { tools: ToolCallCardProps[] }) {
 function CompleteHeader({ tools }: { tools: ToolCallCardProps[] }) {
   const total = sumDurations(tools);
   return (
-    <span className="flex items-center gap-1.5 font-medium text-status-running">
+    <span className="flex items-center gap-1.5 font-medium text-foreground">
       <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
       Tools complete ✓{total !== undefined && ` ${formatMs(total)}`}
     </span>
@@ -48,7 +48,7 @@ function CompleteHeader({ tools }: { tools: ToolCallCardProps[] }) {
 function ErrorHeader({ tools }: { tools: ToolCallCardProps[] }) {
   const errorCount = tools.filter((t) => t.status === 'error').length;
   return (
-    <span className="flex items-center gap-1.5 font-medium text-status-failed">
+    <span className="flex items-center gap-1.5 font-medium text-foreground">
       <AlertCircle className="h-3.5 w-3.5 shrink-0" />
       {errorCount} error{errorCount !== 1 ? 's' : ''}
     </span>
@@ -109,6 +109,8 @@ export function ToolGroup({ tools, isActive }: ToolGroupProps) {
     setOpen((v) => !v);
   }
 
+  if (tools.length === 0) return null;
+
   const hasError = tools.some((t) => t.status === 'error');
   const totalDuration = sumDurations(tools);
 
@@ -118,7 +120,7 @@ export function ToolGroup({ tools, isActive }: ToolGroupProps) {
       <button
         type="button"
         onClick={handleToggle}
-        className="flex w-full items-center gap-2 px-3 py-2 text-xs select-none hover:bg-muted/30"
+        className="flex w-full items-center gap-2 px-3 py-2 text-xs select-none hover:bg-muted/30 rounded focus-visible:outline-2 focus-visible:outline-ring"
         aria-expanded={open}
       >
         <ChevronDown

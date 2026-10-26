@@ -5,8 +5,9 @@
  * @module agent/tools/usage-notice.test
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { buildUsageNotice, evaluateDispatchUsage } from './usage-notice.js';
+import { setUsageAwareness, resetUsageAwarenessForTests } from '../usage/usage-awareness-toggle.js';
 import { InMemoryTraceWriter } from '../trace/writer.js';
 import { USAGE_STALE_AFTER_MS, type UsageRecord } from '../usage/usage-record.js';
 import { evaluateUsage } from '../usage/usage-budget.js';
@@ -88,4 +89,11 @@ describe('evaluateDispatchUsage', () => {
   it('works without a trace writer', async () => {
     expect(await evaluateDispatchUsage('anthropic-direct', undefined, () => rec({ fiveHour: 0.9 }))).toBeTruthy();
   });
+
+  it('returns undefined when usage awareness is toggled off', async () => {
+    setUsageAwareness(false);
+    expect(await evaluateDispatchUsage('anthropic-direct', undefined, () => rec({ fiveHour: 0.95 }))).toBeUndefined();
+  });
+
+  afterEach(() => resetUsageAwarenessForTests());
 });

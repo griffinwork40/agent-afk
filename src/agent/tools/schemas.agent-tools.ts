@@ -69,7 +69,8 @@ export const agentTool: AnthropicToolDef = {
           'Model for the agent. Defaults to parent session model. Override per-call ' +
           'to right-size cost vs. capability — `haiku` (cheapest/fastest), `sonnet` ' +
           '(general-use), `opus` (most capable). Append `_1m` (e.g. `sonnet_1m`) for ' +
-          '1M-context variants. Full model IDs are also accepted.',
+          '1M-context variants. OpenAI family aliases: `sol`, `luna`, `astra`, `terra` ' +
+          '(pinned to a concrete flagship in each family). Full model IDs are also accepted.',
       },
       max_turns: {
         type: 'number',
@@ -167,6 +168,14 @@ export const agentTool: AnthropicToolDef = {
           'Risk class `high`: autonomous mode holds for approval and plan mode refuses it. ' +
           'Incompatible with `isolation:"worktree"` (isolation creates a local worktree). ' +
           'Background mode is supported.',
+      },
+      continuation_chain_id: {
+        type: 'string',
+        description:
+          'Continue a previous subagent with its full prior conversation (the chain id from a ' +
+          '`[continuation: chain_id=...]` line or result metadata; runtime-minted, never invent one). ' +
+          '`prompt` is the new instruction. agent_type/model/cwd/isolation are inherited from the chain ' +
+          'and must be omitted or equal. `mode` (foreground/background) may differ.',
       },
     },
     required: ['prompt'],

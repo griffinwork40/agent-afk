@@ -12,15 +12,9 @@
  *   - Silent degradation: any error → structured error result, never throws.
  *   - TypeScript / JS only in this phase; Python (pyright) is a follow-up.
  *   - LSP server binary: `typescript-language-server --stdio` on PATH.
- *   - No persistent server — each call spawns, queries, and exits.
- *
- * LSP sequence for symbol lookup:
- *   1. Send `initialize` request.
- *   2. Send `initialized` notification.
- *   3. Send `textDocument/didOpen` with the file content.
- *   4. Send `textDocument/definition` or `textDocument/references` request.
- *   5. Await the response (id matches step-4 request id).
- *   6. Send `shutdown` + `exit`.
+ *   - Persistent server (#4272): queries share one warm server per
+ *     (workspace root, language) via `LspServerPool`; a crashed server is
+ *     evicted and the next query spawns a fresh one.
  *
  * Security: the input `filePath` is resolved through `resolveAndContain`
  * (read-denylist + root containment) before any file read or LSP query, and
@@ -30,21 +24,22 @@
  * @module agent/tools/handlers/lsp-symbols
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL, fileURLToPath } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { env } from '../../../config/env.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { decidePathAccess } from './path-policy.js';
 import type { ToolHandlerContext } from '../types.js';
+import { getSymbolsTimeoutMs, lspFailureMessage, readLspSource } from './lsp-shared.js';
+import { LspClientError } from '../../lsp/client.js';
+import { realpathSafe } from './_cwd-utils.js';
+import { withPooledFile } from '../../lsp/query.js';
 import {
-  encodeMessage,
-  killProc,
-  parseMessages,
-  languageIdForExt,
-  getTimeoutMs,
-} from './lsp-shared.js';
+  DEFAULT_LSP_CMD,
+  TYPESCRIPT_SERVER_DEFINITION,
+  typescriptRootFor,
+  typescriptSpecFromCommand,
+} from '../../lsp/typescript-default.js';
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -69,10 +64,13 @@ export interface LspSymbolResult {
 /** Subcommand accepted by the `code_symbols` tool. */
 export type SymbolSubcommand = 'definition' | 'references';
 
+/** Default LSP server command — shared by `queryLspSymbol` and `handleCodeSymbols`. */
+export { DEFAULT_LSP_CMD };
+
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 /** Parse an LSP Location or LocationLink into an LspLocation. */
-function parseLocation(raw: unknown): LspLocation | null {
+export function parseLocation(raw: unknown): LspLocation | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const loc = raw as {
     uri?: string;
@@ -82,17 +80,24 @@ function parseLocation(raw: unknown): LspLocation | null {
   };
   const uri = loc.targetUri ?? loc.uri;
   const range = loc.targetRange ?? loc.range;
+  // Treat missing uri or range.start as malformed — skip rather than defaulting.
   if (typeof uri !== 'string') return null;
+  if (typeof range?.start?.line !== 'number' || typeof range?.start?.character !== 'number') return null;
   let filePath: string;
   try { filePath = fileURLToPath(uri); } catch { return null; }
+
+  // Security: resolve symlinks via realpathSafe before access-policy check so
+  // symlinks cannot escape read roots (e.g. a symlink pointing outside the
+  // workspace would otherwise bypass decidePathAccess).
+  try { filePath = realpathSafe(filePath); } catch { return null; }
 
   // Security (finding 2): filter out locations pointing at denylisted paths
   // so credential paths from LSP responses are never surfaced in tool output.
   const decision = decidePathAccess(filePath, 'read');
   if (decision.kind === 'deny') return null;
 
-  const line = (typeof range?.start?.line === 'number' ? range.start.line : 0) + 1;
-  const col = (typeof range?.start?.character === 'number' ? range.start.character : 0) + 1;
+  const line = range.start.line + 1;
+  const col = range.start.character + 1;
   return { filePath, line, col };
 }
 
@@ -122,6 +127,8 @@ export function isLspSymbolsEnabled(): boolean {
  * @param rootDir    - Workspace root for rootUri (session cwd). When provided,
  *                     enables cross-file definition/references.
  * @param serverCmd  - LSP server binary + args (injectable for tests).
+ * @param signal     - Optional AbortSignal; resolves immediately with an error
+ *                     when aborted before the LSP server responds.
  */
 export async function queryLspSymbol(
   filePath: string,
@@ -129,140 +136,55 @@ export async function queryLspSymbol(
   line: number,
   col: number,
   rootDir?: string,
-  serverCmd: readonly string[] = ['typescript-language-server', '--stdio'],
+  serverCmd: readonly string[] = DEFAULT_LSP_CMD,
+  signal?: AbortSignal,
 ): Promise<LspSymbolResult> {
-  const timeoutMs = getTimeoutMs();
-  const langId = languageIdForExt(path.extname(filePath));
-  if (!langId) {
-    return { locations: [], error: `Unsupported file type: ${path.extname(filePath)}` };
+  if (signal?.aborted) return { locations: [], error: 'Aborted' };
+  const ext = path.extname(filePath);
+  if (!TYPESCRIPT_SERVER_DEFINITION.languageIds[ext.toLowerCase()]) {
+    return { locations: [], error: `Unsupported file type: ${ext}` };
   }
-
-  let proc: ChildProcess | null = null;
-
-  return new Promise<LspSymbolResult>((resolve) => {
-    let settled = false;
-    const done = (result: LspSymbolResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (proc) killProc(proc);
-      resolve(result);
-    };
-
-    const timer = setTimeout(() => done({ locations: [], error: 'LSP server timed out' }), timeoutMs);
-    timer.unref();
-
-    readFile(filePath, 'utf8')
-      .then((fileContent) => {
-        if (settled) return;
-
-        const [cmd, ...args] = serverCmd as [string, ...string[]];
-        try {
-          proc = spawn(cmd, args, {
-            stdio: ['pipe', 'pipe', 'ignore'],
-            shell: process.platform === 'win32',
-          });
-        } catch {
-          done({ locations: [], error: 'Failed to spawn LSP server' });
-          return;
-        }
-
-        proc.on('error', () => done({ locations: [], error: 'LSP server process error' }));
-
-        const uri = pathToFileURL(filePath).toString();
-        // Finding 5: send session cwd as rootUri so cross-file
-        // definition/references work instead of sending null.
-        const rootUri = rootDir ? pathToFileURL(rootDir).toString() : null;
-        let reqId = 0;
-        const chunks: Buffer[] = [];
-
-        const send = (msg: unknown) => {
-          try { proc!.stdin!.write(encodeMessage(msg)); } catch { /* stdin closed */ }
-        };
-
-        // 1. Initialize — with rootUri and workspaceFolders for cross-file support.
-        send({
-          jsonrpc: '2.0',
-          id: ++reqId,
-          method: 'initialize',
-          params: {
-            processId: process.pid,
-            rootUri,
-            ...(rootUri ? { workspaceFolders: [{ uri: rootUri, name: 'workspace' }] } : {}),
-            capabilities: {},
-          },
-        });
-
-        // 2. Initialized notification
-        send({ jsonrpc: '2.0', method: 'initialized', params: {} });
-
-        // 3. didOpen
-        send({
-          jsonrpc: '2.0',
-          method: 'textDocument/didOpen',
-          params: {
-            textDocument: { uri, languageId: langId, version: 1, text: fileContent },
-          },
-        });
-
-        // 4. Symbol request — LSP uses 0-based positions.
-        const symbolReqId = ++reqId;
-        const lspMethod = subcommand === 'definition'
-          ? 'textDocument/definition'
-          : 'textDocument/references';
-        const params: Record<string, unknown> = {
-          textDocument: { uri },
-          position: { line: line - 1, character: col - 1 },
-        };
-        if (subcommand === 'references') {
-          params['context'] = { includeDeclaration: true };
-        }
-        send({ jsonrpc: '2.0', id: symbolReqId, method: lspMethod, params });
-
-        // 5. Read responses — wait for the reply whose id === symbolReqId.
-        proc.stdout!.on('data', (chunk: Buffer) => {
-          if (settled) return;
-          chunks.push(chunk);
-          const buf = Buffer.from(Buffer.concat(chunks));
-          const { messages, remaining } = parseMessages(buf);
-          chunks.length = 0;
-          chunks.push(remaining);
-
-          for (const msg of messages) {
-            if (typeof msg !== 'object' || msg === null) continue;
-            const m = msg as { id?: unknown; result?: unknown; error?: unknown };
-            if (m.id !== symbolReqId) continue;
-
-            // 6. Graceful shutdown.
-            send({ jsonrpc: '2.0', id: ++reqId, method: 'shutdown', params: null });
-            send({ jsonrpc: '2.0', method: 'exit', params: null });
-
-            if (m.error !== undefined) {
-              done({ locations: [], error: 'LSP server returned an error' });
-              return;
-            }
-
-            const raw = m.result;
-            const locations: LspLocation[] = [];
-            if (Array.isArray(raw)) {
-              for (const item of raw) {
-                const loc = parseLocation(item);
-                if (loc) locations.push(loc);
-              }
-            } else if (raw !== null && raw !== undefined) {
-              const loc = parseLocation(raw);
-              if (loc) locations.push(loc);
-            }
-
-            done({ locations });
-            return;
-          }
-        });
-
-        proc.on('close', () => done({ locations: [], error: 'LSP server exited before responding' }));
-      })
-      .catch(() => done({ locations: [], error: 'Failed to read source file' }));
-  });
+  const t0 = Date.now();
+  const budgetMs = getSymbolsTimeoutMs();
+  let content: string;
+  try {
+    content = await readLspSource(filePath, budgetMs, signal);
+  } catch (err) {
+    return { locations: [], error: err instanceof LspClientError
+      ? lspFailureMessage(err, 'LSP symbols timed out (increase AFK_LSP_SYMBOLS_TIMEOUT_MS)')
+      : 'Failed to read source file' };
+  }
+  const spec = typescriptSpecFromCommand(serverCmd);
+  const root = rootDir ?? typescriptRootFor(filePath);
+  const lspMethod = subcommand === 'definition' ? 'textDocument/definition' : 'textDocument/references';
+  // F4: subtract the time spent reading the file so the withPooledFile
+  // deadline covers the full budget, not just what remains after the read.
+  const elapsed = Date.now() - t0;
+  const timeoutMs = Math.max(0, budgetMs - elapsed);
+  try {
+    const raw = await withPooledFile(spec, filePath, content, { root, timeoutMs, signal }, (ctx) => {
+      const params: Record<string, unknown> = {
+        textDocument: { uri: ctx.sync.uri },
+        // LSP uses 0-based positions.
+        position: { line: line - 1, character: col - 1 },
+      };
+      // includeDeclaration:false — report call-sites only; the declaration
+      // itself is a separate go-to-definition query.
+      if (subcommand === 'references') params['context'] = { includeDeclaration: false };
+      return ctx.client.request<unknown>(lspMethod, params, { timeoutMs: ctx.remainingMs(), signal });
+    });
+    const items = Array.isArray(raw) ? raw : raw === null || raw === undefined ? [] : [raw];
+    const locations: LspLocation[] = [];
+    for (const item of items) {
+      const loc = parseLocation(item);
+      if (loc) locations.push(loc);
+    }
+    return { locations };
+  } catch (err) {
+    const error = lspFailureMessage(err, 'LSP symbols timed out (increase AFK_LSP_SYMBOLS_TIMEOUT_MS)');
+    if (env.AFK_DEBUG) process.stderr.write(`[afk:lsp-symbols] ${error}\n`);
+    return { locations: [], error };
+  }
 }
 
 /**
@@ -303,6 +225,7 @@ export async function handleCodeSymbols(
   context?: ToolHandlerContext,
   cwd?: string,
   serverCmd?: readonly string[],
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!isLspSymbolsEnabled()) {
     return (
@@ -321,9 +244,11 @@ export async function handleCodeSymbols(
 
   try {
     const rootDir = context?.resolveBase ?? cwd;
-    const result = serverCmd !== undefined
-      ? await queryLspSymbol(resolvedPath, input.subcommand, input.line, input.col, rootDir, serverCmd)
-      : await queryLspSymbol(resolvedPath, input.subcommand, input.line, input.col, rootDir);
+    const result = await queryLspSymbol(
+      resolvedPath, input.subcommand, input.line, input.col, rootDir,
+      serverCmd ?? DEFAULT_LSP_CMD,
+      signal,
+    );
     return formatSymbolResult(input.file_path, input.subcommand, input.line, input.col, result);
   } catch {
     return '[LSP] code_symbols: unexpected error';

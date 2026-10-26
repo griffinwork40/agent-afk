@@ -42,16 +42,23 @@ import {
   buildChatCompletionsRequestBody,
   buildResponsesRequestBody,
 } from './request-body.js';
-import { driveStream, type IterationResult } from './stream-drive.js';
+import { driveStream, type IterationResult, type StreamDriveStrategy } from './stream-drive.js';
 import type { FastTierSession } from './fast-tier-session.js';
 import type { OpenAIJournalWiring } from './journal-wiring.js';
 import { chatGptClaudeModelError, clarifyResponsesError } from './chatgpt-backend-errors.js';
 import type { TraceSink } from '../../../trace/index.js';
 import type { OpenAIAuthResolution } from '../auth.js';
 import { ensureError } from '../../../../utils/errors.js';
+import {
+  getEndpointSemaphore,
+  type EndpointSemaphore,
+} from '../../../../config/endpoint-semaphore.js';
+import { emitSessionPhase } from '../../../trace/emit.js';
 
 /** Live accessors the iteration driver needs from the owning query instance. */
 export interface IterationContext {
+  /** File-checkpoint linker for the pushed user turn; absent in tests and when unwired. */
+  readonly checkpoint?: { linkUserTurn(message: object, messageIndex: number): void };
   /** Current model id — mutable between turns via setModel. */
   readonly currentModel: string;
   /** Current permission mode — mutable via setPermissionMode. */
@@ -115,12 +122,73 @@ export function* finishTurn(
 export function pushUserTurn(
   ctx: IterationContext,
   content: import('../../../provider.js').ProviderUserTurn['content'],
+  linkCheckpoint = true,
 ): void {
   const vision = supportsVision(ctx.currentModel);
-  ctx.priorTurns.push({
+  const message: OpenAIMessage = {
     role: 'user',
     content: buildUserContent(content, { vision, model: ctx.currentModel }),
-  });
+  };
+  ctx.priorTurns.push(message);
+  // Tie this prompt to its file checkpoint for /rewind (#4271). Stop-hook
+  // continuation messages are NOT linked: rewinding "to" one would restore
+  // files to the start of the whole turn while keeping its earlier segment.
+  if (linkCheckpoint) ctx.checkpoint?.linkUserTurn(message, ctx.priorTurns.length - 1);
+}
+
+/**
+ * Wrap a `createStream` factory with per-endpoint semaphore acquire/release so
+ * the slot is held for the full stream lifetime, not just the connection phase.
+ *
+ * Acquire happens before the underlying `createStream` call; release happens in
+ * the generator's `finally` block so every exit path — clean completion, error,
+ * or abort — releases the slot. Passes `signal` to `acquire()` so an aborted
+ * session does not leak a queued resolver.
+ *
+ * When `sem` is null (no concurrency cap configured) the original factory is
+ * returned unchanged, preserving pre-#3886 behaviour.
+ */
+function wrapCreateStreamWithSemaphore<TEvent>(
+  createStream: StreamDriveStrategy<TEvent>['createStream'],
+  sem: EndpointSemaphore | null,
+  signal: AbortSignal,
+  traceWriter: TraceSink | undefined,
+  model: string,
+  baseUrl: string,
+): StreamDriveStrategy<TEvent>['createStream'] {
+  if (sem === null) return createStream;
+  return async (streamSignal: AbortSignal) => {
+    const waitStart = Date.now();
+    await sem.acquire(signal);
+    const waitMs = Date.now() - waitStart;
+    if (waitMs > 0) {
+      void emitSessionPhase(traceWriter, {
+        phase: 'endpoint_semaphore_wait',
+        durationMs: waitMs,
+        resolvedModel: model,
+        metadata: {
+          baseUrl,
+          activeCount: sem.activeCount,
+        },
+      });
+    }
+    // Guard: if createStream rejects before the generator is constructed the
+    // acquired slot would leak permanently. Release on throw, then re-throw.
+    let rawStream: Awaited<ReturnType<typeof createStream>>;
+    try {
+      rawStream = await createStream(streamSignal);
+    } catch (e) {
+      sem.release();
+      throw e;
+    }
+    return (async function* semaphoreHeld() {
+      try {
+        yield* rawStream;
+      } finally {
+        sem.release();
+      }
+    })();
+  };
 }
 
 /**
@@ -187,6 +255,18 @@ export async function* runIteration(
     isClosed: () => ctx.closed,
   };
 
+  // Per-endpoint concurrency semaphore (#3886). The key is `openaiBaseUrl`
+  // (the per-slot override, set by applySlotCredentials) falling back to
+  // the client's resolved base URL. This matches how slot-credentials.ts
+  // propagates the binding: openaiBaseUrl is the canonical key for this
+  // provider. When no cap is configured, sem is null and every createStream
+  // call passes through unchanged (backward-compatible).
+  const semBaseUrl = ctx.opts.config.openaiBaseUrl ?? ctx.client.baseURL ?? '';
+  const sem = getEndpointSemaphore(
+    semBaseUrl || undefined,
+    ctx.opts.config.endpointConcurrency,
+  );
+
   if (ctx.wireMode === 'responses') {
     const isChatGptBackend = ctx.opts.auth.source === 'chatgpt-oauth';
 
@@ -205,8 +285,15 @@ export async function* runIteration(
     });
 
     const result = yield* driveStream<ResponsesStreamEvent>(driveCtx, {
-      createStream: async (signal) => (await ctx.fastTier.create(requestBody, (body) =>
-        ctx.client.responses.create(body as never, { signal }))) as unknown as AsyncIterable<ResponsesStreamEvent>,
+      createStream: wrapCreateStreamWithSemaphore(
+        async (signal) => (await ctx.fastTier.create(requestBody, (body) =>
+          ctx.client.responses.create(body as never, { signal }))) as unknown as AsyncIterable<ResponsesStreamEvent>,
+        sem,
+        controller.signal,
+        ctx.traceWriter,
+        ctx.currentModel,
+        semBaseUrl,
+      ),
       translate: (event, state) => {
         ctx.fastTier.observeResponsesEvent(event);
         return translateResponsesEvent(event, state, ctx.initSessionId);
@@ -226,8 +313,15 @@ export async function* runIteration(
     });
 
     const result = yield* driveStream<OpenAIChunk>(driveCtx, {
-      createStream: async (signal) => (await ctx.fastTier.create(requestBody, (body) =>
-        ctx.client.chat.completions.create(body as never, { signal }))) as unknown as AsyncIterable<OpenAIChunk>,
+      createStream: wrapCreateStreamWithSemaphore(
+        async (signal) => (await ctx.fastTier.create(requestBody, (body) =>
+          ctx.client.chat.completions.create(body as never, { signal }))) as unknown as AsyncIterable<OpenAIChunk>,
+        sem,
+        controller.signal,
+        ctx.traceWriter,
+        ctx.currentModel,
+        semBaseUrl,
+      ),
       translate: (event, state) => {
         ctx.fastTier.observeChatChunk(event);
         return translateChunk(event, state, ctx.initSessionId);

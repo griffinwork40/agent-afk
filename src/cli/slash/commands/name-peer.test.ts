@@ -79,7 +79,7 @@ describe('/name ↔ peerNotifier.setName wiring', () => {
     setNamePeerNotifier(notifier);
     const { ctx } = makeCtx(makeStats());
     await nameCmd.handler(ctx, 'My Worker Session');
-    expect(notifier.setName).toHaveBeenCalledWith('my-worker-session');
+    expect(notifier.setName).toHaveBeenCalledWith('worker-session');
   });
 
   it('does not call setName when arg is empty (no-arg / show path)', async () => {

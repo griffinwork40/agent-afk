@@ -178,6 +178,9 @@ export class StreamRenderer {
   /** Ref wired in arm() so the edit-preview hook can push diffs to the tool lane. */
   private readonly addPreviewDiffRef: PreviewDiffRef | undefined;
 
+  /** REPL completion writer — forwarded to SubagentCtx for Channel B suppression. */
+  private completionWriter: import('../commands/interactive/shared.js').CompletionWriter | undefined;
+
   /**
    * Pre-bound sink — pass directly to `runWithSink(...)` from callers.
    * Equivalent to `(event, meta) => this.process(event, meta)`.
@@ -254,6 +257,7 @@ export class StreamRenderer {
     this.ttfbStartedAt = opts.turnStartedAt;
     this.ttfbDone = opts.turnStartedAt === undefined;
     this.addPreviewDiffRef = opts.addPreviewDiffRef;
+    this.completionWriter = opts.completionWriter;
 
     this.sink = (event, meta) => this.process(event, meta);
   }
@@ -593,6 +597,7 @@ export class StreamRenderer {
       activeSkillName: this.activeSkillName,
       onStageChange: this.onStageChange,
       buildOrchestratorCtx: () => this.buildOrchestratorCtx(),
+      ...(this.completionWriter ? { completionWriter: this.completionWriter } : {}),
     };
     processEvent(ctx, event, meta);
   }

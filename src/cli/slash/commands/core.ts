@@ -6,15 +6,18 @@
  * modules are removed.
  */
 
+import { randomUUID } from 'node:crypto';
 import ora from 'ora';
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { list } from '../registry.js';
-import { resetStats } from '../session-stats.js';
+import { missingCapabilities } from '../capabilities.js';
+import { writeList } from '../output-blocks.js';
+import { clearConversation, compactConversation } from '../../../agent/session-control/index.js';
 import { REPL_SPINNER_OPTIONS } from '../../commands/interactive/shared.js';
 import { HookBlockedError, AbortError } from '../../../utils/errors.js';
-import { renderSelector } from '../../input/selectors.js';
 import type { SlashCommand } from '../types.js';
+import { rewindCmd } from './core.rewind.js';
 
 /** Compact human-readable byte size for the /compact microcompaction notice. */
 function formatBytes(n: number): string {
@@ -39,13 +42,8 @@ const clearCmd: SlashCommand = {
   hint: 'When the current thread has drifted off-topic or you want a clean slate without restarting the session.',
   async handler(ctx) {
     try {
-      // We tear down and rebuild the SDK conversation rather than forwarding
-      // the literal string `/clear` to the provider — providers treat that
-      // as a normal user-text turn, so the model retains prior context.
-      await ctx.session.current.reset();
+      await clearConversation(ctx.session.current, ctx.stats, ctx.ledger);
       ctx.ui.clearScreen();
-      resetStats(ctx.stats);
-      ctx.ledger?.clear();
       ctx.out.success('Conversation history cleared.');
     } catch (err) {
       ctx.out.error(err instanceof Error ? err.message : 'Unknown error');
@@ -64,15 +62,21 @@ const compactCmd: SlashCommand = {
     // ora's imperative cursor writes race the compositor's frame repaints on
     // the same physical rows (see terminal-compositor.ts:~800), which is why
     // a user typing during compaction couldn't see their own keystrokes.
-    // Non-TTY surfaces (Telegram, daemon, tests) have no compositor to race
-    // with, so they keep the original bare-ora behavior unchanged.
-    const compositor = ctx.getCompositor?.() ?? null;
+    // Explicit non-TTY surfaces receive text progress; legacy contexts without
+    // capability declarations retain their original bare-ora fallback.
+    const compositor = ctx.progress ? null : (ctx.getCompositor?.() ?? null);
+    const corrId = randomUUID();
+    let progressActive = false;
     let spinner: ReturnType<typeof ora> | null = null;
     let spinnerActive = false;
     // Single stop point reused on every exit path below (success and catch)
     // so the two flavors of "turn the spinner off" can never drift out of
     // sync — a spinner left enabled is a worse bug than the race it replaces.
     const stopSpinner = (): void => {
+      if (progressActive) {
+        progressActive = false;
+        ctx.progress?.({ corrId, phase: 'end', label: 'Summarizing earlier turns...' });
+      }
       if (!spinnerActive) return;
       if (compositor) {
         compositor.setSpinner({ enabled: false });
@@ -82,51 +86,30 @@ const compactCmd: SlashCommand = {
       spinnerActive = false;
     };
     try {
-      // Invariant: fire PreCompact before compaction so registered handlers can
-      // block or observe the operation. block -> HookBlockedError -> skip.
-      const session = ctx.session.current;
-      const hookRegistry = session.hookRegistry;
-      if (hookRegistry) {
-        await hookRegistry.dispatch({
-          event: 'PreCompact',
-          sessionId: session.sessionId,
-          trigger: 'manual',
-        });
-      }
-      // Do not announce or animate compaction until PreCompact hooks have
-      // allowed it. The compositor notice is durable scrollback, so emitting it
-      // before dispatch would falsely claim summarization began when a hook
-      // blocks the operation.
-      if (compositor) {
-        // The in-frame spinner carries no caller-supplied label — it rotates
-        // work-derived/flavour verbs (see input/work-derived-verb.ts), and there
-        // is no 'compact' tool category to map onto. Commit the intent line above
-        // the frame instead, so the operator still learns WHAT is running; unlike
-        // a spinner label it also survives into scrollback next to the result.
-        ctx.out.info('Summarizing earlier turns...');
-        compositor.setSpinner({ enabled: true });
-        spinnerActive = true;
-      } else {
-        spinner = ora({
-          text: palette.meta('Summarizing earlier turns...'),
-          ...REPL_SPINNER_OPTIONS,
-        }).start();
-        spinnerActive = true;
-      }
-      // Report in PROMPTS, not raw API messages: `messagesBefore/After` count
-      // every assistant tool_use and user tool_result message (~2 per tool
-      // round), so a 12-prompt session reads as "Compacted 247 → 5 messages".
-      // Snapshot the genuine user-prompt count before and after compaction the
-      // same way /rewind does (fix #3109), so the two commands stay consistent.
-      // Coupling note: `listRewindTargets()` runs while the compaction spinner
-      // is already armed (inside the PreCompact guard window), so it sees the
-      // pre-compaction history — this is intentional. If `compact()` is ever
-      // refactored to call `listRewindTargets()` internally, the before/after
-      // snapshot split here will need revisiting.
-      const promptsBefore = session.listRewindTargets().length;
-      const result = await session.compact();
-      const promptsAfter = session.listRewindTargets().length;
-      stopSpinner();
+      const result = await compactConversation(ctx.session.current, (phase) => {
+        if (phase === 'end') { stopSpinner(); return; }
+        if (ctx.progress) {
+          progressActive = true;
+          ctx.progress({ corrId, phase: 'start', label: 'Summarizing earlier turns...' });
+          return;
+        }
+        // Progress starts only after PreCompact permits it. Explicit non-TTY
+        // surfaces capture text; legacy REPL contexts keep their ora fallback.
+        if (compositor) {
+          ctx.out.info('Summarizing earlier turns...');
+          compositor.setSpinner({ enabled: true });
+          spinnerActive = true;
+        } else if (ctx.capabilities && !ctx.capabilities.has('tty')) {
+          ctx.out.info('Summarizing earlier turns...');
+        } else {
+          spinner = ora({
+            text: palette.meta('Summarizing earlier turns...'),
+            ...REPL_SPINNER_OPTIONS,
+          }).start();
+          spinnerActive = true;
+        }
+      });
+      const { promptsBefore, promptsAfter } = result;
       if (!result.compacted) {
         const reason = result.reason ?? 'unknown';
         if (reason === 'aborted') {
@@ -176,92 +159,38 @@ const compactCmd: SlashCommand = {
   },
 };
 
-const rewindCmd: SlashCommand = {
-  name: '/rewind',
-  summary: 'Edit a previous message (rewind the conversation)',
-  hint: 'When you want to go back and re-ask an earlier prompt — pick a message, the conversation rewinds to it, and its text loads into the input to edit and resend. (Also: press Esc twice at an empty prompt.)',
-  async handler(ctx) {
-    const session = ctx.session.current;
-    const targets = session.listRewindTargets();
-    if (targets.length === 0) {
-      ctx.out.info('Nothing to rewind to — no earlier messages in this conversation.');
-      return 'continue';
-    }
-
-    // renderSelector drives raw stdin directly, so release the persistent
-    // compositor's keypress listener first and re-arm it after (the selector
-    // contract — see input/selectors.ts). getCompositor is null on non-TTY.
-    const compositor = ctx.getCompositor?.() ?? null;
-    compositor?.suspendInput();
-    let choice: number | ':cancel' | null;
-    try {
-      choice = await renderSelector(
-        targets.map((t) => t.preview),
-        new AbortController().signal,
-      );
-    } finally {
-      compositor?.resumeInput();
-    }
-
-    if (choice === null) {
-      ctx.out.info('Rewind requires an interactive terminal.');
-      return 'continue';
-    }
-    if (choice === ':cancel') return 'continue';
-
-    const target = targets[choice];
-    if (!target) return 'continue';
-
-    const result = await session.rewindConversation(target.turnIndex);
-    if (!result.rewound) {
-      const reason = result.reason ?? 'unknown';
-      if (reason === 'not-supported') {
-        ctx.out.warn(
-          'Rewind is not supported for this provider — use a Claude model to enable /rewind.',
-        );
-      } else if (reason === 'session-busy' || reason === 'turn-in-flight') {
-        ctx.out.info('Cannot rewind while a turn is running.');
-      } else {
-        ctx.out.info(`Cannot rewind (${reason}).`);
-      }
-      return 'continue';
-    }
-
-    // Report in PROMPTS, not raw API messages: `messagesBefore/After` count
-    // every assistant tool_use and user tool_result message (~2 per tool
-    // round), so a 12-prompt session reads as "Rewound 247 → 232 messages".
-    // Targets are newest-first, so picking index `choice` discards the
-    // chosen prompt plus the `choice` newer ones.
-    const dropped = choice + 1;
-    const kept = targets.length - dropped;
-    ctx.out.success(
-      `Rewound ${dropped} ${dropped === 1 ? 'prompt' : 'prompts'} (${kept} earlier kept). Edit the message below and press Enter to resend.`,
-    );
-    return { kind: 'prefill', message: result.reloadText ?? '' };
-  },
-};
-
 const helpCmd: SlashCommand = {
   name: '/help',
   summary: 'Show this help',
   hint: 'When you want the full command list with usage strings — broader than this inline dropdown.',
   async handler(ctx) {
-    const cmds = list();
+    // Contract: a surface that declares capabilities sees only the commands it
+    // can run (web and Telegram listed refused ones like /editor before). The
+    // REPL declares none, so its listing and bytes are unchanged.
+    const provided = ctx.capabilities;
+    const cmds = list().filter((cmd) => provided === undefined || missingCapabilities(cmd, provided).length === 0);
     const maxName = cmds.reduce((m, c) => Math.max(m, c.name.length), 0) + 2;
 
-    ctx.out.line();
-    ctx.out.line(palette.bold(palette.brand('Commands')));
-    ctx.out.line(divider());
+    writeList(ctx.out, {
+      title: 'Commands',
+      items: cmds.map((cmd) => ({ text: cmd.usage ?? cmd.name, description: cmd.summary })),
+    }, () => {
+      ctx.out.line();
+      ctx.out.line(palette.bold(palette.brand('Commands')));
+      ctx.out.line(divider());
 
-    for (const cmd of cmds) {
-      const name = cmd.usage ?? cmd.name;
-      const padding = ' '.repeat(Math.max(0, maxName - name.length));
-      ctx.out.line(`  ${palette.warning(name)}${padding} ${palette.dim(cmd.summary)}`);
+      for (const cmd of cmds) {
+        const name = cmd.usage ?? cmd.name;
+        const padding = ' '.repeat(Math.max(0, maxName - name.length));
+        ctx.out.line(`  ${palette.warning(name)}${padding} ${palette.dim(cmd.summary)}`);
+      }
+      ctx.out.line();
+    });
+    if (provided === undefined || provided.has('tty')) {
+      ctx.out.line(palette.dim('  Tip: Ctrl+C interrupts a running turn; a second press exits.'));
+      ctx.out.line(palette.dim('  Hidden: /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode'));
+      ctx.out.line();
     }
-    ctx.out.line();
-    ctx.out.line(palette.dim('  Tip: Ctrl+C interrupts a running turn; a second press exits.'));
-    ctx.out.line(palette.dim('  Hidden: /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode'));
-    ctx.out.line();
     return 'continue';
   },
 };

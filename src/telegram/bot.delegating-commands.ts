@@ -1,15 +1,16 @@
 /**
  * Telegram commands that delegate straight to a handler with no routing or
- * queueing logic of their own (/model, /cd, /name, /good, /bad, /afk, /usage).
+ * queueing logic of their own (/cd, /good, /bad, /afk, /inbox, /insights). Shared
+ * commands (/model, /name, /usage, ...) run through handlers/slash.ts.
+
  *
  * Extracted from TelegramBot.setupHandlers() (200-line function ceiling).
  * Registration order is preserved exactly from the original inline block.
  */
 
 import type { Telegraf } from 'telegraf';
-import { handleCwd, handleModelSwitch, handleName } from './handlers/commands.js';
+import { handleCwd } from './handlers/commands.js';
 import { handleAfk } from './handlers/afk.js';
-import { handleUsage } from './handlers/usage.js';
 import { handleInbox } from './handlers/inbox.js';
 import { handleInsights } from './handlers/insights.js';
 import { registerFeedbackCommands } from './bot.feedback-commands.js';
@@ -23,16 +24,10 @@ export function registerDelegatingCommands(
   sessionManager: SessionManager,
   log: LogFn,
 ): void {
-  bot.command('model', (ctx) =>
-    handleModelSwitch(ctx, sessionManager, log)
-  );
   // `/cd` is the primary; `/cwd` is an alias matching the gather-investigation
   // user-facing label. Both route to the same handler.
   bot.command(['cd', 'cwd'], (ctx) =>
     handleCwd(ctx, sessionManager, log)
-  );
-  bot.command('name', (ctx) =>
-    handleName(ctx, sessionManager, log)
   );
   registerFeedbackCommands(bot, sessionManager, log);
   // /afk [on|off] — toggle autonomous mode for this chat's session. On the
@@ -40,11 +35,6 @@ export function registerDelegatingCommands(
   // handlers/afk.ts + docs/afk-telegram-native-host.md.
   bot.command('afk', (ctx) =>
     handleAfk(ctx, sessionManager, log)
-  );
-  // /usage — report the operator's Claude subscription usage (5-hour rolling
-  // + 7-day windows) for this chat. See handlers/usage.ts.
-  bot.command('usage', (ctx) =>
-    handleUsage(ctx, log)
   );
   // /inbox [release|drop] [<prefix>|all] — list, release, or drop held peer
   // messages when AFK_PEER_INBOUND=hold. Reuses the peer inbox store; peer
@@ -56,6 +46,6 @@ export function registerDelegatingCommands(
   // recommendations. Reuses aggregateAll + evaluateRecommendations from
   // src/insights/ with no new aggregation logic; no HTML file, no browser.
   bot.command('insights', (ctx) =>
-    handleInsights(ctx)
+    handleInsights(ctx, log)
   );
 }

@@ -25,6 +25,7 @@ export {
   ledgerRecordToItem,
   accumulateTotals,
   ledgerToItems,
+  settleRunningTools,
   isClippedLedgerText,
   toolResultPath,
   LEDGER_CLIP_MARKER,

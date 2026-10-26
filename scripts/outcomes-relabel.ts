@@ -17,6 +17,9 @@
  *                       backfilling the 564 'unknown' records produced by combiner v1.
  *                       Does NOT run against ~/.afk automatically — pass --outcomes-dir
  *                       to target a fixture directory during testing.
+ *   --include-failed    with --rescore-settled: also re-combine settled 'failed'
+ *                       records. Records with a /good or /bad vote are never touched.
+ *                       Back up the outcomes directory and run with --dry-run first.
  *   --outcomes-dir DIR  override the outcomes directory (for testing only)
  *
  * Exit codes: 0 success, 1 fatal error (e.g. import failure).
@@ -44,6 +47,7 @@ interface ParsedArgs {
   dryRun: boolean;
   limit: number;
   rescoreSettled: boolean;
+  includeFailed: boolean;
   outcomesDir: string | undefined;
 }
 
@@ -51,6 +55,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let dryRun = false;
   let limit = 200;
   let rescoreSettled = false;
+  let includeFailed = false;
   let outcomesDir: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
@@ -59,6 +64,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       dryRun = true;
     } else if (arg === '--rescore-settled') {
       rescoreSettled = true;
+    } else if (arg === '--include-failed') {
+      includeFailed = true;
     } else if (arg === '--limit') {
       const next = argv[i + 1];
       if (next !== undefined) {
@@ -77,7 +84,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  return { dryRun, limit, rescoreSettled, outcomesDir };
+  return { dryRun, limit, rescoreSettled, includeFailed, outcomesDir };
 }
 
 // ---------------------------------------------------------------------------
@@ -85,16 +92,24 @@ function parseArgs(argv: string[]): ParsedArgs {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  const { dryRun, limit, rescoreSettled, outcomesDir } = parseArgs(process.argv.slice(2));
+  const { dryRun, limit, rescoreSettled, includeFailed, outcomesDir } = parseArgs(
+    process.argv.slice(2),
+  );
 
   if (dryRun) {
     process.stdout.write('outcomes-relabel: dry-run mode — no writes\n');
   }
 
+  if (includeFailed && !rescoreSettled) {
+    process.stderr.write(
+      'outcomes-relabel: warning: --include-failed has no effect without --rescore-settled\n',
+    );
+  }
+
   if (rescoreSettled) {
     // Backfill path: re-apply combiner v2 to settled unknown records
     process.stdout.write('outcomes-relabel: --rescore-settled active — backfilling settled unknown records\n');
-    const rescoreResult = await rescoreSettledUnknown({ dryRun, limit, outcomesDir });
+    const rescoreResult = await rescoreSettledUnknown({ dryRun, limit, outcomesDir, includeFailed });
     const prefix = dryRun ? '[dry-run] ' : '';
     process.stdout.write(
       `${prefix}outcomes-relabel rescore: scanned=${rescoreResult.scanned} relabeled=${rescoreResult.relabeled} skipped=${rescoreResult.skipped} errors=${rescoreResult.errors}\n`,

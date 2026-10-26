@@ -439,12 +439,32 @@ describe('SubagentExecutor named-agent dispatch', () => {
       expect(executor.describeAgentTool()).toBe(agentTool);
     });
 
-    it('advertises registry types with a registry', () => {
+    it('description is static even when a registry is wired (#4217)', () => {
+      // Under the new contract, the tool description never embeds agent names —
+      // that listing moves to the system-prompt tail via describeAgentTypeListing().
       const executor = makeExecutor();
       const def = executor.describeAgentTool();
-      expect(def.description).toContain('Available agent types');
-      expect(def.description).toContain('research-agent');
+      expect(def.description).not.toContain('research-agent');
+      expect(def.description).not.toContain('git-investigator');
+      // The description still refers the model to the system prompt.
+      expect(def.description).toContain('system prompt');
+      // The agent_type property is still wired into the schema.
       expect(def.input_schema.properties).toHaveProperty('agent_type');
+    });
+  });
+
+  describe('describeAgentTypeListing', () => {
+    it('returns the dynamic listing with registered agent names', () => {
+      const executor = makeExecutor();
+      const listing = executor.describeAgentTypeListing();
+      expect(listing).toContain('Available agent types');
+      expect(listing).toContain('research-agent');
+      expect(listing).toContain('git-investigator');
+    });
+
+    it('returns empty string when no registry is wired', () => {
+      const executor = makeExecutor({ agentRegistry: undefined });
+      expect(executor.describeAgentTypeListing()).toBe('');
     });
   });
 });

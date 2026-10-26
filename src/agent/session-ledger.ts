@@ -12,9 +12,11 @@
  *     ledger-worthy event leave no file.
  *   - Disk errors are caught and suppressed on the write path: a session
  *     must never fail because the ledger directory is unwritable.
- *   - The ledger is a PROJECTION, not a transcript: per-token text deltas,
- *     suggestions, stream-retry markers, and panel payloads are skipped.
- *     What lands: user turns, full assistant messages, thinking blocks,
+ *   - The ledger is a PROJECTION, not a transcript: per-token deltas are
+ *     coalesced into one record per text/thinking segment (SegmentTracker),
+ *     and suggestions, stream-retry markers, and panel payloads are skipped.
+ *     What lands: user turns, assistant text segments (including text written
+ *     before a tool call), coalesced thinking blocks,
  *     tool starts, successful + failed tool results, turn completions with
  *     token breakdown, errors, pause/resume, tool activity, rate-limit,
  *     progress, subagent lifecycle, background-job, and plan-mode events.
@@ -32,6 +34,7 @@ import * as fs from 'node:fs';
 import { getSessionLedgerDir, getSessionLedgerPath, isSafeLedgerSessionId } from '../paths.js';
 import type { OutputEvent } from './types/session-types.js';
 import { clip, MAX_TEXT_LEN, projectOutputEvent } from './session-ledger-project.js';
+import { isSegmentEvent, SegmentTracker, type SegmentStep } from './session-ledger-segments.js';
 
 // Re-export public API from the extracted modules so existing import paths work.
 export type { LedgerRecord, LedgerPayload } from './session-ledger-project.js';
@@ -56,6 +59,7 @@ export class SessionLedgerWriter {
   private pendingLines: string[] = [];
   private readyPromise: Promise<void> | null = null;
   private readyResolve: (() => void) | null = null;
+  private readonly segments = new SegmentTracker();
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -99,8 +103,16 @@ export class SessionLedgerWriter {
 
   /** Project and append an OutputEvent. No-ops for skipped event types. */
   recordEvent(event: OutputEvent): void {
+    // Segment records (sealed text/thinking) precede the event's own record,
+    // so `assistant{seg}` lands right before its `tool` card or `done`.
+    this.writeSteps(this.segments.observe(event));
+    if (isSegmentEvent(event)) return;
     const payload = projectOutputEvent(event);
     if (payload) this.record(payload);
+  }
+
+  private writeSteps(steps: SegmentStep[]): void {
+    for (const step of steps) if (step.op === 'record') this.record(step.payload);
   }
 
   /**
@@ -109,6 +121,9 @@ export class SessionLedgerWriter {
    * differs from `text` (see the `user` record in session-ledger-project).
    */
   recordUser(text: string, input?: string): void {
+    // An aborted turn ends without done/error: keep its open text, then
+    // restart segment numbering for the new turn.
+    this.writeSteps(this.segments.beginTurn());
     this.record(
       input !== undefined && input !== text
         ? { kind: 'user', text: clip(text, MAX_TEXT_LEN), input: clip(input, MAX_TEXT_LEN) }
@@ -168,6 +183,7 @@ export class SessionLedgerWriter {
    */
   async close(reason?: string): Promise<void> {
     if (this.closed) return;
+    this.writeSteps(this.segments.flush());
     this.record({ kind: 'closed', ...(reason !== undefined ? { reason } : {}) });
     this.closed = true;
     if (this.readyPromise) await this.readyPromise;

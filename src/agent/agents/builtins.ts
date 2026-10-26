@@ -214,10 +214,11 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
       source: 'builtin',
       definition: {
         description: gitInvestigator.description,
-        // Flag-conditional: under AFK_READONLY_GIT_TOOL the bashReadOnly gate
-        // below swaps Bash for git_read, so the prompt must say so too.
+        // Under AFK_READONLY_GIT_TOOL the bashReadOnly gate below swaps Bash
+        // for git_read, so the prompt must say so too.
         // Note: withGitReadSubstitution allocates per builtinAgents() call when
-        // the flag is on; accepted as negligible (cheap string op, cold path).
+        // the flag is on; accepted as negligible — this is a cold path (called
+        // once per agent dispatch, not per tool call or token).
         prompt: withGitReadSubstitution(vendoredPromptBody(gitInvestigator.systemPrompt)),
         tools: [...gitInvestigator.allowedTools],
         // No `model`: builtins never pin a model, so dispatch follows the

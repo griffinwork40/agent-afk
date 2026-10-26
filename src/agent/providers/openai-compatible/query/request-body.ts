@@ -65,7 +65,9 @@ export function buildResponsesRequestBody(
     req.instructions ?? (args.isChatGptBackend ? DEFAULT_RESPONSES_INSTRUCTIONS : undefined);
   if (instructions !== undefined) requestBody['instructions'] = instructions;
   if (args.isChatGptBackend) requestBody['store'] = false;
-  if (req.tools && req.tools.length > 0) requestBody['tools'] = req.tools;
+  if (req.tools && req.tools.length > 0) {
+    requestBody['tools'] = req.tools;
+  }
   // Forward reasoning effort for o-series models via the Responses API's
   // `reasoning: { effort }` shape.
   const responsesEffort = resolveReasoningEffort(args.effort, args.model);

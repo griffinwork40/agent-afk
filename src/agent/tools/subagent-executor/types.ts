@@ -203,6 +203,8 @@ export interface SubagentExecutorContext {
   // Delegation budget: shared by reference across the entire session tree.
   // See delegation-budget.ts. Opt-in: undefined when no budget env vars are set.
   traceWriter?: TraceSink; workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: DelegationBudget;
+  /** Root-session continuation chains (D2), shared by reference like delegationBudget. */
+  continuationRegistry?: import('../../subagent/continuation-registry.js').ContinuationRegistry;
   /**
    * Hook registry for the depth-2+ child {@link SubagentManager} this executor
    * builds (child-config.ts buildNestedChildManager), whose stub parent carries

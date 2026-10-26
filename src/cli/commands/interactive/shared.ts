@@ -26,6 +26,7 @@ import type { GitStatusSampler } from '../../git-status-sampler.js';
 import { formatTurnSparkline } from '../../render/context-sparkline.js';
 import { quotaWindowsFromRecord, quotaWindowsFromSnapshot } from '../../quota-indicator.js';
 import { readUsageRecord, ANTHROPIC_OAUTH } from '../../../agent/usage/usage-snapshot.js';
+import { setUsageAwareness } from '../../../agent/usage/usage-awareness-toggle.js';
 import { palette } from '../../palette.js';
 import { replayTurns } from './turn-record-renderer.replay.js';
 
@@ -60,11 +61,19 @@ export function reseedStatsFromStored(
   stats.turns = [...stored.turns];
   stats.sessionId = stored.sessionId ?? resumeId;
   stats.name = stored.name;
+  if (stored.nameExplicit) stats.nameExplicit = true;
+  if (stored.nameExplicit && stored.displayName) stats.displayName = stored.displayName;
   stats.model = stored.model;
   // External constraint: legacy stored sessions saved before `startedAt`
   // was added lack the field, deserializing as undefined despite the type.
   // Default to now so the status-line duration is 0, not NaN.
   stats.sessionStartTime = stored.startedAt ?? Date.now();
+  // Defense-in-depth: hydrate usageAwareness so the resume path stays in sync
+  // even if the config bootstrap path is skipped or extended in the future.
+  if (stored.usageAwareness !== undefined) {
+    stats.usageAwareness = stored.usageAwareness;
+    setUsageAwareness(stored.usageAwareness);
+  }
 }
 
 /**
@@ -575,6 +584,19 @@ export interface CompletionWriter {
    * completions and the `chat` surface still surface the line.
    */
   suppressSubagentCompletion?: boolean;
+  /**
+   * Subagent IDs whose Done row the tool lane has already committed to
+   * scrollback (Channel A). {@link emitSubagentCompletion} skips any id in
+   * this set so the SubagentStop hook (Channel B) never double-renders a
+   * subagent that the tool lane already covered — even when the hook fires
+   * after `teardownTurn` resets `suppressSubagentCompletion`.
+   *
+   * Populated by `finalizeSubagent` in `stream-renderer-subagent.ts` at the
+   * exact moment `addResult` is called for the Done row. Cleared at the start
+   * of each new turn by `armAndWire` so the set never grows beyond the
+   * subagents in one turn's lifetime.
+   */
+  renderedSubagentIds?: Set<string>;
 }
 
 export interface TurnHandles {
@@ -929,5 +951,6 @@ export function formatStatusFields(
       ? { maxBudgetUsd }
       : {}),
     ...(activeAgentCount !== undefined && activeAgentCount > 0 ? { activeAgentCount } : {}),
+    ...(stats.usageAwareness === false ? { usageAwarenessOff: true } : {}),
   };
 }

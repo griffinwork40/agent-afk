@@ -436,6 +436,20 @@ describe('listWebSessions', () => {
     expect(s0?.title).toBe('what are the local changes?');
   });
 
+  it('reports the model from the ledger meta record for a non-owned stored session', async () => {
+    writeLedger('foreign-with-model', [
+      metaLine('foreign-with-model', { cwd: '/tmp/x', surface: 'cli' }),
+      userLine('hello'),
+    ]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === 'foreign-with-model');
+
+    expect(entry).toBeDefined();
+    expect(entry?.mode).toBe('readonly');
+    expect(entry?.model).toBe('test-model');
+  });
+
   it('sorts a brand-new owned session (no ledger yet) first, above dated sessions', async () => {
     writeLedger('old', [metaLine('old'), userLine('older work')], Date.now() - 60_000);
     const sessions = await listWebSessions(new Set(['fresh-owned']));
@@ -448,6 +462,16 @@ describe('listWebSessions', () => {
     fs.writeFileSync(path.join(getSessionsDir(), 'named.json'), JSON.stringify(sidecar, null, 2));
     const [s0] = await listWebSessions(new Set());
     expect(s0?.title).toBe('what-are-the-local-changes-on');
+    expect(s0?.titleExplicit).toBeUndefined(); // auto-derived slug: the UI may humanize it
+  });
+
+  it('flags an explicit /name (nameExplicit in the sidecar) as titleExplicit', async () => {
+    writeLedger('explicit', [metaLine('explicit', { cwd: '/w' }), userLine('first prompt here')]);
+    const sidecar = { sessionId: 'explicit', name: 'smoke-stage3', nameExplicit: true, model: 'm', turns: [] };
+    fs.writeFileSync(path.join(getSessionsDir(), 'explicit.json'), JSON.stringify(sidecar, null, 2));
+    const [s0] = await listWebSessions(new Set());
+    expect(s0?.title).toBe('smoke-stage3');
+    expect(s0?.titleExplicit).toBe(true);
   });
 
   it('falls back to the preview when the sidecar has no top-level name', async () => {

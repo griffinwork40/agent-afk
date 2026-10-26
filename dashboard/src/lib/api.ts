@@ -85,17 +85,25 @@ export async function apiFetch<T>(
     // next request re-reads from the meta tag instead of reusing the stale one.
     if (res.status === 401) clearTokenCache();
     const text = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, text);
+    // Try to parse JSON body for structured error fields.
+    let body: Record<string, unknown> | undefined;
+    try { body = JSON.parse(text) as Record<string, unknown>; } catch { /* raw text */ }
+    throw new ApiError(res.status, text, body);
   }
   return res.json() as Promise<T>;
 }
 
 export class ApiError extends Error {
+  /** Parsed JSON body from the error response, if available. */
+  readonly body: Record<string, unknown> | undefined;
+
   constructor(
     public readonly status: number,
     message: string,
+    body?: Record<string, unknown>,
   ) {
     super(`API ${status}: ${message}`);
     this.name = 'ApiError';
+    this.body = body;
   }
 }

@@ -400,6 +400,14 @@ describe('subagent_lifecycle payload', () => {
     expect(() => SubagentLifecyclePayloadSchema.parse({ ...base, maxToolUseIterations: -1 })).toThrow();
   });
 
+  it('D10: accepts started variant with continuation chain fields; rejects a non-positive index', () => {
+    const base = { transition: 'started', subagentId: 'child-2', parentId: 'root', model: 'sonnet' };
+    const fields = { chainId: 'chain_ab', continuationOf: 'child-1', continuationIndex: 1 };
+    expect(SubagentLifecyclePayloadSchema.parse({ ...base, ...fields })).toMatchObject(fields);
+    expect(SubagentLifecyclePayloadSchema.parse(base)).not.toHaveProperty('chainId');
+    expect(() => SubagentLifecyclePayloadSchema.parse({ ...base, ...fields, continuationIndex: 0 })).toThrow();
+  });
+
   it("accepts failed variant with failureClass 'timeout'", () => {
     const parsed = SubagentLifecyclePayloadSchema.parse({
       transition: 'failed',

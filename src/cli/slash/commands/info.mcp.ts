@@ -14,6 +14,8 @@ import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { errorMessage } from '../../../utils/errors.js';
 import type { SlashCommand } from '../types.js';
+import { writeTable, writeLink } from '../output-blocks.js';
+import { readMcpStatus, readMcpOauthPending } from '../../../agent/session-control/index.js';
 
 export const mcpCmd: SlashCommand = {
   name: '/mcp',
@@ -25,8 +27,7 @@ export const mcpCmd: SlashCommand = {
     // unless the operator asks for OAuth surfacing.
     if (sub === 'auth') {
       try {
-        const { readOauthPending } = await import('../../../agent/mcp/oauth.js');
-        const pending = readOauthPending();
+        const pending = await readMcpOauthPending();
         if (Object.keys(pending).length === 0) {
           ctx.out.info('No MCP servers are waiting for OAuth.');
           return 'continue';
@@ -38,7 +39,9 @@ export const mcpCmd: SlashCommand = {
           const age = Date.now() - entry.timestamp;
           const ageMin = Math.round(age / 60_000);
           ctx.out.line(`  ${palette.warning('●')} ${name}  ${palette.dim(`(${ageMin}m ago)`)}`);
-          ctx.out.line(`     ${palette.info(entry.authorizationUrl)}`);
+          writeLink(ctx.out, { url: entry.authorizationUrl, label: `Authorize ${name}` }, () => {
+            ctx.out.line(`     ${palette.info(entry.authorizationUrl)}`);
+          });
         }
         ctx.out.line();
         ctx.out.line(
@@ -108,24 +111,31 @@ export const mcpCmd: SlashCommand = {
     }
 
     try {
-      const meta = await ctx.session.current.waitForInitialization();
-      const servers = meta.mcpServers ?? [];
+      const servers = await readMcpStatus(ctx.session.current);
       if (servers.length === 0) {
         ctx.out.info('No MCP servers connected.');
         return 'continue';
       }
-      ctx.out.line();
-      ctx.out.line(palette.bold(`MCP servers  (${servers.length})`));
-      ctx.out.line(divider());
-      let pendingCount = 0;
-      for (const s of servers) {
+      const serverRows = servers.map((s) => {
         const name = typeof s === 'string' ? s : (s as { name?: string }).name ?? JSON.stringify(s);
         const status = typeof s === 'object' && s !== null && 'status' in s ? String((s as { status: unknown }).status) : '';
-        const dot = status === 'connected' ? palette.success('●') : palette.warning('●');
-        ctx.out.line(`  ${dot} ${name}${status ? palette.dim(`  (${status})`) : ''}`);
-        if (status === 'oauth_pending') pendingCount++;
-      }
-      ctx.out.line();
+        return [name, status];
+      });
+      const pendingCount = serverRows.filter((row) => row[1] === 'oauth_pending').length;
+      writeTable(ctx.out, {
+        title: `MCP servers (${servers.length})`, columns: ['Name', 'Status'], rows: serverRows,
+      }, () => {
+        ctx.out.line();
+        ctx.out.line(palette.bold(`MCP servers  (${servers.length})`));
+        ctx.out.line(divider());
+        for (const s of servers) {
+          const name = typeof s === 'string' ? s : (s as { name?: string }).name ?? JSON.stringify(s);
+          const status = typeof s === 'object' && s !== null && 'status' in s ? String((s as { status: unknown }).status) : '';
+          const dot = status === 'connected' ? palette.success('●') : palette.warning('●');
+          ctx.out.line(`  ${dot} ${name}${status ? palette.dim(`  (${status})`) : ''}`);
+        }
+        ctx.out.line();
+      });
       if (pendingCount > 0) {
         ctx.out.line(
           palette.dim(`  ${pendingCount} server(s) need OAuth — run "/mcp auth" to see authorization URLs.`),

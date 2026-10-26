@@ -274,3 +274,16 @@ describe('rewindConversationHistory', () => {
     expect(targets.map((t) => t.preview)).toEqual(['actually, cancel that', 'first question']);
   });
 });
+
+describe('rewind strips drained framework preamble', () => {
+  const pre = '[placeholder-prevent] Prefer running commands yourself with your tools.\n\nwhat the user typed';
+  it('preview and reloadText carry only the user text', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: pre },
+      { role: 'assistant', content: 'ok' },
+    ];
+    expect(listUserTurns(messages).map((t) => t.preview)).toEqual(['what the user typed']);
+    const state = makeState(messages);
+    expect(rewindConversationHistory({ state, abort: idleAbort }, 0).reloadText).toBe('what the user typed');
+  });
+});

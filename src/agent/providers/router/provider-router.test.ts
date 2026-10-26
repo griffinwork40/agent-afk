@@ -577,6 +577,7 @@ describe('ProviderRouter', () => {
       small: { id: 'gpt-cloud', provider: 'openai' },
       medium: { id: 'gpt-local', provider: 'openai', baseUrl: 'http://localhost:8081/v1' },
       large: { id: 'claude-opus-4-8' },
+      subagent: { id: '' },
     });
     const { router, outer, openai } = makeSlotRouter('small');
     const iter = router[Symbol.asyncIterator]();
@@ -604,6 +605,7 @@ describe('ProviderRouter', () => {
       small: { id: 'gpt-4o-mini', provider: 'openai' },
       medium: { id: 'gpt-4o', provider: 'openai' },
       large: { id: 'claude-opus-4-8' },
+      subagent: { id: '' },
     });
     const { router, outer, openai } = makeSlotRouter('small');
     const iter = router[Symbol.asyncIterator]();
@@ -629,6 +631,7 @@ describe('ProviderRouter', () => {
       small: { id: 'gpt-4o', provider: 'openai' },
       medium: { id: 'gpt-5.6', provider: 'chatgpt-oauth' },
       large: { id: 'claude-opus-4-8' },
+      subagent: { id: '' },
     });
     const { router, outer, openai } = makeSlotRouter('small');
     const iter = router[Symbol.asyncIterator]();
@@ -675,6 +678,7 @@ describe('ProviderRouter — per-slot tool deny list (tools.disabledBySlot) on /
       small: { id: 'gpt-4o-mini', provider: 'openai' },
       medium: { id: 'gpt-4o', provider: 'openai' },
       large: { id: 'claude-opus-4-8' },
+      subagent: { id: '' },
     });
     const { router, outer, openai } = makeSlotRouter('small');
     const iter = router[Symbol.asyncIterator]();
@@ -697,6 +701,7 @@ describe('ProviderRouter — per-slot tool deny list (tools.disabledBySlot) on /
       small: { id: 'gpt-4o-mini', provider: 'openai' },
       medium: { id: 'gpt-4o', provider: 'openai' },
       large: { id: 'claude-opus-4-8' },
+      subagent: { id: '' },
     });
     const { router, outer, openai } = makeSlotRouter('small');
     const iter = router[Symbol.asyncIterator]();

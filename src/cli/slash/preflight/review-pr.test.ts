@@ -97,7 +97,7 @@ describe('gatherPrState', () => {
       if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'diff') {
         return 'diff --git a/foo b/foo\n+line\n';
       }
-      if (cmd === 'git' && args[0] === 'status') {
+      if (cmd === 'git' && args.includes('status')) {
         return ''; // clean
       }
       return null;
@@ -124,7 +124,7 @@ describe('gatherPrState', () => {
         return JSON.stringify({ title: 'x', additions: 1, deletions: 0, changedFiles: 1, files: [] });
       }
       if (cmd === 'gh' && args[1] === 'diff') return 'diff\n';
-      if (cmd === 'git' && args[0] === 'status') {
+      if (cmd === 'git' && args.includes('status')) {
         return ' M src/foo.ts\n?? unrelated.md\n';
       }
       return null;
@@ -257,7 +257,7 @@ describe('gatherPrState — P02 concurrency (all 3 subprocesses fire together)',
         return JSON.stringify({ title: 't', additions: 1, deletions: 0, changedFiles: 1, files: [] });
       }
       if (cmd === 'gh' && args[1] === 'diff') return 'd\n';
-      if (cmd === 'git' && args[0] === 'status') return '';
+      if (cmd === 'git' && args.includes('status')) return '';
       return null;
     });
     const writeFile = vi.fn();
@@ -478,7 +478,7 @@ describe('dirty-tree side-effect guarantee', () => {
         return JSON.stringify({ title: 't', additions: 1, deletions: 0, changedFiles: 0, files: [] });
       }
       if (cmd === 'gh' && args[1] === 'diff') return 'd';
-      if (cmd === 'git' && args[0] === 'status') return ' M dirty.ts\n';
+      if (cmd === 'git' && args.includes('status')) return ' M dirty.ts\n';
       return null;
     });
     const writeFile = vi.fn();

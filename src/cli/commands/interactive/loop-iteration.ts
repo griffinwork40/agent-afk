@@ -8,7 +8,10 @@ import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import {
   autoRegisterPluginPassthroughs,
   getPluginShadowingNoticeLines,
+  setInitBarrier,
 } from '../../slash/plugin-skills.js';
+import { palette } from '../../palette.js';
+import { errorMessage } from '../../../utils/errors.js';
 import type { InteractiveCtx } from './shared.js';
 import type { TranscriptHandle } from './transcript.js';
 import type { InputSurface } from '../../input/input-surface.js';
@@ -87,11 +90,16 @@ export async function runInputLoop(
   // Init metadata deferred to loop top so it prints cleanly between turns.
   let pendingInitMeta: string | null = null;
   let pendingShadowingNotices: string[] = [];
-  ctx.session.current.waitForInitialization().then(async (meta) => {
+  const pluginInitPromise = ctx.session.current.waitForInitialization().then(async (meta) => {
     if (isDebugEnabled()) pendingInitMeta = renderDebugBanner(meta);
     await autoRegisterPluginPassthroughs(ctx.session.current);
     if (isDebugEnabled()) pendingShadowingNotices = getPluginShadowingNoticeLines();
-  }).catch(() => { /* init / plugin discovery non-critical */ });
+  }).catch((err: unknown) => {
+    // Surface failures instead of silently swallowing them.
+    // eslint-disable-next-line no-console
+    console.error(palette.dim('  ⚠ Plugin skill init failed: ') + errorMessage(err));
+  });
+  setInitBarrier(pluginInitPromise);
 
   // Slash-command submit queue: pre-seeded from ctx.initialInput when the
   // session was launched with a first-message argument. See original docs.

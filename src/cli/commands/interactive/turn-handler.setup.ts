@@ -75,6 +75,7 @@ export function buildRendererOptions(params: {
     ...(h.onStageChange ? { onStageChange: h.onStageChange } : {}),
     ...ttfbRendererOptions(turnTtfb),
     ...(h.addPreviewDiffRef ? { addPreviewDiffRef: h.addPreviewDiffRef } : {}),
+    ...(completionWriter ? { completionWriter } : {}),
   };
 }
 
@@ -122,6 +123,9 @@ export async function armAndWire(params: {
     completionWriter.fn = (line) => c.commitAbove(line);
     // Suppress the redundant SubagentStop line while the overlay is live.
     completionWriter.suppressSubagentCompletion = true;
+    // Clear the per-turn rendered-id set so stale ids from a previous turn
+    // don't suppress legitimate between-turn completions.
+    completionWriter.renderedSubagentIds = new Set();
   }
   h.setActiveCompositor?.(armedCompositor);
   // Notifier follows the live renderer across paused→resumed hot-swaps.

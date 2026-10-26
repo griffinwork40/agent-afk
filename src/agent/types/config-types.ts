@@ -138,6 +138,13 @@ export interface AgentConfig {
   baseUrl?: string;
 
   /**
+   * Per-endpoint concurrency cap resolved from the active slot's `maxConcurrency`
+   * by {@link applySlotCredentials}. When set, at most N concurrent model HTTP
+   * requests to `baseUrl` are in flight at once. Unset = no cap. Part of #3886.
+   */
+  endpointConcurrency?: number;
+
+  /**
    * Base URL for an OpenAI-compatible Chat Completions endpoint (optional).
    * Forwarded as the SDK's `baseURL` option when the openai-compatible
    * provider builds its client — overrides any construction-time default.
@@ -412,8 +419,11 @@ export interface AgentConfig {
   env?: Record<string, string>;
 
   /**
-   * Enable file checkpointing for rewind. NOT currently consumed by any
-   * provider (reserved for future SDK V2 support); has no effect today.
+   * Snapshot files before write_file / edit_file / patch_apply mutate them,
+   * per user turn, so `rewindFiles` and `/rewind` → files/both can restore
+   * them. Consumed by both the anthropic-direct and openai-compatible
+   * providers. Default off; the interactive REPL turns it on unless
+   * `fileCheckpoints: false` is configured (#4271).
    */
   enableFileCheckpointing?: boolean;
 

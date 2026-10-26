@@ -14,6 +14,7 @@ import {
   AUTO_SENTINEL,
   DIRECT_MODEL_ALIASES,
   MAX_CONTEXT_WINDOW_OVERRIDE,
+  MAX_SLOT_CONCURRENCY,
 } from './model-slots.js';
 import type { ModelSlotBinding } from './model-slots.js';
 import { normalizeSlotProvider, parseStringField } from './model-slots.utils.js';
@@ -135,6 +136,18 @@ export function coerceSlotBindingInput(
   for (const field of ['contextWindow', 'maxOutputTokens'] as const) {
     const err = coercePositiveIntField(obj, field, binding);
     if (err) return { ok: false, error: err };
+  }
+  // maxConcurrency: positive integer in [1, MAX_SLOT_CONCURRENCY].
+  if (obj['maxConcurrency'] !== undefined && obj['maxConcurrency'] !== '') {
+    const val = obj['maxConcurrency'];
+    const n = typeof val === 'number' ? val : Number(val);
+    if (!Number.isInteger(n) || n < 1 || n > MAX_SLOT_CONCURRENCY) {
+      return {
+        ok: false,
+        error: `model binding "maxConcurrency" must be a positive integer in [1, ${MAX_SLOT_CONCURRENCY}] (got ${JSON.stringify(val)})`,
+      };
+    }
+    binding.maxConcurrency = n;
   }
   // Cross-check: maxOutputTokens must not exceed contextWindow when both are set.
   // An oversized cap passes config validation but causes the provider to 400.

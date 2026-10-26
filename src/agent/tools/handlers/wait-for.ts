@@ -12,6 +12,7 @@
 
 import path from 'node:path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
+import { resolveAndContain } from './_cwd-utils.js';
 import { checkEgressTarget } from '../../../http-client/egress-guard.js';
 import {
   evaluateUrl,
@@ -49,6 +50,7 @@ interface WaitForInput {
   pid?: unknown;
   // Command
   command?: unknown;
+  cwd?: unknown;
   // Common
   timeout_ms?: unknown;
   poll_interval_ms?: unknown;
@@ -151,11 +153,22 @@ function parseInput(
       if (typeof input.command !== 'string' || input.command.trim() === '') {
         throw new Error('"command" is required for type "command"');
       }
-      const cwd = context?.resolveBase;
+      // Resolve cwd: caller-supplied > context.resolveBase > undefined (process.cwd() fallback in evaluator).
+      let resolvedCwd: string | undefined;
+      if (input.cwd !== undefined) {
+        if (typeof input.cwd !== 'string' || input.cwd.trim() === '') {
+          throw new Error('"cwd" must be a non-empty string when provided');
+        }
+        // Resolve relative cwd against session root, and enforce containment so
+        // the model cannot poll inside an arbitrary directory outside the workspace.
+        resolvedCwd = resolveAndContain(input.cwd, context, 'read');
+      } else {
+        resolvedCwd = context?.resolveBase;
+      }
       const condition: WaitCondition = {
         type: 'command',
         command: input.command,
-        ...(cwd !== undefined ? { cwd } : {}),
+        ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
       };
       return { condition, timeoutMs, pollIntervalMs, backoff };
     }

@@ -48,12 +48,12 @@ import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import { dispatchAndAppendToolCalls } from './dispatch-append.js';
 import { buildVitalsNote, type VitalsInput } from '../../shared/vitals.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
-import type { TraceSink } from '../../../trace/index.js';
+import type { TraceSink } from '../../../trace/writer.js';
 import type { OpenAIMessage } from '../messages.js';
 import type { OpenAIJournalWiring } from './journal-wiring.js';
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { OpenAIAuthResolution } from '../auth.js';
-import { emitQueuedUserMessage } from '../../../trace/emit.js';
+import { emitQueuedUserMessage, emitSessionPhase } from '../../../trace/emit.js';
 import { emitTurnTerminal } from './turn-driver.emit-terminal.js';
 import { windDownFinalText } from './wind-down-final.js';
 
@@ -204,15 +204,30 @@ async function* dispatchAndAppend(
  * Inject a round-cap delivery notice into the last tool-result message so the
  * model sees the budget reminder before its next reply.  Extracted from
  * `runTurnInner` to keep it under the 200-line function ceiling.
+ *
+ * Every producer of `role:'tool'` messages emits string content (see the
+ * invariant on `OpenAIToolResultMessage` in `../loop.ts`), so only the string
+ * shape is handled. When no injectable tool message exists, a
+ * `round_cap_notice_dropped` trace event is emitted instead of dropping silently.
  */
-function injectRoundCapNotice(priorTurns: OpenAIMessage[], round: number, maxIterations: number): void {
+export function injectRoundCapNotice(
+  priorTurns: OpenAIMessage[],
+  round: number,
+  maxIterations: number,
+  traceWriter: TraceSink | undefined,
+): void {
   const notice = roundDeliveryNotice(round, maxIterations);
-  if (notice) {
-    const lastTool = [...priorTurns].reverse().find(m => m.role === 'tool');
-    if (lastTool && typeof lastTool.content === 'string') {
-      lastTool.content += '\n\n' + notice;
-    }
+  if (!notice) return;
+  const lastTool = [...priorTurns].reverse().find(m => m.role === 'tool');
+  if (lastTool && typeof lastTool.content === 'string') {
+    lastTool.content += '\n\n' + notice;
+    return;
   }
+  // No injectable tool message found — emit an observable signal.
+  void emitSessionPhase(traceWriter, {
+    phase: 'round_cap_notice_dropped',
+    metadata: { provider: 'openai-compatible', round },
+  });
 }
 
 /**
@@ -268,6 +283,26 @@ async function pushAssistantAndCheckStopHook(
 }
 
 
+
+/**
+ * Fold one round's provider usage into the running accumulator and update
+ * the context's last-usage snapshot. Extracted from `runTurnInner` to keep
+ * it under the 200-line function ceiling.
+ */
+function accumulateRoundUsage(
+  ctx: TurnDriverContext,
+  state: StreamState,
+  prior: ProviderUsage,
+): ProviderUsage {
+  const pricedModel = ctx.useOpenAIPricing ? ctx.currentModel : undefined;
+  const roundUsage = usageFromState(state, pricedModel, ctx.fastTier.confirmedFast());
+  const accumulated = sumProviderUsage(prior, roundUsage);
+  // Context-window footprint for this round; carries the last known value
+  // forward (never 0) when the round had no usage. See the helper's Contract.
+  accumulated.contextWindowTokens = roundContextWindowTokens(roundUsage, ctx.lastUsage);
+  ctx.lastUsage = accumulated;
+  return accumulated;
+}
 
 /**
  * Drive a single user turn through the model + tool loop.
@@ -334,7 +369,7 @@ export async function* runTurnInner(
   // triggered by a blocking Stop hook). The vast majority of runs execute
   // exactly once; only blocking Stop hooks cause a second iteration.
   for (;;) {
-    pushUserTurn(ctx, currentContent);
+    pushUserTurn(ctx, currentContent, stopHookContinuation === 0);
 
     // Per-segment accumulators — reset each iteration so each segment starts
     // fresh. Segment usage is summed into `turnUsage` (turn scope) at round end.
@@ -375,13 +410,7 @@ export async function* runTurnInner(
         return;
       }
 
-      const pricedModel = ctx.useOpenAIPricing ? ctx.currentModel : undefined;
-      const roundUsage = usageFromState(result.state, pricedModel, ctx.fastTier.confirmedFast());
-      accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
-      // Context-window footprint for this round; carries the last known value
-      // forward (never 0) when the round had no usage. See the helper's Contract.
-      accumulatedUsage.contextWindowTokens = roundContextWindowTokens(roundUsage, ctx.lastUsage);
-      ctx.lastUsage = accumulatedUsage;
+      accumulatedUsage = accumulateRoundUsage(ctx, result.state, accumulatedUsage);
       if (result.text.length > 0) finalAssistantText = result.text;
       finalReasoningText = result.state.reasoningText;
       finalReasoningField = result.state.reasoningField;
@@ -431,13 +460,16 @@ export async function* runTurnInner(
       if (windDownForContextPressure(ctx, appendedAt)) {
         windDownReason = CONTEXT_PRESSURE_WIND_DOWN;
         if (!canSynthesizeUnderPressure(ctx, appendedAt)) {
-          finalAssistantText ||= 'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
+          // Fix #3963 (B): always overwrite finalAssistantText with the incomplete
+          // marker — the ||= would silently pass a stale planning sentence as the
+          // answer when an earlier round had text.
+          finalAssistantText = 'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
           break;
         }
         continue;
       }
 
-      injectRoundCapNotice(ctx.priorTurns, round, maxIterations);
+      injectRoundCapNotice(ctx.priorTurns, round, maxIterations, ctx.traceWriter);
       const roundsSpent = shouldWindDown(round, maxIterations);
       const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
       if (roundsSpent || timeSpent) {

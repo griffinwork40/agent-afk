@@ -1,8 +1,10 @@
 import { resolve } from 'node:path';
+import { resolveRepoRootSync } from '../../../utils/git.js';
 import { StatusLine } from '../../status-line.js';
 import { GitStatusSampler } from '../../git-status-sampler.js';
 import { createConsoleWriter } from '../../slash/writer.js';
 import { createSessionStats } from '../../slash/session-stats.js';
+import { setUsageAwareness } from '../../../agent/usage/usage-awareness-toggle.js';
 import type { SessionStats } from '../../slash/types.js';
 import type { PermissionMode } from '../../../agent/types/sdk-types.js';
 import type { CompletionWriter } from './shared.js';
@@ -65,6 +67,12 @@ export function createReplSurface(a: {
   if (initialPermissionMode !== undefined) {
     stats.permissionMode = initialPermissionMode;
   }
+  // Seed usage-awareness toggle from config. Default is on (undefined = on).
+  const configUsageAwareness = a.cliConfig.tools?.usageAwareness;
+  if (configUsageAwareness !== undefined) {
+    stats.usageAwareness = configUsageAwareness;
+    setUsageAwareness(configUsageAwareness);
+  }
   // Seed thinking-UI mode so `/thinking` has a live value to mutate.
   // `options.thinkingUi` was already resolved by the interactive action handler
   // via `resolveThinkingUi` (--thinking-ui flag > AFK_THINKING_UI env >
@@ -81,6 +89,7 @@ export function createReplSurface(a: {
   // `process.cwd()`. Captured once at bootstrap — sessions don't `chdir`
   // mid-run, and the status line treats this as a fixed identity field.
   stats.cwd = a.effectiveCwd ?? process.cwd();
+  try { stats.repoRoot = resolveRepoRootSync({ cwd: stats.cwd, mode: 'git-common-dir' }); } catch { /* not a git repo */ }
 
   // Trace was opened earlier (before the executor) so the
   // BackgroundAgentRegistry could be constructed with the writer. Surface

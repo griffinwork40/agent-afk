@@ -136,11 +136,6 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this._stateStore = opts.stateStore;
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas, ...readOnlyGitSchemas()];
-    // Executor-supplied `agent` def advertises named agent types when a
-    // registry is wired — parity with anthropic-direct (see agents/tool-def.ts).
-    if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
-    if (opts.skillExecutor) schemas.push(skillTool);
-    if (opts.composeExecutor) schemas.push(composeTool);
     if (opts.readOnlyMemory === true) {
       schemas.push(memorySearchTool);
     } else {
@@ -158,6 +153,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // SubagentHandleImpl wiring (setSubscribeHandler) not yet supported by this provider.
     // Only publish + query are advertised; subscribe goes through anthropic-direct only.
     schemas.push(...(this.workspaceStore !== undefined ? [workspacePublishTool, workspaceQueryTool] : []), getRuntimeStateTool);
+    // Nesting tools — placed AFTER memory/state/get_runtime_state (#4217) so
+    // variation in their schemas (present vs absent at max depth, or a
+    // different `agent_type` property when a registry is wired) invalidates
+    // the fewest cached tokens. Executor-supplied `agent` def advertises
+    // named agent types when a registry is wired — parity with
+    // anthropic-direct (see agents/tool-def.ts).
+    if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
+    if (opts.skillExecutor) schemas.push(skillTool);
+    if (opts.composeExecutor) schemas.push(composeTool);
     // Custom (consumer-registered) tool schemas are appended last so their
     // names never silently shadow a builtin. A custom schema whose name
     // collides with an already-present builtin (or an earlier custom tool) is
@@ -312,7 +316,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // cwd-/base-rebuild factories (#876, #2420). Extracted to system-prompt-wiring.ts
     // (#2711/#2721 ratchet fix) so query() stays within the function-size ceiling.
     // Ordering: [toolBase, userSystem?, memoryPrompt, workspace?, hotMemory?,
-    // goalPrompt?, envFragment, manifest?] — mirrors AnthropicDirectProvider.query().
+    // goalPrompt?, envFragment, manifest?, agentTypeListing?] — mirrors AnthropicDirectProvider.query().
     const spw = buildSystemPromptWiring({
       config,
       skillExecutor: this.providerOpts.skillExecutor ?? undefined,
@@ -323,6 +327,16 @@ export class OpenAICompatibleProvider implements ModelProvider {
       surface: this.providerOpts.surface ?? 'cli',
       getCurrentCwd: () => _currentCwd,
       runtimeStateSource,
+      // Dynamic agent-type listing injected into the volatile system-prompt tail
+      // rather than the tool description, preserving prefix-cache stability across
+      // sessions that differ only in their agent sets (#4217).
+      // Gate on the agent tool being both registered (this.schemas: executor wired
+      // at construction) and granted by this provider's permissions, the same
+      // #4060 grant answer the workspace section uses, so the prompt never lists
+      // agent types for a tool the model cannot call.
+      agentTypeListing: this.schemas.some((s) => s.name === 'agent') && this.grantsTool('agent')
+        ? (this.providerOpts.subagentExecutor?.describeAgentTypeListing?.() ?? '')
+        : '',
     });
 
     const patchedConfig: typeof config = { ...config, systemPrompt: spw.initialSystemPrompt };

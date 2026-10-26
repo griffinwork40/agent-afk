@@ -22,10 +22,14 @@ const mockAnswerHandoff = vi.fn<
   (taskId: string, answer: unknown, source: string, dir: string | undefined, identity: string) => Promise<boolean>
 >();
 
-vi.mock('../agent/daemon/handoff-store.js', () => ({
-  listPendingHandoffs: (dir: string) => mockListPendingHandoffs(dir),
-  readHandoff: (taskId: string, dir: string) => mockReadHandoff(taskId, dir),
-}));
+vi.mock('../agent/daemon/handoff-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agent/daemon/handoff-store.js')>();
+  return {
+    ...actual,
+    listPendingHandoffs: (dir: string) => mockListPendingHandoffs(dir),
+    readHandoff: (taskId: string, dir: string) => mockReadHandoff(taskId, dir),
+  };
+});
 
 vi.mock('../agent/daemon/handoff-wiring.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../agent/daemon/handoff-wiring.js')>();
@@ -394,10 +398,19 @@ describe('routes.handoffs — handleAnswerHandoff', () => {
     mockReadHandoff.mockResolvedValue(makeRecord());
     const ioError = new Error('EACCES: permission denied');
     mockAnswerHandoff.mockRejectedValue(ioError);
+    let headWritten = false;
     const { res } = makeRes();
+    const origWriteHead = res.writeHead.bind(res);
+    (res as unknown as { writeHead: (s: number) => void }).writeHead = (s: number) => {
+      headWritten = true;
+      origWriteHead(s);
+    };
     await expect(
       handleAnswerHandoff(makeReq(), res, 'q-1700000000000-abc', { answer: 'yes' }, { handoffsDir: DIR }),
     ).rejects.toThrow('EACCES: permission denied');
+    // No response must have been written — the error propagates to the
+    // framework's 500 handler, not silently mapped to a JSON reply.
+    expect(headWritten).toBe(false);
   });
 
   it('returns 400 when answer exceeds MAX_ANSWER_BYTES', async () => {

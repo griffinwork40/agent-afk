@@ -60,23 +60,10 @@ const defaultClientFactory: CompleteWireClientFactory = (opts) => new OpenAI(opt
  * @param authDeps - Injectable auth-resolver dependencies (env/fs). Used by
  *   tests to drive the Responses-wire path without real credentials.  Production
  *   callers omit this and get the real env + file-system resolvers.
- *
- * @deprecated Use {@link completeWithWireWithStop} instead — it returns the
- *   stop reason so callers can detect a `max_tokens` cut (ghost-text truncation
- *   detection). This wrapper discards that information and exists only for
- *   back-compat; it will be removed in a future cleanup.
  */
-export async function completeWithWire(
-  input: OpenAIOneShotInput,
-  clientFactory: CompleteWireClientFactory = defaultClientFactory,
-  authDeps: AuthResolverDeps = {},
-): Promise<string> {
-  return (await completeWithWireWithStop(input, clientFactory, authDeps)).text;
-}
-
 /**
- * {@link completeWithWire} plus the stop reason, for callers that must tell a
- * finished reply from one cut at `maxTokens` (ghost-text suggestions).
+ * Returns both the reply text and the stop reason, so callers can detect
+ * a `max_tokens` cut (ghost-text truncation detection).
  */
 export async function completeWithWireWithStop(
   input: OpenAIOneShotInput,

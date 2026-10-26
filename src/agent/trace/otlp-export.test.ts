@@ -463,4 +463,36 @@ describe('traceToOtlp', () => {
     expect(tool.parentSpanId).toBe(bgSpan.spanId);
     expect(attr(tool, 'afk.subagent.id')).toBe('bg-sub3');
   });
+
+  // -------------------------------------------------------------------------
+  // Fix #4192: ROOT_PARENT_SENTINEL background agents expose real root spanId
+  // -------------------------------------------------------------------------
+
+  it('background_agent with ROOT_PARENT_SENTINEL emits afk.subagent.parent_id === root.spanId', () => {
+    // A background_agent with no parentId (ROOT_PARENT_SENTINEL) must emit
+    // the real root spanId in afk.subagent.parent_id — not the sentinel string.
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:00.000Z', seq: 0, kind: 'background_agent', payload: {
+        transition: 'started', jobId: 'job-root', subagentId: 'bg-root1',
+        label: 'root-level-agent', model: 'claude-haiku',
+      }}),
+      ev({ ts: '2026-01-01T00:01:00.000Z', seq: 1, kind: 'background_agent', payload: {
+        transition: 'completed', jobId: 'job-root', subagentId: 'bg-root1',
+        durationMs: 60000, outputBytes: 100,
+      }}),
+    ];
+    const result = traceToOtlp(events, { sessionId: SESSION_ID });
+    const spans = allSpans(result);
+    const root = findSpan(spans, 'afk.session')!;
+    const bgSpan = spans.find((s) => s.name.startsWith('agent.invoke'))!;
+
+    expect(bgSpan).toBeDefined();
+    // parentSpanId on the span itself must equal root.spanId
+    expect(bgSpan.parentSpanId).toBe(root.spanId);
+    // afk.subagent.parent_id attribute must be the real root spanId,
+    // never the ROOT_PARENT_SENTINEL string '__root__'
+    const parentIdAttr = attr(bgSpan, 'afk.subagent.parent_id');
+    expect(parentIdAttr).toBe(root.spanId);
+    expect(parentIdAttr).not.toBe('__root__');
+  });
 });

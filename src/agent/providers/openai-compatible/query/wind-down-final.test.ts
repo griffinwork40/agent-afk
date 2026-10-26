@@ -265,6 +265,10 @@ describe('openai-compatible wind-down round — Responses wire keeps tools and n
     expect(Array.isArray(normal['tools']) && (normal['tools'] as unknown[]).length).toBeGreaterThan(0);
     expect(JSON.stringify(windDown['tools'])).toBe(JSON.stringify(normal['tools']));
     expect('tool_choice' in windDown).toBe(false);
+    // The Responses wire appends the wind-down note as the last input message,
+    // matching the Chat Completions analogue (see line 149 in this file).
+    const input = windDown['input'] as Array<{ role?: string; content?: unknown }> | undefined;
+    expect(input?.at(-1)?.content).toBe(WIND_DOWN_NOTE);
     expect(finalAnswer(events)).toBe('Final answer.');
   });
 

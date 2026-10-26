@@ -51,6 +51,13 @@ export function summarizeToolInput(toolName: string, input: unknown): string {
     }
     return '';
   }
+  // Search tools: the pattern is the point of the call, the path is context.
+  // Checked before the generic path rule, which would otherwise drop it.
+  if (/^(grep|glob)$/i.test(toolName) && typeof obj['pattern'] === 'string' && obj['pattern'].length > 0) {
+    const pattern = obj['pattern'].length > 80 ? obj['pattern'].slice(0, 79) + '…' : obj['pattern'];
+    const where = obj['path'];
+    return ` "${pattern}"` + (typeof where === 'string' && where.length > 0 ? ` in ${where}` : '');
+  }
   const path = obj['file_path'] ?? obj['path'] ?? obj['filePath'];
   if (typeof path === 'string') return ' ' + path;
   const cmd = obj['command'] ?? obj['cmd'];

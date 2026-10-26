@@ -6,6 +6,7 @@ import {
   formatRoundLabel,
   resolveMaxToolIterations,
   shouldWindDown,
+  roundDeliveryNotice,
 } from './tool-loop-cap.js';
 
 describe('shared/tool-loop-cap', () => {
@@ -64,6 +65,99 @@ describe('shared/tool-loop-cap', () => {
 
     it('renders round/cap even once the round number reaches the cap', () => {
       expect(formatRoundLabel(50, 50)).toBe('round 50/50');
+    });
+  });
+
+  describe('roundDeliveryNotice', () => {
+    it('returns null when budget is 0 (unlimited)', () => {
+      expect(roundDeliveryNotice(0, 0)).toBeNull();
+      expect(roundDeliveryNotice(5, 0)).toBeNull();
+      expect(roundDeliveryNotice(47, 0)).toBeNull();
+    });
+
+    it('returns null when budget is 1', () => {
+      // budget=1 means wind-down fires after the very first round — no room
+      // for a "N rounds remain" warning that is still actionable.
+      expect(roundDeliveryNotice(0, 1)).toBeNull();
+      expect(roundDeliveryNotice(1, 1)).toBeNull();
+    });
+
+    it('fires exactly once at max(1, budget-3) for budget=2', () => {
+      // budget=2: threshold = max(1, 2-3) = max(1,-1) = 1
+      expect(roundDeliveryNotice(0, 2)).toBeNull();
+      expect(roundDeliveryNotice(1, 2)).not.toBeNull();
+      expect(roundDeliveryNotice(2, 2)).toBeNull();
+    });
+
+    it('fires exactly once at max(1, budget-3) for budget=3', () => {
+      // budget=3: threshold = max(1, 0) = 1
+      expect(roundDeliveryNotice(0, 3)).toBeNull();
+      expect(roundDeliveryNotice(1, 3)).not.toBeNull();
+      expect(roundDeliveryNotice(2, 3)).toBeNull();
+      expect(roundDeliveryNotice(3, 3)).toBeNull();
+    });
+
+    it('fires exactly once at max(1, budget-3) for budget=4', () => {
+      // budget=4: threshold = max(1, 1) = 1
+      expect(roundDeliveryNotice(0, 4)).toBeNull();
+      expect(roundDeliveryNotice(1, 4)).not.toBeNull();
+      expect(roundDeliveryNotice(2, 4)).toBeNull();
+      expect(roundDeliveryNotice(3, 4)).toBeNull();
+      expect(roundDeliveryNotice(4, 4)).toBeNull();
+    });
+
+    it('fires exactly once at max(1, budget-3) for budget=5', () => {
+      // budget=5: threshold = max(1, 2) = 2
+      expect(roundDeliveryNotice(0, 5)).toBeNull();
+      expect(roundDeliveryNotice(1, 5)).toBeNull();
+      expect(roundDeliveryNotice(2, 5)).not.toBeNull();
+      expect(roundDeliveryNotice(3, 5)).toBeNull();
+      expect(roundDeliveryNotice(4, 5)).toBeNull();
+      expect(roundDeliveryNotice(5, 5)).toBeNull();
+    });
+
+    it('fires exactly once at max(1, budget-3) for budget=50', () => {
+      // budget=50: threshold = max(1, 47) = 47
+      expect(roundDeliveryNotice(46, 50)).toBeNull();
+      expect(roundDeliveryNotice(47, 50)).not.toBeNull();
+      expect(roundDeliveryNotice(48, 50)).toBeNull();
+      expect(roundDeliveryNotice(49, 50)).toBeNull();
+      expect(roundDeliveryNotice(50, 50)).toBeNull();
+    });
+
+    it('uses singular "round remains" when exactly 1 round left', () => {
+      // budget=4, threshold=1, remaining=4-1=3 ... let's pick budget=2: remaining=1
+      const notice = roundDeliveryNotice(1, 2);
+      expect(notice).not.toBeNull();
+      expect(notice).toContain('1 tool-use round remains');
+      expect(notice).not.toContain('rounds remain');
+    });
+
+    it('uses plural "rounds remain" when more than 1 round left', () => {
+      // budget=50, threshold=47, remaining=50-47=3
+      const notice = roundDeliveryNotice(47, 50);
+      expect(notice).not.toBeNull();
+      expect(notice).toContain('3 tool-use rounds remain');
+      expect(notice).not.toContain('1 tool-use round remains');
+    });
+
+    it('notice contains the budget total', () => {
+      const notice = roundDeliveryNotice(47, 50);
+      expect(notice).toContain('of 50');
+    });
+
+    it('notice contains the Budget notice prefix', () => {
+      const notice = roundDeliveryNotice(47, 50);
+      expect(notice).toMatch(/^\[Budget notice:/);
+    });
+
+    it('returns null on rounds before and after the single fire round', () => {
+      for (let r = 0; r < 46; r++) {
+        expect(roundDeliveryNotice(r, 50)).toBeNull();
+      }
+      for (let r = 48; r <= 55; r++) {
+        expect(roundDeliveryNotice(r, 50)).toBeNull();
+      }
     });
   });
 });

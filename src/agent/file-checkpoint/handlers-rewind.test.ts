@@ -111,7 +111,7 @@ describe('real handler checkpoint and rewind regressions', () => {
     writeFileSync(file, 'old');
     writeFileSync(redirected, 'external');
     const registry = context.fileCheckpoint!;
-    context.fileCheckpoint = { turnId: turn, async snapshotFile(target) {
+    context.fileCheckpoint = { turnId: turn, touchedPaths: () => registry.touchedPaths(), async snapshotFile(target) {
       await registry.snapshotFile(target);
       rmSync(file);
       symlinkSync(redirected, file, 'file');

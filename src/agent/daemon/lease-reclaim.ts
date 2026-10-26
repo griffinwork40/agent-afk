@@ -17,9 +17,8 @@ import {
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getQueueDir } from '../../paths.js';
-import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { type TaskRecord } from './task-lifecycle.js';
-import { reEnqueueRecord } from './lease-store.js';
+import { atomicWriteJson, reEnqueueRecord } from './lease-store.js';
 
 const LEASED_SUBDIR = 'leased';
 const DEAD_LETTER_SUBDIR = 'dead-letter';
@@ -38,10 +37,6 @@ function leasedPath(queueDir: string, taskId: string): string {
 
 function deadLetterPath(queueDir: string, taskId: string): string {
   return join(deadLetterDir(queueDir), `${taskId}.json`);
-}
-
-function atomicWriteJson(dest: string, data: unknown): void {
-  atomicWriteFile(dest, JSON.stringify(data), { mode: 0o600 });
 }
 
 /**
@@ -87,6 +82,9 @@ export function reclaimSingleLease(
   }
 
   // Apply same crash-window reconstruction as recoverExpiredLeases.
+  // Records that are missing attempt fields are reconstructed with
+  // attempts: 0, maxAttempts: 1.  They are re-enqueued on the first reclaim
+  // (0 < 1) and dead-lettered only on the second (1 < 1 → false).
   if (record.attempts === undefined || record.maxAttempts === undefined) {
     record = {
       ...record,

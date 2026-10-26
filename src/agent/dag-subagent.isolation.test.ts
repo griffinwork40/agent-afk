@@ -55,8 +55,6 @@ vi.mock('./tools/handlers/worktree-managed.background.js', () => ({
   lockWorktreeForBackground,
 }));
 
-
-
 import { runSubagentDAG, type SubagentDAGNode } from './dag-subagent.js';
 import { dispatchDagNode } from './dag-subagent.dispatch.js';
 

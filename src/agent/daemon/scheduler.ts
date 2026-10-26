@@ -423,11 +423,11 @@ export class CronScheduler {
     if (this.handoffMaintenance !== undefined) return;
     const maintenanceOpts: HandoffMaintenanceOpts = {
       queueDir: this.queueDir,
-      ...(this.options.handoffsDir !== undefined ? { handoffsDir: this.options.handoffsDir } : {}),
-      ...(this.options.bot !== undefined ? { bot: this.options.bot } : {}),
-      ...(intervalMs !== undefined ? { intervalMs } : {}),
+      ...(this.options.handoffsDir !== undefined && { handoffsDir: this.options.handoffsDir }),
+      ...(this.options.bot !== undefined && { bot: this.options.bot }),
+      ...(intervalMs !== undefined && { intervalMs }),
       drainResumeQueue: (resumeDir: string) => this.pullTick(resumeDir),
-      ...((this.options.pullPollIntervalMs ?? 0) > 0 ? { recoverMainQueue: () => recoverDaemonQueues(this.queueDir) } : {}),
+      ...((this.options.pullPollIntervalMs ?? 0) > 0 && { recoverMainQueue: () => recoverDaemonQueues(this.queueDir) }),
       isInFlight: (id: string) => this.inFlightTasks.has(id),
     };
     this.handoffMaintenance = startHandoffMaintenance(maintenanceOpts);

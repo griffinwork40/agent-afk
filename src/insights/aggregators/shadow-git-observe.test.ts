@@ -313,6 +313,59 @@ describe('aggregateShadowGitObserve — time window', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests: decision filter
+// ---------------------------------------------------------------------------
+
+describe('aggregateShadowGitObserve — decision filter', () => {
+  it('does not count a block decision even when reason prefix matches', () => {
+    writeSession('sess-block-decision');
+    writeTrace('sess-block-decision', [
+      // Same reason prefix as shadow-git observe events, but decision: 'block'.
+      // This should NOT be counted — only 'approve' decisions are shadow-git
+      // observe firings; 'block' comes from a different guard.
+      JSON.stringify({
+        ts: NOW_ISO,
+        seq: 1,
+        kind: 'hook_decision',
+        payload: {
+          hookEvent: 'PreToolUse',
+          decision: 'block',
+          reason: `${SHADOW_GIT_OBSERVE_REASON_PREFIX} [no-verify]`,
+          blockedTool: 'bash',
+        },
+      }),
+    ]);
+
+    const result = aggregateShadowGitObserve(opts());
+    expect(result.totalFirings).toBe(0);
+    expect(result.sessionsWithFirings).toBe(0);
+    expect(result.sessionsScanned).toBe(1);
+  });
+
+  it('counts approve but not block when both appear in the same session', () => {
+    writeSession('sess-mixed-decision');
+    writeTrace('sess-mixed-decision', [
+      shadowGitEvent(1, ['no-verify']),   // approve — should count
+      JSON.stringify({
+        ts: NOW_ISO,
+        seq: 2,
+        kind: 'hook_decision',
+        payload: {
+          hookEvent: 'PreToolUse',
+          decision: 'block',
+          reason: `${SHADOW_GIT_OBSERVE_REASON_PREFIX} [no-verify]`,
+          blockedTool: 'bash',
+        },
+      }),                                 // block — must not count
+    ]);
+
+    const result = aggregateShadowGitObserve(opts());
+    expect(result.totalFirings).toBe(1);
+    expect(result.sessionsWithFirings).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: resilience
 // ---------------------------------------------------------------------------
 

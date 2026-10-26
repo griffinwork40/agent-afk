@@ -166,6 +166,8 @@ export interface ForkAndCheckCancelArgs {
   callId: string;
   /** Default-tier model fallback from buildChildConfig (undefined = not eligible). */
   modelFallback?: ForkSubagentOptions['modelFallback'];
+  /** D8: continuation fork (resume the seeded journal); undefined on ordinary dispatches. */
+  continuation?: ForkSubagentOptions['continuation'];
 }
 
 export type ForkResult =
@@ -204,6 +206,7 @@ export async function forkAndCheckCancel(
       parent: ctx.parentSession,
       parentId: callId,
       config: childConfig,
+      yieldEnabled: true, // foreground agent-tool dispatch (#4297 F-C2)
       idPrefix: parsed.id_prefix,
       agentType:
         namedAgent !== undefined
@@ -225,6 +228,7 @@ export async function forkAndCheckCancel(
       progressEvents: parsed.progress_events,
       ...(nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist } : {}),
       ...(args.modelFallback !== undefined ? { modelFallback: args.modelFallback } : {}),
+      ...(args.continuation !== undefined ? { continuation: args.continuation } : {}),
     });
   } catch (err) {
     const message = errorMessage(err);
@@ -416,6 +420,25 @@ import { executeRemoteAgentDispatch } from './subagent-executor.execute-once.rem
  * `return` it immediately, or `undefined` when the local path should proceed.
  *
  * Extracted here to keep `executeOnce` within the 200-line ceiling.
+ *
+ * Invariant: the delegation-budget slot (concurrent-spawn count) is acquired
+ * BEFORE this helper is called and is held for the entire SSH session — from
+ * the `delegationBudget.recordSpawn` call in `executeOnce` through to the
+ * `rollback()` / `release()` call inside this function.  This is intentional:
+ * a remote dispatch occupies a real concurrency slot just like a local one,
+ * preventing unbounded fan-out even though no local AgentSession is forked.
+ * The slot is rolled back (not consumed) on any pre-execution failure path
+ * (isRemoteRun refusal, isolation guard, host-resolve error) so those slots
+ * remain available for subsequent local dispatches.
+ *
+ * Gates that apply to BOTH local and remote paths (enforced in `executeOnce`
+ * before this call): depth check, delegation-budget canSpawn/recordSpawn.
+ * Gates that apply ONLY to the local path (after this call returns undefined):
+ * `evaluateDispatchUsageForModel` — skipped because the remote session runs
+ * its own model; a local usage notice would be misleading (no local tokens
+ * are consumed).  `emitTelemetry` (inside forkAndCheckCancel) and
+ * `appendRoutingDecision` — skipped for parity with the `remote_agent` tool,
+ * which also omits them; the remote host's own session records those events.
  */
 export async function checkAndRunRemoteDispatch(
   parsed: Pick<AgentInput, 'host' | 'prompt' | 'model' | 'isolation' | 'cwd'>,

@@ -7,7 +7,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
-import { closeStore } from '../elicitation/pending-question-store.js';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -102,7 +101,6 @@ afterEach(() => {
   else process.env['AFK_HOME'] = savedAfkHome;
   if (savedAllowProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
   else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
-  closeStore();
   if (isolatedAfkHome !== undefined) rmSync(isolatedAfkHome, { recursive: true, force: true });
   isolatedAfkHome = undefined;
   // Reset the daemonDefaultCwd memo so each test gets a fresh resolution
@@ -1104,7 +1102,7 @@ describe('resolveWorktreePruneRoot', () => {
     const mock = vi.fn().mockResolvedValue({ stdout: '/Users/me/proj\n', stderr: '' });
     const root = await resolveWorktreePruneRoot(mock as unknown as ExecFileFn, '/Users/me/proj/sub', undefined);
     expect(root).toBe('/Users/me/proj');
-    expect(mock).toHaveBeenCalledWith('git', ['rev-parse', '--show-toplevel'], { cwd: '/Users/me/proj/sub' });
+    expect(mock).toHaveBeenCalledWith('git', ['--no-optional-locks', 'rev-parse', '--show-toplevel'], { cwd: '/Users/me/proj/sub' });
   });
 
   it('returns null when cwd is not a git repo (rev-parse throws) — the daemon $HOME case', async () => {

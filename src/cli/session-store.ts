@@ -40,6 +40,10 @@ export interface StoredSession {
   /** Human-readable session name (kebab-case). Optional — absent on legacy
    * sidecars saved before naming existed; those resolve by id/sessionId. */
   name?: string;
+  /** True when `name` came from `/name` (shown verbatim), absent when auto-derived. */
+  nameExplicit?: boolean;
+  /** Verbatim `/name` text for display; `name` remains the slug resume key. */
+  displayName?: string;
   /** Origin surface ('cli' | 'telegram' | 'daemon' | 'web'). Absent on legacy sidecars → 'cli'. */
   source?: 'cli' | 'telegram' | 'daemon' | 'web';
   /** Telegram chat id when source === 'telegram' (reverse lookup). */
@@ -79,6 +83,9 @@ export interface StoredSession {
    * to filter the list to sessions from the current directory. Absent on
    * legacy sidecars — those surface only in the global fallback view. */
   cwd?: string;
+  /** Shared git repo root (dirname of git-common-dir). Same for main checkout
+   * and all linked worktrees; lets /resume include worktree sessions. */
+  repoRoot?: string;
   /** Session-registry handle id. Absent on pre-registry sidecars → the
    *  sidecar's on-disk id is used as the stable handle id (see storedToHandle). */
   handleId?: string;
@@ -86,6 +93,10 @@ export interface StoredSession {
    *  pre-registry sidecars; a legacy `telegramChatId` migrates to one telegram
    *  binding so existing Telegram conversations resolve unchanged. */
   bindings?: SessionBinding[];
+  /** Whether the model sees subscription usage info. Absent on legacy sidecars
+   *  → runtime default (true). Persisted so the resume path can hydrate the
+   *  toggle without relying solely on the config bootstrap. */
+  usageAwareness?: boolean;
 }
 
 export interface SessionListEntry {
@@ -103,6 +114,7 @@ export interface SessionListEntry {
   totalTurns: number;
   totalCostUsd: number;
   cwd?: string;
+  repoRoot?: string;
 }
 
 export interface FoundSession {
@@ -187,10 +199,16 @@ export function saveSession(
   const payload: StoredSession = {
     sessionId: stats.sessionId,
     ...(stats.name ? { name: stats.name } : {}),
+    // Invariant: written right after `name` (before `turns`) so the web
+    // session list's head-only sidecar read sees it (session-name-head.ts).
+    ...(stats.name && stats.nameExplicit ? { nameExplicit: true } : {}),
+    // Same head-read invariant as nameExplicit: before `turns`.
+    ...(stats.name && stats.nameExplicit && stats.displayName ? { displayName: stats.displayName } : {}),
     ...(stats.source ? { source: stats.source } : {}),
     ...(stats.actor ? { actor: stats.actor } : {}),
     ...(stats.telegramChatId !== undefined ? { telegramChatId: stats.telegramChatId } : {}),
     ...(stats.cwd ? { cwd: stats.cwd } : {}),
+    ...(stats.repoRoot ? { repoRoot: stats.repoRoot } : {}),
     model: stats.model,
     startedAt: stats.sessionStartTime,
     savedAt: now,
@@ -202,6 +220,7 @@ export function saveSession(
     totalTokens: stats.totalTokens,
     totalDurationMs: stats.totalDurationMs,
     turns: stats.turns,
+    ...(stats.usageAwareness !== undefined ? { usageAwareness: stats.usageAwareness } : {}),
   };
   // Validate write destination — pathForId(id) calls path.join() which does
   // NOT block traversal; `id = '../../evil'` would otherwise escape the
@@ -243,10 +262,10 @@ export function forkStoredSession(
     totalTokens: stats.totalTokens,
     totalDurationMs: stats.totalDurationMs,
     turns: [...stats.turns],
-    // Preserve the session's cwd so a forked sidecar records where it was
-    // running (e.g. an `afk --worktree` session). Without this, resuming the
-    // fork lands in the launch cwd instead of the worktree. Mirrors saveSession.
+    // Preserve the session's cwd and repoRoot so a forked sidecar records
+    // where it was running (e.g. an `afk --worktree` session). Mirrors saveSession.
     ...(stats.cwd ? { cwd: stats.cwd } : {}),
+    ...(stats.repoRoot ? { repoRoot: stats.repoRoot } : {}),
     ...(stats.sessionId ? { forkedFrom: stats.sessionId } : {}),
     forkedAt: Date.now(),
   };
@@ -362,6 +381,7 @@ export function listSessions(): SessionListEntry[] {
         totalTurns: loaded.totalTurns,
         totalCostUsd: loaded.totalCostUsd,
         cwd: loaded.cwd,
+        repoRoot: loaded.repoRoot,
       });
     } catch {
       // skip corrupted files

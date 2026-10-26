@@ -15,6 +15,7 @@ import {
   formatDuration,
   vitalsEnabled,
 } from './vitals.js';
+import { setUsageAwareness, resetUsageAwarenessForTests } from '../../usage/usage-awareness-toggle.js';
 
 // Fri 2026-10-09 14:32:00 EDT.
 const NOW = Date.UTC(2026, 9, 9, 18, 32, 0);
@@ -34,6 +35,7 @@ function usage(utilization: number, extra: Partial<NonNullable<UsageRecord['wind
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  resetUsageAwarenessForTests();
 });
 
 describe('buildVitalsNote: ambient tier', () => {
@@ -101,6 +103,14 @@ describe('buildVitalsNote: usage salience', () => {
   it('never shows usage to a subagent, even when it is high', () => {
     const read = vi.fn(() => usage(0.95));
     const note = buildVitalsNote({ ...root, subagentId: 'child-1' }, { ...base, readClaudeUsage: read });
+    expect(note).not.toContain('usage');
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('suppresses usage when usage awareness is toggled off', () => {
+    const read = vi.fn(() => usage(0.95));
+    setUsageAwareness(false);
+    const note = buildVitalsNote(root, { ...base, readClaudeUsage: read });
     expect(note).not.toContain('usage');
     expect(read).not.toHaveBeenCalled();
   });

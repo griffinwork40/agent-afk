@@ -48,12 +48,22 @@ import { join } from 'node:path';
 import { renderCli } from './render-cli-reference.mdx.js';
 import { isMain, repoRoot, writeReference } from './lib/docs-reference.js';
 
-/** Extract ordered `registerXxxCommand` call sites from source text. */
+/**
+ * Extract ordered `registerXxxCommand` call sites from source text.
+ * @internal
+ */
 export function registrations(text: string): string[] {
   return [...text.matchAll(/^\s*(register\w+Command)\(program\);/gm)].map((m) => m[1]!);
 }
 
-/** Returns true when the generator mirrors the entry point exactly; logs diff on mismatch. */
+/**
+ * Returns true when the generator mirrors the entry point exactly; logs diff on mismatch.
+ *
+ * When called with no arguments, reads `src/cli/index.ts` for `entryText` and
+ * reads **this file** (`scripts/render-cli-reference.ts`) for `generatorText`.
+ *
+ * @internal
+ */
 export function checkMirror(
   entryText?: string,
   generatorText?: string,

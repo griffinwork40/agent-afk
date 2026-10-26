@@ -98,7 +98,7 @@ const PINNED_HASHES = {
   // wave keeps dispatching). The upstream ground-state has neither layer, so
   // both lines are permanent bundled-only divergence.
   'ground-state':
-    '619d00252cb2006184f4e0e3fcd3b00a1a01c2e8751c6165ad16c313cb716bc2',
+    '1d0ba01a4c9a3a28713cd1bf1fd7faef57b90b50fd199c0092233049629f9a33',
 
   polish:
     '03c7d8d1f593d4aca3327247d5c226e957bae84982b8a438c5834ba74ee4184c',
@@ -113,7 +113,7 @@ const PINNED_HASHES = {
   // (`pnpm test <file>` / `pnpm test -t "AuthService"`) plus a note to never emit
   // the `--` form. Bundled-only — mirror into the user-scope /refactor at
   // ~/.afk/skills/ if it drifts back.
-  refactor: '816bcc71c185cf0fe511c67424986ae08b45364d00bb790c1b972c3d562d099e',
+  refactor: '3823a970ce2fa7bdf0b2c40713de633e6ed3d450c0ad5665d342764fd51cee26',
   research: '052f8ec6f467f5b9200bea01286bebecf079c7135897a6a503c9cd74a019304b',
   // History: /review Wave 1 no longer mandates a `git show` re-read (#726,
   // #777); severity and disposition split into separate axes with an explicit

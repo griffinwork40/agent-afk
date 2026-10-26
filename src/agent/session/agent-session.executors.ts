@@ -75,7 +75,9 @@ export function recordSubagentCompletionInTree(
   const max = config.maxBudgetUsd;
   if (max === undefined || abortController.signal.aborted) return;
   const acct = accounting.snapshot();
-  const running = acct.sessionRunningCostUsd + acct.subagentRunningCostUsd;
+  // #3882 cause 4: use lifetime cost (not reset on /clear) so the budget ceiling
+  // is enforced across all REPL cycles, not just the current one.
+  const running = acct.lifetimeSessionCostUsd + acct.lifetimeSubagentCostUsd;
   if (running < max) return;
   // Invariant: emit the threshold-breach record BEFORE aborting (same
   // ordering as the per-turn gate) so it lands before any abort cascade.

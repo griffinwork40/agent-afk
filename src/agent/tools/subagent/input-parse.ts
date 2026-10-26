@@ -159,6 +159,8 @@ export interface AgentInput {
    * (inherits the same gate as `remote_agent`).
    */
   host?: string;
+  /** Runtime-minted continuation chain id (docs/subagent-continuation.md, D7). */
+  continuation_chain_id?: string;
 }
 
 /**
@@ -284,7 +286,11 @@ export function parseAgentInput(input: unknown): AgentInput {
   if (hostRaw !== undefined && !isValidSshTarget(hostRaw)) {
     throw new Error(`Agent tool \`host\` is not a valid SSH target: ${JSON.stringify(hostRaw)}`);
   }
-  const host = hostRaw !== undefined && !hostRaw.startsWith('-') ? hostRaw : undefined;
+  // Invariant: the startsWith('-') case is already rejected by the throw
+  // above, and isValidSshTarget also rejects it — so hostRaw is always a
+  // valid, non-dash-prefixed target at this point.
+  const host = hostRaw;
+  const continuation_chain_id = readOptionalString(agentInput, 'continuation_chain_id');
 
   return {
     prompt,
@@ -303,5 +309,6 @@ export function parseAgentInput(input: unknown): AgentInput {
     ...(isolation !== undefined ? { isolation } : {}),
     ...(progress_events !== undefined ? { progress_events } : {}),
     ...(host !== undefined ? { host } : {}),
+    ...(continuation_chain_id !== undefined ? { continuation_chain_id } : {}),
   };
 }

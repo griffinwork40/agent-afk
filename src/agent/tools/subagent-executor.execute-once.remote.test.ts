@@ -6,8 +6,13 @@
  *   - isolation:"worktree" incompatibility
  *   - host resolution error propagation
  *   - successful done outcome
- *   - error / lost / aborted outcomes
+ *   - error outcome
  *   - reply truncation at MAX_REPLY_CHARS
+ *
+ * lost / aborted outcomes are produced by runRemoteAgent's SSH-reconnect and
+ * AbortSignal logic, not by stream-line parsing, so they cannot be driven
+ * through the fake SshRunner.  They are covered directly via the exported
+ * formatRemoteOutcome helper (see "lost / aborted outcome formatting" suite).
  *
  * @module agent/tools/subagent-executor.execute-once.remote.test
  */
@@ -15,9 +20,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   executeRemoteAgentDispatch,
+  formatRemoteOutcome,
   type RemoteAgentDispatchDeps,
 } from './subagent-executor.execute-once.remote.js';
 import { checkAndRunRemoteDispatch } from './subagent-executor.execute-once.helpers.js';
+
+// Module-level mock so the release() test can replace executeRemoteAgentDispatch
+// inside checkAndRunRemoteDispatch without real SSH.
+vi.mock('./subagent-executor.execute-once.remote.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./subagent-executor.execute-once.remote.js')>();
+  return { ...actual };
+});
 import type { RemoteHost } from '../../remote/hosts.js';
 import type { SshRunner, SshExecResult, SshStreamOptions } from '../../remote/ssh-runner.js';
 import { PID_MARKER } from '../../remote/remote-script.js';
@@ -223,6 +236,50 @@ describe('executeRemoteAgentDispatch', () => {
 });
 
 // ---------------------------------------------------------------------------
+// lost / aborted outcome formatting (direct, no SSH required)
+// ---------------------------------------------------------------------------
+//
+// These outcomes are produced by runRemoteAgent's SSH-reconnect logic and
+// AbortSignal handling respectively — they cannot be driven through the fake
+// SshRunner's onLine callback.  We test formatRemoteOutcome directly instead.
+
+const FAKE_HOST = makeHost();
+const FAKE_RUN_ID = 'run-abc';
+const FAKE_SESSION = 'sess-xyz';
+
+describe('formatRemoteOutcome', () => {
+  it('returns isError on aborted outcome', () => {
+    const result = formatRemoteOutcome(
+      { kind: 'aborted', pid: 42 },
+      FAKE_HOST, FAKE_RUN_ID, FAKE_SESSION,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/aborted/);
+    expect(result.content).toContain(FAKE_RUN_ID);
+  });
+
+  it('returns isError on lost outcome and names the remote run file', () => {
+    const result = formatRemoteOutcome(
+      { kind: 'lost', reason: 'SSH connection dropped', pid: 42 },
+      FAKE_HOST, FAKE_RUN_ID, FAKE_SESSION,
+    );
+    expect(result.isError).toBe(true);
+    // The lost path names the remote run file so the operator can retrieve it.
+    expect(result.content).toMatch(/remote-runs/);
+    expect(result.content).toContain(FAKE_RUN_ID);
+  });
+
+  it('includes partial output in lost outcome when present', () => {
+    const result = formatRemoteOutcome(
+      { kind: 'lost', reason: 'dropped', pid: 42, partial: 'some partial' },
+      FAKE_HOST, FAKE_RUN_ID, FAKE_SESSION,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('some partial');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // #4202 follow-up: SpawnReceipt release/rollback per outcome kind
 // ---------------------------------------------------------------------------
 
@@ -246,27 +303,47 @@ describe('checkAndRunRemoteDispatch budget receipt handling', () => {
     expect(rollback).not.toHaveBeenCalled();
   });
 
-  it('calls release() on successful remote dispatch', async () => {
+  it('calls rollback() when host resolution fails (unknown host)', async () => {
+    // Unknown host → resolveHost throws → executeRemoteAgentDispatch returns
+    // isError → checkAndRunRemoteDispatch calls rollback(), not release().
     const release = vi.fn();
     const rollback = vi.fn();
     const receipt = { release, rollback } as never;
-    // Monkey-patch the module to inject fake deps — use the production function
-    // which internally calls executeRemoteAgentDispatch. We stub the env so
-    // the remote-depth guard does not fire, and rely on host resolution to
-    // succeed against a real hosts.json (or fail gracefully). Instead, test
-    // indirectly: a host that resolves triggers runRemoteAgent; a host that
-    // does not resolve returns isError → rollback.
-    // We can test the rollback path reliably: unknown host → resolveHost throws → isError.
     const result = await checkAndRunRemoteDispatch(
       { host: 'nonexistent-host-xyz', prompt: 'task' },
       ABORT.signal,
       receipt, 'call-1', updateWave,
     );
-    // Unknown host → error → rollback
     expect(result).toBeDefined();
     expect(result!.isError).toBe(true);
     expect(rollback).toHaveBeenCalledTimes(1);
     expect(release).not.toHaveBeenCalled();
+  });
+
+  it('calls release() on successful remote dispatch', async () => {
+    // Mock executeRemoteAgentDispatch at the module boundary so
+    // checkAndRunRemoteDispatch receives a non-error result without real SSH.
+    const mod = await import('./subagent-executor.execute-once.remote.js');
+    const spy = vi
+      .spyOn(mod, 'executeRemoteAgentDispatch')
+      .mockResolvedValueOnce({ content: 'remote reply' });
+
+    const release = vi.fn();
+    const rollback = vi.fn();
+    const receipt = { release, rollback } as never;
+
+    const result = await checkAndRunRemoteDispatch(
+      { host: 'any-host', prompt: 'task' },
+      ABORT.signal,
+      receipt, 'call-release', updateWave,
+    );
+
+    expect(result).toBeDefined();
+    expect(result!.isError).toBeUndefined();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(rollback).not.toHaveBeenCalled();
+
+    spy.mockRestore();
   });
 
   it('calls rollback() when AFK_REMOTE_DEPTH causes refusal', async () => {

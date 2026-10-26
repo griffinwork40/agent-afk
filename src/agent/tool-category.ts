@@ -69,6 +69,10 @@ const READ_TOOLS = new Set([
   // git_read — structured read-only git (#3754, opt-in via AFK_READONLY_GIT_TOOL).
   'git_read',
   // code_symbols — LSP symbol lookup (#3904 phase 2, opt-in via AFK_LSP_DIAGNOSTICS).
+  // Excluded from READ_ONLY_PHASE_TOOLS intentionally: it spawns a child
+  // process (typescript-language-server) per call, so it is not safe to
+  // allow during the pre-approval read-only phase where no side-effectful
+  // child processes should run.
   'code_symbols',
   // state-tools.ts — read-only queries against the durable cross-session KV store.
   'state_get', 'state_query',

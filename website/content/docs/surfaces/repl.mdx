@@ -196,9 +196,9 @@ Use `/history` to replay conversation output, `/history 10` to limit it to recen
 
 ### Rewind an earlier prompt
 
-Run `/rewind`, or press **Esc twice at an empty, idle prompt**, to choose an earlier message. AFK rewinds the conversation to before that prompt and loads its text into your input. Edit it, then press Enter to start the revised branch. Rewind requires a supported provider (currently Claude), and cannot run while a turn is active.
+Run `/rewind` to choose an earlier message, then choose whether to rewind the conversation, the files the agent edited, or both. A conversation rewind loads that prompt's text into your input; edit it, then press Enter to start the revised branch. A file rewind previews every file before restoring. Pressing **Esc twice at an empty, idle prompt** runs a conversation-only rewind. Rewind cannot run while a turn is active.
 
-Conversation rewind is not filesystem rollback. Use the [undo guide](/guides/undo-changes) for file restoration.
+File rewind covers the agent's `write_file`, `edit_file`, and `patch_apply` edits, not shell commands. See the [undo guide](/guides/undo-changes).
 
 ### Copy useful output
 

@@ -95,7 +95,7 @@ export function printExitSummary(
   // skips the line so process exit is never blocked.
   try {
     const cwd = ctx.stats.cwd ?? process.cwd();
-    const stdout = execFileSync('git', ['diff', '--shortstat', 'HEAD'], {
+    const stdout = execFileSync('git', ['--no-optional-locks', 'diff', '--shortstat', 'HEAD'], {
       cwd,
       encoding: 'utf8',
       timeout: 400,
@@ -145,8 +145,8 @@ export function printExitSummary(
 export async function snapshotGitStateForCancelAll(cwd: string): Promise<void> {
   try {
     const [statResult, statusResult] = await Promise.all([
-      execFile('git', ['diff', '--stat', 'HEAD'], { cwd, encoding: 'utf8', timeout: 2000 }),
-      execFile('git', ['status', '--short'], { cwd, encoding: 'utf8', timeout: 2000 }),
+      execFile('git', ['--no-optional-locks', 'diff', '--stat', 'HEAD'], { cwd, encoding: 'utf8', timeout: 2000 }),
+      execFile('git', ['--no-optional-locks', 'status', '--short'], { cwd, encoding: 'utf8', timeout: 2000 }),
     ]);
     const stat = statResult.stdout.trim();
     const status = statusResult.stdout.trim();

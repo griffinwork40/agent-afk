@@ -267,4 +267,5 @@ export function handleDisarmWindowResize(self: LifecycleHost): void {
   self.bandGeometryStale = true;
   self.resizeGeometryStale = true; // mirrors handleResizeImmediate — SIGWINCH-only flag (#3212)
   self.disarmRows = 0;
+  self.disarmCols = 0; // mirror disarmRows reset (#4203)
 }

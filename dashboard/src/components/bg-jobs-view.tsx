@@ -8,14 +8,14 @@
  *     re-fetching from the server.
  *   - Manual refresh button is always available.
  *
- * Cancel note: POST /api/bg-jobs/:id/cancel does not exist in the server router
- * (only GET /api/bg-jobs and GET /api/bg-jobs/:id are wired). The cancel button
- * is rendered but posts to that path and surfaces the 404 as a user-visible
- * error — ready to go live once the server route is added.
+ * Cancel note (A3): background job cancel requires a cross-process signal
+ * channel that does not yet exist. The cancel button is disabled with a
+ * tooltip directing the operator to use `/bgsub:cancel <id>` from the
+ * owning session. This will be revisited in Stage 1.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Briefcase, ChevronDown, ChevronRight, RefreshCw, X } from 'lucide-react';
+import { Briefcase, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
@@ -51,34 +51,17 @@ function StatusBadge({ status }: { status: BgJobMeta['status'] }) {
 function JobCard({
   job,
   now,
-  onCancel,
 }: {
   job: BgJobMeta;
   /** Current epoch ms — passed from parent so all cards tick together. */
   now: number;
-  onCancel: (jobId: string) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-  const [cancelError, setCancelError] = useState<string | null>(null);
 
   // Duration ticks live for running jobs (parent increments `now` every 1 s).
   const duration = formatDuration(job.startedAt, job.status === 'running' ? now : job.endedAt);
   const relTime = formatRelative(job.startedAt);
   const ChevronIcon = expanded ? ChevronDown : ChevronRight;
-
-  const handleCancel = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setCancelError(null);
-    setCancelling(true);
-    try {
-      await onCancel(job.jobId);
-    } catch (err) {
-      setCancelError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCancelling(false);
-    }
-  };
 
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900 overflow-hidden">
@@ -102,17 +85,15 @@ function JobCard({
             {job.status === 'running' && (
               <button
                 type="button"
-                onClick={handleCancel}
-                disabled={cancelling}
-                aria-label={`Cancel job ${job.jobId}`}
+                disabled
+                title={`Cancel from the owning session with /bgsub:cancel ${job.jobId}${job.ownerPid !== undefined ? ` (owner PID: ${job.ownerPid})` : ''}`}
+                aria-label={`Cancel job ${job.jobId} — use /bgsub:cancel from the owning session`}
                 className={cn(
                   'flex items-center gap-1 rounded px-1.5 py-0.5 text-xs',
-                  'text-neutral-500 hover:text-red-400 hover:bg-red-500/10',
-                  'disabled:opacity-40 transition-colors',
+                  'text-neutral-600 cursor-not-allowed opacity-40',
                 )}
               >
-                <X className="size-3" />
-                {cancelling ? 'Cancelling…' : 'Cancel'}
+                Cancel
               </button>
             )}
           </div>
@@ -134,9 +115,7 @@ function JobCard({
           </div>
         )}
 
-        {cancelError && (
-          <p className="pl-5 text-xs text-red-400" title={cancelError}>{cancelError.length > 200 ? cancelError.slice(0, 200) + '…' : cancelError}</p>
-        )}
+
       </div>
 
       {/* Expandable detail panel */}
@@ -248,17 +227,7 @@ export function BgJobsView() {
     return () => clearInterval(id);
   }, [jobs]);
 
-  const handleCancel = useCallback(async (jobId: string) => {
-    // Contract: POST /api/bg-jobs/:id/cancel is not yet wired in server.ts.
-    // This call will receive a 404 until the route is added. The error surfaces
-    // through the JobCard's cancelError state, so the user sees the failure.
-    await apiFetch(`/api/bg-jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
-    // Optimistically update local state (only reached on 2xx; inert until
-    // the server route is added — the poll will correct if needed).
-    setJobs((prev) =>
-      prev.map((j) => j.jobId === jobId ? { ...j, status: 'cancelled' as const } : j),
-    );
-  }, []);
+
 
   const running = jobs.filter((j) => j.status === 'running');
   const settled = jobs.filter((j) => isSettled(j));
@@ -300,7 +269,7 @@ export function BgJobsView() {
         <div className="flex flex-col gap-2">
           <SectionHeader label="Running" count={running.length} />
           {running.map((job) => (
-            <JobCard key={job.jobId} job={job} now={now} onCancel={handleCancel} />
+            <JobCard key={job.jobId} job={job} now={now} />
           ))}
         </div>
       )}
@@ -310,7 +279,7 @@ export function BgJobsView() {
         <div className="flex flex-col gap-2">
           <SectionHeader label="Settled" count={settled.length} />
           {settled.map((job) => (
-            <JobCard key={job.jobId} job={job} now={now} onCancel={handleCancel} />
+            <JobCard key={job.jobId} job={job} now={now} />
           ))}
         </div>
       )}

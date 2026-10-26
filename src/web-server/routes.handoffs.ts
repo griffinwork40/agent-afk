@@ -27,7 +27,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { listPendingHandoffs, readHandoff } from '../agent/daemon/handoff-store.js';
+import { listPendingHandoffs, readHandoff, HANDOFF_STORE_NO_RECORD_PREFIX } from '../agent/daemon/handoff-store.js';
 import { answerHandoff, MAX_ANSWER_BYTES } from '../agent/daemon/handoff-wiring.js';
 import { getHandoffsDir } from '../paths.js';
 import { isRecord } from '../utils/type-guards.js';
@@ -207,7 +207,7 @@ export async function handleAnswerHandoff(
     // error (disk I/O, permission failure, etc.) is a genuine 500 and must
     // not be silently mapped to "no longer active".
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.startsWith('handoff-store: no record found')) {
+    if (msg.startsWith(HANDOFF_STORE_NO_RECORD_PREFIX)) {
       sendJson(res, 409, {
         error: 'no_longer_active',
         message: `handoff for task ${taskId} is no longer active (already answered or expired)`,

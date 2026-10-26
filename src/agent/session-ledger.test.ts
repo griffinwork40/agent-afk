@@ -53,6 +53,21 @@ describe('projectOutputEvent', () => {
     expect(projectOutputEvent(event)).toEqual({ kind: 'assistant', text: 'hello world' });
   });
 
+  it('stores a 20k assistant message whole (no 8k clip)', () => {
+    const text = 'a'.repeat(20_000);
+    const event: OutputEvent = { type: 'message', message: { role: 'assistant', content: text, timestamp: new Date() } };
+    expect(projectOutputEvent(event)).toEqual({ kind: 'assistant', text });
+  });
+
+  it('still clips user text at 8k', async () => {
+    const id = freshId();
+    const writer = new SessionLedgerWriter(id);
+    writer.recordUser('u'.repeat(20_000));
+    await writer.close('close');
+    const user = (await collect(readLedger(id))).find((r) => r.kind === 'user');
+    expect(user && user.kind === 'user' && user.text.length).toBeLessThan(8_100);
+  });
+
   it('skips user-role message events (recorded separately via recordUser)', () => {
     const event: OutputEvent = {
       type: 'message',
@@ -411,14 +426,24 @@ describe('tailLedger', () => {
     }, { timeout: 5000, interval: 20 });
 
     const seen: LedgerRecord[] = [];
+
+    // Invariant: the tail must establish its file offset (via fsp.stat) before
+    // new data is written, otherwise on loaded CI runners the stat resolves
+    // AFTER the writer has flushed and fileOffset skips past all new records,
+    // making the tail poll forever until the test times out (#4248).
+    let tailReady!: () => void;
+    const tailReadyPromise = new Promise<void>((r) => { tailReady = r; });
+
     const done = (async () => {
-      for await (const rec of tailLedger(id)) {
+      for await (const rec of tailLedger(id, { onCaughtUp: () => tailReady() })) {
         seen.push(rec);
       }
     })();
 
-    // Write a live record, then close. No fixed sleeps — the tail's internal
-    // poll (250 ms) plus fs.watch wakeup picks up both writes deterministically.
+    await tailReadyPromise;
+
+    // Write a live record, then close. The tail's internal poll (250 ms) plus
+    // fs.watch wakeup picks up both writes deterministically.
     writer.recordUser('live-one');
     await writer.close('close');
     await done;

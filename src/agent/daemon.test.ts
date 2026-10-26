@@ -19,6 +19,7 @@ import type { AgentConfig, Message } from './types.js';
 import { validateScheduledTask, type ScheduledTask } from './daemon/triggers.js';
 import { CronScheduler } from './daemon/scheduler.js';
 import { startDaemon, type DaemonHandle } from './daemon.js';
+import { registerTasksWithQuarantine } from './daemon.startup-register.js';
 import { getDaemonStateDir, getAfkHome } from '../paths.js';
 import { toScheduledTask } from './daemon/schedule-store.js';
 
@@ -545,6 +546,59 @@ describe('CronScheduler.fireOnStart (Phase 6)', () => {
   });
 });
 
+describe('registerTasksWithQuarantine', () => {
+  let scheduler: CronScheduler;
+  let telemetryPath: string;
+
+  beforeEach(() => {
+    telemetryPath = tmpTelemetryFile();
+    scheduler = new CronScheduler({ telemetryPath });
+  });
+
+  afterEach(async () => {
+    await scheduler.stop();
+    rmSync(telemetryPath, { force: true });
+  });
+
+  it('quarantines a duplicate taskId instead of throwing, leaving the first registration intact', () => {
+    // scheduler.register() throws "already registered" on a duplicate taskId.
+    // registerTasksWithQuarantine must catch that error and warn rather than
+    // crashing the daemon startup loop (#4052, #4161).
+    const task: ScheduledTask = {
+      taskId: 'dup-task',
+      command: '/ok',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // First registration succeeds; second is a duplicate.
+      registerTasksWithQuarantine(scheduler, [task, task]);
+      // The original registration must survive.
+      expect(scheduler.list().map((t) => t.taskId)).toEqual(['dup-task']);
+      // A warn must have been emitted for the duplicate.
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy.mock.calls[0]![0]).toMatch(/dup-task/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('quarantines a malformed runAt without disrupting valid tasks', () => {
+    const good: ScheduledTask = { taskId: 'good', command: '/ok', trigger: 'cron', cronExpression: '* * * * *' };
+    const bad = { taskId: 'bad-runat', command: '/bad', trigger: 'cron' as const, runAt: 'not-a-date' } as unknown as ScheduledTask;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      registerTasksWithQuarantine(scheduler, [bad, good]);
+      expect(scheduler.list().map((t) => t.taskId)).toEqual(['good']);
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy.mock.calls[0]![0]).toMatch(/bad-runat/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
 describe('startDaemon', () => {
   let telemetryPath: string;
   let handle: DaemonHandle | null = null;
@@ -694,7 +748,7 @@ describe('startDaemon', () => {
       // A console.warn must have been emitted for the operator,
       // including the taskId and the field name that was malformed.
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('bad-runat'));
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('runAt'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/\brunAt\b/));
     } finally {
       warnSpy.mockRestore();
     }
@@ -1116,12 +1170,13 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         },
       ]),
     );
+    let h: DaemonHandle | null = null;
     try {
       // Isolation assertion: getAfkHome() must resolve to tmpHome so the store
       // module reads from our temp dir, not ~/.afk.  Verifies that vi.stubEnv
       // is active before the daemon is spun up and getSchedule() is called.
       expect(getAfkHome()).toBe(tmpHome);
-      const h = await spinDaemon();
+      h = await spinDaemon();
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1137,6 +1192,8 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       const task = h.scheduler.list().find((t) => t.taskId === 'shell-live');
       expect(task?.executor).toBe('shell');
     } finally {
+      await h?.stop();
+      handle = null;
       vi.unstubAllEnvs();
       // Isolation assertion: after unstub the store path must no longer resolve
       // to tmpHome, so a subsequent test in any order cannot inherit this dir.
@@ -1165,12 +1222,13 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         },
       ]),
     );
+    let h: DaemonHandle | null = null;
     try {
       // Isolation assertion: getAfkHome() must resolve to tmpHome so the store
       // module reads from our temp dir, not ~/.afk.  Verifies that vi.stubEnv
       // is active before the daemon is spun up and getSchedule() is called.
       expect(getAfkHome()).toBe(tmpHome);
-      const h = await spinDaemon();
+      h = await spinDaemon();
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1185,6 +1243,8 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       expect(res.status).toBe(400);
       expect(h.scheduler.list().some((t) => t.taskId === 'shell-live')).toBe(false);
     } finally {
+      await h?.stop();
+      handle = null;
       vi.unstubAllEnvs();
       // Isolation assertion: after unstub the store path must no longer resolve
       // to tmpHome, so a subsequent test in any order cannot inherit this dir.
@@ -1219,9 +1279,10 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         },
       ]),
     );
+    let h: DaemonHandle | null = null;
     try {
       expect(getAfkHome()).toBe(tmpHome);
-      const h = await spinDaemon();
+      h = await spinDaemon();
       // Request carries explicit notifyOn: 'failure' — must match the omitted store value.
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',
@@ -1239,6 +1300,8 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       const task = h.scheduler.list().find((t) => t.taskId === 'shell-notify');
       expect(task?.executor).toBe('shell');
     } finally {
+      await h?.stop();
+      handle = null;
       vi.unstubAllEnvs();
       expect(getAfkHome()).not.toBe(tmpHome);
       rmSync(tmpHome, { recursive: true, force: true });
@@ -1268,9 +1331,10 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         },
       ]),
     );
+    let h: DaemonHandle | null = null;
     try {
       expect(getAfkHome()).toBe(tmpHome);
-      const h = await spinDaemon();
+      h = await spinDaemon();
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1286,6 +1350,8 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       expect(res.status).toBe(400);
       expect(h.scheduler.list().find((t) => t.taskId === 'shell-notify-bad')).toBeUndefined();
     } finally {
+      await h?.stop();
+      handle = null;
       vi.unstubAllEnvs();
       expect(getAfkHome()).not.toBe(tmpHome);
       rmSync(tmpHome, { recursive: true, force: true });
@@ -1317,9 +1383,10 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         },
       ]),
     );
+    let h: DaemonHandle | null = null;
     try {
       expect(getAfkHome()).toBe(tmpHome);
-      const h = await spinDaemon();
+      h = await spinDaemon();
       // Request carries explicit notifyOn: null — must be treated as absent
       // and match the store entry whose notifyOn is also omitted.
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
@@ -1338,6 +1405,8 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       const task = h.scheduler.list().find((t) => t.taskId === 'shell-null-notify');
       expect(task?.executor).toBe('shell');
     } finally {
+      await h?.stop();
+      handle = null;
       vi.unstubAllEnvs();
       expect(getAfkHome()).not.toBe(tmpHome);
       rmSync(tmpHome, { recursive: true, force: true });

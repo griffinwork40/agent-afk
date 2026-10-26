@@ -73,7 +73,7 @@ issue, not a security vulnerability.
 | **Path / bash string filters** | Warn-only scan of bash command strings for out-of-root path references; block typed-file calls outside `readRoots`/`writeRoots`. | `src/agent/tools/hooks/bash-restriction-hook.ts`, `src/agent/tools/hooks/path-approval-hook.ts` |
 | **Read-only bash mode** | Blocks high-frequency mutation forms (writes, pipes to interpreter) for recon sub-agents. Classifier is best-effort, default-ALLOW. | `src/agent/tools/readonly-bash.ts:18`, `src/agent/tools/readonly-bash.ts:133` |
 | **AFK-mode gate** | Safety ceiling applied when running in AFK (unattended) mode; raises the bar for destructive actions without OS-level enforcement. | `src/agent/afk-mode-gate.ts`, `src/agent/default-hook-registry.ts:231` |
-| **Safe-destruct detect** | Observes destructive command patterns and surfaces them before execution in interactive sessions. | `src/agent/safe-destruct-detect.ts`, `src/agent/safe-destruct-patterns.ts` |
+| **Safe-destruct detect** | Observes or blocks destructive command patterns; worktree-scoped patterns (e.g. `git stash` mutating ops) are blocked only inside `.afk-worktrees/` linked worktrees. | `src/agent/safe-destruct-detect.ts`, `src/agent/safe-destruct-patterns.ts` |
 | **Release-boundary detect** | Observes sync-boundary commands (publish, deploy, release) to surface them before they escape in interactive sessions. | `src/agent/release-boundary-detect.ts` |
 | **Plan-mode gate** | Blocks write-capable tools while `exit_plan_mode` has not been called. Explicitly an honesty guardrail, not a security boundary. | `src/agent/plan-mode-gate.ts:27` |
 

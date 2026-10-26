@@ -85,9 +85,10 @@ export function sumBillingUsage(
   if (!a) return b ? { ...b } : undefined;
   if (!b) return { ...a };
   // Short-circuit: if either input is already 'mixed', propagate without
-  // re-warning.  A deserialized 'mixed' record has already been flagged at
-  // construction time; warning again on every subsequent accumulation would
-  // flood the log with redundant noise.
+  // re-warning.  A 'mixed' record can arise at construction time (mismatched
+  // providers in a single call) or via `billingFromUsageRecord` deserialization
+  // (a stored sidecar that was already mixed). Either way, warning again on
+  // every subsequent accumulation would flood the log with redundant noise.
   let provider: string;
   if (a.provider === 'mixed' || b.provider === 'mixed') {
     provider = 'mixed';

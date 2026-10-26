@@ -8,18 +8,24 @@
 import { providerForModel } from '../providers/index.js';
 import type { AgentModelInput } from '../types.js';
 import { env } from '../../config/env.js';
+import { getSlotBindings } from './model-slots.js';
 
 /**
  * Get the default model for dispatched subagents (`agent` and `skill` tools).
  *
  * Precedence:
  *   1. `AFK_DEFAULT_SUBAGENT_MODEL` env (when set, always wins).
- *   2. If the parent session routes to `openai-compatible` (any non-Claude
+ *   2. `models.subagent` slot (afk.config.json or `AFK_MODEL_SUBAGENT` env).
+ *      When configured, returns `'subagent'` so downstream slot resolution
+ *      picks up the binding's per-slot baseUrl/apiKey/provider — enabling
+ *      subagent inference routing to a different provider (Together, Fireworks,
+ *      Groq, or a self-hosted vLLM/SGLang endpoint).
+ *   3. If the parent session routes to `openai-compatible` (any non-Claude
  *      provider — GPT/o-series, codex-*, HF-style local ids) → return the
  *      parent model. Without this, a local-only setup silently dispatches
  *      subagents to api.anthropic.com because the literal `'medium'` fallback
  *      below routes back through `providerForModel` → `anthropic-direct`.
- *   3. `'medium'` (the medium capability tier). Preserved for Claude parents so
+ *   4. `'medium'` (the medium capability tier). Preserved for Claude parents so
  *      the historical cost-management intent — "high-tier parent (e.g. opus)
  *      shouldn't auto-spawn high-tier children" — keeps working; and because it
  *      is the rebindable TIER (not the fixed `'sonnet'` identity alias), a user
@@ -34,6 +40,11 @@ import { env } from '../../config/env.js';
 export function getDefaultSubagentModel(parentModel?: AgentModelInput): AgentModelInput {
   const raw = env.AFK_DEFAULT_SUBAGENT_MODEL;
   if (raw && raw.length > 0) return raw;
+  // Check the `subagent` slot binding (afk.config.json models.subagent or
+  // AFK_MODEL_SUBAGENT env). When configured, return the slot name so
+  // downstream resolution picks up per-slot baseUrl/apiKey/provider.
+  const subagentBinding = getSlotBindings().subagent;
+  if (subagentBinding?.id && subagentBinding.id.length > 0) return 'subagent';
   if (typeof parentModel === 'string') {
     const parentProvider = providerForModel(parentModel);
     // Inherit parent for OpenAI-compatible and xAI/Grok families so local/Grok

@@ -344,6 +344,99 @@ describe('planGitRead (#4058): new subcommand allowlist', () => {
     const plan = planGitRead({ subcommand: 'log', args: ['--diff-filter=M', '--oneline'] }, CWD);
     expect(plan.ok).toBe(true);
   });
+
+  it('log accepts -n (shorthand for --max-count)', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['-n', '5', '--oneline'] }, CWD);
+    expect(plan.ok).toBe(true);
+    // -n 5 is normalised to --max-count=5 by the count-shorthand rewriter
+    expect(plan.ok && plan.argv).toContain('--max-count=5');
+  });
+
+  it('log accepts -i and --regexp-ignore-case (case-insensitive grep)', () => {
+    const planI = planGitRead({ subcommand: 'log', args: ['-i', '--grep=fix', '--oneline'] }, CWD);
+    expect(planI.ok).toBe(true);
+    const planLong = planGitRead({ subcommand: 'log', args: ['--regexp-ignore-case', '--grep=fix'] }, CWD);
+    expect(planLong.ok).toBe(true);
+  });
+
+  it('log accepts --not (revision exclusion)', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['--oneline', '--not', 'origin/main'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--not');
+  });
+
+  it('rev-list accepts --not (revision exclusion)', () => {
+    const plan = planGitRead({ subcommand: 'rev-list', args: ['--count', 'HEAD', '--not', 'origin/main'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--not');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests for #4227: model-quirk normalization (count shorthand, empty pattern,
+// echoed subcommand). None of these widen the read-only surface — each maps
+// onto a form the allowlist already accepts.
+// ---------------------------------------------------------------------------
+
+describe('planGitRead (#4227): model-quirk normalization', () => {
+  it('normalizes count shorthand to --max-count=', () => {
+    for (const args of [['-5'], ['-n', '5'], ['-n5']]) {
+      for (const sub of ['log', 'rev-list'] as const) {
+        const plan = planGitRead({ subcommand: sub, args }, CWD);
+        expect(plan.ok, `${sub} ${args.join(' ')}`).toBe(true);
+        if (plan.ok) expect(plan.argv, `${sub} ${args.join(' ')}`).toContain('--max-count=5');
+      }
+    }
+  });
+
+  it('keeps shortlog -n (numbered) verbatim and only pairs -n with a value for log/rev-list', () => {
+    // shortlog: -n is --numbered there, not a count.
+    const s = planGitRead({ subcommand: 'shortlog', args: ['-s', '-n'] }, CWD);
+    expect(s.ok && s.argv).toEqual(['shortlog', '-s', '-n', 'HEAD']);
+    // shortlog with a paired -n <N> normalizes to a count (git's shortlog -n
+    // <N> is ambiguous in practice; the count reading is the model-quirk one).
+    const s2 = planGitRead({ subcommand: 'shortlog', args: ['-n', '3'] }, CWD);
+    expect(s2.ok && s2.argv).toEqual(['shortlog', '--max-count=3', 'HEAD']);
+    // A bare -n followed by another flag stays verbatim for shortlog (legacy
+    // shape preserved: `-n` = --numbered, as in `shortlog -s -n`).
+    const s3 = planGitRead({ subcommand: 'shortlog', args: ['-n', '-e'] }, CWD);
+    expect(s3.ok && s3.argv).toEqual(['shortlog', '-n', '-e', 'HEAD']);
+  });
+
+  it('rejects -n with a non-numeric value for log/rev-list', () => {
+    expect(rejected({ subcommand: 'log', args: ['-n', 'abc'] })).toContain('positive integer');
+    expect(rejected({ subcommand: 'log', args: ['-nabc'] })).toContain('Rejected option');
+    expect(rejected({ subcommand: 'log', args: ['-n'] })).toContain('expects --max-count=');
+    expect(rejected({ subcommand: 'rev-list', args: ['-n', 'abc'] })).toContain('positive integer');
+  });
+
+  it('treats an empty or whitespace-only pattern as absent for non-grep subcommands', () => {
+    const a = planGitRead({ subcommand: 'log', args: ['--oneline'], pattern: '' }, CWD);
+    expect(a.ok && a.argv).toEqual(['log', '--no-ext-diff', '--no-textconv', '--oneline', '--']);
+    expect(planGitRead({ subcommand: 'show', args: ['HEAD'], pattern: '  ' }, CWD).ok).toBe(true);
+    // grep still requires a real pattern — the empty string is not a search term.
+    expect(rejected({ subcommand: 'grep', pattern: '' })).toContain('non-empty');
+    // ...but a whitespace-only grep pattern is a legitimate search (literal
+    // spaces / indentation) and must be passed through unchanged via -e.
+    for (const ws of [' ', '\t', '  ']) {
+      const g = planGitRead({ subcommand: 'grep', pattern: ws }, CWD);
+      expect(g.ok, JSON.stringify(ws)).toBe(true);
+      if (g.ok) {
+        const i = g.argv.indexOf('-e');
+        expect(i, JSON.stringify(ws)).toBeGreaterThan(-1);
+        expect(g.argv[i + 1], JSON.stringify(ws)).toBe(ws);
+      }
+    }
+    // A non-empty pattern on a non-grep subcommand is still rejected.
+    expect(rejected({ subcommand: 'log', pattern: 'x' })).toContain('only valid');
+  });
+
+  it('drops a leading subcommand echoed into args', () => {
+    const plan = planGitRead({ subcommand: 'show', args: ['show', 'HEAD'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['show', '--no-ext-diff', '--no-textconv', 'HEAD', '--']);
+    const plan2 = planGitRead({ subcommand: 'log', args: ['log', '--oneline'] }, CWD);
+    expect(plan2.ok && plan2.argv).toEqual(['log', '--no-ext-diff', '--no-textconv', '--oneline', '--']);
+  });
 });
 
 describe('planGitRead (#4058): injection rejection for new subcommands', () => {

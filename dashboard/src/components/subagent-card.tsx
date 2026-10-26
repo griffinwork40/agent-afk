@@ -71,11 +71,11 @@ function statusTextClass(status: string): string {
   switch (status) {
     case 'succeeded':
     case 'completed':
-      return 'text-status-running';
+      return 'text-foreground';
     case 'failed':
-      return 'text-status-failed';
+      return 'text-foreground';
     case 'started':
-      return 'text-status-blocked';
+      return 'text-foreground';
     default:
       return 'text-muted-foreground';
   }

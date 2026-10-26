@@ -120,6 +120,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly launchModel: string;
   private readonly temperature?: number;
   private readonly baseUrl?: string;
+  private readonly endpointConcurrency?: number;
   private readonly maxToolUseIterations?: number;
   private readonly softDeadlineMs?: number;
   private readonly traceWriter?: import('../../trace/index.js').TraceSink;
@@ -198,6 +199,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.launchModel = opts.model;
     if (opts.temperature !== undefined) this.temperature = opts.temperature;
     if (opts.baseUrl !== undefined) this.baseUrl = opts.baseUrl;
+    if (opts.endpointConcurrency !== undefined) this.endpointConcurrency = opts.endpointConcurrency;
     if (opts.maxToolUseIterations !== undefined)
       this.maxToolUseIterations = opts.maxToolUseIterations;
     if (opts.softDeadlineMs !== undefined) this.softDeadlineMs = opts.softDeadlineMs;
@@ -221,6 +223,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       ...(opts.tokenRefresher ? { tokenRefresher: opts.tokenRefresher } : {}),
       autoResumeOnUsageLimit: opts.autoResumeOnUsageLimit ?? true,
       ...(opts.surface !== undefined ? { surface: opts.surface } : {}),
+      credentialFromStore: opts.credentialFromStore,
     });
     this.state = createSessionState({
       model: opts.model,
@@ -295,6 +298,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
           : undefined;
       },
       get baseUrl() { return query.baseUrl; },
+      get endpointConcurrency() { return query.endpointConcurrency; },
       get maxToolUseIterations() { return query.maxToolUseIterations; },
       get softDeadlineMs() { return query.softDeadlineMs; },
       get traceWriter() { return query.traceWriter; },

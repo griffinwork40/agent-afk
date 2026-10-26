@@ -8,6 +8,7 @@ import { teardownBackgroundWorktree } from './tools/handlers/worktree-managed.ba
 import { debugLog } from '../utils/debug.js';
 import { isTooBroadRoot, ungatedSensitiveRoot } from './tools/subagent/root-validation.js';
 import { realpathSafe } from './tools/handlers/_cwd-utils.js';
+import { resolveChildModel } from './subagent/resolve-child-model.js';
 
 /**
  * Invariant: validate that a DAG node's `cwd`, `readRoots`, and `writeRoots` pass the
@@ -122,12 +123,26 @@ export async function dispatchDagNode(
     spec = iso.spec;
   }
 
+  // Stage 3 (#4042): resolve the node model through the shared four-tier chain
+  // (callSite → namedAgent → defaultSubagentModel → defaultModel → 'sonnet')
+  // instead of the inline `spec.model ?? 'sonnet'` that skipped tiers 3 and 4.
+  // Compose pre-resolves spec.model via resolveChildModel before building the
+  // DAG node, so callSiteModel here is always set for compose nodes. Direct
+  // library callers (skills, mint phases) that omit spec.model now honour
+  // options.defaultSubagentModel and options.defaultModel instead of silently
+  // falling to 'sonnet'.
+  const resolvedNodeModel = resolveChildModel({
+    callSiteModel: typeof spec.model === 'string' ? spec.model : undefined,
+    defaultSubagentModel: typeof options.defaultSubagentModel === 'string' ? options.defaultSubagentModel : undefined,
+    defaultModel: typeof options.defaultModel === 'string' ? options.defaultModel : undefined,
+  });
+
   let handle: Awaited<ReturnType<typeof manager.forkSubagent>>;
   try {
     handle = await manager.forkSubagent({
       parent: { sessionId: parentSession.sessionId, messageJournal: parentSession.messageJournal },
       config: {
-        model: spec.model ?? 'sonnet',
+        model: resolvedNodeModel,
         systemPrompt: spec.systemPrompt,
         ...(spec.canUseTool !== undefined ? { canUseTool: spec.canUseTool } : {}),
         ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
@@ -215,6 +230,16 @@ export async function dispatchDagNode(
       prompt = spec.promptBuilder(inputs);
     }
     const result = await handle.runToResult(prompt);
+    // V1 safety net: compose/DAG nodes cannot yield — a yielding node looks
+    // like a successful completion to the DAG executor, so downstream nodes
+    // would proceed on partial data. Fail-fast so the error is surfaced
+    // immediately rather than silently propagating a bad result.
+    if (result.needsInput !== undefined) {
+      throw new Error(
+        `DAG node ${handle.id} yielded Asking — compose nodes cannot yield in v1. ` +
+        `Question: ${result.needsInput.question}`,
+      );
+    }
     // #3601 / #3660: attach setupNotice as a dedicated field on the result so
     // the DAG layer (dag-subagent.ts) can propagate it through DAGRunResult
     // regardless of return path. The notice is already injected into the node's

@@ -188,7 +188,10 @@ function handleToolUseDetail(
     chunk.toolInput,
     agentCtx,
   );
-  source.stats.toolUses += 1;
+  if (!source.stats.seenToolUseIds.has(chunk.toolUseId)) {
+    source.stats.seenToolUseIds.add(chunk.toolUseId);
+    source.stats.toolUses += 1;
+  }
   // Tool gap: the model is waiting on tool execution rather than
   // generating visible text. Re-enable the spinner so the user sees
   // an honest "waiting" signal during the gap. (No-op if already on.)

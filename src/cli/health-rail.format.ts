@@ -28,6 +28,10 @@ export interface HealthRailFields {
   activeSubs: number;
   /** Total subagents ever dispatched in this session (foreground + background combined high-water mark). */
   totalSubs: number;
+  /** Number of currently-running background processes (bash run_in_background). */
+  activeProcs: number;
+  /** Total background processes ever started in this session (high-water mark). */
+  totalProcs: number;
   /** Context window fill ratio [0, 1]. */
   contextRatio: number;
 }
@@ -63,7 +67,7 @@ function formatDuration(ms: number): string {
  * established visual language.
  */
 export function formatHealthRail(fields: HealthRailFields, maxWidth: number): string {
-  const { totalTurns, elapsedMs, toolCalls, activeSubs, totalSubs, contextRatio } = fields;
+  const { totalTurns, elapsedMs, toolCalls, activeSubs, totalSubs, activeProcs, totalProcs, contextRatio } = fields;
 
   const sep = palette.dim(' · ');
 
@@ -81,6 +85,16 @@ export function formatHealthRail(fields: HealthRailFields, maxWidth: number): st
     contextRatio > 0.8 ? palette.error : contextRatio > 0.5 ? palette.warning : palette.chrome;
   const ctxText = palette.dim('ctx ') + ctxTone(`${pct}%`);
 
-  const line = [turnText, elapsedText, callsText, subsText, ctxText].join(sep);
+  // Procs segment sits AFTER ctx% so it is the first field shed on narrow
+  // terminals — ctx% is more important to keep visible. Only rendered when
+  // at least one process has been started (common case: no processes, zero
+  // width cost, line is identical to pre-feature output).
+  const segments = [turnText, elapsedText, callsText, subsText, ctxText];
+  if (totalProcs > 0) {
+    const procsText = palette.info(`${activeProcs}/${totalProcs} procs`);
+    segments.push(procsText);
+  }
+
+  const line = segments.join(sep);
   return truncateDisplayWidth('  ' + line, maxWidth);
 }

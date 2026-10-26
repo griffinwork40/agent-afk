@@ -39,8 +39,11 @@
  * would re-introduce the phantom-turn bug fixed in PR #511.
  */
 
+import { truncateDisplayWidth } from '../display.js';
 import { palette } from '../palette.js';
+import { getTerminalWidth } from '../terminal-size.js';
 import type { PickerController } from '../terminal-compositor.js';
+import { contentBand } from './measure.js';
 import { filterOptions } from './picker-filter.js';
 
 /**
@@ -171,6 +174,7 @@ export function renderPickerRows(
   multi: boolean,
   searchable: boolean,
   terminalRowsFn: (() => number | undefined) | undefined,
+  bandWidth?: number,
 ): readonly string[] {
   const lines: string[] = [];
   for (const h of header) lines.push(h);
@@ -184,6 +188,13 @@ export function renderPickerRows(
   const len = ao.length;
   const windowSize = pickerViewportSize(terminalRowsFn, header.length, searchable, len);
   clampPickerScroll(state, ao, windowSize);
+
+  // Truncate picker rows to the content band width so long option labels
+  // do not wrap when AFK_CENTER_CONTENT narrows the band. Only the
+  // selection picker needs this — bash-output-viewer and text-input pickers
+  // carry content that must not be truncated by the frame assembler.
+  const fit = (row: string): string =>
+    bandWidth !== undefined ? truncateDisplayWidth(row, bandWidth) : row;
 
   // Virtual-scroll window.
   const visStart = state.scrollOffset;
@@ -210,18 +221,18 @@ export function renderPickerRows(
       const labelStyled = isCursor ? palette.bold(label) : palette.dim(label);
       row = `  ${cursorGlyph} ${labelStyled}`;
     }
-    lines.push(row);
+    lines.push(fit(row));
   }
 
   // Scroll indicator — shown when the list is longer than the window.
   if (len > windowSize) {
     const lo = visStart + 1;
     const hi = visEnd;
-    lines.push(palette.dim(`  (${lo}–${hi} of ${len}  ↑/↓ scroll)`));
+    lines.push(fit(palette.dim(`  (${lo}–${hi} of ${len}  ↑/↓ scroll)`)));
   }
 
   const helpText = searchable ? HELP_SEARCH : multi ? HELP_MULTI : HELP_SINGLE;
-  lines.push(palette.dim('  ' + helpText));
+  lines.push(fit(palette.dim('  ' + helpText)));
   return lines;
 }
 
@@ -494,7 +505,7 @@ export function runPicker(
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
 
     const renderRows = (): readonly string[] =>
-      renderPickerRows(state, header, options, multi, searchable, host.terminalRows?.bind(host));
+      renderPickerRows(state, header, options, multi, searchable, host.terminalRows?.bind(host), contentBand(getTerminalWidth()).width);
 
     const onKey = (
       _char: string | undefined,

@@ -6,8 +6,8 @@
  * structure of lsp-diagnostics.test.ts.
  */
 
-import { describe, it, expect, afterAll, afterEach } from 'vitest';
-import { writeFile, mkdir, rm } from 'fs/promises';
+import { describe, it, expect, afterAll, afterEach, vi } from 'vitest';
+import { writeFile, mkdir, rm, stat } from 'fs/promises';
 import { writeFileSync } from 'node:fs';
 import os from 'os';
 import path from 'path';
@@ -17,9 +17,13 @@ import {
   formatSymbolResult,
   handleCodeSymbols,
   isLspSymbolsEnabled,
+  parseLocation,
+  DEFAULT_LSP_CMD,
   type LspLocation,
 } from './lsp-symbols.js';
 import { createCodeSymbolsHandler } from '../lsp-symbols-surface.js';
+import { writeFakeLspServer } from '../../lsp/__test-utils__/fake-lsp-server.js';
+import { getLspPool } from '../../lsp/pool.js';
 
 // ── scratch dir ────────────────────────────────────────────────────────────
 
@@ -29,70 +33,34 @@ const tempDir = path.join(
 );
 
 afterAll(async () => {
+  await getLspPool().disposeAll();
   await rm(tempDir, { recursive: true, force: true });
 });
 
 // ── fake LSP server helpers ────────────────────────────────────────────────
 
 /**
- * Write a fake LSP server that waits for the symbol request (id===2, sent
- * after initialize=1 and initialized notification) and replies with `locs`.
+ * Fake LSP servers use the shared protocol-correct util: they answer
+ * `initialize` (the persistent client waits for it) and reply to
+ * definition/references with `locs`.
  */
 function writeFakeSymbolServer(scriptPath: string, locs: unknown[]): void {
-  const locsJson = JSON.stringify(locs);
-  const script = `
-const chunks = [];
-process.stdin.on('data', (chunk) => {
-  chunks.push(chunk);
-  const buf = Buffer.concat(chunks);
-  const str = buf.toString('utf8');
-  // Wait until we see the symbol request (textDocument/definition or references)
-  if (!str.includes('textDocument/definition') && !str.includes('textDocument/references')) return;
-
-  // Parse id from the LAST request (the symbol one, id=2)
-  const idMatch = str.match(/"id"\\s*:\\s*(\\d+)/g);
-  const lastId = idMatch ? parseInt(idMatch[idMatch.length - 1].match(/\\d+/)[0]) : 2;
-
-  const locs = ${locsJson};
-  const body = JSON.stringify({ jsonrpc: '2.0', id: lastId, result: locs });
-  const msg = 'Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body;
-  process.stdout.write(msg);
-  setTimeout(() => process.exit(0), 200);
-});
-process.stdin.resume();
-`;
-  writeFileSync(scriptPath, script, 'utf8');
+  writeFakeLspServer(scriptPath, { locations: locs });
 }
 
 /** Write a fake server that returns a JSON-RPC error for the symbol request. */
 function writeFakeErrorServer(scriptPath: string): void {
-  const script = `
-const chunks = [];
-process.stdin.on('data', (chunk) => {
-  chunks.push(chunk);
-  const buf = Buffer.concat(chunks);
-  const str = buf.toString('utf8');
-  if (!str.includes('textDocument/definition') && !str.includes('textDocument/references')) return;
-  const idMatch = str.match(/"id"\\s*:\\s*(\\d+)/g);
-  const lastId = idMatch ? parseInt(idMatch[idMatch.length - 1].match(/\\d+/)[0]) : 2;
-  const body = JSON.stringify({ jsonrpc: '2.0', id: lastId, error: { code: -32601, message: 'Method not found' } });
-  const msg = 'Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body;
-  process.stdout.write(msg);
-  setTimeout(() => process.exit(0), 200);
-});
-process.stdin.resume();
-`;
-  writeFileSync(scriptPath, script, 'utf8');
+  writeFakeLspServer(scriptPath, { requestError: true });
 }
 
 /** Write a fake server that never responds (timeout simulation). */
 function writeSilentServer(scriptPath: string): void {
-  writeFileSync(scriptPath, `process.stdin.resume();\n`, 'utf8');
+  writeFakeLspServer(scriptPath, { silent: true });
 }
 
 /** Write a fake server that exits immediately (crash simulation). */
 function writeCrashServer(scriptPath: string): void {
-  writeFileSync(scriptPath, `process.exit(1);\n`, 'utf8');
+  writeFakeLspServer(scriptPath, { crashOnStart: true });
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -167,6 +135,71 @@ describe('formatSymbolResult', () => {
   });
 });
 
+// ── parseLocation edge cases ──────────────────────────────────────────────
+
+describe('parseLocation', () => {
+  it('returns null for null input', () => {
+    expect(parseLocation(null)).toBeNull();
+  });
+
+  it('returns null for non-object input', () => {
+    expect(parseLocation('string')).toBeNull();
+    expect(parseLocation(42)).toBeNull();
+    expect(parseLocation(undefined)).toBeNull();
+  });
+
+  it('returns null when uri is missing', () => {
+    expect(parseLocation({ range: { start: { line: 0, character: 0 } } })).toBeNull();
+  });
+
+  it('returns null when range is missing entirely', () => {
+    expect(parseLocation({ uri: 'file:///tmp/x.ts' })).toBeNull();
+  });
+
+  it('returns null when range.start is missing', () => {
+    expect(parseLocation({ uri: 'file:///tmp/x.ts', range: {} })).toBeNull();
+  });
+
+  it('returns null when range.start.line is missing', () => {
+    expect(parseLocation({ uri: 'file:///tmp/x.ts', range: { start: { character: 0 } } })).toBeNull();
+  });
+
+  it('returns null when range.start.character is missing', () => {
+    expect(parseLocation({ uri: 'file:///tmp/x.ts', range: { start: { line: 0 } } })).toBeNull();
+  });
+
+  it('returns null for a malformed URI', () => {
+    expect(parseLocation({ uri: 'not-a-file-uri://bad', range: { start: { line: 0, character: 0 } } })).toBeNull();
+  });
+
+  it('converts 0-based LSP position to 1-based for a valid location', () => {
+    const tempFile = path.join(os.tmpdir(), `afk-pl-test-${process.pid}.ts`);
+    // Use a file we know exists so realpathSafe succeeds (os.tmpdir() itself).
+    const loc = parseLocation({
+      uri: `file://${os.tmpdir().replace(/\\/g, '/')}`,
+      range: { start: { line: 4, character: 2 } },
+    });
+    // os.tmpdir() exists but is a directory — parseLocation only cares that
+    // realpathSafe resolves it and decidePathAccess allows it.
+    expect(loc).not.toBeNull();
+    expect(loc!.line).toBe(5);
+    expect(loc!.col).toBe(3);
+    void tempFile; // suppress unused warning
+  });
+
+  it('prefers targetUri/targetRange (LocationLink) over uri/range', () => {
+    const loc = parseLocation({
+      uri: 'file:///should-not-use.ts',
+      range: { start: { line: 99, character: 99 } },
+      targetUri: `file://${os.tmpdir().replace(/\\/g, '/')}`,
+      targetRange: { start: { line: 1, character: 0 } },
+    });
+    expect(loc).not.toBeNull();
+    expect(loc!.line).toBe(2);
+    expect(loc!.col).toBe(1);
+  });
+});
+
 // ── queryLspSymbol ────────────────────────────────────────────────────────
 
 describe('queryLspSymbol', () => {
@@ -216,8 +249,8 @@ describe('queryLspSymbol', () => {
   }, 10_000);
 
   it('returns error when server never responds (timeout)', async () => {
-    const origTimeout = process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'];
-    process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'] = '300';
+    // queryLspSymbol now reads AFK_LSP_SYMBOLS_TIMEOUT_MS (not the diagnostics one).
+    vi.stubEnv('AFK_LSP_SYMBOLS_TIMEOUT_MS', '300');
     try {
       await mkdir(tempDir, { recursive: true });
       const filePath = await makeTsFile('sym-slow.ts');
@@ -228,8 +261,7 @@ describe('queryLspSymbol', () => {
       expect(result.locations).toEqual([]);
       expect(result.error).toContain('timed out');
     } finally {
-      if (origTimeout === undefined) delete process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'];
-      else process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'] = origTimeout;
+      vi.unstubAllEnvs();
     }
   }, 5_000);
 
@@ -313,8 +345,7 @@ describe('handleCodeSymbols', () => {
   }, 10_000);
 
   it('returns error-formatted string when feature is on but server is absent', async () => {
-    process.env['AFK_LSP_DIAGNOSTICS'] = '1';
-    process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'] = '300';
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '1');
     try {
       const filePath = await makeTsFile('handle-absent.ts');
       const result = await handleCodeSymbols(
@@ -325,7 +356,88 @@ describe('handleCodeSymbols', () => {
       expect(typeof result).toBe('string');
       expect(result).toContain('[LSP]');
     } finally {
-      delete process.env['AFK_LSP_DIAGNOSTICS_TIMEOUT_MS'];
+      vi.unstubAllEnvs();
     }
   }, 5_000);
+});
+
+// ── AbortSignal ───────────────────────────────────────────────────────────
+
+describe('queryLspSymbol — AbortSignal', () => {
+  it('returns Aborted immediately when signal is pre-aborted', async () => {
+    const filePath = await makeTsFile('abort-pre.ts');
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await queryLspSymbol(
+      filePath, 'definition', 1, 1, undefined,
+      ['/nonexistent-binary-afk-lsp-sym-test-abort'],
+      controller.signal,
+    );
+    expect(result.locations).toEqual([]);
+    expect(result.error).toBe('Aborted');
+  }, 5_000);
+
+  it('returns Aborted when signal fires mid-flight (slow server)', async () => {
+    vi.stubEnv('AFK_LSP_SYMBOLS_TIMEOUT_MS', '3000');
+    try {
+      await mkdir(tempDir, { recursive: true });
+      const filePath = await makeTsFile('abort-mid.ts');
+      const sentinelPath = path.join(tempDir, 'abort-mid-spawned.flag');
+      const scriptPath = path.join(tempDir, 'fake-silent-abort-server.js');
+
+      // Fake server writes a sentinel file the moment it is spawned, then
+      // parks on stdin.  The test aborts as soon as it sees the sentinel,
+      // eliminating any dependency on wall-clock delays.
+      writeFileSync(
+        scriptPath,
+        `const fs = require('fs');
+fs.writeFileSync(${JSON.stringify(sentinelPath)}, '1');
+process.stdin.resume();
+`,
+        'utf8',
+      );
+
+      const controller = new AbortController();
+
+      // Poll for the sentinel file (written by the fake server on spawn),
+      // then abort immediately — no fixed wall-clock delay needed.
+      const abortOnSpawn = (async () => {
+        const deadline = Date.now() + 4_000;
+        while (Date.now() < deadline) {
+          try {
+            await stat(sentinelPath);
+            controller.abort();
+            return;
+          } catch {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+        }
+        // Safety valve: abort anyway so the test does not hang.
+        controller.abort();
+      })();
+
+      const result = await queryLspSymbol(
+        filePath, 'definition', 1, 1, undefined,
+        nodeCmd(scriptPath),
+        controller.signal,
+      );
+      await abortOnSpawn; // drain the polling loop so any late abort() calls complete before assertions
+      expect(result.locations).toEqual([]);
+      expect(result.error).toBe('Aborted');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 5_000);
+});
+
+// ── DEFAULT_LSP_CMD ───────────────────────────────────────────────────────
+
+describe('DEFAULT_LSP_CMD', () => {
+  it('is a frozen array with typescript-language-server as the binary', () => {
+    expect(Array.isArray(DEFAULT_LSP_CMD)).toBe(true);
+    expect(Object.isFrozen(DEFAULT_LSP_CMD)).toBe(true);
+    expect(DEFAULT_LSP_CMD[0]).toBe('typescript-language-server');
+    expect(DEFAULT_LSP_CMD[1]).toBe('--stdio');
+  });
 });

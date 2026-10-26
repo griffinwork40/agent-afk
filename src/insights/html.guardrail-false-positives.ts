@@ -13,30 +13,7 @@
  */
 
 import type { InsightAggregates } from './types.js';
-
-// ---------------------------------------------------------------------------
-// Helpers (intentionally inlined — importing from html.ts would create a
-// circular dep risk and these are trivial)
-// ---------------------------------------------------------------------------
-
-function htmlEscape(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function safeNum(n: number | undefined | null, decimals = 0): string {
-  if (n === undefined || n === null || !Number.isFinite(n)) return '0';
-  return n.toFixed(decimals);
-}
-
-function formatPct(fraction: number | null | undefined): string {
-  if (fraction === undefined || fraction === null || !Number.isFinite(fraction)) return 'N/A';
-  return `${safeNum(fraction * 100, 1)}%`;
-}
+import { htmlEscape, safeNum, formatPct } from './html.helpers.js';
 
 // ---------------------------------------------------------------------------
 // Public renderer

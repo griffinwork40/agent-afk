@@ -540,7 +540,7 @@ async function createWorktreeAt(
     let metaBaseBranch = baseRef ?? '';
     if (baseSha === undefined) {
       try {
-        const shaResult = await execFile('git', ['-C', repoRoot, 'rev-parse', 'HEAD']);
+        const shaResult = await execFile('git', ['--no-optional-locks', '-C', repoRoot, 'rev-parse', 'HEAD']);
         metaBaseSha = shaResult.stdout.trim();
       } catch { /* non-fatal */ }
       try {

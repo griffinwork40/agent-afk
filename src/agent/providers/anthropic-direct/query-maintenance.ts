@@ -3,6 +3,7 @@ import type {
   ProviderRewindConversationResult,
   RewindTarget,
 } from '../../provider.js';
+import { withCheckpointTurnIds } from '../../file-checkpoint/turn-lifecycle.js';
 import type { AbortCoordinator } from '../shared/abort-coordinator.js';
 import { compactHistory } from './query/compact-handler.js';
 import { listUserTurns, rewindConversationHistory } from './query/rewind-conversation.js';
@@ -35,7 +36,7 @@ export function compactQueryHistory(options: {
 }
 
 export function queryRewindTargets(state: SessionState): RewindTarget[] {
-  return listUserTurns(state.messages);
+  return withCheckpointTurnIds(listUserTurns(state.messages), state.messages);
 }
 
 export function rewindQueryConversation(

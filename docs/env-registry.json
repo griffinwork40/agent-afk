@@ -356,6 +356,30 @@
       "category": "daemon"
     },
     {
+      "name": "AFK_FILE_CHECKPOINT_MAX_AGE_DAYS",
+      "description": "Evict a file-checkpoint session directory once its newest content is older than this many days. Default 14.",
+      "type": "number",
+      "required": false,
+      "default": "14",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_MAX_BYTES",
+      "description": "Aggregate byte cap for state/file-checkpoints/; oldest session directories are evicted first once exceeded. Default 1073741824 (1 GiB).",
+      "type": "number",
+      "required": false,
+      "default": "1073741824",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_RETENTION_DISABLE",
+      "description": "Disable the file-checkpoint retention sweep (state/file-checkpoints/), so no session checkpoint directory is ever evicted.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
       "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
       "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even to tool calls whose context carries no grant manager. Every production provider wires itself as the grant manager on every surface (REPL, Telegram, afk chat, daemon, subagents), so there the denylist is already active; without one it fails open. Set to 1 to force it on for those contexts too. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off.",
       "type": "boolean",
@@ -476,6 +500,24 @@
       "required": false,
       "default": "1500",
       "example": "3000",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_LSP_IDLE_SHUTDOWN_MS",
+      "description": "Idle window in milliseconds after which a pooled (persistent) language server with no requests is shut down (#4272). Servers are kept warm per workspace root and language so repeat LSP queries skip the cold start. Default 300000 (5 min). Idle timers never keep the process alive.",
+      "type": "number",
+      "required": false,
+      "default": "300000",
+      "example": "60000",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_LSP_SYMBOLS_TIMEOUT_MS",
+      "description": "Hard timeout in milliseconds for code_symbols (go-to-definition / find-references) LSP queries (AFK_LSP_DIAGNOSTICS=1). Symbol queries can require a cold-start index build and therefore need a longer budget than the post-edit diagnostics timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS). Default 5000 (5 s). Raise for large monorepos where the first query triggers a full project load.",
+      "type": "number",
+      "required": false,
+      "default": "5000",
+      "example": "10000",
       "category": "misc"
     },
     {
@@ -692,6 +734,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_LARGE_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"large\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_LOCAL",
       "description": "Bind the \"local\" capability tier (cheapest/fastest, user-configured) to a model id. Overrides afk.config.json models.local. Point at a local Ollama, LM Studio, or any OpenAI-compatible shim.",
       "type": "string",
@@ -713,6 +763,14 @@
       "type": "string",
       "required": false,
       "example": "http://localhost:11434/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_LOCAL_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"local\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously (shared with any other slot targeting the same baseUrl). Useful for single-request local servers (Ollama, LM Studio, MLX). Unset = unlimited. Accepted range 1-32; out-of-range or unparseable input is ignored. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
       "category": "model"
     },
     {
@@ -740,6 +798,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_MEDIUM_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"medium\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_SMALL",
       "description": "Bind the \"small\" capability tier (cheap/fast) to a model id/alias. Overrides afk.config.json models.small.",
       "type": "string",
@@ -764,12 +830,44 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_SMALL_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"small\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_STALL_TIMEOUT_MS",
       "description": "Progress-aware POST-first-byte stall window (ms) for the anthropic-direct streaming loop. Bounds how long a stream that has ALREADY produced content may then go completely silent. Every streamed output event resets the window, so this is NOT a total-round cap: a legitimately long, actively-streaming round (large code emission, extended thinking) survives indefinitely, while a stream wedged mid-flight is aborted and surfaces as a real terminal error instead of hanging. Complements AFK_MODEL_TTFB_TIMEOUT_MS, which governs only the window BEFORE the first token; this one takes over after it. Default 1200000 (20min) — above the 18.5min maximum post-first-byte stream duration observed across 86,076 rounds in 12,381 local traces (p99 122s, p99.9 234s), so no healthy round trips it. Set to 0 to disable (issue #762).",
       "type": "number",
       "required": false,
       "default": "1200000",
       "example": "600000",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_SUBAGENT",
+      "description": "Bind the \"subagent\" routing slot to a model id/alias. When set, all dispatched subagents (agent/skill/compose forks without an explicit model) use this model instead of the medium tier. Use with AFK_MODEL_SUBAGENT_BASE_URL to route subagent inference to a different provider (Together, Fireworks, Groq, or self-hosted vLLM/SGLang). Overrides afk.config.json models.subagent.",
+      "type": "string",
+      "required": false,
+      "example": "Qwen/Qwen3-32B",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_SUBAGENT_API_KEY",
+      "description": "Per-slot API key for the \"subagent\" routing slot. Overrides global credentials for subagent forks only.",
+      "type": "string",
+      "required": false,
+      "category": "model",
+      "secret": true
+    },
+    {
+      "name": "AFK_MODEL_SUBAGENT_BASE_URL",
+      "description": "Per-slot endpoint base URL for the \"subagent\" routing slot. Point at Together (https://api.together.xyz/v1), Fireworks, Groq, or a self-hosted vLLM/SGLang endpoint to route subagent inference off Anthropic.",
+      "type": "string",
+      "required": false,
+      "example": "https://api.together.xyz/v1",
       "category": "model"
     },
     {
@@ -1092,6 +1190,24 @@
       "required": false,
       "default": "0",
       "example": "1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_SUBAGENT_CONTINUATION_MAX_CONTINUATIONS",
+      "description": "Maximum number of continuations per subagent continuation chain (not counting the initial dispatch). 0 disables continuation entirely (every continuation call is refused). Unset, empty, non-numeric, or negative falls back to the default 3.",
+      "type": "number",
+      "required": false,
+      "default": "3",
+      "example": "5",
+      "category": "model"
+    },
+    {
+      "name": "AFK_SUBAGENT_CONTINUATION_MAX_ROUNDS",
+      "description": "Aggregate tool-round limit per subagent continuation chain (the initial dispatch plus every `continuation_chain_id` continuation). The initial attempt is charged at its round cap (or its runtime-counted rounds when uncapped); each continuation is charged its full finite allowance at admission, clipped to what remains. No refunds. Unset, empty, non-numeric, or < 1 falls back to the default 150.",
+      "type": "number",
+      "required": false,
+      "default": "150",
+      "example": "300",
       "category": "model"
     },
     {

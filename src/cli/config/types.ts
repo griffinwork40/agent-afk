@@ -28,7 +28,7 @@ export interface AutoRoutingConfig {
 }
 
 export interface CliConfig {
-  tools?: { disabled?: string[] };
+  tools?: { disabled?: string[]; usageAwareness?: boolean };
   apiKey?: string;
   /**
    * Base URL for the Anthropic Messages API. When set, traffic is routed to
@@ -261,6 +261,12 @@ export interface CliConfig {
    */
   enforceDoneEvidence?: boolean;
   /**
+   * Per-turn file checkpoints for `/rewind` → files/both (#4271). Default ON in
+   * the interactive REPL; set `false` to opt out. Other surfaces (chat,
+   * Telegram, daemon) have no rewind UI and never checkpoint. Human-tier.
+   */
+  fileCheckpoints?: boolean;
+  /**
    * When true, the REPL constructs a BackgroundSummarizer that periodically
    * asks Haiku to summarize each running background subagent job's transcript
    * tail. Summaries appear in `/bgsub:list` on an indented second line.
@@ -346,7 +352,7 @@ export interface ConfigFileSchema {
    * extra deny list for sessions whose active model resolves to that slot;
    * resolved and enforced in agent/tools/operator-denied.slots.ts.
    */
-  tools?: { disabled?: string[]; disabledBySlot?: Partial<Record<string, string[]>> };
+  tools?: { disabled?: string[]; disabledBySlot?: Partial<Record<string, string[]>>; usageAwareness?: boolean };
   model?: string;
   /**
    * Per-tier model bindings. Each slot accepts a bare id string
@@ -360,6 +366,12 @@ export interface ConfigFileSchema {
     small?: string | ModelSlotConfigEntry;
     medium?: string | ModelSlotConfigEntry;
     large?: string | ModelSlotConfigEntry;
+    /** Default model for dispatched subagents. When configured, overrides the
+     * `medium` tier fallback for `agent`/`skill`/`compose` forks. Accepts a bare
+     * id, a slot alias, or a `{ id, provider, name }` object. Use with
+     * `AFK_MODEL_SUBAGENT_BASE_URL` / `_API_KEY` env vars to route subagent
+     * inference to a different provider (e.g. Together, Fireworks, Groq). */
+    subagent?: string | ModelSlotConfigEntry;
   };
   maxTokens?: number;
   temperature?: number;
@@ -420,6 +432,8 @@ export interface ConfigFileSchema {
   autoResumeOnUsageLimit?: boolean;
   /** Opt-in AFK terminal-state enforcement gate; default off. See `CliConfig.enforceDoneEvidence`. */
   enforceDoneEvidence?: boolean;
+  /** REPL file checkpoints for /rewind; default on. See `CliConfig.fileCheckpoints`. */
+  fileCheckpoints?: boolean;
   bgSummaries?: boolean;
   maxSummaryCallsPerSession?: number;
   hooks?: RawHooksConfig;

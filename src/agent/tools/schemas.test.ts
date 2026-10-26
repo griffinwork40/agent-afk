@@ -14,20 +14,28 @@ import { sendToSessionTool } from './schemas.peer.js';
 import { createScheduleTool, updateScheduleTool } from './schemas.schedule.js';
 import { TASK_MAX_ATTEMPTS_LIMIT, TASK_RETRY_DELAY_MAX_MS, TASK_RETRY_DELAY_MIN_MS } from '../daemon/task-retry.js';
 import { cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
+import { filterBackgroundToolDefs } from './process-job-tools.js';
 import type { AnthropicToolDef } from './types.js';
 
 describe('builtinToolSchemas', () => {
   it('contains exactly 45 tools', () => {
+    // 23 invariant core + 22 optional tail = 45
     expect(builtinToolSchemas).toHaveLength(45);
   });
 
   it('exports the expected tool names', () => {
-    // ORDERING INVARIANT (#4198): invariant core tools occupy indices 0..25;
-    // optional/disableable/surface-filtered tools occupy indices 26..44.
-    // Changing this order breaks prefix-cache reuse across tool-config variants.
-    // Indices 0..5 are the LOCKED_TOOLS builtins (never operator-disableable).
+    // ORDERING INVARIANT (#4198): invariant core tools occupy indices 0..22;
+    // optional/disableable/surface-filtered/registry-filtered tools occupy
+    // indices 23..44. Changing this order breaks prefix-cache reuse across
+    // tool-config variants. Indices 0..5 are the LOCKED_TOOLS builtins (never
+    // operator-disableable).
+    //
+    // #4208: cancel_background_job / send_message_to_agent /
+    // get_background_job_health moved from core (was 0..25) to optional tail
+    // because filterBackgroundToolDefs (process-job-tools.ts) removes them
+    // when no background registry is wired — they cannot be invariant.
     expect(BUILTIN_TOOL_NAMES).toEqual([
-      // -- Invariant core (0..25) --
+      // -- Invariant core (0..22) --
       // 0..5: LOCKED_TOOLS builtins
       'read_file',
       'write_file',
@@ -35,7 +43,7 @@ describe('builtinToolSchemas', () => {
       'grep',
       'glob',
       'list_directory',
-      // 6..25: remaining core (individually disableable)
+      // 6..22: remaining core (individually disableable, never registry-filtered)
       'bash',
       'view_image',
       'extract_document',
@@ -50,13 +58,14 @@ describe('builtinToolSchemas', () => {
       'config_set',
       'read_witness',
       'search_witness',
-      'cancel_background_job',
-      'send_message_to_agent',
-      'get_background_job_health',
       'remote_agent',
       'web_scrape',
       'web_request',
-      // -- Optional tail (26..44) --
+      // -- Optional tail (23..44) --
+      // registry-filtered: absent when no background registry is wired
+      'cancel_background_job',
+      'send_message_to_agent',
+      'get_background_job_health',
       'send_telegram',
       'image_generate',
       'image_edit',
@@ -84,10 +93,15 @@ describe('builtinToolSchemas', () => {
     // singles and send_telegram (tail by convention). toolGroups() is called
     // inside the test body to avoid import-cycle evaluation at module load time.
     const groups = toolGroups();
+    // surface-filtered: dropped on some surfaces (e.g. non-interactive, telegram)
+    // registry-filtered: removed by filterBackgroundToolDefs when no background
+    //   registry is wired (process-job-tools.ts — see #4208)
     const surfaceFiltered = ['ask_question', 'terminal_font_size', 'clipboard_read', 'clipboard_write'];
+    const registryFiltered = ['cancel_background_job', 'send_message_to_agent', 'get_background_job_health'];
     const optionalTools = new Set([
       ...Object.values(groups).flat(),
       ...surfaceFiltered,
+      ...registryFiltered,
       'send_telegram',
     ]);
     // Every tool at index < INVARIANT_CORE_COUNT must not be optional.
@@ -412,6 +426,40 @@ describe('prefix-cache stability: invariant core prefix (#4198)', () => {
     const prefix = schemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
     const coreNames = builtinToolSchemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
     expect(prefix).toEqual(coreNames);
+  });
+});
+
+describe('prefix-cache stability: filterBackgroundToolDefs (#4235)', () => {
+  it('invariant core prefix is intact after filterBackgroundToolDefs(false, false)', () => {
+    // subagentBackground=false, processJobs=false → all three bg tools removed
+    const filtered = filterBackgroundToolDefs([...builtinToolSchemas], false, false);
+    const prefix = filtered.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    const coreNames = builtinToolSchemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    expect(prefix).toEqual(coreNames);
+  });
+
+  it('invariant core prefix is intact after filterBackgroundToolDefs(false, true)', () => {
+    // subagentBackground=false, processJobs=true → only send_message_to_agent removed
+    const filtered = filterBackgroundToolDefs([...builtinToolSchemas], false, true);
+    const prefix = filtered.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    const coreNames = builtinToolSchemas.slice(0, INVARIANT_CORE_COUNT).map((t) => t.name);
+    expect(prefix).toEqual(coreNames);
+  });
+
+  it('filterBackgroundToolDefs(false, false) removes all three bg tools', () => {
+    const filtered = filterBackgroundToolDefs([...builtinToolSchemas], false, false);
+    const names = filtered.map((t) => t.name);
+    expect(names).not.toContain('cancel_background_job');
+    expect(names).not.toContain('send_message_to_agent');
+    expect(names).not.toContain('get_background_job_health');
+  });
+
+  it('filterBackgroundToolDefs(false, true) removes only send_message_to_agent', () => {
+    const filtered = filterBackgroundToolDefs([...builtinToolSchemas], false, true);
+    const names = filtered.map((t) => t.name);
+    expect(names).not.toContain('send_message_to_agent');
+    expect(names).toContain('cancel_background_job');
+    expect(names).toContain('get_background_job_health');
   });
 });
 

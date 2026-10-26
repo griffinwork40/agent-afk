@@ -149,6 +149,7 @@ describe('credential gate after real Commander parsing', () => {
         small: { id: 'opaque-small', provider: 'openai' },
         medium: { id: 'opaque-medium', provider: 'openai' },
         large: { id: 'opaque-large', provider: 'chatgpt-oauth' },
+        subagent: { id: '' },
       });
       return { model: 'medium', updatePolicy: 'off' } as ReturnType<typeof loadConfig>;
     });

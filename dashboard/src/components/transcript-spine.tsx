@@ -7,6 +7,7 @@
  * a hierarchical execution view.
  */
 import { useMemo } from 'react';
+import { ToolSummaryContext } from '@/lib/tool-summary-context';
 import type { TranscriptItem } from '@/lib/ledger-adapter';
 import { TopologySpine } from './topology-spine';
 import { buildSpineTree } from '@/lib/topology';
@@ -20,7 +21,7 @@ import type { SpineNode } from '@/lib/topology-types';
 const EXECUTION_KINDS = new Set(['tool', 'subagent', 'notice']);
 
 // Items that are prose/text (rendered individually)
-const TEXT_KINDS = new Set(['user', 'assistant', 'thinking', 'error', 'bg_job']);
+const TEXT_KINDS = new Set(['user', 'assistant', 'thinking', 'error', 'stopped', 'bg_job']);
 
 /**
  * A rendered slot is either a single text item or a group of execution
@@ -43,7 +44,11 @@ export function groupIntoSpineSlots(items: TranscriptItem[]): SpineSlot[] {
     const item = items[i];
     if (item === undefined) { i++; continue; }
 
-    if (TEXT_KINDS.has(item.kind)) {
+    // Invariant: every iteration consumes at least one item. A kind in
+    // neither set (e.g. a new ledger kind) renders as text rather than
+    // looping forever on an empty execution run — that froze the tab when
+    // `stopped` was added without being listed here.
+    if (TEXT_KINDS.has(item.kind) || !EXECUTION_KINDS.has(item.kind)) {
       slots.push({ kind: 'text', item });
       i++;
       continue;
@@ -60,7 +65,7 @@ export function groupIntoSpineSlots(items: TranscriptItem[]): SpineSlot[] {
 
     if (run.length > 0) {
       const spineNodes = buildSpineTree(run);
-      slots.push({
+      if (spineNodes.length > 0) slots.push({
         kind: 'execution',
         items: run,
         id: run[0]!.id,
@@ -84,18 +89,18 @@ interface SpineTranscriptProps {
  */
 export function SpineTranscript({ slots, renderTextItem }: SpineTranscriptProps) {
   return (
-    <>
+    <ToolSummaryContext>
       {slots.map((slot, idx) => {
         if (slot.kind === 'text') {
           return renderTextItem(slot.item, idx);
         }
         return (
-          <div key={slot.id} className="py-2 px-1">
+          <div key={slot.id} className="py-2 px-1 [content-visibility:auto] [contain-intrinsic-size:auto_100px]">
             <TopologySpine nodes={slot.spineNodes} />
           </div>
         );
       })}
-    </>
+    </ToolSummaryContext>
   );
 }
 

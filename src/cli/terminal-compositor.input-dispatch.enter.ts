@@ -10,6 +10,7 @@
 
 import { InputCore } from './input-core.js';
 import * as Paste from './terminal-compositor.paste.js';
+import { shouldFilePickerSubmit } from './input/file-picker-predicate.js';
 import { isSoftNewlineEnter, endsWithBackslashContinuation } from './input/enter-decision.js';
 import { handleEnterIdleSubmit, handleEnterStreamingQueue } from './terminal-compositor.input-dispatch.enter.submit.js';
 import type { KeyInfo, SubmissionPayload } from './terminal-compositor.types.js';
@@ -199,10 +200,21 @@ export function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: strin
   const ac = self.autocompleteState;
   if (ac?.dropdownOpen) {
     const kind = ac.trigger?.kind;
+    // Snapshot before applyDropdownSelection clears the candidate list.
+    const candidateValue = ac.candidates[ac.selectedIndex]?.value;
     const applied = self.applyDropdownSelection();
-    if (kind !== 'slash') return true;
-    if (!applied) return true;
-    // Slash + applied: fall through with the now-completed buffer.
+    if (kind === 'file') {
+      // Directory (trailing '/') → navigate deeper; the dropdown reopens
+      // for the directory's contents. File → accept AND fall through to
+      // submit so the user doesn't need a second Enter after the final
+      // file pick.
+      if (!applied || !shouldFilePickerSubmit(candidateValue)) return true;
+    } else if (kind !== 'slash') {
+      return true;
+    } else if (!applied) {
+      return true;
+    }
+    // Slash + applied, or file (non-directory) + applied: fall through.
   }
   // Trailing backslash escapes Enter → convert to a real newline. The
   // documented escape hatch (mirrors reader.ts via endsWithBackslashContinuation)

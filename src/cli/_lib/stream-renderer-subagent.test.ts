@@ -801,3 +801,82 @@ describe('handleSubagentEvent — issue #389 regression: subagent events preserv
     }
   });
 });
+
+describe('handleSubagentEvent — pending tool_use_detail dedup (E: 2× count bug)', () => {
+  /**
+   * Regression: Anthropic emits a pending:true tool.use.start placeholder
+   * while arguments are still streaming, then emits the SAME toolUseId again
+   * without pending once streaming completes. Before the fix both events
+   * incremented source.stats.toolUses, producing a 2× count in the Done row
+   * even though ToolLane.addStartWithAgentContext already deduped by id for
+   * the head-row display. This test drives both events and asserts the Done
+   * summary reports 1 tool call, not 2.
+   */
+  it('counts a pending then real tool_use_detail for the same toolUseId as ONE tool call', () => {
+    const lane = new ToolLane();
+    const ctx = makeCtx(lane);
+    const source: SourceState = freshSourceState('dedup-agent');
+    source.agentType = 'verifier';
+    synthesizeAgentEntry('src-dedup', source, ctx, undefined);
+
+    // First: pending placeholder — arguments still streaming.
+    handleSubagentEvent(
+      {
+        type: 'chunk',
+        chunk: {
+          type: 'tool_use_detail',
+          toolUseId: 'tu-dedup-1',
+          toolName: 'bash',
+          toolInput: '',
+          pending: true,
+        },
+      } as OutputEvent,
+      'src-dedup',
+      source,
+      ctx,
+    );
+
+    // Second: real event for the same toolUseId, arguments complete.
+    handleSubagentEvent(
+      {
+        type: 'chunk',
+        chunk: {
+          type: 'tool_use_detail',
+          toolUseId: 'tu-dedup-1',
+          toolName: 'bash',
+          toolInput: '{"command":"ls"}',
+        },
+      } as OutputEvent,
+      'src-dedup',
+      source,
+      ctx,
+    );
+
+    expect(source.stats.toolUses).toBe(1);
+  });
+
+  it('counts two distinct toolUseIds as two tool calls', () => {
+    const lane = new ToolLane();
+    const ctx = makeCtx(lane);
+    const source: SourceState = freshSourceState('dedup-agent-2');
+    source.agentType = 'verifier';
+    synthesizeAgentEntry('src-dedup-2', source, ctx, undefined);
+
+    handleSubagentEvent(
+      {
+        type: 'chunk',
+        chunk: { type: 'tool_use_detail', toolUseId: 'tu-a', toolName: 'bash', toolInput: '{}' },
+      } as OutputEvent,
+      'src-dedup-2', source, ctx,
+    );
+    handleSubagentEvent(
+      {
+        type: 'chunk',
+        chunk: { type: 'tool_use_detail', toolUseId: 'tu-b', toolName: 'read_file', toolInput: '{}' },
+      } as OutputEvent,
+      'src-dedup-2', source, ctx,
+    );
+
+    expect(source.stats.toolUses).toBe(2);
+  });
+});

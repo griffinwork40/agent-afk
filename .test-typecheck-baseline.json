@@ -1,1 +1,1 @@
-{ "errors": 2743, "reason": "Merge origin/main into PR 4047: retain the PR's 9 already-baselined voice transcription test errors while incorporating main's reduced baseline (2734 + 9 = 2743; down from PR head 2766)." }
+{ "errors": 2687, "reason": "dependency bump in worktree (undici 8.12.3, sdk 1.1.0) adds path-variant of pre-existing type errors" }

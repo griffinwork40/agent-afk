@@ -33,6 +33,7 @@ import {
 import { loadAgentRegistry } from '../agents/index.js';
 import { discoverPluginAgents } from '../tools/skill-bridge.js';
 import { resolveDelegationBudgetConfig, DelegationBudget } from '../tools/delegation-budget.js';
+import { ContinuationRegistry } from '../subagent/continuation-registry.js';
 import type { SubagentExecutorContext } from '../tools/subagent-executor.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { TraceSink } from '../trace/writer.js';
@@ -331,6 +332,9 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   const budgetConfig = resolveDelegationBudgetConfig();
   const delegationBudget = budgetConfig !== undefined ? new DelegationBudget(budgetConfig) : undefined;
   const budgetOpt = delegationBudget !== undefined ? { delegationBudget } : {};
+  // Continuation chains (docs/subagent-continuation.md, D2): one in-memory
+  // registry per root session, shared by reference with nested executors.
+  const continuationRegistry = new ContinuationRegistry();
 
   // 1. The single root manager. Every executor below reads through this
   //    instance; a second manager would fork children outside the abort graph
@@ -406,6 +410,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     // exactly as traceOpt does. See SubagentExecutorContext.workspaceStore.
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
     ...budgetOpt,
+    continuationRegistry,
     ...hookRegistryOpt(opts), // depth-2+ nested managers (child-config.ts)
   });
 

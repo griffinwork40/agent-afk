@@ -302,7 +302,7 @@ describe('denial circuit breaker — dispatcher integration', () => {
       // blocks the hook-block-repeat breaker may trip — that is correct and
       // expected; once it fires, assert explicitly that the class is hook-block-repeat.
       expect(r.failureClass).not.toBe(DENIAL_BREAKER_FAILURE_CLASS);
-      if (i >= HOOK_BLOCK_REPEAT_THRESHOLD - 1 && r.failureClass !== undefined) {
+      if (i >= HOOK_BLOCK_REPEAT_THRESHOLD - 1) {
         expect(r.failureClass).toBe(HOOK_BLOCK_REPEAT_FAILURE_CLASS);
       }
     }
@@ -316,10 +316,11 @@ describe('denial circuit breaker — dispatcher integration', () => {
     for (let i = 0; i < DENIAL_CIRCUIT_BREAKER_THRESHOLD * 2; i++) {
       const r = await d.execute(readCall(i));
       expect(r.isError).toBe(true);
-      // Same: never denial-breaker; hook-block-repeat fires after its threshold —
-      // assert explicitly that the class is hook-block-repeat once it does.
+      // Same: never denial-breaker; hook-block-repeat fires unconditionally after
+      // its threshold — assert it without the !== undefined guard so a regression
+      // (breaker not firing) is caught.
       expect(r.failureClass).not.toBe(DENIAL_BREAKER_FAILURE_CLASS);
-      if (i >= HOOK_BLOCK_REPEAT_THRESHOLD - 1 && r.failureClass !== undefined) {
+      if (i >= HOOK_BLOCK_REPEAT_THRESHOLD - 1) {
         expect(r.failureClass).toBe(HOOK_BLOCK_REPEAT_FAILURE_CLASS);
       }
     }

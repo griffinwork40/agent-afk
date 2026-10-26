@@ -1,5 +1,6 @@
 import type { FastModeInactiveReason } from '../../../agent/fast-mode.js';
 import type { SlashCommand } from '../types.js';
+import { readSessionFast, setSessionFast } from '../../../agent/session-control/index.js';
 
 const REASONS: Record<FastModeInactiveReason, string> = {
   'preference-off': 'preference is off',
@@ -16,13 +17,13 @@ export const fastCmd: SlashCommand = {
     const controller = ctx.fastMode;
     if (!controller) { ctx.out.warn('Fast mode is unavailable on this surface.'); return 'continue'; }
     const value = args.trim().toLowerCase();
-    if (value && value !== 'on' && value !== 'off') { ctx.out.warn('Usage: /fast [on|off]'); return 'continue'; }
-    if (value === 'on' || value === 'off') {
-      controller.setPreference(value);
-      ctx.out.success(`Fast mode preference set to ${value}. Takes effect on the next turn.`);
+    if (value) {
+      const result = setSessionFast(controller, value);
+      if (!result.ok) { ctx.out.warn('Usage: /fast [on|off]'); return 'continue'; }
+      ctx.out.success(`Fast mode preference set to ${result.preference}. Takes effect on the next turn.`);
       return 'continue';
     }
-    const status = controller.resolveStatus(ctx.getFastModeContext?.() ?? {
+    const status = readSessionFast(controller, ctx.getFastModeContext?.() ?? {
       resolvedModelId: String(ctx.stats.model), providerFamily: 'unknown', hasCustomEndpoint: false, executionPath: 'top-level',
     });
     if (status.preference === 'off') ctx.out.info('Fast mode preference: off.');

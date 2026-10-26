@@ -665,4 +665,14 @@ describe('buildMcpDisconnectNotice (#4064-b)', () => {
     const notice = buildMcpDisconnectNotice('data-srv', 'timeout');
     expect(notice).toContain('mcp__data-srv__*');
   });
+
+  it('redacts secrets in the reason (#4203)', () => {
+    // Pass a Bearer token in the reason; buildMcpDisconnectNotice must call
+    // redactSecrets() before including it in the notice text.
+    const notice = buildMcpDisconnectNotice('my-srv', 'auth failed: Bearer sk-abc123secretXYZ');
+    expect(notice).not.toContain('sk-abc123secretXYZ');
+    // The notice should still name the server and indicate disconnection.
+    expect(notice).toContain('my-srv');
+    expect(notice).toContain('disconnected');
+  });
 });

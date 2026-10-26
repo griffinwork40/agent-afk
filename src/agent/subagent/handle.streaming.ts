@@ -30,6 +30,7 @@ import {
   type SubagentResult,
   type SubagentStatus,
 } from './result.js';
+
 import { buildEmptyBufferError, synthesizeEmptyBufferPartial, synthesizeTimeoutPartial } from './empty-buffer-partial.js';
 import type { SubagentHandleImpl } from './handle.js';
 import { CappedHandoffAccumulator } from './capped-handoff.js';
@@ -63,6 +64,7 @@ async function consumeStream<T>(
   let finalMessage: Message | undefined;
   let streamError: Error | undefined;
   const handoff = new CappedHandoffAccumulator();
+  let streamRounds = 0;
   // Snapshot current history length so finish() only walks messages from THIS run,
   // preventing cross-turn leakage when a handle is reused (Finding 1, PR #3176).
   handoff.setHistoryBaseline(handle.session.getHistory?.()?.length ?? 0);
@@ -137,6 +139,7 @@ async function consumeStream<T>(
       handle._pauseCeiling?.onEvent(event);
 
       handoff.onEvent(event);
+      streamRounds = countRuntimeRounds(handle, event, streamRounds);
       if (event.type === 'chunk') {
         processChunkEvent(handle, event.chunk);
       }
@@ -285,10 +288,18 @@ function resolveStreamResult<T>(
     // provider-stream close, or a provider that ended without a final
     // message). Mark the run non-clean so `runToResult` surfaces it as an
     // incomplete partial (via `stopReason`) instead of a silent success —
-    // consumers prepend a parent-visible marker (annotateIfIncomplete). Use
-    // `??=` so a real terminal stopReason (if one somehow arrived) is never
-    // clobbered; reaching here implies none did.
-    handle._lastStopReason ??= STREAM_INCOMPLETE;
+    // consumers prepend a parent-visible marker (annotateIfIncomplete).
+    //
+    // Use unconditional assignment (`=`, not `??=`): a stale tool-stop reason
+    // (`tool_use` / `tool_calls`) from the PREVIOUS completed round survives
+    // on `_lastStopReason` when an abort lands in the NEXT round before any
+    // `done` event is emitted. The `??=` guard preserved that stale reason,
+    // causing the run to report `succeeded` and `annotateIfIncomplete` to
+    // never fire (#3965). Any genuine terminal reason (end_turn / max_tokens /
+    // wind-down) that arrived would have produced a `message` event and exited
+    // via the `if (finalMessage) return finalMessage` branch above, so nothing
+    // worth preserving can reach here.
+    handle._lastStopReason = STREAM_INCOMPLETE;
     return { role: 'assistant', content: handle._lastStreamedContent, timestamp: new Date() };
   }
   // Invariant: both wind-down triggers return incomplete partials, never opaque
@@ -567,4 +578,30 @@ export async function dispatchStopAndRelease<T>(
   }
 
   handle._onTerminal();
+}
+
+/**
+ * Advance `handle._runtimeRoundsUsed` from this stream's `progress.roundsUsed`
+ * values and return the new baseline (the last value seen).
+ *
+ * Invariant (provider contract): within one stream, `roundsUsed` rises by
+ * exactly 1 per progress event inside a segment, and a new segment restarts
+ * at 1. No provider re-emits an equal value:
+ * - anthropic-direct yields one progress per `turn.iterations += 1`
+ *   (loop/tool-round.ts); the TurnAccumulator is shared by retry-tier
+ *   replays and Stop-hook continuations (loop.ts `turnState`), and a replay
+ *   resumes after the last completed round, so values keep rising.
+ * - openai-compatible yields one progress per `round += 1` and resets `round`
+ *   to 0 per Stop-hook segment (query/turn-driver.ts); its 401 replay runs
+ *   only when no tool was dispatched, i.e. before any progress event.
+ * So a value above the baseline adds the delta, and a value at or below it
+ * starts a new segment and adds the whole value. Examples: 1,2,3 then 1,2
+ * counts 5; 1 then 1 counts 2.
+ * @internal exported for tests.
+ */
+export function countRuntimeRounds<T>(handle: Pick<SubagentHandleImpl<T>, '_runtimeRoundsUsed'>, event: OutputEvent, last: number): number {
+  if (event.type !== 'progress' || typeof event.progress.roundsUsed !== 'number') return last;
+  const r = event.progress.roundsUsed;
+  handle._runtimeRoundsUsed += r > last ? r - last : Math.max(0, r);
+  return r;
 }

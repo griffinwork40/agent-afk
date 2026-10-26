@@ -679,6 +679,84 @@ describe('handleOrchestratorEvent — tool-use-loop scrollback (no content emiss
   });
 });
 
+// ────────────────────────────────────────────────────────────────────────────
+// seenToolUseIds dedup path — toolUses counter must not double-count replays
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('handleOrchestratorEvent — seenToolUseIds dedup (toolUses counter)', () => {
+  // The orchestrator increments source.stats.toolUses ONLY when a toolUseId
+  // has not been seen before (guarded by seenToolUseIds). This matters for
+  // retry/replay scenarios where the SDK re-streams tool_use_detail events
+  // for tool calls the model already started. Without the guard, toolUses
+  // would over-count and the progress banner's "N tool calls" summary would
+  // be inflated. A future refactor must not silently remove the set check.
+
+  function toolStart(id: string, toolName = 'Bash'): OutputEvent {
+    return {
+      type: 'chunk',
+      chunk: { type: 'tool_use_detail', toolUseId: id, toolName, toolInput: '"cmd"' },
+    };
+  }
+
+  it('increments toolUses exactly once for the first occurrence of a toolUseId', () => {
+    const toolLane = new ToolLane();
+    const ctx = makeCtx(toolLane);
+    const source: SourceState = freshSourceState('__main__');
+
+    handleOrchestratorEvent(toolStart('tu-dedup-1'), source, ctx);
+
+    expect(source.stats.toolUses).toBe(1);
+    expect(source.stats.seenToolUseIds.has('tu-dedup-1')).toBe(true);
+  });
+
+  it('does NOT increment toolUses when the same toolUseId is replayed (dedup guard)', () => {
+    const toolLane = new ToolLane();
+    const ctx = makeCtx(toolLane);
+    const source: SourceState = freshSourceState('__main__');
+
+    // First occurrence — counted.
+    handleOrchestratorEvent(toolStart('tu-dedup-2'), source, ctx);
+    expect(source.stats.toolUses).toBe(1);
+
+    // Replay of the same id (e.g. SDK retry re-streams the same chunk).
+    handleOrchestratorEvent(toolStart('tu-dedup-2'), source, ctx);
+
+    // Counter must still be 1, not 2.
+    expect(source.stats.toolUses).toBe(1);
+    // The id remains in the set exactly once.
+    expect(source.stats.seenToolUseIds.size).toBe(1);
+  });
+
+  it('counts distinct toolUseIds independently', () => {
+    const toolLane = new ToolLane();
+    const ctx = makeCtx(toolLane);
+    const source: SourceState = freshSourceState('__main__');
+
+    handleOrchestratorEvent(toolStart('tu-a'), source, ctx);
+    handleOrchestratorEvent(toolStart('tu-b'), source, ctx);
+    handleOrchestratorEvent(toolStart('tu-c'), source, ctx);
+
+    expect(source.stats.toolUses).toBe(3);
+    expect(source.stats.seenToolUseIds.size).toBe(3);
+  });
+
+  it('dedup is robust to interleaved replays across multiple ids', () => {
+    const toolLane = new ToolLane();
+    const ctx = makeCtx(toolLane);
+    const source: SourceState = freshSourceState('__main__');
+
+    // 3 distinct ids, then tu-x replayed twice.
+    handleOrchestratorEvent(toolStart('tu-x'), source, ctx);
+    handleOrchestratorEvent(toolStart('tu-y'), source, ctx);
+    handleOrchestratorEvent(toolStart('tu-z'), source, ctx);
+    handleOrchestratorEvent(toolStart('tu-x'), source, ctx); // replay
+    handleOrchestratorEvent(toolStart('tu-x'), source, ctx); // replay again
+
+    expect(source.stats.toolUses).toBe(3);
+    expect(source.stats.seenToolUseIds.size).toBe(3);
+  });
+});
+
 describe('handleOrchestratorEvent — stage rail single-paint invariant', () => {
   // Regression suite for the "duplicate observe · model · choose · act · update
   // rail" bug. Pre-fix path:

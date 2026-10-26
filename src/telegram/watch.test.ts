@@ -167,6 +167,31 @@ describe('SessionWatchManager', () => {
     expect(sent.some((m) => m.includes('hello from CLI') && m.includes('on it'))).toBe(true);
   });
 
+  it('relays pre-tool assistant text (segmented ledger) and keeps the 700-char preview for uncapped answers', async () => {
+    const id = freshId();
+    const writer = new SessionLedgerWriter(id);
+    writer.recordUser('pre');
+    await sleep(50);
+    const sent: string[] = [];
+    const manager = new SessionWatchManager();
+    manager.start(9, id, async (text) => { sent.push(text); });
+    await sleep(100);
+    writer.recordUser('run it');
+    writer.recordEvent({ type: 'chunk', chunk: { type: 'content', content: 'checking first' } });
+    writer.recordEvent({ type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: 't', toolName: 'bash', toolInput: 'ls' } } as never);
+    const long = 'z'.repeat(20_000);
+    writer.recordEvent({ type: 'message', message: { role: 'assistant', content: long, timestamp: new Date() } });
+    await sleep(300);
+    await writer.close('close');
+    await vi.waitFor(() => { expect(sent.join('\n')).toContain('watch ended'); }, { timeout: 2000 });
+    const all = sent.join('\n');
+    expect(all.indexOf('🤖 checking first')).toBeGreaterThan(-1);
+    expect(all.indexOf('🤖 checking first')).toBeLessThan(all.indexOf('🔧 bash'));
+    const answer = all.split('\n').find((l) => l.startsWith('🤖 zzz'))!;
+    expect(answer.length).toBeLessThan(800);
+    expect(answer.endsWith('…')).toBe(true);
+  });
+
   it('stop aborts the tail and reports the watched id', async () => {
     const id = freshId();
     const writer = new SessionLedgerWriter(id);

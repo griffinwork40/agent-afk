@@ -11,7 +11,8 @@
  */
 
 import type { ImageAttachment } from '../../input/attachments.js';
-import { dispatch as dispatchSlash, parse as parseSlash } from '../../slash/registry.js';
+import { dispatch as dispatchSlash, parse as parseSlash, has as hasSlashCommand } from '../../slash/registry.js';
+import { isPluginInitPending, awaitPluginInit } from '../../slash/plugin-skills.js';
 import {
   getPreflight,
   getSkillPreflightDir,
@@ -65,6 +66,13 @@ export async function handleSlashCommand(
   verdictLedger: VerdictLedger,
   clearStopInjection: () => void,
 ): Promise<SlashBranchAction> {
+  // Contract: if the command is unknown and plugin skill registration is
+  // still in flight, await init (bounded) so the user doesn't get a spurious
+  // "Unknown command" for a plugin skill typed before init completes.
+  const parsed = parseSlash(text);
+  if (parsed && !hasSlashCommand(parsed.name) && isPluginInitPending()) {
+    await awaitPluginInit(5_000);
+  }
   const res = await dispatchSlash(text, ctx.slashCtx, attachments);
   if (!res.handled) return { action: 'fall-through' };
 

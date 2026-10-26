@@ -31,6 +31,18 @@ export interface AccountingSnapshot {
   subagentCompletedCount: number;
   subagentRunningTokens: Readonly<TokenCounters>;
   subagentRunningCostUsd: number;
+  /**
+   * Cumulative root-session cost across ALL lifecycle cycles (never reset by
+   * `reset()`). Used by the monetary budget gates so `/clear` does not
+   * re-zero the session's contribution to `maxBudgetUsd` (#3882 cause 4).
+   */
+  lifetimeSessionCostUsd: number;
+  /**
+   * Cumulative subagent cost across ALL lifecycle cycles (never reset by
+   * `reset()`). Paired with `lifetimeSessionCostUsd` for cross-cycle budget
+   * enforcement (#3882 cause 4).
+   */
+  lifetimeSubagentCostUsd: number;
   /** Billing-normalized root-session rollup (#3878); undefined when none reported. */
   sessionBilling?: BillingRollupSnapshot;
   /**
@@ -91,6 +103,18 @@ export class AccountingAccumulator {
   private subagentRunningTokens: TokenCounters = zeroCounters();
   /** Cumulative USD cost rolled up from completed subagents. */
   private subagentRunningCostUsd = 0;
+  /**
+   * Lifetime root-session cost across ALL `/clear` cycles. NOT zeroed by
+   * `reset()`. Used by the monetary budget gates so a REPL `/clear` does not
+   * re-zero the session's own spend against `maxBudgetUsd` (#3882 cause 4).
+   */
+  private lifetimeSessionCostUsd = 0;
+  /**
+   * Lifetime subagent cost across ALL `/clear` cycles. NOT zeroed by
+   * `reset()`. Paired with `lifetimeSessionCostUsd` for cross-cycle budget
+   * enforcement (#3882 cause 4).
+   */
+  private lifetimeSubagentCostUsd = 0;
   /** Billing rollups (#3878) — summed per round, split by provider. */
   private readonly sessionBilling = new BillingRollup();
   private readonly subagentBilling = new BillingRollup();
@@ -111,6 +135,8 @@ export class AccountingAccumulator {
     this.subagentCompletedCount = 0;
     this.subagentRunningTokens = zeroCounters();
     this.subagentRunningCostUsd = 0;
+    // lifetimeSessionCostUsd and lifetimeSubagentCostUsd are intentionally NOT
+    // reset here — they accumulate across cycles for cross-cycle budget enforcement.
     this.sessionBilling.reset();
     this.subagentBilling.reset();
   }
@@ -125,8 +151,9 @@ export class AccountingAccumulator {
    * the running total.
    */
   recordTurnMetadata(m: ResponseMetadata): void {
-    if (typeof m.totalCostUsd === 'number' && Number.isFinite(m.totalCostUsd)) {
+    if (typeof m.totalCostUsd === 'number' && Number.isFinite(m.totalCostUsd) && m.totalCostUsd > 0) {
       this.sessionRunningCostUsd += m.totalCostUsd;
+      this.lifetimeSessionCostUsd += m.totalCostUsd;
     }
     const usage = m.usage;
     if (usage && typeof usage === 'object') {
@@ -209,6 +236,7 @@ export class AccountingAccumulator {
       // total spend across ALL terminal outcomes, not just succeeded ones.
       if (typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0) {
         this.subagentRunningCostUsd += costUsd;
+        this.lifetimeSubagentCostUsd += costUsd;
       }
       return;
     }
@@ -229,6 +257,7 @@ export class AccountingAccumulator {
 
     if (typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0) {
       this.subagentRunningCostUsd += costUsd;
+      this.lifetimeSubagentCostUsd += costUsd;
     }
   }
 
@@ -261,6 +290,8 @@ export class AccountingAccumulator {
       subagentCompletedCount: this.subagentCompletedCount,
       subagentRunningTokens: { ...this.subagentRunningTokens },
       subagentRunningCostUsd: this.subagentRunningCostUsd,
+      lifetimeSessionCostUsd: this.lifetimeSessionCostUsd,
+      lifetimeSubagentCostUsd: this.lifetimeSubagentCostUsd,
       ...optionalBilling('sessionBilling', this.sessionBilling.snapshot()),
       ...optionalBilling('subagentBilling', this.subagentBilling.snapshot()),
     };

@@ -34,6 +34,7 @@ import { factsToResults, sanitizeFtsQuery } from './memory-store.fts.js';
 import { queryUnaccessed, queryAccessStats } from './memory-store.access.js';
 import { SCHEMA_VERSION, SCHEMA_SQL, runMigrations } from './memory-store.schema.js';
 import { configureSqliteConnection } from '../storage/sqlite.js';
+import { estimateTokens } from './estimate-tokens.js';
 import { appendWAL, replayWAL as replayWALImpl } from './memory-store.wal.js';
 import { supersedeFact as supersededFactImpl } from './memory-store.facts.js';
 import {
@@ -77,9 +78,9 @@ export const HOT_SOFT_WARN_RATIO = 0.8;
 const HOT_TRUNCATION_SENTINEL =
   '<!-- HOT TRUNCATED to fit the ~1,500-token cap; move durable detail to the fact archive (memory_update target:"fact"). -->';
 
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 3.5);
-}
+// Defined in a dependency-free leaf so config-path callers avoid this module's
+// better-sqlite3 import; re-exported so existing importers are unchanged.
+export { estimateTokens };
 
 /**
  * Usage report for hot memory (HOT.md), returned by {@link MemoryStore.saveHot}

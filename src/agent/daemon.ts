@@ -27,6 +27,7 @@ import { getSchedule, toScheduledTask } from './daemon/schedule-store.js';
 import { parseTaskRetryFields, type TaskRetryFields } from './daemon/task-retry.js';
 import { parseTaskRequestTime } from './daemon/task-request-time.js';
 import { registerTasksWithQuarantine } from './daemon.startup-register.js';
+import { readBody } from './daemon.read-body.js';
 
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
@@ -289,17 +290,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   };
 }
 
-/**
- * Read the full HTTP request body as a UTF-8 string.
- */
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-    req.on('error', reject);
-  });
-}
+
 
 /**
  * Synchronous outer wrapper that delegates to the async handler.

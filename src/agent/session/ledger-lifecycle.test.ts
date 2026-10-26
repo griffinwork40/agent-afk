@@ -254,18 +254,20 @@ describe('LedgerLifecycle record methods when ledgered', () => {
     });
   });
 
-  it('does not record output events the ledger projection skips (content deltas)', async () => {
+  it('coalesces content deltas: nothing per delta, one assistant record when the open segment is flushed', async () => {
     const id = freshId();
     const life = new LedgerLifecycle();
     life.ensure(ledgeredCtx(id));
-    // A content-delta chunk projects to null → recordEvent is a no-op.
-    life.recordEvent({ type: 'chunk', chunk: { type: 'content', content: 'tok' } });
+    // Deltas are buffered by SegmentTracker (session-ledger-segments.ts), never
+    // written one record per token.
+    life.recordEvent({ type: 'chunk', chunk: { type: 'content', content: 'to' } });
+    life.recordEvent({ type: 'chunk', chunk: { type: 'content', content: 'k' } });
+    // Close flushes the still-open segment so an interrupted answer is kept.
     await life.seal('close');
 
     const records = await collect(id);
-    expect(records.some((r) => r.kind === 'assistant')).toBe(false);
-    // Only meta + closed remain.
-    expect(records.map((r) => r.kind)).toEqual(['meta', 'closed']);
+    expect(records.map((r) => r.kind)).toEqual(['meta', 'assistant', 'closed']);
+    expect(records[1]).toMatchObject({ kind: 'assistant', seg: 0, text: 'tok' });
   });
 
   it('records an elicitation request', async () => {

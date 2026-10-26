@@ -28,6 +28,7 @@ import * as path from 'path';
 import { startWebServer, type WebServerHandle } from './server.js';
 import { getSessionsDir } from '../paths.js';
 import { parseSseChunk } from './sse-protocol.js';
+import { ledgerGeneration } from '../agent/session-ledger-reader.js';
 
 let tmpDir: string;
 let origAfkHome: string | undefined;
@@ -58,6 +59,11 @@ function appendRecord(text: string, sessionId = SESSION): void {
   const file = ledgerPath(sessionId);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, `${JSON.stringify({ v: 1, ts: Date.now(), kind: 'assistant', text })}\n`);
+}
+
+function eventId(position: number): string {
+  const stat = fs.statSync(ledgerPath());
+  return `${ledgerGeneration(stat)}:${position}`;
 }
 
 interface Frame {
@@ -130,7 +136,7 @@ describe('handleStream — event ids are ledger positions', () => {
 
     const frames = await readFrames(handle, 3);
     expect(frames.map((f) => f.text)).toEqual(['one', 'two', 'three']);
-    expect(frames.map((f) => f.id)).toEqual(['1', '2', '3']);
+    expect(frames.map((f) => f.id)).toEqual([1, 2, 3].map(eventId));
     // History is replay; the ledger never persists successful tool output, and
     // the frontend keys `outputUnavailable` off this flag.
     expect(frames.every((f) => f.replay)).toBe(true);
@@ -142,11 +148,11 @@ describe('handleStream — event ids are ledger positions', () => {
     appendRecord('three');
     handle = await startWebServer({ port: 0 });
 
-    const frames = await readFrames(handle, 1, { lastEventId: '2' });
+    const frames = await readFrames(handle, 1, { lastEventId: eventId(2) });
     expect(frames.map((f) => f.text)).toEqual(['three']);
     // The id must still be the true ledger position, not a per-connection
     // counter restarting at 1 — that drift is what made resume lose records.
-    expect(frames[0]?.id).toBe('3');
+    expect(frames[0]?.id).toBe(eventId(3));
   });
 
   it('delivers a record appended after replay drains, as live and unduplicated', async () => {
@@ -161,7 +167,7 @@ describe('handleStream — event ids are ledger positions', () => {
 
     const frames = await framesPromise;
     expect(frames.map((f) => f.text)).toEqual(['one', 'two']);
-    expect(frames.map((f) => f.id)).toEqual(['1', '2']);
+    expect(frames.map((f) => f.id)).toEqual([1, 2].map(eventId));
     expect(frames[0]?.replay).toBe(true);
     expect(frames[1]?.replay).toBe(false);
   });
@@ -177,7 +183,7 @@ describe('handleStream — event ids are ledger positions', () => {
 
     const frames = await readFrames(handle, 2, { lastEventId: 'not-a-number' });
     expect(frames.map((f) => f.text)).toEqual(['one', 'two']);
-    expect(frames.map((f) => f.id)).toEqual(['1', '2']);
+    expect(frames.map((f) => f.id)).toEqual([1, 2].map(eventId));
   });
 
   it('treats a negative Last-Event-ID as no header — full replay', async () => {
@@ -187,7 +193,7 @@ describe('handleStream — event ids are ledger positions', () => {
 
     const frames = await readFrames(handle, 2, { lastEventId: '-5' });
     expect(frames.map((f) => f.text)).toEqual(['one', 'two']);
-    expect(frames.map((f) => f.id)).toEqual(['1', '2']);
+    expect(frames.map((f) => f.id)).toEqual([1, 2].map(eventId));
   });
 
   it('does not replay a record twice across a reconnect', async () => {
@@ -195,12 +201,12 @@ describe('handleStream — event ids are ledger positions', () => {
     handle = await startWebServer({ port: 0 });
 
     const first = await readFrames(handle, 1);
-    expect(first.map((f) => f.id)).toEqual(['1']);
+    expect(first.map((f) => f.id)).toEqual([eventId(1)]);
 
     appendRecord('two');
     const second = await readFrames(handle, 1, { lastEventId: first[0]?.id ?? '0' });
     expect(second.map((f) => f.text)).toEqual(['two']);
-    expect(second.map((f) => f.id)).toEqual(['2']);
+    expect(second.map((f) => f.id)).toEqual([eventId(2)]);
   });
 });
 

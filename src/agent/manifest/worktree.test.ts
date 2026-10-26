@@ -15,6 +15,10 @@ describe('isWorktreeCwd', () => {
     expect(isWorktreeCwd('/home/user/project/src')).toBe(false);
     expect(isWorktreeCwd('/project')).toBe(false);
   });
+
+  it('returns true for a Windows-style path inside .afk-worktrees (normalizeSeps)', () => {
+    expect(isWorktreeCwd('C:\\repo\\.afk-worktrees\\slug')).toBe(true);
+  });
 });
 
 describe('extractWorktreePath', () => {
@@ -41,6 +45,11 @@ describe('extractWorktreePath', () => {
   it('returns undefined for empty segment after .afk-worktrees/', () => {
     // Edge case: cwd ends with the separator
     expect(extractWorktreePath('/repo/.afk-worktrees/')).toBeUndefined();
+  });
+
+  it('returns a forward-slash path for a Windows-style input (normalizeSeps)', () => {
+    expect(extractWorktreePath('C:\\repo\\.afk-worktrees\\slug\\src'))
+      .toBe('C:/repo/.afk-worktrees/slug');
   });
 });
 

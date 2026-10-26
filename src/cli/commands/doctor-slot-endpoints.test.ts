@@ -43,11 +43,11 @@ afterAll(async () => {
 
 function slots(overrides: Partial<ModelSlots>): ModelSlots {
   return {
-    local: { id: 'claude-haiku-5-5' },
-    small: { id: 'claude-haiku-5-5' },
-    medium: { id: 'claude-sonnet-4-6' },
-    large: { id: 'claude-opus-5-5' },
-    ...overrides,
+    local: overrides.local ?? { id: 'claude-haiku-5-5' },
+    small: overrides.small ?? { id: 'claude-haiku-5-5' },
+    medium: overrides.medium ?? { id: 'claude-sonnet-4-6' },
+    large: overrides.large ?? { id: 'claude-opus-5-5' },
+    subagent: overrides.subagent ?? { id: '' },
   };
 }
 
