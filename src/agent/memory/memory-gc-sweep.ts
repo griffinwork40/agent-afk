@@ -228,12 +228,12 @@ export async function sweepMemoryGc(
     let db: InstanceType<typeof Database>;
     try {
       db = new Database(dbPath, { fileMustExist: true });
-      configureSqliteConnection(db);
     } catch {
       return noop('no-db');
     }
 
     try {
+      configureSqliteConnection(db);
       // Old installations have no trustworthy observation epoch. A sweep
       // must never initialize/migrate one itself, nor assume a release date.
       const hasMetadata = db.prepare(`SELECT 1 FROM sqlite_master

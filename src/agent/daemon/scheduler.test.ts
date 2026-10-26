@@ -1102,7 +1102,7 @@ describe('resolveWorktreePruneRoot', () => {
     const mock = vi.fn().mockResolvedValue({ stdout: '/Users/me/proj\n', stderr: '' });
     const root = await resolveWorktreePruneRoot(mock as unknown as ExecFileFn, '/Users/me/proj/sub', undefined);
     expect(root).toBe('/Users/me/proj');
-    expect(mock).toHaveBeenCalledWith('git', ['rev-parse', '--show-toplevel'], { cwd: '/Users/me/proj/sub' });
+    expect(mock).toHaveBeenCalledWith('git', ['--no-optional-locks', 'rev-parse', '--show-toplevel'], { cwd: '/Users/me/proj/sub' });
   });
 
   it('returns null when cwd is not a git repo (rev-parse throws) — the daemon $HOME case', async () => {

@@ -274,7 +274,7 @@ export async function managedWorktreeCommitsAhead(
     if (!meta.baseSha) return 0;
     const head = await execFile('git', ['--no-optional-locks', '-C', worktreePath, 'rev-parse', 'HEAD']);
     const count = await execFile('git', [
-      '-C', repoRoot, 'rev-list', `${meta.baseSha}..${head.stdout.trim()}`, '--count',
+      '--no-optional-locks', '-C', repoRoot, 'rev-list', `${meta.baseSha}..${head.stdout.trim()}`, '--count',
     ]);
     return parseInt(count.stdout.trim(), 10) || 0;
   } catch {
