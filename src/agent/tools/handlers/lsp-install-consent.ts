@@ -1,4 +1,5 @@
 /** Adapt trusted per-call eligibility to the existing human elicitation surface. */
+import { randomUUID } from 'node:crypto';
 import { elicitationRouter } from '../../elicitation-router.js';
 import type { InstallContext } from '../../lsp/server-spec.js';
 import type { ToolHandlerContext } from '../types.js';
@@ -10,7 +11,7 @@ export function lspInstallContext(context?: ToolHandlerContext, signal?: AbortSi
   // Invariant: a missing sessionId must never collide with another session's
   // key. An empty string would match a ''-keyed handler from a concurrent
   // session that also lacks a sessionId, so use a per-call unique sentinel.
-  const sessionKey = context?.sessionId ?? `__no-session-${Date.now()}-${Math.random()}`;
+  const sessionKey = context?.sessionId ?? `__no-session-${randomUUID()}`;
   const interactive = context?.lspInstallAllowed === true && elicitationRouter.hasHandler(sessionKey);
   return {
     interactive,

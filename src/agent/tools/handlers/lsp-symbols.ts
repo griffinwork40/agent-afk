@@ -139,9 +139,9 @@ export async function queryLspSymbol(
   if (signal?.aborted) return { locations: [], error: 'Aborted' };
   const t0 = Date.now();
   const budgetMs = getSymbolsTimeoutMs();
-  const resolved = await resolveLspServer(filePath, { serverCmd, sessionRoot: rootDir, installContext });
-  if (resolved.kind === 'unavailable') return { locations: [], error: resolved.error };
-  const { spec, root } = resolved;
+  // Read source first so the deadline timer starts immediately and
+  // readFile is called synchronously in the async turn (before resolveLspServer).
+  // This preserves the test-observable ordering from the original design.
   let content: string;
   try {
     content = await readLspSource(filePath, budgetMs, signal);
@@ -150,6 +150,9 @@ export async function queryLspSymbol(
       ? lspFailureMessage(err, 'LSP symbols timed out (increase AFK_LSP_SYMBOLS_TIMEOUT_MS)')
       : 'Failed to read source file' };
   }
+  const resolved = await resolveLspServer(filePath, { serverCmd, sessionRoot: rootDir, installContext });
+  if (resolved.kind === 'unavailable') return { locations: [], error: resolved.error };
+  const { spec, root } = resolved;
   const lspMethod = subcommand === 'definition' ? 'textDocument/definition' : 'textDocument/references';
   // F4: subtract the time spent reading the file so the withPooledFile
   // deadline covers the full budget, not just what remains after the read.

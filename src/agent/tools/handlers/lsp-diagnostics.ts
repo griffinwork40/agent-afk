@@ -66,23 +66,28 @@ export function isLspDiagnosticsEnabled(): boolean {
  * @param filePath - Absolute path to the file to diagnose.
  * @param serverCmd - LSP server binary + args (injectable for tests).
  * @param sessionRoot - Session cwd bounding nearest-marker workspace detection.
+ * @param signal - Optional AbortSignal.
  */
 export async function queryLspDiagnostics(
   filePath: string,
   serverCmd?: readonly string[],
+  sessionRoot?: string,
   signal?: AbortSignal,
 ): Promise<LspDiagnostic[]> {
   const t0 = Date.now();
   const budgetMs = getTimeoutMs();
-  const resolved = await resolveLspServer(filePath, { serverCmd });
-  if (resolved.kind === 'unavailable') return [];
-  const { spec, root } = resolved;
+  // Read source first so the deadline timer starts immediately and
+  // readFile is called synchronously in the async turn (before resolveLspServer).
+  // This preserves the test-observable ordering from the original design.
   let content: string;
   try {
     content = await readLspSource(filePath, budgetMs, signal);
   } catch {
     return [];
   }
+  const resolved = await resolveLspServer(filePath, { serverCmd, sessionRoot });
+  if (resolved.kind === 'unavailable') return [];
+  const { spec, root } = resolved;
   try {
     // F4: subtract the time spent reading the file so the withPooledFile
     // deadline covers the full budget, not just what remains after the read.
@@ -145,11 +150,12 @@ export function formatDiagnostics(filePath: string, diags: LspDiagnostic[]): str
 export async function appendLspDiagnostics(
   filePath: string,
   serverCmd?: readonly string[],
+  sessionRoot?: string,
   signal?: AbortSignal,
 ): Promise<string> {
   if (!isLspDiagnosticsEnabled()) return '';
   try {
-    const diags = await queryLspDiagnostics(filePath, serverCmd, signal);
+    const diags = await queryLspDiagnostics(filePath, serverCmd, sessionRoot, signal);
     return formatDiagnostics(filePath, diags);
   } catch {
     return '';

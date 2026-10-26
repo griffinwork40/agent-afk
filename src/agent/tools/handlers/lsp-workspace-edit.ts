@@ -36,6 +36,7 @@ function localFile(uri: string): string {
   }
   const path = fileURLToPath(url);
   if (path.includes('\0')) throw new Error('WorkspaceEdit URI contains NUL');
+  if (path.startsWith('//')) throw new Error('WorkspaceEdit URI resolved to a network path');
   return path;
 }
 
@@ -51,6 +52,13 @@ async function planWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): 
     if (document.version !== null && document.version !== undefined &&
         options.documentVersion?.(document.uri) !== document.version) {
       throw new Error(`WorkspaceEdit document version mismatch: ${document.uri}`);
+    }
+    if (document.version === null && options.documentVersion?.(document.uri) !== undefined) {
+      // LSP server sent null version; local document is open at a known version.
+      // Apply proceeds (null is a legitimate server-side sentinel) but flag the
+      // staleness risk so callers can surface it in sync_warnings.
+      (options as { _nullVersionUris?: string[] })._nullVersionUris ??= [];
+      (options as { _nullVersionUris?: string[] })._nullVersionUris!.push(document.uri);
     }
     const sourcePath = localFile(document.uri);
     const path = await validatedWriteTarget(sourcePath, options.context, options.cwd);
