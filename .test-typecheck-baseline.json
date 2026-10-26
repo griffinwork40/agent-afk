@@ -1,1 +1,1 @@
-{ "errors": 2710 }
+{ "errors": 2711, "reason": "blockDestructiveGit test uses the same partial-options pattern as 10+ existing dispatcher.test.ts instances" }

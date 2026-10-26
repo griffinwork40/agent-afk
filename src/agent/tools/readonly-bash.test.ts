@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyBashCommand, PIPE_TO_SHELL_REASON } from './readonly-bash.js';
+import { classifyDestructiveGit } from './readonly-bash.tokenizer.js';
 
 describe('classifyBashCommand', () => {
   describe('blocks mutating commands', () => {
@@ -837,8 +838,6 @@ describe('classifyBashCommand', () => {
     }
   });
 });
-
-import { classifyDestructiveGit } from './readonly-bash.tokenizer.js';
 
 describe('classifyDestructiveGit', () => {
   const destructive: Array<[string, string]> = [
