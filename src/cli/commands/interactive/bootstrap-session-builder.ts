@@ -193,7 +193,7 @@ export function buildSharedDeps(a: {
       ? { detachRegistry: a.detachRegistry }
       : {}),
     ...(a.processJobs !== undefined ? { processJobs: a.processJobs } : {}),
-    cwd: a.effectiveCwd ?? process.cwd(),
+    cwd: a.effectiveCwd,
     maxTurns: parseInt(a.maxTurns, 10),
     autoResumeOnUsageLimit: a.cliConfig.autoResumeOnUsageLimit,
     // REPL default-on with an opt-out (#4271); other surfaces never set it.

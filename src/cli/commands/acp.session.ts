@@ -103,7 +103,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
         {},
       ).registry,
       provider,
-      cwd: opts.cwd ?? process.cwd(),
+      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
     }),
     undefined,
   );

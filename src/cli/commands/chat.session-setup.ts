@@ -224,7 +224,7 @@ export async function buildChatSession(
     ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(traceWriter !== undefined ? { traceWriter } : {}),
     ...(autoResumeOnUsageLimit !== undefined ? { autoResumeOnUsageLimit } : {}),
-    cwd: worktreeCwd ?? process.cwd(),
+    ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
     ...resumeConfig,
     provider,
   }))), traceWriter);

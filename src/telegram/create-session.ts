@@ -88,7 +88,7 @@ export function createTelegramSessionFactory(
       : undefined;
     const layeredBasePrompt = composeSystemPrompt(frameworkBase, operatorOverlay);
 
-    const sessionCwd = sessionConfig.cwd ?? telegramCwd ?? process.cwd();
+    const sessionCwd = sessionConfig.cwd ?? telegramCwd;
     // Invariant: the trace writer is created BEFORE loadTelegramMcpManager so
     // the MCP connect phase (mcp_server_start/done, mcp_connect_start/done) is
     // captured in the same session trace as the rest of the Telegram session.

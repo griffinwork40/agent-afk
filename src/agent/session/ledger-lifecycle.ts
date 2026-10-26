@@ -64,11 +64,16 @@ export class LedgerLifecycle {
     const meta = ctx.getMetadata();
     const traceLabel = sessionLabelFromTracePath(ctx.tracePath);
     const model = meta.model ?? ctx.fallbackModel;
+    // Invariant: journal meta always carries cwd so receipts and facets can
+    // attribute sessions to a directory. The fallback to process.cwd() lives
+    // HERE, not in config.cwd at the surface sites, because config.cwd===undefined
+    // marks an UNCONFINED session for tool containment (see _cwd-utils.ts:119-128).
+    const effectiveCwd = meta.cwd ?? process.cwd();
     writer.record({
       kind: 'meta',
       sessionId: id,
       model,
-      ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
+      cwd: effectiveCwd,
       // Correlate this id-keyed ledger to its witness trace: fresh sessions
       // label the trace dir with a random UUID (not the session id), so the
       // ledger is the durable id→label bridge. `null` when tracing is
@@ -81,7 +86,7 @@ export class LedgerLifecycle {
       v: 1,
       sessionId: id,
       model,
-      ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
+      cwd: effectiveCwd,
       traceLabel,
     });
   }
