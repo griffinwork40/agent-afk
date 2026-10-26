@@ -15,7 +15,7 @@
  */
 
 import { computeLineDiff } from '../utils/diff.js';
-import { deriveCallCostUsd } from '../agent/providers/anthropic-direct/pricing.js';
+import { deriveCallCostUsd } from '../agent/providers/index.js';
 import type { DiffPayload } from '../utils/diff.js';
 import type { RequestSnapshot, StructuralImpact } from './types.js';
 

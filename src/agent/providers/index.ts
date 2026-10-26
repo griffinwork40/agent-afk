@@ -339,3 +339,19 @@ export { anthropicDirectProvider };
 export { AnthropicDirectProvider } from './anthropic-direct/index.js';
 export { OpenAICompatibleProvider, openaiCompatibleProvider } from './openai-compatible/index.js';
 export { XaiProvider } from './xai/index.js';
+
+// ---------------------------------------------------------------------------
+// Stable public API for whatif/ and other consumers outside providers/
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-exported so `whatif/` and other modules outside `agent/providers/` can
+ * depend on a stable surface rather than the Anthropic-specific private path.
+ * If the underlying file is reorganised (e.g. when adding a second direct
+ * provider), only this barrel needs updating — not every consumer.
+ */
+export { deriveCallCostUsd } from './anthropic-direct/pricing.js';
+export type { CacheWriteSplit, ModelPricing, SpeedPricingContext } from './anthropic-direct/pricing.js';
+export { oneShotCompletion, oneShotCompletionWithStop } from './anthropic-direct/oneshot.js';
+export type { OneShotInput, OneShotStopReason } from './anthropic-direct/oneshot.js';
+export { resolveModelId } from '../session/model-resolution.js';

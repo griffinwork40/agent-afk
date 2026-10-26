@@ -14,11 +14,9 @@
  * @module whatif/complete
  */
 
-import { oneShotCompletion } from '../agent/providers/anthropic-direct/oneshot.js';
-import { deriveCallCostUsd } from '../agent/providers/anthropic-direct/pricing.js';
+import { oneShotCompletion, deriveCallCostUsd, resolveModelId } from '../agent/providers/index.js';
 import type { CompleteFn } from './types.js';
 import { withAnalystRetry } from './complete.retry.js';
-import { resolveModelId } from '../agent/session/model-resolution.js';
 
 /** Characters-per-token ratio used for cost estimation (rough heuristic). */
 const CHARS_PER_TOKEN = 3.5;
