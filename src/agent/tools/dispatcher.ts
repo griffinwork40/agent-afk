@@ -230,6 +230,13 @@ export interface SessionToolDispatcherOptions {
    */
   readOnlyBash?: boolean;
   /**
+   * When true, the dispatcher blocks bash commands that would destroy
+   * working-tree state (git checkout, switch, restore, clean, reset --hard,
+   * stash drop/clear/pop). Set for ALL forked children via
+   * `createChildProviderFactory`. Defaults to false.
+   */
+  blockDestructiveGit?: boolean;
+  /**
    * Central per-result output cap, in UTF-8 bytes. When set, `executeCore`
    * reduces any tool result whose `content` exceeds this to head+tail via
    * {@link headAndTail} (and stamps `truncated: true`) as the FINAL step before
@@ -347,6 +354,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly traceWriter: TraceSink | undefined;
   /** When true, mutating `bash` commands are blocked (read-only skill child). */
   private readonly readOnlyBash: boolean;
+  /** When true, working-tree-destructive git commands are blocked (all children). */
+  private readonly blockDestructiveGit: boolean;
   /**
    * Central per-result output byte cap (see
    * {@link SessionToolDispatcherOptions.maxOutputBytes}). `undefined` ⇒ no
@@ -443,6 +452,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.isNonInteractive = opts.isNonInteractive === true;
     this.traceWriter = opts.traceWriter;
     this.readOnlyBash = opts.readOnlyBash === true;
+    this.blockDestructiveGit = opts.blockDestructiveGit === true;
     // Central output cap: only a positive finite number arms the backstop; any
     // other value (undefined, 0, negative, NaN) leaves it off — matching the
     // top-level default of "no central capping".
@@ -729,6 +739,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       permissions: this.permissions,
       canUseTool: this.canUseTool,
       readOnlyBash: this.readOnlyBash,
+      blockDestructiveGit: this.blockDestructiveGit,
       repeatFailureGuard: this.repeatFailureGuard,
       sessionId: this.sessionId,
       parentSessionId: this.parentSessionId,

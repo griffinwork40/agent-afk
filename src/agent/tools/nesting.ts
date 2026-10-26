@@ -245,6 +245,13 @@ export interface CreateChildProviderFactoryOptions {
    * in-memory store as the parent.
    */
   workspaceStore?: WorkspaceStore;
+  /**
+   * Override the default destructive-git gate for child sessions. When
+   * absent or `true` (the default), all child sessions are blocked from
+   * running working-tree-destructive git commands. Pass `false` only for
+   * callers that explicitly need to opt out (e.g. integration test harnesses).
+   */
+  blockDestructiveGit?: boolean;
 }
 
 /**
@@ -279,6 +286,9 @@ export function createChildProviderFactory(
       // never write to the state store (state_put/cas/delete). Independent of
       // readOnlyMemory so fact writes remain open while state writes stay closed.
       readOnlyState: true as const,
+      // Destructive-git gate: ALL child sessions are blocked by default; callers
+      // may pass `blockDestructiveGit: false` via opts to opt out explicitly.
+      ...(opts.blockDestructiveGit !== false ? { blockDestructiveGit: true as const } : {}),
       // Custom tools injected at fork time (e.g. emit_progress). The provider
       // constructor is the only read point — config.customTools is not consulted
       // at query time when a pre-built provider is set.
@@ -361,11 +371,12 @@ export function buildReadOnlyReconProvider(
       permissions,
       readOnlyBash: true,
       readOnlyMemory: true,
+      blockDestructiveGit: true,
       ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
       ...store,
     });
   }
-  return new AnthropicDirectProvider({ permissions, readOnlyBash: true, readOnlyMemory: true, ...store });
+  return new AnthropicDirectProvider({ permissions, readOnlyBash: true, readOnlyMemory: true, blockDestructiveGit: true, ...store });
 }
 
 /**
@@ -470,6 +481,7 @@ export function buildComposeNodeProvider(
   const common = {
     permissions: { allowedTools: effectiveAllowedTools },
     readOnlyMemory: true,
+    blockDestructiveGit: true as const,
     ...(workspaceStore !== undefined ? { workspaceStore } : {}),
     ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
     ...(canUseTool !== undefined ? { canUseTool } : {}),

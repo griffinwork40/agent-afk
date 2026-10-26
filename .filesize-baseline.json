@@ -1,6 +1,6 @@
 {
   "limit": 350,
   "entries": {
-
+    "src/agent/tools/dispatcher.ts": { "loc": 354, "reason": "feat(dispatcher): add blockDestructiveGit field — 4 code lines for the new gate flag stored on the dispatcher class" }
   }
 }

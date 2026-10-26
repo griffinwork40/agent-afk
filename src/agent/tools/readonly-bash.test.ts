@@ -837,3 +837,65 @@ describe('classifyBashCommand', () => {
     }
   });
 });
+
+import { classifyDestructiveGit } from './readonly-bash.tokenizer.js';
+
+describe('classifyDestructiveGit', () => {
+  const destructive: Array<[string, string]> = [
+    ['git checkout main', 'git checkout (branch)'],
+    ['git checkout -b feature', 'git checkout -b (new branch — still destructive)'],
+    ['git switch main', 'git switch'],
+    ['git reset --hard', 'git reset --hard'],
+    ['git clean -fd', 'git clean'],
+    ['git restore .', 'git restore'],
+    ['git stash drop', 'git stash drop'],
+    ['git stash clear', 'git stash clear'],
+    ['git stash pop', 'git stash pop'],
+    ['git stash apply', 'git stash apply'],
+  ];
+  for (const [cmd, label] of destructive) {
+    it(`classifies as destructive: ${label}`, () => {
+      const result = classifyDestructiveGit(cmd);
+      expect(result.destructive, `expected "${cmd}" to be destructive`).toBe(true);
+      expect(result.reason).toBeTruthy();
+    });
+  }
+
+  const safe: Array<[string, string]> = [
+    ['git reset --soft', 'git reset --soft'],
+    ['git reset', 'git reset (bare — defaults to --mixed, non-destructive)'],
+    ['git reset --mixed', 'git reset --mixed'],
+    ['git stash list', 'git stash list'],
+    ['git stash show', 'git stash show'],
+    ['git stash push', 'git stash push (saves state, non-destructive)'],
+    ['git stash push -m "wip"', 'git stash push -m (saves state, non-destructive)'],
+    ['git stash save', 'git stash save (legacy alias for push, non-destructive)'],
+    ['git stash', 'bare git stash (implicit push, non-destructive)'],
+    ['git commit -m "x"', 'git commit'],
+    ['git push', 'git push'],
+    ['git status', 'git status'],
+    ['git log', 'git log'],
+  ];
+  for (const [cmd, label] of safe) {
+    it(`classifies as NOT destructive: ${label}`, () => {
+      const result = classifyDestructiveGit(cmd);
+      expect(result.destructive, `expected "${cmd}" to be non-destructive`).toBe(false);
+    });
+  }
+
+  describe('compound-command bypass (must NOT be bypassable)', () => {
+    const compoundDestructive: Array<[string, string]> = [
+      ['{ git checkout main; }', 'brace-group git checkout'],
+      ['{ git reset --hard; }', 'brace-group git reset --hard'],
+      ['if true; then git checkout main; fi', 'if/then git checkout'],
+      ['if true; then git clean -fd; fi', 'if/then git clean'],
+    ];
+    for (const [cmd, label] of compoundDestructive) {
+      it(`blocks compound: ${label}`, () => {
+        const result = classifyDestructiveGit(cmd);
+        expect(result.destructive, `expected "${cmd}" to be destructive`).toBe(true);
+        expect(result.reason).toBeTruthy();
+      });
+    }
+  });
+});
