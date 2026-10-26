@@ -21,6 +21,7 @@ import { CronScheduler, type SchedulerOptions, type TelemetryRecord } from './da
 import type { ScheduledTask, TaskExecutor, TriggerMode } from './daemon/triggers.js';
 import { getDaemonStateDir } from '../paths.js';
 import { listenWithRecovery, closeServer } from './daemon.listen.js';
+import { acquireDaemonLock } from './daemon-instance.lock.js';
 import { errorMessage } from '../utils/errors.js';
 import { validateScheduleCwd } from './daemon/cwd-validator.js';
 import { getSchedule, toScheduledTask } from './daemon/schedule-store.js';
@@ -164,6 +165,25 @@ const DEFAULT_PORT = 7777;
 const DEFAULT_HOST = '127.0.0.1';
 
 export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHandle> {
+  // ── Single-instance guard ────────────────────────────────────────────────
+  // Acquire an O_EXCL PID lockfile before binding the HTTP control surface.
+  // This prevents two daemon processes from running concurrently on the same
+  // machine. If a live daemon owns the lock, `acquireDaemonLock` throws
+  // `DaemonAlreadyRunningError`. Stale locks (from SIGKILL'd daemons) are
+  // detected via process.kill(pid, 0) and cleared automatically.
+  //
+  // The lock is acquired BEFORE `listenWithRecovery` so that the ghost-socket
+  // fallback (bind alternate loopback on EADDRINUSE) can never produce two
+  // live daemons: the second start fails at the lock step, not at the bind.
+  //
+  // writePortFile:false (transient --once instances, tests) skips the guard
+  // to avoid spurious contention with the long-running service daemon.
+  const writePortFile = options.writePortFile !== false;
+  let releaseDaemonLock: (() => Promise<void>) | undefined;
+  if (writePortFile) {
+    releaseDaemonLock = await acquireDaemonLock();
+  }
+
   const scheduler = new CronScheduler({
     ...(options.sessionConfig !== undefined ? { sessionConfig: options.sessionConfig } : {}),
     ...(options.telemetryPath !== undefined ? { telemetryPath: options.telemetryPath } : {}),
@@ -193,7 +213,6 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   // Port file path — written on listen, deleted on stop.
   // STALE-FILE NOTE: SIGKILL cannot be intercepted — a stale port file may
   // survive a crash. Tool handlers report this as 'daemon-unreachable'.
-  const writePortFile = options.writePortFile !== false;
   const portFilePath = join(getDaemonStateDir('default'), 'port');
 
   const server = createServer((req, res) => handleRequest(req, res, scheduler));
@@ -286,6 +305,9 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
         }
       }
       await closeServer(server);
+      // Release the single-instance lock last so the port file is already
+      // gone before a new daemon start can acquire the lock and rebind.
+      if (releaseDaemonLock !== undefined) await releaseDaemonLock();
     },
   };
 }
