@@ -121,8 +121,15 @@ export async function catchUpStaleCredential(
     });
     return true;
   }
-  // Witness layer: a resume with no matching pause, because the turn never
-  // parked. `source` distinguishes it from the park-loop resumes.
+  // Witness layer: intentional divergence from the turn-start / compaction
+  // paths. Those paths emit `credential_swap` because they stand alone — no
+  // surrounding pause/resume lifecycle. This path (`source: 'usage-limit'`)
+  // fires inside the usage-limit tier, where the session IS in a park-then-
+  // resume lifecycle: the swap is the REASON we do not need to park, so the
+  // observable event is a resume (with durationMs: 0, no park) rather than a
+  // bare swap. Consumers correlating `credential_swap` events for account-
+  // switch telemetry must also watch `usage_limit_resume` with
+  // `metadata.hotSwapped === true` to capture this path.
   void emitSessionPhase(runInput.traceWriter, {
     phase: 'usage_limit_resume',
     durationMs: 0,
