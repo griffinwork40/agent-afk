@@ -356,6 +356,11 @@ export function parseAccountIdentifier(token: string): string {
       (typeof claims['preferred_username'] === 'string' && claims['preferred_username']);
     if (id) return id;
   } catch { /* fall through */ }
+  // TODO(#4370): pre-existing leak — the last 8 chars of the raw token are
+  // included in trace events when the JWT decode path fails (non-JWT tokens,
+  // opaque tokens). Not introduced by #4259. A future hardening pass should
+  // replace this with a stable opaque fingerprint (e.g. first 8 chars of a
+  // SHA-256 of the full token) so no token material appears in traces.
   const suffix = token.length >= 8 ? token.slice(-8) : token;
   return `token:${suffix}`;
 }

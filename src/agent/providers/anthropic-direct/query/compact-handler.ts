@@ -137,9 +137,14 @@ export async function compactHistory(
     // passes through the turn-start credential catch-up. Adopt an account
     // switch here too, then read `client` via the retry layer's getter so we
     // always see the post-swap reference, never a stale snapshot.
-    // Invariant: the sync is best-effort. A credential check must never be
-    // the reason a compaction fails, so any throw falls back to the client
-    // the session already holds.
+    //
+    // Invariant: syncClientWithStore() is called INSIDE this per-retry closure
+    // so that every summarization attempt (including transient-retry replays)
+    // re-checks the store. Placing it outside the closure would mean a swap
+    // that lands between a failed attempt and its retry would not be seen until
+    // the next full compaction call. The sync is best-effort — a credential
+    // check must never be the reason a compaction fails — so any throw falls
+    // back to the client the session already holds.
     try {
       const swapResult = await retry.syncClientWithStore();
       if (swapResult?.swapped) {

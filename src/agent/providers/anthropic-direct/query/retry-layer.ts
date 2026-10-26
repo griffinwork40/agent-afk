@@ -162,11 +162,14 @@ export class RetryLayer {
     // constructor is called in OAuth mode the store holds the same value;
     // in api-key mode it is undefined (no OAuth token).
     //
-    // Invariant: the constructor and the `opts.client` build both run in the
-    // same synchronous frame, so `loadClaudeCodeOauthToken()` returns the same
-    // value that was used to construct `opts.client`. This is safe as long as
-    // the caller does not construct the client on one microtask and pass it here
-    // on a later one (i.e. construction must be synchronous and sequential).
+    // Invariant (synchronous-frame): the caller MUST construct `opts.client`
+    // and `new RetryLayer(opts)` in the same synchronous frame — no `await`
+    // between the two. If an `await` were introduced, another microtask could
+    // write a new token to the keychain between the client build and the
+    // `loadClaudeCodeOauthToken()` call here, leaving `_clientToken` tracking
+    // a value that was NEVER in `_client` and causing the first
+    // `storeAheadOfClient` comparison to see a false-positive difference.
+    // See `query-runtime.ts` where both calls are sequential in the same frame.
     this._clientToken = loadClaudeCodeOauthToken();
     this._authMode = opts.authMode;
     this.initSessionId = opts.initSessionId;
