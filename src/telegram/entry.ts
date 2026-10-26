@@ -38,6 +38,14 @@ import { createTelegramSessionFactory } from './create-session.js';
 import { writeServiceStartupSidecar } from '../service/version-skew.js';
 import { startStatsTicker } from './stats-ticker.js';
 import { pushIfConfigured } from './push.js';
+import { registerOperatorNotifier } from '../agent/operator-notify.js';
+
+// Wire Telegram as the operator notification channel so agent core
+// (elicitation-router, ask-question-gate) can push without importing
+// telegram/ directly.
+registerOperatorNotifier((message: string) => {
+  void pushIfConfigured(message).catch(() => undefined);
+});
 import { installCrashNotifier } from '../utils/crash-notifier.js';
 import { errorMessage } from '../utils/errors.js';
 import { createTranscriber } from './audio-transcriber.js';
