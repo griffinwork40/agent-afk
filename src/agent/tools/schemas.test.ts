@@ -298,6 +298,11 @@ describe('compose and skill tool descriptions', () => {
     expect(composeTool.description).toContain('invoke `skill` once');
   });
 
+  it('agent and compose descriptions cross-reference each other', () => {
+    expect(agentTool.description).toContain('prefer `compose`');
+    expect(composeTool.description).toContain('prefer the `agent` tool');
+  });
+
   it('does not suggest compose nodes for parallel skill invocation', () => {
     expect(skillTool.description).toContain('parallel `agent` calls');
     expect(skillTool.description).not.toContain('via `agent` or `compose`');
