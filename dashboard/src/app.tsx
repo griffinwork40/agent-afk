@@ -345,8 +345,7 @@ function Dashboard() {
 
         {/* Content area */}
         <div className="relative flex flex-1 flex-col overflow-hidden">
-          <div ref={containerRef} data-testid="transcript-scroll" className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
-            style={showScrollButton ? { paddingBottom: '2.5rem' } : undefined}>
+          <div ref={containerRef} data-testid="transcript-scroll" tabIndex={0} aria-label="Conversation transcript" className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
             <div className="flex-1">
               {activeNav === 'sessions' && (
                 <SessionContent
@@ -384,14 +383,16 @@ function Dashboard() {
             {activeNav === 'sessions' && selectedSession && selectedSession.mode === 'live' && (
               <div className="relative shrink-0 pb-[env(safe-area-inset-bottom)]" data-testid="composer-dock">
                 {showScrollButton && (
-                  <button
-                    onClick={scrollToBottom}
-                    aria-label={hasNewContent ? 'New messages' : 'Jump to latest'}
-                    className="absolute -top-10 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full bg-brand px-3 py-2 text-xs font-medium text-primary-foreground shadow-lg"
-                  >
-                    <ArrowDown className="size-3" />
-                    {hasNewContent ? 'New messages' : 'Jump to latest'}
-                  </button>
+                  <div className="pointer-events-none absolute inset-x-0 bottom-full flex justify-center pb-2">
+                    <button
+                      onClick={scrollToBottom}
+                      aria-label={hasNewContent ? 'New messages' : 'Jump to latest'}
+                      className="pointer-events-auto flex items-center gap-1.5 whitespace-nowrap rounded-full bg-brand px-3 py-2 text-xs font-medium text-primary-foreground shadow-lg"
+                    >
+                      <ArrowDown className="size-3" />
+                      {hasNewContent ? 'New messages' : 'Jump to latest'}
+                    </button>
+                  </div>
                 )}
                 {approvals.length > 0 && (
                   <ApprovalCards approvals={approvals} />
