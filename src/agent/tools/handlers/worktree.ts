@@ -251,16 +251,34 @@ export function createWorktreeHandler(
     }
 
     const anchor = context?.resolveBase ?? cwd ?? process.cwd();
+
+    // Validate the optional explicit repo parameter.
+    let explicitRepo: string | undefined;
+    if (obj['repo'] !== undefined && obj['repo'] !== null && obj['repo'] !== '') {
+      if (typeof obj['repo'] !== 'string') {
+        return { content: 'Invalid input: repo must be a string (absolute path)', isError: true };
+      }
+      if (!isAbsolute(obj['repo'])) {
+        return { content: `Invalid input: repo must be an absolute path, got: ${obj['repo']}`, isError: true };
+      }
+      explicitRepo = obj['repo'];
+    }
+
     let ctx: RepoContext;
     try {
-      ctx = await resolveRepoContext(execFile, anchor);
+      ctx = await resolveRepoContext(execFile, anchor, explicitRepo);
     } catch (err) {
+      const source = explicitRepo ?? anchor;
       return {
         content:
-          `Cannot resolve git repo root from ${anchor}: ${errorMessage(err)}\n\n` +
-          `This usually means the subagent was dispatched without an explicit \`cwd\` pointing at a git repository. ` +
-          `Fix: pass \`cwd\` set to the project root when dispatching the subagent (e.g. the repo root returned by a prior worktree create, or the session's own git checkout root). ` +
-          `The worktree tool requires a git working directory to locate \`.afk-worktrees/\`.`,
+          `Cannot resolve git repo root from ${source}: ${errorMessage(err)}\n\n` +
+          (explicitRepo
+            ? `The \`repo\` parameter was set to "${explicitRepo}" but it does not appear to be inside a git repository. ` +
+              `Pass the absolute path to the git project root (e.g. "/home/user/myproject").`
+            : `This usually means the subagent was dispatched without an explicit \`cwd\` pointing at a git repository. ` +
+              `Fix: pass \`cwd\` set to the project root when dispatching the subagent (e.g. the repo root returned by a prior worktree create, or the session's own git checkout root), ` +
+              `or pass the \`repo\` parameter with the absolute path to the git repository root. ` +
+              `The worktree tool requires a git working directory to locate \`.afk-worktrees/\`.`),
         isError: true,
       };
     }
