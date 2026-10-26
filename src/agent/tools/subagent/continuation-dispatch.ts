@@ -20,6 +20,8 @@ import {
   type WorkspaceCheckpoint,
 } from '../../subagent/continuation-registry.js';
 import { captureCheckpointWithin, captureWorkspaceCheckpoint } from '../../subagent/continuation-guards.js';
+import { releaseChainWorktree } from './continuation-worktree.js';
+import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { ContinuationPlan } from './continuation-run.js';
 import { emitSessionPhase } from '../../trace/emit.js';
@@ -138,19 +140,46 @@ export async function recordChainTerminal(args: ChainTerminalArgs): Promise<Work
     checkpoint,
     endReason: args.endReason,
   });
+  // Fix: when the chain transitions to non-continuable and it held a kept
+  // worktree (link 2+ exhausted its limit), release the worktree now.
+  // Without this, the worktree stays git-locked indefinitely — the
+  // buildIsolationTeardownHook path is not reached on link 2+ because
+  // continuationInput omits the isolation field, leaving isolationTeardown
+  // undefined and the hook unset.
+  if (!isContinuable(chain) && chain.isolatedWorktreePath !== undefined) {
+    const worktreePath = chain.isolatedWorktreePath;
+    // Resolve repoRoot: afk worktrees live at <repoRoot>/.afk-worktrees/<slug>.
+    const repoRoot = dirname(dirname(worktreePath));
+    void releaseChainWorktree({
+      repoRoot,
+      worktreePath,
+      chainId: chain.chainId,
+      registry,
+    }).catch(() => { /* best-effort: never throw from terminal bookkeeping */ });
+  }
   return checkpoint;
 }
 
 /**
- * True when a continuation would be admitted on limits and isolation: worktree
- * chains are refused in v1 (D3), and an exhausted continuation count (incl.
- * MAX_CONTINUATIONS=0) or aggregate round budget would be refused (D4), so
- * the result line must not invite one.
+ * True when a continuation would be admitted on limits: an exhausted
+ * continuation count (incl. MAX_CONTINUATIONS=0) or aggregate round budget
+ * would be refused (D4), so the result line must not invite one.
+ * Worktree-isolated chains are now continuable (the worktree is kept and
+ * locked between links).
  */
 function isContinuable(chain: ChainRecord): boolean {
-  return chain.inputs.isolation !== 'worktree' &&
-    chain.continuations < chain.limits.maxContinuations &&
+  return chain.continuations < chain.limits.maxContinuations &&
     chain.roundsCharged < chain.limits.maxRounds;
+}
+
+/**
+ * Exported for the executor's isolation teardown hook: true when the chain
+ * will admit at least one more continuation. Callers that need to decide
+ * whether to keep or release a worktree use this instead of replicating the
+ * limit arithmetic.
+ */
+export function isContinuableChain(chain: ChainRecord): boolean {
+  return isContinuable(chain);
 }
 
 /** D6 structured chain metadata (snapshot of the chain's current state). */

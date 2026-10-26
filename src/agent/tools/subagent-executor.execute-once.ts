@@ -29,8 +29,9 @@ import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
 import { prependSetupNotice } from '../worktree/worktree-setup.js';
 import { prependNeedsInputHeader } from './subagent/foreground-handoff.js';
-import { parseDispatchInput, wireDispatchChain, annotateChainResult, markChainPromoted } from './subagent/continuation-dispatch.js';
+import { parseDispatchInput, wireDispatchChain, annotateChainResult, markChainPromoted, isContinuableChain } from './subagent/continuation-dispatch.js';
 import { runContinuation, type ContinuationPlan } from './subagent/continuation-run.js';
+import { buildIsolationTeardownHook } from './subagent/continuation-worktree.js';
 import {
   setupIsolationWorktree,
   forkAndCheckCancel,
@@ -126,15 +127,7 @@ export async function executeOnce(
   { const r = await checkAndRunRemoteDispatch(parsed, call.signal, budgetReceipt, call.id, updateCurrentWaveUnit); if (r !== undefined) return r; }
   const usageNotice = await evaluateDispatchUsageForModel(ctx.parentModel, ctx.traceWriter);
 
-  const childScopeInputs = ctx.subagentManager.getReadScopeInputs?.() ?? {
-    parentReadRoots: undefined,
-    parentCwd: undefined,
-  };
-  const childInheritedReadRoots = computeInheritedReadRoots({
-    parentReadRoots: childScopeInputs.parentReadRoots,
-    parentCwd: childScopeInputs.parentCwd,
-    childCwd: parsed.cwd ?? currentCwd,
-  });
+  const { childScopeInputs, childInheritedReadRoots } = resolveChildReadScope(ctx, parsed.cwd ?? currentCwd);
 
   // Phase 1: build base config (model, tools, budgets, credential) without
   // nesting wiring. Nesting is deferred until after isolation setup so depth-2+
@@ -154,9 +147,10 @@ export async function executeOnce(
   { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.release(); return r; } }
 
   // isolation:"worktree" — may mutate childConfig.cwd to the worktree path.
+  // Skip worktree setup on continuation: the chain already owns the worktree.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
   let setupNotice: string | undefined; // #3601: failed repo-declared setup, surfaced to the parent too
-  if (parsed.isolation === 'worktree') {
+  if (parsed.isolation === 'worktree' && plan === undefined) {
     const isoResult = await setupIsolationWorktree({
       parsed, currentCwd, isolationCounterRef, childConfig,
       childWriteCapable, probe, budgetReceipt, signal: call.signal,
@@ -223,6 +217,11 @@ export async function executeOnce(
 
   const budgetRelease = budgetReceipt?.release;
   const promotionTookBudget = { value: false };
+  // For worktree-isolated chains: if the chain is still continuable after the
+  // child ends, keep the worktree locked (for the next link) instead of tearing
+  // it down. Extracted to buildIsolationTeardownHook (continuation-worktree.ts)
+  // to satisfy the 200-line function ceiling.
+  const onIsolationTeardown = buildIsolationTeardownHook(isolationTeardown, chain, ctx.continuationRegistry, isContinuableChain);
   const result = await runForegroundWithPromotion({
     handle,
     signal: call.signal,
@@ -240,6 +239,7 @@ export async function executeOnce(
     promotionTriggers,
     activeForegroundHandles,
     ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
+    ...(onIsolationTeardown !== undefined ? { onIsolationTeardown } : {}),
     ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
     onPromoted: () => markChainPromoted(handle),
   });
@@ -254,4 +254,21 @@ export async function executeOnce(
     updateCurrentWaveUnit(call.id, 'done');
   }
   return result;
+}
+
+/** Resolve the child's read scope inputs and inherited read roots from the parent context. */
+function resolveChildReadScope(
+  ctx: SubagentExecutorContext,
+  childCwd: string | undefined,
+): { childScopeInputs: { parentReadRoots: string[] | undefined; parentCwd: string | undefined }; childInheritedReadRoots: string[] | undefined } {
+  const childScopeInputs = ctx.subagentManager.getReadScopeInputs?.() ?? {
+    parentReadRoots: undefined,
+    parentCwd: undefined,
+  };
+  const childInheritedReadRoots = computeInheritedReadRoots({
+    parentReadRoots: childScopeInputs.parentReadRoots,
+    parentCwd: childScopeInputs.parentCwd,
+    childCwd,
+  });
+  return { childScopeInputs, childInheritedReadRoots };
 }
