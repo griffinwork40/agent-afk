@@ -24,8 +24,7 @@ export function selectCliProvider(
     const routed = providerForModel(opts.model, {
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
     });
-    if (routed === 'openai-compatible') effective = 'openai-compatible';
-    if (routed === 'xai' || routed === 'xai-oauth') effective = routed;
+    if (routed !== 'anthropic-direct') effective = routed;
   }
   if (effective !== undefined && !VALID_PROVIDERS.includes(effective)) {
     throw new Error(`Invalid --provider value: ${effective}. Expected one of: ${VALID_PROVIDERS.join(', ')}`);

@@ -13,6 +13,8 @@ import { managerShutdownConfig } from '../../agent/session/manager-shutdown-conf
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
+import { OpenAICompatibleProvider } from '../../agent/providers/openai-compatible/index.js';
+import { XaiProvider } from '../../agent/providers/xai/index.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
@@ -24,6 +26,7 @@ import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { parseProvider, getApiKeyForModel, getModel, getDefaultSubagentModel } from '../shared-helpers.js';
+import { cliProviderFamily } from '../provider-selection.js';
 import type { TraceWriter } from '../../agent/trace/writer.js';
 import { formatSubagentCompletion } from './interactive/progress-banner.js';
 import type { McpManager } from '../../agent/mcp/index.js';
@@ -174,18 +177,34 @@ export async function buildChatSession(
     ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
     ...(mcpManager !== undefined ? { mcpManager } : {}),
   })
-    ?? new AnthropicDirectProvider({
-      permissions: {
-        allowedTools: topLevelSurfaceAllowedTools(mcpToolWireNames),
-      },
-      subagentExecutor,
-      skillExecutor,
-      composeExecutor,
-      memoryStore: sharedMemoryStore,
-      stateStore: sharedStateStore,
-      surface: 'cli',
-      ...(mcpManager !== undefined ? { mcpManager } : {}),
-    });
+    ?? (() => {
+      const family = cliProviderFamily(providerRaw, {
+        model: String(model),
+        ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
+      });
+      const sharedOpts = {
+        permissions: { allowedTools: topLevelSurfaceAllowedTools(mcpToolWireNames) },
+        subagentExecutor,
+        skillExecutor,
+        composeExecutor,
+        memoryStore: sharedMemoryStore,
+        ...(mcpManager !== undefined ? { mcpManager } : {}),
+      };
+      if (family === 'openai-compatible') {
+        return new OpenAICompatibleProvider({
+          ...sharedOpts,
+          ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
+        });
+      }
+      if (family === 'xai' || family === 'xai-oauth') {
+        return new XaiProvider({ ...sharedOpts });
+      }
+      return new AnthropicDirectProvider({
+        ...sharedOpts,
+        stateStore: sharedStateStore,
+        surface: 'cli',
+      });
+    })();
 
   await ensurePluginEntrypointsLoaded();
 
