@@ -214,7 +214,10 @@ export function createWiredExecutors(
   return {
     executors,
     dispose(): Promise<void> {
-      disposedPromise ??= drain('close').then(() => {});
+      disposedPromise ??= drain('close').then(() => {
+        // Release any worktrees kept for continuation chains at session end.
+        wired.continuationRegistry.dispose();
+      });
       return disposedPromise;
     },
   };

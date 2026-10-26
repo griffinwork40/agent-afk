@@ -201,6 +201,13 @@ export interface WiredExecutors {
   subagentExecutor: SubagentExecutor;
   skillExecutor: SkillExecutor;
   composeExecutor: ComposeExecutor;
+  /**
+   * The continuation registry for this session. Exposed so callers can invoke
+   * `continuationRegistry.dispose()` at session end to release any worktrees
+   * kept for continuation chains. `createWiredExecutors` calls this from its
+   * own `dispose()`.
+   */
+  continuationRegistry: ContinuationRegistry;
 }
 
 /**
@@ -483,5 +490,5 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     ...budgetOpt,
   });
 
-  return { rootManager, subagentExecutor, skillExecutor, composeExecutor };
+  return { rootManager, subagentExecutor, skillExecutor, composeExecutor, continuationRegistry };
 }
