@@ -464,8 +464,8 @@ export class SessionOwner {
     this.turns.clear();
     this.mcpManagers.clear();
     this.autosavers.clear();
-    // Sessions close BEFORE MCP disconnect: a closing session may raise a final
-    // tool call that needs the MCP transport alive.
+    // Sessions close BEFORE controls, controls BEFORE MCP disconnect: a closing
+    // session may raise a final tool call that needs the MCP transport alive.
     await Promise.all(all.map((s) => s.close().catch(() => {})));
     await Promise.all(controls.map((c) => c.close().catch(() => {})));
     await Promise.all(mcps.map((m) => m.disconnectAll().catch(() => {})));
