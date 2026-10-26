@@ -10,6 +10,7 @@
 import type { SubagentDAGNode } from '../dag-subagent.js';
 import type { ComposeNodeInput } from './compose-input-parse.js';
 import { resolveChildModel, defaultTierModelFallback } from '../subagent/resolve-child-model.js';
+import { resolveChildBudgets } from './subagent/child-config.helpers.js';
 import { providerForModel } from '../providers/index.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { applyParentCredentialFallback } from './child-credential.js';
@@ -87,16 +88,22 @@ export function buildComposeUpstreamPrompt(prompt: string, inputs: Record<string
  * Uses applyParentCredentialFallback so the isAnthropicCredential gate
  * prevents a non-Anthropic ctx.apiKey from reaching Anthropic children
  * (structural parity with child-config.ts, not just behavioral).
+ *
+ * Note: this function performs an explicit OpenAI early-exit BEFORE calling
+ * applyParentCredentialFallback. This is intentional: resolveApiKeyForModel
+ * may return an Anthropic-shaped key even when the node model is OpenAI-routed
+ * (e.g. a misconfigured resolver), and applyParentCredentialFallback's
+ * `resolved !== undefined` guard would return it unchanged. The explicit
+ * nodeIsOpenAI guard prevents that cross-provider leak at source.
  */
 export function resolveComposeNodeApiKey(
   nodeModel: string,
   ctx: Pick<ComposeExecutorContext, 'resolveApiKeyForModel' | 'apiKey'>,
 ): string | undefined {
   const nodeIsOpenAI = providerForModel(typeof nodeModel === 'string' ? nodeModel : undefined) === 'openai-compatible';
-  const freshKey = nodeIsOpenAI ? undefined
-    : (ctx.resolveApiKeyForModel ? ctx.resolveApiKeyForModel(nodeModel) : resolveCredentialForModel(nodeModel));
-  return nodeIsOpenAI ? undefined
-    : applyParentCredentialFallback({ childModel: nodeModel, resolved: freshKey, parentApiKey: ctx.apiKey });
+  if (nodeIsOpenAI) return undefined;
+  const freshKey = ctx.resolveApiKeyForModel ? ctx.resolveApiKeyForModel(nodeModel) : resolveCredentialForModel(nodeModel);
+  return applyParentCredentialFallback({ childModel: nodeModel, resolved: freshKey, parentApiKey: ctx.apiKey });
 }
 
 /**
@@ -174,16 +181,49 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
     model: nodeModel,
     idPrefix: `compose-${n.id}`,
     ...(resolvedNodeApiKey !== undefined ? { apiKey: resolvedNodeApiKey } : {}),
-    // Budget enforcement: per-node max_tool_rounds overrides compose-level
-    // max_tool_rounds_per_node. Omitted when unset so the fork keeps
-    // SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS (subagent.ts).
+    // Budget enforcement (#4042 Stage 3): apply the same call-site > named-agent
+    // > unlimited precedence chain the agent-tool path uses via resolveChildBudgets.
+    // The parsed fields mirror AgentInput: max_turns_explicit is true when
+    // the node sets max_turns explicitly (taking precedence over the named-agent
+    // frontmatter); max_tool_rounds / max_tool_rounds_per_node are the compose
+    // equivalents of max_tool_use_iterations / max_tool_use_iterations_explicit.
+    //
+    // Precedence for tool-use rounds:
+    //   explicit per-node max_tool_rounds
+    //   > named-agent frontmatter maxToolUseIterations
+    //   > compose-level max_tool_rounds_per_node
+    //   > unlimited (omitted from the node so the fork inherits the session default)
+    //
+    // Precedence for turns:
+    //   explicit per-node max_turns
+    //   > named-agent frontmatter maxTurns
+    //   > unlimited (omitted)
     ...(() => {
-      const effectiveRounds = n.max_tool_rounds ?? maxToolRoundsPerNode;
-      return effectiveRounds !== undefined ? { maxToolUseIterations: effectiveRounds } : {};
+      const { effectiveMaxTurns, effectiveMaxToolUseIterations } = resolveChildBudgets(
+        {
+          max_turns: n.max_turns,
+          max_turns_explicit: n.max_turns !== undefined,
+          max_tool_use_iterations: n.max_tool_rounds ?? maxToolRoundsPerNode,
+          max_tool_use_iterations_explicit: n.max_tool_rounds !== undefined,
+        },
+        // Expose the named-agent definition fields resolveChildBudgets needs.
+        // The named agent is embedded in resolvedAgent as two forwarded fields;
+        // we pass a shape-compatible shim so the shared helper applies the
+        // same precedence logic without importing RegisteredAgent.
+        resolvedAgent.namedAgentMaxTurns !== undefined || resolvedAgent.namedAgentMaxToolUseIterations !== undefined
+          ? {
+              definition: {
+                maxTurns: resolvedAgent.namedAgentMaxTurns,
+                maxToolUseIterations: resolvedAgent.namedAgentMaxToolUseIterations,
+              },
+            } as import('../agents/index.js').RegisteredAgent
+          : undefined,
+      );
+      return {
+        ...(effectiveMaxToolUseIterations > 0 ? { maxToolUseIterations: effectiveMaxToolUseIterations } : {}),
+        ...(effectiveMaxTurns > 0 ? { maxTurns: effectiveMaxTurns } : {}),
+      };
     })(),
-    // Per-node turn budget: forwarded to the fork config as maxTurns.
-    // Omitted when unset so the node inherits the session default.
-    ...(n.max_turns !== undefined ? { maxTurns: n.max_turns } : {}),
     // Per-node filesystem overrides: cwd, extraReadRoots, writeRoots. When
     // set on the node, they refine the fork's scope. extraReadRoots is
     // forwarded as the ADDITIVE field (AgentConfig.extraReadRoots) so the
