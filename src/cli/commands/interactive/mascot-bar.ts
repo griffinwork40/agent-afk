@@ -19,11 +19,12 @@
  * Unlike the other tenants this one uses an *opacity-toggle* reservation:
  * the band claims its rows on the first `working` transition (gated by
  * `visibleRows()` so short/narrow terminals never pay) and holds that
- * reservation for the rest of the session.  Subsequent idle transitions
- * erase the sprite pixels but do NOT release the DECSTBM rows, so the
- * input area never jumps.  The reservation is released only at `stop()`
- * (session teardown) or when a resize shrinks the terminal below the
- * sprite's minimum dimensions.
+ * reservation within each turn so rapid stage transitions (acting ->
+ * updating -> acting) never cause the input area to jump.  Between turns,
+ * `releaseBand()` drops the reservation so blank rows do not waste screen
+ * space while the user reads or types.  The reservation is also released
+ * at `stop()` (session teardown) or when a resize shrinks the terminal
+ * below the sprite's minimum dimensions.
  *
  * Lifecycle: construct → `start()` → `setState(...)` per loop-stage
  * transition → `stop()` before exit.
@@ -216,6 +217,28 @@ export class MascotBar {
     this.repaint();
   }
 
+  /**
+   * Release the opacity-toggle reservation between turns so the idle band
+   * does not waste screen space with blank rows. Called from the REPL loop
+   * after each turn completes.
+   *
+   * No-op when the band is not claimed, not started, or the mascot is not
+   * idle (an alert dwell in progress keeps the band so the sprite finishes
+   * its animation). The reservation is re-claimed automatically on the next
+   * `onStage('acting')` transition via the existing claim path in repaint().
+   */
+  releaseBand(): void {
+    if (!this.started || !this.claimed) return;
+    // Only release when idle. A turn-end that fires while an alert is
+    // dwelling should keep the band so the sprite finishes its dwell.
+    if (this.state !== 'idle') return;
+    this.clearBand();
+    this.rowCount = 0;
+    this.claimed = false;
+    this.spriteInMargin = false;
+    this.onRowCountChange?.(0);
+  }
+
   /** Rows the band currently occupies (0 when idle or too cramped). */
   getRowCount(): number {
     return this.rowCount;
@@ -247,10 +270,11 @@ export class MascotBar {
    * Recompute geometry, reconcile the reservation, and paint (or blank).
    *
    * Opacity-toggle semantics: the DECSTBM reservation is claimed on the
-   * first `working` transition and held for the session.  Idle repaints
-   * erase the sprite pixels but leave the reservation intact, so the
-   * input area never jumps.  The reservation is only released by `stop()`
-   * or by a resize that collapses the band (terminal too short/narrow).
+   * first `working` transition and held within the turn.  Idle repaints
+   * erase the sprite pixels but leave the reservation intact so rapid
+   * stage transitions never cause the input area to jump.  Between turns,
+   * `releaseBand()` drops the reservation.  It is also released by
+   * `stop()` or by a resize that collapses the band (too short/narrow).
    *
    * Invariant (DECSTBM ordering): a GROWING reservation must be published
    * before the paint (the rows must already be outside the scroll region,
