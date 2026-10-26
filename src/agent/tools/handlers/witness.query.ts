@@ -164,13 +164,15 @@ async function resolveTracePath(
       // Fast path: read traceLabel from session-meta.json (#4429). Falls back
       // to the ledger JSONL scan for pre-sidecar sessions.
       const sideMeta = readSessionMeta(id);
-      if (sideMeta !== null) {
+      if (sideMeta !== null && sideMeta.traceLabel !== undefined) {
+        // Sidecar has an explicit traceLabel — trust it.
         if (sideMeta.traceLabel === null) return { tracePath: tp, disabledNote: id };
-        if (typeof sideMeta.traceLabel === 'string' && sideMeta.traceLabel.length > 0) {
+        if (sideMeta.traceLabel.length > 0) {
           const relabeled = join(getTraceDir(sideMeta.traceLabel), 'trace.jsonl');
           if (existsSync(relabeled)) tp = relabeled;
         }
       } else {
+        // No sidecar, or sidecar lacks traceLabel — fall back to journal scan.
         try {
           for await (const rec of readLedger(id)) {
             if (rec.kind !== 'meta') continue;

@@ -57,7 +57,12 @@ async function readForkParent(dir: string): Promise<string | undefined> {
   // Fast path: session-meta.json sidecar (#4429).
   if (sessionId) {
     const sideMeta = readSessionMeta(sessionId);
-    if (sideMeta !== null) return sideMeta.forkedFrom;
+    if (sideMeta !== null) {
+      if (sideMeta.forkedFrom !== undefined) return sideMeta.forkedFrom;
+      // Sidecar exists but lacks forkedFrom — fall through to journal scan.
+      // LedgerLifecycle.ensure() writes the sidecar without forkedFrom, so a
+      // present sidecar does not prove the session has no parent (#4429).
+    }
   }
 
   // Fallback: scan the head of journal.jsonl for pre-sidecar sessions.
