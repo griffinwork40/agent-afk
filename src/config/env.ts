@@ -68,6 +68,7 @@ import { MEMORY_GC_ENV_REGISTRY } from './env.memory-gc.js';
 import { VITALS_ENV_REGISTRY } from './env.vitals.js';
 import { TOOLS_ENV_REGISTRY } from './env.tools.js';
 import { CONTINUATION_ENV_REGISTRY } from './env.continuation.js';
+import { PROMPT_EXPERIMENT_ENV_REGISTRY } from './env.prompt-experiment.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -172,9 +173,11 @@ export const ENV_REGISTRY = [
   // Entries live in env.browser.ts (extracted for the 350-line ceiling, #2206).
   ...BROWSER_ENV_REGISTRY,
 
-  // ── What-if episode mode ──────────────────────────────────────────────────
+  // ── What-if episode mode / prompt experiments ─────────────────────────────
   // Entries live in env.whatif.ts (extracted for the 350-line ceiling).
   ...WHATIF_ENV_REGISTRY,
+  // AFK_PROMPT_EXPERIMENT: active experiment name (env.prompt-experiment.ts).
+  ...PROMPT_EXPERIMENT_ENV_REGISTRY,
 
   // ── Filesystem / Rate-limit / Web egress / CLI / Session / Shell (env.misc.ts)
   ...MISC_ENV_REGISTRY,
