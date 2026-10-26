@@ -26,6 +26,14 @@ progress — never the file. Terminal resize events are recorded as `"r"` events
 When `AFK_TTY_TRACE` is unset (the default), the recorder adds zero overhead —
 no wrappers are installed, no file is opened.
 
+## Privacy
+
+> **Warning:** The cast file records **every byte** written to your terminal during the session — including prompts, source snippets, command output, model responses, and potentially credentials or secrets. The file is created with `0600` permissions (owner-read/write only), but it is not encrypted and may be captured by backup tools, synced to cloud storage, or accidentally shared.
+>
+> - Keep cast files in a directory excluded from cloud sync and backups.
+> - Delete them as soon as the diagnostic work is done.
+> - Never share a cast file without scrubbing it first.
+
 ## How to replay
 
 Use the bundled replay script to feed the cast through a headless xterm and

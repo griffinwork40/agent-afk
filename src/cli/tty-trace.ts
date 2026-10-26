@@ -27,6 +27,7 @@
  */
 
 import * as nodeFs from 'node:fs';
+import { homedir } from 'node:os';
 import { env } from '../config/env.js';
 import { getTerminalHeight, getTerminalWidth } from './terminal-size.js';
 
@@ -159,9 +160,8 @@ export function installTtyTrace(fsOps?: FsOps): void {
   // Use injected fs ops (tests) or the real node:fs (production).
   _fs = fsOps ?? nodeFs;
 
-  // Expand leading ~/ using env.HOME (HOME is registered in ENV_REGISTRY via
-  // env.paths.ts so this read goes through the typed env object, not raw process.env).
-  const home = env.HOME ?? '';
+  // Expand leading ~/ using os.homedir() — immune to HOME injection via env vars.
+  const home = homedir();
   const expandedPath = tracePath.startsWith('~/') ? home + tracePath.slice(1) : tracePath;
 
   // Open the file synchronously once. On error, warn once on stderr and leave
@@ -190,6 +190,9 @@ export function installTtyTrace(fsOps?: FsOps): void {
   };
   _writeLine(JSON.stringify(header));
   if (_disabled) return; // header write failed
+
+  // Emit a one-time privacy notice so the operator knows the session is being recorded.
+  process.stderr.write('[afk tty-trace] recording session to ' + expandedPath + ' — cast contains all terminal output; delete when done\n');
 
   // Save originals and install wrappers.
   _saved = {

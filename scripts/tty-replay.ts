@@ -20,6 +20,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as readline from 'node:readline';
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
 
@@ -104,25 +105,42 @@ interface CastHeader {
 
 type CastEvent = [number, 'o' | 'r', string];
 
-const lines = fs.readFileSync(castPath, 'utf8').split('\n').filter(Boolean);
-if (lines.length === 0) {
+// Read cast file line-by-line (streaming) to avoid OOM on large sessions.
+const rl = readline.createInterface({
+  input: fs.createReadStream(castPath, { encoding: 'utf8' }),
+  crlfDelay: Infinity,
+});
+
+let header: CastHeader | undefined;
+const events: CastEvent[] = [];
+let lineNum = 0;
+
+for await (const line of rl) {
+  if (!line.trim()) continue;
+  if (lineNum === 0) {
+    try {
+      header = JSON.parse(line) as CastHeader;
+    } catch {
+      process.stderr.write('tty-replay: could not parse cast header\n');
+      process.exit(1);
+    }
+    if (header!.version !== 2) {
+      process.stderr.write(`tty-replay: unsupported cast version ${header!.version} (expected 2)\n`);
+      process.exit(1);
+    }
+  } else {
+    try {
+      events.push(JSON.parse(line) as CastEvent);
+    } catch {
+      // Skip malformed lines (e.g. trailing partial write on crash).
+    }
+  }
+  lineNum++;
+}
+
+if (lineNum === 0) {
   process.stderr.write('tty-replay: cast file is empty\n');
   process.exit(1);
-}
-
-const header = JSON.parse(lines[0]!) as CastHeader;
-if (header.version !== 2) {
-  process.stderr.write(`tty-replay: unsupported cast version ${header.version} (expected 2)\n`);
-  process.exit(1);
-}
-
-const events: CastEvent[] = [];
-for (const line of lines.slice(1)) {
-  try {
-    events.push(JSON.parse(line) as CastEvent);
-  } catch {
-    // Skip malformed lines (e.g. trailing partial write on crash).
-  }
 }
 
 // ── Replay into headless terminal ────────────────────────────────────────────
