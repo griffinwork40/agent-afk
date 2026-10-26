@@ -381,7 +381,7 @@ describe('patch_apply — stale-context re-read warning (#2028)', () => {
     expect(parsed).not.toHaveProperty('_reread_warning');
   });
 
-  it('omits _reread_warning when patch validation fails', async () => {
+  it('includes _reread_warning when patch validation fails with hash mismatch', async () => {
     const filePath = await writeTemp('warn-fail.txt', 'current\n');
     const handler = createPatchApplyHandler(tempDir);
 
@@ -402,8 +402,10 @@ describe('patch_apply — stale-context re-read warning (#2028)', () => {
     expect(result.isError).toBe(true);
     const parsed = JSON.parse(result.content as string);
     expect(parsed.status).toBe('validation_failed');
-    // No warning — the patch failed, disk was not touched.
-    expect(parsed).not.toHaveProperty('_reread_warning');
+    // Warning tells the model its in-context copy is stale and it must re-read.
+    expect(parsed).toHaveProperty('_reread_warning');
+    expect(parsed._reread_warning).toContain('stale');
+    expect(parsed._reread_warning).toContain('read_file');
   });
 });
 

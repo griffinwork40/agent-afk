@@ -22,7 +22,8 @@ import { classifyDispatchIntent, checkReadOnlyDispatchIntent } from './subagent-
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budget.js';
-import { evaluateDispatchUsageForModel } from './usage-notice.js';
+import { evaluateDispatchUsageForModel, type DispatchUsageResult } from './usage-notice.js';
+import type { TraceSink } from '../trace/index.js';
 import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
 import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
@@ -56,6 +57,29 @@ export interface ExecuteOnceArgs {
     error?: string,
     cwd?: string,
   ) => void;
+}
+
+/**
+ * Evaluate usage and build a refusal when the subscription is over limit.
+ * Returns the notice string for healthy dispatches, or a ToolResult refusal
+ * that the caller returns immediately to block the dispatch.
+ */
+async function usageGate(
+  model: unknown,
+  traceWriter: TraceSink | undefined,
+  budgetReceipt: SpawnReceipt | undefined,
+): Promise<{ notice: string | undefined; refusal?: ToolResult }> {
+  const { notice, blocked }: DispatchUsageResult = await evaluateDispatchUsageForModel(model, traceWriter);
+  if (!blocked) return { notice };
+  budgetReceipt?.release();
+  return {
+    notice,
+    refusal: {
+      content: `Subagent dispatch refused: usage limit exceeded. ${notice ?? 'The subscription quota is exhausted.'}` +
+        `\n\nReduce parallel dispatches, wait for the quota window to reset, or switch to a non-Claude model.`,
+      isError: true,
+    },
+  };
 }
 
 export async function executeOnce(
@@ -123,7 +147,8 @@ export async function executeOnce(
     budgetReceipt = ctx.delegationBudget.recordSpawn(ctx.parentSession.sessionId ?? '');
   }
   { const r = await checkAndRunRemoteDispatch(parsed, call.signal, budgetReceipt, call.id, updateCurrentWaveUnit); if (r !== undefined) return r; }
-  const usageNotice = await evaluateDispatchUsageForModel(ctx.parentModel, ctx.traceWriter);
+  const { notice: usageNotice, refusal: usageRefusal } = await usageGate(ctx.parentModel, ctx.traceWriter, budgetReceipt);
+  if (usageRefusal !== undefined) return usageRefusal;
 
   // childScopeInputs carries the parent manager's raw read-scope inputs.
   // parentReadRoots is the fully-resolved inheritedReadRoots the current
