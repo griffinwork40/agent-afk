@@ -53,7 +53,7 @@
  * @module agent/tools/tool-call-ledger
  */
 
-import type { ToolResult } from '../providers/anthropic-direct/types.js';
+import type { ToolResult } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -169,6 +169,11 @@ export class ToolCallLedger {
    * @param turnIndex  Non-negative integer turn counter from the session.
    */
   record(toolName: string, inputHash: string, result: ToolResult, turnIndex: number): void {
+    if (!Number.isFinite(turnIndex) || turnIndex < 0) {
+      throw new RangeError(
+        `ToolCallLedger.record: turnIndex must be a non-negative finite number, got ${turnIndex}`,
+      );
+    }
     const key = compositeKey(toolName, inputHash);
     let bucket = this.buckets.get(key);
 

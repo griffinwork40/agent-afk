@@ -31,7 +31,7 @@ import {
   DEFAULT_TURN_WINDOW,
   MAX_LEDGER_KEYS,
 } from './tool-call-ledger.js';
-import type { ToolResult } from '../providers/anthropic-direct/types.js';
+import type { ToolResult } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,6 +66,14 @@ describe('constants', () => {
 // ---------------------------------------------------------------------------
 
 describe('constructor', () => {
+  it('uses DEFAULT_TURN_WINDOW when no argument supplied', () => {
+    const ledger = new ToolCallLedger();
+    // Record at turn 0, lookup at turn DEFAULT_TURN_WINDOW — still inside window
+    ledger.record('bash', 'h1', ok(), 0);
+    expect(ledger.lookup('bash', 'h1', DEFAULT_TURN_WINDOW)).toHaveLength(1);
+    // Lookup at turn DEFAULT_TURN_WINDOW + 1 — now outside window
+    expect(ledger.lookup('bash', 'h1', DEFAULT_TURN_WINDOW + 1)).toHaveLength(0);
+  });
   it('accepts a valid positive integer window', () => {
     expect(() => new ToolCallLedger(5)).not.toThrow();
     expect(() => new ToolCallLedger(1)).not.toThrow();
@@ -92,6 +100,39 @@ describe('constructor', () => {
   it('throws RangeError for non-integer turnWindow', () => {
     expect(() => new ToolCallLedger(2.5)).toThrow(RangeError);
     expect(() => new ToolCallLedger(NaN)).toThrow(RangeError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// record — turnIndex validation
+// ---------------------------------------------------------------------------
+
+describe('record — turnIndex validation', () => {
+  it('throws RangeError for negative turnIndex', () => {
+    const ledger = new ToolCallLedger(10);
+    expect(() => ledger.record('bash', 'h1', ok(), -1)).toThrow(RangeError);
+    expect(() => ledger.record('bash', 'h1', ok(), -0.5)).toThrow(RangeError);
+  });
+
+  it('throws RangeError for NaN turnIndex', () => {
+    const ledger = new ToolCallLedger(10);
+    expect(() => ledger.record('bash', 'h1', ok(), NaN)).toThrow(RangeError);
+  });
+
+  it('throws RangeError for Infinity turnIndex', () => {
+    const ledger = new ToolCallLedger(10);
+    expect(() => ledger.record('bash', 'h1', ok(), Infinity)).toThrow(RangeError);
+    expect(() => ledger.record('bash', 'h1', ok(), -Infinity)).toThrow(RangeError);
+  });
+
+  it('accepts turnIndex of 0', () => {
+    const ledger = new ToolCallLedger(10);
+    expect(() => ledger.record('bash', 'h1', ok(), 0)).not.toThrow();
+  });
+
+  it('accepts large positive turnIndex', () => {
+    const ledger = new ToolCallLedger(10);
+    expect(() => ledger.record('bash', 'h1', ok(), 999_999)).not.toThrow();
   });
 });
 
