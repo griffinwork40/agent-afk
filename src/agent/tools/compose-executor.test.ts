@@ -2279,6 +2279,39 @@ describe('ComposeExecutor', () => {
       expect(result.content).toContain('"research-agent" not found');
       expect(mockRunSubagentDAG).not.toHaveBeenCalled();
     });
+
+    it('compose-level max_tool_rounds_per_node wins over named-agent frontmatter budget when node omits max_tool_rounds', async () => {
+      // Regression guard for the bug fixed in PR #4441: when a node has no
+      // explicit max_tool_rounds but the named-agent frontmatter declares
+      // maxToolUseIterations, the compose-level cap must still win because
+      // max_tool_use_iterations_explicit was incorrectly set to
+      // `n.max_tool_rounds !== undefined` (always false here), causing
+      // resolveChildBudgets to fire the named-agent branch and return 50
+      // instead of the compose-level 100.
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const agentWithBudget: RegisteredAgent = {
+        name: 'budgeted-agent',
+        definition: {
+          description: '',
+          prompt: 'You are a budgeted specialist.',
+          tools: ['read_file'],
+          model: 'haiku',
+          maxToolUseIterations: 50, // frontmatter budget — must NOT win
+        },
+        source: 'user',
+      };
+      const budgetRegistry: AgentRegistry = new Map([['budgeted-agent', agentWithBudget]]);
+      const executor = new ComposeExecutor(makeContext({ agentRegistry: budgetRegistry }));
+
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a', agent_type: 'budgeted-agent' }],
+        max_tool_rounds_per_node: 100, // compose-level cap — must win
+      }));
+
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      // Compose-level cap (100) must win over named-agent frontmatter (50).
+      expect(dagOpts.nodes[0].maxToolUseIterations).toBe(100);
+    });
   });
 
   // -------------------------------------------------------------------------
