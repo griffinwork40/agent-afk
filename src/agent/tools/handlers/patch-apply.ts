@@ -215,7 +215,7 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
       // of patch_apply errors are instant rejections from stale context, and
       // agents retry identical patches without re-reading the file first.
       const stalePaths = validation.errors
-        .filter((e) => e.error === 'hash_mismatch' || e.error === 'string_not_found')
+        .filter((e) => e.error === 'hash_mismatch' || e.error === 'edit_not_found')
         .map((e) => callerPaths.get(e.path ?? '') ?? e.path ?? '')
         .filter(Boolean);
       const result: Record<string, unknown> = {

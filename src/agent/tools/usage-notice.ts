@@ -48,18 +48,21 @@ export function buildUsageNotice(ev: UsageEvaluation, now: number = Date.now()):
  * @param provider     The parent session's resolved provider (`providerForModel`).
  * @param traceWriter  Optional trace sink; when absent, no event is emitted.
  * @param readRecord   Injectable for tests; defaults to the shared reader.
+ * @param model        Optional dispatched child model; used to skip irrelevant
+ *                     model-scoped windows (e.g. sevenDayOpus for Sonnet). (#4475)
  */
 export async function evaluateDispatchUsage(
   provider: string,
   traceWriter: TraceSink | undefined,
   readRecord: () => UsageRecord | undefined = () => readUsageRecord(ANTHROPIC_OAUTH.provider, ANTHROPIC_OAUTH.account),
+  model?: string,
 ): Promise<DispatchUsageResult> {
   const none: DispatchUsageResult = { notice: undefined, blocked: false };
   // Only Claude sessions draw down the subscription windows we track.
   if (provider !== 'anthropic-direct') return none;
   if (!isUsageAwarenessEnabled()) return none;
   const now = Date.now();
-  const ev = evaluateUsage(readRecord(), now);
+  const ev = evaluateUsage(readRecord(), now, undefined, model);
   const notice = buildUsageNotice(ev, now);
   if (notice === undefined || ev.binding === undefined) return none;
   void emitSessionPhase(traceWriter, {
@@ -82,9 +85,13 @@ export async function evaluateDispatchUsage(
  * Replaces the 4-line `parentProvider` + `evaluateDispatchUsage` pattern in
  * executor callsites with a single 1-line call, keeping those functions under
  * the size ceiling.
+ *
+ * Passes the model string through to {@link evaluateDispatchUsage} so
+ * model-scoped windows are filtered correctly for the child being dispatched. (#4475)
  */
 export function evaluateDispatchUsageForModel(model: unknown, traceWriter: TraceSink | undefined): Promise<DispatchUsageResult> {
-  return evaluateDispatchUsage(providerForModel(typeof model === 'string' ? model : undefined), traceWriter);
+  const modelStr = typeof model === 'string' ? model : undefined;
+  return evaluateDispatchUsage(providerForModel(modelStr), traceWriter, undefined, modelStr);
 }
 
 /**

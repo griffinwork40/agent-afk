@@ -60,6 +60,20 @@ export interface ExecuteOnceArgs {
 }
 
 /**
+ * Resolve the parent manager's read-scope inputs and derive inherited read roots.
+ * Extracted from executeOnce to stay within the 200-line function ceiling (#4475).
+ */
+function resolveChildReadScope(
+  manager: { getReadScopeInputs?: () => { parentReadRoots?: string[]; parentCwd?: string } },
+): { childScopeInputs: { parentReadRoots: string[] | undefined; parentCwd: string | undefined }; childInheritedReadRoots: string[] | undefined } {
+  const raw = manager.getReadScopeInputs?.();
+  const childScopeInputs = { parentReadRoots: raw?.parentReadRoots, parentCwd: raw?.parentCwd };
+  const childInheritedReadRoots = childScopeInputs.parentReadRoots
+    ?? (childScopeInputs.parentCwd !== undefined ? [childScopeInputs.parentCwd] : undefined);
+  return { childScopeInputs, childInheritedReadRoots };
+}
+
+/**
  * Evaluate usage and build a refusal when the subscription is over limit.
  * Returns the notice string for healthy dispatches, or a ToolResult refusal
  * that the caller returns immediately to block the dispatch.
@@ -71,7 +85,7 @@ async function usageGate(
 ): Promise<{ notice: string | undefined; refusal?: ToolResult }> {
   const { notice, blocked }: DispatchUsageResult = await evaluateDispatchUsageForModel(model, traceWriter);
   if (!blocked) return { notice };
-  budgetReceipt?.release();
+  budgetReceipt?.rollback();
   return {
     notice,
     refusal: {
@@ -147,20 +161,8 @@ export async function executeOnce(
     budgetReceipt = ctx.delegationBudget.recordSpawn(ctx.parentSession.sessionId ?? '');
   }
   { const r = await checkAndRunRemoteDispatch(parsed, call.signal, budgetReceipt, call.id, updateCurrentWaveUnit); if (r !== undefined) return r; }
-  const { notice: usageNotice, refusal: usageRefusal } = await usageGate(ctx.parentModel, ctx.traceWriter, budgetReceipt);
-  if (usageRefusal !== undefined) return usageRefusal;
 
-  // childScopeInputs carries the parent manager's raw read-scope inputs.
-  // parentReadRoots is the fully-resolved inheritedReadRoots the current
-  // session's forkSubagent computed (all Gap A/B/C additions via resolveReadScope).
-  // Falls back to parentCwd for the root manager (#4438). Replaces the old
-  // computeInheritedReadRoots that lacked afkStateRoot/afkFrameworkRoot (#4373).
-  const childScopeInputs = ctx.subagentManager.getReadScopeInputs?.() ?? {
-    parentReadRoots: undefined,
-    parentCwd: undefined,
-  };
-  const childInheritedReadRoots = childScopeInputs.parentReadRoots
-    ?? (childScopeInputs.parentCwd !== undefined ? [childScopeInputs.parentCwd] : undefined);
+  const { childScopeInputs, childInheritedReadRoots } = resolveChildReadScope(ctx.subagentManager);
 
   // Phase 1: build base config (model, tools, budgets, credential) without
   // nesting wiring. Nesting is deferred until after isolation setup so depth-2+
@@ -174,10 +176,16 @@ export async function executeOnce(
   const preNesting = buildChildConfigWithoutNesting(childConfigArgs);
   const { childConfig, childWriteCapable, childSideEffectFree } = preNesting;
 
+  // Usage gate runs AFTER child model is resolved so the gate checks the child
+  // model (not the parent). This lets an explicitly-requested non-Claude child
+  // dispatch even when the Claude parent quota is exhausted. (#4475)
+  const { notice: usageNotice, refusal: usageRefusal } = await usageGate(childConfig.model, ctx.traceWriter, budgetReceipt);
+  if (usageRefusal !== undefined) return usageRefusal;
+
   if (probe !== undefined) probe.sideEffectFree = childSideEffectFree;
 
   // Pre-dispatch implementation-intent gate (#3754): rejects implementation briefs sent to read-only named agents.
-  { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.release(); return r; } }
+  { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.rollback(); return r; } }
 
   // isolation:"worktree" — may mutate childConfig.cwd to the worktree path.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
