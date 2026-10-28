@@ -319,8 +319,8 @@ describe('SessionOwner — retire()', () => {
     expect(sessionClose).toHaveBeenCalledOnce();
     expect(controlClose).toHaveBeenCalledOnce();
     // session.close() must be invoked before control.close().
-    expect(sessionClose.mock.invocationCallOrder[0]).toBeLessThan(
-      controlClose.mock.invocationCallOrder[0],
+    expect(sessionClose.mock.invocationCallOrder[0]!).toBeLessThan(
+      controlClose.mock.invocationCallOrder[0]!,
     );
   });
 
