@@ -181,6 +181,7 @@ function formatLspSymbols(symbols: RawSymbol[], rootDir: string): string {
   // Group top-level symbols by relative file path (skip methods/properties).
   const SKIP_KINDS = new Set([6, 7, 8, 9]); // method, prop, field, ctor
   const byFile = new Map<string, string[]>();
+  let totalSymbols = 0;
 
   for (const sym of symbols) {
     if (SKIP_KINDS.has(sym.kind)) continue;
@@ -192,14 +193,16 @@ function formatLspSymbols(symbols: RawSymbol[], rootDir: string): string {
     } catch {
       continue;
     }
-    const rel = path.relative(rootDir, filePath);
+    const rel = path.relative(rootDir, filePath).replace(/[^\w.()\-/]/g, '_');
     if (rel.startsWith('..') || rel.includes('node_modules')) continue;
 
     if (!byFile.has(rel)) byFile.set(rel, []);
     const kindLabel = SYMBOL_KIND[sym.kind] ?? '?';
-    byFile.get(rel)!.push(`${kindLabel}(${sym.name})`);
+    const safeName = sym.name.replace(/[^\w.()\-/]/g, '_');
+    byFile.get(rel)!.push(`${kindLabel}(${safeName})`);
+    totalSymbols++;
 
-    if (byFile.size + [...byFile.values()].reduce((s, a) => s + a.length, 0) > MAX_SYMBOLS * 2) break;
+    if (byFile.size + totalSymbols > MAX_SYMBOLS * 2) break;
   }
 
   if (byFile.size === 0) return '';
@@ -240,7 +243,7 @@ async function fsMap(
     // node:fs/promises glob is available in Node ≥22; fall back gracefully.
     const entries = await globSourceFiles(rootDir, combined);
     for (const rel of entries) {
-      if (rel.includes('node_modules') || rel.startsWith('.')) continue;
+      if (rel.includes('node_modules') || path.basename(rel).startsWith('.')) continue;
       const parts = rel.split(path.sep);
       const dir = parts.length > 1 ? parts[0]! : '.';
       if (!byDir.has(dir)) byDir.set(dir, []);
@@ -261,7 +264,7 @@ async function fsMap(
     const shown = sorted.slice(0, MAX_FILES_PER_DIR);
     const extra = sorted.length - shown.length;
     const suffix = extra > 0 ? ` (+${extra} more)` : '';
-    lines.push(`${dir}/: ${shown.map((f) => path.basename(f)).join(', ')}${suffix}`);
+    lines.push(`${dir}/: ${shown.map((f) => f.slice(dir.length + 1)).join(', ')}${suffix}`);
   }
 
   return lines.join('\n');
