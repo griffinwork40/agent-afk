@@ -154,6 +154,8 @@ interface CreateArgs {
   obj: Record<string, unknown>;
   ctx: RepoContext;
   anchor: string;
+  /** Explicit repo path supplied by the caller; overrides anchor for base-ref resolution (#4430). */
+  explicitRepo?: string;
   execFile: ExecFileFn;
   generateSuffix: () => string;
   signal: AbortSignal;
@@ -161,7 +163,7 @@ interface CreateArgs {
 
 /** `create` action: confined path, collision auto-suffix (#1516), managed create + setup (#3601). */
 async function handleCreate(args: CreateArgs): Promise<ToolResult> {
-  const { obj, ctx, anchor, execFile, generateSuffix, signal } = args;
+  const { obj, ctx, anchor, explicitRepo, execFile, generateSuffix, signal } = args;
   if (typeof obj['name'] !== 'string' || !obj['name']) {
     return { content: 'Invalid input: name required for create', isError: true };
   }
@@ -194,8 +196,9 @@ async function handleCreate(args: CreateArgs): Promise<ToolResult> {
   if (typeof baseInput === 'object') {
     return { content: baseInput.error, isError: true };
   }
-  // An unspecified base resolves at the ANCHOR, not at ctx.repoRoot (#760).
-  const baseRef = baseInput ?? await resolveAnchorBaseRef(execFile, anchor);
+  // An unspecified base resolves at the explicit repo (when the caller supplied
+  // one) or at the ANCHOR, not at ctx.repoRoot (#760, #4430).
+  const baseRef = baseInput ?? await resolveAnchorBaseRef(execFile, explicitRepo ?? anchor);
   const info = await createManagedWorktree({
     execFile,
     repoRoot: ctx.repoRoot,
@@ -226,9 +229,9 @@ async function buildCreateNote(info: ManagedWorktreeInfo): Promise<string> {
   return `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${info.path} before building or testing, or the build/tests will fail opaquely.`;
 }
 
-/** Build the `worktree` tool handler bound to a session cwd. */
+/** Build the `worktree` tool handler bound to a session cwd fallback. */
 export function createWorktreeHandler(
-  cwd?: string,
+  cwdFallback?: string,
   deps?: WorktreeHandlerDeps,
 ): ToolHandler {
   const execFile = deps?.execFile ?? defaultExecFile;
@@ -250,7 +253,7 @@ export function createWorktreeHandler(
       };
     }
 
-    const anchor = context?.resolveBase ?? cwd ?? process.cwd();
+    const anchor = context?.resolveBase ?? cwdFallback ?? process.cwd();
 
     // Validate the optional explicit repo parameter.
     let explicitRepo: string | undefined;
@@ -286,7 +289,7 @@ export function createWorktreeHandler(
     try {
       switch (action) {
         case 'create':
-          return await handleCreate({ obj, ctx, anchor, execFile, generateSuffix, signal });
+          return await handleCreate({ obj, ctx, anchor, explicitRepo, execFile, generateSuffix, signal });
 
         case 'keep': {
           if (typeof obj['path'] !== 'string' || !obj['path']) {
