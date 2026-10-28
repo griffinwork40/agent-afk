@@ -3,7 +3,7 @@
  * @module telegram/formatter
  */
 
-import type { UsageResult, UsageWindow } from '../agent/subscription-usage.js';
+import type { UsageResult, UsageWindow } from '../agent/usage/usage-result.js';
 
 /**
  * Maximum message length for Telegram (4096 chars)
@@ -247,7 +247,7 @@ export function formatUsage(result: UsageResult): string {
     .filter((entry): entry is [string, UsageWindow] => entry[1] !== undefined)
     .map(([label, w]) => {
       const pct = Math.round(w.utilization * 100);
-      const resets = w.resetsAt ? ` (resets ${w.resetsAt.toLocaleString()})` : '';
+      const resets = w.resetsAt !== undefined ? ` (resets ${new Date(w.resetsAt).toLocaleString()})` : '';
       return `  ${label}: ${pct}%${resets}`;
     });
 

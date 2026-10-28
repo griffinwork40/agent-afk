@@ -18,7 +18,7 @@ describe('parseCodexUsagePayload', () => {
     const r = parseCodexUsagePayload({
       rate_limit: { primary_window: { used_percent: 47, limit_window_seconds: 604_800, reset_at: RESET_S }, secondary_window: null },
     });
-    expect(r).toEqual({ kind: 'ok', sevenDay: { utilization: 0.47, resetsAt: new Date(RESET_S * 1000) } });
+    expect(r).toEqual({ kind: 'ok', sevenDay: { utilization: 0.47, resetsAt: RESET_S * 1000 } });
   });
 
   it('maps a 5h primary and a 7d secondary', () => {

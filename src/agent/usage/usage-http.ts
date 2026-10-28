@@ -11,7 +11,7 @@
  * @module agent/usage/usage-http
  */
 
-import type { UsageUnavailable } from '../subscription-usage.js';
+import type { UsageUnavailable } from './usage-result.js';
 import { h1ModelFetch } from '../providers/shared/h1-fetch.js';
 
 export const DEFAULT_USAGE_TIMEOUT_MS = 10_000;

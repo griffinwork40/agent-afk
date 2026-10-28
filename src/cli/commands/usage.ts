@@ -18,7 +18,7 @@
 import type { Command } from 'commander';
 import { collectUsage, ANTHROPIC_OAUTH } from '../../agent/usage/usage-snapshot.js';
 import { CODEX_SUBSCRIPTION } from '../../agent/usage/codex-usage.js';
-import type { UsageResult } from '../../agent/subscription-usage.js';
+import type { UsageResult } from '../../agent/usage/usage-result.js';
 import {
   errorProviderSummary,
   summarizeUsageRecord,

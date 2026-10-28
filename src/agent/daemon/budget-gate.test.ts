@@ -17,7 +17,7 @@ import {
   resolveDaemonUsageTarget,
   BudgetAlertLatch,
 } from './budget-gate.js';
-import type { UsageResult } from '../subscription-usage.js';
+import type { UsageResult } from '../usage/usage-result.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -144,7 +144,7 @@ describe('evaluateBudgetGate', () => {
   });
 
   it('includes resetsAt when the window provides it', async () => {
-    const resetsAt = new Date('2026-10-03T15:00:00Z');
+    const resetsAt = new Date('2026-10-03T15:00:00Z').getTime();
     const result = await evaluateBudgetGate({
       skipPct: 90,
       fetchUsage: async () => ({
@@ -154,7 +154,7 @@ describe('evaluateBudgetGate', () => {
     });
     expect(result.skip).toBe(true);
     if (result.skip) {
-      expect(result.binding.resetsAt).toBe(resetsAt.getTime());
+      expect(result.binding.resetsAt).toBe(resetsAt);
     }
   });
 

@@ -22,7 +22,7 @@
  * @module agent/usage/codex-usage
  */
 
-import type { UsageResult, UsageSnapshot, UsageWindow } from '../subscription-usage.js';
+import type { UsageResult, UsageSnapshot, UsageWindow } from './usage-result.js';
 import { resolveOpenAIAuth, type OpenAIAuthResolution } from '../providers/openai-compatible/auth.js';
 import { buildChatGptOAuthHeaders } from '../providers/openai-compatible/responses-config.js';
 import { fetchUsageJson, MAX_REASONABLE_EPOCH_SECONDS, clampFraction, type UsageHttpOptions } from './usage-http.js';
@@ -89,8 +89,8 @@ function parseCodexWindow(raw: unknown): { slot: WindowSlot; window: UsageWindow
   const resetAt = num(w['reset_at']);
   const utilization = clampFraction(used / 100);
   const resetsAt =
-    resetAt !== undefined && resetAt > 0 && resetAt <= MAX_REASONABLE_EPOCH_SECONDS ? new Date(resetAt * 1000) : undefined;
-  return { slot, window: { utilization, ...(resetsAt ? { resetsAt } : {}) } };
+    resetAt !== undefined && resetAt > 0 && resetAt <= MAX_REASONABLE_EPOCH_SECONDS ? resetAt * 1000 : undefined;
+  return { slot, window: { utilization, ...(resetsAt !== undefined ? { resetsAt } : {}) } };
 }
 
 /** Map a `wham/usage` body to the shared usage shape. Pure. */

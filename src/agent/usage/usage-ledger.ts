@@ -43,7 +43,7 @@ import { appendSample } from './burn-rate.js';
 import type { QuotaSnapshot } from '../quota-cache.js';
 import type { RateLimitSnapshot } from '../providers/shared/rate-limit-bucket.js';
 import type { RateLimitGate } from '../providers/shared/tracing-fetch-utils.js';
-import type { UsageResult } from '../subscription-usage.js';
+import type { UsageResult } from './usage-result.js';
 
 const NAMESPACE = 'usage';
 const MAX_CAS_ATTEMPTS = 4;
@@ -249,7 +249,7 @@ export function windowsFromUsageResult(r: UsageResult, now: number): WindowsObse
   const out: WindowsObservation = { observedAt: now };
   for (const k of WINDOW_KEYS) {
     const w = r[k];
-    if (w) out[k] = { utilization: w.utilization, ...(w.resetsAt ? { resetsAt: w.resetsAt.getTime() } : {}) };
+    if (w) out[k] = { utilization: w.utilization, ...(w.resetsAt !== undefined ? { resetsAt: w.resetsAt } : {}) };
   }
   return out;
 }

@@ -20,8 +20,8 @@ import { getQuotaSnapshot } from '../quota-cache.js';
 import {
   fetchSubscriptionUsage,
   type FetchSubscriptionUsageOptions,
-  type UsageResult,
-} from '../subscription-usage.js';
+} from './anthropic-usage.js';
+import type { UsageResult } from './usage-result.js';
 import { mergeUsageRecords, usageKey, type UsageRecord } from './usage-record.js';
 import { CODEX_SUBSCRIPTION, fetchCodexUsage } from './codex-usage.js';
 import {

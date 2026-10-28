@@ -23,7 +23,8 @@
  * @module agent/daemon/budget-gate
  */
 
-import type { FetchSubscriptionUsageOptions, UsageResult } from '../subscription-usage.js';
+import type { FetchSubscriptionUsageOptions } from '../usage/anthropic-usage.js';
+import type { UsageResult } from '../usage/usage-result.js';
 import { env } from '../../config/env.js';
 import { collectUsage, ANTHROPIC_OAUTH } from '../usage/usage-snapshot.js';
 import { CODEX_SUBSCRIPTION } from '../usage/codex-usage.js';

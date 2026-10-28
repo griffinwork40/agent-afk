@@ -265,7 +265,7 @@ describe('observation adapters', () => {
 
   it('windowsFromUsageResult maps all windows, undefined when unavailable', () => {
     expect(windowsFromUsageResult({ kind: 'unavailable', reason: 'no-token', detail: '' }, NOW)).toBeUndefined();
-    const w = windowsFromUsageResult({ kind: 'ok', sevenDaySonnet: { utilization: 0.2, resetsAt: new Date(NOW) } }, NOW);
+    const w = windowsFromUsageResult({ kind: 'ok', sevenDaySonnet: { utilization: 0.2, resetsAt: NOW } }, NOW);
     expect(w?.sevenDaySonnet).toEqual({ utilization: 0.2, resetsAt: NOW });
   });
 });

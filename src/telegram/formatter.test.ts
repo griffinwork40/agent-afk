@@ -24,7 +24,7 @@ import {
   formatQueued,
   formatUsage,
 } from './formatter';
-import type { UsageResult } from '../agent/subscription-usage.js';
+import type { UsageResult } from '../agent/usage/usage-result.js';
 
 describe('splitLongMessage', () => {
   test('should not split short messages', () => {
