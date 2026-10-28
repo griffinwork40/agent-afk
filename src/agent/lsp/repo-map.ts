@@ -26,6 +26,7 @@
  */
 
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { env } from '../../config/env.js';
 import { LspClient, LspClientError } from './client.js';
 import { getLspPool, type LspServerPool } from './pool.js';
@@ -143,7 +144,7 @@ async function tryLspMap(
   const pool = opts.pool ?? getLspPool();
   const serverCmd = opts.serverCmd ?? DEFAULT_LSP_CMD;
   const spec: ServerSpec = typescriptSpecFromCommand(serverCmd);
-  const root = typescriptRootFor(rootDir) ?? rootDir;
+  const root = typescriptRootFor(path.join(rootDir, '_')) ?? rootDir;
 
   let client: LspClient;
   let release: () => void;
@@ -187,7 +188,7 @@ function formatLspSymbols(symbols: RawSymbol[], rootDir: string): string {
     if (!uri) continue;
     let filePath: string;
     try {
-      filePath = new URL(uri).pathname;
+      filePath = fileURLToPath(uri);
     } catch {
       continue;
     }
@@ -231,7 +232,7 @@ async function fsMap(
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), remaining());
   const combined = signal
-    ? combineSignals(signal, ctl.signal)
+    ? AbortSignal.any([signal, ctl.signal])
     : ctl.signal;
 
   const byDir = new Map<string, string[]>();
@@ -282,6 +283,7 @@ async function globSourceFiles(rootDir: string, signal: AbortSignal): Promise<st
     exclude: (name: string) => name === 'node_modules' || name === '.git',
     signal,
   })) {
+    if (signal.aborted) break;
     results.push(entry as string);
     if (results.length >= MAX_SYMBOLS) break;
   }
@@ -319,12 +321,3 @@ async function walkSourceFiles(
   return results;
 }
 
-/** Merge two AbortSignals: aborts when either fires. */
-function combineSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
-  const ctl = new AbortController();
-  const abort = () => ctl.abort();
-  a.addEventListener('abort', abort, { once: true });
-  b.addEventListener('abort', abort, { once: true });
-  if (a.aborted || b.aborted) ctl.abort();
-  return ctl.signal;
-}
