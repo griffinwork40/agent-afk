@@ -48,7 +48,8 @@ export function registerOperatorNotifier(fn: OperatorNotifyFn): void {
 export function notifyOperator(message: string): void {
   if (!_notifier) return;
   try {
-    _notifier(message);
+    const result = _notifier(message) as unknown;
+    if (result instanceof Promise) result.catch(() => undefined);
   } catch {
     // Fire-and-forget — never throw into the calling path.
   }

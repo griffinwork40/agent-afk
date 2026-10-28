@@ -137,3 +137,6 @@ export { getSessionsDir, getSkillsDir, getAgentFrameworkDir } from './paths.js';
 
 export { TelegramBot, SessionManager } from './telegram/index.js';
 export type { BotOptions, SessionManagerOptions } from './telegram/index.js';
+
+export { registerOperatorNotifier } from './agent/operator-notify.js';
+export type { OperatorNotifyFn } from './agent/operator-notify.js';

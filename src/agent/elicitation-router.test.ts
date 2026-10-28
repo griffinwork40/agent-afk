@@ -100,6 +100,14 @@ describe('elicitationRouter', () => {
     expect(result.action).toBe('decline');
   });
 
+  it('park-and-notify: an async notifier rejection never breaks the decline', async () => {
+    vi.mocked(notifyOperator).mockImplementationOnce(
+      () => Promise.reject(new Error('async notify exploded')) as unknown as void,
+    );
+    const result = await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL });
+    expect(result.action).toBe('decline');
+  });
+
   it('park-and-notify: does NOT fire on the pre-aborted fast path', async () => {
     const aborted = new AbortController();
     aborted.abort();
