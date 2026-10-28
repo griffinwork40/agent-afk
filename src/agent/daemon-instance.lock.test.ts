@@ -90,6 +90,55 @@ describe('acquireDaemonLock', () => {
     expect(existsSync(deepLock)).toBe(true);
     await release();
   });
+
+  it('clears an empty/zero-byte lock file and acquires successfully', async () => {
+    const { writeFileSync } = await import('node:fs');
+    // Simulate crash between O_EXCL open and writeFile: empty lock file exists.
+    writeFileSync(lockPath, '', 'utf-8');
+
+    const release = await acquireDaemonLock(lockPath);
+    const { readFileSync } = await import('node:fs');
+    expect(parseInt(readFileSync(lockPath, 'utf-8').trim(), 10)).toBe(process.pid);
+    await release();
+  });
+
+  it('clears a lock file with non-numeric content and acquires successfully', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(lockPath, 'not-a-pid', 'utf-8');
+
+    const release = await acquireDaemonLock(lockPath);
+    await release();
+  });
+
+  it('treats EPERM from process.kill as alive — throws DaemonAlreadyRunningError', async () => {
+    // PID 1 is init/launchd — we almost certainly lack permission to signal it
+    // (EPERM), which means it is alive. On Linux containers it may be our own
+    // process group leader; skip if we ARE pid 1.
+    if (process.pid === 1) return;
+
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(lockPath, '1', 'utf-8');
+
+    // process.kill(1, 0) throws EPERM on most systems — treat as alive.
+    // If it throws ESRCH (unusual sandbox) the test is a no-op (lock cleared).
+    let threw = false;
+    try {
+      process.kill(1, 0);
+      // If we get here, pid 1 is signallable → we own it → DaemonAlreadyRunningError expected
+      threw = true;
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === 'EPERM') threw = true; // expected path
+      // ESRCH: skip — can't reproduce EPERM in this env
+    }
+
+    if (!threw) return; // ESRCH env — skip
+
+    await expect(acquireDaemonLock(lockPath)).rejects.toThrow(DaemonAlreadyRunningError);
+    // Clean up the lock file since we didn't acquire
+    const { unlinkSync, existsSync } = await import('node:fs');
+    if (existsSync(lockPath)) unlinkSync(lockPath);
+  });
 });
 
 describe('getDaemonLockPath', () => {

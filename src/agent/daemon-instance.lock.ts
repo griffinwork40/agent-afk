@@ -140,7 +140,7 @@ async function tryOpen(
     try {
       const raw = await fs.readFile(lockPath, 'utf-8');
       const parsed = parseInt(raw.trim(), 10);
-      if (!Number.isNaN(parsed)) ownerPid = parsed;
+      if (!Number.isNaN(parsed) && parsed > 0) ownerPid = parsed;
     } catch {
       // Lock file vanished between open() and readFile() — another process may
       // have won the race and released already. Fall through to retry.
@@ -152,20 +152,27 @@ async function tryOpen(
       try {
         process.kill(ownerPid, 0);
         alive = true;
-      } catch {
-        // ESRCH — process is gone; stale lock.
+      } catch (killErr) {
+        // EPERM means the process is alive but we lack permission to signal it.
+        // ESRCH means the process is gone — stale lock.
+        if (isErrnoCode(killErr, 'EPERM')) alive = true;
       }
 
       if (alive) {
         throw new DaemonAlreadyRunningError(lockPath, ownerPid);
       }
 
-      // Stale lock — remove it and retry once.
+      // Stale lock (dead PID) — remove it and retry once.
+      await fs.unlink(lockPath).catch(() => {});
+    } else {
+      // ownerPid is null: the lock file exists but contains no valid PID.
+      // This happens when a process was killed between O_EXCL open and
+      // writeFile. The file is safe to remove — no live process owns it.
       await fs.unlink(lockPath).catch(() => {});
     }
 
-    // Retry once after clearing the stale lock (or if the lock file vanished
-    // on its own between our open() and readFile() calls above).
+    // Retry once after clearing the stale/empty lock (or if the lock file
+    // vanished on its own between our open() and readFile() calls above).
     try {
       return await fs.open(lockPath, 'wx');
     } catch (retryErr) {
@@ -178,7 +185,7 @@ async function tryOpen(
       try {
         const raw = await fs.readFile(lockPath, 'utf-8');
         const parsed = parseInt(raw.trim(), 10);
-        if (!Number.isNaN(parsed)) retryOwnerPid = parsed;
+        if (!Number.isNaN(parsed) && parsed > 0) retryOwnerPid = parsed;
       } catch { /* ignore */ }
       throw new DaemonAlreadyRunningError(lockPath, retryOwnerPid);
     }
