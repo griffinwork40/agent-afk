@@ -106,7 +106,46 @@ function importedSegment(importerAbsPath: string, specifier: string): string | u
 
 // ── Violation detection ───────────────────────────────────────────────────────
 
-/** Matches static import/export-from lines (including `import type`). */
+/**
+ * Collect a logical import statement that may span multiple lines.
+ *
+ * TypeScript allows multiline import bindings:
+ *   import {
+ *     Foo,
+ *     Bar,
+ *   } from '../cli/types.js';
+ *
+ * The opening line ends with `{` (no closing `}` before `from`), so we
+ * accumulate continuation lines until we find the closing `}` on the same
+ * line as `from '...'`.  Returns the joined single-line representation and
+ * the number of raw lines consumed (so the caller can advance `i`).
+ */
+export function collectLogicalLine(lines: string[], startIdx: number): { logical: string; consumed: number } {
+  const first = lines[startIdx] ?? '';
+  // Fast path: complete on one line (no unclosed `{` before `from`).
+  // An unclosed `{` means the `}` appears on a later line.
+  const openBrace = first.indexOf('{');
+  const closeBrace = first.indexOf('}');
+  if (openBrace === -1 || closeBrace > openBrace) {
+    return { logical: first, consumed: 1 };
+  }
+
+  // Multiline: accumulate until a line contains `} from '...'`.
+  const parts: string[] = [first.trimEnd()];
+  let j = startIdx + 1;
+  while (j < lines.length) {
+    const continuation = lines[j] ?? '';
+    parts.push(continuation.trimEnd());
+    // Stop once we see the closing `}` followed (eventually) by `from`.
+    if (/\}.*from\s+['"]/.test(continuation)) {
+      break;
+    }
+    j++;
+  }
+  return { logical: parts.join(' '), consumed: j - startIdx + 1 };
+}
+
+/** Matches a complete (single-line-normalised) import/export-from statement. */
 const IMPORT_RE =
   /^\s*(?:import|export)\s+(?:type\s+)?(?:\{[^}]*\}|\*\s+as\s+\S+|\S+)\s+from\s+['"]([^'"]+)['"]/;
 
@@ -140,10 +179,34 @@ function checkPair(
   return null;
 }
 
-function isAllowed(relPath: string, specifier: string): boolean {
-  return ALLOWED_PAIRS.some(
-    (e) => e.file === relPath && specifier.includes(e.importContains),
-  );
+/**
+ * Returns true when the (file, specifier) pair is covered by an allowlist entry.
+ *
+ * Contract: each AllowedPair.importContains value is a directory-segment
+ * prefix such as `'cli/'` or `'telegram/'`.  We test whether the specifier
+ * contains that prefix as a path segment boundary rather than an arbitrary
+ * substring, so `'cli/'` matches `'../cli/palette.js'` but NOT a hypothetical
+ * `'../unicli/foo.js'`.
+ *
+ * History: the original `specifier.includes(e.importContains)` was a plain
+ * substring test which could in theory exempt an entire directory class when
+ * the importContains string appeared anywhere in the path.  Using an exact
+ * path-segment check (the prefix must follow a `/` or `.`) is safer.
+ */
+export function isAllowed(relPath: string, specifier: string, pairs = ALLOWED_PAIRS): boolean {
+  return pairs.some((e) => {
+    if (e.file !== relPath) return false;
+    const needle = e.importContains;
+    // Accept the needle when it appears at a path-segment boundary:
+    //   - immediately after a `/`  (e.g. `../cli/foo`)
+    //   - at the very start        (e.g. `cli/foo` — bare relative)
+    //   - after a `.` segment      (e.g. `./cli/foo`)
+    const idx = specifier.indexOf(needle);
+    if (idx === -1) return false;
+    if (idx === 0) return true;
+    const charBefore = specifier[idx - 1];
+    return charBefore === '/' || charBefore === '.';
+  });
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -168,34 +231,59 @@ function main(): void {
     const source = fs.readFileSync(absPath, 'utf8');
     const lines = source.split('\n');
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line === undefined) continue;
-      const trimmed = line.trimStart();
-      if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*'))
-        continue;
+    let inBlockComment = false;
 
-      const match = IMPORT_RE.exec(line);
-      if (!match) continue;
+    for (let i = 0; i < lines.length; ) {
+      const line = lines[i];
+      if (line === undefined) { i++; continue; }
+
+      // ── Block-comment state tracking ──────────────────────────────────────
+      // Contract: inBlockComment is true from the line that opens `/*` until
+      // (and including) the line that closes `*/`.  A line may open and close
+      // a block comment (`/* foo */`) — we handle that by checking both.
+      if (inBlockComment) {
+        if (line.includes('*/')) inBlockComment = false;
+        i++;
+        continue;
+      }
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith('/*')) {
+        // Single-line block comment (`/* ... */`) or start of a multi-line one.
+        if (!line.includes('*/')) inBlockComment = true;
+        i++;
+        continue;
+      }
+      // Skip line comments and mid-block-comment continuation lines (`* ...`).
+      if (trimmed.startsWith('//') || trimmed.startsWith('*')) {
+        i++;
+        continue;
+      }
+
+      // ── Multiline import accumulation ─────────────────────────────────────
+      const { logical, consumed } = collectLogicalLine(lines, i);
+
+      const match = IMPORT_RE.exec(logical);
+      if (!match) { i += consumed; continue; }
       const specifier = match[1];
-      if (!specifier) continue;
+      if (!specifier) { i += consumed; continue; }
 
       const imported = importedSegment(absPath, specifier);
-      if (!imported) continue;
+      if (!imported) { i += consumed; continue; }
 
       const importedLayer = classifyDir(imported);
-      if (importedLayer === 'unknown') continue;
-      if (importerLayer === importedLayer) continue; // same layer, fine
-      if (importerLayer === 'foundation' && importedLayer === 'foundation') continue;
+      if (importedLayer === 'unknown') { i += consumed; continue; }
+      if (importerLayer === importedLayer) { i += consumed; continue; }
+      if (importerLayer === 'foundation' && importedLayer === 'foundation') { i += consumed; continue; }
 
       const rule = checkPair(importerLayer, seg, importedLayer, imported);
-      if (!rule) continue;
+      if (!rule) { i += consumed; continue; }
 
       if (isAllowed(relPath, specifier)) {
         allowedHits.push({ file: relPath, line: i + 1, rule });
       } else {
         allViolations.push({ file: relPath, line: i + 1, text: line.trim(), rule });
       }
+      i += consumed;
     }
   }
 
@@ -233,4 +321,10 @@ function main(): void {
   process.exit(1);
 }
 
-main();
+// Run only when executed directly, not when imported by tests.
+const isMain =
+  typeof process !== 'undefined' &&
+  process.argv[1] !== undefined &&
+  (process.argv[1].endsWith('audit-layer-imports.ts') ||
+    process.argv[1].endsWith('audit-layer-imports.js'));
+if (isMain) main();
