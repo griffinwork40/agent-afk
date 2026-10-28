@@ -343,9 +343,11 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
           decision: 'block',
           reason:
             `Bash command references a restricted path (${sub}) on a headless surface ` +
-            '(daemon / afk chat / subagent / thread). Direct shell access to credential and config ' +
+            '(daemon / afk chat / subagent / thread). ' +
+            sanctionedHint +
+            'Direct shell access to credential and config ' +
             'paths is blocked to prevent prompt-injection bypass of the typed-tool ' +
-            `write-denylist. ${sanctionedHint}` +
+            'write-denylist. ' +
             'Use the typed file tools (read_file, write_file, edit_file) ' +
             'or run the command interactively where a human can approve it.',
         };
@@ -392,7 +394,17 @@ function sanctionedAlternativeHint(sub: string): string {
   // fail-safe posture as configuredAfkHome() in afk-home-refs.ts).
   let configDir: string | undefined;
   try { configDir = getAfkConfigDir(); } catch { configDir = undefined; }
-  if (configDir !== undefined && (sub === configDir || sub.startsWith(configDir + path.sep))) {
+  if (configDir !== undefined) {
+    // Normalize both sides to forward slashes so the comparison is correct on
+    // Windows, where getAfkConfigDir() may return back-slash-separated paths
+    // while `sub` (sourced from command text) typically uses forward slashes.
+    const normSub = sub.replace(/\\/g, '/');
+    const normDir = configDir.replace(/\\/g, '/');
+    if (normSub !== normDir && !normSub.startsWith(normDir + '/')) {
+      configDir = undefined;
+    }
+  }
+  if (configDir !== undefined) {
     return (
       'To read AFK config values use the `config_get` tool (values are masked). ' +
       'To write config use `afk config set` or the `config_set` tool. '
