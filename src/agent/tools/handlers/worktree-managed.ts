@@ -44,15 +44,22 @@ export interface RepoContext {
  * Resolve the repo root from `cwd` via `--git-common-dir` so the answer is the
  * MAIN checkout even when `cwd` itself is a linked worktree. Throws when `cwd`
  * is not inside a git repository.
+ *
+ * When `explicitRepo` is provided (an absolute path supplied by the caller),
+ * it is used as the anchor for `--git-common-dir` instead of `cwd`. This lets
+ * the `worktree` tool work when the session cwd is not inside any git repo
+ * (e.g. daemon tasks running with cwd $HOME, research sessions in scratch dirs).
  */
 export async function resolveRepoContext(
   execFile: ExecFileFn,
   cwd: string,
+  explicitRepo?: string,
 ): Promise<RepoContext> {
-  const result = await execFile('git', ['--no-optional-locks', '-C', cwd, 'rev-parse', '--git-common-dir']);
+  const anchor = explicitRepo ?? cwd;
+  const result = await execFile('git', ['--no-optional-locks', '-C', anchor, 'rev-parse', '--git-common-dir']);
   const raw = result.stdout.trim();
   if (!raw) throw new Error('Not in a git repository.');
-  const absoluteGitDir = isAbsolute(raw) ? raw : resolve(cwd, raw);
+  const absoluteGitDir = isAbsolute(raw) ? raw : resolve(anchor, raw);
   const repoRoot = dirname(absoluteGitDir);
   return { repoRoot, afkWorktreesRoot: join(repoRoot, '.afk-worktrees') };
 }
