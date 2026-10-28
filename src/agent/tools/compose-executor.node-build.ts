@@ -204,7 +204,7 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
           max_turns: n.max_turns,
           max_turns_explicit: n.max_turns !== undefined,
           max_tool_use_iterations: n.max_tool_rounds ?? maxToolRoundsPerNode,
-          max_tool_use_iterations_explicit: n.max_tool_rounds !== undefined,
+          max_tool_use_iterations_explicit: (n.max_tool_rounds ?? maxToolRoundsPerNode) !== undefined,
         },
         // Expose the named-agent definition fields resolveChildBudgets needs.
         // The named agent is embedded in resolvedAgent as two forwarded fields;
