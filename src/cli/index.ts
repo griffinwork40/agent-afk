@@ -59,6 +59,15 @@ configureColor();
 // the config `theme` key and the `--theme` flag. Default is dark, so an
 // unset AFK_THEME leaves every existing user's colors unchanged.
 applyTheme(resolveTheme(parseThemeMode(env.AFK_THEME)));
+// Wire operator notification port before any command registers sessions.
+// Surfaces register the concrete push implementation so agent core never
+// imports telegram/ directly. Covers all CLI modes (chat, interactive, daemon).
+import { registerOperatorNotifier } from '../agent/operator-notify.js';
+import { pushIfConfigured } from '../telegram/push.js';
+registerOperatorNotifier((message: string) => {
+  void pushIfConfigured(message).catch(() => undefined);
+});
+
 import { registerChatCommand } from './commands/chat.js';
 import { registerInteractiveCommand } from './commands/interactive.js';
 import { registerStatusCommand } from './commands/status.js';

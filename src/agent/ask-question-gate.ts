@@ -37,7 +37,7 @@
 
 import type { HookContext, HookDecision } from './hooks.js';
 import { elicitationRouter } from './elicitation-router.js';
-import { pushIfConfigured } from '../telegram/push.js';
+import { notifyOperator } from './operator-notify.js';
 
 /**
  * Cap on the question text echoed to Telegram — mirrors the router's
@@ -75,7 +75,7 @@ export interface AskQuestionGateOptions {
 }
 
 function defaultNotify(message: string): void {
-  void pushIfConfigured(message).catch(() => undefined);
+  notifyOperator(message);
 }
 
 export function createAskQuestionGate(
