@@ -508,6 +508,11 @@ describe('listWebSessions', () => {
       metaLine(sessionId, { cwd: '/ledger/cwd', surface: 'cli' }),
       userLine('the real first message'),
       ...dummyRecords,
+      // Sentinel: if the break fires at record 3 (after meta+user), this record
+      // is never consumed and title stays 'the real first message'. If the scan
+      // runs past HEAD_RECORD_SCAN_LIMIT this line is unreachable anyway, but
+      // if early-exit regresses to O(21+) it overwrites the title assertion.
+      userLine('SHOULD_NOT_APPEAR_IF_BREAK_FIRES'),
     ]);
 
     const results = await listWebSessions(new Set());

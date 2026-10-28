@@ -96,22 +96,20 @@ async function readLedgerHead(
     out.model = sideMeta.model;
   }
 
-  // Always scan the ledger for `title` (not stored in session-meta). Track
-  // per-field need flags independently: `model` is non-optional on SessionMeta
-  // so a sidecar always sets it, but `cwd` and `surface` are optional and may
-  // still need backfilling from ledger `meta` records even when the sidecar
-  // provided `model`.
-  const needCwd = out.cwd === undefined;
-  const needSurface = out.surface === undefined;
-  const needModel = out.model === undefined;
+  // Always scan the ledger for `title` (not stored in session-meta). `cwd`
+  // and `surface` are optional on SessionMeta so a sidecar may provide `model`
+  // only — the ledger `meta` record backfills whatever fields are still absent.
+  // All guards use live `out` field checks (not snapshot consts) so the break
+  // condition and the assignment guards are consistent: once a field is set it
+  // is never overwritten by a later record.
   try {
     let seen = 0;
     for await (const rec of readLedger(sessionId)) {
       seen += 1;
-      if (rec.kind === 'meta' && (needCwd || needSurface || needModel)) {
-        if (needCwd && rec.cwd !== undefined) out.cwd = rec.cwd;
-        if (needSurface && rec.surface !== undefined) out.surface = rec.surface;
-        if (needModel && rec.model !== undefined) out.model = rec.model;
+      if (rec.kind === 'meta' && (out.cwd === undefined || out.surface === undefined || out.model === undefined)) {
+        if (out.cwd === undefined && rec.cwd !== undefined) out.cwd = rec.cwd;
+        if (out.surface === undefined && rec.surface !== undefined) out.surface = rec.surface;
+        if (out.model === undefined && rec.model !== undefined) out.model = rec.model;
       } else if (rec.kind === 'user' && out.title === undefined) {
         // Prefer `input` (the caller's own message, recorded when framework
         // context was prepended). Older ledgers lack it, so fall back to
