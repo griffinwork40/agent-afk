@@ -22,7 +22,7 @@
  */
 
 import { Command } from 'commander';
-import { open, readdir, readFile } from 'node:fs/promises';
+import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { handleCommandError } from '../errors/index.js';
@@ -76,6 +76,7 @@ async function resolveTraceLabel(
     const rec = JSON.parse(firstLine) as { kind?: unknown; traceLabel?: unknown };
     if (rec.kind === 'meta') {
       if (typeof rec.traceLabel === 'string' && rec.traceLabel.length > 0) {
+        if (!isSafeLedgerSessionId(rec.traceLabel)) return { kind: 'none' };
         return { kind: 'label', label: rec.traceLabel };
       }
       if (rec.traceLabel === null) return { kind: 'disabled' };
@@ -195,6 +196,15 @@ async function runRegenerate(opts: RegenerateOptions): Promise<void> {
     const receiptsDir = getReceiptsDir();
     const jsonPath = join(receiptsDir, `${traceLabel}.json`);
     const mdPath = join(receiptsDir, `${traceLabel}.md`);
+
+    // Probe trace existence before dry-run so we never overcount absent traces.
+    try {
+      await stat(tracePath);
+    } catch {
+      results.push({ sessionId, outcome: 'skipped', reason: 'trace file absent' });
+      skipped++;
+      continue;
+    }
 
     if (onlyV1) {
       const existingVersion = await readReceiptSchemaVersion(jsonPath);

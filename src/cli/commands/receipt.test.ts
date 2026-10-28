@@ -48,6 +48,7 @@ function makeClosure(): TraceEvent {
       finalTurnCount: 1,
       finalCostUsd: 0.001,
       lastStopReason: 'end_turn',
+      finalTokens: {},
     },
   };
 }
@@ -94,7 +95,7 @@ async function writeSessionMeta(sessionId: string, traceLabel: string): Promise<
 async function writeV1Receipt(label: string): Promise<string> {
   const dir = getReceiptsDir();
   await mkdir(dir, { recursive: true });
-  const stub: Partial<RunReceipt> & { schemaVersion: 1 } = {
+  const stub: Record<string, unknown> = {
     schemaVersion: 1,
     generatedAt: '2026-01-01T00:00:00.000Z',
     witnessLabel: label,
@@ -225,5 +226,105 @@ describe('receipt regenerate (filesystem integration)', () => {
     // No second writeRunReceipt called → mtime unchanged.
     const statAfterCheck = await stat(jsonPath);
     expect(statAfterCheck.mtimeMs).toBe(statAfterFirst.mtimeMs);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CLI-layer tests: runRegenerate via Commander
+// ---------------------------------------------------------------------------
+
+import { Command } from 'commander';
+import { registerReceiptCommand } from './receipt.js';
+
+/** Capture stdout.write calls during fn(), return collected output. */
+async function captureStdout(fn: () => Promise<void>): Promise<string> {
+  const chunks: string[] = [];
+  const orig = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    await fn();
+  } finally {
+    process.stdout.write = orig;
+  }
+  return chunks.join('');
+}
+
+describe('CLI-layer: runRegenerate via Commander', () => {
+  function makeProgram(): Command {
+    const prog = new Command().exitOverride();
+    registerReceiptCommand(prog);
+    return prog;
+  }
+
+  it('--json --all on empty sessions dir emits valid JSON with zero results', async () => {
+    const out = await captureStdout(async () => {
+      await makeProgram().parseAsync(['receipt', 'regenerate', '--all', '--json'], { from: 'user' });
+    });
+    const parsed = JSON.parse(out) as { regenerated: number; skipped: number; results: unknown[] };
+    expect(parsed.regenerated).toBe(0);
+    expect(parsed.skipped).toBe(0);
+    expect(Array.isArray(parsed.results)).toBe(true);
+  });
+
+  it('--json --session with missing trace emits skipped outcome', async () => {
+    const sessionId = 'cli-test-missing-trace';
+    await writeSessionMeta(sessionId, 'nonexistent-trace-label-xyz');
+    const out = await captureStdout(async () => {
+      await makeProgram().parseAsync(
+        ['receipt', 'regenerate', '--session', sessionId, '--json'],
+        { from: 'user' },
+      );
+    });
+    const parsed = JSON.parse(out) as {
+      regenerated: number;
+      skipped: number;
+      results: Array<{ sessionId: string; outcome: string; reason?: string }>;
+    };
+    expect(parsed.skipped).toBeGreaterThanOrEqual(1);
+    const r = parsed.results.find((x) => x.sessionId === sessionId);
+    expect(r).toBeDefined();
+    expect(r?.outcome).toBe('skipped');
+  });
+
+  it('--dry-run --session with missing trace emits skipped, not dry-run', async () => {
+    const sessionId = 'cli-test-dry-run-missing';
+    await writeSessionMeta(sessionId, 'nonexistent-trace-for-dry-run');
+    const out = await captureStdout(async () => {
+      await makeProgram().parseAsync(
+        ['receipt', 'regenerate', '--session', sessionId, '--dry-run', '--json'],
+        { from: 'user' },
+      );
+    });
+    const parsed = JSON.parse(out) as {
+      results: Array<{ sessionId: string; outcome: string }>;
+    };
+    const r = parsed.results.find((x) => x.sessionId === sessionId);
+    expect(r?.outcome).toBe('skipped');
+  });
+
+  it('--json --session with unsafe session id emits skipped', async () => {
+    const out = await captureStdout(async () => {
+      await makeProgram().parseAsync(
+        ['receipt', 'regenerate', '--session', '../unsafe', '--json'],
+        { from: 'user' },
+      );
+    });
+    const parsed = JSON.parse(out) as {
+      results: Array<{ sessionId: string; outcome: string; reason?: string }>;
+    };
+    expect(parsed.results[0]?.outcome).toBe('skipped');
+    expect(parsed.results[0]?.reason).toMatch(/unsafe/i);
+  });
+
+  it('readReceiptSchemaVersion: v1 receipt stub returns 1', async () => {
+    seq = 0;
+    const label = 'cli-schema-version-test';
+    const jsonPath = await writeV1Receipt(label);
+    const raw = await readFile(jsonPath, 'utf8');
+    const parsed = JSON.parse(raw) as { schemaVersion: number };
+    expect(parsed.schemaVersion).toBe(1);
   });
 });
