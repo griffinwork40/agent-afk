@@ -14,7 +14,7 @@
  * @module whatif/complete
  */
 
-import { oneShotCompletion, deriveCallCostUsd, resolveModelId } from '../agent/providers/index.js';
+import { oneShotCompletion, deriveCallCostUsd, resolveModelId } from '../agent/providers/whatif-api.js';
 import type { CompleteFn } from './types.js';
 import { withAnalystRetry } from './complete.retry.js';
 

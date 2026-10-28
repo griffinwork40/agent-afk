@@ -52,7 +52,7 @@
  * @module whatif/cost
  */
 
-import { deriveCallCostUsd, resolveModelId } from '../agent/providers/index.js';
+import { deriveCallCostUsd, resolveModelId } from '../agent/providers/whatif-api.js';
 
 // ---------------------------------------------------------------------------
 // Per-turn token assumptions
