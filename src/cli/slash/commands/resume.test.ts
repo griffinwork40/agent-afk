@@ -574,6 +574,44 @@ describe('/resume — repo-root filtering', () => {
     expect(text).not.toContain('session-daemon');
   });
 
+  it('daemon fallback path: daemon sessions excluded even when isFiltered=false (global fallback)', async () => {
+    // Regression guard for the daemon-fallback path: when no local sessions
+    // match the current repo (isFiltered=false), displayEntries falls back to
+    // the full `nonDaemon` list. Daemon sessions must remain absent even in
+    // this fallback, because they were already stripped by the `nonDaemon`
+    // filter — they must never leak into the global fallback display.
+    const daemonStats = createSessionStats('sonnet');
+    daemonStats.cwd = '/other-project/src';
+    daemonStats.source = 'daemon';
+    (daemonStats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/other-project';
+    recordTurn(daemonStats, 'daemon task', 'done', { sessionId: 'sdk-daemon-fb', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    daemonStats.name = 'session-daemon-fallback';
+    saveSession(daemonStats);
+
+    const cliStats = createSessionStats('sonnet');
+    cliStats.cwd = '/other-project/src';
+    (cliStats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/other-project';
+    recordTurn(cliStats, 'cli task', 'done', { sessionId: 'sdk-cli-fb', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    cliStats.name = 'session-cli-fallback';
+    saveSession(cliStats);
+
+    // Current cwd is an unrelated project — no local sessions match, so
+    // isFiltered=false and displayEntries === nonDaemon (global fallback).
+    const { ctx, lines } = makeCtx(undefined);
+    ctx.stats.cwd = '/unrelated-project/src';
+    (ctx.stats as import('../types.js').SessionStats & { repoRoot?: string }).repoRoot = '/unrelated-project';
+    await resumeCmd.handler(ctx, '');
+
+    const text = lines.join('\n');
+    // Global fallback header is shown (isFiltered=false).
+    expect(text).toMatch(/Saved sessions — all \(none in this directory\)/);
+    // The non-daemon CLI session appears in the global fallback.
+    expect(text).toContain('session-cli-fallback');
+    // The daemon session must NOT appear — daemon filtering is applied before
+    // the isFiltered/fallback branch, so daemon sessions never reach displayEntries.
+    expect(text).not.toContain('session-daemon-fallback');
+  });
+
   it('legacy session without repoRoot or cwd falls through to global fallback', async () => {
     // Legacy sidecar: no cwd, no repoRoot — only appears when no local sessions.
     const stats = createSessionStats('sonnet');

@@ -81,6 +81,14 @@ export class OpenAIAudioTranscriber implements AudioTranscriber {
 
     // SSRF host guard: reject private/loopback/link-local/cloud-metadata hosts.
     // Runs at transcribe-time so async DNS resolution is available.
+    //
+    // DNS-rebinding TOCTOU note: the egress guard resolves the hostname once
+    // here; `fetch()` performs its own independent resolution milliseconds
+    // later.  A DNS entry with a short TTL could map to a public IP at guard
+    // time and a private IP at fetch time, bypassing the guard.  This is a
+    // pre-existing pattern shared by all egress-guard consumers in this
+    // codebase.  Mitigations (pinned IP connection, 0-TTL detection) are
+    // tracked as a separate hardening item.
     if (this.checkEgress) {
       let verdict: { allowed: boolean; reason?: string };
       try {
@@ -158,6 +166,11 @@ const DEFAULT_WHISPER_MODEL = 'whisper-1';
  * Reads env vars at call time so tests can stub `process.env` without module
  * re-loading.  Only `AFK_TRANSCRIBE_API_URL` is required; the key and model
  * have defaults.
+ *
+ * @param opts.checkEgress  SSRF egress-check function injected by the caller.
+ *   When omitted (default `{}`), the SSRF guard is disabled and any URL
+ *   (including private/loopback/cloud-metadata hosts) will be fetched.
+ *   Production callers should always supply this from `ssrf-guard.ts`.
  */
 export function createTranscriber(
   env: {

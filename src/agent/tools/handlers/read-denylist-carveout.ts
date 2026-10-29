@@ -207,7 +207,7 @@ export function gateSshPubKeyDir(
  * case-insensitive comparison when the filesystem under `sshDir` is
  * case-insensitive (`isCaseInsensitiveFs`), which is the common NTFS case.
  * Over-blocking (false) is safe; under-blocking (false positive allow) is not
- * — so the default for indeterminate probes stays case-sensitive.
+ * — so indeterminate probes fold to case-insensitive (the deny-more direction).
  */
 export function isSshPubKeyChild(real: string, sshDir: string): boolean {
   const name = basename(real);

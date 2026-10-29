@@ -475,6 +475,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_INLINE_IMAGES",
+      "description": "Controls inline terminal image rendering after image_generate, image_edit, and browser_screenshot tool calls. When set to \"0\" or \"false\", rendering is disabled and only the file path is logged (the existing behaviour). When unset (default), the hook auto-detects terminal support: Kitty graphics protocol for kitty/ghostty/wezterm, iTerm2 inline images protocol for iTerm2, and plain path logging as a fallback. Set to \"0\" to suppress all inline rendering.",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_INTERNAL",
       "description": "Tier gate. Set to exactly `1` to unlock — only the literal string \"1\" unlocks (other truthy values like \"true\"/\"yes\" leave the tier locked). When unlocked, skills tagged `audience: 'internal'` (e.g. /audit-fit, harvest/distill plugins) become visible at end-user surfaces (slash-command list, --help, tab-complete, system-prompt skill manifest). Default unset = public tier — internal skills are hidden. Not an access-control boundary; it gates surfacing, not the underlying registry.",
       "type": "boolean",
@@ -2044,6 +2053,30 @@
       "required": false,
       "example": "true",
       "category": "telegram"
+    },
+    {
+      "name": "TERM",
+      "description": "Terminal type string set by the outer terminal emulator (e.g. \"xterm-kitty\", \"xterm-256color\"). Not set by AFK. Read by the inline-image hook (#2143) to detect Kitty graphics protocol support (\"xterm-kitty\" means the terminal natively implements the protocol).",
+      "type": "string",
+      "required": false,
+      "example": "xterm-kitty",
+      "category": "process"
+    },
+    {
+      "name": "TERM_PROGRAM",
+      "description": "Terminal program name set by the outer terminal emulator (e.g. \"iTerm.app\", \"ghostty\", \"WezTerm\"). Not set by AFK. Read by the inline-image hook (#2143) to select between Kitty graphics protocol (ghostty, WezTerm) and iTerm2 inline images protocol (iTerm.app).",
+      "type": "string",
+      "required": false,
+      "example": "iTerm.app",
+      "category": "process"
+    },
+    {
+      "name": "TERM_PROGRAM_VERSION",
+      "description": "Terminal program version set by some terminal emulators alongside TERM_PROGRAM. Not set by AFK. Read by the inline-image hook (#2143) as a secondary iTerm2 detection signal.",
+      "type": "string",
+      "required": false,
+      "example": "3.5.0",
+      "category": "process"
     },
     {
       "name": "TMUX",

@@ -270,8 +270,9 @@ describe('renderMarkdownToTerminal', () => {
       expect(separators).toHaveLength(2);
       // The inter-row separator must sit AFTER the wrapped row content and
       // BEFORE the next single-line row — not before the wrapped row.
-      // Match the first line of the wrapped row (col-A renders 'this' on its own line).
-      const wrappedContentIdx = lines.findIndex((l) => /│\s*this\s*│/.test(l));
+      // Match the first physical line of the wrapped row: col-A renders 'this' on its own
+      // line alongside col-B's '2' — that combination is unique to this row.
+      const wrappedContentIdx = lines.findIndex((l) => /│\s*this\s*│\s*2\s*│/.test(l));
       const nextRowIdx = lines.findIndex((l) => l.includes('rowBa'));
       // Find the inter-row separator (second ├ line, after the header separator)
       const interRowSepIdx = lines.findIndex(
@@ -304,11 +305,12 @@ describe('renderMarkdownToTerminal', () => {
       // wraps); no trailing separator after the last (also-wrapped) row 2.
       expect(separators).toHaveLength(2);
       // Confirm the bottom border follows the wrapped content (not a ├ line).
-      // Use the last line that contains the col-B marker for row 2 ('r2c2')
-      // or any row-2 col-A content ('this', 'text', etc.) — take the maximum
-      // index so we anchor to the final physical line of the wrapped row.
+      // Use 'r2c2' as the primary anchor for row 2's col-B cell. The regex also
+      // matches common words from row-2 col-A wrapped lines (both rows share
+      // words like 'this', 'text', etc.), so correctness depends on reduce(max)
+      // landing on the last physical line of row 2 — anchored by r2c2.
       const lastDataLineIdx = lines.reduce(
-        (acc, l, i) => (/│\s*(this|text|long|enough|to|wrap|at|a|narrow|width|r2c2)\s*│/.test(l) ? i : acc),
+        (acc, l, i) => (/│\s*r2c2\s*│/.test(l) ? i : acc),
         -1
       );
       const bottomBorderIdx = lines.findIndex((l) => l.startsWith('└'));

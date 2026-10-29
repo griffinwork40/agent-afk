@@ -59,3 +59,34 @@ export function parseDiffOutput(raw: string): Map<string, Set<number>> {
   }
   return map;
 }
+
+/**
+ * A single file fragment as reported by jscpd.
+ * Kept here so the pure filtering helper can be unit-tested without importing
+ * the top-level script (which calls `main()` on load).
+ */
+export interface CloneFile {
+  name: string;
+  start: number;
+  end: number;
+  startLoc: { line: number };
+  endLoc: { line: number };
+}
+
+/**
+ * Return true when any line in `frag` appears in the set of added lines from
+ * the PR diff.
+ */
+export function fragmentOverlapsAdded(
+  frag: CloneFile,
+  added: Map<string, Set<number>>,
+): boolean {
+  const lines = added.get(frag.name);
+  if (!lines) return false;
+  const startLine = frag.startLoc.line;
+  const endLine = frag.endLoc.line;
+  for (let l = startLine; l <= endLine; l++) {
+    if (lines.has(l)) return true;
+  }
+  return false;
+}

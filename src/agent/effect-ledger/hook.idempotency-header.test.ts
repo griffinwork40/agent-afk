@@ -195,6 +195,11 @@ describe('Scenario 2 / #3714 — idempotency-key header forwarding', () => {
 
   // Pins the expected post-feature behavior: when header-forwarding lands,
   // a caller-supplied Idempotency-Key must not be clobbered.
+  //
+  // Note: this test exercises DELETE only. When the no-clobber guard is
+  // implemented it should be extended to POST/PUT/PATCH, since all mutating
+  // methods will receive the Idempotency-Key injection and all must preserve
+  // a caller-supplied value equally. See issue #3714.
   it.fails(
     'DEFECT(#3714): a caller-supplied Idempotency-Key header must not be overwritten by the hook' +
       ' — flip to passing when no-clobber guard is implemented alongside header-forwarding',

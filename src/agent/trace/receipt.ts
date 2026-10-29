@@ -32,7 +32,7 @@ import type { HookHandler } from '../hooks.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import { SessionCostAccumulator, type CostTokens, type SessionCostSource } from './cost.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
-import { loadJournalMessages } from '../journal/reader.js';
+import { loadJournalMessages, readJournalRecords } from '../journal/reader.js';
 import { extractJournalSummary, type JournalSummary } from './receipt.journal.js';
 import {
   BENIGN_FAILURE_CLASSES,
@@ -416,6 +416,7 @@ export async function writeRunReceipt(
     ? extractJournalSummary(
         loadJournalMessages(opts.sessionId),
         env.AFK_RUN_RECEIPT_TEXT_DISABLED === '1',
+        readJournalRecords(opts.sessionId),
       )
     : undefined;
   const receipt = generateReceipt(events, {

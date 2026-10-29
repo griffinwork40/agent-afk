@@ -68,6 +68,7 @@ import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import { isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
 import { headlessSignalOpts, sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
 import { chainProviderClose } from '../shared/chain-provider-close.js';
+import { logFragmentTokens } from '../shared/prompt-fragment-tokens.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -338,6 +339,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
         ? (this.providerOpts.subagentExecutor?.describeAgentTypeListing?.() ?? '')
         : '',
     });
+
+    // Emit per-fragment token estimates to the witness trace (#4449). Read-path
+    // only — the assembled prompt is never mutated by this call.
+    logFragmentTokens(config.traceWriter, spw.stableFragments);
 
     const patchedConfig: typeof config = { ...config, systemPrompt: spw.initialSystemPrompt };
 

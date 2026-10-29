@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**258 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**262 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -260,6 +260,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `SCRIPT` | string |  |  | `/tmp/typescript` | Set by script(1) on BSD/macOS/Linux to the typescript filename while a terminal session is being recorded. Presence of a non-empty value triggers capture-mode. |
 | `SHELL` | string |  |  | `/bin/zsh` | Standard POSIX env var pointing to the user's login shell binary. Used by shell-init and worktree commands to auto-detect the correct shell syntax for emitted wrapper code. |
 | `SystemRoot` | string |  |  |  | Windows system root directory (typically C:\Windows). Used to identify WSL bash.exe shim paths in resolve-shell.ts. |
+| `TERM` | string |  |  | `xterm-kitty` | Terminal type string set by the outer terminal emulator (e.g. "xterm-kitty", "xterm-256color"). Not set by AFK. Read by the inline-image hook (#2143) to detect Kitty graphics protocol support ("xterm-kitty" means the terminal natively implements the protocol). |
+| `TERM_PROGRAM` | string |  |  | `iTerm.app` | Terminal program name set by the outer terminal emulator (e.g. "iTerm.app", "ghostty", "WezTerm"). Not set by AFK. Read by the inline-image hook (#2143) to select between Kitty graphics protocol (ghostty, WezTerm) and iTerm2 inline images protocol (iTerm.app). |
+| `TERM_PROGRAM_VERSION` | string |  |  | `3.5.0` | Terminal program version set by some terminal emulators alongside TERM_PROGRAM. Not set by AFK. Read by the inline-image hook (#2143) as a secondary iTerm2 detection signal. |
 | `TMUX` | string |  |  | `/tmp/tmux-501/default,12345,0` | OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment, and by peer messaging to derive a default session name (#S:#I); for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env. |
 | `TMUX_PANE` | string |  |  | `%0` | tmux pane identifier, set automatically by tmux inside any pane (e.g. %0). Used by AFK to target the correct pane when composing a tmux display-message label. |
 | `USER` | string |  |  |  | Unix login name of the current user. Used as a default approver identity in improve/approve. |
@@ -286,6 +289,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_GOBLIN_SPINNER` | boolean |  |  | `0` | Goblin-themed working spinner (olive frames + goblin verbs) while the agent runs tools. 1 = on (default), 0 = classic dim spinner. |
 | `AFK_IMAGE_ALLOW_DAEMON` | string |  |  |  | Set to "1" to allow image_generate in daemon/cron sessions. Blocked by default to prevent unattended API spend. |
 | `AFK_IMAGE_SESSION_LIMIT` | string |  |  |  | Maximum number of images the image_generate tool may produce per session. Prevents runaway spend in autonomous loops. Default: 10. |
+| `AFK_INLINE_IMAGES` | string |  |  | `0` | Controls inline terminal image rendering after image_generate, image_edit, and browser_screenshot tool calls. When set to "0" or "false", rendering is disabled and only the file path is logged (the existing behaviour). When unset (default), the hook auto-detects terminal support: Kitty graphics protocol for kitty/ghostty/wezterm, iTerm2 inline images protocol for iTerm2, and plain path logging as a fallback. Set to "0" to suppress all inline rendering. |
 | `AFK_LEASE_TTL_MS` | number |  |  | `600000` | Lease TTL in milliseconds for durable task execution (issue #1411). A leased task whose lease expires before it completes is recovered and re-enqueued (or dead-lettered if maxAttempts is exhausted). Default: 600000 (10 minutes). |
 | `AFK_LSP_DIAGNOSTICS` | boolean |  | `0` | `1` | Enable opt-in LSP features (#3904). When set to 1: (phase 1) after every successful edit_file or write_file call the handler queries typescript-language-server (must be on PATH) for diagnostics on the touched file and appends any errors/warnings to the tool result; (phase 2) enables the code_symbols tool for go-to-definition and find-references. Off by default. A missing or slow server never fails or stalls the edit — the query times out silently. TypeScript / JavaScript only in this phase. |
 | `AFK_LSP_DIAGNOSTICS_TIMEOUT_MS` | number |  | `1500` | `3000` | Hard timeout in milliseconds for the post-edit LSP diagnostics query (AFK_LSP_DIAGNOSTICS=1). If the language server does not respond within this window the query is abandoned silently and the edit result is unchanged. Default 1500 (1.5 s) — intentionally low so a slow server does not stall every edit; raise when diagnostics are valuable enough to wait for. |

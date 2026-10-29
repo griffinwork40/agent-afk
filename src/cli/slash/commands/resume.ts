@@ -283,6 +283,13 @@ export const resumeCmd: SlashCommand = {
     try { currentRepoRoot = resolveRepoRootSync({ cwd: currentCwd, mode: 'git-common-dir' }); } catch { /* not a git repo */ }
     const nonDaemon = entries.filter((e) => e.source !== 'daemon');
     const repoRootCache = new Map<string, string | undefined>();
+    // TODO(#4321): `resolveRepoRootSync` calls `execFileSync` and blocks the
+    // event loop for up to ~5 s per unique `cwd` when a legacy session has no
+    // stored `repoRoot` and git must be spawned to resolve it. For the typical
+    // case (a handful of recent sessions, most with a stored `repoRoot`) the
+    // synchronous path is imperceptible. A future improvement is to resolve
+    // unknown roots asynchronously (e.g. via `resolveRepoRoot`) so that
+    // long-running daemon processes are not stalled during session listing.
     const cachedRepoRoot = (cwd: string): string | undefined => {
       if (repoRootCache.has(cwd)) return repoRootCache.get(cwd);
       let root: string | undefined;

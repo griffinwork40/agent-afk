@@ -205,9 +205,17 @@ const ALT_SEP = process.platform === 'win32' ? ';' : ':';
  * the PATH separator and C-unquotes an entry that starts with `"`, so a path
  * containing the separator or a double quote is emitted C-style quoted
  * (backslash, quote and control bytes escaped); any other path is passed as-is.
+ *
+ * Note: newline (`\n`) is included in the fast-path guard. A path with a
+ * newline would not be split by the PATH separator, but git parses the
+ * alternates file one path per line — a bare newline in the value would
+ * truncate the entry. Including it in the C-quote trigger ensures it is always
+ * octal-escaped (e.g. `\012`) rather than passed through literally.
+ * Practical risk is low (paths come from the AFK state dir), but the check is
+ * cheap and eliminates an ambiguous edge case.
  */
 export function quoteAlternate(dir: string, sep: string = ALT_SEP): string {
-  if (!dir.includes(sep) && !dir.includes('"')) return dir;
+  if (!dir.includes(sep) && !dir.includes('"') && !dir.includes('\n')) return dir;
   let out = '"';
   for (const byte of Buffer.from(dir, 'utf8')) {
     if (byte === 0x22 || byte === 0x5c) out += `\\${String.fromCharCode(byte)}`;

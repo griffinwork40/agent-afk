@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { parseDiffOutput, hasMergeBase } from '../scripts/lib/clone-gate.js';
+import { parseDiffOutput, hasMergeBase, fragmentOverlapsAdded, CloneFile } from '../scripts/lib/clone-gate.js';
 
 // vi.mock must be top-level (hoisted by vitest).
 vi.mock('node:child_process', () => ({ execFileSync: vi.fn() }));
@@ -20,37 +20,15 @@ vi.mock('node:child_process', () => ({ execFileSync: vi.fn() }));
 const { execFileSync } = await import('node:child_process');
 const mockExec = vi.mocked(execFileSync);
 
-// ── Inline the pure filtering logic under test ────────────────────────────────
-// We replicate the two pure functions from the script to avoid needing to
-// spawn git or jscpd. The script is the source of truth; this test validates
-// the algorithmic contract.
-
-interface CloneFile {
-  name: string;
-  start: number;
-  end: number;
-  startLoc: { line: number };
-  endLoc: { line: number };
-}
+// ── Filtering logic under test ────────────────────────────────────────────────
+// fragmentOverlapsAdded is imported from scripts/lib/clone-gate.ts (the source
+// of truth shared with the script) so this test cannot silently drift from the
+// real implementation.
 
 interface Clone {
   firstFile: CloneFile;
   secondFile: CloneFile;
   isNew: boolean;
-}
-
-function fragmentOverlapsAdded(
-  frag: CloneFile,
-  added: Map<string, Set<number>>,
-): boolean {
-  const lines = added.get(frag.name);
-  if (!lines) return false;
-  const startLine = frag.startLoc.line;
-  const endLine = frag.endLoc.line;
-  for (let l = startLine; l <= endLine; l++) {
-    if (lines.has(l)) return true;
-  }
-  return false;
 }
 
 function filterGenuineNewClones(

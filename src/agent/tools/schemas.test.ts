@@ -285,6 +285,40 @@ describe('agentTool', () => {
   });
 });
 
+describe('agentTool / composeTool readRoots + writeRoots confinement qualifications', () => {
+  // Pins the confinement semantics documented in schemas.agent-tools.ts so
+  // future edits cannot silently drop the "unconfined session" no-op clause
+  // or the confinement-only grant language (#3794).
+
+  it('agentTool readRoots description mentions unconfined-session no-op', () => {
+    const desc: string = (agentTool.input_schema.properties as Record<string, { description?: string }>)['readRoots']?.description ?? '';
+    expect(desc).toContain('unconfined');
+    expect(desc).toContain('do not request confinement');
+    expect(desc).toContain('Grandchildren must be re-granted');
+  });
+
+  it('agentTool writeRoots description mentions unconfined-session no-op', () => {
+    const desc: string = (agentTool.input_schema.properties as Record<string, { description?: string }>)['writeRoots']?.description ?? '';
+    expect(desc).toContain('unconfined');
+    expect(desc).toContain('do not request confinement');
+  });
+
+  it('composeTool node readRoots description mentions unconfined-session no-op', () => {
+    const nodeItems = (composeTool.input_schema.properties as Record<string, { items?: { properties?: Record<string, { description?: string }> } }>)['nodes']?.items;
+    const desc: string = nodeItems?.properties?.['readRoots']?.description ?? '';
+    expect(desc).toContain('unconfined');
+    expect(desc).toContain('do not request confinement');
+    expect(desc).toContain('Grandchildren must be re-granted');
+  });
+
+  it('composeTool node writeRoots description mentions unconfined-session no-op', () => {
+    const nodeItems = (composeTool.input_schema.properties as Record<string, { items?: { properties?: Record<string, { description?: string }> } }>)['nodes']?.items;
+    const desc: string = nodeItems?.properties?.['writeRoots']?.description ?? '';
+    expect(desc).toContain('unconfined');
+    expect(desc).toContain('do not request confinement');
+  });
+});
+
 describe('compose and skill tool descriptions', () => {
   it('documents every tool unavailable to compose leaf nodes', () => {
     expect(CHILD_ALLOWED_TOOLS).not.toContain('compose');
@@ -296,6 +330,11 @@ describe('compose and skill tool descriptions', () => {
     }
     expect(composeTool.description).toContain('parallel `agent` calls');
     expect(composeTool.description).toContain('invoke `skill` once');
+  });
+
+  it('agent and compose descriptions cross-reference each other', () => {
+    expect(agentTool.description).toContain('prefer `compose`');
+    expect(composeTool.description).toContain('prefer the `agent` tool');
   });
 
   it('does not suggest compose nodes for parallel skill invocation', () => {

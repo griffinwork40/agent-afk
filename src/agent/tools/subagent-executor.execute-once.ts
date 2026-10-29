@@ -39,6 +39,7 @@ import {
   checkNestedScope,
   checkAndRunRemoteDispatch,
 } from './subagent-executor.execute-once.helpers.js';
+import { resolveChildInheritedReadRoots } from './subagent-executor.execute-once.read-scope.js';
 
 export interface ExecuteOnceArgs {
   ctx: SubagentExecutorContext;
@@ -57,20 +58,6 @@ export interface ExecuteOnceArgs {
     error?: string,
     cwd?: string,
   ) => void;
-}
-
-/**
- * Resolve the parent manager's read-scope inputs and derive inherited read roots.
- * Extracted from executeOnce to stay within the 200-line function ceiling (#4475).
- */
-function resolveChildReadScope(
-  manager: { getReadScopeInputs?: () => { parentReadRoots?: string[]; parentCwd?: string } },
-): { childScopeInputs: { parentReadRoots: string[] | undefined; parentCwd: string | undefined }; childInheritedReadRoots: string[] | undefined } {
-  const raw = manager.getReadScopeInputs?.();
-  const childScopeInputs = { parentReadRoots: raw?.parentReadRoots, parentCwd: raw?.parentCwd };
-  const childInheritedReadRoots = childScopeInputs.parentReadRoots
-    ?? (childScopeInputs.parentCwd !== undefined ? [childScopeInputs.parentCwd] : undefined);
-  return { childScopeInputs, childInheritedReadRoots };
 }
 
 /**
@@ -162,7 +149,11 @@ export async function executeOnce(
   }
   { const r = await checkAndRunRemoteDispatch(parsed, call.signal, budgetReceipt, call.id, updateCurrentWaveUnit); if (r !== undefined) return r; }
 
-  const { childScopeInputs, childInheritedReadRoots } = resolveChildReadScope(ctx.subagentManager);
+  // Resolve child read-scope from the parent manager. See resolveChildInheritedReadRoots
+  // in the helpers module for the full collapse-caveat documentation (#4438, #4472).
+  const { childScopeInputs, childInheritedReadRoots } = resolveChildInheritedReadRoots(
+    ctx.subagentManager.getReadScopeInputs?.bind(ctx.subagentManager),
+  );
 
   // Phase 1: build base config (model, tools, budgets, credential) without
   // nesting wiring. Nesting is deferred until after isolation setup so depth-2+

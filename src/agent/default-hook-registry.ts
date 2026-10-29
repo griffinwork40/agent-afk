@@ -39,6 +39,7 @@ import type { LoadedHooksConfig } from './hooks/config-loader.js';
 import { loadAndRegisterConfigHooks } from './hooks/config-bridge.js';
 import { createWhatifEpisodeGate } from './whatif-episode-gate.js';
 import { createUnprovenDiagnosisDetectHook } from './unproven-diagnosis-detect.js';
+import { createInlineImageHook } from './tools/hooks/inline-image-hook.js';
 
 export interface SubagentCompleteInfo {
   subagentId: string;
@@ -411,6 +412,12 @@ export function createDefaultHookRegistry(
   registerFacetAndOutcomeHooks(registry, agentOptions?.cwd);
   registerSubagentCompleteHook(registry, onSubagentComplete);
   registerEffectLedgerHooks(registry);
+  // Inline terminal image rendering (#2143): renders image_generate, image_edit,
+  // and browser_screenshot results inline via Kitty / iTerm2 protocol when the
+  // terminal supports it. Non-blocking display-only hook; skipped on subagents
+  // and non-TTY surfaces. Registered after the ledger so it fires last and never
+  // interferes with policy or accounting hooks.
+  registry.register('PostToolUse', createInlineImageHook(agentOptions?.cwd));
   registerConfigHooks(registry, hookConfig, agentOptions);
   // Install process-scoped plugin declarations last; built-in and config
   // handlers retain their registration order above.

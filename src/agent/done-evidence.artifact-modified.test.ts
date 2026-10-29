@@ -59,9 +59,20 @@ describe('classifyDoneEvidence – artifact modified after tests passed (Scenari
   it('returns "unverified" when edit_file is applied after a passing test', () => {
     // Sequence: edit → test passes → another edit_file (stale certification)
     const events: ToolEventMin[] = [
-      { toolName: 'edit_file', input: 'src/baz.ts', isError: false },
+      { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
       { toolName: 'bash', input: 'pnpm test', isError: false },
-      { toolName: 'edit_file', input: 'src/baz.ts', isError: false },
+      { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
+    ];
+    expect(classifyDoneEvidence(events)).toBe('unverified');
+  });
+
+  it('returns "unverified" when write_file is the initial mutation and edit_file follows a passing test', () => {
+    // Exercises write_file in the initial-mutation position (CODE_MUTATION_TOOLS branch).
+    // Sequence: write_file → test passes → edit_file (stale certification)
+    const events: ToolEventMin[] = [
+      { toolName: 'write_file', input: 'src/foo.ts', isError: false },
+      { toolName: 'bash', input: 'pnpm test', isError: false },
+      { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
     ];
     expect(classifyDoneEvidence(events)).toBe('unverified');
   });
@@ -71,7 +82,8 @@ describe('classifyDoneEvidence – artifact modified after tests passed (Scenari
     // Known defect: `patch_apply` is absent from CODE_MUTATION_TOOLS in
     // done-evidence.ts:55, so a patch applied after tests pass is not detected
     // as a mutation — the earlier test result incorrectly certifies the artifact.
-    // Fix: add 'patch_apply' to CODE_MUTATION_TOOLS. Tracked by #3714.
+    // Fix: add 'patch_apply' to both CODE_MUTATION_TOOLS and DONE_EVIDENCE_TOOLS.
+    // See session-end-hook.ts:89 and load-outcome-turns.test.ts:250. Tracked by #3714.
     () => {
       const events: ToolEventMin[] = [
         { toolName: 'edit_file', input: 'src/qux.ts', isError: false },
@@ -83,8 +95,9 @@ describe('classifyDoneEvidence – artifact modified after tests passed (Scenari
   );
 
   it('returns "unverified" when a bash output-redirect follows a passing test', () => {
-    // `echo "new content" > src/foo.ts` is a shell write operator — must
-    // invalidate the earlier verification even though it matches isVerificationCommand:false.
+    // `echo "new content" > src/foo.ts` must invalidate the earlier verification.
+    // Detection path: classifyBashCommand(e.input).mutating via Pass 3 REAL_REDIRECT
+    // (shell write-redirect operator), not via isVerificationCommand.
     const events: ToolEventMin[] = [
       { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
       { toolName: 'bash', input: 'pnpm test', isError: false },

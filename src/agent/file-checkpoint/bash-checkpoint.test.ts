@@ -240,6 +240,46 @@ describe('bash checkpoint hook', () => {
     await runClose(0);
     expect(outcome()).toEqual([expect.objectContaining({ status: 'partial', reason: partial.partial })]);
   });
+  it('skips after-snapshot diff when repoRoot changes between captures', async () => {
+    // Finding #5: verify the "repository changed" skip path when repoRoot
+    // differs between the before and after captures.
+    const otherRoot = join(root, 'other');
+    vi.mocked(captureWorkspaceTree)
+      .mockResolvedValueOnce({ ok: true, repoRoot: root, tree: 'before' })
+      .mockResolvedValueOnce({ ok: true, repoRoot: otherRoot, tree: 'after' });
+    await runClose(0);
+    expect(captureWorkspaceTree).toHaveBeenCalledTimes(2);
+    expect(diffTrees).not.toHaveBeenCalled();
+    expect(outcome()).toEqual([expect.objectContaining({ status: 'skipped', reason: 'repository changed' })]);
+  });
+
+  it('timedOutIndexes persists across different registry instances for the same index file', async () => {
+    // Finding #6: timedOutIndexes is module-level state keyed by indexFile path.
+    // A timeout recorded against one registry must disable capture for a second
+    // registry that shares the same session (and therefore the same indexFile).
+    vi.useFakeTimers(); vi.stubEnv('AFK_FILE_CHECKPOINT_BASH_TIMEOUT_MS', '10');
+    // First registry: trigger a capture timeout so the index is added to timedOutIndexes.
+    vi.mocked(captureWorkspaceTree).mockImplementation(() => new Promise(() => {}));
+    const first = beginBashCheckpoint(registry, root);
+    await vi.advanceTimersByTimeAsync(11);
+    await (await first).finish();
+    expect(outcome()).toEqual([expect.objectContaining({ status: 'skipped', reason: 'timeout' })]);
+
+    // Second registry: different object instance, same sessionId/stateDir → same indexFile path.
+    const registry2 = createFileCheckpointRegistry('session', 'turn2', root);
+    vi.mocked(captureWorkspaceTree).mockResolvedValue({ ok: true, repoRoot: root, tree: 'tree' });
+    await (await beginBashCheckpoint(registry2, root)).finish();
+
+    // captureWorkspaceTree must NOT be called again: the index is disabled.
+    expect(captureWorkspaceTree).toHaveBeenCalledTimes(1);
+    // Both turns' log entries are in the same session log file.
+    const allBash = readTurnLog('session', root).filter((e) => e.kind === 'bash');
+    expect(allBash).toEqual([
+      expect.objectContaining({ status: 'skipped', reason: 'timeout' }),
+      expect.objectContaining({ status: 'skipped', reason: 'timeout (capture disabled for this session after a slow first snapshot)' }),
+    ]);
+  });
+
   it('captures once at detach and records partial, not at later close', async () => {
     const detachRegistry = new DetachableToolRegistry();
     const run = createBashHandler('default', root)({ command: 'fake' }, new AbortController().signal, { fileCheckpoint: registry, detachRegistry, toolUseId: 'tool' });

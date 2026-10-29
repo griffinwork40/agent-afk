@@ -16,8 +16,8 @@ import { describe, it, expect, vi } from 'vitest';
 
 // Mock the Telegram push primitive before the gate module (which imports it
 // for its default notifier) so no test can touch the network.
-vi.mock('../telegram/push.js', () => ({
-  pushIfConfigured: vi.fn().mockResolvedValue(null),
+vi.mock('./operator-notify.js', () => ({
+  operatorNotify: vi.fn().mockResolvedValue(null),
 }));
 
 import { createAskQuestionGate, ASK_QUESTION_GATE_REASON } from './ask-question-gate.js';

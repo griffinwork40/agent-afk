@@ -13,6 +13,7 @@
 import { writeJsonFileAsync } from '../../utils/json-file.js';
 import { getSessionMetaPath } from '../../paths.journal.js';
 import { readFileSync } from 'fs';
+import { debugLog } from '../../utils/debug.js';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -52,7 +53,7 @@ export interface SessionMeta {
 
 /**
  * Write the session-meta.json sidecar atomically. Best-effort: errors are
- * swallowed and logged to stderr so a sidecar failure never breaks session
+ * swallowed and logged via debugLog so a sidecar failure never breaks session
  * startup. Uses atomic write (tmp+rename via writeJsonFileAsync).
  */
 export async function writeSessionMeta(meta: SessionMeta): Promise<void> {
@@ -60,8 +61,9 @@ export async function writeSessionMeta(meta: SessionMeta): Promise<void> {
     await writeJsonFileAsync(getSessionMetaPath(meta.sessionId), meta);
   } catch (err) {
     // Best-effort: a sidecar write failure must never break session startup.
-    // eslint-disable-next-line no-console
-    console.error(`[session-meta] failed to write session-meta.json: ${err}`);
+    // Use debugLog (not console.error) to avoid Vitest EnvironmentTeardownError
+    // when this fire-and-forget promise rejects after the test worker RPC closes.
+    debugLog(`[session-meta] failed to write session-meta.json: ${err}`);
   }
 }
 

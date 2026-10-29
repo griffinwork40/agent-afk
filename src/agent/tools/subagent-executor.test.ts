@@ -2922,4 +2922,88 @@ describe('SubagentExecutor', () => {
       expect(executor.hasActiveForeground()).toBe(false);
     });
   });
+
+  // History: #4438 added getReadScopeInputs() so executeOnce could derive
+  // childInheritedReadRoots. #4472 found no executor-level test for the
+  // parentCwd fallback path and documents the pre-existing unwired-manager
+  // collapse (finding #2 in execute-once.ts). These tests capture the nested
+  // child SubagentManager built by wireChildNesting (same technique as the
+  // cwd/traceWriter chain tests above) and call getReadScopeInputs() on it.
+  describe('executeOnce read-scope: root-manager parentCwd fallback (#4472)', () => {
+    /** Build an executor with a childProviderFactory that captures the child
+     *  executor's ctx.subagentManager for inspection after execute() resolves. */
+    function makeReadScopeExecutor(inputs: {
+      parentReadRoots: string[] | undefined;
+      parentCwd: string | undefined;
+    }): {
+      exec: SubagentExecutor;
+      getChildManager: () => SubagentExecutorContext['subagentManager'] | undefined;
+    } {
+      let childCtx: SubagentExecutorContext | undefined;
+      const mgr = mockManager();
+      (mgr as any).getReadScopeInputs = () => inputs;
+      const factory = vi.fn().mockImplementation(({ childExecutor }: { childExecutor: SubagentExecutor }) => {
+        childCtx = (childExecutor as any).ctx as SubagentExecutorContext;
+        return { name: 'p', query: vi.fn() };
+      });
+      const exec = new SubagentExecutor({
+        subagentManager: mgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        childProviderFactory: factory,
+        defaultSubagentModel: 'sonnet',
+        depth: 0,
+        maxDepth: DEFAULT_MAX_NESTING_DEPTH,
+      });
+      return { exec, getChildManager: () => childCtx?.subagentManager };
+    }
+
+    it('parentCwd fallback: child SubagentManager receives [parentCwd] as parentReadRoots when parentReadRoots is undefined', async () => {
+      // executeOnce computes childInheritedReadRoots = ['/repo'] and passes it
+      // into wireChildNesting → buildNestedChildManager → new SubagentManager
+      // ({ parentReadRoots: ['/repo'] }). The child executor ctx captures that
+      // manager, so getReadScopeInputs() on it returns parentReadRoots = ['/repo'].
+      const { exec, getChildManager } = makeReadScopeExecutor({
+        parentReadRoots: undefined,
+        parentCwd: '/repo',
+      });
+
+      const result = await exec.execute(makeCall({ input: { prompt: 'test' } }));
+      expect(result.isError).toBeUndefined();
+
+      const childReadScope = getChildManager()?.getReadScopeInputs();
+      expect(childReadScope?.parentReadRoots).toEqual(['/repo']);
+    });
+
+    it('explicit parentReadRoots: child SubagentManager receives them verbatim', async () => {
+      // When getReadScopeInputs() returns explicit parentReadRoots, executeOnce
+      // forwards them unchanged (does not substitute or wrap with parentCwd).
+      const roots = ['/repo', '/shared/data'];
+      const { exec, getChildManager } = makeReadScopeExecutor({
+        parentReadRoots: roots,
+        parentCwd: '/repo',
+      });
+
+      await exec.execute(makeCall({ input: { prompt: 'test' } }));
+
+      const childReadScope = getChildManager()?.getReadScopeInputs();
+      expect(childReadScope?.parentReadRoots).toEqual(roots);
+    });
+
+    it('both undefined: child SubagentManager gets no parentReadRoots (cwd-derivation governs)', async () => {
+      // Both undefined collapses "unwired manager" and "known-unconfined parent"
+      // (#4438 finding #2, documented in execute-once.ts). No
+      // childInheritedReadRoots is seeded, so the child manager's own
+      // cwd-derivation applies and parentReadRoots stays undefined.
+      const { exec, getChildManager } = makeReadScopeExecutor({
+        parentReadRoots: undefined,
+        parentCwd: undefined,
+      });
+
+      await exec.execute(makeCall({ input: { prompt: 'test' } }));
+
+      const childReadScope = getChildManager()?.getReadScopeInputs();
+      expect(childReadScope?.parentReadRoots).toBeUndefined();
+    });
+  });
 });

@@ -14,10 +14,11 @@ vi.mock('../../../agent/auth/model-availability.js', () => ({
   isModelAvailable: (model: string | undefined) => model !== 'large' && model !== 'opus',
 }));
 
-// /usage delegates entirely to fetchSubscriptionUsage() — mocked so tests
+// /usage delegates entirely to collectUsageSummary() — mocked so tests
 // never hit the network; each /usage test sets its own resolved value.
-vi.mock('../../../agent/subscription-usage.js', () => ({
-  fetchSubscriptionUsage: vi.fn(),
+vi.mock('../../commands/usage.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../commands/usage.js')>(),
+  collectUsageSummary: vi.fn(),
 }));
 
 // /history delegates to replayTurns (sidecar path) and replayJournal
@@ -36,7 +37,7 @@ vi.mock('../../commands/interactive/turn-record-renderer.replay.journal.js', () 
 }));
 
 import { infoCommands } from './info.js';
-import { fetchSubscriptionUsage } from '../../../agent/subscription-usage.js';
+import * as usageModule from '../../commands/usage.js';
 import type { SlashContext, SessionStats } from '../types.js';
 import type { PickerController, TerminalCompositor } from '../../terminal-compositor.js';
 
@@ -270,60 +271,61 @@ describe('/tokens — last-turn window precedence', () => {
 });
 
 const usageCmd = infoCommands.find((c) => c.name === '/usage')!;
-const mockFetchUsage = vi.mocked(fetchSubscriptionUsage);
+const mockCollectUsageSummary = vi.mocked(usageModule.collectUsageSummary);
 
 describe('/usage', () => {
-  it('kind:"ok" with all windows renders each as a percentage plus reset time', async () => {
+  it('renders all four windows with percentages', async () => {
     const { ctx, lines } = makeCtx(false);
-    mockFetchUsage.mockResolvedValueOnce({
-      kind: 'ok',
-      fiveHour: { utilization: 0.42, resetsAt: new Date('2026-01-01T00:00:00Z') },
-      sevenDay: { utilization: 0.10 },
-      sevenDaySonnet: { utilization: 0.05 },
-      sevenDayOpus: { utilization: 0.01 },
-    });
+    mockCollectUsageSummary.mockResolvedValueOnce({
+      asOfMs: Date.now(),
+      providers: [{
+        provider: 'anthropic', account: 'oauth', status: 'ok', ageMs: 0,
+        fiveHour: { utilization: 0.42, utilizationPct: 42, resetsIn: '2h' },
+        sevenDay: { utilization: 0.10, utilizationPct: 10 },
+        sevenDaySonnet: { utilization: 0.05, utilizationPct: 5 },
+        sevenDayOpus: { utilization: 0.01, utilizationPct: 1 },
+      }],
+    } as never);
 
     await usageCmd.handler(ctx, '');
 
     const text = lines.join('\n');
-    expect(text).toMatch(/5-hour/);
+    expect(text).toMatch(/5h/);
     expect(text).toMatch(/42%/);
-    expect(text).toMatch(/resets/);
-    expect(text).toMatch(/7-day/);
+    expect(text).toMatch(/7d/);
     expect(text).toMatch(/10%/);
-    expect(text).toMatch(/7-day \(Sonnet\)/);
     expect(text).toMatch(/5%/);
-    expect(text).toMatch(/7-day \(Opus\)/);
     expect(text).toMatch(/1%/);
   });
 
-  it('kind:"ok" with only fiveHour renders just that window', async () => {
+  it('renders a single 5h window', async () => {
     const { ctx, lines } = makeCtx(false);
-    mockFetchUsage.mockResolvedValueOnce({
-      kind: 'ok',
-      fiveHour: { utilization: 0.75 },
-    });
+    mockCollectUsageSummary.mockResolvedValueOnce({
+      asOfMs: Date.now(),
+      providers: [{
+        provider: 'anthropic', account: 'oauth', status: 'ok', ageMs: 0,
+        fiveHour: { utilization: 0.75, utilizationPct: 75 },
+      }],
+    } as never);
 
     await usageCmd.handler(ctx, '');
 
     const text = lines.join('\n');
-    expect(text).toMatch(/5-hour/);
+    expect(text).toMatch(/5h/);
     expect(text).toMatch(/75%/);
-    expect(text).not.toMatch(/7-day/);
   });
 
-  it('kind:"unavailable" with reason "no-token" tells the user to run claude login', async () => {
+  it('renders provider/account header on error status', async () => {
     const { ctx, lines } = makeCtx(false);
-    mockFetchUsage.mockResolvedValueOnce({
-      kind: 'unavailable',
-      reason: 'no-token',
-      detail: 'no credentials found',
-    });
+    mockCollectUsageSummary.mockResolvedValueOnce({
+      asOfMs: Date.now(),
+      providers: [{ provider: 'anthropic', account: 'oauth', status: 'error', errorDetail: 'no credentials found' }],
+    } as never);
 
     await usageCmd.handler(ctx, '');
 
     const text = lines.join('\n');
-    expect(text).toMatch(/claude login/);
+    expect(text).toMatch(/anthropic/);
   });
 });
 

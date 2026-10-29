@@ -26,17 +26,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { hasMergeBase, parseDiffOutput } from './lib/clone-gate.js';
+import { hasMergeBase, parseDiffOutput, fragmentOverlapsAdded, CloneFile } from './lib/clone-gate.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-interface CloneFile {
-  name: string;
-  start: number;
-  end: number;
-  startLoc: { line: number };
-  endLoc: { line: number };
-}
 
 interface Clone {
   firstFile: CloneFile;
@@ -73,22 +65,11 @@ function addedLinesByFile(baseRef: string): Map<string, Set<number>> {
     maxBuffer: 50 * 1024 * 1024,
   });
 
-  return parseDiffOutput(raw);
-}
-
-/** Check whether a clone fragment overlaps any added line in the diff. */
-function fragmentOverlapsAdded(
-  frag: CloneFile,
-  added: Map<string, Set<number>>,
-): boolean {
-  const lines = added.get(frag.name);
-  if (!lines) return false;
-  const startLine = frag.startLoc.line;
-  const endLine = frag.endLoc.line;
-  for (let l = startLine; l <= endLine; l++) {
-    if (lines.has(l)) return true;
+  const parsed = parseDiffOutput(raw);
+  if (parsed.size === 0) {
+    console.log('[clone-gate] diff has no added lines — overlap filter will pass all new clones through as genuine.');
   }
-  return false;
+  return parsed;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────

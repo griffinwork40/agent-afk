@@ -134,15 +134,19 @@ function saveSeen(stateDir: string, seen: Set<string>): void {
 }
 
 // Prevent the dedup set from growing unbounded across long-running pollers.
-const MAX_SEEN = 10_000;
+export const MAX_SEEN_FOR_TESTS = 10_000;
+const MAX_SEEN = MAX_SEEN_FOR_TESTS;
 
-function pruneSeen(seen: Set<string>): Set<string> {
+/** Exported for unit tests only — not part of the public API. */
+export function _pruneSeen(seen: Set<string>): Set<string> {
   if (seen.size <= MAX_SEEN) return seen;
   // Drop oldest entries (insertion order) down to 80% of the cap.
   const keep = Math.floor(MAX_SEEN * 0.8);
   const entries = [...seen];
   return new Set(entries.slice(entries.length - keep));
 }
+// Internal alias keeps call sites unchanged.
+const pruneSeen = _pruneSeen;
 
 // ---------------------------------------------------------------------------
 // Command rendering — untrusted payload is delimited
@@ -188,6 +192,10 @@ async function defaultGhRunner(
   extraArgs: string[] = [],
 ): Promise<unknown> {
   const args = ['api', path, '--paginate', '--slurp', ...extraArgs];
+  // maxBuffer of 10 MB is sufficient for the small per_page=30–50 payloads we
+  // request and is already larger than the default 1 MB. Very large repos with
+  // extremely verbose check-run or PR-comment payloads could still overflow;
+  // a follow-up can add --jq filtering or streaming if that becomes an issue.
   const { stdout } = await execFileAsync('gh', args, { maxBuffer: 10 * 1024 * 1024 });
   // --slurp wraps all pages into a single top-level JSON array.
   const parsed = JSON.parse(stdout) as unknown;
@@ -295,6 +303,14 @@ export class GithubEventPoller {
   private polling = false;
 
   constructor(opts: GithubPollerOptions) {
+    // Validate repo format: must be `owner/repo` with no leading slash, spaces,
+    // or extra path segments — anything else would silently build malformed API
+    // paths like `repos//repo/pulls/comments`.
+    if (!/^[^/\s]+\/[^/\s]+$/.test(opts.repo)) {
+      throw new Error(
+        `GithubEventPoller: invalid repo "${opts.repo}" — expected "owner/repo" format`,
+      );
+    }
     this.repo = opts.repo;
     this.events = opts.events;
     this.commandTemplate = opts.commandTemplate;

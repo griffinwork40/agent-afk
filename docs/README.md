@@ -16,6 +16,14 @@ One line per document, grouped by concern.
 
 ---
 
+## Introspection & Debugging
+
+- [afk-trace.md](afk-trace.md) — Read-only CLI for inspecting witness-layer traces: `afk trace show`, `afk trace list`, `afk trace export-otlp`.
+- [afk-witness.md](afk-witness.md) — Query-oriented CLI for filtering and searching traces across sessions: `afk witness read`, `afk witness search`.
+- [runtime-state.md](runtime-state.md) — `get_runtime_state` agent tool: six views (self, tools, subagents, workspace, hooks, all) with field-level reference.
+
+---
+
 ## Hooks
 
 - [hook-payload.md](hook-payload.md) — Shell hook stdin payload reference: every field, event-specific fields, `transcript_path` contract, and stdout response schema.

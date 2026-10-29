@@ -140,6 +140,13 @@ export async function systemAttributeFile(ctx: GitCtx, cwd: string): Promise<str
  * Contract: `supported` is the `--attr-source` probe result; when true only
  * `info/attributes` can still apply (global is off via `core.attributesFile=`
  * and system via GIT_ATTR_NOSYSTEM).
+ *
+ * System attribute file omission: the snapshot environment sets
+ * `GIT_ATTR_NOSYSTEM=1` (see `buildSnapshotEnv` in git-snapshot.exec.ts),
+ * which causes git to skip the system-wide attributes file entirely during
+ * `git add`. The system file therefore cannot influence blob content and does
+ * not need to be checked here. `systemAttributeFile` is intentionally not
+ * included in `files`.
  */
 export async function captureAttributeCheck(
   ctx: GitCtx, repoRoot: string, infoAttributes: string, supported: boolean,

@@ -16,7 +16,7 @@ import {
   type JournalSummary,
   type RunReceipt,
 } from './receipt.js';
-import type { JournalMessage } from '../journal/types.js';
+import type { JournalMessage, JournalRecord } from '../journal/types.js';
 import type { ClosureReason, ToolFailureClass, TraceEvent } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -641,6 +641,69 @@ describe('extractJournalSummary (#4427)', () => {
     }];
     const summary = extractJournalSummary(messages, false)!;
     expect(summary.firstUserMessage).toBe('spilled content preview');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Compaction survival (#4432)
+  // ---------------------------------------------------------------------------
+
+  it('reads original first user message from raw records after mid-session compaction', () => {
+    // Simulate a journal that underwent mid-session compaction:
+    //   - records 0-2: original conversation (user "real first message", assistant with tools, user follow-up)
+    //   - truncate(0, 'compact'): compaction discards the original prefix
+    //   - records 3+: compaction summary + new messages re-appended from index 0
+    // foldJournal produces: [compaction-summary-user, assistant-reply]
+    // rawRecords still contains the original index=0 append with the real user message.
+
+    const V = 1 as const;
+
+    const rawRecords: JournalRecord[] = [
+      { v: V, ts: 1, kind: 'append', index: 0, message: { role: 'user', content: [{ type: 'text', text: 'real first message' }] } },
+      { v: V, ts: 2, kind: 'append', index: 1, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'bash', input: {} }, { type: 'text', text: 'running bash' }] } },
+      { v: V, ts: 3, kind: 'append', index: 2, message: { role: 'user', content: [{ type: 'text', text: 'follow-up' }] } },
+      { v: V, ts: 4, kind: 'truncate', length: 0, reason: 'compact' },
+      // After compaction: synthetic summary as first message, then new assistant reply
+      { v: V, ts: 5, kind: 'append', index: 0, message: { role: 'user', content: [{ type: 'text', text: '[Summary of prior conversation]' }] } },
+      { v: V, ts: 6, kind: 'append', index: 1, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu2', name: 'read_file', input: {} }, { type: 'text', text: 'final answer' }] } },
+    ];
+
+    // The folded view (what loadJournalMessages returns after compaction)
+    const foldedMessages: JournalMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: '[Summary of prior conversation]' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'tu2', name: 'read_file', input: {} }, { type: 'text', text: 'final answer' }] },
+    ];
+
+    const summary = extractJournalSummary(foldedMessages, false, rawRecords)!;
+
+    // firstUserMessage must come from raw records — NOT the compaction summary
+    expect(summary.firstUserMessage).toBe('real first message');
+    // lastAssistantMessage still comes from the folded view
+    expect(summary.lastAssistantMessage).toBe('final answer');
+    // toolUseCount covers ALL tool_use blocks across raw records (bash + read_file)
+    expect(summary.toolUseCount).toBe(2);
+    expect(summary.toolNames).toContain('bash');
+    expect(summary.toolNames).toContain('read_file');
+    // messageCount reflects the folded (live context) count
+    expect(summary.messageCount).toBe(2);
+  });
+
+  it('falls back to folded view when rawRecords is empty', () => {
+    const messages: JournalMessage[] = [
+      userMsg('folded first'),
+      assistantMsg('folded reply'),
+    ];
+    const summary = extractJournalSummary(messages, false, [])!;
+    expect(summary.firstUserMessage).toBe('folded first');
+    expect(summary.toolUseCount).toBe(0);
+  });
+
+  it('falls back to folded view when rawRecords is omitted', () => {
+    const messages: JournalMessage[] = [
+      userMsg('folded first'),
+      assistantMsg('folded reply'),
+    ];
+    const summary = extractJournalSummary(messages, false)!;
+    expect(summary.firstUserMessage).toBe('folded first');
   });
 });
 
