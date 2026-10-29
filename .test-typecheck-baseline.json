@@ -1,1 +1,1 @@
-{ "errors": 2686 }
+{ "errors": 2688, "reason": "2 errors pre-existing on main (fork-result.test.ts TS2322 x2); not introduced by this PR" }

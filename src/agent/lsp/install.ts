@@ -99,11 +99,12 @@ export async function acquireInstallLock(
         try { await unlink(lockFile); } catch { /* already removed */ }
       };
     } catch (err: unknown) {
-      // EEXIST → another process has the file; check staleness.
+      // EEXIST → another process has the file; check staleness below.
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
-        // Unexpected error (permissions etc.) — skip locking, proceed anyway.
-        // npm install is idempotent; worst case two processes overlap.
-        return async (): Promise<void> => { /* nothing to release */ };
+        // Unexpected error (EACCES, EMFILE, EROFS, …) — propagate so
+        // ensureInstalledSafe maps it to {kind:'failed'} instead of
+        // proceeding without the lock.
+        throw err;
       }
     }
 
