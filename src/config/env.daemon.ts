@@ -110,6 +110,7 @@ export const DAEMON_ENV_REGISTRY = [
       'Part of #3896 (event-triggered runs).',
     type: 'string',
     required: false,
+    secret: true,
     category: 'daemon',
   },
   {

@@ -378,6 +378,7 @@
       "description": "HMAC-SHA256 secret for the `afk events serve` GitHub webhook receiver. Must match the secret configured in the GitHub webhook settings page. Every incoming request is rejected with 401 unless it carries a valid X-Hub-Signature-256 header signed with this value. Part of #3896 (event-triggered runs).",
       "type": "string",
       "required": false,
+      "secret": true,
       "category": "daemon"
     },
     {

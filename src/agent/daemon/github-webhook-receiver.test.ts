@@ -612,9 +612,7 @@ describe('WebhookReceiver.handleRequest — check_run failure-class conclusions'
 // ---------------------------------------------------------------------------
 
 describe('WebhookReceiver.handleRequest — pull_request_review_comment any action', () => {
-  const actions = ['created', 'edited', 'deleted'];
-
-  for (const action of actions) {
+  for (const action of ['created', 'edited']) {
     it(`enqueues pull_request_review_comment with action: ${action}`, async () => {
       const receiver = makeReceiver();
       const res = await sendWebhook({
@@ -629,4 +627,17 @@ describe('WebhookReceiver.handleRequest — pull_request_review_comment any acti
       expect(readQueuedTasks()[0]!.command).toContain('pr_comment');
     });
   }
+
+  it('ignores pull_request_review_comment with action: deleted', async () => {
+    const receiver = makeReceiver();
+    const res = await sendWebhook({
+      receiver,
+      eventName: 'pull_request_review_comment',
+      deliveryId: 'del-prc-deleted',
+      body: makePayload({ action: 'deleted', comment: { body: 'text', html_url: 'http://x' } }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('Ignored');
+    expect(readQueuedTasks()).toHaveLength(0);
+  });
 });

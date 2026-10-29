@@ -32,12 +32,13 @@ import {
   type ServerResponse,
 } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { enqueue } from './queue-store.js';
 import { renderCommand, type GithubEventType } from './github-event-poller.js';
 import { errorMessage } from '../../utils/errors.js';
 import { getAfkStateDir } from '../../paths.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -96,6 +97,8 @@ function resolveEventType(
 ): GithubEventType | undefined {
   switch (githubEvent) {
     case 'pull_request_review_comment':
+      // Deleted comments are no longer actionable — skip them.
+      if (payload.action === 'deleted') return undefined;
       return 'pr_comment';
     case 'check_run': {
       // Only completed check_runs with a failure-class conclusion map to
@@ -153,7 +156,7 @@ function persistSeenSet(dedupPath: string, seen: Set<string>): void {
     : arr;
   const dir = join(dedupPath, '..');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(dedupPath, JSON.stringify(trimmed));
+  atomicWriteFile(dedupPath, JSON.stringify(trimmed));
 }
 
 // ---------------------------------------------------------------------------
