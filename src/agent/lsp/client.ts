@@ -30,7 +30,7 @@ import type { ServerSpec } from './server-spec.js';
 import { answerServerRequest, CLIENT_CAPABILITIES } from './client-handlers.js';
 import { DocumentSync, type SyncResult } from './document-sync.js';
 import { DiagnosticsStore } from './diagnostics-store.js';
-import { exitPromise, forceKillRoot, killServerTree, killServerTreeAndWait, spawnServer, waitForExit } from './client-process.js';
+import { exitPromise, forceKillRoot, killServerTree, killServerTreeAndWait, killServerTreeSync, spawnServer, waitForExit } from './client-process.js';
 
 /** Failure kinds surfaced to handlers so they can map to their error strings. */
 export type LspFailureKind = 'timeout' | 'aborted' | 'exited' | 'spawn' | 'response';
@@ -304,6 +304,16 @@ export class LspClient {
   dispose(): Promise<void> {
     this.disposing ??= this.doDispose();
     return this.disposing;
+  }
+
+  /**
+   * Synchronous best-effort tree kill. Safe to call from a `process.on('exit')`
+   * handler where the event loop is no longer running. Never throws.
+   * Used by `LspServerPool.killAll()` for non-interactive exit paths (#4309 item 2).
+   */
+  killSync(): void {
+    this.markDead('sync-kill');
+    killServerTreeSync(this.proc);
   }
 
   private async doDispose(): Promise<void> {

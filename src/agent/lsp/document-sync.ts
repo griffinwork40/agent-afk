@@ -24,11 +24,20 @@ export class DocumentSync {
   private readonly docs = new Map<string, DocState>();
   // Invariant: closing releases text, not version identity. A delayed publish
   // from a prior open must never match a later reopen in this client lifetime.
-  private readonly versions = new Map<string, number>();
+  // Versions are allocated from a client-wide monotonic counter (#4309 item 4):
+  // this means every didOpen/didChange across ALL documents draws from the same
+  // sequence, so the `lastVersions` map (which only stores a number, not text)
+  // is the sole per-URI retained state after close — the old `versions` Map
+  // was identical in structure but used per-URI +1 counters instead.
+  private nextVersion = 1;
+  // Retains only the last-assigned version number for each URI (including
+  // closed ones) so that version() still works for stale-diagnostic matching.
+  // Stores small integers; the memory cost per URI is negligible.
+  private readonly lastVersions = new Map<string, number>();
 
   /** Last assigned version for `uri`, including closed docs; undefined if never opened. */
   version(uri: string): number | undefined {
-    return this.versions.get(uri);
+    return this.lastVersions.get(uri);
   }
 
   /** Uris currently open (tests / diagnostics). */
@@ -57,9 +66,9 @@ export class DocumentSync {
   sync(uri: string, languageId: string, text: string): SyncResult {
     const prev = this.docs.get(uri);
     if (!prev) {
-      const version = (this.versions.get(uri) ?? 0) + 1;
-      this.versions.set(uri, version);
+      const version = this.nextVersion++;
       this.docs.set(uri, { version, text });
+      this.lastVersions.set(uri, version);
       return {
         version,
         changed: true,
@@ -70,9 +79,9 @@ export class DocumentSync {
       };
     }
     if (prev.text === text) return { version: prev.version, changed: false, notification: null };
-    const version = prev.version + 1;
-    this.versions.set(uri, version);
+    const version = this.nextVersion++;
     this.docs.set(uri, { version, text });
+    this.lastVersions.set(uri, version);
     return {
       version,
       changed: true,
