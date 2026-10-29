@@ -1,1 +1,1 @@
-{ "errors": 2687, "reason": "merge-base regression: subagent-executor.test.ts +1 error from main (SubagentExecutorContext.defaultSubagentModel required field missing in test fixture, introduced by main at 1e5b9fd); not introduced by this PR" }
+{ "errors": 2686 }
