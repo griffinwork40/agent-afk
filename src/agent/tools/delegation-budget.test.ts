@@ -240,11 +240,13 @@ describe('resolveDelegationBudgetConfig', () => {
 
   // Save and restore env around each test
   const saved: Partial<Record<string, string>> = {};
+  let warnSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     for (const key of ENV_KEYS) {
       saved[key] = process.env[key];
       delete process.env[key];
     }
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
   afterEach(() => {
     for (const key of ENV_KEYS) {
@@ -254,6 +256,7 @@ describe('resolveDelegationBudgetConfig', () => {
         process.env[key] = saved[key];
       }
     }
+    warnSpy.mockRestore();
     vi.resetModules();
   });
 
@@ -310,6 +313,11 @@ describe('resolveDelegationBudgetConfig', () => {
     // Only this one var set, and it is non-numeric — all three resolve undefined
     const config = resolveDelegationBudgetConfig();
     expect(config).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('abc'));
   });
 
   it('returns undefined for zero (zero is not a positive int)', () => {
@@ -344,6 +352,11 @@ describe('resolveDelegationBudgetConfig', () => {
     const config = resolveDelegationBudgetConfig();
     // profile deep would give maxConcurrentAgents=16 — individual invalid var must block that
     expect(config?.maxConcurrentAgents).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('AFK_MAX_CONCURRENT_AGENTS'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('notanumber'));
   });
 
   it('profile=deep + AFK_MAX_CONCURRENT_AGENTS=0 → maxConcurrentAgents undefined (zero is not positive)', () => {
@@ -352,6 +365,11 @@ describe('resolveDelegationBudgetConfig', () => {
     const config = resolveDelegationBudgetConfig();
     // zero is not a valid positive int; profile must not override an explicitly-set var
     expect(config?.maxConcurrentAgents).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('AFK_MAX_CONCURRENT_AGENTS'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('0'));
   });
 
   it('profile=deep + AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT=notanumber → maxConcurrentChildrenPerAgent undefined; profile still fills other fields', () => {
@@ -363,6 +381,11 @@ describe('resolveDelegationBudgetConfig', () => {
     // The other two fields are unset — profile fills them in normally
     expect(config?.maxConcurrentAgents).toBe(16);
     expect(config?.maxTotalAgents).toBe(48);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('notanumber'));
   });
 });
 

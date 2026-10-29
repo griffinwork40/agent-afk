@@ -41,6 +41,8 @@
  * @module config/endpoint-semaphore
  */
 
+import { env } from './env.js';
+
 /** A minimal counting semaphore. */
 export interface EndpointSemaphore {
   /** Block until a slot is available, then claim it. */
@@ -95,7 +97,7 @@ class CountingSemaphore implements EndpointSemaphore {
       // slot directly to the next waiter rather than decrement then re-increment.
       next();
     } else {
-      this._activeCount -= 1;
+      this._activeCount = Math.max(0, this._activeCount - 1);
     }
   }
 }
@@ -183,9 +185,16 @@ export async function withEndpointSemaphore<T>(
  * Clear all registered semaphores and conflict-warn state.
  * **Test-only** — calling this in production would race with live requests.
  * Named with a leading underscore to make the intent clear.
+ *
+ * Throws at runtime when `NODE_ENV` is not `'test'` so any accidental
+ * production import fails loudly rather than silently corrupting shared state.
+ *
  * @internal
  */
 export function _resetEndpointSemaphores(): void {
+  if (env.NODE_ENV !== 'test') {
+    throw new Error('[endpoint-semaphore] _resetEndpointSemaphores() must only be called in tests.');
+  }
   _semaphoreRegistry.clear();
   _warnedConflictKeys.clear();
 }

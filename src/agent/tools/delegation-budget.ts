@@ -78,15 +78,26 @@ function resolvePositiveInt(
  * this field — even when `raw` is invalid. An invalid-but-set individual var
  * means "no cap", not "fall through to profile". Only consult the profile when
  * `raw === undefined` (the var was never set).
+ *
+ * Emits a `console.warn` when `raw` is set but fails to parse as a positive
+ * integer, so operators see a clear signal rather than silent no-cap behaviour.
  */
 function resolveIndividualOrProfile(
   raw: string | undefined,
   ceiling: number,
   profileValue: number | undefined,
+  name: string,
 ): number | undefined {
   if (raw !== undefined) {
     // Individual var explicitly set — profile must not win, even if invalid.
-    return resolvePositiveInt(raw, ceiling) ?? undefined;
+    const resolved = resolvePositiveInt(raw, ceiling);
+    if (resolved === undefined) {
+      console.warn(
+        `[delegation-budget] ${name}=${JSON.stringify(raw)} is not a valid positive integer` +
+        ` — no cap applied for this field (profile value, if any, is NOT used).`,
+      );
+    }
+    return resolved;
   }
   // Unset — profile is the fallback.
   return profileValue !== undefined
@@ -111,16 +122,19 @@ export function resolveDelegationBudgetConfig(): DelegationBudgetConfig | undefi
     env.AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT,
     CEILING_CONCURRENT_CHILDREN_PER_AGENT,
     profile?.maxConcurrentChildrenPerAgent,
+    'AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT',
   );
   const effectiveConcurrent = resolveIndividualOrProfile(
     env.AFK_MAX_CONCURRENT_AGENTS,
     CEILING_CONCURRENT_AGENTS,
     profile?.maxConcurrentAgents,
+    'AFK_MAX_CONCURRENT_AGENTS',
   );
   const effectiveTotal = resolveIndividualOrProfile(
     env.AFK_MAX_TOTAL_AGENTS,
     CEILING_TOTAL_AGENTS,
     profile?.maxTotalAgents,
+    'AFK_MAX_TOTAL_AGENTS',
   );
 
   if (
