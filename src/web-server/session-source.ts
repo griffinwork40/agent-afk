@@ -74,8 +74,8 @@ function truncateTitle(text: string): string {
  * Best-effort identity read: `cwd`/`surface`/`model` from session-meta.json
  * (O(1)) when present, falling back to a head-of-ledger scan for pre-sidecar
  * sessions. `title` always comes from the ledger `user` record (session-meta
- * does not store it). Stops the ledger scan once both `title` and all identity
- * fields are found, or after {@link HEAD_RECORD_SCAN_LIMIT} records.
+ * does not store it). Stops the ledger scan once both `title`, `cwd`, and
+ * `model` are found, or after {@link HEAD_RECORD_SCAN_LIMIT} records.
  *
  * Never throws. `readLedger` re-throws non-ENOENT filesystem errors (e.g. a
  * permission error), and a session's ledger content can be malformed or
@@ -106,7 +106,7 @@ async function readLedgerHead(
     let seen = 0;
     for await (const rec of readLedger(sessionId)) {
       seen += 1;
-      if (rec.kind === 'meta' && (out.cwd === undefined || out.surface === undefined || out.model === undefined)) {
+      if (rec.kind === 'meta' && (out.cwd === undefined || out.model === undefined)) {
         if (out.cwd === undefined && rec.cwd !== undefined) out.cwd = rec.cwd;
         if (out.surface === undefined && rec.surface !== undefined) out.surface = rec.surface;
         if (out.model === undefined && rec.model !== undefined) out.model = rec.model;
