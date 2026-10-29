@@ -551,4 +551,82 @@ describe('WebhookReceiver.handleRequest — dedup', () => {
     expect(res.body).toContain('Already processed');
     expect(readQueuedTasks()).toHaveLength(1);
   });
+
+  it('enqueues separately for different delivery IDs', async () => {
+    const receiver = makeReceiver();
+    const body = makePayload({ action: 'opened', issue: { number: 3, title: 'C', html_url: 'http://x' } });
+    await sendWebhook({ receiver, eventName: 'issues', deliveryId: 'unique-del-A', body });
+    await sendWebhook({ receiver, eventName: 'issues', deliveryId: 'unique-del-B', body });
+    expect(readQueuedTasks()).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — failure-class conclusions for check_run (Finding 1 extended)
+// ---------------------------------------------------------------------------
+
+describe('WebhookReceiver.handleRequest — check_run failure-class conclusions', () => {
+  const failureConclusions = ['failure', 'timed_out', 'cancelled', 'action_required', 'stale'];
+
+  for (const conclusion of failureConclusions) {
+    it(`enqueues check_run with conclusion: ${conclusion}`, async () => {
+      const receiver = makeReceiver();
+      const res = await sendWebhook({
+        receiver,
+        eventName: 'check_run',
+        deliveryId: `del-cr-${conclusion}`,
+        body: makePayload({
+          action: 'completed',
+          check_run: { name: 'CI', conclusion, html_url: 'http://x' },
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Accepted');
+      expect(readQueuedTasks()).toHaveLength(1);
+    });
+  }
+
+  const nonFailureConclusions = ['success', 'neutral', 'skipped'];
+
+  for (const conclusion of nonFailureConclusions) {
+    it(`ignores check_run with conclusion: ${conclusion}`, async () => {
+      const receiver = makeReceiver();
+      const res = await sendWebhook({
+        receiver,
+        eventName: 'check_run',
+        deliveryId: `del-cr-skip-${conclusion}`,
+        body: makePayload({
+          action: 'completed',
+          check_run: { name: 'CI', conclusion, html_url: 'http://x' },
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Ignored');
+      expect(readQueuedTasks()).toHaveLength(0);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// handleRequest — pull_request_review_comment enqueues for any action
+// ---------------------------------------------------------------------------
+
+describe('WebhookReceiver.handleRequest — pull_request_review_comment any action', () => {
+  const actions = ['created', 'edited', 'deleted'];
+
+  for (const action of actions) {
+    it(`enqueues pull_request_review_comment with action: ${action}`, async () => {
+      const receiver = makeReceiver();
+      const res = await sendWebhook({
+        receiver,
+        eventName: 'pull_request_review_comment',
+        deliveryId: `del-prc-${action}`,
+        body: makePayload({ action, comment: { body: 'text', html_url: 'http://x' } }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('Accepted');
+      expect(readQueuedTasks()).toHaveLength(1);
+      expect(readQueuedTasks()[0]!.command).toContain('pr_comment');
+    });
+  }
 });

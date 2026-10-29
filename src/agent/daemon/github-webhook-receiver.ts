@@ -98,10 +98,18 @@ function resolveEventType(
     case 'pull_request_review_comment':
       return 'pr_comment';
     case 'check_run': {
-      // Only completed check_runs with conclusion=failure map to check_failure.
-      // Successful / in-progress / neutral runs are not actionable failures.
-      const conclusion = payload.check_run?.conclusion;
-      if (payload.action === 'completed' && conclusion === 'failure') {
+      // Only completed check_runs with a failure-class conclusion map to
+      // check_failure. Successful / in-progress / neutral runs are not
+      // actionable failures.
+      const conclusion = payload.check_run?.conclusion ?? '';
+      const isFailureClass = (
+        conclusion === 'failure' ||
+        conclusion === 'timed_out' ||
+        conclusion === 'cancelled' ||
+        conclusion === 'action_required' ||
+        conclusion === 'stale'
+      );
+      if (payload.action === 'completed' && isFailureClass) {
         return 'check_failure';
       }
       return undefined;
@@ -185,17 +193,19 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let settled = false;
     req.on('data', (chunk: Buffer) => {
       total += chunk.length;
       if (total > MAX_BODY_BYTES) {
-        req.destroy(new Error('request body too large'));
+        settled = true;
+        req.destroy();
         reject(new Error('request body exceeds 1 MB limit'));
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+    req.on('end', () => { if (!settled) resolve(Buffer.concat(chunks)); });
+    req.on('error', (err) => { if (!settled) { settled = true; reject(err); } });
   });
 }
 
