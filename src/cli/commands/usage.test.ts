@@ -68,6 +68,16 @@ describe('collectUsageSummary credential placeholders', () => {
     expect(ids(s)).toEqual(['anthropic/oauth:unknown']);
   });
 
+  it('passes provider-specific detail through for a codex no-token (not the Claude hint)', async () => {
+    collectUsage.mockResolvedValue({
+      records: [],
+      codex: { kind: 'unavailable', reason: 'no-token', detail: 'ChatGPT sign-in expired. Run `codex` to refresh it.' },
+    });
+    const s = await collectUsageSummary(NOW, { chatgpt: () => ({ source: 'chatgpt-oauth' }), openaiApiKey: () => undefined });
+    expect(ids(s)).toEqual(['codex/chatgpt-subscription:error']);
+    expect(s.providers[0]?.errorDetail).toBe('ChatGPT sign-in expired. Run `codex` to refresh it.');
+  });
+
   it('maps no-token to an error entry with a claude login hint in errorDetail', async () => {
     collectUsage.mockResolvedValue({ records: [], anthropic: { kind: 'unavailable', reason: 'no-token', detail: 'No token.' } });
     loadAnthropicCredential.mockReturnValue('some-credential');

@@ -63,7 +63,7 @@ export async function collectUsageSummary(
   // rather than a generic "no signal" message.
   const placeholder = (ids: { provider: string; account: string }, result: UsageResult | undefined) => {
     if (result?.kind === 'unavailable') {
-      if (result.reason === 'no-token') {
+      if (result.reason === 'no-token' && ids.provider === 'anthropic') {
         return errorProviderSummary(
           ids.provider,
           ids.account,
