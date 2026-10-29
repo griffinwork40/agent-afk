@@ -319,9 +319,9 @@ describe('SessionOwner — retire()', () => {
     expect(sessionClose).toHaveBeenCalledOnce();
     expect(controlClose).toHaveBeenCalledOnce();
     // session.close() must be invoked before control.close().
-    expect(sessionClose.mock.invocationCallOrder[0]!).toBeLessThan(
-      controlClose.mock.invocationCallOrder[0]!,
-    );
+    const sessionOrder = sessionClose.mock.invocationCallOrder[0] ?? fail('sessionClose not called');
+    const controlOrder = controlClose.mock.invocationCallOrder[0] ?? fail('controlClose not called');
+    expect(sessionOrder).toBeLessThan(controlOrder);
   });
 
   it('does not throw when called for an unknown id', () => {
