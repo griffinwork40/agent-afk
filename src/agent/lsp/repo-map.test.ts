@@ -7,7 +7,10 @@
  *   3. Filesystem fallback: LSP disabled or fails.
  */
 
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { buildRepoMap, MAX_SYMBOLS, MAX_LINES } from './repo-map.js';
 import type { LspServerPool } from './pool.js';
 import type { LspClient } from './client.js';
@@ -158,6 +161,66 @@ describe('buildRepoMap — LSP path', () => {
     const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
     const lines = result.split('\n');
     expect(lines.length).toBeLessThanOrEqual(MAX_LINES + 1); // +1 for truncation marker
+  });
+});
+
+describe('buildRepoMap — filesystem fallback', () => {
+  let tmpDir: string;
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('result starts with "# Repo map" header when LSP is disabled', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '');
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-repo-map-test-'));
+    await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, 'src', 'index.ts'), '// index');
+    await fs.writeFile(path.join(tmpDir, 'src', 'utils.ts'), '// utils');
+
+    const result = await buildRepoMap({ rootDir: tmpDir, timeoutMs: 3000 });
+    expect(result.startsWith('# Repo map')).toBe(true);
+  });
+
+  it('groups files under src/ in a "src/:" line', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '');
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-repo-map-test-'));
+    await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, 'src', 'foo.ts'), '// foo');
+    await fs.writeFile(path.join(tmpDir, 'src', 'bar.ts'), '// bar');
+
+    const result = await buildRepoMap({ rootDir: tmpDir, timeoutMs: 3000 });
+    expect(result).toContain('src/:');
+    expect(result).toContain('foo.ts');
+    expect(result).toContain('bar.ts');
+  });
+
+  it('does not include files inside dotdir directories', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '');
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-repo-map-test-'));
+    await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true });
+    await fs.mkdir(path.join(tmpDir, '.hidden'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, 'src', 'visible.ts'), '// visible');
+    await fs.writeFile(path.join(tmpDir, '.hidden', 'secret.ts'), '// secret');
+
+    const result = await buildRepoMap({ rootDir: tmpDir, timeoutMs: 3000 });
+    expect(result).toContain('visible.ts');
+    expect(result).not.toContain('secret.ts');
+    expect(result).not.toContain('.hidden');
+  });
+
+  it('shows "+N more" when a directory exceeds MAX_FILES_PER_DIR (12)', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '');
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-repo-map-test-'));
+    await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true });
+    // Create 15 files — 15 - 12 = 3 extra → "+3 more"
+    for (let i = 0; i < 15; i++) {
+      await fs.writeFile(path.join(tmpDir, 'src', `file${i}.ts`), `// file${i}`);
+    }
+
+    const result = await buildRepoMap({ rootDir: tmpDir, timeoutMs: 3000 });
+    expect(result).toContain('+3 more');
   });
 });
 

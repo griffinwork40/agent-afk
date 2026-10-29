@@ -114,9 +114,10 @@ async function _buildRepoMapUnsafe(opts: RepoMapOptions): Promise<string> {
   if (isLspEnabled()) {
     const lspResult = await tryLspMap(rootDir, timeoutMs, opts);
     if (lspResult) return lspResult;
+    // LSP enabled but returned no result (timeout/error) → fall through to fs scan.
   }
-
-  // Fallback: filesystem scan.
+  // Filesystem fallback runs regardless of the LSP flag: it is the always-available
+  // baseline (per design: "when LSP is disabled or times out, a directory scan…").
   return fsMap(rootDir, timeoutMs, opts.signal);
 }
 
@@ -147,11 +148,17 @@ async function tryLspMap(
   const root = typescriptRootFor(path.join(rootDir, '_')) ?? rootDir;
 
   let client: LspClient;
-  let release: () => void;
   try {
     client = await pool.acquire(spec, root, { timeoutMs: remainingMs(), signal: opts.signal });
+  } catch {
+    return null;
+  }
+  let release: () => void;
+  try {
     release = client.hold();
   } catch {
+    // hold() failed after a successful acquire — the client stays in the pool
+    // (it was never held) but we cannot proceed without a release guard.
     return null;
   }
 
@@ -283,7 +290,7 @@ async function globSourceFiles(rootDir: string, signal: AbortSignal): Promise<st
   }
   for await (const entry of fsPromises.glob('**/*.{ts,tsx,js,jsx}', {
     cwd: rootDir,
-    exclude: (name: string) => name === 'node_modules' || name === '.git',
+    exclude: (name: string) => name === 'node_modules' || name.startsWith('.'),
     signal,
   })) {
     if (signal.aborted) break;
