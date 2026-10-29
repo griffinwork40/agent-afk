@@ -172,8 +172,18 @@ export class ComposeExecutor {
     if (!pre.ok) return pre.result;
     const { parsed, parseWarnings, identity, depth, maxDepth, maxToolRoundsPerNode } = pre;
 
-    // Usage notice: evaluate quota at compose-wave start (observer-only, no blocking).
-    const usageNotice = await evaluateDispatchUsageForModel(this.ctx.defaultModel, this.ctx.traceWriter);
+    // Usage notice: evaluate quota at compose-wave start; block at `over`.
+    const { notice: usageNotice, blocked: usageBlocked } = await evaluateDispatchUsageForModel(this.ctx.defaultModel, this.ctx.traceWriter);
+
+    // Contract: at `over` (>= 100%), refuse the compose dispatch instead of
+    // spawning N nodes that each immediately fail with UsageLimitError.
+    if (usageBlocked) {
+      return {
+        content: `Compose dispatch refused: usage limit exceeded. ${usageNotice ?? 'The subscription quota is exhausted.'}` +
+          `\n\nReduce parallel dispatches, wait for the quota window to reset, or switch to a non-Claude model.`,
+        isError: true,
+      };
+    }
 
     // Read-scope inheritance (#547): derive the DAG nodes' parentReadRoots from
     // the parent session's read scope + this executor's cwd, mirroring the
