@@ -1,7 +1,7 @@
 # Agent Client Protocol (ACP) — `afk acp`
 
 `afk acp` starts a JSON-RPC 2.0 server over **stdio** that lets Zed, JetBrains,
-Cursor, Cline, Goose, OpenCode, and any other
+Cline, Goose, OpenCode, and any other
 [ACP](https://github.com/i-am-bee/acp)-compatible editor frontend drive afk as a
 first-class agent backend — no editor plugin required.
 
@@ -38,7 +38,7 @@ the final response for each request carries the original `id`.
 | `initialize` | Capability handshake — must be called first |
 | `session/new` | Create a named session; returns `{ sessionId }` |
 | `session/prompt` | Stream a prompt; emits `session/update` notifications then a `done` response |
-| `session/cancel` | Abort a running `session/prompt` through `AbortGraph` |
+| `session/cancel` | Abort a running `session/prompt` via `AbortController` + `session.abort('acp-cancel')` |
 | `session/close` | Tear down a session and release its resources |
 
 ### Error codes
@@ -101,7 +101,12 @@ server → client
 | `tool_start` | `toolName: string` | Tool call beginning |
 | `tool_end` | `toolName: string` | Tool call finished |
 | `rate_limit` | `retryAfterMs: number` | Provider rate-limit; server will retry automatically |
-| `done` | `sessionId?`, `costUsd?` | Matches the final response result |
+
+The turn ends with a JSON-RPC **response** (carries the original request `id`), not a notification:
+
+```json
+{"jsonrpc":"2.0","id":3,"result":{"type":"done","update":{"type":"done","sessionId":"<uuid>","costUsd":0.003},"text":"Hi …"}}
+```
 
 ### Multi-turn sessions
 
@@ -138,8 +143,7 @@ Send `session/cancel` while a `session/prompt` is in flight to abort it:
 {"jsonrpc":"2.0","id":10,"method":"session/cancel","params":{"sessionId":"<uuid>"}}
 ```
 
-The server signals the running turn via `AbortGraph`, drains any in-flight work,
-and responds to the `session/prompt` with error code `-32001` (`Cancelled`).
+The server calls `abort()` on the session's `AbortController` and `session.abort('acp-cancel')`, which causes the in-flight `session/prompt` loop to exit on the aborted signal and respond with error code `-32001` (`Cancelled`).
 The `session/cancel` response itself returns `{"cancelled":true}`.
 
 ## Configuring editors
@@ -184,21 +188,6 @@ through the ACP channel.
 3. Click **OK** and restart the IDE.
 4. In any editor, open the AI chat panel, click the model picker, and choose
    **afk**.
-
-### Cursor
-
-```bash
-# ~/.cursor/mcp.json  (or the workspace .cursor/mcp.json)
-{
-  "mcpServers": {
-    "afk-acp": {
-      "command": "afk",
-      "args": ["acp"],
-      "transport": "stdio"
-    }
-  }
-}
-```
 
 ### Cline CLI
 
