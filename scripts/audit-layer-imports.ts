@@ -83,7 +83,7 @@ export function classifyDir(dirOrBasename: string): Layer {
  *   - file's own basename for top-level src/ files (e.g. "paths.ts")
  */
 export function srcSegment(relPath: string): string | undefined {
-  const parts = relPath.split('/');
+  const parts = relPath.split(/[\\/]/);
   if (parts[0] !== 'src') return undefined;
   if (parts.length < 2) return undefined;
   return parts[1]; // subdirectory OR top-level filename
@@ -107,7 +107,7 @@ export function importedSegment(
   const resolved = path.resolve(importerDir, specifier);
   const rel = path.relative(scanRoot, resolved);
   if (rel.startsWith('..')) return undefined;
-  const parts = rel.split('/');
+  const parts = rel.split(/[\\/]/);
   return parts[0];
 }
 
@@ -224,17 +224,21 @@ export function isAllowed(relPath: string, specifier: string, pairs = ALLOWED_PA
  * Extracted from main() so that tests can exercise the block-comment state
  * machine and import detection logic directly without spawning a subprocess.
  *
- * @param absPath       Absolute path to the file (used to resolve relative imports).
- * @param relPath       Repo-relative path (used in violation records and allowlist lookup).
- * @param importerLayer Layer the file belongs to.
- * @param lines         Source lines (file split on '\n').
- * @returns             Array of violations found in this file.
+ * @param absPath        Absolute path to the file (used to resolve relative imports).
+ * @param relPath        Repo-relative path (used in violation records and allowlist lookup).
+ * @param importerLayer  Layer the file belongs to.
+ * @param lines          Source lines (file split on '\n').
+ * @param outAllowedHits Optional accumulator — when supplied, allowlisted cross-layer
+ *                       import sites are appended here (used by --list mode to avoid
+ *                       duplicating the scanning loop).
+ * @returns              Array of violations found in this file.
  */
 export function scanFile(
   absPath: string,
   relPath: string,
   importerLayer: Layer,
   lines: string[],
+  outAllowedHits?: Array<{ file: string; line: number; rule: string }>,
 ): Violation[] {
   const violations: Violation[] = [];
   const seg = srcSegment(relPath);
@@ -301,13 +305,19 @@ export function scanFile(
     }
 
     // ── Multiline import accumulation ─────────────────────────────────────
-    // Note: we pass the original lines array and index so collectLogicalLine
-    // can look ahead for multiline imports. effectiveLine is only used for
-    // single-line matching when we trimmed block-comment prefixes.
-    const { logical, consumed } = collectLogicalLine(
-      effectiveLine !== rawLine ? [effectiveLine, ...lines.slice(i + 1)] : lines,
-      effectiveLine !== rawLine ? 0 : i,
-    );
+    // When effectiveLine !== rawLine we trimmed a block-comment prefix (`*/`
+    // closed on this line). We build a synthetic array starting at the
+    // post-`*/` suffix so collectLogicalLine sees the real content. The
+    // consumed count from that synthetic array maps to real lines as:
+    //   real next i = i (the `*/` line) + consumed
+    // In the normal path effectiveLine === rawLine, consumed maps directly:
+    //   real next i = i + consumed
+    // Both cases reduce to i += consumed, but we keep the scanLines/scanIdx
+    // split so collectLogicalLine receives the correct starting content.
+    const trimmedByComment = effectiveLine !== rawLine;
+    const scanLines = trimmedByComment ? [effectiveLine, ...lines.slice(i + 1)] : lines;
+    const scanIdx = trimmedByComment ? 0 : i;
+    const { logical, consumed } = collectLogicalLine(scanLines, scanIdx);
 
     const match = IMPORT_RE.exec(logical);
     if (!match) { i += consumed; continue; }
@@ -325,7 +335,9 @@ export function scanFile(
     const rule = checkPair(importerLayer, seg, importedLayer, imported);
     if (!rule) { i += consumed; continue; }
 
-    if (!isAllowed(relPath, specifier)) {
+    if (isAllowed(relPath, specifier)) {
+      outAllowedHits?.push({ file: relPath, line: i + 1, rule });
+    } else {
       violations.push({ file: relPath, line: i + 1, text: rawLine.trim(), rule });
     }
 
@@ -357,71 +369,11 @@ function main(): void {
     const source = fs.readFileSync(absPath, 'utf8');
     const lines = source.split('\n');
 
-    const fileViolations = scanFile(absPath, relPath, importerLayer, lines);
+    // Pass outAllowedHits to scanFile when in --list mode so both violation and
+    // allowlisted-hit collection share a single scanning pass.
+    const fileViolations = scanFile(absPath, relPath, importerLayer, lines,
+      listMode ? allowedHits : undefined);
     allViolations.push(...fileViolations);
-
-    // Re-collect allowedHits for --list mode by re-scanning with allowlist check.
-    // We do a lightweight second pass only when --list is requested.
-    if (listMode) {
-      let inBlockComment = false;
-      for (let i = 0; i < lines.length; ) {
-        const rawLine = lines[i];
-        if (rawLine === undefined) { i++; continue; }
-
-        let effectiveLine = rawLine;
-        if (inBlockComment) {
-          const closeIdx = rawLine.indexOf('*/');
-          if (closeIdx === -1) { i++; continue; }
-          inBlockComment = false;
-          effectiveLine = rawLine.slice(closeIdx + 2);
-          if (effectiveLine.trim() === '') { i++; continue; }
-        }
-
-        const trimmed = effectiveLine.trimStart();
-        if (trimmed.startsWith('/*')) {
-          if (!effectiveLine.includes('*/')) {
-            inBlockComment = true;
-            i++; continue;
-          }
-          const closeIdx = effectiveLine.indexOf('*/');
-          const suffix = effectiveLine.slice(closeIdx + 2);
-          if (suffix.trim() === '') { i++; continue; }
-          effectiveLine = suffix;
-        }
-
-        const trimmedEffective = effectiveLine.trimStart();
-        if (trimmedEffective.startsWith('//') || trimmedEffective.startsWith('*')) {
-          i++; continue;
-        }
-
-        const { logical, consumed } = collectLogicalLine(
-          effectiveLine !== rawLine ? [effectiveLine, ...lines.slice(i + 1)] : lines,
-          effectiveLine !== rawLine ? 0 : i,
-        );
-
-        const match = IMPORT_RE.exec(logical);
-        if (!match) { i += consumed; continue; }
-        const specifier = match[1];
-        if (!specifier) { i += consumed; continue; }
-
-        const imported = importedSegment(absPath, specifier);
-        if (!imported) { i += consumed; continue; }
-
-        const importedLayer = classifyDir(imported);
-        if (importedLayer === 'unknown') { i += consumed; continue; }
-        if (importerLayer === importedLayer) { i += consumed; continue; }
-        if (importerLayer === 'foundation' && importedLayer === 'foundation') { i += consumed; continue; }
-
-        const rule = checkPair(importerLayer, seg, importedLayer, imported);
-        if (!rule) { i += consumed; continue; }
-
-        if (isAllowed(relPath, specifier)) {
-          allowedHits.push({ file: relPath, line: i + 1, rule });
-        }
-
-        i += consumed;
-      }
-    }
   }
 
   if (listMode) {

@@ -346,6 +346,17 @@ export const ALLOWED_PAIRS: ReadonlyArray<AllowedPair> = [
     reason:
       'Foundation→Core: utils/sleep.ts re-exports from agent/providers/shared/sleep-with-abort. Tracked in #4457.',
   },
+  // ── Rule 1: agent/ → telegram/ and agent/ → cli/ (files added to main after branch point) ──
+  {
+    file: 'src/agent/operator-notify.ts',
+    importContains: 'telegram/',
+    reason: 'Core→Surface: operator-notify re-exports PushResult from telegram/push. Tracked in #4456.',
+  },
+  {
+    file: 'src/agent/tools/hooks/inline-image-render.ts',
+    importContains: 'cli/',
+    reason: 'Core→Surface: inline-image-render uses palette from cli/palette. Tracked in #4457.',
+  },
   // ── Rule 3: Feature → Surface ──────────────────────────────────────────────
   {
     file: 'src/whatif/report.ts',
