@@ -153,13 +153,41 @@ describe('RetryLayer.turnWithRetries — turn-start credential catch-up', () => 
 });
 
 describe('RetryLayer — credentialFromStore: true + env var set (defence-in-depth)', () => {
-  it('never swaps when credentialFromStore is true but an env var pins the credential', async () => {
+  it('never swaps when credentialFromStore is true but ANTHROPIC_API_KEY pins the credential', async () => {
     // Defence-in-depth: even when credentialFromStore is explicitly true, the
     // env-var guard in storeAheadOfClient must still block the swap. This path
     // covers the case where the flag was set optimistically but an env var
     // (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN) is also present — the env
     // var takes precedence so the session must not be silently moved.
     vi.stubEnv('ANTHROPIC_API_KEY', 'env-pinned-key');
+
+    loadClaudeCodeOauthTokenMock.mockReturnValueOnce('store-tok'); // constructor snapshot
+    const refresher = vi.fn(async () => client('client-new'));
+    const layer = new RetryLayer({
+      client: client('client-store-tok'),
+      authMode: 'oauth',
+      initSessionId: 's1',
+      autoResumeOnUsageLimit: true,
+      tokenRefresher: refresher,
+      credentialFromStore: true,
+    });
+    // Store has moved to a different token — but env var pins the credential.
+    loadClaudeCodeOauthTokenMock.mockReturnValue('store-tok-new');
+
+    await drain(layer.turnWithRetries(makeInput(layer), () => false));
+
+    expect(refresher).not.toHaveBeenCalled();
+    expect(emitSessionPhaseMock).not.toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ phase: 'credential_swap' }),
+    );
+  });
+
+  it('never swaps when credentialFromStore is true but CLAUDE_CODE_OAUTH_TOKEN pins the credential', async () => {
+    // Parallel case for CLAUDE_CODE_OAUTH_TOKEN: the env-var guard in
+    // storeAheadOfClient covers both vars, so the same block applies when
+    // CLAUDE_CODE_OAUTH_TOKEN is set instead of ANTHROPIC_API_KEY.
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'env-oauth-pinned');
 
     loadClaudeCodeOauthTokenMock.mockReturnValueOnce('store-tok'); // constructor snapshot
     const refresher = vi.fn(async () => client('client-new'));
