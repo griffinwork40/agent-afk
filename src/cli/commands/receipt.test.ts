@@ -376,4 +376,42 @@ describe('CLI-layer: runRegenerate via Commander', () => {
     const statAfterSecond = await stat(jsonPath);
     expect(statAfterSecond.mtimeMs).toBe(statAfterFirst.mtimeMs);
   });
+
+  it('--dry-run happy path: wouldRegenerate === 1, regenerated === 0, no receipt file written', async () => {
+    seq = 0;
+    const label = 'cli-dry-run-happy';
+    const sessionId = 'sess-cli-dry-run-happy';
+    await writeTrace(label, [makeClosure(), makeSealed('succeeded')]);
+    await writeSessionMeta(sessionId, label);
+
+    const jsonPath = join(getReceiptsDir(), `${label}.json`);
+
+    // Confirm no receipt exists before the dry-run.
+    expect(existsSync(jsonPath)).toBe(false);
+
+    const out = await captureStdout(async () => {
+      await makeProgram().parseAsync(
+        ['receipt', 'regenerate', '--session', sessionId, '--dry-run', '--json'],
+        { from: 'user' },
+      );
+    });
+
+    const parsed = JSON.parse(out) as {
+      wouldRegenerate: number;
+      regenerated: number;
+      skipped: number;
+      results: Array<{ sessionId: string; outcome: string }>;
+    };
+
+    // Both keys must be present in dry-run mode.
+    expect(parsed.wouldRegenerate).toBe(1);
+    expect(parsed.regenerated).toBe(0);
+    expect(parsed.skipped).toBe(0);
+
+    const r = parsed.results.find((x) => x.sessionId === sessionId);
+    expect(r?.outcome).toBe('dry-run');
+
+    // No receipt file must have been written.
+    expect(existsSync(jsonPath)).toBe(false);
+  });
 });

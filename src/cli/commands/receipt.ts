@@ -247,9 +247,17 @@ async function runRegenerate(opts: RegenerateOptions): Promise<void> {
 
   // Output.
   if (opts.json) {
-    const jsonOut = opts.dryRun
-      ? { wouldRegenerate, skipped, alreadyCurrent, results }
-      : { regenerated, skipped, alreadyCurrent, results };
+    // Emit both keys in both modes so scripting consumers can read either key
+    // regardless of whether --dry-run was passed.  The inapplicable counter is
+    // always 0: `wouldRegenerate` is 0 in live mode; `regenerated` is 0 in
+    // dry-run mode.
+    const jsonOut = {
+      wouldRegenerate: opts.dryRun ? wouldRegenerate : 0,
+      regenerated: opts.dryRun ? 0 : regenerated,
+      skipped,
+      alreadyCurrent,
+      results,
+    };
     process.stdout.write(JSON.stringify(jsonOut, null, 2) + '\n');
     return;
   }
