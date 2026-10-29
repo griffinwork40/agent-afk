@@ -204,7 +204,7 @@ describe('compactHistory — credential_swap emission from compaction path', () 
 
     expect(retry.syncClientWithStore).toHaveBeenCalled();
     expect(emitSessionPhaseMock).not.toHaveBeenCalledWith(
-      expect.anything(),
+      undefined,
       expect.objectContaining({ phase: 'credential_swap' }),
     );
   });
@@ -218,7 +218,7 @@ describe('compactHistory — credential_swap emission from compaction path', () 
 
     expect(retry.syncClientWithStore).toHaveBeenCalled();
     expect(emitSessionPhaseMock).not.toHaveBeenCalledWith(
-      expect.anything(),
+      undefined,
       expect.objectContaining({ phase: 'credential_swap' }),
     );
   });
@@ -234,7 +234,7 @@ describe('compactHistory — credential_swap emission from compaction path', () 
     ).resolves.not.toThrow();
 
     expect(emitSessionPhaseMock).not.toHaveBeenCalledWith(
-      expect.anything(),
+      undefined,
       expect.objectContaining({ phase: 'credential_swap' }),
     );
   });
