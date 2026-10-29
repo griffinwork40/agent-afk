@@ -178,7 +178,7 @@ describe('RetryLayer — credentialFromStore: true + env var set (defence-in-dep
 
     expect(refresher).not.toHaveBeenCalled();
     expect(emitSessionPhaseMock).not.toHaveBeenCalledWith(
-      expect.anything(),
+      undefined,
       expect.objectContaining({ phase: 'credential_swap' }),
     );
   });
@@ -230,7 +230,7 @@ describe('RetryLayer — credentialFromStore: false (explicit non-store credenti
 
     expect(refresher).not.toHaveBeenCalled();
     expect(emitSessionPhaseMock).not.toHaveBeenCalledWith(
-      expect.anything(),
+      undefined,
       expect.objectContaining({ phase: 'credential_swap' }),
     );
   });
