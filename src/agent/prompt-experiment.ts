@@ -62,8 +62,9 @@ import { env } from '../config/env.js';
  * experiment is active at a time and unrelated code paths are unaffected.
  */
 export function isPromptExperimentActive(name: string): boolean {
+  if (!name.trim()) return false;
   const active = env.AFK_PROMPT_EXPERIMENT;
-  return typeof active === 'string' && active.trim() === name;
+  return typeof active === 'string' && active.trim() === name.trim();
 }
 
 /**
@@ -84,7 +85,7 @@ export function getPromptVariant(name: string): 'control' | 'treatment' {
   if (!isPromptExperimentActive(name)) return 'control';
 
   const arm = env.AFK_PROMPT_EXPERIMENT_ARM;
-  if (typeof arm === 'string' && arm.trim() === 'treatment') return 'treatment';
+  if (typeof arm === 'string' && arm.trim().toLowerCase() === 'treatment') return 'treatment';
 
   return 'control';
 }
