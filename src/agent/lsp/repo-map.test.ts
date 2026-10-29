@@ -22,7 +22,7 @@ type RequestFn = (method: string, params: unknown, opts: unknown) => Promise<unk
 
 function makeFakePool(
   requestFn: RequestFn,
-  acquireSpy = vi.fn(async (_spec: ServerSpec, _root: string, _opts: unknown) => client),
+  acquireSpy = vi.fn(async (_spec: ServerSpec, _root: string, _opts: unknown) => undefined as unknown as LspClient),
 ): { pool: LspServerPool; acquireSpy: typeof acquireSpy } {
   const client = {
     hold: () => () => { /* no-op release */ },
