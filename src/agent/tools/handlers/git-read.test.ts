@@ -259,6 +259,14 @@ describe('git_read handler (live repo)', () => {
     const r = await h({ subcommand: 'show', args: ['no-such-ref'] }, signal);
     expect(r.isError).toBe(true);
   });
+
+  it('a bad revision (exit 128) appends the discover-refs hint', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'show', args: ['no-such-ref'] }, signal);
+    expect(r.isError).toBe(true);
+    expect(String(r.content)).toContain('git exited 128');
+    expect(String(r.content)).toContain('Do not retry with the same revision');
+  });
 });
 
 // ---------------------------------------------------------------------------
