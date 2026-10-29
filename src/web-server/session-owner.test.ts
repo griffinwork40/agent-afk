@@ -307,14 +307,21 @@ describe('SessionOwner — retire()', () => {
     const internals = asInternals(owner);
     const id = 'retire-test-2';
 
-    const close = vi.fn().mockResolvedValue(undefined);
-    internals.controls.set(id, { close });
+    const sessionClose = vi.fn().mockResolvedValue(undefined);
+    const controlClose = vi.fn().mockResolvedValue(undefined);
+    internals.sessions.set(id, { close: sessionClose });
+    internals.controls.set(id, { close: controlClose });
 
     owner.retire(id);
 
     // close() is fire-and-forget — flush the microtask queue.
     await new Promise((r) => setTimeout(r, 0));
-    expect(close).toHaveBeenCalledOnce();
+    expect(sessionClose).toHaveBeenCalledOnce();
+    expect(controlClose).toHaveBeenCalledOnce();
+    // session.close() must be invoked before control.close().
+    const sessionOrder = sessionClose.mock.invocationCallOrder[0] ?? fail('sessionClose not called');
+    const controlOrder = controlClose.mock.invocationCallOrder[0] ?? fail('controlClose not called');
+    expect(sessionOrder).toBeLessThan(controlOrder);
   });
 
   it('does not throw when called for an unknown id', () => {

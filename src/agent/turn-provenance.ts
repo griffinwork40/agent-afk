@@ -58,8 +58,9 @@ export interface TurnProvenance {
   origin: TurnOrigin;
   /**
    * `true` when at least one peer-session envelope was prepended to this
-   * turn's running text (regardless of `origin`).  Flipped by
-   * `markTurnPeerInfluenced` in the boundary injection path.
+   * turn's running text (regardless of `origin`).  Set at turn construction
+   * by `autoResumeTurnProvenance`; PR C will add a mutation path for the
+   * boundary injection layer.
    *
    * Invariant: always `false` when `origin === 'scheduled'` (daemon sessions
    * have no peer injection path today).
@@ -108,13 +109,4 @@ export function autoResumeTurnProvenance(bgResultPending: boolean): TurnProvenan
  */
 export function scheduledTurnProvenance(): TurnProvenance {
   return { origin: 'scheduled', peerInfluenced: false };
-}
-
-/**
- * Flip `peerInfluenced` to `true` on an existing provenance object.
- * Called by the boundary injection path the moment a peer envelope is prepended.
- * Mutates in place (the object is owned by the current-turn scope).
- */
-export function markTurnPeerInfluenced(provenance: TurnProvenance): void {
-  provenance.peerInfluenced = true;
 }
