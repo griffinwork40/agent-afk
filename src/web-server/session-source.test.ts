@@ -482,5 +482,50 @@ describe('listWebSessions', () => {
     const [s0] = await listWebSessions(new Set());
     expect(s0?.title).toBe('hello there');
   });
+
+  it('reads cwd and surface from ledger when sidecar provides model but not identity fields', async () => {
+    // Mixed-sidecar scenario: session-meta.json has `model` set but no `cwd`/`surface`.
+    // The ledger meta record must backfill cwd+surface; the sidecar supplies model.
+    // This test also exercises the early-exit fix: the break condition now checks
+    // the live `out` fields (not stale `needCwd`/`needSurface`/`needModel` consts),
+    // so the scan stops as soon as title+cwd+surface+model are all populated.
+    const sessionId = 'mixed-sidecar-1';
+
+    // Write a session-meta.json with model but no cwd/surface (the mixed sidecar).
+    // session-meta.json lives at sessions/<sessionId>/session-meta.json.
+    const sessionDir = path.join(getSessionsDir(), sessionId);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const sessionMetaPath = path.join(sessionDir, 'session-meta.json');
+    const mixedMeta = { v: 1, sessionId, model: 'sidecar-model' };
+    fs.writeFileSync(sessionMetaPath, JSON.stringify(mixedMeta), 'utf8');
+
+    // Ledger: meta record at line 1 (supplies cwd+surface), user record at line 2
+    // (supplies title), then 20 dummy records that must NOT be needed with early-exit.
+    const dummyRecords = Array.from({ length: 20 }, (_, i) =>
+      JSON.stringify({ v: 1, ts: Date.now(), kind: 'tool_call', name: `dummy-${i}` }),
+    );
+    writeLedger(sessionId, [
+      metaLine(sessionId, { cwd: '/ledger/cwd', surface: 'cli' }),
+      userLine('the real first message'),
+      ...dummyRecords,
+      // Sentinel: if the break fires at record 3 (after meta+user), this record
+      // is never consumed and title stays 'the real first message'. If the scan
+      // runs past HEAD_RECORD_SCAN_LIMIT this line is unreachable anyway, but
+      // if early-exit regresses to O(21+) it overwrites the title assertion.
+      userLine('SHOULD_NOT_APPEAR_IF_BREAK_FIRES'),
+    ]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === sessionId);
+
+    expect(entry).toBeDefined();
+    // model comes from the sidecar (not the ledger meta record's 'test-model')
+    expect(entry?.model).toBe('sidecar-model');
+    // cwd and surface come from the ledger meta record
+    expect(entry?.cwd).toBe('/ledger/cwd');
+    expect(entry?.surface).toBe('cli');
+    // title comes from the ledger user record
+    expect(entry?.title).toBe('the real first message');
+  });
 });
 
