@@ -166,6 +166,8 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   readonly useOpenAIPricing: boolean;
   /** @internal Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
   readonly traceWriter: TraceSink | undefined;
+  /** @internal Per-turn origin for the current turn (issue #2906, PR A). Updated by setTurnProvenance(); forwarded to TurnTrace. */
+  private _turnProvenance: import('../../turn-provenance.js').TurnProvenance | undefined;
   /** @internal Package-visible for fast-tier delegation from turn-driver. */
   readonly fastTier: FastTierSession;
 
@@ -252,6 +254,9 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.onCwdChange = opts.onCwdChange;
     this.systemPromptRebuildFactory = opts.systemPromptRebuildFactory;
     this.traceWriter = opts.traceWriter;
+    // Seed per-turn provenance from the initial config (issue #2906, PR A).
+    // Updated per-turn when the session layer calls setTurnProvenance().
+    this._turnProvenance = opts.config.turnProvenance;
     this.fastTier = new FastTierSession(opts.fastTier);
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
     this.checkpoint = new FileCheckpointState(opts.config.enableFileCheckpointing ?? false, opts.synthesizedSessionId, opts.config.messageJournal);
@@ -407,7 +412,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     // tool handlers snapshot files before mutation.
     const checkpointId = this.checkpoint.begin(this.toolDispatcher, userMessageId);
 
-    const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible');
+    const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible', this._turnProvenance);
     this.fastTier.beginTurn(this.currentModel);
     try {
       // Pass `this` — which implements TurnDriverContext — so every mutable

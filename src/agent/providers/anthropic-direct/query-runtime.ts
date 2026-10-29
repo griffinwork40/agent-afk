@@ -124,6 +124,8 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly maxToolUseIterations?: number;
   private readonly softDeadlineMs?: number;
   private readonly traceWriter?: import('../../trace/index.js').TraceSink;
+  /** Per-turn origin (issue #2906, PR A). Read by the TurnDriverContext getter. */
+  readonly turnProvenance: import('../../turn-provenance.js').TurnProvenance | undefined;
   /** Owning subagent id (fork only); stamped onto tool_call trace events. */
   private readonly subagentId?: string;
   /**
@@ -204,6 +206,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       this.maxToolUseIterations = opts.maxToolUseIterations;
     if (opts.softDeadlineMs !== undefined) this.softDeadlineMs = opts.softDeadlineMs;
     this.traceWriter = opts.traceWriter;
+    this.turnProvenance = opts.turnProvenance;
     if (opts.subagentId !== undefined) this.subagentId = opts.subagentId;
     this.hasWorkspacePreamble = opts.hasWorkspacePreamble ?? false;
     this._cwd = opts.cwd ?? process.cwd();
@@ -302,6 +305,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get maxToolUseIterations() { return query.maxToolUseIterations; },
       get softDeadlineMs() { return query.softDeadlineMs; },
       get traceWriter() { return query.traceWriter; },
+      get turnProvenance() { return query.turnProvenance; },
       get subagentId() { return query.subagentId; },
       get mcpManager() { return query.mcpManager; },
       get hookRegistry() { return query.hookRegistry; },

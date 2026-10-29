@@ -126,6 +126,12 @@ export interface WireExecutorsOptions {
    */
   traceWriter?: TraceSink;
   /**
+   * Per-turn provenance of the parent's current turn (issue #2906, PR A).
+   * Forwarded to the root manager so every forked child inherits it and can
+   * answer "was a human watching when this work started?" Data only.
+   */
+  parentTurnProvenance?: import('../turn-provenance.js').TurnProvenance;
+  /**
    * Witness-layer writer for the `skill` executor and the nested
    * skill-executor factory.
    *
@@ -355,6 +361,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     ...cwdOpt,
     ...traceOpt,
     surface,
+    ...(opts.parentTurnProvenance !== undefined ? { parentTurnProvenance: opts.parentTurnProvenance } : {}),
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
     ...(opts.sessionLabel !== undefined ? { sessionLabel: opts.sessionLabel } : {}),
     ...hookRegistryOpt(opts),

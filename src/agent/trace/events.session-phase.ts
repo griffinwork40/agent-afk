@@ -9,6 +9,7 @@
  */
 
 import { z } from 'zod';
+import { TurnOriginSchema } from '../turn-provenance.js';
 
 // ---------------------------------------------------------------------------
 // session_phase
@@ -181,4 +182,11 @@ export const SessionPhasePayloadSchema = z.object({
   // Running afk version, set ONLY on `session_id_assigned`. Absent on older
   // traces and all other phase kinds. (#3808)
   afkVersion: z.string().optional(),
+  // Per-turn provenance (issue #2906, PR A). Set ONLY on `loop_start` events.
+  // Absent on all other phase kinds and on traces from builds that predate
+  // this field. Consumers must treat absence as "unknown".
+  turnProvenance: z.object({
+    origin: TurnOriginSchema,
+    peerInfluenced: z.boolean(),
+  }).optional(),
 });

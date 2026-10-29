@@ -22,6 +22,7 @@
 
 import type { TraceSink } from '../../trace/index.js';
 import { emitSessionPhase } from '../../trace/emit.js';
+import type { TurnProvenance } from '../../turn-provenance.js';
 
 /**
  * Brackets a turn with its witness events. Construct at loop entry (which emits
@@ -31,15 +32,20 @@ export class TurnTrace {
   private interruptedAt: number | null;
 
   /**
-   * @param signal      - The turn's abort signal. Watched for the ESC soft-stop.
-   * @param traceWriter - Absent on a no-trace session; every method no-ops safely.
-   * @param provider    - Stamped onto the `interrupt_halt` metadata so the two
-   *                      providers' halt-latency events stay distinguishable.
+   * @param signal        - The turn's abort signal. Watched for the ESC soft-stop.
+   * @param traceWriter   - Absent on a no-trace session; every method no-ops safely.
+   * @param provider      - Stamped onto the `interrupt_halt` metadata so the two
+   *                        providers' halt-latency events stay distinguishable.
+   * @param turnProvenance - Optional per-turn origin (issue #2906, PR A). When
+   *                        supplied, emitted alongside `loop_start` so trace
+   *                        consumers can answer "what started this turn?" without
+   *                        inspecting injected text. Data only; no behaviour change.
    */
   constructor(
     private readonly signal: AbortSignal,
     private readonly traceWriter: TraceSink | undefined,
     private readonly provider: 'anthropic-direct' | 'openai-compatible',
+    turnProvenance?: TurnProvenance,
   ) {
     // Invariant: emit order matches the pre-split loop prologue — `loop_start`
     // is the first witness event of the turn, and the interrupt listener is
@@ -48,8 +54,12 @@ export class TurnTrace {
     // can land between them — this ordering is about keeping the trace stream
     // byte-comparable with pre-split sessions, not correctness.
 
-    // Mark loop entry once for this turn.
-    void emitSessionPhase(traceWriter, { phase: 'loop_start' });
+    // Mark loop entry once for this turn. Include turnProvenance when available
+    // (issue #2906, PR A — data only).
+    void emitSessionPhase(traceWriter, {
+      phase: 'loop_start',
+      ...(turnProvenance !== undefined ? { turnProvenance } : {}),
+    });
 
     // Interrupt→halt latency instrumentation. Stamp the instant the turn signal
     // fires so `finish()` can report ESC→terminal wall-clock in the

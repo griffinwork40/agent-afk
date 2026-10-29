@@ -17,6 +17,7 @@ import {
   setPresenceActivityPromptHead,
   setPresenceActivityTurnEnd,
 } from '../../../agent/awareness/presence.activity.js';
+import type { TurnProvenance } from '../../../agent/turn-provenance.js';
 
 /**
  * User-message text seeded when a pending injection auto-resumes an idle REPL.
@@ -85,14 +86,19 @@ export function prependTurnInjections(runText: string, sources: readonly Injecti
  * forwarded for first-turn fallback (see setPresenceActivityTurnEnd JSDoc),
  * but `setPresenceActivityTurnEnd` will silently discard it when it is a
  * synthetic auto-resume directive — those must never appear as promptHead.
+ *
+ * @param provenance  Optional per-turn provenance (issue #2906, PR A).
+ *   When supplied on the `'busy'` path, its `origin` is forwarded to
+ *   `setPresenceActivityPromptHead` so peer sessions can answer "is a human
+ *   watching?" without guessing from `surface`.
  */
-export function markPresenceTurn(sessionId: string | undefined, state: 'busy', rawUserText?: string): void;
+export function markPresenceTurn(sessionId: string | undefined, state: 'busy', rawUserText?: string, provenance?: TurnProvenance): void;
 export function markPresenceTurn(sessionId: string | undefined, state: 'idle', rawUserText: string | undefined, totalTurns: number): void;
 export function markPresenceTurn(
   sessionId: string | undefined,
   state: 'idle' | 'busy',
   rawUserText?: string,
-  totalTurns?: number,
+  totalTurnsOrProvenance?: number | TurnProvenance,
 ): void {
   if (!sessionId) return;
   void setPresenceTurnState(sessionId, state);
@@ -102,8 +108,9 @@ export function markPresenceTurn(
     // in activity.promptHead would give peers a misleading "[auto-resume] …"
     // presence snippet rather than the actual work the session was doing.
     if (rawUserText.startsWith(AUTO_RESUME_PREFIX)) return;
-    void setPresenceActivityPromptHead(sessionId, rawUserText);
+    const provenance = typeof totalTurnsOrProvenance === 'object' ? totalTurnsOrProvenance : undefined;
+    void setPresenceActivityPromptHead(sessionId, rawUserText, provenance?.origin);
   } else if (state === 'idle') {
-    void setPresenceActivityTurnEnd(sessionId, totalTurns!, rawUserText);
+    void setPresenceActivityTurnEnd(sessionId, totalTurnsOrProvenance as number, rawUserText);
   }
 }

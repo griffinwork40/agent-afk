@@ -785,6 +785,20 @@ export interface AgentConfig {
    */
   surface?: Surface;
 
+  /**
+   * Per-turn origin record (issue #2906, PR A).
+   *
+   * Set by the surface loop at the start of each turn and threaded through the
+   * turn boundary.  Consumers — PreToolUse context, presence activity, peer
+   * envelope, subagent inheritance — read from this single field instead of
+   * guessing origin from `surface` or interactive checks.
+   *
+   * Optional / back-compat: absent on sessions that predate this field and on
+   * forked subagents whose parent did not set it.  Consumers must treat absence
+   * as "unknown" and behave as before.
+   */
+  turnProvenance?: import('../turn-provenance.js').TurnProvenance;
+
   /** Parent session ID when this session was forked as a subagent. */
   parentSessionId?: string;
 

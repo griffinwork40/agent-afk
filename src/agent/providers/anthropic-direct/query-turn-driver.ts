@@ -57,6 +57,9 @@ export interface TurnDriverContext {
   readonly maxToolUseIterations: number | undefined;
   readonly softDeadlineMs: number | undefined;
   readonly traceWriter: import('../../trace/index.js').TraceSink | undefined;
+  /** Per-turn origin (issue #2906, PR A). Optional; absent on builds that
+   *  predate this field and on sessions that never set it. */
+  readonly turnProvenance: import('../../turn-provenance.js').TurnProvenance | undefined;
   readonly subagentId: string | undefined;
   readonly mcpManager: import('../../mcp/index.js').McpManager | undefined;
   readonly hookRegistry: HookRegistry | undefined;
@@ -148,6 +151,7 @@ function buildTurnRunInput(
     ...(ctx.maxToolUseIterations !== undefined ? { maxToolUseIterations: ctx.maxToolUseIterations } : {}),
     ...(ctx.softDeadlineMs !== undefined ? { softDeadlineMs: ctx.softDeadlineMs } : {}),
     ...(ctx.traceWriter ? { traceWriter: ctx.traceWriter } : {}),
+    ...(ctx.turnProvenance !== undefined ? { turnProvenance: ctx.turnProvenance } : {}),
     ...(ctx.subagentId !== undefined ? { subagentId: ctx.subagentId } : {}),
     ...(ctx.throttleQueue ? { throttleQueue: ctx.throttleQueue } : {}),
     ...(ctx.beforeNextRound ? { beforeNextRound: ctx.beforeNextRound } : {}),

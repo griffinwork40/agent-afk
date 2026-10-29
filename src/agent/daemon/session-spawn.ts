@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { scheduledTurnProvenance } from '../turn-provenance.js';
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
@@ -290,6 +291,10 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // wiring) already stamps surface:'daemon' on its executors; this covers
     // the fallback/standalone path where no factory is set.
     surface: 'daemon',
+    // Per-turn origin (issue #2906, PR A): daemon turns are always scheduled
+    // — no human is watching. Placed before sessionConfig so an operator
+    // escape-hatch can still override. Data only; no behaviour change.
+    turnProvenance: scheduledTurnProvenance(),
     // Trace writer placed before sessionConfig so an operator-supplied
     // sessionConfig.traceWriter still wins (escape-hatch parity with
     // permissionMode).

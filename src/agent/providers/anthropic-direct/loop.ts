@@ -208,7 +208,7 @@ export async function* runTurn(
   // interrupt→halt latency stamp. loop_end fires from the generator's finally
   // block so all exit paths — abort, error, clean end-of-turn, capped — are
   // covered without per-site annotation.
-  const trace = new TurnTrace(input.signal, input.traceWriter, 'anthropic-direct');
+  const trace = new TurnTrace(input.signal, input.traceWriter, 'anthropic-direct', input.turnProvenance);
 
   try {
   while (true) {

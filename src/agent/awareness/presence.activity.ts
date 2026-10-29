@@ -20,6 +20,7 @@
 
 import { patchPresenceFile } from './presence.js';
 import { redactSecrets } from '../redact-secrets.js';
+import type { TurnOrigin } from '../turn-provenance.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -65,6 +66,13 @@ export interface PresenceActivity {
    * Absent until the first turn completes.
    */
   lastTurnEndedAt?: string;
+  /**
+   * Origin of the most recently started turn (issue #2906, PR A).
+   * Set at TURN START alongside `promptHead` so peer sessions can answer
+   * "is a human watching this session right now?" without guessing from `surface`.
+   * Absent on sessions that predate this field and before the first turn starts.
+   */
+  turnOrigin?: TurnOrigin;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,7 +106,8 @@ export function normalizePromptHead(raw: string): string | undefined {
 // ---------------------------------------------------------------------------
 
 /**
- * Set the `activity.promptHead` on this session's presence file at TURN START.
+ * Set the `activity.promptHead` (and optionally `turnOrigin`) on this
+ * session's presence file at TURN START.
  *
  * Should be called with the RAW user-typed text, BEFORE any injections are
  * prepended (peer messages, bg-subagent results, etc.).
@@ -108,10 +117,15 @@ export function normalizePromptHead(raw: string): string | undefined {
  * non-empty text (the command token itself, or the expanded message), so
  * promptHead IS written for those paths — only genuinely empty/whitespace-only
  * inputs are skipped. Best-effort and never throws.
+ *
+ * @param turnOrigin  Optional per-turn origin (issue #2906, PR A).  When
+ *   supplied it is persisted alongside `promptHead` so peer sessions can
+ *   answer "is a human watching?" without guessing from `surface`.
  */
 export async function setPresenceActivityPromptHead(
   sessionId: string,
   rawText: string,
+  turnOrigin?: TurnOrigin,
 ): Promise<void> {
   const head = normalizePromptHead(rawText);
   if (head === undefined) return;
@@ -123,6 +137,7 @@ export async function setPresenceActivityPromptHead(
       promptHead: head,
       turns: prev?.turns ?? 0,
       ...(prev?.lastTurnEndedAt !== undefined ? { lastTurnEndedAt: prev.lastTurnEndedAt } : {}),
+      ...(turnOrigin !== undefined ? { turnOrigin } : {}),
     };
   });
 }

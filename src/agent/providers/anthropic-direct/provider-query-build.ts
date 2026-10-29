@@ -170,6 +170,7 @@ export function buildProviderQuery(
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
     ...(config.endpointConcurrency !== undefined ? { endpointConcurrency: config.endpointConcurrency } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
+    ...(config.turnProvenance !== undefined ? { turnProvenance: config.turnProvenance } : {}),
     ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
     ...(config.hasWorkspacePreamble ? { hasWorkspacePreamble: true } : {}),
     ...(config.autoResumeOnUsageLimit !== undefined
