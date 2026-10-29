@@ -113,7 +113,7 @@ function resolveGithubInterval(flagMs: number): number {
 // ---------------------------------------------------------------------------
 
 interface ServeOpts {
-  secret?: string;
+  secretEnv: string;
   command: string;
   port: string;
   host: string;
@@ -121,10 +121,15 @@ interface ServeOpts {
 }
 
 async function runServeAction(opts: ServeOpts): Promise<void> {
-  const secret = opts.secret ?? env.AFK_EVENTS_WEBHOOK_SECRET;
+  // Resolve the secret via the env registry indirection.
+  // --secret-env names the env var (default AFK_EVENTS_WEBHOOK_SECRET) so
+  // the raw secret never appears in the process argv / process table.
+  const secret = opts.secretEnv === 'AFK_EVENTS_WEBHOOK_SECRET'
+    ? env.AFK_EVENTS_WEBHOOK_SECRET
+    : env[opts.secretEnv as keyof typeof env] as string | undefined;
   if (!secret) {
     console.error(
-      palette.error('Missing webhook secret. Supply --secret <secret> or set AFK_EVENTS_WEBHOOK_SECRET.'),
+      palette.error(`Missing webhook secret. Set ${opts.secretEnv} in your environment.`),
     );
     process.exit(1);
   }
@@ -216,7 +221,7 @@ export function registerEventsCommand(program: Command): void {
       'Listens on 127.0.0.1 by default. Use a tunnel (ngrok, cloudflared) to\n' +
       'expose it to GitHub\'s webhook delivery addresses.',
     )
-    .option('--secret <secret>', 'HMAC-SHA256 secret (falls back to AFK_EVENTS_WEBHOOK_SECRET)')
+    .option('--secret-env <env-var>', 'Name of env var holding the HMAC-SHA256 secret (avoids process-table leaks). Default: AFK_EVENTS_WEBHOOK_SECRET', 'AFK_EVENTS_WEBHOOK_SECRET')
     .option('--command <template>', 'Command template. Placeholders: {{event_type}}, {{repo}}, {{event_id}}.', DEFAULT_COMMAND_TEMPLATE)
     .option('--port <port>', 'TCP port to bind on', String(DEFAULT_WEBHOOK_PORT))
     .option('--host <host>', 'Bind address (default: 127.0.0.1). Non-loopback requires --allow-external.', DEFAULT_WEBHOOK_HOST)

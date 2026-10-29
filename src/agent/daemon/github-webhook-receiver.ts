@@ -32,9 +32,12 @@ import {
   type ServerResponse,
 } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { enqueue } from './queue-store.js';
 import { renderCommand, type GithubEventType } from './github-event-poller.js';
 import { errorMessage } from '../../utils/errors.js';
+import { getAfkStateDir } from '../../paths.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -65,6 +68,8 @@ export interface WebhookReceiverOptions {
   allowExternal?: boolean;
   /** Override the queue directory (for testing). */
   queueDir?: string;
+  /** Override the state directory for the dedup store (for testing). */
+  stateDir?: string;
 }
 
 export const DEFAULT_WEBHOOK_PORT = 9876;
@@ -73,14 +78,75 @@ export const DEFAULT_WEBHOOK_HOST = '127.0.0.1';
 /** Maximum request body size accepted before the connection is dropped. */
 const MAX_BODY_BYTES = 1_000_000; // 1 MB
 
-/** GitHub events we convert to recognisable GithubEventType names. */
-const GITHUB_EVENT_MAP: Record<string, GithubEventType | undefined> = {
-  /* eslint-disable @typescript-eslint/naming-convention */
-  pull_request_review_comment: 'pr_comment',
-  check_run: 'check_failure',
-  issues: 'issue_opened',
-  /* eslint-enable @typescript-eslint/naming-convention */
-};
+/**
+ * Map GitHub webhook event name + action/conclusion → internal GithubEventType.
+ *
+ * Unlike the flat Record in the poller (which only subscribes to specific
+ * endpoints), the webhook receiver sees every event GitHub sends. We inspect
+ * the payload's `action` and `conclusion` fields to derive the correct type:
+ *  - check_run with conclusion !== 'failure' is NOT a check_failure.
+ *  - issues with action !== 'opened' is NOT an issue_opened.
+ *
+ * Returns `undefined` for events/actions we do not map, which the handler
+ * uses to decide whether to enqueue.
+ */
+function resolveEventType(
+  githubEvent: string,
+  payload: GithubPayload,
+): GithubEventType | undefined {
+  switch (githubEvent) {
+    case 'pull_request_review_comment':
+      return 'pr_comment';
+    case 'check_run': {
+      // Only completed check_runs with conclusion=failure map to check_failure.
+      // Successful / in-progress / neutral runs are not actionable failures.
+      const conclusion = payload.check_run?.conclusion;
+      if (payload.action === 'completed' && conclusion === 'failure') {
+        return 'check_failure';
+      }
+      return undefined;
+    }
+    case 'issues':
+      // Only newly opened issues are actionable; closed/edited/etc are not.
+      if (payload.action === 'opened') return 'issue_opened';
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Delivery dedup store — prevents replayed webhooks from creating duplicates
+// ---------------------------------------------------------------------------
+
+const DEDUP_FILENAME = 'webhook-delivery-seen.json';
+const DEDUP_MAX_ENTRIES = 10_000;
+
+function getDedupPath(stateDir?: string): string {
+  const dir = stateDir ?? getAfkStateDir();
+  return join(dir, DEDUP_FILENAME);
+}
+
+function loadSeenSet(dedupPath: string): Set<string> {
+  try {
+    if (!existsSync(dedupPath)) return new Set();
+    const raw = JSON.parse(readFileSync(dedupPath, 'utf-8')) as string[];
+    return new Set(raw);
+  } catch {
+    return new Set();
+  }
+}
+
+function persistSeenSet(dedupPath: string, seen: Set<string>): void {
+  // Evict oldest entries when the set grows too large.
+  const arr = [...seen];
+  const trimmed = arr.length > DEDUP_MAX_ENTRIES
+    ? arr.slice(arr.length - DEDUP_MAX_ENTRIES)
+    : arr;
+  const dir = join(dedupPath, '..');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(dedupPath, JSON.stringify(trimmed));
+}
 
 // ---------------------------------------------------------------------------
 // HMAC verification
@@ -200,6 +266,8 @@ export class WebhookReceiver {
   private readonly port: number;
   private readonly host: string;
   private readonly queueDir: string | undefined;
+  private readonly dedupPath: string;
+  private readonly seen: Set<string>;
   private server: Server | null = null;
 
   constructor(opts: WebhookReceiverOptions) {
@@ -226,6 +294,8 @@ export class WebhookReceiver {
     this.port = opts.port ?? DEFAULT_WEBHOOK_PORT;
     this.host = host;
     this.queueDir = opts.queueDir;
+    this.dedupPath = getDedupPath(opts.stateDir);
+    this.seen = loadSeenSet(this.dedupPath);
   }
 
   /**
@@ -298,20 +368,32 @@ export class WebhookReceiver {
         return;
       }
 
-      // Map GitHub event name → internal GithubEventType (or keep raw name
-      // for unrecognised events so we still enqueue them).
-      const eventType: GithubEventType =
-        GITHUB_EVENT_MAP[githubEvent] ?? ('issue_opened' as GithubEventType);
-
-      // Extract repo from payload (best-effort; falls back to 'unknown/repo').
-      let repo = 'unknown/repo';
-      try {
-        const payload = JSON.parse(rawBody.toString('utf-8')) as { repository?: { full_name?: string } };
-        repo = payload.repository?.full_name ?? repo;
-      } catch {
-        // ignore parse errors; repo stays at default
+      // Dedup: reject replayed deliveries (same X-GitHub-Delivery GUID).
+      if (this.seen.has(deliveryId)) {
+        sendResponse(res, 200, `Already processed: ${deliveryId}`);
+        return;
       }
 
+      // Parse payload once for action/conclusion inspection and repo extraction.
+      let payload: GithubPayload = {};
+      try {
+        payload = JSON.parse(rawBody.toString('utf-8')) as GithubPayload;
+      } catch {
+        // Non-JSON payloads: we can still record the delivery but cannot map.
+      }
+
+      // Map GitHub event + action/conclusion → internal type.
+      // Unknown or non-actionable combinations are silently dropped.
+      const eventType = resolveEventType(githubEvent, payload);
+      if (eventType === undefined) {
+        // Record the delivery as seen so retries don't re-evaluate.
+        this.seen.add(deliveryId);
+        persistSeenSet(this.dedupPath, this.seen);
+        sendResponse(res, 200, `Ignored: unsupported event ${githubEvent}/${payload.action ?? 'unknown'}`);
+        return;
+      }
+
+      const repo = payload.repository?.full_name ?? 'unknown/repo';
       const eventId = `webhook:${githubEvent}:${deliveryId}`;
       const summary = summarisePayload(rawBody, githubEvent);
 
@@ -324,6 +406,10 @@ export class WebhookReceiver {
       );
 
       enqueue(command, {}, this.queueDir);
+
+      // Record delivery as processed after successful enqueue.
+      this.seen.add(deliveryId);
+      persistSeenSet(this.dedupPath, this.seen);
 
       // eslint-disable-next-line no-console
       console.log(`[github-webhook-receiver] enqueued task for ${githubEvent} delivery ${deliveryId}`);

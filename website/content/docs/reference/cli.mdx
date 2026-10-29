@@ -467,7 +467,7 @@ Usage: `afk events serve [options]`
 
 | Flags | Description | Default |
 | --- | --- | --- |
-| `--secret <secret>` | HMAC-SHA256 secret (falls back to AFK_EVENTS_WEBHOOK_SECRET) |  |
+| `--secret-env <env-var>` | Name of env var holding the HMAC-SHA256 secret (avoids process-table leaks). Default: AFK_EVENTS_WEBHOOK_SECRET | `"AFK_EVENTS_WEBHOOK_SECRET"` |
 | `--command <template>` | Command template. Placeholders: &#123;&#123;event_type&#125;&#125;, &#123;&#123;repo&#125;&#125;, &#123;&#123;event_id&#125;&#125;. | `"A GitHub event occurred in {{repo}}. Event type: {{event_type}}. Event id: {{event_id}}. Review the untrusted payload below and take appropriate action if warranted."` |
 | `--port <port>` | TCP port to bind on | `"9876"` |
 | `--host <host>` | Bind address (default: 127.0.0.1). Non-loopback requires --allow-external. | `"127.0.0.1"` |
