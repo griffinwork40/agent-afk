@@ -18,6 +18,7 @@ import { isChildReplaySafe } from './retry-safety.js';
 import { isChildWriteCapable } from './write-capability.js';
 import { SubagentManager } from '../../subagent.js';
 import type { RegisteredAgent, AgentRegistry } from '../../agents/index.js';
+import type { AgentDefinition } from '../../types/sdk-types.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
@@ -142,12 +143,20 @@ export interface ResolvedChildBudgets {
 }
 
 /**
+ * Minimal structural type covering the two fields `resolveChildBudgets` reads
+ * from a named-agent definition. Wider callers that pass a full `RegisteredAgent`
+ * are structurally compatible because `RegisteredAgent.definition` satisfies
+ * `Pick<AgentDefinition, 'maxTurns' | 'maxToolUseIterations'>`.
+ */
+export type BudgetHint = { definition: Pick<AgentDefinition, 'maxTurns' | 'maxToolUseIterations'> };
+
+/**
  * Resolve turn and tool-use-round budgets.
  * Precedence: explicit call-site > named-agent frontmatter > parse default (0 = unlimited).
  */
 export function resolveChildBudgets(
   parsed: Pick<AgentInput, 'max_turns' | 'max_turns_explicit' | 'max_tool_use_iterations' | 'max_tool_use_iterations_explicit'>,
-  namedAgent: RegisteredAgent | undefined,
+  namedAgent: BudgetHint | undefined,
 ): ResolvedChildBudgets {
   const effectiveMaxTurns: number =
     !parsed.max_turns_explicit && namedAgent?.definition.maxTurns !== undefined

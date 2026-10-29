@@ -216,7 +216,7 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
                 maxTurns: resolvedAgent.namedAgentMaxTurns,
                 maxToolUseIterations: resolvedAgent.namedAgentMaxToolUseIterations,
               },
-            } as import('../agents/index.js').RegisteredAgent
+            } satisfies import('./subagent/child-config.helpers.js').BudgetHint
           : undefined,
       );
       return {
