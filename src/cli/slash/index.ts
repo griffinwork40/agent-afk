@@ -53,6 +53,7 @@ import { peersCmd } from './commands/peers.js';
 import { exportCmd } from './commands/export.js';
 import { usageAwarenessCmd } from './commands/usage-awareness.js';
 import { handoffsCommands } from './commands/handoffs.js';
+import { whereCmd } from './commands/where.js';
 import '../trusted-skills-registered.js';
 
 export function registerAll(): void {
@@ -99,6 +100,7 @@ export function registerAll(): void {
   register(exportCmd);
   register(usageAwarenessCmd);
   for (const cmd of handoffsCommands) register(cmd);
+  register(whereCmd);
   // Placeholders for plugin-backed commands. The real lists get registered
   // after `session.waitForInitialization()` resolves, via
   // `registerPluginSkills(session)` / `registerPluginAgents(session)` in
