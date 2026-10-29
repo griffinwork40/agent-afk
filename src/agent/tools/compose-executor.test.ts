@@ -2308,7 +2308,7 @@ describe('ComposeExecutor', () => {
         max_tool_rounds_per_node: 100, // compose-level cap — must win
       }));
 
-      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      const dagOpts = mockRunSubagentDAG.mock.calls[0]![0]!;
       // Compose-level cap (100) must win over named-agent frontmatter (50).
       expect(dagOpts.nodes[0].maxToolUseIterations).toBe(100);
     });
