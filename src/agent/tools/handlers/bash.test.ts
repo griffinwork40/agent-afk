@@ -976,16 +976,15 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
 // ---------------------------------------------------------------------------
 // C4 (#354): best-effort readRoots/writeRoots path-containment scan.
 //
-// The scan is ADVISORY-ONLY: when a command references an absolute/home-relative
-// path outside the session's writeRoots it emits one `[security]` console.warn
-// (and a telemetry row) but STILL executes the command — it never blocks. These
-// tests assert both halves: the warning fires (or is suppressed) as specified,
-// AND the command runs to completion either way.
+// The scan is TELEMETRY-ONLY: when a command references an absolute/home-relative
+// path outside the session's writeRoots it emits a `tool.bash_path_escape`
+// telemetry row but STILL executes the command — it never blocks and never
+// logs to the console. These tests verify commands run to completion and that
+// no console.warn is emitted.
 //
 // NB: appendRoutingDecision is a no-op under vitest (env.VITEST guard), so we
-// spy on console.warn — the reliable, synchronous signal that the escape path
-// was taken. We match specifically on the path-escape substring so unrelated
-// `[security]` lines can never satisfy these assertions.
+// spy on console.warn to confirm silence. We match specifically on the
+// path-escape substring so unrelated warnings cannot satisfy these assertions.
 // ---------------------------------------------------------------------------
 describe('bash path-containment scan — C4 (#354)', () => {
   function createSignal(): AbortSignal {
@@ -1015,7 +1014,7 @@ describe('bash path-containment scan — C4 (#354)', () => {
       .filter((m) => m.includes(ESCAPE_MARKER));
   }
 
-  it('warns AND still executes when a command references a path outside writeRoots', async () => {
+  it('still executes when a command references a path outside writeRoots (telemetry-only)', async () => {
     // 'default' mode → allowAll is NOT set, so containment is enforced/advised.
     const handler = createBashHandler('default', root);
     const result = await handler(
@@ -1024,23 +1023,18 @@ describe('bash path-containment scan — C4 (#354)', () => {
       { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false },
     );
 
-    // Warned about the escape…
-    const warnings = escapeWarnings();
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('/etc/hosts');
-    expect(warnings[0]).toContain('best-effort');
+    // No console.warn — the scan is telemetry-only.
+    expect(escapeWarnings()).toHaveLength(0);
 
-    // …but the command STILL ran (advisory-only, not a block).
+    // Command ran normally (scan never blocks).
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('hi');
   });
 
-  it('expands ~/… and warns when a home-relative path escapes writeRoots', async () => {
-    // End-to-end exercise of scanPathsBestEffort's ~ / ~/… expansion branch:
+  it('still executes when a home-relative path escapes writeRoots (telemetry-only)', async () => {
+    // Exercise of scanPathsBestEffort's ~ / ~/… expansion branch:
     // `~/.ssh/id_rsa` expands to os.homedir()/.ssh/id_rsa — outside the temp-dir
-    // writeRoots — so it warns (and still executes). Had expansion NOT fired, the
-    // token would anchor to resolveBase (in-root) and produce zero warnings, so
-    // the single warning is itself proof the expansion happened.
+    // writeRoots. The scan records telemetry but emits no console.warn.
     //
     // Pin home OUTSIDE os.tmpdir(): on win32 the global test setup points
     // USERPROFILE at a temp sentinel (redirect-paths-env.ts), so the real
@@ -1055,10 +1049,7 @@ describe('bash path-containment scan — C4 (#354)', () => {
       { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false },
     );
 
-    const warnings = escapeWarnings();
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('.ssh');
-    expect(warnings[0]).toContain('id_rsa');
+    expect(escapeWarnings()).toHaveLength(0);
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('hi');
   });
@@ -1090,14 +1081,13 @@ describe('bash path-containment scan — C4 (#354)', () => {
     expect(result.content).toContain('hi');
   });
 
-  it('warns at most once per handler instance (one-time latch)', async () => {
+  it('emits no console.warn even for repeated out-of-root references', async () => {
     const handler = createBashHandler('default', root);
     const ctx = { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false };
     await handler({ command: 'cat /etc/hosts' }, createSignal(), ctx);
     await handler({ command: 'cat /etc/passwd' }, createSignal(), ctx);
 
-    // Latch means the second escaping command does not re-warn.
-    expect(escapeWarnings()).toHaveLength(1);
+    expect(escapeWarnings()).toHaveLength(0);
   });
 
   it('does NOT warn when no context is supplied (inline/back-compat call)', async () => {
@@ -1119,24 +1109,11 @@ describe('bash path-containment scan — C4 (#354)', () => {
     expect(result.isError).toBeFalsy();
   });
 
-  it('still warns for a traversal out of a scratch dir (/tmp/../etc/hosts)', async () => {
+  it('does NOT warn for a traversal out of a scratch dir (telemetry-only)', async () => {
     const handler = createBashHandler('default', root);
     const ctx = { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false };
     await handler({ command: 'echo hi /tmp/../etc/hosts' }, createSignal(), ctx);
-    expect(escapeWarnings()).toHaveLength(1);
-  });
-
-  it('a benign sink does not consume the one-time latch for a later real escape', async () => {
-    const handler = createBashHandler('default', root);
-    const ctx = { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false };
-    await handler({ command: 'ls 2>/dev/null' }, createSignal(), ctx);
     expect(escapeWarnings()).toHaveLength(0);
-    await handler({ command: 'cat /etc/hosts 2>/dev/null' }, createSignal(), ctx);
-    const warnings = escapeWarnings();
-    expect(warnings).toHaveLength(1);
-    // Only the genuine escape is named — the exempt sink is not listed.
-    expect(warnings[0]).toContain('/etc/hosts');
-    expect(warnings[0]).not.toContain('/dev/null');
   });
 });
 

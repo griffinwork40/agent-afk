@@ -12,6 +12,46 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.340.0] - 2026-10-29
+
+### Added
+- implement ToolCallLedger class with bounded turn-window map (427b33a7d)
+- inline terminal image rendering via Kitty graphics protocol (99d58b7f7)
+
+### Fixed
+- cap bash-output-viewer lines to terminal width in buildRows (79ed7ff7e)
+- consolidate picker row truncation and add skipBandTruncation flag (c264b0651)
+- reject non-integer turnIndex; bump test-typecheck baseline (35600553a)
+- add RangeError guard in record() and fix import path (1ed585c8d)
+- add missing defaultSubagentModel to makeReadScopeExecutor in subagent-executor.test.ts (d724493d2)
+- merge duplicate JSDoc blocks on createTranscriber into one (eac20ef78)
+- remaining advisory findings — TOCTOU doc, JSDoc, CHANGELOG preamble, import order, synthetic-completedAt comment, utils tests (11880132f)
+- stat catch returns early; realpathSync.native for tmpdir prefix (e9de65b99)
+- derive worktree slug from agent_type when id_prefix is omitted (#4474) (1e5b9fd30)
+- address 4 blocking review findings in inline-image-render (703bae2ef)
+- address review findings #5 and #6 in bash-checkpoint tests (c5e0c3865)
+- address review feedback on inline-image-render (a0614c853)
+- tighten formatter test anchors and fix stale comment (330dc7c2c)
+- extend operator-notify port to cover remaining agent/ → telegram/ imports (3c1ff62d0)
+- address remaining advisory findings from triage batch (750203c07)
+- apply fail-closed grantsToolStrict to workspace prompt gate (9ec00cc22)
+- move pause→resume test to its own describe block (8e3092dfa)
+- address plugin-api state store advisory findings (2937125d9)
+- read raw journal records for receipt firstUserMessage to survive compaction (8099e684d)
+- fix bg process count accuracy and add display tests (49fa60ddc)
+- add executor-level parentCwd fallback test and document unwired-manager collapse (14f4516de)
+- add riskCategory forwarding integration test (e901a2035)
+- address bash side-effect capture advisory findings (92130fcf3)
+- fix misleading comments and add write_file test in artifact-modified (3fbd5f2e4)
+- add agent↔compose cross-references and budget mapping note (1a902c6a6)
+- wire /usage slash command to multi-provider pipeline (8eefe8b52)
+
+### Changed
+- suppress advisory bash path-containment console.warn (#4516) (8522f2ac8)
+- correct user-backgrounded steering/cancel semantics (c3a960351)
+- regenerate env-registry docs after #2143 env vars (54671c6bd)
+- document provenance fail-safe default in background-registry (533fd31b5)
+
 ## [5.339.0] - 2026-10-28
 
 ### Added

@@ -339,3 +339,4 @@ export { anthropicDirectProvider };
 export { AnthropicDirectProvider } from './anthropic-direct/index.js';
 export { OpenAICompatibleProvider, openaiCompatibleProvider } from './openai-compatible/index.js';
 export { XaiProvider } from './xai/index.js';
+

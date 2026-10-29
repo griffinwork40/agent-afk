@@ -266,10 +266,6 @@ export function createBashHandler(
     }
     if (escaping.length === 0) return;
     _pathEscapeWarned = true;
-    console.warn(
-      `[security] bash: command references path(s) outside writeRoots: ${escaping.join(', ')} — ` +
-        'bash containment is best-effort (tracked C4); use file tools for contained writes.',
-    );
     // Telemetry: counts + mode only. The raw command string and the escaping
     // paths list are tool input and stay out of the JSONL (audit §G.4) — same
     // privacy rule as the overflow-kill path above.
