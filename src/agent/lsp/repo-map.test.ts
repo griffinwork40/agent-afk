@@ -291,3 +291,162 @@ describe('buildRepoMap — timeout + abort', () => {
     expect(typeof result).toBe('string');
   });
 });
+
+describe('buildRepoMap — interior path denylist', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('filters dist/, build/, .cache/ from LSP symbols', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '1');
+
+    const symbols = [
+      sym('Good', 5, '/proj/src/app.ts'),
+      sym('Compiled', 5, '/proj/dist/app.js'),
+      sym('Built', 5, '/proj/build/out.js'),
+      sym('Cached', 5, '/proj/.cache/temp.js'),
+    ];
+
+    const { pool } = makeFakePool(async () => symbols);
+    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
+
+    expect(result).toContain('class(Good)');
+    expect(result).not.toContain('Compiled');
+    expect(result).not.toContain('Built');
+    expect(result).not.toContain('Cached');
+  });
+
+  it('filters dist/, build/, .cache/ from filesystem fallback', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '');
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-repo-map-deny-'));
+    try {
+      await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true });
+      await fs.mkdir(path.join(tmpDir, 'dist'), { recursive: true });
+      await fs.mkdir(path.join(tmpDir, 'build'), { recursive: true });
+      await fs.mkdir(path.join(tmpDir, '.cache'), { recursive: true });
+      await fs.writeFile(path.join(tmpDir, 'src', 'index.ts'), '// ok');
+      await fs.writeFile(path.join(tmpDir, 'dist', 'index.js'), '// no');
+      await fs.writeFile(path.join(tmpDir, 'build', 'index.js'), '// no');
+      await fs.writeFile(path.join(tmpDir, '.cache', 'temp.js'), '// no');
+
+      const result = await buildRepoMap({ rootDir: tmpDir, timeoutMs: 3000 });
+
+      expect(result).toContain('index.ts');
+      expect(result).not.toContain('dist');
+      expect(result).not.toContain('build');
+      expect(result).not.toContain('.cache');
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('buildRepoMap — symbol name sanitization', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('strips $ and special characters from symbol names', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '1');
+
+    const symbols = [
+      sym('$inject', 5, '/proj/src/di.ts'),
+      sym('foo<bar>', 12, '/proj/src/gen.ts'),
+      sym('normal_name', 5, '/proj/src/ok.ts'),
+    ];
+
+    const { pool } = makeFakePool(async () => symbols);
+    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
+
+    // $ should be replaced with _
+    expect(result).toContain('class(_inject)');
+    expect(result).not.toContain('$inject');
+    // angle brackets replaced
+    expect(result).toContain('fn(foo_bar_)');
+    // clean name passes through
+    expect(result).toContain('class(normal_name)');
+  });
+});
+
+describe('buildRepoMap — MAX_SYMBOLS cap', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('stops at exactly MAX_SYMBOLS symbols (no off-by-one)', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '1');
+
+    // Generate exactly MAX_SYMBOLS + 20 symbols, each in its own file.
+    const symbols = Array.from({ length: MAX_SYMBOLS + 20 }, (_, i) =>
+      sym(`Sym${i}`, 5, `/proj/src/file${i}.ts`),
+    );
+
+    const { pool } = makeFakePool(async () => symbols);
+    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
+
+    // Count symbols in output — each file has exactly one.
+    const symbolLines = result.split('\n').filter((l) => l.includes('class('));
+    expect(symbolLines.length).toBeLessThanOrEqual(MAX_SYMBOLS);
+  });
+});
+
+describe('buildRepoMap — walkSourceFiles fallback', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('walks directories recursively up to depth 6', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '');
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-repo-map-walk-'));
+    try {
+      const deepDir = path.join(tmpDir, 'src', 'a', 'b', 'c');
+      await fs.mkdir(deepDir, { recursive: true });
+      await fs.writeFile(path.join(deepDir, 'deep.ts'), '// deep');
+      await fs.writeFile(path.join(tmpDir, 'src', 'top.ts'), '// top');
+
+      const result = await buildRepoMap({ rootDir: tmpDir, timeoutMs: 3000 });
+
+      expect(result).toContain('top.ts');
+      expect(result).toContain('deep.ts');
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips dotdirs and node_modules during walk', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '');
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-repo-map-walk-'));
+    try {
+      await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true });
+      await fs.mkdir(path.join(tmpDir, '.hidden'), { recursive: true });
+      await fs.mkdir(path.join(tmpDir, 'node_modules', 'pkg'), { recursive: true });
+      await fs.writeFile(path.join(tmpDir, 'src', 'ok.ts'), '// ok');
+      await fs.writeFile(path.join(tmpDir, '.hidden', 'bad.ts'), '// bad');
+      await fs.writeFile(path.join(tmpDir, 'node_modules', 'pkg', 'index.ts'), '// bad');
+
+      const result = await buildRepoMap({ rootDir: tmpDir, timeoutMs: 3000 });
+
+      expect(result).toContain('ok.ts');
+      expect(result).not.toContain('bad.ts');
+      expect(result).not.toContain('node_modules');
+      expect(result).not.toContain('.hidden');
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns empty string for nonexistent directory', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '');
+    const result = await buildRepoMap({ rootDir: '/no/such/dir/ever', timeoutMs: 500 });
+    expect(result).toBe('');
+  });
+
+  it('respects abort signal during walk', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '');
+    const ctl = new AbortController();
+    ctl.abort();
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-repo-map-walk-'));
+    try {
+      await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true });
+      await fs.writeFile(path.join(tmpDir, 'src', 'index.ts'), '// index');
+
+      const result = await buildRepoMap({ rootDir: tmpDir, timeoutMs: 3000, signal: ctl.signal });
+      expect(typeof result).toBe('string');
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

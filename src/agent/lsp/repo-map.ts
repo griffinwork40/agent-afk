@@ -51,6 +51,17 @@ const MAX_FILES_PER_DIR = 12;
 /** Source extensions included by the filesystem fallback. */
 const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx']);
 
+/**
+ * Interior path segments that should never appear in repo-map output.
+ * These are build artifacts / caches that would leak noise into the prompt.
+ */
+const DENY_SEGMENTS = new Set(['node_modules', 'dist', 'build', '.cache']);
+
+/** Return true when a relative path contains a denied interior segment. */
+function hasDeniedSegment(rel: string): boolean {
+  return rel.split(/[\\/]/).some((s) => DENY_SEGMENTS.has(s));
+}
+
 /** LSP SymbolKind numbers → short labels (subset of the spec). */
 const SYMBOL_KIND: Record<number, string> = {
   1: 'file', 2: 'module', 3: 'ns', 4: 'pkg', 5: 'class', 6: 'method',
@@ -145,6 +156,9 @@ async function tryLspMap(
   const pool = opts.pool ?? getLspPool();
   const serverCmd = opts.serverCmd ?? DEFAULT_LSP_CMD;
   const spec: ServerSpec = typescriptSpecFromCommand(serverCmd);
+  // Contract: typescriptRootFor expects a *file* path and walks from its
+  // dirname. We pass a synthetic child so it starts searching inside rootDir
+  // itself, not its parent. The sentinel basename is arbitrary.
   const root = typescriptRootFor(path.join(rootDir, '_')) ?? rootDir;
 
   let client: LspClient;
@@ -200,16 +214,16 @@ function formatLspSymbols(symbols: RawSymbol[], rootDir: string): string {
     } catch {
       continue;
     }
-    const rel = path.relative(rootDir, filePath).replace(/[^\w.\-/]/g, '_');
-    if (rel.startsWith('..') || rel.includes('node_modules')) continue;
+    const rel = path.relative(rootDir, filePath).split(path.sep).join('/');
+    if (rel.startsWith('..') || hasDeniedSegment(rel)) continue;
 
     if (!byFile.has(rel)) byFile.set(rel, []);
     const kindLabel = SYMBOL_KIND[sym.kind] ?? '?';
-    const safeName = sym.name.replace(/[^a-zA-Z0-9_.$]/g, '_');
+    const safeName = sym.name.replace(/[^a-zA-Z0-9_]/g, '_');
     byFile.get(rel)!.push(`${kindLabel}(${safeName})`);
     totalSymbols++;
 
-    if (byFile.size > MAX_SYMBOLS || totalSymbols > MAX_SYMBOLS * 2) break;
+    if (totalSymbols >= MAX_SYMBOLS) break;
   }
 
   if (byFile.size === 0) return '';
@@ -250,7 +264,7 @@ async function fsMap(
     // node:fs/promises glob is available in Node ≥22; fall back gracefully.
     const entries = await globSourceFiles(rootDir, combined);
     for (const rel of entries) {
-      if (rel.includes('node_modules') || path.basename(rel).startsWith('.')) continue;
+      if (hasDeniedSegment(rel) || path.basename(rel).startsWith('.')) continue;
       const parts = rel.split(/[\\/]/);
       const dir = parts.length > 1 ? parts[0]! : '.';
       if (!byDir.has(dir)) byDir.set(dir, []);
@@ -288,10 +302,13 @@ async function globSourceFiles(rootDir: string, signal: AbortSignal): Promise<st
     // Fallback for Node <22: simple readdir walk.
     return walkSourceFiles(rootDir, rootDir, 0, signal);
   }
+  // Contract: fs.promises.glob does NOT honour the `signal` option on
+  // Node 22/24 — an already-aborted signal still enumerates files. We
+  // enforce cancellation manually by checking `signal.aborted` on every
+  // iteration and breaking out of the async iterator.
   for await (const entry of fsPromises.glob('**/*.{ts,tsx,js,jsx}', {
     cwd: rootDir,
-    exclude: (name: string) => name === 'node_modules' || name.startsWith('.'),
-    signal,
+    exclude: (name: string) => DENY_SEGMENTS.has(name) || name.startsWith('.'),
   })) {
     if (signal.aborted) break;
     results.push(entry as string);
@@ -318,7 +335,7 @@ async function walkSourceFiles(
   const results: string[] = [];
   for (const e of entries) {
     if (signal.aborted) break;
-    if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+    if (e.name.startsWith('.') || DENY_SEGMENTS.has(e.name)) continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
       const sub = await walkSourceFiles(rootDir, full, depth + 1, signal);
