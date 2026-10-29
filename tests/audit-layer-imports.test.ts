@@ -1,5 +1,14 @@
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { collectLogicalLine, isAllowed } from '../scripts/audit-layer-imports.js';
+import {
+  checkPair,
+  classifyDir,
+  collectLogicalLine,
+  importedSegment,
+  isAllowed,
+  scanFile,
+  srcSegment,
+} from '../scripts/audit-layer-imports.js';
 import type { AllowedPair } from '../scripts/audit-layer-imports.allowlist.js';
 
 // ── collectLogicalLine ────────────────────────────────────────────────────────
@@ -167,5 +176,322 @@ describe('isAllowed — specifier at index 0 (bare specifier starts with needle)
   it('matches when specifier starts directly with needle (idx === 0)', () => {
     // Rare but valid: bare `cli/foo` import with no leading dot
     expect(isAllowed('src/agent/foo.ts', 'cli/foo.js', pairs)).toBe(true);
+  });
+});
+
+// ── classifyDir ───────────────────────────────────────────────────────────────
+
+describe('classifyDir', () => {
+  it("classifies 'cli' as surface", () => {
+    expect(classifyDir('cli')).toBe('surface');
+  });
+
+  it("classifies 'telegram' as surface", () => {
+    expect(classifyDir('telegram')).toBe('surface');
+  });
+
+  it("classifies 'web-server' as surface", () => {
+    expect(classifyDir('web-server')).toBe('surface');
+  });
+
+  it("classifies 'agent' as core-infra", () => {
+    expect(classifyDir('agent')).toBe('core-infra');
+  });
+
+  it("classifies 'browser' as core-infra", () => {
+    expect(classifyDir('browser')).toBe('core-infra');
+  });
+
+  it("classifies 'skills' as core-infra", () => {
+    expect(classifyDir('skills')).toBe('core-infra');
+  });
+
+  it("classifies 'config' as foundation", () => {
+    expect(classifyDir('config')).toBe('foundation');
+  });
+
+  it("classifies 'utils' as foundation", () => {
+    expect(classifyDir('utils')).toBe('foundation');
+  });
+
+  it("classifies 'improve' as feature", () => {
+    expect(classifyDir('improve')).toBe('feature');
+  });
+
+  it("classifies 'insights' as feature", () => {
+    expect(classifyDir('insights')).toBe('feature');
+  });
+
+  it("classifies 'whatif' as feature", () => {
+    expect(classifyDir('whatif')).toBe('feature');
+  });
+
+  it("classifies 'paths.ts' as foundation (startsWith 'paths')", () => {
+    expect(classifyDir('paths.ts')).toBe('foundation');
+  });
+
+  it("classifies 'paths-helpers.ts' as foundation (startsWith 'paths')", () => {
+    expect(classifyDir('paths-helpers.ts')).toBe('foundation');
+  });
+
+  it("classifies an unknown directory as 'unknown'", () => {
+    expect(classifyDir('unknown-dir')).toBe('unknown');
+  });
+
+  it("classifies an empty string as 'unknown'", () => {
+    expect(classifyDir('')).toBe('unknown');
+  });
+});
+
+// ── srcSegment ────────────────────────────────────────────────────────────────
+
+describe('srcSegment', () => {
+  it("returns the subdirectory for 'src/agent/foo.ts'", () => {
+    expect(srcSegment('src/agent/foo.ts')).toBe('agent');
+  });
+
+  it("returns the subdirectory for 'src/cli/bar.ts'", () => {
+    expect(srcSegment('src/cli/bar.ts')).toBe('cli');
+  });
+
+  it("returns the filename for a top-level src/ file 'src/paths.ts'", () => {
+    expect(srcSegment('src/paths.ts')).toBe('paths.ts');
+  });
+
+  it("returns undefined for a path not starting with 'src'", () => {
+    expect(srcSegment('notSrc/foo.ts')).toBeUndefined();
+  });
+
+  it("returns undefined for a path that is just 'src'", () => {
+    expect(srcSegment('src')).toBeUndefined();
+  });
+
+  it("returns undefined for an empty path", () => {
+    expect(srcSegment('')).toBeUndefined();
+  });
+
+  it("returns the deep subdirectory first segment for 'src/agent/spine/deep.ts'", () => {
+    expect(srcSegment('src/agent/spine/deep.ts')).toBe('agent');
+  });
+});
+
+// ── importedSegment ───────────────────────────────────────────────────────────
+
+describe('importedSegment', () => {
+  // Use a fake SCAN_ROOT so tests don't depend on __dirname resolution.
+  const fakeRoot = '/fake/repo/src';
+
+  it("resolves '../cli/types.js' from src/agent/foo.ts to 'cli'", () => {
+    const absPath = '/fake/repo/src/agent/foo.ts';
+    expect(importedSegment(absPath, '../cli/types.js', fakeRoot)).toBe('cli');
+  });
+
+  it("resolves '../../utils/helpers.js' from src/agent/sub/foo.ts to 'utils'", () => {
+    const absPath = '/fake/repo/src/agent/sub/foo.ts';
+    expect(importedSegment(absPath, '../../utils/helpers.js', fakeRoot)).toBe('utils');
+  });
+
+  it('returns undefined for a third-party specifier (no leading dot)', () => {
+    const absPath = '/fake/repo/src/agent/foo.ts';
+    expect(importedSegment(absPath, 'vitest', fakeRoot)).toBeUndefined();
+  });
+
+  it('returns undefined for a specifier that resolves outside src/', () => {
+    // From src/agent/foo.ts, going up three levels exits src/
+    const absPath = '/fake/repo/src/agent/foo.ts';
+    expect(importedSegment(absPath, '../../../outside/thing.js', fakeRoot)).toBeUndefined();
+  });
+
+  it("resolves './sibling.js' to the same directory segment 'agent'", () => {
+    const absPath = '/fake/repo/src/agent/foo.ts';
+    expect(importedSegment(absPath, './sibling.js', fakeRoot)).toBe('agent');
+  });
+
+  it("resolves '../telegram/bot.js' from src/agent/foo.ts to 'telegram'", () => {
+    const absPath = '/fake/repo/src/agent/foo.ts';
+    expect(importedSegment(absPath, '../telegram/bot.js', fakeRoot)).toBe('telegram');
+  });
+
+  it('uses the module-level SCAN_ROOT when no override is provided (smoke test)', () => {
+    // We can't control SCAN_ROOT here, but we CAN verify the function accepts
+    // two-argument form without throwing.
+    const absPath = '/some/path/src/agent/foo.ts';
+    // Third-party specifier always returns undefined regardless of SCAN_ROOT.
+    expect(importedSegment(absPath, 'node:fs')).toBeUndefined();
+  });
+});
+
+// ── checkPair ─────────────────────────────────────────────────────────────────
+
+describe('checkPair', () => {
+  it('Rule 1: core-infra importing surface → non-null violation string', () => {
+    const result = checkPair('core-infra', 'agent', 'surface', 'cli');
+    expect(result).not.toBeNull();
+    expect(result).toContain('Rule 1');
+    expect(result).toContain('agent');
+    expect(result).toContain('cli');
+  });
+
+  it('Rule 2: foundation importing core-infra → non-null violation string', () => {
+    const result = checkPair('foundation', 'config', 'core-infra', 'agent');
+    expect(result).not.toBeNull();
+    expect(result).toContain('Rule 2');
+  });
+
+  it('Rule 2: foundation importing surface → non-null violation string', () => {
+    const result = checkPair('foundation', 'config', 'surface', 'cli');
+    expect(result).not.toBeNull();
+    expect(result).toContain('Rule 2');
+  });
+
+  it('Rule 2: foundation importing feature → non-null violation string', () => {
+    const result = checkPair('foundation', 'utils', 'feature', 'improve');
+    expect(result).not.toBeNull();
+    expect(result).toContain('Rule 2');
+  });
+
+  it('Rule 3: feature importing surface → non-null violation string', () => {
+    const result = checkPair('feature', 'improve', 'surface', 'cli');
+    expect(result).not.toBeNull();
+    expect(result).toContain('Rule 3');
+    expect(result).toContain('improve');
+    expect(result).toContain('cli');
+  });
+
+  it('allowed: core-infra importing core-infra → null', () => {
+    expect(checkPair('core-infra', 'agent', 'core-infra', 'skills')).toBeNull();
+  });
+
+  it('allowed: same layer surface → surface → null', () => {
+    expect(checkPair('surface', 'cli', 'surface', 'telegram')).toBeNull();
+  });
+
+  it('allowed: surface importing core-infra → null (surface may depend on core-infra)', () => {
+    expect(checkPair('surface', 'cli', 'core-infra', 'agent')).toBeNull();
+  });
+
+  it('allowed: surface importing foundation → null', () => {
+    expect(checkPair('surface', 'cli', 'foundation', 'config')).toBeNull();
+  });
+
+  it('allowed: core-infra importing foundation → null', () => {
+    expect(checkPair('core-infra', 'agent', 'foundation', 'utils')).toBeNull();
+  });
+
+  it('allowed: feature importing core-infra → null', () => {
+    expect(checkPair('feature', 'improve', 'core-infra', 'agent')).toBeNull();
+  });
+});
+
+// ── scanFile — block-comment state machine ────────────────────────────────────
+
+describe('scanFile — block-comment state machine', () => {
+  // Helper: build a fake absPath and relPath for a file in src/agent/
+  // using a fake scan root so importedSegment resolves correctly.
+  //
+  // IMPORTANT: scanFile calls importedSegment(absPath, specifier) which
+  // internally uses the module-level SCAN_ROOT (derived from __dirname).
+  // To make violations trigger, we need absPath to live under real SCAN_ROOT.
+  // We work around this by constructing absPath from the real scripts/__dirname
+  // equivalent — but since we can't know it at test-write time, we use a
+  // specifier that resolves relative to absPath such that the target segment
+  // is 'cli' (a surface dir), making it a Rule 1 violation.
+  //
+  // Strategy: use a real path under the actual src/ tree for absPath so that
+  // SCAN_ROOT resolves correctly, and use a specifier like '../cli/types.js'
+  // which, from src/agent/fake.ts, resolves to src/cli/types.js → segment 'cli'.
+  //
+  // The real SCAN_ROOT = <repoRoot>/src. We construct absPath as:
+  //   <repoRoot>/src/agent/fake.ts  (a file that doesn't need to exist for scanFile)
+  // relPath = 'src/agent/fake.ts'
+  // importerLayer = 'core-infra'
+
+  // Locate real repoRoot: tests/ is one level below the worktree root.
+  // path.dirname gives tests/; one more resolve('..') reaches the worktree root,
+  // which is where scripts/audit-layer-imports.ts derives SCAN_ROOT from.
+  const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const absPath = path.join(repoRoot, 'src', 'agent', 'fake.ts');
+  const relPath = 'src/agent/fake.ts';
+  const importerLayer = 'core-infra' as const;
+
+  it('does NOT report a violation for an import inside a multi-line block comment', () => {
+    const lines = [
+      '/*',
+      " * import { Foo } from '../cli/types.js';",
+      ' */',
+      'const x = 1;',
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations).toHaveLength(0);
+  });
+
+  it('reports a violation for an import that appears after */ on the same closing line (Item 1 fix)', () => {
+    // The `*/` closes the block comment; the import on the same line is live code.
+    const lines = [
+      '/*',
+      " * some comment",
+      `*/ import { Foo } from '../cli/types.js';`,
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0]?.rule).toContain('Rule 1');
+  });
+
+  it('does NOT report a violation for an import-looking string inside a line comment', () => {
+    const lines = [
+      "// import { Foo } from '../cli/types.js';",
+      'const x = 1;',
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations).toHaveLength(0);
+  });
+
+  it('reports a violation for an import after a single-line /* */ block comment on the same line', () => {
+    // /* single-line block comment */ import ... — the import IS live code.
+    const lines = [
+      `/* intentionally ignored */ import { Foo } from '../cli/types.js';`,
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0]?.rule).toContain('Rule 1');
+  });
+
+  it('does NOT report a violation for an import entirely inside a single-line /* */ comment', () => {
+    // The import is inside the comment delimiters — not live code.
+    const lines = [
+      `/* import { Foo } from '../cli/types.js'; */`,
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations).toHaveLength(0);
+  });
+
+  it('does NOT report a violation for an import inside a multi-line block comment spanning several lines', () => {
+    const lines = [
+      '/**',
+      ' * Example:',
+      " *   import { run } from '../cli/index.js';",
+      ' */',
+      'export {};',
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations).toHaveLength(0);
+  });
+
+  it('reports a violation for a real import that follows non-comment code', () => {
+    const lines = [
+      "import { Foo } from '../cli/types.js';",
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0]?.rule).toContain('Rule 1');
+  });
+
+  it('returns empty array for a file with no imports', () => {
+    const lines = [
+      'const x = 42;',
+      'function hello() { return x; }',
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations).toHaveLength(0);
   });
 });

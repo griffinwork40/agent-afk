@@ -66,9 +66,9 @@ const FOUNDATION_TOP_LEVEL_PREFIX = 'paths';
 
 // ── Layer classification ──────────────────────────────────────────────────────
 
-type Layer = 'foundation' | 'core-infra' | 'surface' | 'feature' | 'unknown';
+export type Layer = 'foundation' | 'core-infra' | 'surface' | 'feature' | 'unknown';
 
-function classifyDir(dirOrBasename: string): Layer {
+export function classifyDir(dirOrBasename: string): Layer {
   if (FOUNDATION_DIRS.has(dirOrBasename)) return 'foundation';
   if (dirOrBasename.startsWith(FOUNDATION_TOP_LEVEL_PREFIX)) return 'foundation';
   if (CORE_INFRA_DIRS.has(dirOrBasename)) return 'core-infra';
@@ -82,7 +82,7 @@ function classifyDir(dirOrBasename: string): Layer {
  *   - subdirectory name for src/<dir>/... files
  *   - file's own basename for top-level src/ files (e.g. "paths.ts")
  */
-function srcSegment(relPath: string): string | undefined {
+export function srcSegment(relPath: string): string | undefined {
   const parts = relPath.split('/');
   if (parts[0] !== 'src') return undefined;
   if (parts.length < 2) return undefined;
@@ -93,12 +93,19 @@ function srcSegment(relPath: string): string | undefined {
  * Resolve a relative import specifier to the src/ segment it targets.
  * Returns undefined for third-party imports (no leading dot) or paths
  * that resolve outside src/.
+ *
+ * @param scanRoot - Override for the SCAN_ROOT constant (used by tests to
+ *   supply a deterministic root without depending on __dirname).
  */
-function importedSegment(importerAbsPath: string, specifier: string): string | undefined {
+export function importedSegment(
+  importerAbsPath: string,
+  specifier: string,
+  scanRoot: string = SCAN_ROOT,
+): string | undefined {
   if (!specifier.startsWith('.')) return undefined;
   const importerDir = path.dirname(importerAbsPath);
   const resolved = path.resolve(importerDir, specifier);
-  const rel = path.relative(SCAN_ROOT, resolved);
+  const rel = path.relative(scanRoot, resolved);
   if (rel.startsWith('..')) return undefined;
   const parts = rel.split('/');
   return parts[0];
@@ -149,14 +156,14 @@ export function collectLogicalLine(lines: string[], startIdx: number): { logical
 const IMPORT_RE =
   /^\s*(?:import|export)\s+(?:type\s+)?(?:\{[^}]*\}|\*\s+as\s+\S+|\S+)\s+from\s+['"]([^'"]+)['"]/;
 
-interface Violation {
+export interface Violation {
   file: string;
   line: number;
   text: string;
   rule: string;
 }
 
-function checkPair(
+export function checkPair(
   importerLayer: Layer,
   importerDir: string,
   importedLayer: Layer,
@@ -209,6 +216,125 @@ export function isAllowed(relPath: string, specifier: string, pairs = ALLOWED_PA
   });
 }
 
+// ── Per-file scan ─────────────────────────────────────────────────────────────
+
+/**
+ * Scan a single source file for layer-import violations.
+ *
+ * Extracted from main() so that tests can exercise the block-comment state
+ * machine and import detection logic directly without spawning a subprocess.
+ *
+ * @param absPath       Absolute path to the file (used to resolve relative imports).
+ * @param relPath       Repo-relative path (used in violation records and allowlist lookup).
+ * @param importerLayer Layer the file belongs to.
+ * @param lines         Source lines (file split on '\n').
+ * @returns             Array of violations found in this file.
+ */
+export function scanFile(
+  absPath: string,
+  relPath: string,
+  importerLayer: Layer,
+  lines: string[],
+): Violation[] {
+  const violations: Violation[] = [];
+  const seg = srcSegment(relPath);
+  if (!seg) return violations;
+
+  let inBlockComment = false;
+
+  for (let i = 0; i < lines.length; ) {
+    const rawLine = lines[i];
+    if (rawLine === undefined) { i++; continue; }
+
+    // ── Block-comment state tracking ──────────────────────────────────────
+    // Contract: inBlockComment is true from the line that opens `/*` until
+    // (and including) the line that closes `*/`.  A line may open and close
+    // a block comment (`/* foo */`) — we handle that by checking both.
+    //
+    // Fix (Item 1): when `*/` closes the block comment, do NOT skip the rest
+    // of the line.  Any code appearing after `*/` on the same line is live
+    // and must be scanned.  We extract the suffix after `*/` and use it as
+    // the effective line for the remainder of this iteration.
+    let effectiveLine = rawLine;
+    if (inBlockComment) {
+      const closeIdx = rawLine.indexOf('*/');
+      if (closeIdx === -1) {
+        // Still inside the block comment — nothing to scan.
+        i++;
+        continue;
+      }
+      // Block comment closed on this line; scan whatever follows `*/`.
+      inBlockComment = false;
+      effectiveLine = rawLine.slice(closeIdx + 2);
+      // If there's nothing after `*/`, skip to next line.
+      if (effectiveLine.trim() === '') { i++; continue; }
+    }
+
+    const trimmed = effectiveLine.trimStart();
+
+    if (trimmed.startsWith('/*')) {
+      // Single-line block comment (`/* ... */`) or start of a multi-line one.
+      if (!effectiveLine.includes('*/')) {
+        inBlockComment = true;
+      }
+      // Even if this line has `/* ... */ import ...`, we only skip the `/* */`
+      // prefix; the open-check above already handles single-line inline block
+      // comments by NOT setting inBlockComment when `*/` is present.
+      // However the content after `*/` on a `/* ... */` line needs scanning.
+      // We handle this by replacing effectiveLine with the post-`*/` suffix.
+      if (trimmed.startsWith('/*') && effectiveLine.includes('*/')) {
+        const closeIdx = effectiveLine.indexOf('*/');
+        const suffix = effectiveLine.slice(closeIdx + 2);
+        if (suffix.trim() === '') { i++; continue; }
+        effectiveLine = suffix;
+      } else {
+        i++;
+        continue;
+      }
+    }
+
+    const trimmedEffective = effectiveLine.trimStart();
+    // Skip line comments and mid-block-comment continuation lines (`* ...`).
+    if (trimmedEffective.startsWith('//') || trimmedEffective.startsWith('*')) {
+      i++;
+      continue;
+    }
+
+    // ── Multiline import accumulation ─────────────────────────────────────
+    // Note: we pass the original lines array and index so collectLogicalLine
+    // can look ahead for multiline imports. effectiveLine is only used for
+    // single-line matching when we trimmed block-comment prefixes.
+    const { logical, consumed } = collectLogicalLine(
+      effectiveLine !== rawLine ? [effectiveLine, ...lines.slice(i + 1)] : lines,
+      effectiveLine !== rawLine ? 0 : i,
+    );
+
+    const match = IMPORT_RE.exec(logical);
+    if (!match) { i += consumed; continue; }
+    const specifier = match[1];
+    if (!specifier) { i += consumed; continue; }
+
+    const imported = importedSegment(absPath, specifier);
+    if (!imported) { i += consumed; continue; }
+
+    const importedLayer = classifyDir(imported);
+    if (importedLayer === 'unknown') { i += consumed; continue; }
+    if (importerLayer === importedLayer) { i += consumed; continue; }
+    if (importerLayer === 'foundation' && importedLayer === 'foundation') { i += consumed; continue; }
+
+    const rule = checkPair(importerLayer, seg, importedLayer, imported);
+    if (!rule) { i += consumed; continue; }
+
+    if (!isAllowed(relPath, specifier)) {
+      violations.push({ file: relPath, line: i + 1, text: rawLine.trim(), rule });
+    }
+
+    i += consumed;
+  }
+
+  return violations;
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -231,59 +357,70 @@ function main(): void {
     const source = fs.readFileSync(absPath, 'utf8');
     const lines = source.split('\n');
 
-    let inBlockComment = false;
+    const fileViolations = scanFile(absPath, relPath, importerLayer, lines);
+    allViolations.push(...fileViolations);
 
-    for (let i = 0; i < lines.length; ) {
-      const line = lines[i];
-      if (line === undefined) { i++; continue; }
+    // Re-collect allowedHits for --list mode by re-scanning with allowlist check.
+    // We do a lightweight second pass only when --list is requested.
+    if (listMode) {
+      let inBlockComment = false;
+      for (let i = 0; i < lines.length; ) {
+        const rawLine = lines[i];
+        if (rawLine === undefined) { i++; continue; }
 
-      // ── Block-comment state tracking ──────────────────────────────────────
-      // Contract: inBlockComment is true from the line that opens `/*` until
-      // (and including) the line that closes `*/`.  A line may open and close
-      // a block comment (`/* foo */`) — we handle that by checking both.
-      if (inBlockComment) {
-        if (line.includes('*/')) inBlockComment = false;
-        i++;
-        continue;
+        let effectiveLine = rawLine;
+        if (inBlockComment) {
+          const closeIdx = rawLine.indexOf('*/');
+          if (closeIdx === -1) { i++; continue; }
+          inBlockComment = false;
+          effectiveLine = rawLine.slice(closeIdx + 2);
+          if (effectiveLine.trim() === '') { i++; continue; }
+        }
+
+        const trimmed = effectiveLine.trimStart();
+        if (trimmed.startsWith('/*')) {
+          if (!effectiveLine.includes('*/')) {
+            inBlockComment = true;
+            i++; continue;
+          }
+          const closeIdx = effectiveLine.indexOf('*/');
+          const suffix = effectiveLine.slice(closeIdx + 2);
+          if (suffix.trim() === '') { i++; continue; }
+          effectiveLine = suffix;
+        }
+
+        const trimmedEffective = effectiveLine.trimStart();
+        if (trimmedEffective.startsWith('//') || trimmedEffective.startsWith('*')) {
+          i++; continue;
+        }
+
+        const { logical, consumed } = collectLogicalLine(
+          effectiveLine !== rawLine ? [effectiveLine, ...lines.slice(i + 1)] : lines,
+          effectiveLine !== rawLine ? 0 : i,
+        );
+
+        const match = IMPORT_RE.exec(logical);
+        if (!match) { i += consumed; continue; }
+        const specifier = match[1];
+        if (!specifier) { i += consumed; continue; }
+
+        const imported = importedSegment(absPath, specifier);
+        if (!imported) { i += consumed; continue; }
+
+        const importedLayer = classifyDir(imported);
+        if (importedLayer === 'unknown') { i += consumed; continue; }
+        if (importerLayer === importedLayer) { i += consumed; continue; }
+        if (importerLayer === 'foundation' && importedLayer === 'foundation') { i += consumed; continue; }
+
+        const rule = checkPair(importerLayer, seg, importedLayer, imported);
+        if (!rule) { i += consumed; continue; }
+
+        if (isAllowed(relPath, specifier)) {
+          allowedHits.push({ file: relPath, line: i + 1, rule });
+        }
+
+        i += consumed;
       }
-      const trimmed = line.trimStart();
-      if (trimmed.startsWith('/*')) {
-        // Single-line block comment (`/* ... */`) or start of a multi-line one.
-        if (!line.includes('*/')) inBlockComment = true;
-        i++;
-        continue;
-      }
-      // Skip line comments and mid-block-comment continuation lines (`* ...`).
-      if (trimmed.startsWith('//') || trimmed.startsWith('*')) {
-        i++;
-        continue;
-      }
-
-      // ── Multiline import accumulation ─────────────────────────────────────
-      const { logical, consumed } = collectLogicalLine(lines, i);
-
-      const match = IMPORT_RE.exec(logical);
-      if (!match) { i += consumed; continue; }
-      const specifier = match[1];
-      if (!specifier) { i += consumed; continue; }
-
-      const imported = importedSegment(absPath, specifier);
-      if (!imported) { i += consumed; continue; }
-
-      const importedLayer = classifyDir(imported);
-      if (importedLayer === 'unknown') { i += consumed; continue; }
-      if (importerLayer === importedLayer) { i += consumed; continue; }
-      if (importerLayer === 'foundation' && importedLayer === 'foundation') { i += consumed; continue; }
-
-      const rule = checkPair(importerLayer, seg, importedLayer, imported);
-      if (!rule) { i += consumed; continue; }
-
-      if (isAllowed(relPath, specifier)) {
-        allowedHits.push({ file: relPath, line: i + 1, rule });
-      } else {
-        allViolations.push({ file: relPath, line: i + 1, text: line.trim(), rule });
-      }
-      i += consumed;
     }
   }
 
