@@ -200,16 +200,16 @@ function formatLspSymbols(symbols: RawSymbol[], rootDir: string): string {
     } catch {
       continue;
     }
-    const rel = path.relative(rootDir, filePath).replace(/[^\w.()\-/]/g, '_');
+    const rel = path.relative(rootDir, filePath).replace(/[^\w.\-/]/g, '_');
     if (rel.startsWith('..') || rel.includes('node_modules')) continue;
 
     if (!byFile.has(rel)) byFile.set(rel, []);
     const kindLabel = SYMBOL_KIND[sym.kind] ?? '?';
-    const safeName = sym.name.replace(/[^\w.()\-/]/g, '_');
+    const safeName = sym.name.replace(/[^a-zA-Z0-9_.$]/g, '_');
     byFile.get(rel)!.push(`${kindLabel}(${safeName})`);
     totalSymbols++;
 
-    if (byFile.size + totalSymbols > MAX_SYMBOLS * 2) break;
+    if (byFile.size > MAX_SYMBOLS || totalSymbols > MAX_SYMBOLS * 2) break;
   }
 
   if (byFile.size === 0) return '';
@@ -251,7 +251,7 @@ async function fsMap(
     const entries = await globSourceFiles(rootDir, combined);
     for (const rel of entries) {
       if (rel.includes('node_modules') || path.basename(rel).startsWith('.')) continue;
-      const parts = rel.split(path.sep);
+      const parts = rel.split(/[\\/]/);
       const dir = parts.length > 1 ? parts[0]! : '.';
       if (!byDir.has(dir)) byDir.set(dir, []);
       byDir.get(dir)!.push(rel);

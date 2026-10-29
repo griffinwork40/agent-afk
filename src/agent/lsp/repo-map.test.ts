@@ -20,7 +20,10 @@ import type { ServerSpec } from './server-spec.js';
 
 type RequestFn = (method: string, params: unknown, opts: unknown) => Promise<unknown>;
 
-function makeFakePool(requestFn: RequestFn): LspServerPool {
+function makeFakePool(
+  requestFn: RequestFn,
+  acquireSpy = vi.fn(async (_spec: ServerSpec, _root: string, _opts: unknown) => client),
+): { pool: LspServerPool; acquireSpy: typeof acquireSpy } {
   const client = {
     hold: () => () => { /* no-op release */ },
     request: requestFn,
@@ -31,11 +34,16 @@ function makeFakePool(requestFn: RequestFn): LspServerPool {
     syncFile: async () => ({ uri: 'file:///dummy.ts', version: 1, changed: false }),
   } as unknown as LspClient;
 
-  return {
-    acquire: async (_spec: ServerSpec, _root: string) => client,
+  // Fix the spy to capture the real client once it is defined.
+  acquireSpy.mockImplementation(async (_spec: ServerSpec, _root: string, _opts: unknown) => client);
+
+  const pool = {
+    acquire: acquireSpy as unknown as LspServerPool['acquire'],
     dispose: async () => { /* no-op */ },
     startedCount: 0,
   } as unknown as LspServerPool;
+
+  return { pool, acquireSpy };
 }
 
 // ── Helper: build a minimal workspace symbol ──────────────────────────────────
@@ -79,7 +87,7 @@ describe('buildRepoMap — LSP path', () => {
       sym('IFace', 11, '/proj/src/bar.ts'),
     ];
 
-    const pool = makeFakePool(async (method) => {
+    const { pool } = makeFakePool(async (method) => {
       if (method === 'workspace/symbol') return symbols;
       throw new Error(`unexpected method ${method}`);
     });
@@ -97,7 +105,7 @@ describe('buildRepoMap — LSP path', () => {
   it('falls back to fs map when workspace/symbol returns empty array', async () => {
     vi.stubEnv('AFK_LSP_DIAGNOSTICS', '1');
 
-    const pool = makeFakePool(async () => []);
+    const { pool } = makeFakePool(async () => []);
 
     const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 500, pool });
     // Empty LSP result → tries fs fallback → likely '' for /proj (nonexistent)
@@ -107,7 +115,7 @@ describe('buildRepoMap — LSP path', () => {
   it('falls back to fs map when workspace/symbol throws', async () => {
     vi.stubEnv('AFK_LSP_DIAGNOSTICS', '1');
 
-    const pool = makeFakePool(async () => { throw new Error('server error'); });
+    const { pool } = makeFakePool(async () => { throw new Error('server error'); });
 
     // Should not throw; returns empty string or fs fallback.
     const result = await buildRepoMap({ rootDir: process.cwd(), timeoutMs: 3000, pool });
@@ -125,7 +133,7 @@ describe('buildRepoMap — LSP path', () => {
       sym('TopFn', 12, '/proj/src/a.ts'),     // fn — keep
     ];
 
-    const pool = makeFakePool(async () => symbols);
+    const { pool } = makeFakePool(async () => symbols);
 
     const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
     expect(result).toContain('fn(TopFn)');
@@ -141,7 +149,7 @@ describe('buildRepoMap — LSP path', () => {
       sym('Internal', 5, '/proj/src/app.ts'),
     ];
 
-    const pool = makeFakePool(async () => symbols);
+    const { pool } = makeFakePool(async () => symbols);
 
     const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
     expect(result).not.toContain('node_modules');
@@ -156,7 +164,7 @@ describe('buildRepoMap — LSP path', () => {
       sym(`Sym${i}`, 5, `/proj/src/file${i}.ts`),
     );
 
-    const pool = makeFakePool(async () => symbols);
+    const { pool } = makeFakePool(async () => symbols);
 
     const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
     const lines = result.split('\n');
@@ -224,6 +232,37 @@ describe('buildRepoMap — filesystem fallback', () => {
   });
 });
 
+describe('buildRepoMap — opts forwarding', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('forwards timeoutMs and signal to pool.acquire and client.request', async () => {
+    vi.stubEnv('AFK_LSP_DIAGNOSTICS', '1');
+    const ctl = new AbortController();
+
+    let capturedRequestOpts: unknown;
+    const { pool, acquireSpy } = makeFakePool(async (method, _params, opts) => {
+      capturedRequestOpts = opts;
+      if (method === 'workspace/symbol') return [];
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool, signal: ctl.signal });
+
+    // acquire must have been called with the opts object
+    expect(acquireSpy).toHaveBeenCalledOnce();
+    expect(acquireSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ timeoutMs: expect.any(Number), signal: ctl.signal }),
+    );
+
+    // request must also have received the opts
+    expect(capturedRequestOpts).toEqual(
+      expect.objectContaining({ timeoutMs: expect.any(Number), signal: ctl.signal }),
+    );
+  });
+});
+
 describe('buildRepoMap — timeout + abort', () => {
   afterEach(() => { vi.unstubAllEnvs(); });
 
@@ -232,7 +271,7 @@ describe('buildRepoMap — timeout + abort', () => {
     const ctl = new AbortController();
     ctl.abort();
 
-    const pool = makeFakePool(async () => {
+    const { pool } = makeFakePool(async () => {
       await new Promise((r) => setTimeout(r, 5000));
       return [];
     });
@@ -243,7 +282,7 @@ describe('buildRepoMap — timeout + abort', () => {
 
   it('resolves when timeoutMs is very small', async () => {
     vi.stubEnv('AFK_LSP_DIAGNOSTICS', '1');
-    const pool = makeFakePool(async () => {
+    const { pool } = makeFakePool(async () => {
       await new Promise((r) => setTimeout(r, 2000));
       return [];
     });
