@@ -494,4 +494,77 @@ describe('scanFile — block-comment state machine', () => {
     const violations = scanFile(absPath, relPath, importerLayer, lines);
     expect(violations).toHaveLength(0);
   });
+
+  it('reports a violation for an import after two consecutive inline block comments (double-inline fix)', () => {
+    // /* a */ /* b */ import ... — both block comments must be stripped.
+    const lines = [
+      `/* first */ /* second */ import { Foo } from '../cli/types.js';`,
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0]?.rule).toContain('Rule 1');
+  });
+
+  it('does NOT report when double inline block comments consume the entire line', () => {
+    const lines = [
+      '/* first */ /* second */',
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations).toHaveLength(0);
+  });
+});
+
+// ── scanFile — coordinate-space paths ─────────────────────────────────────────
+
+describe('scanFile — multiline import coordinate space', () => {
+  const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const absPath = path.join(repoRoot, 'src', 'agent', 'fake.ts');
+  const relPath = 'src/agent/fake.ts';
+  const importerLayer = 'core-infra' as const;
+
+  it('reports correct line number for a multiline import (consumed > 1)', () => {
+    const lines = [
+      'const x = 1;',
+      'import {',
+      '  Foo,',
+      "} from '../cli/types.js';",
+      'const y = 2;',
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations).toHaveLength(1);
+    // The violation should point to the opening line of the import (line 2, 1-indexed).
+    expect(violations[0]?.line).toBe(2);
+    expect(violations[0]?.rule).toContain('Rule 1');
+  });
+
+  it('advances past multiline imports without double-counting lines', () => {
+    const lines = [
+      'import {',
+      '  Foo,',
+      "} from '../cli/types.js';",
+      "import { Bar } from '../cli/palette.js';",
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    // Both imports are violations — one multiline, one single-line.
+    expect(violations).toHaveLength(2);
+    expect(violations[0]?.line).toBe(1);
+    expect(violations[1]?.line).toBe(4);
+  });
+
+  it('reports correct line number for a multiline import after */ on the closing line', () => {
+    // Block comment closes on line 3; the import starts on the same line
+    // and spans to line 5 (multiline).
+    const lines = [
+      '/*',
+      ' * block comment',
+      `*/ import {`,
+      '  Foo,',
+      "} from '../cli/types.js';",
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    expect(violations).toHaveLength(1);
+    // Line 3 (1-indexed) is where the import starts.
+    expect(violations[0]?.line).toBe(3);
+    expect(violations[0]?.rule).toContain('Rule 1');
+  });
 });

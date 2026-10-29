@@ -274,28 +274,23 @@ export function scanFile(
       if (effectiveLine.trim() === '') { i++; continue; }
     }
 
-    const trimmed = effectiveLine.trimStart();
-
-    if (trimmed.startsWith('/*')) {
-      // Single-line block comment (`/* ... */`) or start of a multi-line one.
+    // Invariant: strip any leading inline block comments (`/* ... */`) from
+    // effectiveLine.  A line may contain multiple consecutive inline block
+    // comments (e.g. `/* a */ /* b */ import ...`), so we loop until the
+    // trimmed prefix no longer starts with `/*` or until only a multi-line
+    // block comment opener remains (no closing `*/`).
+    while (effectiveLine.trimStart().startsWith('/*')) {
       if (!effectiveLine.includes('*/')) {
+        // Multi-line block comment opens here with no close — skip.
         inBlockComment = true;
+        break;
       }
-      // Even if this line has `/* ... */ import ...`, we only skip the `/* */`
-      // prefix; the open-check above already handles single-line inline block
-      // comments by NOT setting inBlockComment when `*/` is present.
-      // However the content after `*/` on a `/* ... */` line needs scanning.
-      // We handle this by replacing effectiveLine with the post-`*/` suffix.
-      if (trimmed.startsWith('/*') && effectiveLine.includes('*/')) {
-        const closeIdx = effectiveLine.indexOf('*/');
-        const suffix = effectiveLine.slice(closeIdx + 2);
-        if (suffix.trim() === '') { i++; continue; }
-        effectiveLine = suffix;
-      } else {
-        i++;
-        continue;
-      }
+      const closeIdx = effectiveLine.indexOf('*/');
+      const suffix = effectiveLine.slice(closeIdx + 2);
+      if (suffix.trim() === '') { effectiveLine = ''; break; }
+      effectiveLine = suffix;
     }
+    if (inBlockComment || effectiveLine.trim() === '') { i++; continue; }
 
     const trimmedEffective = effectiveLine.trimStart();
     // Skip line comments and mid-block-comment continuation lines (`* ...`).
