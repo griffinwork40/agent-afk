@@ -59,6 +59,7 @@ async function resolveTraceLabel(
   const sideMeta = readSessionMeta(sessionId);
   if (sideMeta !== null) {
     if (typeof sideMeta.traceLabel === 'string' && sideMeta.traceLabel.length > 0) {
+      if (!isSafeLedgerSessionId(sideMeta.traceLabel)) return { kind: 'none' };
       return { kind: 'label', label: sideMeta.traceLabel };
     }
     if (sideMeta.traceLabel === null) return { kind: 'disabled' };

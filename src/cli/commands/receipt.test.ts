@@ -15,7 +15,7 @@ import * as fs from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as os from 'node:os';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 // Isolated temp dir for AFK_HOME (same pattern as trace.test.ts).
 const tmpDir = fs.mkdtempSync(join(os.tmpdir(), 'afk-receipt-regen-'));
@@ -326,5 +326,54 @@ describe('CLI-layer: runRegenerate via Commander', () => {
     const raw = await readFile(jsonPath, 'utf8');
     const parsed = JSON.parse(raw) as { schemaVersion: number };
     expect(parsed.schemaVersion).toBe(1);
+  });
+
+  it('AFK_RUN_RECEIPT_DISABLED=1 in --json mode emits JSON error and returns early', async () => {
+    vi.stubEnv('AFK_RUN_RECEIPT_DISABLED', '1');
+    const out = await captureStdout(async () => {
+      await makeProgram().parseAsync(
+        ['receipt', 'regenerate', '--all', '--json'],
+        { from: 'user' },
+      );
+    });
+    vi.unstubAllEnvs();
+    const parsed = JSON.parse(out) as { error: string };
+    expect(parsed.error).toMatch(/AFK_RUN_RECEIPT_DISABLED/);
+  });
+
+  it('--only-v1 two-pass idempotency: second pass via Commander skips already-current receipt', async () => {
+    seq = 0;
+    const label = 'cli-only-v1-idempotent';
+    const sessionId = 'sess-cli-only-v1';
+    const tracePath = await writeTrace(label, [makeClosure(), makeSealed('succeeded')]);
+    await writeSessionMeta(sessionId, label);
+
+    // First pass: regenerate to get a v2 receipt on disk.
+    const first = await writeRunReceipt({ tracePath, sessionId });
+    expect(first).not.toBeNull();
+
+    const jsonPath = join(getReceiptsDir(), `${label}.json`);
+    const statAfterFirst = await stat(jsonPath);
+
+    // Second pass: via Commander --only-v1 --session --json.
+    const out = await captureStdout(async () => {
+      await makeProgram().parseAsync(
+        ['receipt', 'regenerate', '--session', sessionId, '--only-v1', '--json'],
+        { from: 'user' },
+      );
+    });
+    const parsed = JSON.parse(out) as {
+      regenerated: number;
+      alreadyCurrent: number;
+      results: Array<{ sessionId: string; outcome: string }>;
+    };
+    expect(parsed.regenerated).toBe(0);
+    expect(parsed.alreadyCurrent).toBe(1);
+    const r = parsed.results.find((x) => x.sessionId === sessionId);
+    expect(r?.outcome).toBe('already-current');
+
+    // Receipt file must be untouched (same mtime).
+    const statAfterSecond = await stat(jsonPath);
+    expect(statAfterSecond.mtimeMs).toBe(statAfterFirst.mtimeMs);
   });
 });
