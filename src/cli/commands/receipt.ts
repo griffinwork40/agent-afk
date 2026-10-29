@@ -27,7 +27,7 @@ import { join } from 'node:path';
 
 import { handleCommandError } from '../errors/index.js';
 import { getSessionsDir, isSafeLedgerSessionId } from '../../paths.js';
-import { getTraceDir } from '../../paths.witness.js';
+import { getTraceDir, getReceiptsDir } from '../../paths.witness.js';
 import {
   writeRunReceipt,
   RECEIPT_SCHEMA_VERSION,
@@ -166,6 +166,7 @@ async function runRegenerate(opts: RegenerateOptions): Promise<void> {
 
   const results: SessionResult[] = [];
   let regenerated = 0;
+  let wouldRegenerate = 0;
   let skipped = 0;
   let alreadyCurrent = 0;
   const seenLabels = new Set<string>();
@@ -205,7 +206,6 @@ async function runRegenerate(opts: RegenerateOptions): Promise<void> {
     const tracePath = join(getTraceDir(traceLabel), 'trace.jsonl');
 
     // Check the existing receipt schema version when --only-v1 applies.
-    const { getReceiptsDir } = await import('../../paths.witness.js');
     const receiptsDir = getReceiptsDir();
     const jsonPath = join(receiptsDir, `${traceLabel}.json`);
     const mdPath = join(receiptsDir, `${traceLabel}.md`);
@@ -230,7 +230,7 @@ async function runRegenerate(opts: RegenerateOptions): Promise<void> {
 
     if (opts.dryRun) {
       results.push({ sessionId, outcome: 'dry-run', jsonPath, mdPath });
-      regenerated++;
+      wouldRegenerate++;
       continue;
     }
 
@@ -247,14 +247,15 @@ async function runRegenerate(opts: RegenerateOptions): Promise<void> {
 
   // Output.
   if (opts.json) {
-    process.stdout.write(
-      JSON.stringify({ regenerated, skipped, alreadyCurrent, results }, null, 2) + '\n',
-    );
+    const jsonOut = opts.dryRun
+      ? { wouldRegenerate, skipped, alreadyCurrent, results }
+      : { regenerated, skipped, alreadyCurrent, results };
+    process.stdout.write(JSON.stringify(jsonOut, null, 2) + '\n');
     return;
   }
 
   if (opts.dryRun) {
-    process.stdout.write(`[dry-run] would regenerate ${regenerated} receipt(s):\n`);
+    process.stdout.write(`[dry-run] would regenerate ${wouldRegenerate} receipt(s):\n`);
     for (const r of results) {
       if (r.outcome === 'dry-run') {
         process.stdout.write(`  ${r.sessionId}  →  ${r.jsonPath ?? ''}\n`);
