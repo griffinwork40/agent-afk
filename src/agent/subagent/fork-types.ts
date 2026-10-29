@@ -365,6 +365,13 @@ export interface SubagentManagerOptions {
    */
   surface?: Surface;
   /**
+   * Per-turn provenance of the parent's current turn (issue #2906, PR A).
+   * Inherited by every forked child whose `config.turnProvenance` is unset so
+   * the child can answer "was a human watching when this work was started?"
+   * without additional plumbing. Data only; no behaviour change.
+   */
+  parentTurnProvenance?: import('../turn-provenance.js').TurnProvenance;
+  /**
    * Optional callback invoked after each forked subagent reaches
    * `succeeded` status, AND once more (billing-only) for a child that
    * accrued spend but did not succeed (#3878, #3889).

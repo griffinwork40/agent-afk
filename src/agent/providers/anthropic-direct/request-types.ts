@@ -40,6 +40,9 @@ export interface RunTurnInput {
    */
   endpointConcurrency?: number;
   traceWriter?: import('../../trace/index.js').TraceSink;
+  /** Per-turn origin (issue #2906, PR A). Forwarded to TurnTrace so the
+   *  `loop_start` witness event records what initiated this turn. Data only. */
+  turnProvenance?: import('../../turn-provenance.js').TurnProvenance;
   subagentId?: string;
   onUsageProgress?: (usage: ProviderUsage) => void;
   throttleQueue?: import('./throttle-queue.js').ThrottleQueue;

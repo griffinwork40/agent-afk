@@ -182,6 +182,7 @@ export function createWiredExecutors(
     defaultSubagentModel: getDefaultSubagentModel(model),
     resolveApiKeyForModel: (m) => resolveCredentialForModel(m),
     ...configPassThrough(config),
+    ...(config.turnProvenance !== undefined ? { parentTurnProvenance: config.turnProvenance } : {}),
     ...(opts?.traceWriter !== undefined ? { traceWriter: opts.traceWriter, skillTraceWriter: opts.traceWriter } : {}),
     agentRegistryWarn: warn,
     pluginConfigs: opts?.pluginConfigs ?? [],

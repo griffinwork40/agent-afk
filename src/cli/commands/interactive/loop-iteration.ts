@@ -20,6 +20,11 @@ import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
 import { runFirstTurnHookIfNeeded } from './loop-iteration.first-turn.js';
 import { autoResumeDirective } from './loop-iteration.injections.js';
+import {
+  humanTurnProvenance,
+  autoResumeTurnProvenance,
+  type TurnProvenance,
+} from '../../../agent/turn-provenance.js';
 import { drainLoopNotifications } from './loop-iteration.drain.js';
 import { handleShellPassthrough } from './loop-iteration.shell-branch.js';
 import { handleSlashCommand, runPluginPreflight } from './loop-iteration.slash-branch.js';
@@ -59,6 +64,78 @@ function renderSeedEcho(
     attachmentSummary: describeAttachmentSummary([...queued.attachments]),
   });
   replRenderer.writeLine(echo);
+}
+
+/** Result of resolving one loop iteration's input (seed or readline). */
+interface TurnInput {
+  text: string;
+  attachments: ReadWithAutocompleteResult['attachments'];
+  silentSeed: boolean;
+  queuedHumanTurn: boolean;
+  /** Updated seed buffer after consumption (undefined = consumed). */
+  nextSeedBuffer: { text: string; attachments: readonly ImageAttachment[]; echo?: 'normal' | 'silent'; queuedSubmission?: boolean } | undefined;
+}
+
+/**
+ * Resolve the text + attachments for one loop iteration.
+ *
+ * Checks for a pending plan-exit seed, then falls through to the seedBuffer
+ * fast-path or a real `surface.readLine` call. Returns explicit parameters so
+ * `runInputLoop` does not need to close over the resolved values.
+ *
+ * Takes all inputs explicitly — no closure over outer loop locals — so it can
+ * be read and tested independently.
+ */
+async function resolveTurnInput(
+  ctx: InteractiveCtx,
+  surface: InputSurface,
+  sigintHandler: () => void,
+  prefillBuffer: string | undefined,
+  seedBuffer: TurnInput['nextSeedBuffer'],
+): Promise<TurnInput> {
+  let activeSeed = seedBuffer;
+
+  // Plan-exit seed: promote a queued exit_plan_mode seed when no other seed is pending.
+  if (activeSeed === undefined) {
+    const planExit = await ctx.session.current.takePendingPlanExitSeed();
+    if (planExit !== undefined) {
+      ctx.stats.permissionMode = planExit.mode;
+      activeSeed = { text: planExit.message, attachments: [] };
+    }
+  }
+
+  if (activeSeed !== undefined) {
+    const queued = activeSeed;
+    const silentSeed = queued.echo === 'silent';
+    if (!silentSeed) renderSeedEcho(ctx.replRenderer, ctx.stats.permissionMode, queued);
+    return {
+      text: queued.text.trim(),
+      attachments: queued.attachments as ReadWithAutocompleteResult['attachments'],
+      silentSeed,
+      queuedHumanTurn: queued.queuedSubmission === true,
+      nextSeedBuffer: undefined,
+    };
+  }
+
+  // No seed — block on readline.
+  const initialBuffer = prefillBuffer;
+  const result = await surface.readLine({
+    promptFn: (buffer) => buildPrompt(ctx.stats.permissionMode, buffer),
+    ...(initialBuffer !== undefined ? { initialBuffer } : {}),
+    primePromptSuggestion: true,
+    onSigint: sigintHandler,
+    onShiftTab: () => {
+      cyclePermissionMode(ctx.slashCtx).catch(() => {});
+      ctx.statusLine.rearm();
+    },
+  });
+  return {
+    text: result.text.trim(),
+    attachments: result.attachments,
+    silentSeed: false,
+    queuedHumanTurn: result.queuedSubmission === true,
+    nextSeedBuffer: undefined,
+  };
 }
 
 /**
@@ -130,6 +207,11 @@ export async function runInputLoop(
   ctx.reinstallPeerBoundary = reinstallBoundary; // wired to onSwapped in bootstrap.ts
 
   const versionNotice = createVersionNotice();
+  // Per-turn provenance (issue #2906, PR A — data only, no behaviour change).
+  // Tracks what started the current turn: 'human' for readline/seed submits,
+  // or the auto-resume origin for woken-idle turns.
+  let currentTurnProvenance: TurnProvenance = humanTurnProvenance();
+
   // Auto-resume: wake an idle prompt when bg results or peer messages land.
   let autoResumeCount = 0;
   const tryAutoResume = (): void => {
@@ -140,6 +222,9 @@ export async function runInputLoop(
     autoResumeCount++;
     ringBellIfEnabled(process.stdout);
     seedBuffer = { text: autoResumeDirective(bgPending), attachments: [], echo: 'silent' };
+    // Stamp provenance for this auto-resume wake so runOneTurn can forward it
+    // to the presence file and (future) PreToolUse context.
+    currentTurnProvenance = autoResumeTurnProvenance(bgPending);
     surface.abortPendingRead();
   };
   for (const n of [bgResultNotifier, peerNotifier, processJobNotifier]) if (n) n.onInjectable = tryAutoResume;
@@ -148,6 +233,9 @@ export async function runInputLoop(
   while (true) {
     autoResumeCount = 0;
     queuedHumanTurn = false;
+    // Reset provenance to 'human' at each loop top; tryAutoResume overwrites it
+    // when a bg/peer wake seeds the buffer before readline.
+    currentTurnProvenance = humanTurnProvenance();
 
     if (pendingInitMeta) {
       ctx.replRenderer.writeLine(pendingInitMeta);
@@ -161,46 +249,11 @@ export async function runInputLoop(
     }
     drainLoopNotifications(ctx, footer);
 
-    let text: string;
-    let attachments: ReadWithAutocompleteResult['attachments'];
-    let silentSeed = false;
-
-    // Plan-exit seed: promote a queued exit_plan_mode seed to seedBuffer.
-    if (seedBuffer === undefined) {
-      const planExit = await ctx.session.current.takePendingPlanExitSeed();
-      if (planExit !== undefined) {
-        ctx.stats.permissionMode = planExit.mode;
-        seedBuffer = { text: planExit.message, attachments: [] };
-      }
-    }
-
-    if (seedBuffer !== undefined) {
-      const queued = seedBuffer;
-      seedBuffer = undefined;
-      silentSeed = queued.echo === 'silent';
-      if (queued.echo !== 'silent') {
-        renderSeedEcho(ctx.replRenderer, ctx.stats.permissionMode, queued);
-      }
-      queuedHumanTurn = queued.queuedSubmission === true;
-      text = queued.text.trim();
-      attachments = queued.attachments as ReadWithAutocompleteResult['attachments'];
-    } else {
-      const initialBuffer = prefillBuffer;
-      prefillBuffer = undefined;
-      const result = await surface.readLine({
-        promptFn: (buffer) => buildPrompt(ctx.stats.permissionMode, buffer),
-        ...(initialBuffer !== undefined ? { initialBuffer } : {}),
-        primePromptSuggestion: true,
-        onSigint: sigintHandler,
-        onShiftTab: () => {
-          cyclePermissionMode(ctx.slashCtx).catch(() => {});
-          ctx.statusLine.rearm();
-        },
-      });
-      queuedHumanTurn = result.queuedSubmission === true;
-      text = result.text.trim();
-      attachments = result.attachments;
-    }
+    const turnInput = await resolveTurnInput(ctx, surface, sigintHandler, prefillBuffer, seedBuffer);
+    prefillBuffer = undefined;
+    seedBuffer = turnInput.nextSeedBuffer;
+    const { text, attachments, silentSeed } = turnInput;
+    queuedHumanTurn = turnInput.queuedHumanTurn;
     // Invariant: await readLine first so idle upgrades are checked before
     // dispatch. writeLine commits above the persistent compositor, never raw
     // stdout while the input overlay owns the cursor. No timer can interrupt it.
@@ -263,9 +316,11 @@ export async function runInputLoop(
     // Contract: pass `text` (raw, pre-injection) as rawUserText so the presence
     // activity.promptHead records what the operator typed, never peer message
     // bodies or bg-subagent-result content that are prepended into `runText`.
+    // currentTurnProvenance carries the per-turn origin (issue #2906, PR A).
     await runOneTurn(
       runText, attachments ?? [], ctx, turnState, footer,
       transcript, surface, installSoftStop, maxTurnsNum, autosaveState, text,
+      currentTurnProvenance,
     );
 
     // Stop is dispatched by the session layer (turn-stream-runner.ts) via

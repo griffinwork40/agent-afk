@@ -411,4 +411,14 @@ export interface SessionPhasePayload {
    * other phase kinds. (#3808)
    */
   afkVersion?: string;
+  /**
+   * Per-turn origin record (issue #2906, PR A).  Set ONLY on `loop_start`
+   * events — the earliest per-turn trace event — so consumers can answer
+   * "what initiated this turn?" without inspecting injected text.  Absent on
+   * all other phase events and on traces from builds that predate this field.
+   *
+   * Invariant: emitted fire-and-forget by `TurnTrace` alongside `loop_start`;
+   * no behaviour change.
+   */
+  turnProvenance?: import('../turn-provenance.js').TurnProvenance;
 }

@@ -74,6 +74,8 @@ export interface OpenAICompatibleQueryOptions {
    * events are emitted.
    */
   traceWriter?: TraceSink;
+  /** Per-turn origin (issue #2906, PR A). Forwarded to TurnTrace on loop_start. Data only. */
+  turnProvenance?: import('../../../turn-provenance.js').TurnProvenance;
   /** Fast mode (service_tier "priority"); absent for forks. See query/fast-tier-session.ts. */
   fastTier?: FastTierOptions;
 }

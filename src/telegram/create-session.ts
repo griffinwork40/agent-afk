@@ -29,6 +29,7 @@ import { buildAnthropicTelegramSession } from './session-anthropic.js';
 import { buildOpenAiTelegramSession } from './session-openai.js';
 import { buildXaiTelegramSession } from './session-xai.js';
 import type { TelegramBotConfig, TelegramSessionBuildContext } from './session-context.js';
+import { humanTurnProvenance } from '../agent/turn-provenance.js';
 
 export interface TelegramSessionFactoryOptions {
   /** Bot-level config resolved once at startup by `loadConfig()`. */
@@ -128,8 +129,15 @@ export function createTelegramSessionFactory(
       // Constructed inside the try so that a SQLite-open failure triggers MCP
       // teardown via the catch rather than leaking the connected servers (#3588).
       workspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
+      // Stamp per-turn provenance on the session config (issue #2906, PR A).
+      // Telegram turns are always human-initiated: a real person sent a message.
+      // Data only; no behaviour change.
+      const telegramSessionConfig: AgentConfig = {
+        ...sessionConfig,
+        turnProvenance: humanTurnProvenance(),
+      };
       const ctx: TelegramSessionBuildContext = {
-        sessionConfig,
+        sessionConfig: telegramSessionConfig,
         config,
         layeredBasePrompt,
         ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),

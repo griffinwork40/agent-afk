@@ -17,6 +17,7 @@ import { buildPrompt } from './repl-loop-shared.js';
 import { saveSession } from '../../session-store.js';
 import { runTurn } from './turn-handler.js';
 import { markPresenceTurn } from './loop-iteration.injections.js';
+import type { TurnProvenance } from '../../../agent/turn-provenance.js';
 import type { ImageAttachment } from '../../input/attachments.js';
 import type { InteractiveCtx } from './shared.js';
 import type { TurnState } from './repl-loop-shared.js';
@@ -60,6 +61,9 @@ export interface TerminalCapture {
  *                          omitting it would fall back to the composited runText
  *                          and leak peer/bg-injection content into the presence
  *                          file (finding #4 in PR #2850 review).
+ * @param provenance        Optional per-turn provenance (issue #2906, PR A).
+ *                          Forwarded to `markPresenceTurn` so the presence file
+ *                          records the turn origin alongside `promptHead`.
  */
 export async function runOneTurn(
   runText: string,
@@ -73,6 +77,7 @@ export async function runOneTurn(
   maxTurnsNum: number | undefined,
   autosaveState: [autosaveFailureLogged: boolean],
   rawUserText: string,
+  provenance?: TurnProvenance,
 ): Promise<TerminalCapture> {
   const { verdictLedger, loopStageBar, mascotBar, healthRail } = footer;
   const capture: TerminalCapture = { kind: undefined, doneHasEvidence: undefined, doneClassification: undefined };
@@ -91,7 +96,9 @@ export async function runOneTurn(
   momentumTicker.start();
   // Contract: pass rawUserText (pre-injection) so activity.promptHead records
   // what the operator typed, never peer message bodies or bg-result content.
-  markPresenceTurn(ctx.stats.sessionId, 'busy', rawUserText);
+  // provenance is forwarded so the presence file also records the turn origin
+  // (issue #2906, PR A — data only, no behaviour change).
+  markPresenceTurn(ctx.stats.sessionId, 'busy', rawUserText, provenance);
 
   await runTurn(
     { text: runText, attachments: attachments as ImageAttachment[] },

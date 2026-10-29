@@ -44,9 +44,19 @@ export interface PeerEnvelope {
   ts: string;
   /** Message body text. */
   body: string;
+  /**
+   * Per-turn provenance of the sender's current turn at the moment the
+   * message was sent (issue #2906, PR A).  Lets the receiver answer "was a
+   * human watching on the other side when this was sent?" without additional
+   * round-trips.  Optional / back-compat — absent on envelopes from older
+   * builds.
+   */
+  senderTurn?: import('../turn-provenance.js').TurnProvenance;
 }
 
 import { escapeXml } from './xml-escape.js';
+import { TurnProvenanceSchema } from '../turn-provenance.js';
+import type { TurnProvenance } from '../turn-provenance.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -107,6 +117,15 @@ export function parseEnvelope(raw: string): PeerEnvelope | null {
           : null;
     if (name === null) return null;
 
+    // senderTurn (issue #2906, PR A): parse leniently — absent or malformed
+    // values are silently ignored for forward/backward compat.
+    const senderTurnRaw = obj['senderTurn'];
+    let senderTurn: TurnProvenance | undefined;
+    if (senderTurnRaw !== undefined && senderTurnRaw !== null) {
+      const parsed = TurnProvenanceSchema.safeParse(senderTurnRaw);
+      if (parsed.success) senderTurn = parsed.data;
+    }
+
     return {
       v: 1,
       messageId,
@@ -116,6 +135,7 @@ export function parseEnvelope(raw: string): PeerEnvelope | null {
       hop,
       ts,
       body,
+      ...(senderTurn !== undefined ? { senderTurn } : {}),
     };
   } catch {
     return null;

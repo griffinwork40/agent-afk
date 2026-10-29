@@ -74,6 +74,7 @@ export function buildQueryFromConfig(
   if (options.mcpManager !== undefined) opts.mcpManager = options.mcpManager;
   if (options.useResponsesApi !== undefined) opts.useResponsesApi = options.useResponsesApi;
   if (config.traceWriter !== undefined) opts.traceWriter = config.traceWriter;
+  if (config.turnProvenance !== undefined) opts.turnProvenance = config.turnProvenance;
   if (options.fastTier !== undefined) opts.fastTier = options.fastTier;
   return new OpenAICompatibleQuery(opts);
 }

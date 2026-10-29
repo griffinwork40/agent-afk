@@ -175,6 +175,11 @@ export interface AnthropicDirectQueryOptions {
   /** Witness-layer trace writer threaded into each per-turn run. */
   traceWriter?: import('../../trace/index.js').TraceSink;
   /**
+   * Per-turn origin (issue #2906, PR A). Forwarded from `AgentConfig.turnProvenance`
+   * at construction time and emitted on `loop_start` trace events. Data only.
+   */
+  turnProvenance?: import('../../turn-provenance.js').TurnProvenance;
+  /**
    * Owning subagent id when this query runs inside a forked child
    * (`AgentConfig.subagentId`). Threaded into `RunTurnInput.subagentId` so the
    * loop's `tool_call` events are attributable in the shared parent trace.

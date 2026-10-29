@@ -115,6 +115,7 @@ export class SubagentManager {
   // Undefined when THIS manager belongs to a top-level session. Threaded into
   // assembleChildConfig so grandchild forks inherit the real root id.
   private readonly parentRootSessionId: string | undefined;
+  private parentTurnProvenance: import('./turn-provenance.js').TurnProvenance | undefined;
   // Per-cwd cache of the resolved main-repo root for worktree children.
   // Extracted to WorktreeMainRootCache (./subagent/worktree-main-root-cache.ts).
   private readonly worktreeMainRootCache = new WorktreeMainRootCache();
@@ -157,6 +158,7 @@ export class SubagentManager {
     this.parentCwd = options.cwd;
     this.parentReadRoots = options.parentReadRoots;
     this.parentRootSessionId = options.parentRootSessionId;
+    this.parentTurnProvenance = options.parentTurnProvenance;
     this.parentTraceWriter = options.traceWriter;
     this.parentSurface = options.surface;
     this.parentAbortSignal = options.parentAbortSignal;
@@ -272,6 +274,17 @@ export class SubagentManager {
   }
 
   /**
+   * Update the per-turn provenance (issue #2906, PR A).
+   *
+   * Called by the REPL turn loop at the start of each turn so every child
+   * forked DURING that turn inherits the correct origin.  Data only; no
+   * behaviour change.
+   */
+  setTurnProvenance(provenance: import('./turn-provenance.js').TurnProvenance | undefined): void {
+    this.parentTurnProvenance = provenance;
+  }
+
+  /**
    * The read-scope inputs this manager applies to its forks — the parent's
    * `readRoots` (may be undefined = derive from cwd) and `cwd`. Used to
    * propagate read scope transitively: a forked child that builds its OWN
@@ -290,8 +303,8 @@ export class SubagentManager {
    * ceiling); `parentRootSessionId` (#2442) seeds grandchild root attribution.
    */
   private parentForkFields(): ParentForkFields {
-    const { parentCwd, parentApiKey, parentBaseUrl, parentProvider, parentTraceWriter, parentSurface, parentCanUseTool, parentRootSessionId } = this;
-    return { parentCwd, parentApiKey, parentBaseUrl, parentProvider, parentTraceWriter, parentSurface, parentCanUseTool, parentRootSessionId };
+    const { parentCwd, parentApiKey, parentBaseUrl, parentProvider, parentTraceWriter, parentSurface, parentCanUseTool, parentRootSessionId, parentTurnProvenance } = this;
+    return { parentCwd, parentApiKey, parentBaseUrl, parentProvider, parentTraceWriter, parentSurface, parentCanUseTool, parentRootSessionId, parentTurnProvenance };
   }
 
   private async resolveMainRootForCwd(cwd: string): Promise<string | undefined> {

@@ -73,6 +73,14 @@ export interface AssembleChildConfigArgs<T> {
    */
   parentRootSessionId: string | undefined;
   /**
+   * Per-turn provenance of the parent's current turn (issue #2906, PR A).
+   * Inherited by the child so it knows whether a human initiated the root
+   * work — e.g. `origin === 'human'` — without inspecting injected text.
+   * Undefined when the parent has not set provenance (pre-PR-A sessions).
+   * Data only; no behaviour change.
+   */
+  parentTurnProvenance?: import('../turn-provenance.js').TurnProvenance;
+  /**
    * When `true`, the child's identity preamble includes the yield-and-resume
    * paragraph explaining how to use an **Asking** block to yield a question to
    * the parent. Set for foreground non-compose dispatches; `false`/absent for
@@ -98,6 +106,7 @@ export type ParentForkFields = Pick<
   AssembleChildConfigArgs<unknown>,
   | 'parentCwd' | 'parentApiKey' | 'parentBaseUrl' | 'parentProvider'
   | 'parentTraceWriter' | 'parentSurface' | 'parentCanUseTool' | 'parentRootSessionId'
+  | 'parentTurnProvenance'
 >;
 
 /**
@@ -199,6 +208,13 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
       : {}),
     ...(args.options.config.surface === undefined && args.parentSurface !== undefined
       ? { surface: args.parentSurface }
+      : {}),
+    // Per-turn provenance inheritance (issue #2906, PR A): a forked child
+    // inherits the parent turn's provenance so it knows whether a human
+    // initiated the root work. Guard: explicit caller value wins.
+    // Data only; no behaviour change.
+    ...(args.options.config.turnProvenance === undefined && args.parentTurnProvenance !== undefined
+      ? { turnProvenance: args.parentTurnProvenance }
       : {}),
     // Private temp dir (session-tmpdir.ts): a fresh TMPDIR/TMP/TEMP nested
     // under the dispatching session's dir, merged over the caller's env so
