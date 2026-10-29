@@ -25,7 +25,7 @@
  */
 
 import { open, readdir, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { newestMtimeAndBytes } from './_lib/dir-newest-mtime.js';
 import { isSafeLedgerSessionId } from '../paths.js';
 import { readSessionMeta } from './session/session-meta.js';
@@ -52,7 +52,7 @@ const META_HEAD_BYTES = 8 * 1024;
  */
 async function readForkParent(dir: string): Promise<string | undefined> {
   // Extract the session id from the directory name (last path segment).
-  const sessionId = dir.split('/').at(-1) ?? '';
+  const sessionId = basename(dir);
 
   // Fast path: session-meta.json sidecar (#4429).
   if (sessionId) {
