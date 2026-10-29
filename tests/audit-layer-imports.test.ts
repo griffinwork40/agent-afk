@@ -386,31 +386,12 @@ describe('checkPair', () => {
 // ── scanFile — block-comment state machine ────────────────────────────────────
 
 describe('scanFile — block-comment state machine', () => {
-  // Helper: build a fake absPath and relPath for a file in src/agent/
-  // using a fake scan root so importedSegment resolves correctly.
-  //
-  // IMPORTANT: scanFile calls importedSegment(absPath, specifier) which
-  // internally uses the module-level SCAN_ROOT (derived from __dirname).
-  // To make violations trigger, we need absPath to live under real SCAN_ROOT.
-  // We work around this by constructing absPath from the real scripts/__dirname
-  // equivalent — but since we can't know it at test-write time, we use a
-  // specifier that resolves relative to absPath such that the target segment
-  // is 'cli' (a surface dir), making it a Rule 1 violation.
-  //
-  // Strategy: use a real path under the actual src/ tree for absPath so that
-  // SCAN_ROOT resolves correctly, and use a specifier like '../cli/types.js'
-  // which, from src/agent/fake.ts, resolves to src/cli/types.js → segment 'cli'.
-  //
-  // The real SCAN_ROOT = <repoRoot>/src. We construct absPath as:
-  //   <repoRoot>/src/agent/fake.ts  (a file that doesn't need to exist for scanFile)
-  // relPath = 'src/agent/fake.ts'
-  // importerLayer = 'core-infra'
-
-  // Locate real repoRoot: tests/ is one level below the worktree root.
-  // path.dirname gives tests/; one more resolve('..') reaches the worktree root,
-  // which is where scripts/audit-layer-imports.ts derives SCAN_ROOT from.
-  const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-  const absPath = path.join(repoRoot, 'src', 'agent', 'fake.ts');
+  // Use a portable fake root so tests are independent of the real repo layout
+  // and work identically on Windows (where path.join returns backslashes).
+  // We inject scanRoot='/fake/src' and absPath='/fake/src/agent/fake.ts' so
+  // importedSegment resolves '../cli/types.js' → segment 'cli' on all platforms.
+  const fakeRoot = '/fake/src';
+  const absPath = '/fake/src/agent/fake.ts';
   const relPath = 'src/agent/fake.ts';
   const importerLayer = 'core-infra' as const;
 
@@ -421,7 +402,7 @@ describe('scanFile — block-comment state machine', () => {
       ' */',
       'const x = 1;',
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations).toHaveLength(0);
   });
 
@@ -432,7 +413,7 @@ describe('scanFile — block-comment state machine', () => {
       " * some comment",
       `*/ import { Foo } from '../cli/types.js';`,
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations.length).toBeGreaterThan(0);
     expect(violations[0]?.rule).toContain('Rule 1');
   });
@@ -442,7 +423,7 @@ describe('scanFile — block-comment state machine', () => {
       "// import { Foo } from '../cli/types.js';",
       'const x = 1;',
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations).toHaveLength(0);
   });
 
@@ -451,7 +432,7 @@ describe('scanFile — block-comment state machine', () => {
     const lines = [
       `/* intentionally ignored */ import { Foo } from '../cli/types.js';`,
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations.length).toBeGreaterThan(0);
     expect(violations[0]?.rule).toContain('Rule 1');
   });
@@ -461,7 +442,7 @@ describe('scanFile — block-comment state machine', () => {
     const lines = [
       `/* import { Foo } from '../cli/types.js'; */`,
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations).toHaveLength(0);
   });
 
@@ -473,7 +454,7 @@ describe('scanFile — block-comment state machine', () => {
       ' */',
       'export {};',
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations).toHaveLength(0);
   });
 
@@ -481,7 +462,7 @@ describe('scanFile — block-comment state machine', () => {
     const lines = [
       "import { Foo } from '../cli/types.js';",
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations.length).toBeGreaterThan(0);
     expect(violations[0]?.rule).toContain('Rule 1');
   });
@@ -491,7 +472,7 @@ describe('scanFile — block-comment state machine', () => {
       'const x = 42;',
       'function hello() { return x; }',
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations).toHaveLength(0);
   });
 
@@ -500,7 +481,7 @@ describe('scanFile — block-comment state machine', () => {
     const lines = [
       `/* first */ /* second */ import { Foo } from '../cli/types.js';`,
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations.length).toBeGreaterThan(0);
     expect(violations[0]?.rule).toContain('Rule 1');
   });
@@ -509,7 +490,7 @@ describe('scanFile — block-comment state machine', () => {
     const lines = [
       '/* first */ /* second */',
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations).toHaveLength(0);
   });
 });
@@ -517,8 +498,9 @@ describe('scanFile — block-comment state machine', () => {
 // ── scanFile — coordinate-space paths ─────────────────────────────────────────
 
 describe('scanFile — multiline import coordinate space', () => {
-  const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-  const absPath = path.join(repoRoot, 'src', 'agent', 'fake.ts');
+  // Portable fake root — same strategy as the block-comment suite above.
+  const fakeRoot = '/fake/src';
+  const absPath = '/fake/src/agent/fake.ts';
   const relPath = 'src/agent/fake.ts';
   const importerLayer = 'core-infra' as const;
 
@@ -530,7 +512,7 @@ describe('scanFile — multiline import coordinate space', () => {
       "} from '../cli/types.js';",
       'const y = 2;',
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations).toHaveLength(1);
     // The violation should point to the opening line of the import (line 2, 1-indexed).
     expect(violations[0]?.line).toBe(2);
@@ -544,7 +526,7 @@ describe('scanFile — multiline import coordinate space', () => {
       "} from '../cli/types.js';",
       "import { Bar } from '../cli/palette.js';",
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     // Both imports are violations — one multiline, one single-line.
     expect(violations).toHaveLength(2);
     expect(violations[0]?.line).toBe(1);
@@ -561,7 +543,7 @@ describe('scanFile — multiline import coordinate space', () => {
       '  Foo,',
       "} from '../cli/types.js';",
     ];
-    const violations = scanFile(absPath, relPath, importerLayer, lines);
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
     expect(violations).toHaveLength(1);
     // Line 3 (1-indexed) is where the import starts.
     expect(violations[0]?.line).toBe(3);

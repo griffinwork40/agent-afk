@@ -156,6 +156,11 @@ export function collectLogicalLine(lines: string[], startIdx: number): { logical
 const IMPORT_RE =
   /^\s*(?:import|export)\s+(?:type\s+)?(?:\{[^}]*\}|\*\s+as\s+\S+|\S+)\s+from\s+['"]([^'"]+)['"]/;
 
+// Known gap: dynamic `import()` calls (e.g. `const m = await import('../cli/foo.js')`) are
+// NOT matched by IMPORT_RE, which covers only static import/export-from declarations.
+// Production uses are tracked in issue #4457.  Adding a dynamic-import regex is deferred
+// to a follow-up PR so as not to expand scope here.
+
 export interface Violation {
   file: string;
   line: number;
@@ -239,6 +244,7 @@ export function scanFile(
   importerLayer: Layer,
   lines: string[],
   outAllowedHits?: Array<{ file: string; line: number; rule: string }>,
+  scanRoot: string = SCAN_ROOT,
 ): Violation[] {
   const violations: Violation[] = [];
   const seg = srcSegment(relPath);
@@ -319,7 +325,7 @@ export function scanFile(
     const specifier = match[1];
     if (!specifier) { i += consumed; continue; }
 
-    const imported = importedSegment(absPath, specifier);
+    const imported = importedSegment(absPath, specifier, scanRoot);
     if (!imported) { i += consumed; continue; }
 
     const importedLayer = classifyDir(imported);
@@ -355,7 +361,7 @@ function main(): void {
   const allowedHits: Array<{ file: string; line: number; rule: string }> = [];
 
   for (const absPath of files) {
-    const relPath = path.relative(repoRoot, absPath);
+    const relPath = path.relative(repoRoot, absPath).replace(/\\/g, '/');
     const seg = srcSegment(relPath);
     if (!seg) continue;
     const importerLayer = classifyDir(seg);
