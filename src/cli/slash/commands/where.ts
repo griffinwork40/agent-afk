@@ -12,7 +12,7 @@ import type { SlashCommand } from '../types.js';
 
 export const whereCmd: SlashCommand = {
   name: '/where',
-  aliases: ['/orient'],
+  aliases: [],
   summary: 'Show workspace, session, and introspection surface at a glance',
   hint: 'When you feel lost — shows branch, cwd, session identity, and pointers to deeper inspection tools.',
   async handler(ctx) {
@@ -24,16 +24,19 @@ export const whereCmd: SlashCommand = {
     out.line(palette.bold('Where you are'));
     out.line(divider());
 
-    // Workspace
-    const branch = ws.branch ?? palette.dim('(detached)');
-    const sha = ws.headSha ?? palette.dim('n/a');
-    const dirtyLabel = ws.dirty === null
-      ? palette.dim('unknown')
-      : ws.dirty
-        ? palette.warning(`${ws.dirtyCount} dirty`)
-        : palette.success('clean');
-    out.line(`  ${palette.dim('Branch'.padEnd(14))}${branch} @ ${sha}`);
-    out.line(`  ${palette.dim('Working tree'.padEnd(14))}${dirtyLabel}`);
+    // Workspace — distinguish non-git directories from detached HEAD
+    if (ws.headSha === null) {
+      out.line(`  ${palette.dim('Git'.padEnd(14))}${palette.dim('not a git repository')}`);
+    } else {
+      const branch = ws.branch ?? palette.dim('(detached)');
+      const dirtyLabel = ws.dirty === null
+        ? palette.dim('unknown')
+        : ws.dirty
+          ? palette.warning(`${ws.dirtyCount} dirty`)
+          : palette.success('clean');
+      out.line(`  ${palette.dim('Branch'.padEnd(14))}${branch} @ ${ws.headSha}`);
+      out.line(`  ${palette.dim('Working tree'.padEnd(14))}${dirtyLabel}`);
+    }
     out.line(`  ${palette.dim('Directory'.padEnd(14))}${cwd}`);
 
     // Session

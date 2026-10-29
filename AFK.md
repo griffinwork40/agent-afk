@@ -65,7 +65,7 @@ afk trace export-otlp [session]      # convert to OpenTelemetry spans
 
 ```bash
 afk witness read [session]           # read/filter events by kind, tool, errors-only
-afk witness search "rate limit"      # text-search across recent sessions (--since, --kind)
+afk witness search "rate limit"      # text-search across recent sessions (--since, --kinds)
 ```
 
 **Runtime state** (agent tool `get_runtime_state`; human via `/debug`, `/tools`, `/info`):
