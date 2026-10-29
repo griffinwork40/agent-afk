@@ -61,6 +61,16 @@ describe('isPromptExperimentActive', () => {
     vi.stubEnv('AFK_PROMPT_EXPERIMENT', '');
     expect(isPromptExperimentActive(EXPERIMENT)).toBe(false);
   });
+
+  it('is case-sensitive — mismatched case returns false', () => {
+    vi.stubEnv('AFK_PROMPT_EXPERIMENT', 'Explore-Rewrite');
+    expect(isPromptExperimentActive(EXPERIMENT)).toBe(false);
+  });
+
+  it('is case-sensitive — uppercase env does not match lowercase name', () => {
+    vi.stubEnv('AFK_PROMPT_EXPERIMENT', 'EXPLORE-REWRITE');
+    expect(isPromptExperimentActive(EXPERIMENT)).toBe(false);
+  });
 });
 
 // ── getPromptVariant ──────────────────────────────────────────────────────────
@@ -134,14 +144,14 @@ describe('getPromptVariant', () => {
 
 // ── PROTECTED_ENV_KEYS (settable-keys) ────────────────────────────────────────
 
+import { classifyEnvKey } from '../config/settable-keys.js';
+
 describe('PROTECTED_ENV_KEYS contains experiment vars', () => {
-  it('classifies AFK_PROMPT_EXPERIMENT as protected', async () => {
-    const { classifyEnvKey } = await import('../config/settable-keys.js');
+  it('classifies AFK_PROMPT_EXPERIMENT as protected', () => {
     expect(classifyEnvKey('AFK_PROMPT_EXPERIMENT')).toBe('protected');
   });
 
-  it('classifies AFK_PROMPT_EXPERIMENT_ARM as protected', async () => {
-    const { classifyEnvKey } = await import('../config/settable-keys.js');
+  it('classifies AFK_PROMPT_EXPERIMENT_ARM as protected', () => {
     expect(classifyEnvKey('AFK_PROMPT_EXPERIMENT_ARM')).toBe('protected');
   });
 });
