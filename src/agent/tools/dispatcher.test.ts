@@ -3134,4 +3134,21 @@ describe('blockDestructiveGit gate', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain('working-tree-destructive');
   });
+
+  it.each([
+    ['git reset --hard', 'git reset --hard'],
+    ['git stash pop', 'git stash pop'],
+    ['git stash drop', 'git stash drop'],
+    ['git stash clear', 'git stash clear'],
+    ['git switch main', 'git switch'],
+    ['git restore .', 'git restore'],
+    ["printf 'git checkout main' | bash", 'pipe-to-shell git checkout'],
+    ['git reset --keep', 'git reset --keep'],
+    ['git reset --merge', 'git reset --merge'],
+  ])('blocks %s via dispatcher when blockDestructiveGit is true', async (cmd) => {
+    const dispatcher = makeDestructiveGitDispatcher(true);
+    const result = await dispatcher.execute(bashCall(cmd));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('working-tree-destructive');
+  });
 });

@@ -888,9 +888,33 @@ describe('classifyDestructiveGit', () => {
       ['{ git reset --hard; }', 'brace-group git reset --hard'],
       ['if true; then git checkout main; fi', 'if/then git checkout'],
       ['if true; then git clean -fd; fi', 'if/then git clean'],
+      ['{ git switch main; }', 'brace-group git switch'],
+      ['{ git restore .; }', 'brace-group git restore'],
+      ['if true; then git switch main; fi', 'if/then git switch'],
+      ['if true; then git restore .; fi', 'if/then git restore'],
+      ['{ git stash pop; }', 'brace-group git stash pop'],
+      ['{ git stash drop; }', 'brace-group git stash drop'],
+      ['{ git stash clear; }', 'brace-group git stash clear'],
+      ['if true; then git stash pop; fi', 'if/then git stash pop'],
     ];
     for (const [cmd, label] of compoundDestructive) {
       it(`blocks compound: ${label}`, () => {
+        const result = classifyDestructiveGit(cmd);
+        expect(result.destructive, `expected "${cmd}" to be destructive`).toBe(true);
+        expect(result.reason).toBeTruthy();
+      });
+    }
+  });
+
+  describe('pipe-to-shell bypass (must NOT be bypassable)', () => {
+    const pipeToShell: Array<[string, string]> = [
+      ["printf 'git checkout main' | bash", 'printf pipe to bash'],
+      ["echo 'git reset --hard' | sh", 'echo pipe to sh'],
+      ["printf 'git switch main' | /bin/bash", 'printf pipe to /bin/bash'],
+      ["echo 'git stash pop' | /bin/sh", 'echo pipe to /bin/sh'],
+    ];
+    for (const [cmd, label] of pipeToShell) {
+      it(`blocks pipe-to-shell: ${label}`, () => {
         const result = classifyDestructiveGit(cmd);
         expect(result.destructive, `expected "${cmd}" to be destructive`).toBe(true);
         expect(result.reason).toBeTruthy();

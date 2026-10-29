@@ -394,6 +394,9 @@ export const DESTRUCTIVE_GIT_SUBCMDS = new Set([
   'checkout', 'switch', 'restore', 'clean',
 ]);
 
+/** Shell interpreters that execute a string argument — used by the pipe-to-shell backstop. */
+const SHELL_INTERPS = new Set(['bash', 'sh', 'dash', '/bin/bash', '/bin/sh', '/bin/dash']);
+
 /**
  * Classify a `git …` invocation for working-tree-destructive operations only
  * (NOT the full mutating set). Returns a descriptive reason, or null if the
@@ -404,6 +407,8 @@ export const DESTRUCTIVE_GIT_SUBCMDS = new Set([
  *   - `restore`              — always (discards working-tree changes)
  *   - `clean`                — always (deletes untracked files)
  *   - `reset --hard`         — only the `--hard` form
+ *   - `reset --merge`        — modifies working tree (aborts an in-progress merge)
+ *   - `reset --keep`         — modifies working tree (updates index and files)
  *   - `stash drop/clear/pop` — destroy stash entries or modify working tree
  */
 export function destructiveGitSegmentReason(argv: readonly string[]): string | null {
@@ -412,7 +417,10 @@ export function destructiveGitSegmentReason(argv: readonly string[]): string | n
   if (sub === undefined || sub === 'help') return null;
   if (DESTRUCTIVE_GIT_SUBCMDS.has(sub)) return `git ${sub} (working-tree destructive)`;
   if (sub === 'reset') {
-    return argv.includes('--hard') ? 'git reset --hard (working-tree destructive)' : null;
+    if (argv.includes('--hard')) return 'git reset --hard (working-tree destructive)';
+    if (argv.includes('--merge')) return 'git reset --merge (working-tree destructive)';
+    if (argv.includes('--keep')) return 'git reset --keep (working-tree destructive)';
+    return null;
   }
   if (sub === 'stash') {
     const next = rest[0] ?? '';
@@ -452,6 +460,21 @@ export function classifyDestructiveGit(
     }
     const reason = destructiveGitSegmentReason(seg.argv);
     if (reason !== null) return { destructive: true, reason };
+  }
+  // Pipe-to-shell backstop: printf 'git checkout main' | bash
+  // tokenizeSegments splits on |; the git command is a string arg to printf/echo,
+  // not a parsed segment. Detect: if any segment is a bare shell interpreter,
+  // re-parse each string argument from the preceding segment.
+  const allSegs = [...tokenizeSegments(command)];
+  for (let idx = 1; idx < allSegs.length; idx++) {
+    const seg = allSegs[idx]!;
+    if (seg.length === 0 || !SHELL_INTERPS.has(baseName(seg[0]!))) continue;
+    // This segment is a shell interpreter — check string args in the prior segment
+    const prevSeg = allSegs[idx - 1]!;
+    for (const tok of prevSeg.slice(1)) { // skip the command itself (printf/echo/etc)
+      const inner = classifyDestructiveGit(tok);
+      if (inner.destructive) return inner;
+    }
   }
   return { destructive: false };
 }
