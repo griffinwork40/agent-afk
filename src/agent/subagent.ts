@@ -275,6 +275,7 @@ export class SubagentManager {
 
   /**
    * Update the per-turn provenance (issue #2906, PR A).
+   * @deferred PR B — wiring call (`ctx.session.current.subagentManager?.setTurnProvenance(currentTurnProvenance)`) into loop-iteration.ts is deferred to PR B to keep PR A as pure data-plumbing.
    *
    * Called by the REPL turn loop at the start of each turn so every child
    * forked DURING that turn inherits the correct origin.  Data only; no

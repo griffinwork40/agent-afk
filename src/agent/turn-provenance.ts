@@ -101,7 +101,7 @@ export function humanTurnProvenance(): TurnProvenance {
  *   did (→ `'peer'`).
  */
 export function autoResumeTurnProvenance(bgResultPending: boolean): TurnProvenance {
-  return { origin: bgResultPending ? 'background' : 'peer', peerInfluenced: !bgResultPending };
+  return { origin: bgResultPending ? 'background' : 'peer', peerInfluenced: false };
 }
 
 /**

@@ -192,6 +192,8 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   get currentModel(): string { return this._currentModel; }
   /** Current permission mode — live getter. */
   get currentPermissionMode(): string { return this._currentPermissionMode; }
+  /** Per-turn provenance — live getter; satisfies {@link TurnDriverContext}. */
+  get turnProvenance(): import('../../turn-provenance.js').TurnProvenance | undefined { return this._turnProvenance; }
 
   /**
    * Latched `true` when a Responses-wire summarize (history compaction) fails in
