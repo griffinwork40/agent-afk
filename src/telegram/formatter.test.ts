@@ -835,4 +835,71 @@ describe('formatUsage', () => {
     const out = formatUsage(summary);
     expect(out).toMatch(/no providers/i);
   });
+
+  test('stale provider header includes [stale] tag', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'stale',
+          fiveHour: { utilization: 0.5, utilizationPct: 50 },
+        },
+      ],
+    };
+    const out = formatUsage(summary);
+    expect(out).toContain('[stale]');
+    expect(out).toContain('anthropic / oauth [stale]:');
+  });
+
+  test('error provider header includes [error] tag', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'error',
+          errorDetail: '503 Service Unavailable',
+        },
+      ],
+    };
+    const out = formatUsage(summary);
+    expect(out).toContain('[error]');
+    expect(out).toContain('anthropic / oauth [error]:');
+  });
+
+  test('ok provider header has no status tag', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'ok',
+          fiveHour: { utilization: 0.3, utilizationPct: 30 },
+        },
+      ],
+    };
+    const out = formatUsage(summary);
+    expect(out).toContain('anthropic / oauth:');
+    expect(out).not.toContain('[ok]');
+  });
+
+  test('no-token error surfaces claude login hint', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'error',
+          errorDetail: 'No Claude Code OAuth token found. Run `claude login` on the host machine, then try again.',
+        },
+      ],
+    };
+    const out = formatUsage(summary);
+    expect(out).toContain('claude login');
+  });
 });

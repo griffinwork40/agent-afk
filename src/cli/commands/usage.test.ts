@@ -67,4 +67,12 @@ describe('collectUsageSummary credential placeholders', () => {
     const s = await collectUsageSummary(NOW, { chatgpt: () => ({ source: 'no-usable-auth' }), openaiApiKey: () => undefined });
     expect(ids(s)).toEqual(['anthropic/oauth:unknown']);
   });
+
+  it('maps no-token to an error entry with a claude login hint in errorDetail', async () => {
+    collectUsage.mockResolvedValue({ records: [], anthropic: { kind: 'unavailable', reason: 'no-token', detail: 'No token.' } });
+    loadAnthropicCredential.mockReturnValue('some-credential');
+    const s = await collectUsageSummary(NOW, { chatgpt: () => ({ source: 'no-usable-auth' }), openaiApiKey: () => undefined });
+    expect(ids(s)).toEqual(['anthropic/oauth:error']);
+    expect(s.providers[0]?.errorDetail).toMatch(/claude login/i);
+  });
 });

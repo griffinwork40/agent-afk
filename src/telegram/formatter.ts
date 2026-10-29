@@ -234,7 +234,8 @@ export function formatUsage(summary: UsageSummary): string {
   }
   const lines: string[] = ['📊 Subscription usage:'];
   for (const p of summary.providers) {
-    lines.push(`\n${p.provider} / ${p.account}:`);
+    const tag = p.status !== 'ok' ? ` [${p.status}]` : '';
+    lines.push(`\n${p.provider} / ${p.account}${tag}:`);
     for (const row of usageRows(p)) {
       lines.push(`  ${row.label}: ${row.value}`);
     }
