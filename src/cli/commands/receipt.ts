@@ -168,6 +168,7 @@ async function runRegenerate(opts: RegenerateOptions): Promise<void> {
   let regenerated = 0;
   let skipped = 0;
   let alreadyCurrent = 0;
+  const seenLabels = new Set<string>();
 
   for (const sessionId of sessionIds) {
     if (!isSafeLedgerSessionId(sessionId)) {
@@ -190,6 +191,17 @@ async function runRegenerate(opts: RegenerateOptions): Promise<void> {
     }
 
     const traceLabel = resolved.label;
+    if (!isSafeLedgerSessionId(traceLabel)) {
+      results.push({ sessionId, outcome: 'skipped', reason: 'unsafe traceLabel' });
+      skipped++;
+      continue;
+    }
+    if (seenLabels.has(traceLabel)) {
+      results.push({ sessionId, outcome: 'skipped', reason: 'duplicate traceLabel' });
+      skipped++;
+      continue;
+    }
+    seenLabels.add(traceLabel);
     const tracePath = join(getTraceDir(traceLabel), 'trace.jsonl');
 
     // Check the existing receipt schema version when --only-v1 applies.
