@@ -379,14 +379,17 @@ describe('ensureServerInstalled — policy branches', () => {
   });
 
   // Abort signal propagates.
-  it('propagates abort to npm exec', async () => {
+  it('pre-aborted signal aborts at lock acquisition and returns failed', async () => {
+    // With Issue 2 fixed, ctx.signal is forwarded to acquireLock. A pre-aborted
+    // signal throws AbortError inside acquireInstallLock before npm exec is ever
+    // reached — execFn should never be called.
     const def = makeDefinition();
     const controller = new AbortController();
     controller.abort();
-    const calls: Array<{ signal: AbortSignal | undefined }> = [];
-    const execFn: NpmExecFn = async (_f, _a, opts) => {
-      calls.push({ signal: opts.signal });
-      throw new Error('AbortError');
+    const execCalls: number[] = [];
+    const execFn: NpmExecFn = async () => {
+      execCalls.push(1);
+      throw new Error('should not be called');
     };
     const { ensure } = makeInstall(tmpDir, def, execFn);
     const result = await ensure(
@@ -394,7 +397,42 @@ describe('ensureServerInstalled — policy branches', () => {
       makeCtx({ interactive: true, askConsent: async () => true, signal: controller.signal }),
     );
     expect(result).toMatchObject({ kind: 'failed' });
-    expect(calls[0]?.signal).toBe(controller.signal);
+    expect(execCalls).toHaveLength(0);
+  });
+
+  it('forwards ctx.signal to lockFn (and then to npm exec)', async () => {
+    // Verify the signal is passed through the lockFn → execFn chain.
+    const def = makeDefinition();
+    const controller = new AbortController();
+    const lockSignals: Array<AbortSignal | undefined> = [];
+    const execSignals: Array<AbortSignal | undefined> = [];
+
+    const lockFn = async (lang: string, sig?: AbortSignal): Promise<() => Promise<void>> => {
+      lockSignals.push(sig);
+      return async () => {};
+    };
+    const execFn: NpmExecFn = async (_f, _a, opts) => {
+      execSignals.push(opts.signal);
+      controller.abort(); // abort after npm receives it
+      throw new Error('AbortError');
+    };
+    const grantsPath = path.join(tmpDir, 'grants-sig.json');
+    const ledgerPath = path.join(tmpDir, 'ledger-sig.jsonl');
+    const grantStore = createGrantStore(grantsPath);
+    const ensure = createEnsureInstalled({
+      grantStore,
+      execFn,
+      ledgerPath,
+      inFlightMap: new Map(),
+      lockFn,
+    });
+    const result = await ensure(
+      def,
+      makeCtx({ interactive: true, askConsent: async () => true, signal: controller.signal }),
+    );
+    expect(result).toMatchObject({ kind: 'failed' });
+    expect(lockSignals[0]).toBe(controller.signal);
+    expect(execSignals[0]).toBe(controller.signal);
   });
 });
 

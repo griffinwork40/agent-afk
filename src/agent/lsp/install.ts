@@ -116,11 +116,26 @@ export async function acquireInstallLock(
 
     // Write our sentinel.
     const record: LockRecord = { pid: ownPid, expiresAt: now() + LOCK_EXPIRY_MS };
-    try {
-      await writeFile(lockFile, JSON.stringify(record), 'utf8');
-    } catch {
-      // Write failed (permissions, race) — skip locking, proceed anyway.
-      // npm install is idempotent; worst case two processes overlap.
+    if (existing === null) {
+      // No prior lock (or stale lock was cleared above) — use O_EXCL so only
+      // one process wins the race. On EEXIST another process beat us; retry.
+      try {
+        await writeFile(lockFile, JSON.stringify(record), { flag: 'wx' });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+          // Another process acquired the lock between our read and write.
+          continue;
+        }
+        // Other write error (permissions, etc.) — skip locking, proceed anyway.
+        // npm install is idempotent; worst case two processes overlap.
+      }
+    } else {
+      // Re-entrant: same pid already holds the lock — overwrite to refresh expiry.
+      try {
+        await writeFile(lockFile, JSON.stringify(record), 'utf8');
+      } catch {
+        // Write failed — skip locking, proceed anyway.
+      }
     }
 
     return async (): Promise<void> => {
@@ -232,62 +247,70 @@ async function ensureInstalledCore(
   // is idempotent, so a concurrent winner just means the loser's bin-check
   // (step 6d) passes immediately — the lock keeps npm output coherent and
   // avoids partial-state races during the install.
-  // Acquire the lock without forwarding ctx.signal: the signal governs the
-  // npm exec itself, not the inter-process coordination wait. Passing the
-  // signal here would cause a pre-aborted caller to skip locking entirely,
-  // letting two processes overlap on the install dir.
+  // Forward ctx.signal to the lock acquisition: the signal governs the WAIT
+  // for the lock (the polling loop), not just npm exec. A pre-aborted caller
+  // should abort the lock wait immediately rather than silently proceeding
+  // unlocked — which would allow two processes to overlap on the install dir.
   const acquireLock = deps.lockFn ?? acquireInstallLock;
-  const releaseLock = await acquireLock(language);
+  const releaseLock = await acquireLock(language, ctx.signal);
 
   // Re-check the binary now that we hold the lock: another process may have
   // already finished the install while we were waiting.
   try {
     await access(binPath);
-    await releaseLock();
+    try { await releaseLock(); } catch { /* best-effort */ }
     return { kind: 'installed', command: binPath, freshInstall: false };
   } catch {
     // Still not installed — proceed.
   }
 
-  // 6c. Write-ahead to effect ledger (pending).
+  // 6c. Write-ahead to effect ledger (pending), then run npm install.
+  // The try/finally starts HERE so that releaseLock() is called even if
+  // writePending() throws (e.g. ledger I/O error).
   const idempotencyKey = `${LSP_INSTALL_OP}:${language}:${[...install.packages].sort().join(',')}`;
-  const pendingRecord = ledger.writePending({
-    idempotencyKey,
-    operationType: LSP_INSTALL_OP,
-    args: { language, packages: install.packages },
-  });
-
-  // 6d. Run npm install.
   let result: Awaited<ReturnType<typeof runNpmInstall>>;
   try {
-    result = await runNpmInstall(
-      language,
-      install.packages,
-      ctx.signal,
-      deps.execFn,
-      deps.platform ?? process.platform,
-      deps.locateCli,
-    );
+    const pendingRecord = ledger.writePending({
+      idempotencyKey,
+      operationType: LSP_INSTALL_OP,
+      args: { language, packages: install.packages },
+    });
+
+    // 6d. Run npm install.
+    try {
+      result = await runNpmInstall(
+        language,
+        install.packages,
+        ctx.signal,
+        deps.execFn,
+        deps.platform ?? process.platform,
+        deps.locateCli,
+      );
+    } finally {
+      await releaseLock();
+    }
+
+    if (!result.ok) {
+      await ledger.updateStatus({ id: pendingRecord.id, status: 'failed', result: { reason: result.reason } });
+      return { kind: 'failed', reason: result.reason };
+    }
+
+    // 6e. Verify binary exists after install.
+    try {
+      await access(binPath);
+    } catch {
+      const reason = `npm install succeeded but binary not found at ${binPath}`;
+      await ledger.updateStatus({ id: pendingRecord.id, status: 'failed', result: { reason } });
+      return { kind: 'failed', reason };
+    }
+
+    // 6f. Resolve ledger to executed.
+    await ledger.updateStatus({ id: pendingRecord.id, status: 'executed', result: { binPath } });
   } finally {
-    await releaseLock();
+    // Ensure lock is always released even if ledger.writePending() threw.
+    // releaseLock() is idempotent (unlink on a missing file is a no-op).
+    try { await releaseLock(); } catch { /* already released or never acquired */ }
   }
-
-  if (!result.ok) {
-    await ledger.updateStatus({ id: pendingRecord.id, status: 'failed', result: { reason: result.reason } });
-    return { kind: 'failed', reason: result.reason };
-  }
-
-  // 6e. Verify binary exists after install.
-  try {
-    await access(binPath);
-  } catch {
-    const reason = `npm install succeeded but binary not found at ${binPath}`;
-    await ledger.updateStatus({ id: pendingRecord.id, status: 'failed', result: { reason } });
-    return { kind: 'failed', reason };
-  }
-
-  // 6f. Resolve ledger to executed.
-  await ledger.updateStatus({ id: pendingRecord.id, status: 'executed', result: { binPath } });
 
   return { kind: 'installed', command: binPath, freshInstall: true };
 }
