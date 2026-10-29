@@ -140,9 +140,11 @@ export function wireTelegramExecutors(
   const drainSubagents: AgentConfig['drainSubagents'] = async (reason) => {
     bgNotifier.dispose();
     await backgroundRegistry.cancelAll();
-    return executors.rootManager.abortAllAndDrain(
+    const result = await executors.rootManager.abortAllAndDrain(
       'session_end', 'user_signal', undefined, reason === 'reset',
     );
+    executors.continuationRegistry.dispose();
+    return result;
   };
 
   // -- Late-bind helper -----------------------------------------------------

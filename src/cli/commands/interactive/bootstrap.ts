@@ -48,6 +48,25 @@ async function activatePluginEntrypoints(hookRegistry: Parameters<typeof install
 }
 
 /**
+ * Wrap a shutdown config's drainSubagents to also dispose the continuation
+ * registry at session end. Extracted from bootstrapSession to stay within the
+ * 200-line ceiling.
+ */
+function withContinuationDispose(
+  shutdown: ReturnType<typeof managerShutdownConfig>,
+  registry: import('../../../agent/subagent/continuation-registry.js').ContinuationRegistry,
+): ReturnType<typeof managerShutdownConfig> {
+  return {
+    ...shutdown,
+    drainSubagents: async (reason: Parameters<NonNullable<typeof shutdown.drainSubagents>>[0]) => {
+      const result = await shutdown.drainSubagents?.(reason);
+      registry.dispose();
+      return result;
+    },
+  };
+}
+
+/**
  * Build the session context from CLI options. Throws with a user-facing
  * message when option parsing fails — caller is responsible for spinner
  * teardown, exit code, and draining any `extras.bootWarnings` it supplied
@@ -92,7 +111,7 @@ export async function bootstrapSession(
 
   const {
     trace, backgroundRegistry, detachRegistry, processJobs, bgSummarizer,
-    rootManager, subagentExecutor, skillExecutor, composeExecutor,
+    rootManager, subagentExecutor, skillExecutor, composeExecutor, continuationRegistry,
   } = createBootstrapInfra({
     sessionRef, options, cliConfig, sessionModel, basePrompt, operatorOverlay, effectiveCwd, resumeTarget, bootWarnings,
     workspaceStore: sharedWorkspaceStore,
@@ -156,7 +175,7 @@ export async function bootstrapSession(
     // Cascade-abort and drain in-flight children before the writer seals,
     // so a wave still running when this session ends emits real `cancelled`
     // rows instead of vanishing (#733).
-    ...managerShutdownConfig(rootManager, composeExecutor),
+    ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
     ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
   });
 

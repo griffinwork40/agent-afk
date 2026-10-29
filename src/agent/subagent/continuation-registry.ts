@@ -169,7 +169,7 @@ export class ContinuationRegistry {
   dispose(): void {
     for (const chain of this.chains.values()) {
       if (!chain.inFlight && chain.isolatedWorktreePath !== undefined) {
-        try { this.onEvict?.(chain); } catch { /* best-effort */ }
+        try { this.onEvict?.(chain); } catch { /* best-effort */ } finally { chain.isolatedWorktreePath = undefined; }
       }
     }
   }

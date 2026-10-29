@@ -20,8 +20,7 @@ import {
   type WorkspaceCheckpoint,
 } from '../../subagent/continuation-registry.js';
 import { captureCheckpointWithin, captureWorkspaceCheckpoint } from '../../subagent/continuation-guards.js';
-import { releaseChainWorktree } from './continuation-worktree.js';
-import { dirname } from 'node:path';
+import { releaseChainWorktree, repoRootFromWorktreePath } from './continuation-worktree.js';
 import { randomBytes } from 'node:crypto';
 import type { ContinuationPlan } from './continuation-run.js';
 import { emitSessionPhase } from '../../trace/emit.js';
@@ -149,7 +148,8 @@ export async function recordChainTerminal(args: ChainTerminalArgs): Promise<Work
   if (!isContinuable(chain) && chain.isolatedWorktreePath !== undefined) {
     const worktreePath = chain.isolatedWorktreePath;
     // Resolve repoRoot: afk worktrees live at <repoRoot>/.afk-worktrees/<slug>.
-    const repoRoot = dirname(dirname(worktreePath));
+    const repoRoot = repoRootFromWorktreePath(worktreePath);
+    if (repoRoot === undefined) return checkpoint;
     void releaseChainWorktree({
       repoRoot,
       worktreePath,

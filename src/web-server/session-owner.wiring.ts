@@ -142,9 +142,11 @@ export async function wireWebSession(
   // -- 9. Drain callback ------------------------------------------------------
   const drainSubagents: AgentConfig['drainSubagents'] = async (reason) => {
     await backgroundRegistry.cancelAll();
-    return executors.rootManager.abortAllAndDrain(
+    const result = await executors.rootManager.abortAllAndDrain(
       'session_end', 'user_signal', undefined, reason === 'reset',
     );
+    executors.continuationRegistry.dispose();
+    return result;
   };
 
   // Late-bind helper so callers can wire after session construction.

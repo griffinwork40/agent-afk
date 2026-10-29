@@ -18,10 +18,24 @@
  * @module agent/tools/subagent/continuation-worktree
  */
 
+import { basename, dirname } from 'node:path';
 import { execFileAsync as defaultExecFile } from '../../../utils/exec-file.js';
 import { teardownIsolatedWorktree } from '../handlers/worktree-managed.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { ChainRecord, ContinuationRegistry } from '../../subagent/continuation-registry.js';
+
+/**
+ * Derive the repo root from a chain worktree path.
+ * AFK worktrees always live at `<repoRoot>/.afk-worktrees/<slug>`, so the
+ * repo root is two dirname levels up. Returns `undefined` when the path does
+ * not conform to that layout (the `.afk-worktrees` segment is absent), so
+ * callers can fail-safe instead of operating on the wrong directory.
+ */
+export function repoRootFromWorktreePath(worktreePath: string): string | undefined {
+  const afkDir = dirname(worktreePath);
+  if (basename(afkDir) !== '.afk-worktrees') return undefined;
+  return dirname(afkDir);
+}
 
 /**
  * Build the `onIsolationTeardown` hook for `runForegroundWithPromotion` when
