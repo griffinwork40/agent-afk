@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**262 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**265 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -138,6 +138,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_DAEMON_TASK` | string |  |  |  | Default task description for the daemon. Falls back to afk.config.json daemon.task. |
 | `AFK_DAEMON_TASK_ID` | string |  |  |  | Task identifier the daemon uses to scope its state directory and telemetry. |
 | `AFK_EVENTS_GITHUB_POLL_MS` | number |  | `60000` | `30000` | Poll interval in milliseconds for `afk events github`. Overrides the --interval flag. Must be >= 5000. Default 60000 (1 minute). Part of #3896 (event-triggered runs). |
+| `AFK_EVENTS_WEBHOOK_ALLOW_EXTERNAL` | boolean |  | `0` | `1` | Allow `afk events serve` to bind on a non-loopback address. By default the webhook receiver refuses to start on anything other than 127.0.0.1 / ::1 / localhost. Set to 1 to permit binding on 0.0.0.0 or a specific interface (needed when behind a tunnel such as ngrok or cloudflared). Part of #3896 (event-triggered runs). |
+| `AFK_EVENTS_WEBHOOK_PORT` | number |  | `9876` | `9000` | TCP port for the `afk events serve` GitHub webhook receiver. Overrides the --port flag. Default 9876. Part of #3896 (event-triggered runs). |
+| `AFK_EVENTS_WEBHOOK_SECRET` | string |  |  |  | HMAC-SHA256 secret for the `afk events serve` GitHub webhook receiver. Must match the secret configured in the GitHub webhook settings page. Every incoming request is rejected with 401 unless it carries a valid X-Hub-Signature-256 header signed with this value. Part of #3896 (event-triggered runs). |
 | `AFK_SESSIONSTART_COOLDOWN_MS` | number |  |  |  | Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts. |
 | `AFK_TOOL_HEALTH_DISABLE` | boolean |  |  |  | Disable the tool-health daemon builtin entirely. Set to "1" to skip registration. |
 | `AFK_WEB_HOST` | string |  | `127.0.0.1` | `127.0.0.1` | Bind address for the `afk web` browser surface. Defaults to 127.0.0.1. Unlike the daemon control surface, a non-loopback bind is REFUSED unless AFK_WEB_TOKEN (or --token) is also set, because this surface can submit prompts and approve tool use. Overridden by --host. |
