@@ -438,6 +438,7 @@ Usage: `afk events [options] [command]`
 | Command | Description |
 | --- | --- |
 | `github` | Poll GitHub for events and enqueue tasks into the pull queue. Requires `gh` CLI authenticated (`gh auth status`). Supported event types: pr_comment, check_failure, issue_opened |
+| `serve` | Start an HMAC-verified local HTTP webhook receiver for GitHub events. Listens on 127.0.0.1 by default. Use a tunnel (ngrok, cloudflared) to expose it to GitHub's webhook delivery addresses. |
 
 ## `afk events github`
 
@@ -451,9 +452,26 @@ Usage: `afk events github [options]`
 | --- | --- | --- |
 | `--repo <owner/repo>` | GitHub repository to watch (e.g. owner/repo) |  |
 | `--on <events>` | Comma-separated event types to watch: pr_comment, check_failure, issue_opened |  |
-| `--command <template>` | Command template for enqueued tasks. Placeholders: &#123;&#123;event_type&#125;&#125;, &#123;&#123;repo&#125;&#125;, &#123;&#123;event_id&#125;&#125;. Event payload is appended as untrusted data. | `"A GitHub event occurred in {{repo}}. Event type: {{event_type}}. Event id: {{event_id}}. Review the untrusted payload below and take appropriate action if warranted."` |
+| `--command <template>` | Command template. Placeholders: &#123;&#123;event_type&#125;&#125;, &#123;&#123;repo&#125;&#125;, &#123;&#123;event_id&#125;&#125;. | `"A GitHub event occurred in {{repo}}. Event type: {{event_type}}. Event id: {{event_id}}. Review the untrusted payload below and take appropriate action if warranted."` |
 | `--interval <ms>` | Poll interval in milliseconds | `"60000"` |
 | `--once` | Poll once and exit (useful for cron or testing) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk events serve`
+
+Start an HMAC-verified local HTTP webhook receiver for GitHub events. Listens on 127.0.0.1 by default. Use a tunnel (ngrok, cloudflared) to expose it to GitHub's webhook delivery addresses.
+
+Usage: `afk events serve [options]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--secret <secret>` | HMAC-SHA256 secret (falls back to AFK_EVENTS_WEBHOOK_SECRET) |  |
+| `--command <template>` | Command template. Placeholders: &#123;&#123;event_type&#125;&#125;, &#123;&#123;repo&#125;&#125;, &#123;&#123;event_id&#125;&#125;. | `"A GitHub event occurred in {{repo}}. Event type: {{event_type}}. Event id: {{event_id}}. Review the untrusted payload below and take appropriate action if warranted."` |
+| `--port <port>` | TCP port to bind on | `"9876"` |
+| `--host <host>` | Bind address (default: 127.0.0.1). Non-loopback requires --allow-external. | `"127.0.0.1"` |
+| `--allow-external` | Allow binding on a non-loopback address. Also enabled by AFK_EVENTS_WEBHOOK_ALLOW_EXTERNAL=1. |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk interactive`
