@@ -38,6 +38,32 @@ function factory() {
 beforeEach(() => { vi.clearAllMocks(); mocks.workspaceThrow = false; vi.stubEnv('AFK_WORKSPACE_DISABLED', '0'); });
 afterEach(() => { vi.unstubAllEnvs(); });
 
+describe('Telegram unattended limits', () => {
+  it.each(['sonnet', 'gpt-4o', 'grok-4'])('uses finite defaults for %s', async (model) => {
+    vi.stubEnv('AFK_MAX_BUDGET_USD', '');
+    vi.stubEnv('AFK_MAX_TOOL_USE_ITERATIONS', '');
+    mocks.build.mockResolvedValue({ close: async () => {} });
+    await factory()({ model });
+    expect(mocks.build.mock.calls[0]?.[0]).toMatchObject({ maxBudgetUsd: 5, maxToolUseIterations: 100 });
+  });
+
+  it('preserves explicit config over environment, including unlimited rounds', async () => {
+    vi.stubEnv('AFK_MAX_BUDGET_USD', '3');
+    vi.stubEnv('AFK_MAX_TOOL_USE_ITERATIONS', '20');
+    mocks.build.mockResolvedValue({ close: async () => {} });
+    await factory()({ model: 'sonnet', maxBudgetUsd: 8, maxToolUseIterations: 0 });
+    expect(mocks.build.mock.calls[0]?.[0]).toMatchObject({ maxBudgetUsd: 8, maxToolUseIterations: 0 });
+  });
+
+  it('honors environment limits', async () => {
+    vi.stubEnv('AFK_MAX_BUDGET_USD', '2');
+    vi.stubEnv('AFK_MAX_TOOL_USE_ITERATIONS', '15');
+    mocks.build.mockResolvedValue({ close: async () => {} });
+    await factory()({ model: 'sonnet' });
+    expect(mocks.build.mock.calls[0]?.[0]).toMatchObject({ maxBudgetUsd: 2, maxToolUseIterations: 15 });
+  });
+});
+
 describe('Telegram store ownership', () => {
   it.each(['sonnet', 'gpt-4o', 'grok-4'])('forwards shared state and closes only owned workspace for %s', async (model) => {
     const close = vi.fn(async () => { expect(mocks.workspaceClose).not.toHaveBeenCalled(); });

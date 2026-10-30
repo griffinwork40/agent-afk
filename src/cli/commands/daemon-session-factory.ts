@@ -1,5 +1,6 @@
 import { env } from '../../config/env.js';
-import { getApiKeyForModel, getDefaultSubagentModel, getMaxToolUseIterations, getMaxBudgetUsd, parseProvider } from '../shared-helpers.js';
+import { resolveUnattendedLimits } from '../../agent/unattended-limits.js';
+import { getApiKeyForModel, getDefaultSubagentModel, parseProvider } from '../shared-helpers.js';
 import type { AgentConfig, AgentModelInput } from '../../agent/types.js';
 import { AgentSession } from '../../agent/session.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
@@ -174,19 +175,9 @@ export function buildDaemonSessionFactory(
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     });
 
-    // Opt-in top-level tool-use-round ceiling. Explicit caller config wins;
-    // AFK_MAX_TOOL_USE_ITERATIONS is the fallback (undefined/<=0 → unlimited, no
-    // behavior change). Resolved after `...config` so an explicit value on the
-    // caller's config takes precedence over the env default. This is the
-    // production chokepoint the scheduler routes every task through, so it also
-    // caps scheduler/cron-spawned top-level sessions.
-    const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
-    // USD budget ceiling. Explicit caller config wins (set by session-spawn.ts
-    // from AFK_MAX_BUDGET_USD); getMaxBudgetUsd() is the re-read fallback so
-    // buildDaemonSessionFactory works in isolation (e.g. tests) without
-    // session-spawn.ts pre-populating config.maxBudgetUsd.
-    // undefined/NaN/negative → undefined = uncapped (no behavior change).
-    const daemonMaxBudgetUsd = config.maxBudgetUsd ?? getMaxBudgetUsd();
+    const unattendedLimits = resolveUnattendedLimits(
+      env.AFK_MAX_TOOL_USE_ITERATIONS, env.AFK_MAX_BUDGET_USD, config,
+    );
     const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
       ...config,
       provider,
@@ -205,10 +196,7 @@ export function buildDaemonSessionFactory(
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.
       surface: 'daemon',
-      ...(daemonMaxToolUseIterations !== undefined
-        ? { maxToolUseIterations: daemonMaxToolUseIterations }
-        : {}),
-      ...(daemonMaxBudgetUsd !== undefined ? { maxBudgetUsd: daemonMaxBudgetUsd } : {}),
+      ...unattendedLimits,
     }))), ownedTraceWriter);
     bound = session;
     const close = session.close.bind(session);
