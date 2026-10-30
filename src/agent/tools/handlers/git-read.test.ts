@@ -378,6 +378,16 @@ describe('planGitRead (#4058): new subcommand allowlist', () => {
     expect(plan.ok).toBe(true);
     expect(plan.ok && plan.argv).toContain('--not');
   });
+
+  it('branch accepts --show-current (skips forced --list)', () => {
+    const plan = planGitRead({ subcommand: 'branch', args: ['--show-current'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['branch', '--no-color', '--show-current']);
+  });
+
+  it('rev-list accepts --left-right', () => {
+    const plan = planGitRead({ subcommand: 'rev-list', args: ['--left-right', 'HEAD...HEAD~1'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['rev-list', '--left-right', 'HEAD...HEAD~1']);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -444,6 +454,21 @@ describe('planGitRead (#4227): model-quirk normalization', () => {
     expect(plan.ok && plan.argv).toEqual(['show', '--no-ext-diff', '--no-textconv', 'HEAD', '--']);
     const plan2 = planGitRead({ subcommand: 'log', args: ['log', '--oneline'] }, CWD);
     expect(plan2.ok && plan2.argv).toEqual(['log', '--no-ext-diff', '--no-textconv', '--oneline', '--']);
+  });
+
+  it('strips echoed forced tokens from args', () => {
+    // stash forces ['list'] — model sends {subcommand: "stash", args: ["list"]}
+    const stash = planGitRead({ subcommand: 'stash', args: ['list'] }, CWD);
+    expect(stash.ok && stash.argv).toEqual(['stash', 'list']);
+    // reflog forces ['show'] — model sends {subcommand: "reflog", args: ["show", "HEAD"]}
+    const reflog = planGitRead({ subcommand: 'reflog', args: ['show', 'HEAD'] }, CWD);
+    expect(reflog.ok && reflog.argv).toEqual(['reflog', 'show', 'HEAD']);
+    // worktree forces ['list'] — echoed
+    const wt = planGitRead({ subcommand: 'worktree', args: ['list'] }, CWD);
+    expect(wt.ok && wt.argv).toEqual(['worktree', 'list']);
+    // remote forces ['-v'] — echoed
+    const remote = planGitRead({ subcommand: 'remote', args: ['-v'] }, CWD);
+    expect(remote.ok && remote.argv).toEqual(['remote', '-v']);
   });
 });
 
@@ -644,5 +669,18 @@ describe('git_read handler (#4058 live repo)', () => {
     // cat-file --batch would be the most dangerous; policy must reject it
     const r = await h({ subcommand: 'cat-file', args: ['--batch'] }, signal);
     expect(r.isError).toBe(true);
+  });
+
+  it('branch --show-current returns the branch name', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'branch', args: ['--show-current'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content).trim().length).toBeGreaterThan(0);
+  });
+
+  it('stash with echoed "list" arg succeeds', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'stash', args: ['list'] }, signal);
+    expect(r.isError).toBeFalsy();
   });
 });
