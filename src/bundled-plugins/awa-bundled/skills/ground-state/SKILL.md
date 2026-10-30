@@ -107,7 +107,7 @@ After the snapshot is assembled, construct the **Brief Anchor** — a path-verif
 
 **Construction procedure:**
 
-1. From your state survey output, extract the verified `cwd` (from `git rev-parse --show-toplevel`), `branch` (from `git rev-parse --abbrev-ref HEAD`), and `HEAD` SHA (from `git rev-parse HEAD`).
+1. From your state survey output, extract the verified `cwd` (from `git rev-parse --show-toplevel` combined with `git rev-parse --show-prefix` to reconstruct the full session path: `<toplevel>/<prefix>`), `branch` (from `git rev-parse --abbrev-ref HEAD`), and `HEAD` SHA (from `git rev-parse HEAD`).
 2. From your infrastructure survey output, extract the 2–4 canonical file paths most relevant to the task. For each, verify existence with `glob` or `read_file`; include the path only if it exists. Paths that don't exist are omitted; if zero paths survive, set the list to `(none verified)`.
 3. Assemble the preamble block:
 

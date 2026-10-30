@@ -251,11 +251,15 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   // Contract: models naturally echo forced tokens (e.g. `git stash list`,
   // `git reflog show`). The policy prepends them unconditionally, so the
   // echo would be rejected as an unlisted option or bare revision. Strip
-  // all occurrences — forced tokens never collide with legitimate args.
+  // echoed tokens from the pre-separator segment only — post-separator
+  // tokens are pathspecs and must never be filtered.
   const forcedTokens = new Set(policy.forced);
+  const rawSep = argsIn.indexOf('--');
+  const preRaw = rawSep === -1 ? argsIn : argsIn.slice(0, rawSep);
+  const postRaw = rawSep === -1 ? [] : argsIn.slice(rawSep + 1);
   const argsClean = forcedTokens.size > 0
-    ? argsIn.filter((t) => !forcedTokens.has(t))
-    : argsIn;
+    ? preRaw.filter((t) => !forcedTokens.has(t))
+    : preRaw;
   // A pattern is only meaningful for grep. Models that fill optional string
   // fields with "" must not trip the grep-only guard below, so an
   // empty/whitespace-only pattern counts as absent for every other subcommand.
@@ -268,8 +272,7 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   // Accept git's own grammar: a literal `--` in `args` separates revisions
   // from pathspecs. Tokens after it join `paths` and are confined below like
   // any other path, so this widens nothing.
-  const sep = argsClean.indexOf('--');
-  const preSep = sep === -1 ? argsClean : argsClean.slice(0, sep);
+  const preSep = argsClean;
   // Normalise shorthand count flags to `--max-count=<N>` before validation —
   // only where the allowlist already admits --max-count=.
   const args: string[] = [];
@@ -306,7 +309,7 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   } else {
     args.push(...preSep);
   }
-  const paths = sep === -1 ? fieldPaths : [...fieldPaths, ...argsClean.slice(sep + 1)];
+  const paths = [...fieldPaths, ...postRaw];
   if (paths.length > MAX_ARGS) return { ok: false, error: `"paths" accepts at most ${MAX_ARGS} entries.` };
   for (const tok of args) {
     const err = checkToken(tok, policy, subcommand);

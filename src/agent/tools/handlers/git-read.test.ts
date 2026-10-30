@@ -470,6 +470,21 @@ describe('planGitRead (#4227): model-quirk normalization', () => {
     const remote = planGitRead({ subcommand: 'remote', args: ['-v'] }, CWD);
     expect(remote.ok && remote.argv).toEqual(['remote', '-v']);
   });
+
+  it('preserves post-separator pathspecs that match forced tokens', () => {
+    // diff forces ['--no-ext-diff', '--no-textconv']; a pathspec after '--'
+    // must not be stripped even if it matches a forced token name.
+    const plan = planGitRead({ subcommand: 'diff', args: ['HEAD', '--', '--no-textconv'], paths: [] }, CWD);
+    expect(plan.ok).toBe(true);
+    if (plan.ok) {
+      expect(plan.argv).toContain('--no-textconv'); // once as forced, once as pathspec
+      // The forced token appears at position 1 (after 'diff'), and the pathspec
+      // appears after '--' at the end
+      const lastIdx = plan.argv.lastIndexOf('--no-textconv');
+      const sepIdx = plan.argv.indexOf('--');
+      expect(lastIdx).toBeGreaterThan(sepIdx);
+    }
+  });
 });
 
 describe('planGitRead (#4058): injection rejection for new subcommands', () => {
