@@ -422,6 +422,22 @@ describe('aggregateGuardrailFalsePositives — byRule (#3849)', () => {
     const result = aggregateGuardrailFalsePositives(opts());
     expect(result.byRule['readonly-bash.pipe-to-shell']).toBe(2);
     expect(result.byRule['write-roots.outside']).toBe(1);
+    expect(result.totalTrips).toBe(0);
+    expect(result.denialBreakerTaggedFailures).toBe(0);
+  });
+
+  it.each(['constructor', 'toString', '__proto__'])('counts and serializes prototype-name ID %s safely', ruleId => {
+    writeSession('sess-prototype-a');
+    writeTrace('sess-prototype-a', [hookDecisionBlock(1, ruleId), hookDecisionBlock(2, ruleId)]);
+    writeSession('sess-prototype-b');
+    writeTrace('sess-prototype-b', [hookDecisionBlock(1, ruleId)]);
+
+    const { byRule } = aggregateGuardrailFalsePositives(opts());
+    expect(byRule[ruleId]).toBe(3);
+    expect(Object.entries(byRule)).toEqual([[ruleId, 3]]);
+    expect(Object.hasOwn(byRule, ruleId)).toBe(true);
+    expect(JSON.parse(JSON.stringify(byRule))).toEqual({ [ruleId]: 3 });
+    expect(Object.getPrototypeOf(byRule)).toBeNull();
   });
 
   it('ignores hook_decision block events without ruleId', () => {
@@ -467,10 +483,10 @@ describe('aggregateGuardrailFalsePositives — byRule (#3849)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: denialBreakerTrips blindspot measurement (#3849)
+// Tests: denialBreakerTaggedFailures blindspot measurement (#3849)
 // ---------------------------------------------------------------------------
 
-function denialBreakerTripEvent(seq: number, subagentId?: string): string {
+function denialBreakerTaggedFailureEvent(seq: number, subagentId?: string): string {
   return JSON.stringify({
     ts: NOW_ISO,
     seq,
@@ -490,16 +506,18 @@ function denialBreakerTripEvent(seq: number, subagentId?: string): string {
   });
 }
 
-describe('aggregateGuardrailFalsePositives — denialBreakerTrips (#3849)', () => {
-  it('counts denial-breaker tool_call completed events', () => {
+describe('aggregateGuardrailFalsePositives — denialBreakerTaggedFailures (#3849)', () => {
+  it('counts each completed tagged failure row, not distinct trips or actors', () => {
     writeSession('sess-db-1');
     writeTrace('sess-db-1', [
-      denialBreakerTripEvent(1, 'child-abc'),
-      denialBreakerTripEvent(2, 'child-xyz'),
+      denialBreakerTaggedFailureEvent(1, 'child-abc'),
+      denialBreakerTaggedFailureEvent(2, 'child-abc'),
     ]);
 
     const result = aggregateGuardrailFalsePositives(opts());
-    expect(result.denialBreakerTrips).toBe(2);
+    expect(result.denialBreakerTaggedFailures).toBe(2);
+    expect(result.totalTrips).toBe(0);
+    expect(result.byRule).toEqual({});
   });
 
   it('does not count denial-breaker events that are not errors', () => {
@@ -516,7 +534,15 @@ describe('aggregateGuardrailFalsePositives — denialBreakerTrips (#3849)', () =
     ]);
 
     const result = aggregateGuardrailFalsePositives(opts());
-    expect(result.denialBreakerTrips).toBe(0);
+    expect(result.denialBreakerTaggedFailures).toBe(0);
+  });
+
+  it('does not count started tool calls even when tagged as errors', () => {
+    writeSession('sess-db-started');
+    const event = JSON.parse(denialBreakerTaggedFailureEvent(1)) as { payload: { phase: string } };
+    event.payload.phase = 'started';
+    writeTrace('sess-db-started', [JSON.stringify(event)]);
+    expect(aggregateGuardrailFalsePositives(opts()).denialBreakerTaggedFailures).toBe(0);
   });
 
   it('does not count tool_call errors with other failureClass values', () => {
@@ -533,22 +559,22 @@ describe('aggregateGuardrailFalsePositives — denialBreakerTrips (#3849)', () =
     ]);
 
     const result = aggregateGuardrailFalsePositives(opts());
-    expect(result.denialBreakerTrips).toBe(0);
+    expect(result.denialBreakerTaggedFailures).toBe(0);
   });
 
-  it('accumulates denialBreakerTrips across multiple sessions', () => {
+  it('accumulates denialBreakerTaggedFailures across multiple sessions', () => {
     writeSession('sess-db-a');
-    writeTrace('sess-db-a', [denialBreakerTripEvent(1)]);
+    writeTrace('sess-db-a', [denialBreakerTaggedFailureEvent(1)]);
     writeSession('sess-db-b');
-    writeTrace('sess-db-b', [denialBreakerTripEvent(1), denialBreakerTripEvent(2)]);
+    writeTrace('sess-db-b', [denialBreakerTaggedFailureEvent(1), denialBreakerTaggedFailureEvent(2)]);
 
     const result = aggregateGuardrailFalsePositives(opts());
-    expect(result.denialBreakerTrips).toBe(3);
+    expect(result.denialBreakerTaggedFailures).toBe(3);
   });
 
-  it('zero-aggregate has denialBreakerTrips = 0', () => {
+  it('zero-aggregate has denialBreakerTaggedFailures = 0', () => {
     const z = zeroGuardrailFalsePositiveAggregates();
-    expect(z.denialBreakerTrips).toBe(0);
+    expect(z.denialBreakerTaggedFailures).toBe(0);
     expect(z.byRule).toEqual({});
   });
 });

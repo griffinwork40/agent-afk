@@ -75,6 +75,7 @@ async function emitHookDecisionFromOutcome(
         ? { blockedTool: ctx.toolName }
         : {}),
       ...(outcome.err.riskCategory !== undefined ? { riskCategory: outcome.err.riskCategory } : {}),
+      ...(outcome.err.ruleId !== undefined ? { ruleId: outcome.err.ruleId } : {}),
     });
     return;
   }
@@ -84,6 +85,7 @@ async function emitHookDecisionFromOutcome(
     decision: decision.decision,
     ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
     ...(decision.riskCategory !== undefined ? { riskCategory: decision.riskCategory } : {}),
+    ...(decision.ruleId !== undefined ? { ruleId: decision.ruleId } : {}),
     // PreToolUse context is counted by the dispatcher only after result delivery.
     ...(hookEvent !== 'PreToolUse' && decision.injectContext !== undefined
       ? { injectedContextBytes: Buffer.byteLength(decision.injectContext, 'utf8') }

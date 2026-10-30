@@ -127,16 +127,14 @@ export interface GuardrailFalsePositiveAggregates {
   byRule: Record<string, number>;
 
   /**
-   * Total `tool_call` completed events with `failureClass: 'denial-breaker'`
+   * Total completed `tool_call` error rows with `failureClass: 'denial-breaker'`
    * across all traced sessions in the window (#3849 blindspot measurement).
    *
-   * The denial circuit breaker aborts forked sub-agents that accumulate
-   * N consecutive path-approval read denials. These trips are distinct from
-   * `hook_block_repeat_tripped` and were not previously surfaced in insights.
-   * A non-zero count here signals forks being dispatched with too-narrow read
-   * roots.
+   * This counts tagged failures, NOT distinct breaker trip episodes. Multiple
+   * rows can carry the tag for one episode; this cannot measure trip frequency.
+   * Non-zero counts can prompt investigation of fork read-root scope.
    */
-  denialBreakerTrips: number;
+  denialBreakerTaggedFailures: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,8 +149,9 @@ export function zeroGuardrailFalsePositiveAggregates(): GuardrailFalsePositiveAg
     totalPreToolUseBlocks: 0,
     sessionsWithTrips: 0,
     sessionsScanned: 0,
-    byRule: {},
-    denialBreakerTrips: 0,
+    // Rule IDs are hook-provided strings, including prototype property names.
+    byRule: Object.create(null) as Record<string, number>,
+    denialBreakerTaggedFailures: 0,
   };
 }
 
@@ -292,7 +291,7 @@ export function aggregateGuardrailFalsePositives(
     }
 
     // Harvest PreToolUse block counts from hook_summary, per-ruleId counts
-    // from hook_decision blocks, and denial-breaker trips from tool_call events.
+    // from hook_decision blocks, and denial-breaker-tagged failures from tool_call events.
     for (const ev of events) {
       if (ev.kind === 'hook_summary') {
         agg.totalPreToolUseBlocks += sumPreToolUseBlocks(ev.payload as HookSummaryPayload);
@@ -310,7 +309,7 @@ export function aggregateGuardrailFalsePositives(
       if (ev.kind === 'tool_call') {
         const p = ev.payload as ToolCallPayload;
         if (p.phase === 'completed' && p.isError && p.failureClass === 'denial-breaker') {
-          agg.denialBreakerTrips++;
+          agg.denialBreakerTaggedFailures++;
         }
       }
     }

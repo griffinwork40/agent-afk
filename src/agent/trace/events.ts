@@ -161,7 +161,7 @@ export const HookDecisionPayloadSchema = z.object({
    * Present when the emitting hook sets a `ruleId` on its result — e.g.
    * `'readonly-bash.pipe-to-shell'`, `'write-roots.outside'`,
    * `'bash-restriction.restricted-path'`, `'afk-gate.release-boundary'`.
-   * Absent on pre-#3849 traces and pass-through (no-decision) events.
+   * Absent on pre-#3849 traces and untagged pass-through events.
    *
    * Consumers: the `afk insights` guardrail panel uses this field to produce
    * per-rule block counts. Writers set it via the `ruleId` field on the hook

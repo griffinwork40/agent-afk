@@ -52,6 +52,7 @@ function tallyKey(writer: TraceSink): object {
 export function isInformativeHookDecision(p: HookDecisionPayload): boolean {
   return (
     p.decision !== undefined ||
+    p.ruleId !== undefined ||
     (p.reason !== undefined && p.reason.length > 0) ||
     p.blockedTool !== undefined ||
     p.injectedContextBytes !== undefined ||

@@ -21,13 +21,14 @@ import { htmlEscape, safeNum, formatPct } from './html.helpers.js';
 
 /**
  * Render the guardrail false-positive metrics section.
- * Returns empty string when there are no trips (nothing to show).
+ * Returns empty string when no repeat trips, rule blocks, or denial-tagged failures exist.
  */
 export function renderGuardrailFalsePositives(agg: InsightAggregates): string {
   const gfp = agg.guardrailFalsePositives;
-  if (!gfp || gfp.totalTrips === 0) return '';
+  if (!gfp) return '';
 
   const ruleEntries = Object.entries(gfp.byRule ?? {}).sort((a, b) => b[1] - a[1]);
+  if (gfp.totalTrips === 0 && ruleEntries.length === 0 && (gfp.denialBreakerTaggedFailures ?? 0) === 0) return '';
   const ruleTable = ruleEntries.length > 0
     ? `<h3>Blocks by Rule ID</h3>
     <table class="data-table"><thead><tr><th>Rule ID</th><th>Block Count</th></tr></thead><tbody>${
@@ -38,8 +39,9 @@ export function renderGuardrailFalsePositives(agg: InsightAggregates): string {
     <p class="caption">Per-rule counts from <code>hook_decision</code> events with <code>ruleId</code> set. Only rules that have fired appear. Hooks that predate #3849 emit no <code>ruleId</code> and are not shown here.</p>`
     : `<p class="caption">No ruleId-tagged block events found in this window. Hooks must set <code>ruleId</code> on their result for per-rule breakdown (see #3849).</p>`;
 
-  const denialRow = (gfp.denialBreakerTrips ?? 0) > 0
-    ? `<div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.denialBreakerTrips))}</div><div class="metric-label">Denial-Breaker Trips</div></div>`
+  const denialRow = (gfp.denialBreakerTaggedFailures ?? 0) > 0
+    ? `<div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.denialBreakerTaggedFailures))}</div><div class="metric-label">Denial-Breaker Tagged Failures</div>
+      <p class="caption">Completed tool-call error rows tagged <code>denial-breaker</code>, not distinct breaker trip episodes.</p></div>`
     : '';
 
   return `

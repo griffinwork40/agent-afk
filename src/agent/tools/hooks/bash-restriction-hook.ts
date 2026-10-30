@@ -288,6 +288,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     ) {
       return {
         decision: 'block',
+        ruleId: 'bash-restriction.sensitive-interpreter',
         reason:
           'Interpreter one-liner (python -c, node -e, sh -c, ...) referencing a sensitive path ' +
           '(SSH keys, cloud credentials, GPG, /etc/shadow, ...) is blocked by the path-approval ' +
@@ -327,6 +328,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
         if (!headless) {
           return {
             decision: 'block',
+            ruleId: 'bash-restriction.restricted-path',
             reason:
               `Bash command references a restricted path (${sub}). ` +
               'For sensitive paths, use read_file / write_file / edit_file — ' +
@@ -338,6 +340,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
         // Headless: no interactive approval path; block unconditionally.
         return {
           decision: 'block',
+          ruleId: 'bash-restriction.restricted-path',
           reason:
             `Bash command references a restricted path (${sub}) on a headless surface ` +
             '(daemon / afk chat / subagent / thread). Direct shell access to credential and config ' +
