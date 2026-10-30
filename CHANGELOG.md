@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.343.0] - 2026-10-30
+
 ### Added
 - compute outcomes once at SessionEnd for receipt v3 and outcome store (99ee9bb2d)
 - pure computeOutcomes and OutcomesV1 schema with git-range adapter (39e2d5124)
