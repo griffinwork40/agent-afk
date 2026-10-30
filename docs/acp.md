@@ -21,7 +21,7 @@ skills, state — is inherited automatically.
 |---|---|---|
 | `-m, --model <model>` | configured default | Model to use for every session |
 | `--max-turns <n>` | `10` | Maximum agent turns per `session/prompt` call |
-| `--dangerously-skip-permissions` | off | Bypass all permission prompts (use only in trusted environments) |
+| `--dangerously-skip-permissions` | off | Force `bypassPermissions` for every session created by this server (see [Permissions](#permissions)) |
 
 ## Wire format
 
@@ -95,6 +95,11 @@ server → client
 
 ### `session/update` notification shapes
 
+Every notification has the envelope
+`{"jsonrpc":"2.0","method":"session/update","params":{"type":"update","update":{...},"sessionId":"<uuid>"}}`.
+`params.sessionId` is always the ACP session ID returned by `session/new`; it is
+outside `params.update`. The table describes fields inside `params.update`:
+
 | `update.type` | Extra fields | Description |
 |---|---|---|
 | `text_delta` | `delta: string` | Incremental assistant text |
@@ -105,7 +110,24 @@ server → client
 The turn ends with a JSON-RPC **response** (carries the original request `id`), not a notification:
 
 ```json
-{"jsonrpc":"2.0","id":3,"result":{"type":"done","update":{"type":"done","sessionId":"<uuid>","costUsd":0.003},"text":"Hi …"}}
+{"jsonrpc":"2.0","id":3,"result":{"type":"done","update":{"type":"done","costUsd":0.003},"text":"Hi …"}}
+```
+
+Both final-response examples show a turn with cost metadata but no session ID
+metadata. `result.update.sessionId` is optional: it is included only when the
+stream's `done` event supplies `metadata.sessionId`, and reflects that metadata,
+not the outer ACP session ID used by notifications. `result.update.costUsd` is
+also optional and is included only when the `done` metadata contains a numeric
+`costUsd`. Without either metadata field, `result.update` is just
+`{"type":"done"}`.
+
+Although the source `AcpUpdateType` union includes `error`, provider errors are
+**not** sent as `session/update` notifications. They terminate the prompt with a
+JSON-RPC error response carrying the original request `id`; internal details are
+logged to stderr rather than forwarded to the client:
+
+```json
+{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"Internal server error"}}
 ```
 
 ### Multi-turn sessions
@@ -215,9 +237,11 @@ you can bypass all prompts:
 afk acp --dangerously-skip-permissions
 ```
 
-> **Warning:** this flag bypasses all safety gates.  Only use it in trusted,
-> sandboxed environments where the agent has been granted the relevant
-> permissions out-of-band.
+> **Warning:** this is a server-wide setting: every session created by this
+> server runs in `bypassPermissions` mode, skipping all permission prompts.
+> It is not scoped to an individual tool or request, and another permission
+> system does not restore afk's permission checks. Use only in a trusted,
+> externally sandboxed environment; the flag itself provides no sandbox.
 
 ## Testing manually
 
@@ -235,7 +259,7 @@ The ACP adapter is split across four files to stay under the 350-line ceiling:
 |---|---|
 | `src/cli/commands/acp.ts` | Commander registration (~58 LOC) |
 | `src/cli/commands/acp.server.ts` | JSON-RPC 2.0 stdio loop + method dispatch |
-| `src/cli/commands/acp.server.protocol.ts` | Wire-format types, error codes, write helpers |
+| `src/cli/commands/acp.server.protocol.ts` | Wire-format types, error codes, write helpers, and the 1 MiB (`MAX_LINE_BYTES`) request-line guard constant (enforced before JSON parsing by the server) |
 | `src/cli/commands/acp.session.ts` | `AgentSession` construction and teardown |
 
 See also: [`docs/headless.md`](headless.md) for the lower-level `afk chat --format stream-json` surface.

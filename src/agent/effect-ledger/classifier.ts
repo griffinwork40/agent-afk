@@ -61,6 +61,8 @@ const EXTERNAL_BASH_PATTERNS: readonly RegExp[] = [
   /\bgh\s+(pr|issue|release|repo)\s+(create|edit|merge|close|delete|push|comment)/i,
   // git push (including --force variants)
   /\bgit\s+push\b/i,
+  // Service lifecycle operations persist host state (status/logs are read-only).
+  /\bafk\s+service\s+(?:install|uninstall|start|stop|restart)\b/i,
   // curl / wget POSTing to external APIs
   /\bcurl\b.*(?:\s-X\s*POST|-XPOST|--request\s+POST|-d\s|--data\b|--data-raw\b|-F\s)/i,
   /\bwget\b.*\s(?:--post-data\b|--post-file\b)/i,

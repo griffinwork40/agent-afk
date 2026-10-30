@@ -24,6 +24,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getEffectLedgerPath } from '../../paths.js';
 import { collectAsyncIter, readJsonlFile } from '../../utils/jsonl.js';
+import { boundedLines, type InputBudget } from '../outcomes/outcomes-input.js';
 import type {
   EffectRecord,
   EffectQuery,
@@ -242,4 +243,52 @@ export class EffectStore {
   async all(): Promise<EffectRecord[]> {
     return this.query();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Bounded per-session reader (outcomes computation at SessionEnd)
+// ---------------------------------------------------------------------------
+
+/** Options for {@link readEffectsForSession}. */
+export interface ReadEffectsForSessionOptions {
+  /** Ledger path override (tests). Defaults to `getEffectLedgerPath()`. */
+  path?: string;
+  /** Stop after this many matching rows. Default 2000. */
+  maxRecords?: number;
+  /** Shared SessionEnd deadline; abort/size exhaustion must not masquerade as empty evidence. */
+  budget?: InputBudget;
+}
+
+/**
+ * Stream the ledger and return the raw rows (pending + settled, unfolded)
+ * whose `sessionId` matches. The file can be MBs, so it is streamed line by
+ * line rather than loaded whole. ENOENT yields []. Other I/O errors
+ * propagate — callers on the teardown path must catch.
+ */
+async function* readBoundedEffects(path: string, budget: InputBudget): AsyncGenerator<EffectRecord> {
+  for await (const line of boundedLines(path, budget)) {
+    let rec: unknown;
+    try { rec = JSON.parse(line); } catch { continue; }
+    if (isEffectRecord(rec)) yield rec;
+  }
+}
+
+export async function readEffectsForSession(
+  sessionId: string,
+  opts: ReadEffectsForSessionOptions = {},
+): Promise<EffectRecord[]> {
+  const max = opts.maxRecords ?? 2000;
+  const out: EffectRecord[] = [];
+  const path = opts.path ?? getEffectLedgerPath();
+  const iter = opts.budget ? readBoundedEffects(path, opts.budget)
+    : readJsonlFile<EffectRecord>(path, { guard: isEffectRecord });
+  for await (const rec of iter) {
+    if (rec.sessionId !== sessionId) continue;
+    out.push(rec);
+    if (out.length >= max) {
+      if (opts.budget) throw new Error('outcomes ledger record limit exceeded');
+      break;
+    }
+  }
+  return out;
 }

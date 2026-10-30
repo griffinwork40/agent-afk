@@ -9,8 +9,8 @@
  * pause that their typed message ended) is therefore invisible to them: the
  * store already holds account B, nothing changes, and the SDK client, which
  * caches its bearer token at construction, keeps sending account A's token
- * and re-hitting the same limit. Before this module the only way out was a
- * manual `/reauth` and then a fresh message.
+ * and re-hitting the same limit. This module eliminates that failure class
+ * by catching up automatically at every turn start and usage-limit check.
  *
  * Two call sites, one comparison ({@link storeAheadOfClient}):
  *   - `source: 'usage-limit'` — once per turn, when a usage-limit 429 is
@@ -19,7 +19,7 @@
  *   - `source: 'turn-start'` — at the top of every turn
  *     (`RetryLayer.turnWithRetries`), so an account switch with NO error is
  *     picked up on the next message on every surface (REPL, Telegram, web),
- *     not only after a 401/429 or a manual `/reauth`.
+ *     not only after a 401/429.
  *
  * Returns `false` (callers proceed exactly as before) when:
  *   - the session is not OAuth, or its credential came from an env var

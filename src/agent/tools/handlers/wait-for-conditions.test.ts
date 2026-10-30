@@ -22,11 +22,19 @@ vi.mock('../../../http-client/egress-guard.js', () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Mock the risk classifier so command-gate tests are deterministic.
+// Mock shared analysis risk only; retain real mutation facets for gate tests.
 // ---------------------------------------------------------------------------
-vi.mock('../../risk-classifier.js', () => ({
-  classifyRisk: vi.fn().mockReturnValue('safe'),
-}));
+const analysisState = vi.hoisted(() => ({ risk: 'safe' }));
+vi.mock('../../command-classifier.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../command-classifier.js')>();
+  return {
+    ...actual,
+    analyzeCommand: vi.fn((command: string) => ({
+      ...actual.analyzeCommand(command),
+      risk: { level: analysisState.risk, category: 'unknown' },
+    })),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Mock fs/promises
@@ -53,14 +61,14 @@ vi.mock('./_cwd-utils.js', () => ({
 
 import { evaluateUrl, evaluateFile, evaluateProcess, evaluateCommand } from './wait-for-conditions.js';
 import { guardedFetch, EgressBlockedError } from '../../../http-client/egress-guard.js';
-import { classifyRisk } from '../../risk-classifier.js';
+import { analyzeCommand } from '../../command-classifier.js';
 import * as fsPromises from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { resolveAndContain } from './_cwd-utils.js';
 import { SpawnedPidRegistry } from './pid-registry.js';
 
 const mockGuardedFetch = vi.mocked(guardedFetch);
-const mockClassifyRisk = vi.mocked(classifyRisk);
+const mockAnalyzeCommand = vi.mocked(analyzeCommand);
 const mockStat = vi.mocked(fsPromises.stat);
 const mockReadFile = vi.mocked(fsPromises.readFile);
 const mockExecSync = vi.mocked(execSync);
@@ -76,7 +84,7 @@ const neverSignal = new AbortController().signal;
 describe('evaluateUrl', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockClassifyRisk.mockReturnValue('safe');
+    analysisState.risk = 'safe';
   });
 
   afterEach(() => {
@@ -404,7 +412,7 @@ describe('evaluateProcess', () => {
 
 describe('evaluateCommand', () => {
   beforeEach(() => {
-    mockClassifyRisk.mockReturnValue('safe');
+    analysisState.risk = 'safe';
   });
 
   afterEach(() => {
@@ -432,7 +440,7 @@ describe('evaluateCommand', () => {
 
   it('blocks high-risk commands before execSync is called', () => {
     // Simulate the classifier flagging a dangerous command (rm -rf, sudo, etc.)
-    mockClassifyRisk.mockReturnValue('high');
+    analysisState.risk = 'high';
     const result = evaluateCommand({ type: 'command', command: 'rm -rf /' });
     expect(result.met).toBe(false);
     expect(result.detail).toContain('blocked by risk classifier');
@@ -441,14 +449,11 @@ describe('evaluateCommand', () => {
     expect(mockExecSync).not.toHaveBeenCalled();
   });
 
-  it('classifies using the bash tool name so the same bash rule table applies', () => {
+  it('reuses the shared command analysis for the poll gate', () => {
     mockExecSync.mockReturnValue(Buffer.from(''));
     evaluateCommand({ type: 'command', command: 'echo hello', cwd: '/tmp' });
-    expect(mockClassifyRisk).toHaveBeenCalledWith(
-      'bash',
-      { command: 'echo hello' },
-      expect.objectContaining({ cwd: '/tmp' }),
-    );
+    expect(mockAnalyzeCommand).toHaveBeenCalledWith('echo hello');
+    expect(mockAnalyzeCommand).toHaveBeenCalledTimes(1);
   });
 
   // #2913: Confirm gh run list is allowed through to execSync (not blocked).
@@ -456,21 +461,18 @@ describe('evaluateCommand', () => {
   // test pins that evaluateCommand passes 'gh run list' to the classifier and
   // executes it when the classifier returns 'safe'.
   it('#2913: gh run list — passes through to execSync when classifier returns safe', () => {
-    // mockClassifyRisk defaults to 'safe' in beforeEach.
+    // Shared analysis risk defaults to 'safe' in beforeEach.
     mockExecSync.mockReturnValue(Buffer.from('[{"status":"completed"}]'));
     const result = evaluateCommand({ type: 'command', command: 'gh run list --limit 1 --json status' });
     expect(result.met).toBe(true);
-    expect(mockClassifyRisk).toHaveBeenCalledWith(
-      'bash',
-      { command: 'gh run list --limit 1 --json status' },
-      expect.any(Object),
-    );
+    expect(mockAnalyzeCommand).toHaveBeenCalledWith('gh run list --limit 1 --json status');
+    expect(mockAnalyzeCommand).toHaveBeenCalledTimes(1);
     expect(mockExecSync).toHaveBeenCalledWith(expect.stringContaining('gh run list'), expect.any(Object));
   });
 
   // H-1: Medium-risk commands must now be blocked (only 'safe' is allowed)
   it('H-1: blocks medium-risk commands before execSync is called', () => {
-    mockClassifyRisk.mockReturnValue('medium');
+    analysisState.risk = 'medium';
     const result = evaluateCommand({ type: 'command', command: 'mv source destination' });
     expect(result.met).toBe(false);
     expect(result.detail).toContain('blocked by risk classifier (medium risk)');
@@ -479,7 +481,7 @@ describe('evaluateCommand', () => {
   });
 
   it('H-1: blocks unknown-risk commands (defaults to medium) before execSync is called', () => {
-    mockClassifyRisk.mockReturnValue('unknown' as 'safe');
+    analysisState.risk = 'unknown';
     const result = evaluateCommand({ type: 'command', command: 'some-unknown-cmd' });
     expect(result.met).toBe(false);
     expect(result.detail).toContain('blocked by risk classifier');

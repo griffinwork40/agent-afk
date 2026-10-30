@@ -68,6 +68,7 @@ import { MEMORY_GC_ENV_REGISTRY } from './env.memory-gc.js';
 import { VITALS_ENV_REGISTRY } from './env.vitals.js';
 import { TOOLS_ENV_REGISTRY } from './env.tools.js';
 import { CONTINUATION_ENV_REGISTRY } from './env.continuation.js';
+import { EPISODE_ENV_REGISTRY } from './env.episode.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -190,6 +191,9 @@ export const ENV_REGISTRY = [
 
   // ── Subagent continuation chain limits (env.continuation.ts) ─────────────
   ...CONTINUATION_ENV_REGISTRY,
+
+  // ── Episode synthesis (env.episode.ts) ────────────────────────────────────
+  ...EPISODE_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];
 
 /**

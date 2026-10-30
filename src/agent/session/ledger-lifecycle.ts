@@ -16,7 +16,7 @@ import { sessionLabelFromTracePath } from '../../paths.js';
 import { SessionLedgerWriter } from '../session-ledger.js';
 import type { OutputEvent } from '../types.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
-import { writeSessionMeta } from './session-meta.js';
+import { captureGitHead, writeSessionMeta, type SessionStart } from './session-meta.js';
 
 /**
  * Inputs for {@link LedgerLifecycle.ensure}. `getMetadata` is a lazy accessor so
@@ -41,6 +41,16 @@ export class LedgerLifecycle {
   private writer: SessionLedgerWriter | null = null;
   /** Set true once ledger creation has been attempted (success or not). */
   private initAttempted = false;
+  private start: { cwd: string; gitHead: SessionStart } | undefined;
+
+  /** Capture before provider initialization or SessionStart hooks can change HEAD. */
+  initialize(ctx: { depth?: number; parentSessionId?: string; cwd?: string }): void {
+    this.start = undefined;
+    if (ctx.depth !== undefined || ctx.parentSessionId !== undefined) return;
+    if (env.AFK_SESSION_LEDGER_DISABLED === '1') return;
+    const cwd = ctx.cwd ?? process.cwd();
+    this.start = { cwd, gitHead: captureGitHead(cwd) };
+  }
 
   /**
    * Create the ledger writer on first use.
@@ -65,10 +75,10 @@ export class LedgerLifecycle {
     const traceLabel = sessionLabelFromTracePath(ctx.tracePath);
     const model = meta.model ?? ctx.fallbackModel;
     // Invariant: journal meta always carries cwd so receipts and facets can
-    // attribute sessions to a directory. The fallback to process.cwd() lives
-    // HERE, not in config.cwd at the surface sites, because config.cwd===undefined
+    // attribute sessions to a directory. Prefer the initialization cwd paired
+    // with the git snapshot. Do not set config.cwd at surface sites: undefined
     // marks an UNCONFINED session for tool containment (see _cwd-utils.ts:119-128).
-    const effectiveCwd = meta.cwd ?? process.cwd();
+    const effectiveCwd = this.start?.cwd ?? meta.cwd ?? process.cwd();
     writer.record({
       kind: 'meta',
       sessionId: id,
@@ -88,6 +98,9 @@ export class LedgerLifecycle {
       model,
       cwd: effectiveCwd,
       traceLabel,
+      // Persist the initialization baseline, never recapture on the first turn.
+      // No snapshot means initialization did not opt into git tracking.
+      gitHead: this.start?.gitHead,
     });
   }
 

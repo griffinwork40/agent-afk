@@ -26,6 +26,9 @@ export type CwdDependentsFactory = (newCwd: string) => {
 export interface CwdDependentsFactoryArgs {
   stableSystemPrefix: StableSystemParts;
   config: AgentConfig;
+  /** The resolved (minted or resumed) session id — use instead of
+   * `config.sessionId` which is only populated on `--resume` paths. */
+  resolvedSessionId: string | undefined;
   surface: string;
   runtimeStateSource: RuntimeStateSource;
   getCurrentCwd: () => string | undefined;
@@ -103,7 +106,7 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
     //    line to the launch directory for the rest of the session.
     const newUserSystem = assembleSystemPrompt(args.stableSystemPrefix, newCwd, {
       surface: args.surface,
-      sessionId: args.config.sessionId,
+      sessionId: args.resolvedSessionId,
       depth: args.config.depth,
       maxDepth: args.config.maxDepth,
       workspace: args.runtimeStateSource.getWorkspace(),
@@ -129,7 +132,7 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
       readRoots: args.sharedReadRoots,
       writeRoots: args.sharedWriteRoots,
       ...(args.config.env !== undefined ? { env: args.config.env } : {}),
-      sessionId: args.config.sessionId,
+      sessionId: args.resolvedSessionId,
       parentSessionId: args.config.parentSessionId,
       // #2442: keep root attribution across a cwd re-anchor (parity with
       // dispatcher-wiring.ts), else a depth-2 child's artifacts are lost.

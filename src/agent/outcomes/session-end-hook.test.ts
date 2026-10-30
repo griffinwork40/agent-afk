@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createOutcomeSessionEndHook } from './session-end-hook.js';
+import { artifactsFromOutcomes, createOutcomeSessionEndHook } from './session-end-hook.js';
 import { readRecord, writeRecord, appendArtifacts, upsertVotes } from './store.js';
 import type { VerifiedOutcome } from './schema.js';
 
@@ -287,5 +287,51 @@ describe('closureFromTrace non-normal reasons map to unknown (finding #1)', () =
     );
     const rec = readRecord('sess-trace-normal', tmpDir);
     expect(rec?.closure_reason).toBe('normal');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OutcomesV1 → legacy artifacts mapping + persistence
+// ---------------------------------------------------------------------------
+
+const OUT = {
+  schemaVersion: 1 as const,
+  cwd: '/repo',
+  startHead: null,
+  endHead: 'b'.repeat(40),
+  commits: [
+    { sha: 'b'.repeat(40), repo: '/repo', subject: 's', source: 'git_log' as const },
+    { sha: 'c'.repeat(7), repo: '/repo', subject: 't', source: 'effect_ledger' as const },
+  ],
+  prs: [{ url: 'https://github.com/o/r/pull/3', action: 'create' as const }],
+  filesChanged: [],
+  filesChangedTruncated: false,
+  schedules: [],
+  services: [],
+  terminalState: null,
+};
+
+describe('artifactsFromOutcomes', () => {
+  it('maps commits to shas, prs to urls, repo to cwd', () => {
+    expect(artifactsFromOutcomes(OUT)).toEqual({
+      commits: ['b'.repeat(40), 'ccccccc'],
+      prs: ['https://github.com/o/r/pull/3'],
+      repo: '/repo',
+      commitRepos: { ['b'.repeat(40)]: '/repo', ccccccc: '/repo' },
+    });
+  });
+
+  it('upsertVotes persists the full outcomes object and backfills a child skeleton', () => {
+    appendArtifacts('sess-o', { commits: ['d'.repeat(7)] }, { outcomesDir: tmpDir });
+    upsertVotes(
+      'sess-o',
+      [],
+      { ...makeOutcome('sess-o'), artifacts: artifactsFromOutcomes(OUT), outcomes: OUT },
+      { outcomesDir: tmpDir },
+    );
+    const rec = readRecord('sess-o', tmpDir)!;
+    expect(rec.outcomes).toEqual(OUT);
+    expect(rec.artifacts.commits).toEqual(['ddddddd', 'b'.repeat(40), 'ccccccc']);
+    expect(rec.artifacts.repo).toBe('/repo');
   });
 });

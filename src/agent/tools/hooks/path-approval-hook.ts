@@ -62,6 +62,7 @@ import {
   PROTECTED_CREDENTIAL_PATH_MARKER,
 } from '../handlers/read-denylist.js';
 import { decidePathAccess } from '../handlers/path-policy.js';
+import { safeRealpath } from '../handlers/write-denylist.js';
 import { buildForkPathDenialReason } from './fork-denial-remedy.js';
 import type { HookContext, HookDecision, HookHandler } from '../../hooks.js';
 import {
@@ -234,59 +235,35 @@ async function preToolUseImpl(
     ? candidate
     : path.resolve(grants.resolveBase ?? cwd ?? process.cwd(), candidate);
 
-  // (1) Unconditional read-denylist floor. Secret/credential paths (~/.ssh,
-  // ~/.afk/config, …) are blocked outright for reads — never prompted, never
-  // bypassed — for top-level sessions and forks alike. Mirrors the floor in
-  // resolveAndContain (_cwd-utils.ts) so the hook blocks cleanly instead of
-  // prompting-then-letting-the-handler-throw. `~/.afk/state` is intentionally
-  // NOT denied (forks legitimately read skill-preflight/todos/transcripts).
-  //
-  // Routed through `decidePathAccess` (#3847 first slice) so this hook and
-  // `resolveAndContain` share one canonicalization rather than each calling
-  // `isReadDenied` independently with their own `path.resolve()` anchors.
-  const decision = decidePathAccess(resolvedAbs, mode);
-  if (decision.kind === 'deny') {
+  // The same floor-then-roots policy as typed handlers. A credential denial
+  // is terminal for BOTH operations: do not offer a grant for a protected write.
+  // Do not pass cwd as fallback confinement: undefined resolveBase is unconfined.
+  const decision = decidePathAccess(resolvedAbs, mode, grants);
+  if (decision.kind === 'deny' && decision.reason === 'credential') {
+    // Use the symlink-resolved (canonical) form so the log and block reason
+    // always name the real credential target, not the symlink that pointed to it.
+    const canonicalAbs = safeRealpath(resolvedAbs);
+    if (mode === 'write') {
+      // eslint-disable-next-line no-console
+      console.error(`[path-approval] surface=${opts.surface} tool=${context.toolName} path=${canonicalAbs} outcome=write-denylist`);
+      return { decision: 'block', reason: `Access denied: refusing to write to protected path: ${canonicalAbs} (matches denylist entry: ${decision.matched}).` };
+    }
     // eslint-disable-next-line no-console
     console.error(
-      `[path-approval] surface=${opts.surface} tool=${context.toolName} path=${resolvedAbs} outcome=read-denylist`,
+      `[path-approval] surface=${opts.surface} tool=${context.toolName} path=${canonicalAbs} outcome=read-denylist`,
     );
     return {
       decision: 'block',
       reason:
-        `Access denied: ${resolvedAbs} ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
+        `Access denied: ${canonicalAbs} ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
         `(${READ_DENYLIST_ENTRY_MARKER} ${decision.matched}). This path is never readable — ` +
         `it holds credentials, not task data; do not retry.`,
     };
   }
 
-  // (2) Bypass mode (bypassPermissions): no containment prompt.
-  if (grants.allowAll === true) return {};
-
-  // (3) Unconfined session: `resolveBase` is deliberately unset — a top-level
-  // `afk`/`afk i` with no worktree, or a fork inheriting that read-open scope.
-  // The file-tool HANDLER (resolveAndContain, _cwd-utils.ts:107-119) bypasses
-  // containment for exactly this case, so the hook MUST agree. The prior
-  // `resolveBase: grants.resolveBase ?? cwd` fabricated a concrete base from
-  // getCwd() (the REPL wires it to `effectiveCwd ?? process.cwd()`,
-  // bootstrap.ts), turning an unconfined session into a confined one whose
-  // readRoots were `[]` — so EVERY typed-file read was "restricted", and forks
-  // (which cannot prompt) auto-denied all of them. Honoring undefined
-  // resolveBase here — matching the handler's own documented invariant — is the
-  // fix for the sub-agent deny-all.
-  if (grants.resolveBase === undefined) return {};
-
-  // (4) Confined session: reproduce the handler's containment verdict. Pass
-  // grants.resolveBase directly; it is defined on this branch (checked above).
-  const result = wouldBeRestricted(
-    candidate,
-    {
-      resolveBase: grants.resolveBase,
-      readRoots: grants.readRoots,
-      writeRoots: grants.writeRoots,
-    },
-    mode,
-  );
-  if (!result.restricted) return {};
+  // Bypass/unconfined/contained paths were already decided by shared policy.
+  if (decision.kind === 'allow') return {};
+  const result = decision;
 
   // A forked sub-agent has no human relationship of its own and must not prompt
   // the operator for out-of-root access — the prompt would surface on the
