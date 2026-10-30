@@ -74,6 +74,7 @@ function makeExecutor(budget: DelegationBudget): SubagentExecutor {
       abortSignal: new AbortController().signal,
     } as any,
     defaultConfig: { apiKey: 'test-key', systemPrompt: 'test system prompt' },
+    defaultSubagentModel: 'haiku',
     depth: 0,
     delegationBudget: budget,
   };
