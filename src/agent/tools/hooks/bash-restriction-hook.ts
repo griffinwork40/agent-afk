@@ -109,6 +109,7 @@ import { escapeRegExp } from '../../../utils/regexp.js';
 import { homeAliasSpellings, restrictedRootSpellings } from './bash-restriction-hook.win32-spellings.js';
 import { isProvablyReadOnly } from './bash-restriction-hook.readonly-gate.js';
 import { EXACT_REF_TAIL, scrubSshPubKeyRefs } from './bash-restriction-hook.pubkey-scrub.js';
+import { safeRealpath } from '../handlers/write-denylist.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -388,23 +389,38 @@ function sanctionedAlternativeHint(sub: string): string {
     );
   }
 
-  // ~/.afk/config — credential tree; config_get exposes masked values safely.
-  // getAfkConfigDir() → getAfkHome() throws on a malformed AFK_HOME; swallow
-  // it here so the hint degrades gracefully rather than propagating (same
-  // fail-safe posture as configuredAfkHome() in afk-home-refs.ts).
-  let configDir: string | undefined;
-  try { configDir = getAfkConfigDir(); } catch { configDir = undefined; }
-  if (configDir !== undefined) {
-    // Normalize both sides to forward slashes so the comparison is correct on
-    // Windows, where getAfkConfigDir() may return back-slash-separated paths
-    // while `sub` (sourced from command text) typically uses forward slashes.
-    const normSub = sub.replace(/\\/g, '/');
-    const normDir = configDir.replace(/\\/g, '/');
-    if (normSub !== normDir && !normSub.startsWith(normDir + '/')) {
-      configDir = undefined;
-    }
-  }
-  if (configDir !== undefined) {
+  // Contract: ~/.afk/config — credential tree; config_get exposes masked
+  // values safely. getAfkConfigDir() → getAfkHome() throws on a malformed
+  // AFK_HOME; swallow it so the hint degrades gracefully rather than
+  // propagating (same fail-safe posture as configuredAfkHome()).
+  //
+  // `sub` arrives in multiple spellings for the AFK config dir:
+  //   1. The raw `getAfkConfigDir()` path (AFK_HOME/config) — when the
+  //      matched restricted root came from relocatedAfkSensitiveRoots().
+  //   2. The safeRealpath-resolved form of the BUILTIN_READ_DENYLIST entry
+  //      (homedir()/.afk/config) — always present in the builtin floor,
+  //      regardless of AFK_HOME. When AFK_HOME differs from homedir()/.afk
+  //      (e.g. tests redirect AFK_HOME to a tmpdir sentinel), the matched sub
+  //      is the realpath of homedir()/.afk/config, which getAfkConfigDir()
+  //      alone does not return — causing the hint to be silently suppressed.
+  // Collect ALL candidate config-dir spellings (raw + realpath) for BOTH the
+  // AFK_HOME-based and the default-home-based forms, then check if sub matches
+  // any. Forward-slash normalization makes this cross-platform correct.
+  const normSub = sub.replace(/\\/g, '/');
+  // Default-home form: keyed to homedir()/.afk/config, which mirrors the
+  // BUILTIN_READ_DENYLIST template literal. path.join is used (not a literal
+  // `~/.afk/` string) so the result is platform-correct on Windows too.
+  const defaultConfigDir = path.join(homedir(), '.afk', 'config');
+  const configDirCandidates: string[] = [defaultConfigDir, safeRealpath(defaultConfigDir)];
+  try {
+    const akd = getAfkConfigDir();
+    configDirCandidates.push(akd, safeRealpath(akd));
+  } catch { /* malformed AFK_HOME — skip */ }
+  const isAfkConfigSub = configDirCandidates.some((dir) => {
+    const nd = dir.replace(/\\/g, '/');
+    return normSub === nd || normSub.startsWith(nd + '/');
+  });
+  if (isAfkConfigSub) {
     return (
       'To read AFK config values use the `config_get` tool (values are masked). ' +
       'To write config use `afk config set` or the `config_set` tool. '
