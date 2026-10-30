@@ -214,7 +214,13 @@ function formatLspSymbols(symbols: RawSymbol[], rootDir: string): string {
     } catch {
       continue;
     }
-    const rel = path.relative(rootDir, filePath).split(path.sep).join('/');
+    // Normalize both sides to forward slashes before computing the relative
+    // path so that comparisons work correctly on Windows, where fileURLToPath
+    // returns backslash-separated native paths but rootDir may be expressed
+    // with forward slashes (e.g. from LSP URIs or test fixtures).
+    const normalRoot = rootDir.split(path.sep).join('/');
+    const normalFile = filePath.split(path.sep).join('/');
+    const rel = path.posix.relative(normalRoot, normalFile);
     if (rel.startsWith('..') || hasDeniedSegment(rel)) continue;
 
     if (!byFile.has(rel)) byFile.set(rel, []);
