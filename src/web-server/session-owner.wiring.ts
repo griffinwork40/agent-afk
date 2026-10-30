@@ -114,6 +114,10 @@ export async function wireWebSession(
     nestedCwd: cwd,
     ...(traceSink !== undefined ? { traceWriter: traceSink, skillTraceWriter: traceSink } : {}),
     backgroundRegistry,
+    // Contract: web sessions always deliver background results (the SSE channel
+    // pushes them on completion). autoWake is intentionally omitted — no idle-wake
+    // hook exists on the web surface yet, so 'next-message' is the honest default.
+    backgroundAutoDeliver: () => true,
     workspaceStore,
   });
 
