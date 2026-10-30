@@ -144,7 +144,7 @@ describe('receipt regenerate (filesystem integration)', () => {
     expect(existsSync(jsonPath)).toBe(true);
     const parsed = JSON.parse(await readFile(jsonPath, 'utf8')) as RunReceipt;
     expect(parsed.schemaVersion).toBe(RECEIPT_SCHEMA_VERSION);
-    expect(parsed.schemaVersion).toBe(2);
+    expect(parsed.schemaVersion).toBe(3);
     expect(parsed.witnessLabel).toBe(label);
   });
 
@@ -165,7 +165,7 @@ describe('receipt regenerate (filesystem integration)', () => {
 
     const after = JSON.parse(await readFile(jsonPath, 'utf8')) as RunReceipt;
     expect(after.schemaVersion).toBe(RECEIPT_SCHEMA_VERSION);
-    expect(after.schemaVersion).toBe(2);
+    expect(after.schemaVersion).toBe(3);
   });
 
   it('--only-v1 check skips a receipt already at the current schema version', async () => {
@@ -214,7 +214,7 @@ describe('receipt regenerate (filesystem integration)', () => {
 
     const jsonPath = join(getReceiptsDir(), `${label}.json`);
     const v = JSON.parse(await readFile(jsonPath, 'utf8')) as RunReceipt;
-    expect(v.schemaVersion).toBe(2);
+    expect(v.schemaVersion).toBe(3);
 
     const statAfterFirst = await stat(jsonPath);
 

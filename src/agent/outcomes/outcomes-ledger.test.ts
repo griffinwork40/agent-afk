@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { resolve } from 'node:path';
 import {
   settledEffects,
   repoFromCommand,
@@ -72,20 +73,20 @@ describe('settledEffects', () => {
 // ---------------------------------------------------------------------------
 describe('repoFromCommand', () => {
   it('extracts a leading cd with &&', () => {
-    expect(repoFromCommand('cd /Users/x/wt && git commit', CWD)).toBe('/Users/x/wt');
+    expect(repoFromCommand('cd /Users/x/wt && git commit', CWD)).toBe(resolve('/Users/x/wt'));
   });
 
   it('extracts a leading cd with ;', () => {
-    expect(repoFromCommand('cd /other; git add .', CWD)).toBe('/other');
+    expect(repoFromCommand('cd /other; git add .', CWD)).toBe(resolve('/other'));
   });
 
   it('extracts quoted paths', () => {
-    expect(repoFromCommand('cd "/path with spaces" && git add', CWD)).toBe('/path with spaces');
-    expect(repoFromCommand("cd '/single' && ls", CWD)).toBe('/single');
+    expect(repoFromCommand('cd "/path with spaces" && git add', CWD)).toBe(resolve('/path with spaces'));
+    expect(repoFromCommand("cd '/single' && ls", CWD)).toBe(resolve('/single'));
   });
 
   it('resolves relative cd targets against cwd', () => {
-    expect(repoFromCommand('cd sub/dir && git commit', CWD)).toBe('/repo/proj/sub/dir');
+    expect(repoFromCommand('cd sub/dir && git commit', CWD)).toBe(resolve(CWD, 'sub/dir'));
   });
 
   it('falls back to cwd when no cd or tilde/env-var path', () => {
