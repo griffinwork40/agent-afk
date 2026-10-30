@@ -29,6 +29,7 @@ import { runOneTurn } from './loop-iteration.turn-run.js';
 import { createVersionNotice } from './version-notice.js';
 import { setupPeerBoundary, applyDeferPeers } from './loop-iteration.boundary.js';
 
+
 /**
  * Per-turn cap on autonomous auto-resumes — an idle REPL woken by a settled
  * background subagent (see the `onInjectable` wiring below). Circuit breaker

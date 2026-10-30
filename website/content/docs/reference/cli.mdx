@@ -63,6 +63,8 @@ Usage: `afk [options] [command]`
 | `defects` | Show top recurring pre-existing defects from the session ledger |
 | `receipt` | Manage run receipts — human- and machine-readable session summaries. |
 | `acp` | Start an Agent Client Protocol (ACP) JSON-RPC 2.0 server over stdio (compatible with Zed, JetBrains, and other ACP clients) |
+| `pause` | Freeze all running AFK sessions in place (write pause.lock) |
+| `resume` | Unfreeze all paused AFK sessions (remove pause.lock) |
 
 ## `afk chat`
 
@@ -2610,4 +2612,28 @@ Usage: `afk acp [options]`
 | `-m, --model <model>` | model to use for sessions (default: configured default) |  |
 | `--max-turns <n>` | maximum agent turns per prompt (default: 10) | `"10"` |
 | `--dangerously-skip-permissions` | Force bypass mode: skip all permission prompts for all sessions created by this server |  |
+| `-h, --help` | display help for command |  |
+
+## `afk pause`
+
+Freeze all running AFK sessions in place (write pause.lock)
+
+Usage: `afk pause [options]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+## `afk resume`
+
+Unfreeze all paused AFK sessions (remove pause.lock)
+
+Usage: `afk resume [options]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
 | `-h, --help` | display help for command |  |
