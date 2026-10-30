@@ -23,12 +23,14 @@ import * as fs from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getEffectLedgerPath } from '../../paths.js';
+import { redactSecrets } from '../redact-secrets.js';
 import { collectAsyncIter, readJsonlFile } from '../../utils/jsonl.js';
 import type {
   EffectRecord,
   EffectQuery,
   PendingEffectInput,
   ExecuteEffectInput,
+  EffectRemoteRead,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -140,6 +142,7 @@ export class EffectStore {
       sessionId: input.sessionId,
       taskId: input.taskId,
       retryOf: input.retryOf,
+      ...(input.remoteIdempotencyKey !== undefined ? { remoteIdempotencyKey: input.remoteIdempotencyKey } : {}),
       timestamp: Date.now(),
     };
     appendLine(this.path, record);
@@ -177,6 +180,44 @@ export class EffectStore {
     appendLine(this.path, updated);
     this.invalidateCache();
     return updated;
+  }
+
+  /**
+   * Resolve an unknown/acknowledged-abandoned effect with one read, never replaying it.
+   * Missing/negative/failed reads leave uncertainty intact. Adapters own exact
+   * remote identity matching (for example PR repo + head, not merely its title).
+   */
+  async reconcile(id: string, readRemote: EffectRemoteRead): Promise<EffectRecord> {
+    const existing = (await this.query()).find((record) => record.id === id);
+    if (!existing) throw new Error(`effect-ledger: record not found: ${id}`);
+    // Pending may still be in flight; only an explicitly acknowledged abandoned
+    // attempt may be reconciled. acknowledgeRetry is the existing crash seam.
+    const uncertain = (record: EffectRecord): boolean => record.status === 'unknown' ||
+      (record.status === 'pending' && record.retryAcknowledgedAt !== undefined);
+    if (!uncertain(existing)) return existing;
+    let observation: Awaited<ReturnType<EffectRemoteRead>>;
+    try { observation = await readRemote(structuredClone(existing)); }
+    catch { return existing; }
+    // Re-read after the await and skip observed settlements. This append-only
+    // store has no cross-process CAS; callers must serialize same-record writers.
+    const current = (await this.query()).find((record) => record.id === id);
+    if (!current) throw new Error(`effect-ledger: record not found: ${id}`);
+    if (!uncertain(current) || observation?.matched !== true || observation.evidence == null) return current;
+    let evidence: unknown;
+    try {
+      // Redact string leaves, not serialized JSON: Bearer patterns may consume
+      // JSON delimiters. Invalid/oversized evidence must not certify an effect.
+      const serialized = JSON.stringify(observation.evidence, (_key, value: unknown) =>
+        typeof value === 'string' ? redactSecrets(value) : value);
+      if (serialized === undefined || Buffer.byteLength(serialized) > 64 * 1024) return current;
+      evidence = JSON.parse(serialized) as unknown;
+    } catch { return current; }
+    const confirmed: EffectRecord = {
+      ...current, status: 'confirmed', reconciledAt: Date.now(), result: evidence,
+    };
+    appendLine(this.path, confirmed);
+    this.invalidateCache();
+    return confirmed;
   }
 
   /** Persist the one-time retry warning on the uncertain attempt. */
