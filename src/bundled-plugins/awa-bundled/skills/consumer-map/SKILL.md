@@ -3,7 +3,7 @@ name: consumer-map
 description: "Read-only consumer graph and blast-radius analysis — takes either a diff (PR number, patch file, git diff) or a named target (symbol, module, config key) and maps the full consumer surface: direct callers, transitive importers (depth 2), test/config/schema refs, hot paths, and event-pipeline members. Emits a scored Impact Report with a PROCEED / NARROW_SCOPE / HUMAN_GATE verdict before any mutation. Replaces blast-radius and impact-map with a single skill covering both entry points."
 argument-hint: "<PR-number | diff-file | symbol | module | config-key> [--repo <path>] [--symbols <comma-list>]"
 skills: [contract]
-allowed-tools: bash, read_file, grep, glob
+allowed-tools: bash, read_file, grep, glob, agent
 failure_modes:
   - diff mode: no diff artifact obtainable (verbal description only, no PR/patch/diff)
   - diff mode: symbols_changed list incomplete (renamed vs. deleted not distinguished)
@@ -104,10 +104,18 @@ score = (direct_count × 3) + (transitive_count × 1) + (test_count × 0.5) + (c
 
 | Score | Tier |
 |---|---|
-| 0–4 | `LOW` |
+| < 5 | `LOW` |
 | 5–14 | `MEDIUM` |
 | 15–39 | `HIGH` |
-| 40+ | `CRITICAL` |
+| ≥ 40 | `CRITICAL` |
+
+**Map tier to verdict:**
+
+| Tier | Verdict |
+|---|---|
+| `LOW` or `MEDIUM` | `PROCEED` — consumer surface is well-understood |
+| `HIGH` | `NARROW_SCOPE` — recommend scoping the change to a subset of consumers before invoking a write-path skill |
+| `CRITICAL` | `HUMAN_GATE` — do not dispatch refactor/forge/mint until a human reviews the report |
 
 ---
 
