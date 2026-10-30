@@ -12,6 +12,21 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- compute outcomes once at SessionEnd for receipt v3 and outcome store (99ee9bb2d)
+- pure computeOutcomes and OutcomesV1 schema with git-range adapter (39e2d5124)
+
+### Fixed
+- receipt schemaVersion v3 + Windows path normalization in outcomes (#4581) (21ea68311)
+- address 4 blocking review findings on PR #4535 (a3f3c98d3)
+- bound git command matching to avoid backtracking (13450fa3c)
+- preserve attributed outcomes and bound teardown input (be3eb5f27)
+- use u flag instead of v flag for FTS5 regex (ES2022 compat) (0ebce56a5)
+- use Unicode-aware boundaries in FTS5 sanitization regex (f59b0e2f5)
+- use Unknown goal sentinel instead of unreachable empty-field guard (a225af857)
+- episode synthesis quality — compaction, promise tracking, tests (69dbf3263)
+- use word boundaries in FTS5 sanitization regex (d490928ca)
+
 ## [5.342.0] - 2026-10-30
 
 ### Added
