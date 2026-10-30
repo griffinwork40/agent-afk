@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { gitLogRange } from './git-range.js';
@@ -30,6 +30,9 @@ describe('gitLogRange', () => {
       git(repo, 'commit', '-q', '-m', msg);
     }
     [third, second, first] = git(repo, 'log', '--format=%H').split('\n') as [string, string, string];
+    // Align with gitLogRange, which reads repo from `git rev-parse --show-toplevel`
+    // (resolves 8.3 short names like RUNNER~1 to long names on Windows).
+    repo = resolve(git(repo, 'rev-parse', '--show-toplevel'));
   });
 
   afterAll(() => {
