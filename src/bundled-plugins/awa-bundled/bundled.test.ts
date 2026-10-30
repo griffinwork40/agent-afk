@@ -39,6 +39,12 @@ const PINNED_HASHES = {
   // framework plugin at the time it was bundled.
   automate: '95645aa07d28ea69384f81ff3e694d7899ee153ede53fda8a8c8790e628437e9',
   contract: '0ea822d8124f5fc55103a3e5e6d0fcb43889bf3f089bc722350da02ecf4f960f',
+  // consumer-map: unified merge of blast-radius + impact-map. Takes either a
+  // diff (PR, patch, git diff) or a named target (symbol, module, config key)
+  // and maps the full consumer surface via 3 parallel context-blind probes.
+  // Bundled-only; no upstream counterpart.
+  'consumer-map':
+    'dddd2614549e72366be638d68da897bebf00180a7640ea06abd216eadc931ed4',
   // Hash re-bumped during PR #187 review: the Merge section now routes the
   // second convergence condition (≥2 critics agree on the same alternative) to
   // Wave 3.5 — prose-consistency fix only; no behavior change to the guard.
@@ -51,7 +57,7 @@ const PINNED_HASHES = {
   // convergence / ≠original+1-critic) explicitly. No frontmatter change
   // (context: load preserved). Bundled-only body; nothing to back-port.
   'devils-advocate':
-    'bab7112157ae0c59b70fe3c8ee0f3c897b27e822cb11cafa2d54eaf4f4b026ec',
+    '0ee6672387aa965c74821738f2f0e995a632c35ad02f4cb053b5d1d80a7e4d91',
   // diagnose is bundled-only (no upstream counterpart). It ships
   // as the agent-driven /diagnose (context: fork) that replaced the retired
   // vendored TS orchestrator (src/skills/diagnose/). Hash bumps need no parallel
