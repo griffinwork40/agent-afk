@@ -444,8 +444,6 @@ export class AgentSession implements IAgentSession {
   async setPermissionMode(mode: PermissionMode): Promise<void> { return sc.setPermissionMode(mode, this.makeConfigDeps()); }
   setSystemPrompt(basePrompt: string | undefined): boolean { return sc.setSystemPrompt(basePrompt, this.makeConfigDeps()); }
   setCwd(cwd: string): void { return sc.setCwd(cwd, this.makeConfigDeps()); }
-  async reauth(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> { return sc.reauth(this.makeConfigDeps()); }
-
   getPrePlanMode(): PermissionMode | undefined { return this.planExit.getPrePlanMode(); }
   // Invariant: called by the REPL after construction to wire a queue-check
   // predicate into exit_plan_mode — when it returns true the handler skips the

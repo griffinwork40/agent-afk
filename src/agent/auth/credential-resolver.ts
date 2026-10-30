@@ -43,9 +43,9 @@ let refreshedClaudeCodeOauthToken: string | undefined;
  * current access token even when no network refresh was needed (token not yet
  * near-expiry) — so ranking it above the store pinned every later read to the
  * boot-time account: after the operator ran `claude login` to switch accounts
- * and `/reauth`, the parent swapped to the new account (its refresher reads the
- * store directly) while every forked subagent resolved the stale boot token here
- * and died on the old account's 429. The cache is only a fallback for when the
+ * and the turn-start credential catch-up swapped the parent to the new account
+ * (its refresher reads the store directly) while every forked subagent resolved
+ * the stale boot token here and died on the old account's 429. The cache is only a fallback for when the
  * store yields no valid token (write-back failed and the stored one is expired).
  *
  * Returns `undefined` when no credential is available. Mirrors the body of
@@ -100,8 +100,8 @@ export function _resetRefreshedClaudeCodeOauthToken(): void {
 /**
  * Update the process-local refresh fallback with a freshly-obtained token.
  *
- * Called by `forceClientRefresh()` (via the `/reauth` handler or the
- * usage-limit hot-swap path) after it successfully builds a new SDK client.
+ * Called by `forceClientRefresh()` (via the turn-start credential catch-up or
+ * the usage-limit hot-swap path) after it successfully builds a new SDK client.
  * Keeps the resolver cache in sync so that when the live credential store
  * yields nothing (expired token, write-back failed, locked keychain),
  * `loadAnthropicCredential()` returns the freshly-refreshed token —

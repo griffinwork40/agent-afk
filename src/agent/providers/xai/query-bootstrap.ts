@@ -140,10 +140,6 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
       bufferedSystemPrompt = basePrompt === undefined ? null : basePrompt;
       return innerQuery?.setSystemPrompt?.(basePrompt) ?? false;
     },
-    async reauth() {
-      const q = innerQuery ?? (await ensureInner().catch(() => undefined));
-      return (await q?.reauth?.()) ?? null;
-    },
     async supportedCommands() {
       const q = innerQuery ?? (await ensureInner().catch(() => undefined));
       return (await q?.supportedCommands()) ?? [];
