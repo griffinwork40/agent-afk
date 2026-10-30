@@ -338,6 +338,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_EPISODE_SYNTHESIS",
+      "description": "Enable automatic episode synthesis at session end. When set to 1, a compressed narrative of each top-level session is synthesized from its sealed journal and stored in cross-session memory (facts table, category: learning). Off by default — opt in once the memory archive is large enough that episodic recall adds value. Requires a valid Anthropic credential; falls back to a deterministic record if the LLM call fails. Use `afk episode synthesize <session-id>` to synthesize a specific session on demand regardless of this flag.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_EVAL_STALENESS_DAYS",
       "description": "Number of days without a completed eval-run before the ground-state pre-flight surfaces a staleness warning. The guard reads the most recent timestamp from the eval-runs index ($AFK_HOME/agent-framework/improve/eval-runs/.index.jsonl) and emits a warning finding when the gap exceeds this threshold. Default: 7. Set to 0 to disable the guard.",
       "type": "number",
