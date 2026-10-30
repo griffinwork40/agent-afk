@@ -93,6 +93,7 @@ function makeFakeReq(opts: {
       : typeof opts.body === 'string'
       ? Buffer.from(opts.body, 'utf-8')
       : opts.body;
+  ee.destroy = () => {};
   setImmediate(() => {
     ee.emit('data', bodyBuf);
     ee.emit('end');
@@ -495,8 +496,32 @@ describe('WebhookReceiver.handleRequest — successful enqueue', () => {
     const body = makePayload({ action: 'opened', issue: { number: 1, title: longBody, html_url: 'http://x' } });
     await sendWebhook({ receiver, eventName: 'issues', deliveryId: 'del-cap-1', body });
     const task = readQueuedTasks()[0]!;
-    // The rendered command should not grow unbounded.
-    expect(task.command.length).toBeLessThan(6000);
+    // renderCommand slices payloadSummary to 4000 chars. Template overhead
+    // (substituted prefix + untrusted block delimiters) is ~160 chars.
+    // Allow 200 chars of tolerance above 4000: anything ≥ 4200 means the cap
+    // regressed. The old bound of 6000 would pass even a 5500-char regression.
+    expect(task.command.length).toBeLessThan(4200);
+  });
+
+  it('returns 413 for a body larger than 1 MB', async () => {
+    const receiver = makeReceiver();
+    // Build a body just over 1 MB. The body must be valid JSON so that the
+    // pre-auth header check passes, but readBody will reject before full parse.
+    // sendWebhook signs the oversized body so the header pre-auth check passes;
+    // the 413 is triggered inside readBody by the size limit.
+    const oversizedBody = Buffer.alloc(1_000_001, 'x');
+    const fakeRes = makeFakeRes();
+    const req = makeFakeReq({
+      headers: {
+        'x-hub-signature-256': sign(SECRET, oversizedBody),
+        'x-github-event': 'issues',
+        'x-github-delivery': 'del-413-1',
+      },
+      body: oversizedBody,
+    });
+    await receiver.handleRequest(req, fakeRes.res);
+    expect(fakeRes.status).toBe(413);
+    expect(fakeRes.body).toContain('Request body error');
   });
 
   it('command template cannot be overridden by payload content', async () => {

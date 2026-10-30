@@ -10,8 +10,9 @@
  * Security posture:
  *  - Binds to 127.0.0.1 only by default; refuses non-loopback without
  *    AFK_EVENTS_WEBHOOK_ALLOW_EXTERNAL=1.
- *  - Verifies the `X-Hub-Signature-256` header via a constant-time comparison
- *    before reading any payload content.
+ *  - Checks for the presence of `X-Hub-Signature-256` (with `sha256=` prefix)
+ *    before reading any payload content; full HMAC verification follows after
+ *    the body is buffered.
  *  - Event payloads are untrusted data — wrapped in delimiters in the prompt
  *    and capped at 4000 chars, consistent with the polling producer.
  *  - Permission mode and command template are operator-supplied at startup and
@@ -357,7 +358,19 @@ export class WebhookReceiver {
         return;
       }
 
-      // Read body before verifying so the digest covers the full payload.
+      // Pre-auth gate: reject requests that are obviously unauthenticated
+      // (missing or malformed signature header) before buffering any body.
+      // This prevents unauthenticated callers from exhausting memory via the
+      // 1 MB readBody buffer, especially when allowExternal:true is set.
+      // Note: this only checks header presence/prefix — full HMAC verification
+      // still requires the body and happens below.
+      const sigHeaderEarly = req.headers['x-hub-signature-256'] as string | undefined;
+      if (!sigHeaderEarly || !sigHeaderEarly.startsWith('sha256=')) {
+        sendResponse(res, 401, 'Invalid or missing X-Hub-Signature-256');
+        return;
+      }
+
+      // Read body — now gated behind the pre-auth header check.
       let rawBody: Buffer;
       try {
         rawBody = await readBody(req);
@@ -366,9 +379,8 @@ export class WebhookReceiver {
         return;
       }
 
-      // HMAC verification — reject before any content is processed.
-      const sigHeader = req.headers['x-hub-signature-256'] as string | undefined;
-      if (!verifySignature(this.secret, rawBody, sigHeader)) {
+      // Full HMAC verification — constant-time comparison against the raw body.
+      if (!verifySignature(this.secret, rawBody, sigHeaderEarly)) {
         sendResponse(res, 401, 'Invalid or missing X-Hub-Signature-256');
         return;
       }
