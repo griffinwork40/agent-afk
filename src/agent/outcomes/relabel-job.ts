@@ -25,12 +25,11 @@
  * Design: docs/proposals/verified-outcome.md § Delayed LFs
  */
 
-import { existsSync } from 'node:fs';
+import { commitSurvivalForArtifacts } from './commit-survival-artifacts.js';
 import type { Vote, VerifiedOutcome } from './schema.js';
 import { listRecords, readRecord, writeRecord, upsertVotes } from './store.js';
 import { combine } from './combine.js';
 import {
-  lfCommitSurvival,
   realFetchPrState,
   realCheckAncestor,
   realCheckRevert,
@@ -233,7 +232,7 @@ export async function processRecord(
 
   const nowDate = deps.now();
   const nowStr = nowDate.toISOString();
-  const { commits, prs, repo } = record.artifacts;
+  const { commits, prs } = record.artifacts;
 
   // Skip if no artifacts — nothing to probe
   if (commits.length === 0 && prs.length === 0) {
@@ -250,9 +249,6 @@ export async function processRecord(
     return { status: 'skipped', reason: 'no artifacts' };
   }
 
-  // Validate cwd / repo for git-based LFs
-  const repoCwd = repo && existsSync(repo) ? repo : null;
-
   // Shared GH cache: avoids fetching the same PR state twice in one record
   const ciCache: Map<string, 'passed' | 'failed' | 'pending' | 'none' | 'error'> = new Map();
 
@@ -267,14 +263,8 @@ export async function processRecord(
     // 2. commit_survival (only after 7 days)
     const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
     const settlesAfterMs = record.settles_after ? new Date(record.settles_after).getTime() : 0;
-    if (repoCwd && nowDate.getTime() - settlesAfterMs >= sevenDaysMs) {
-      const survivalVotes = await lfCommitSurvival(
-        commits,
-        repoCwd,
-        deps.checkAncestor,
-        deps.checkRevert,
-        nowStr,
-      );
+    if (nowDate.getTime() - settlesAfterMs >= sevenDaysMs) {
+      const survivalVotes = await commitSurvivalForArtifacts(record.artifacts, deps, nowStr);
       newVotes.push(...survivalVotes);
     }
 

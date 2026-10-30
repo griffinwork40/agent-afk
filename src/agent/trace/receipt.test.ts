@@ -18,6 +18,7 @@ import {
 } from './receipt.js';
 import type { JournalMessage, JournalRecord } from '../journal/types.js';
 import type { ClosureReason, ToolFailureClass, TraceEvent } from './types.js';
+import type { OutcomesV1 } from '../outcomes/outcomes-v1.schema.js';
 
 // ---------------------------------------------------------------------------
 // Event builders — keep the on-disk envelope ({ ts, seq, kind, payload }).
@@ -405,7 +406,22 @@ describe('writeRunReceipt + runReceiptSessionEndHook (filesystem)', () => {
     expect(parsed.sessionId).toBe('sess-logical');
     expect(parsed.endReason).toBe('close');
     expect(parsed.toolCalls.errored).toBe(1);
-    expect(parsed.schemaVersion).toBe(2);
+    expect(parsed.schemaVersion).toBe(3);
+  });
+
+  it('writes outcomes: null when the outcomes computation has no cwd', async () => {
+    const tracePath = await writeTrace('run-o', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-no-meta' });
+    const parsed = JSON.parse(await readFile(join(getReceiptsDir(), 'run-o.json'), 'utf8')) as RunReceipt;
+    expect(parsed.schemaVersion).toBe(3);
+    expect(parsed.outcomes).toBeNull();
+  });
+
+  it('writes outcomes from the session cwd when no sidecar exists (non-git cwd)', async () => {
+    const tracePath = await writeTrace('run-c', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-cwd', cwd: home });
+    const parsed = JSON.parse(await readFile(join(getReceiptsDir(), 'run-c.json'), 'utf8')) as RunReceipt;
+    expect(parsed.outcomes).toMatchObject({ schemaVersion: 1, cwd: home, startHead: null, commits: [] });
   });
 
   it('returns null when the trace file is absent', async () => {
@@ -734,8 +750,8 @@ describe('generateReceipt with journalSummary (#4427)', () => {
     expect(receipt.limitations.some((l) => l.includes('No message journal'))).toBe(true);
   });
 
-  it('schemaVersion is 2', () => {
-    expect(RECEIPT_SCHEMA_VERSION).toBe(2);
+  it('schemaVersion is 3', () => {
+    expect(RECEIPT_SCHEMA_VERSION).toBe(3);
   });
 });
 
@@ -778,5 +794,56 @@ describe('renderReceiptMarkdown with journalSummary (#4427)', () => {
   it('omits conversation summary when journalSummary absent', () => {
     const md = renderReceiptMarkdown(RECEIPT_BASE);
     expect(md).not.toContain('Conversation summary');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v3: outcomes
+// ---------------------------------------------------------------------------
+
+const OUTCOMES: OutcomesV1 = {
+  schemaVersion: 1,
+  cwd: '/repo',
+  startHead: 'a'.repeat(40),
+  endHead: 'b'.repeat(40),
+  commits: [{ sha: 'b'.repeat(40), repo: '/repo', subject: 'feat: thing', source: 'git_log' }],
+  prs: [{ url: 'https://github.com/o/r/pull/7', action: 'create' }],
+  filesChanged: ['/repo/x.ts'],
+  filesChangedTruncated: false,
+  schedules: [],
+  services: [],
+  terminalState: 'done',
+};
+
+describe('generateReceipt with outcomes (v3)', () => {
+  it('includes outcomes when provided', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: OUTCOMES });
+    expect(r.schemaVersion).toBe(3);
+    expect(r.outcomes).toEqual(OUTCOMES);
+  });
+
+  it('records null when the computation failed', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: null });
+    expect(r.outcomes).toBeNull();
+  });
+
+  it('omits outcomes when not provided', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l' });
+    expect('outcomes' in r).toBe(false);
+  });
+
+  it('renders an Outcomes section with short sha, PR url and counts', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: OUTCOMES });
+    const md = renderReceiptMarkdown(r);
+    expect(md).toContain('## Outcomes');
+    expect(md).toContain('`bbbbbbb` feat: thing');
+    expect(md).toContain('https://github.com/o/r/pull/7 (create)');
+    expect(md).toContain('**Files changed:** 1');
+    expect(md).toContain('**Terminal state:** done');
+  });
+
+  it('renders no Outcomes section when outcomes is null', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: null });
+    expect(renderReceiptMarkdown(r)).not.toContain('## Outcomes');
   });
 });
