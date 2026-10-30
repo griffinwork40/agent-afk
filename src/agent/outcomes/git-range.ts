@@ -9,6 +9,7 @@
  * @module agent/outcomes/git-range
  */
 
+import { resolve } from 'node:path';
 import { execFileAsync } from '../../utils/exec-file.js';
 import { OUTCOMES_COMMITS_CAP } from './outcomes-v1.schema.js';
 import type { GitLogEntry } from './compute-outcomes.js';
@@ -49,7 +50,8 @@ export async function gitLogRange(
   if (endHead !== null && startHead.toLowerCase() === endHead.toLowerCase()) return [];
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   try {
-    const repo = (await git(cwd, ['--no-optional-locks', 'rev-parse', '--show-toplevel'], timeoutMs, opts.signal)).trim();
+    // git returns forward slashes on Windows; resolve() normalises to native separators.
+    const repo = resolve((await git(cwd, ['--no-optional-locks', 'rev-parse', '--show-toplevel'], timeoutMs, opts.signal)).trim());
     if (!repo) return [];
     const out = await git(
       cwd,

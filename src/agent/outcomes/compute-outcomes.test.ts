@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { computeOutcomes, type ComputeOutcomesInput } from './compute-outcomes.js';
 import { OutcomesV1Schema } from './outcomes-v1.schema.js';
@@ -54,7 +55,7 @@ describe('computeOutcomes', () => {
       ],
     }));
     expect(out.commits).toEqual([
-      { sha: '3454e70', repo: '/Users/x/wt/pr36-fix', subject: 'fix(#29): review fixes', source: 'effect_ledger' },
+      { sha: '3454e70', repo: resolve('/Users/x/wt/pr36-fix'), subject: 'fix(#29): review fixes', source: 'effect_ledger' },
       { sha: '5ee66d7', repo: CWD, subject: 'fix(pr-316): address review feedback', source: 'effect_ledger' },
       { sha: '0abcdef', repo: CWD, subject: 'chore: initial', source: 'effect_ledger' },
     ]);
@@ -118,7 +119,7 @@ describe('computeOutcomes', () => {
         ev('read_file', { file_path: '/abs/read.ts' }),
       ],
     }));
-    expect(out.filesChanged).toEqual(['/abs/a.ts', `${CWD}/rel/b.ts`, '/abs/c.ts', '/abs/d.ts']);
+    expect(out.filesChanged).toEqual([resolve('/abs/a.ts'), resolve(CWD, 'rel/b.ts'), resolve('/abs/c.ts'), resolve('/abs/d.ts')]);
   });
 
   it('schedules from schedule tool events (id from result, else args)', () => {
