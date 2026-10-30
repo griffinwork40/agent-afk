@@ -61,6 +61,9 @@ interface LockRecord { pid: number; expiresAt: number }
 
 /** Path of the sentinel file for `language`. Exported for tests. */
 export function installLockPath(language: string, serversDir?: string): string {
+  if (!/^[a-z][a-z0-9_-]*$/i.test(language)) {
+    throw new Error(`Invalid language identifier: ${language}`);
+  }
   return join(serversDir ?? getLspServersDir(), `.installing.${language}`);
 }
 
@@ -83,7 +86,7 @@ export async function acquireInstallLock(
   const pollMs = opts?.pollMs ?? LOCK_POLL_MS;
 
   // Ensure the directory exists before writing the sentinel.
-  try { await mkdir(join(lockFile, '..'), { recursive: true }); } catch { /* already exists */ }
+  await mkdir(join(lockFile, '..'), { recursive: true });
 
   while (true) {
     if (signal?.aborted) throw Object.assign(new Error('Install lock wait aborted'), { name: 'AbortError' });
@@ -124,12 +127,6 @@ export async function acquireInstallLock(
       // Stale lock from a crashed writer — remove it and retry the O_EXCL open.
       try { await unlink(lockFile); } catch { /* already removed by a peer */ }
       continue;
-    }
-
-    if (existing.pid === ownPid) {
-      // Re-entrant (same process) — the in-process dedup map prevents this in
-      // practice, but handle it gracefully by returning a no-op release.
-      return async (): Promise<void> => { /* re-entrant: do not unlink */ };
     }
 
     // Another live process holds the lock — wait and retry.

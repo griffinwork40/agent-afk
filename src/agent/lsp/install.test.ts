@@ -724,6 +724,81 @@ describe('getLspInstallFootprint', () => {
 });
 
 // ---------------------------------------------------------------------------
+// installLockPath — language validation (#4518 finding 1)
+// ---------------------------------------------------------------------------
+
+describe('installLockPath — language validation', () => {
+  it('rejects path-traversal language strings', () => {
+    expect(() => installLockPath('../etc/passwd')).toThrow('Invalid language identifier');
+    expect(() => installLockPath('foo/bar')).toThrow('Invalid language identifier');
+    expect(() => installLockPath('.hidden')).toThrow('Invalid language identifier');
+    expect(() => installLockPath('')).toThrow('Invalid language identifier');
+  });
+
+  it('accepts valid language identifiers', () => {
+    expect(() => installLockPath('typescript')).not.toThrow();
+    expect(() => installLockPath('python-3')).not.toThrow();
+    expect(() => installLockPath('go_lang')).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// acquireInstallLock — non-EEXIST open('wx') errors (#4518 finding 4)
+// ---------------------------------------------------------------------------
+
+describe('acquireInstallLock — non-EEXIST open errors', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    (globalThis as any).__lspTestServersDir = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    delete (globalThis as any).__lspTestServersDir;
+  });
+
+  it('lockFn throwing EACCES propagates as {kind:"failed"}', async () => {
+    const def = makeDefinition();
+    const grantStore = createGrantStore(path.join(tmpDir, 'grants.json'));
+    await grantStore.persistGrant(def.language, [...def.install!.packages]);
+
+    const eaccesLockFn = async (_language: string, _signal?: AbortSignal) => {
+      const err = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      throw err;
+    };
+
+    const ensure = createEnsureInstalled({
+      grantStore,
+      execFn: makeSuccessExec(tmpDir, def),
+      ledgerPath: path.join(tmpDir, 'ledger.jsonl'),
+      inFlightMap: new Map(),
+      lockFn: eaccesLockFn,
+    });
+
+    const result = await ensure(def, makeCtx());
+    expect(result).toMatchObject({ kind: 'failed', reason: expect.stringContaining('EACCES') });
+  });
+
+  it('acquireInstallLock itself throws on non-EEXIST open error', async () => {
+    // Make the lock directory read-only so open('wx') gets EACCES.
+    const lockDir = path.join(tmpDir, 'readonly-dir');
+    fs.mkdirSync(lockDir, { recursive: true });
+    // Pre-create a sentinel so we can make the dir read-only and test
+    // that a real EACCES from the filesystem propagates.
+    fs.chmodSync(lockDir, 0o444);
+
+    await expect(
+      acquireInstallLock('typescript', undefined, { serversDir: lockDir }),
+    ).rejects.toThrow();
+
+    // Restore permissions for cleanup.
+    fs.chmodSync(lockDir, 0o755);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // #4293 review C-5: never throws on ledger I/O; dedupe keyed on interactive
 // ---------------------------------------------------------------------------
 
