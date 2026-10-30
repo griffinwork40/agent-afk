@@ -2280,14 +2280,15 @@ describe('ComposeExecutor', () => {
       expect(mockRunSubagentDAG).not.toHaveBeenCalled();
     });
 
-    it('compose-level max_tool_rounds_per_node wins over named-agent frontmatter budget when node omits max_tool_rounds', async () => {
-      // Regression guard for the bug fixed in PR #4441: when a node has no
-      // explicit max_tool_rounds but the named-agent frontmatter declares
-      // maxToolUseIterations, the compose-level cap must still win because
-      // max_tool_use_iterations_explicit was incorrectly set to
-      // `n.max_tool_rounds !== undefined` (always false here), causing
-      // resolveChildBudgets to fire the named-agent branch and return 50
-      // instead of the compose-level 100.
+    it('named-agent frontmatter budget wins over compose-level cap when node omits max_tool_rounds', async () => {
+      // Precedence (documented in compose-executor.node-build.ts lines 191-195):
+      //   explicit per-node max_tool_rounds
+      //   > named-agent frontmatter maxToolUseIterations
+      //   > compose-level max_tool_rounds_per_node
+      //
+      // When the node sets no explicit max_tool_rounds, max_tool_use_iterations_explicit
+      // is false, so resolveChildBudgets gives the named-agent frontmatter (50)
+      // priority over the compose-level default (100).
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
       const agentWithBudget: RegisteredAgent = {
         name: 'budgeted-agent',
@@ -2296,7 +2297,7 @@ describe('ComposeExecutor', () => {
           prompt: 'You are a budgeted specialist.',
           tools: ['read_file'],
           model: 'haiku',
-          maxToolUseIterations: 50, // frontmatter budget — must NOT win
+          maxToolUseIterations: 50, // frontmatter budget — must win over compose-level default
         },
         source: 'user',
       };
@@ -2305,12 +2306,12 @@ describe('ComposeExecutor', () => {
 
       await executor.execute(makeCall({
         nodes: [{ id: 'a', prompt: 'task a', agent_type: 'budgeted-agent' }],
-        max_tool_rounds_per_node: 100, // compose-level cap — must win
+        max_tool_rounds_per_node: 100, // compose-level default — must NOT win when frontmatter is set
       }));
 
       const dagOpts = mockRunSubagentDAG.mock.calls[0]![0]!;
-      // Compose-level cap (100) must win over named-agent frontmatter (50).
-      expect(dagOpts.nodes[0].maxToolUseIterations).toBe(100);
+      // Named-agent frontmatter (50) must win over compose-level default (100).
+      expect(dagOpts.nodes[0].maxToolUseIterations).toBe(50);
     });
   });
 
