@@ -123,7 +123,8 @@ async function readLedgerHead(
         // If extraction returned nothing (pure-boilerplate record), fall
         // through and let a subsequent user record supply the title.
       }
-      if (out.title !== undefined && out.cwd !== undefined && out.model !== undefined) break;
+      if (out.title !== undefined && out.model !== undefined
+        && (out.cwd !== undefined || out.surface !== undefined)) break;
       if (seen >= HEAD_RECORD_SCAN_LIMIT) break;
     }
   } catch {
