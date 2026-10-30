@@ -366,7 +366,8 @@ describe('markPresenceTurn', () => {
       mpt(REAL_SESSION, 'busy', userText);
 
       // Normal text must reach the promptHead writer.
-      expect(promptHeadSpy).toHaveBeenCalledWith(REAL_SESSION, userText);
+      // Third arg is provenance?.origin — undefined when no provenance is passed.
+      expect(promptHeadSpy).toHaveBeenCalledWith(REAL_SESSION, userText, undefined);
       expect(turnStateSpy).toHaveBeenCalledWith(REAL_SESSION, 'busy');
     }
 
@@ -407,6 +408,103 @@ describe('markPresenceTurn', () => {
       // turnEnd IS called with the totalTurns value.
       expect(turnEndSpy).toHaveBeenCalledWith(REAL_SESSION, 3, directive);
       // promptHead writer is NOT called on the idle path.
+      expect(promptHeadSpy).not.toHaveBeenCalled();
+    }
+
+    vi.doUnmock('../../../agent/awareness/presence.peer.js');
+    vi.doUnmock('../../../agent/awareness/presence.activity.js');
+  });
+
+  // ── provenance parameter (issue #2906, PR A) ──────────────────────────────
+
+  it('busy + provenance: origin is forwarded to setPresenceActivityPromptHead', async () => {
+    const promptHeadSpy = vi.fn().mockResolvedValue(undefined);
+    const turnStateSpy = vi.fn().mockResolvedValue(undefined);
+    const turnEndSpy = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock('../../../agent/awareness/presence.peer.js', () => ({
+      setPresenceTurnState: turnStateSpy,
+    }));
+    vi.doMock('../../../agent/awareness/presence.activity.js', () => ({
+      setPresenceActivityPromptHead: promptHeadSpy,
+      setPresenceActivityTurnEnd: turnEndSpy,
+    }));
+
+    const { markPresenceTurn: mpt } = await import(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ('./loop-iteration.injections.js?prov-spy=1' as any)
+    ).catch(() => ({ markPresenceTurn: null as typeof import('./loop-iteration.injections.js').markPresenceTurn | null }));
+
+    expect(mpt).not.toBeNull();
+    if (mpt !== null) {
+      const SID = 'test-session-prov-01';
+      const prov = { origin: 'human' as const, peerInfluenced: false };
+      mpt(SID, 'busy', 'hello world', prov);
+
+      expect(promptHeadSpy).toHaveBeenCalledWith(SID, 'hello world', 'human');
+    }
+
+    vi.doUnmock('../../../agent/awareness/presence.peer.js');
+    vi.doUnmock('../../../agent/awareness/presence.activity.js');
+  });
+
+  it('busy + undefined provenance: origin passed as undefined', async () => {
+    const promptHeadSpy = vi.fn().mockResolvedValue(undefined);
+    const turnStateSpy = vi.fn().mockResolvedValue(undefined);
+    const turnEndSpy = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock('../../../agent/awareness/presence.peer.js', () => ({
+      setPresenceTurnState: turnStateSpy,
+    }));
+    vi.doMock('../../../agent/awareness/presence.activity.js', () => ({
+      setPresenceActivityPromptHead: promptHeadSpy,
+      setPresenceActivityTurnEnd: turnEndSpy,
+    }));
+
+    const { markPresenceTurn: mpt } = await import(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ('./loop-iteration.injections.js?prov-spy=2' as any)
+    ).catch(() => ({ markPresenceTurn: null as typeof import('./loop-iteration.injections.js').markPresenceTurn | null }));
+
+    expect(mpt).not.toBeNull();
+    if (mpt !== null) {
+      const SID = 'test-session-prov-02';
+      mpt(SID, 'busy', 'hello world');
+
+      // No provenance → origin arg is undefined
+      expect(promptHeadSpy).toHaveBeenCalledWith(SID, 'hello world', undefined);
+    }
+
+    vi.doUnmock('../../../agent/awareness/presence.peer.js');
+    vi.doUnmock('../../../agent/awareness/presence.activity.js');
+  });
+
+  it('busy + number fourth arg (idle overload): discriminated as non-provenance', async () => {
+    const promptHeadSpy = vi.fn().mockResolvedValue(undefined);
+    const turnStateSpy = vi.fn().mockResolvedValue(undefined);
+    const turnEndSpy = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock('../../../agent/awareness/presence.peer.js', () => ({
+      setPresenceTurnState: turnStateSpy,
+    }));
+    vi.doMock('../../../agent/awareness/presence.activity.js', () => ({
+      setPresenceActivityPromptHead: promptHeadSpy,
+      setPresenceActivityTurnEnd: turnEndSpy,
+    }));
+
+    const { markPresenceTurn: mpt } = await import(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ('./loop-iteration.injections.js?prov-spy=3' as any)
+    ).catch(() => ({ markPresenceTurn: null as typeof import('./loop-iteration.injections.js').markPresenceTurn | null }));
+
+    expect(mpt).not.toBeNull();
+    if (mpt !== null) {
+      const SID = 'test-session-prov-03';
+      // idle overload: fourth arg is totalTurns (number), not TurnProvenance
+      mpt(SID, 'idle', 'some text', 5);
+
+      // idle path routes to turnEnd, not promptHead
+      expect(turnEndSpy).toHaveBeenCalledWith(SID, 5, 'some text');
       expect(promptHeadSpy).not.toHaveBeenCalled();
     }
 

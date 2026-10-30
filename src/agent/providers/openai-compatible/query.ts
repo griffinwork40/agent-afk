@@ -257,7 +257,11 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.systemPromptRebuildFactory = opts.systemPromptRebuildFactory;
     this.traceWriter = opts.traceWriter;
     // Seed per-turn provenance from the initial config (issue #2906, PR A).
-    // Updated per-turn when the session layer calls setTurnProvenance().
+    // FIXME(PR-B): _turnProvenance is never updated per-turn for REPL sessions.
+    // The session layer should call a setTurnProvenance() method at each turn
+    // boundary so TurnTrace receives fresh provenance rather than the stale
+    // initial value.  Anthropic-direct has the same gap.  Wiring is deferred
+    // to PR B (issue #2906) to keep PR A as pure data-plumbing.
     this._turnProvenance = opts.config.turnProvenance;
     this.fastTier = new FastTierSession(opts.fastTier);
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
