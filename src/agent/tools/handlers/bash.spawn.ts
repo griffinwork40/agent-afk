@@ -15,6 +15,7 @@
  */
 
 import { spawn } from 'child_process';
+import * as path from 'node:path';
 import type { ChildProcess } from 'child_process';
 import type { ToolHandlerContext } from '../types.js';
 import { buildChildEnv } from './bash-env-scrub.js';
@@ -44,7 +45,7 @@ export function spawnBashProcess(
   // 1. context?.resolveBase — permission-system anchor (from dispatcher)
   // 2. factory-level cwd   — session worktree isolation (from createBashHandler)
   // Falls back to process.cwd() implicitly when both are undefined.
-  const effectiveCwd = context?.resolveBase ?? cwd;
+  const effectiveCwd = context?.resolveBase ?? cwd ?? process.cwd();
 
   const spawnBaseOpts = {
     // detached: true places the shell in its own process group (PGID = proc.pid).
@@ -66,7 +67,9 @@ export function spawnBashProcess(
   // buildSandboxedCommand throws (fail-closed) if the mechanism is unavailable.
   const sandboxPolicy = parseSandboxPolicy();
   if (sandboxPolicy !== undefined && sandboxPolicy !== 'off') {
-    const sandboxed = buildSandboxedCommand(command, sandboxPolicy, effectiveCwd);
+    const childEnv = spawnBaseOpts.env;
+    const childTemp = childEnv['TMPDIR'] || childEnv['TMP'] || childEnv['TEMP'] || path.posix.join('/', 'tmp');
+    const sandboxed = buildSandboxedCommand(command, sandboxPolicy, effectiveCwd, childTemp);
     // sandboxed.shell is the sandbox binary (sandbox-exec / bwrap).
     // sandboxed.args are the pre-command arguments.
     // sandboxed.command is the original shell command string, passed last.

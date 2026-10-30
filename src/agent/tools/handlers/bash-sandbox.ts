@@ -5,9 +5,9 @@
  * // `AFK_BASH_SANDBOX` is set. Three policies are supported:
  * //
  * //   workspace-write  Allow reads everywhere; confine writes to the session
- * //                    cwd/worktree and the OS temp dir. Credential paths from
+ * //                    cwd/worktree and the child temp dir. Credential paths from
  * //                    the write-denylist floor are always denied.
- * //   read-only        Deny all writes anywhere.
+ * //   read-only        Deny regular-file writes (standard device IO remains).
  * //   off              No-op; sandbox disabled.
  * //
  * // Platform behaviour:
@@ -19,7 +19,7 @@
  * //             policy is not 'off', the spawn is REFUSED (fail-closed).
  * //
  * //   Windows — Fail-closed: throws so the caller refuses the spawn. The OS
- * //             sandbox mechanisms (sandbox-exec, bwrap, Landlock) do not
+ * //             sandbox mechanisms (sandbox-exec, bwrap) do not
  * //             exist on Windows. The existing string-based guards remain
  * //             active regardless of this setting.
  * //
@@ -31,9 +31,10 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { env } from '../../../config/env.js';
+import { canonicalSandboxPath, sandboxWriteFloor, sandboxFloorAncestors, assertDisjointSandboxGrants, sandboxSchemeString } from './bash-sandbox.paths.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -84,71 +85,26 @@ export function parseSandboxPolicy(): SandboxPolicy | undefined {
 // ── macOS sandbox-exec ─────────────────────────────────────────────────────
 
 /**
- * Build a TinyScheme sandbox-exec profile for the given policy.
- *
- * // Invariant: credential paths are denied before any allow rule. In
- * // sandbox-exec profiles, (deny …) rules are evaluated in document order
- * // and the first match wins, so explicit denies placed before the broad
- * // (allow file-write*) rule take priority without any rule-ordering tricks.
- * //
- * // The profile grants:
- * //   - default deny for both policies
- * //   - process-fork / exec (the shell must be able to exec commands)
- * //   - file-read-data / file-read-metadata for everything
- * //   - file-write-data / file-write-create / file-write-unlink for:
- * //       cwd   (workspace-write only, via subpath)
- * //       tmp   (workspace-write only, via subpath)
- * //   - signal self
+ * SBPL uses last-matching-rule precedence: all floor denies MUST follow grants.
+ * Default allow deliberately preserves git, networking, IPC and ordinary process
+ * operations. This is a filesystem write sandbox, not a secret-read sandbox.
  */
-function buildMacosProfile(policy: SandboxPolicy, cwd: string | undefined): string {
-  const home = homedir();
-  const tmp = tmpdir();
-
-  // Credential roots mirroring the write-denylist floor. These use POSIX
-  // path composition because sandbox-exec profiles are POSIX strings, not
-  // host paths — correct on macOS regardless.
-  const credentialRoots: readonly string[] = [
-    path.posix.join(home, '.ssh'),
-    path.posix.join(home, '.aws'),
-    path.posix.join(home, '.gnupg'),
-    path.posix.join(home, '.config', 'gcloud'),
-    path.posix.join(home, '.afk', 'config'),
-    path.posix.join(home, '.afk', 'state'),
-    path.posix.join(home, '.npmrc'),
-    path.posix.join(home, '.docker', 'config.json'),
-    // System paths — POSIX literals acceptable in profile strings (these are
-    // macOS profile entries, not host path.resolve calls; they do not go
-    // through Node's Windows path resolver).
-    path.posix.join('/', 'etc'),
-    path.posix.join('/', 'System'),
-    path.posix.join('/', 'private', 'etc'),
-    path.posix.join('/', 'usr', 'local', 'etc'),
-  ];
-
-  const credentialDenyLines = credentialRoots
-    .map((p) => `  (deny file-write* (subpath "${p}"))`)
-    .join('\n');
-
-  const writeAllowLines =
-    policy === 'workspace-write' && cwd !== undefined
-      ? [
-          `  (allow file-write* (subpath "${cwd}"))`,
-          `  (allow file-write* (subpath "${tmp}"))`,
-        ].join('\n')
-      : '';
-
+function buildMacosProfile(policy: SandboxPolicy, cwd: string, temp: string): string {
+  const grants = policy === 'workspace-write' ? [cwd, temp] : [];
+  const floor = sandboxWriteFloor();
   return [
     '(version 1)',
-    '(deny default)',
-    '(allow process-fork)',
-    '(allow process-exec)',
-    '(allow signal (target self))',
+    '(allow default)',
+    '(allow network*)',
     '(allow file-read*)',
-    credentialDenyLines,
-    writeAllowLines,
-  ]
-    .filter(Boolean)
-    .join('\n');
+    '(deny file-write*)',
+    // Git opens /dev/null O_RDWR. This grants device IO, not regular-file writes.
+    '(allow file-write-data (literal "/dev/null"))',
+    ...grants.map((p) => `  (allow file-write* (subpath ${sandboxSchemeString(p)}))`),
+    ...floor.map((p) => `  (deny file-write* (subpath ${sandboxSchemeString(p)}))`),
+    // Prevent moving a protected subtree out from under its pathname deny.
+    ...sandboxFloorAncestors(floor).map((p) => `  (deny file-write-unlink (literal ${sandboxSchemeString(p)}))`),
+  ].join('\n');
 }
 
 /**
@@ -165,9 +121,10 @@ function buildMacosProfile(policy: SandboxPolicy, cwd: string | undefined): stri
 function buildMacosSandboxedCommand(
   command: string,
   policy: SandboxPolicy,
-  cwd: string | undefined,
+  cwd: string,
+  temp: string,
 ): SandboxedCommand {
-  const profile = buildMacosProfile(policy, cwd);
+  const profile = buildMacosProfile(policy, cwd, temp);
   // The POSIX shell path is used as an argument to sandbox-exec (not as the
   // spawn command itself), so R1 does not apply here. We use path.posix.join
   // to make the intent explicit and satisfy R3 for any tooling that checks
@@ -210,50 +167,42 @@ function isBwrapAvailable(): boolean {
   return _bwrapAvailable;
 }
 
-/**
- * Build a bwrap (bubblewrap) invocation for the given policy.
- *
- * // Invariant: the root filesystem is bound read-only. Write binds are
- * // added only for cwd (workspace-write) and tmpdir (workspace-write).
- * // Credential paths are automatically protected by the read-only root bind.
+/** Root is read-only; private proc/dev directories are remounted read-only.
+ * Writable mounts must be wholly disjoint from the full live write floor.
  */
 function buildLinuxBwrapCommand(
   command: string,
   policy: SandboxPolicy,
-  cwd: string | undefined,
+  cwd: string,
+  temp: string,
 ): SandboxedCommand {
-  const tmp = tmpdir();
-
-  // POSIX-path literals below are bwrap argument strings (not host path.resolve
-  // calls), so R3 does not apply. We use path.posix.join for consistency.
-  const rootMount = path.posix.join('/');
-  const devMount = path.posix.join('/', 'dev');
-  const procMount = path.posix.join('/', 'proc');
-  const tmpMount = path.posix.join('/', 'tmp');
-
+  const root = path.posix.join('/');
+  // A host /proc exposes other processes' writable /proc/PID/root aliases.
+  // A private PID namespace + read-only proc mount closes that mount escape.
+  const proc = path.posix.join('/', 'proc');
+  const dev = path.posix.join('/', 'dev');
   const bwrapArgs: string[] = [
-    '--ro-bind', rootMount, rootMount,
-    '--dev', devMount,
-    '--proc', procMount,
-    '--tmpfs', tmpMount,
+    '--ro-bind', root, root, '--cap-drop', 'ALL', '--unshare-pid',
+    '--proc', proc, '--remount-ro', proc,
+    // A read-only host /dev still permits IO to device nodes (including disks).
+    // Expose only inert standard IO devices, in a read-only private directory.
+    '--tmpfs', dev,
   ];
-
-  if (policy === 'workspace-write' && cwd !== undefined) {
-    bwrapArgs.push('--bind', cwd, cwd);
-    bwrapArgs.push('--bind', tmp, tmp);
+  for (const name of ['null', 'zero', 'full', 'random', 'urandom']) {
+    const device = path.posix.join(dev, name);
+    bwrapArgs.push('--dev-bind', device, device);
   }
-
-  // Run the command via /bin/sh inside the sandbox. The shell path here is
-  // a bwrap argument string, not a spawn first-argument — R1 does not apply.
-  const shBin = path.posix.join('/', 'bin', 'sh');
-  bwrapArgs.push('--', shBin, '-c');
-
-  return {
-    shell: 'bwrap',
-    args: bwrapArgs,
-    command,
-    sandboxed: true,
-  };
+  bwrapArgs.push('--remount-ro', dev);
+  if (policy === 'workspace-write') {
+    const grants = [...new Set([cwd, temp])];
+    // Never let a later grant shadow private proc or expose writable kernel/device
+    // interfaces, including ancestor/descendant and canonical-alias grants.
+    const kernelRoots = ['proc', 'dev', 'sys'].map((name) => path.posix.join('/', name));
+    assertDisjointSandboxGrants(grants, [...sandboxWriteFloor(), ...kernelRoots]);
+    for (const grant of grants) bwrapArgs.push('--bind', grant, grant);
+  }
+  bwrapArgs.push('--', path.posix.join('/', 'bin', 'sh'), '-c');
+  return { shell: 'bwrap', args: bwrapArgs, command, sandboxed: true };
 }
 
 // ── Platform dispatch ──────────────────────────────────────────────────────
@@ -273,6 +222,7 @@ export function buildSandboxedCommand(
   command: string,
   policy: SandboxPolicy,
   cwd: string | undefined,
+  childTemp: string = tmpdir(),
 ): SandboxedCommand {
   if (policy === 'off') {
     return { shell: 'sh', args: [], command, sandboxed: false };
@@ -286,20 +236,23 @@ export function buildSandboxedCommand(
     // The existing string-based guards remain active regardless.
     throw new Error(
       `AFK_BASH_SANDBOX="${policy}" is set but the OS-level bash sandbox is not ` +
-        `supported on Windows. The sandbox mechanisms (sandbox-exec, bwrap, Landlock) ` +
+        `supported on Windows. The sandbox mechanisms (sandbox-exec, bwrap) ` +
         `are macOS/Linux-only. Either unset AFK_BASH_SANDBOX or set it to "off" ` +
         `to run without sandboxing on this platform. ` +
         `Existing string-based path guards remain active regardless of this setting.`,
     );
   }
 
+  const effectiveCwd = canonicalSandboxPath(cwd ?? process.cwd());
+  // Relative TMPDIR is interpreted by the child from its effective cwd.
+  const effectiveTemp = canonicalSandboxPath(path.resolve(effectiveCwd, childTemp));
   if (platform === 'darwin') {
-    return buildMacosSandboxedCommand(command, policy, cwd);
+    return buildMacosSandboxedCommand(command, policy, effectiveCwd, effectiveTemp);
   }
 
-  // Linux (and other POSIX platforms): try bwrap.
-  if (isBwrapAvailable()) {
-    return buildLinuxBwrapCommand(command, policy, cwd);
+  // Only Linux supports this bwrap backend; all other platforms fail closed.
+  if (platform === 'linux' && isBwrapAvailable()) {
+    return buildLinuxBwrapCommand(command, policy, effectiveCwd, effectiveTemp);
   }
 
   // bwrap not found — fail closed.

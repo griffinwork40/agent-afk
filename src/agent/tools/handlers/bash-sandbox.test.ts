@@ -13,6 +13,9 @@ import {
   _forceBwrapUnavailableForTests,
 } from './bash-sandbox.js';
 
+import { sandboxWriteFloor, sandboxSchemeString } from './bash-sandbox.paths.js';
+import { getWriteDenylist } from './write-denylist.js';
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /** Stub process.platform for a test scope. Restores afterEach. */
@@ -200,11 +203,12 @@ describe('buildSandboxedCommand — darwin', () => {
     });
   });
 
-  it('profile starts with deny default after version', () => {
+  it('profile preserves non-write operations with allow default', () => {
     withPlatform('darwin', () => {
       const result = buildSandboxedCommand('ls', 'workspace-write', '/tmp');
       const profile = result.args[1] as string;
-      expect(profile).toContain('(deny default)');
+      expect(profile).toContain('(allow default)');
+      expect(profile).toContain('(deny file-write*)');
     });
   });
 
@@ -234,7 +238,7 @@ describe('buildSandboxedCommand — linux (bwrap available on host)', () => {
     withPlatform('linux', () => {
       _resetBwrapCacheForTests();
       try {
-        const result = buildSandboxedCommand('ls', 'workspace-write', '/work');
+        const result = buildSandboxedCommand('ls', 'workspace-write', '/work', '/synthetic-disjoint-temp');
         // When bwrap is installed: sandboxed result expected.
         expect(result.shell).toBe('bwrap');
         expect(result.sandboxed).toBe(true);
@@ -251,7 +255,7 @@ describe('buildSandboxedCommand — linux (bwrap available on host)', () => {
     withPlatform('linux', () => {
       _resetBwrapCacheForTests();
       try {
-        const result = buildSandboxedCommand('ls', 'workspace-write', '/my/project');
+        const result = buildSandboxedCommand('ls', 'workspace-write', '/my/project', '/synthetic-disjoint-temp');
         const args = result.args as string[];
         expect(args).toContain('--ro-bind');
         expect(args).toContain('--bind');
@@ -344,6 +348,17 @@ describe('sandboxDescription', () => {
 // ── Security: credential paths are always denied ─────────────────────────
 
 describe('credential path denial (macOS profile)', () => {
+  it('uses every entry of the actual shared floor, not a partial credential copy', () => {
+    withPlatform('darwin', () => {
+      const profile = buildSandboxedCommand('true', 'workspace-write', '/work').args[1]!;
+      const floor = sandboxWriteFloor();
+      for (const entry of getWriteDenylist()) expect(floor).toContain(entry);
+      for (const entry of floor) {
+        expect(profile).toContain(`(deny file-write* (subpath ${sandboxSchemeString(entry)}))`);
+      }
+    });
+  });
+
   const CREDENTIAL_PATHS = ['.ssh', '.aws', '.gnupg', '.afk', '.npmrc', '.docker'];
 
   for (const credPath of CREDENTIAL_PATHS) {
@@ -353,13 +368,13 @@ describe('credential path denial (macOS profile)', () => {
         const profile = result.args[1] as string;
         // Profile must contain a deny rule mentioning this credential path.
         expect(profile).toContain(credPath);
-        // And the surrounding deny rule must appear before any allow file-write*.
+        // SBPL last matching rule wins: floor denies follow all write grants.
         const denyIdx = profile.indexOf(`(deny file-write*`);
         const allowWriteIdx = profile.indexOf(`(allow file-write* (subpath "/work")`);
         expect(denyIdx).toBeGreaterThan(-1);
-        // deny rules come before write-allow rules in the profile.
+        // The first deny is the blanket write restriction; floor denies are last.
         if (allowWriteIdx !== -1) {
-          expect(denyIdx).toBeLessThan(allowWriteIdx);
+          expect(profile.lastIndexOf('(deny file-write*')).toBeGreaterThan(allowWriteIdx);
         }
       });
     });
