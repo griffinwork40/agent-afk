@@ -61,8 +61,17 @@ async function authorizeRecord(
   }
   // IDs confer no authority. Apply the existing read floor and actor roots even
   // for metadata; then reject redirected blobs, including symlinks outside store.
-  resolveAndContain(record.uri, context, 'read', opts.cwd);
-  const [realStore, realBlob] = await Promise.all([realpath(storeDir), realpath(record.uri)]);
+  try {
+    resolveAndContain(record.uri, context, 'read', opts.cwd);
+  } catch {
+    throw new Error('artifact not accessible');
+  }
+  let realStore: string, realBlob: string;
+  try {
+    [realStore, realBlob] = await Promise.all([realpath(storeDir), realpath(record.uri)]);
+  } catch {
+    throw new Error('artifact not accessible');
+  }
   if (dirname(realBlob) !== realStore || basename(realBlob) !== filename) {
     throw new Error('Invalid artifact blob location');
   }
@@ -75,7 +84,7 @@ async function readSlice(record: Metadata, offset: number, limit: number) {
     const stat = await fh.stat();
     if (!stat.isFile() || stat.size !== record.size) throw new Error('Artifact size mismatch');
     const isText = record.media_type.startsWith('text/') ||
-      ['application/json', 'application/xml'].includes(record.media_type);
+      record.media_type === 'application/json';
     if (!isText || stat.size > 65536) {
       return { artifact: record, read_path: record.uri, contentOmitted: !isText ? 'binary' : 'large' };
     }

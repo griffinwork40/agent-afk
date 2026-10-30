@@ -30,6 +30,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   createReadStream,
   closeSync,
+  fstatSync,
   openSync,
   readSync,
   existsSync,
@@ -220,7 +221,8 @@ function readBoundedIndex(indexPath: string, maxBytes: number): string {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error('Invalid index byte limit');
   const fd = openSync(indexPath, 'r');
   try {
-    const buffer = Buffer.alloc(maxBytes + 1);
+    const cap = Math.min(fstatSync(fd).size, maxBytes) + 1;
+    const buffer = Buffer.allocUnsafe(cap);
     let bytes = 0;
     while (bytes < buffer.length) {
       const n = readSync(fd, buffer, bytes, buffer.length - bytes, null);

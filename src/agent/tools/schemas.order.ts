@@ -100,6 +100,11 @@ import type { AnthropicToolDef } from './types.js';
  *   terminal_font_size,
  *   ask_question
  */
+// History: INVARIANT_CORE_COUNT was 23 before PR #4551 added artifact_get,
+// artifact_list, and artifact_read to the invariant core. This 23→26 bump
+// invalidates any Anthropic API prefix cache that was seeded with the
+// previous 23-tool core. No action is required beyond this note: the API
+// will repopulate the cache on the next request with the new 26-tool prefix.
 export const INVARIANT_CORE_COUNT = 26;
 
 /**
