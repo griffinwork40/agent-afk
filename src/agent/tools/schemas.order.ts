@@ -54,10 +54,10 @@ import type { AnthropicToolDef } from './types.js';
  * LOCKED_TOOLS (operator-denied.ts) guarantees these can never be disabled by
  * operator config, so they form the maximal guaranteed-stable prefix head.
  *
- * The remaining 17 core tools (indices 6..22) are individually disableable via
+ * The remaining 20 core tools (indices 6..25) are individually disableable via
  * tools.disabled / tools.disabledBySlot. Disabling any one truncates the
  * shared prefix at that tool's index. What is invariant by default (absent any
- * disable config) is the membership and order of all 23 core tools.
+ * disable config) is the membership and order of all 26 core tools.
  *
  * Core tools (indices 0..INVARIANT_CORE_COUNT-1):
  *   read_file, write_file, edit_file, grep, glob, list_directory,  <- LOCKED
@@ -65,7 +65,7 @@ import type { AnthropicToolDef } from './types.js';
  *   wait_for, patch_apply, test_run, get_facet, json_query, model_complete,
  *   worktree, config_get, config_set,
  *   read_witness, search_witness,
- *   remote_agent, web_scrape, web_request
+ *   remote_agent, web_scrape, web_request, artifact_get, artifact_list, artifact_read
  *
  * Decision notes:
  *   - `web_scrape` / `web_request`: not in any disable group; no surface filter
@@ -87,7 +87,7 @@ import type { AnthropicToolDef } from './types.js';
  *     construction time and placed after ALL builtins. They do not affect the
  *     core prefix of builtinToolSchemas itself.
  *
- * Optional tail (indices INVARIANT_CORE_COUNT..44):
+ * Optional tail (indices INVARIANT_CORE_COUNT..47):
  *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
  *   image_generate, image_edit,
@@ -100,7 +100,7 @@ import type { AnthropicToolDef } from './types.js';
  *   terminal_font_size,
  *   ask_question
  */
-export const INVARIANT_CORE_COUNT = 23;
+export const INVARIANT_CORE_COUNT = 26;
 
 /**
  * Sort a copy of the MCP schema array by tool name using a locale-independent

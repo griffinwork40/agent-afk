@@ -94,6 +94,7 @@ import { modelCompleteTool } from './schemas.model-complete.js';
 import { gitReadTool } from './schemas.git-read.js';
 import { remoteAgentTool } from './schemas.remote-agent.js';
 import { codeSymbolsTool } from './schemas.lsp-symbols.js';
+import { artifactToolSchemas } from './schemas.artifact.js';
 
 /**
  * The always-on built-in tool definitions,
@@ -125,15 +126,15 @@ import { codeSymbolsTool } from './schemas.lsp-symbols.js';
  * index. send_telegram is placed in the optional tail by convention (not
  * grouped, not surface-filtered, but not locked either).
  *
- * ---- Invariant core (indices 0..22) -----------------------------------------
+ * ---- Invariant core (indices 0..25) -----------------------------------------
  *   read_file, write_file, edit_file, grep, glob, list_directory,  <- LOCKED
  *   bash, view_image, extract_document,
  *   wait_for, patch_apply, test_run, get_facet, json_query, model_complete,
  *   worktree, config_get, config_set,
  *   read_witness, search_witness,
- *   remote_agent, web_scrape, web_request
+ *   remote_agent, web_scrape, web_request, artifact_get, artifact_list, artifact_read
  *
- * ---- Optional tail (indices 23..44) -----------------------------------------
+ * ---- Optional tail (indices 26..47) -----------------------------------------
  *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
  *   image_generate, image_edit,
@@ -147,7 +148,7 @@ import { codeSymbolsTool } from './schemas.lsp-symbols.js';
  *   ask_question
  */
 export const builtinToolSchemas: readonly AnthropicToolDef[] = [
-  // -- Invariant core (0..22) ---------------------------------------------------
+  // -- Invariant core (0..25) ---------------------------------------------------
   // Indices 0..5: LOCKED_TOOLS builtins -- operator config can never disable
   // these six. Placing them first maximises the guaranteed-stable prefix.
   readFileTool,
@@ -156,7 +157,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   grepTool,
   globTool,
   listDirectoryTool,
-  // Indices 6..22: remaining core builtins -- not in any toolGroups() group,
+  // Indices 6..25: remaining core builtins -- not in any toolGroups() group,
   // not surface-filtered, and not registry-filtered (unlike the background-job
   // tools). Individually disableable via tools.disabled / tools.disabledBySlot.
   // Disabling any one truncates the shared prefix there.
@@ -177,7 +178,8 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   remoteAgentTool,
   webScrapeTool,
   webRequestTool,
-  // -- Optional tail (23..44): disableable groups / surface-filtered -----------
+  ...artifactToolSchemas,
+  // -- Optional tail (26..47): disableable groups / surface-filtered -----------
   cancelBackgroundJobTool,
   sendMessageToAgentTool,
   getBackgroundJobHealthTool,

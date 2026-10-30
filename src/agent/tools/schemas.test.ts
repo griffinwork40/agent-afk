@@ -18,15 +18,15 @@ import { filterBackgroundToolDefs } from './process-job-tools.js';
 import type { AnthropicToolDef } from './types.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 45 tools', () => {
-    // 23 invariant core + 22 optional tail = 45
-    expect(builtinToolSchemas).toHaveLength(45);
+  it('contains exactly 48 tools', () => {
+    // 26 invariant core + 22 optional tail = 48
+    expect(builtinToolSchemas).toHaveLength(48);
   });
 
   it('exports the expected tool names', () => {
-    // ORDERING INVARIANT (#4198): invariant core tools occupy indices 0..22;
+    // ORDERING INVARIANT (#4198): invariant core tools occupy indices 0..25;
     // optional/disableable/surface-filtered/registry-filtered tools occupy
-    // indices 23..44. Changing this order breaks prefix-cache reuse across
+    // indices 26..47. Changing this order breaks prefix-cache reuse across
     // tool-config variants. Indices 0..5 are the LOCKED_TOOLS builtins (never
     // operator-disableable).
     //
@@ -35,7 +35,7 @@ describe('builtinToolSchemas', () => {
     // because filterBackgroundToolDefs (process-job-tools.ts) removes them
     // when no background registry is wired — they cannot be invariant.
     expect(BUILTIN_TOOL_NAMES).toEqual([
-      // -- Invariant core (0..22) --
+      // -- Invariant core (0..25) --
       // 0..5: LOCKED_TOOLS builtins
       'read_file',
       'write_file',
@@ -43,7 +43,7 @@ describe('builtinToolSchemas', () => {
       'grep',
       'glob',
       'list_directory',
-      // 6..22: remaining core (individually disableable, never registry-filtered)
+      // 6..25: remaining core (individually disableable, never registry-filtered)
       'bash',
       'view_image',
       'extract_document',
@@ -61,7 +61,10 @@ describe('builtinToolSchemas', () => {
       'remote_agent',
       'web_scrape',
       'web_request',
-      // -- Optional tail (23..44) --
+      'artifact_get',
+      'artifact_list',
+      'artifact_read',
+      // -- Optional tail (26..47) --
       // registry-filtered: absent when no background registry is wired
       'cancel_background_job',
       'send_message_to_agent',
@@ -171,6 +174,7 @@ describe('builtinToolSchemas', () => {
       'clipboard_read',
       'list_sessions',
       'model_complete',
+      'artifact_list',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();
