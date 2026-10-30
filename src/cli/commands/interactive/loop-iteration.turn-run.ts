@@ -23,6 +23,7 @@ import type { TurnState } from './repl-loop-shared.js';
 import type { TranscriptHandle } from './transcript.js';
 import type { InputSurface } from '../../input/input-surface.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
+import { PauseController } from '../../../agent/session/pause-controller.js';
 
 /**
  * Mutable per-turn verdict capture. Reset before every `runOneTurn` so a
@@ -74,6 +75,7 @@ export async function runOneTurn(
   autosaveState: [autosaveFailureLogged: boolean],
   rawUserText: string,
 ): Promise<TerminalCapture> {
+  await PauseController.instance().check(); // pause gate: block before each model turn
   const { verdictLedger, loopStageBar, mascotBar, healthRail } = footer;
   const capture: TerminalCapture = { kind: undefined, doneHasEvidence: undefined, doneClassification: undefined };
 

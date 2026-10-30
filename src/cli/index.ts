@@ -96,6 +96,8 @@ import { registerCapturesCommand } from './commands/captures.js';
 import { registerDefectsCommand } from './commands/defects.js';
 import { registerReceiptCommand } from './commands/receipt.js';
 import { registerAcpCommand } from './commands/acp.js';
+import { registerPauseCommand } from './commands/pause.js';
+import { registerResumeAllCommand } from './commands/resume-all.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
 import { loadConfig } from './config.js';
 import { deferAfkMdSizeWarnings, flushDeferredAfkMdSizeWarnings } from './config/afk-md-tier.js';
@@ -167,6 +169,8 @@ registerCapturesCommand(program);
 registerDefectsCommand(program);
 registerReceiptCommand(program);
 registerAcpCommand(program);
+registerPauseCommand(program);
+registerResumeAllCommand(program);
 
 // Add aliases
 program.commands.find((c) => c.name() === 'chat')?.alias('c');

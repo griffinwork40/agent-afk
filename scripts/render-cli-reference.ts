@@ -43,6 +43,8 @@ import { registerReceiptCommand } from '../src/cli/commands/receipt.js';
 // jscpd:ignore-start — intentional mirror of src/cli/index.ts registrar block;
 // the renderer must declare the same import to build metadata-only, never execute.
 import { registerAcpCommand } from '../src/cli/commands/acp.js';
+import { registerPauseCommand } from '../src/cli/commands/pause.js';
+import { registerResumeAllCommand } from '../src/cli/commands/resume-all.js';
 // jscpd:ignore-end
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -134,6 +136,8 @@ export function buildCli(): Command {
   // jscpd:ignore-start — intentional mirror of src/cli/index.ts registrar block;
   // the renderer must call the same registrar to expose metadata, never execute.
   registerAcpCommand(program);
+  registerPauseCommand(program);
+  registerResumeAllCommand(program);
   // jscpd:ignore-end
 
   program.commands.find((c) => c.name() === 'chat')?.alias('c');
