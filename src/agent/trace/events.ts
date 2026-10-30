@@ -156,6 +156,18 @@ export const HookDecisionPayloadSchema = z.object({
    * on every PreToolUse verdict. Absent on other hook events and pre-#3900 traces.
    */
   riskCategory: z.enum(RISK_CATEGORIES).optional(),
+  /**
+   * Stable rule identifier for the hook that emitted this decision (#3849).
+   * Present when the emitting hook sets a `ruleId` on its result — e.g.
+   * `'readonly-bash.pipe-to-shell'`, `'write-roots.outside'`,
+   * `'bash-restriction.restricted-path'`, `'afk-gate.release-boundary'`.
+   * Absent on pre-#3849 traces and pass-through (no-decision) events.
+   *
+   * Consumers: the `afk insights` guardrail panel uses this field to produce
+   * per-rule block counts. Writers set it via the `ruleId` field on the hook
+   * result object returned from a `PreToolUse` or `PostToolUse` handler.
+   */
+  ruleId: z.string().optional(),
 });
 
 /** Mirrors `HookSummaryPayload` in ./types (see ./hook-tally.ts). */

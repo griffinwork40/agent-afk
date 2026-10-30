@@ -27,6 +27,21 @@ export function renderGuardrailFalsePositives(agg: InsightAggregates): string {
   const gfp = agg.guardrailFalsePositives;
   if (!gfp || gfp.totalTrips === 0) return '';
 
+  const ruleEntries = Object.entries(gfp.byRule ?? {}).sort((a, b) => b[1] - a[1]);
+  const ruleTable = ruleEntries.length > 0
+    ? `<h3>Blocks by Rule ID</h3>
+    <table class="data-table"><thead><tr><th>Rule ID</th><th>Block Count</th></tr></thead><tbody>${
+      ruleEntries.map(([ruleId, count]) =>
+        `<tr><td>${htmlEscape(ruleId)}</td><td>${htmlEscape(safeNum(count))}</td></tr>`,
+      ).join('')
+    }</tbody></table>
+    <p class="caption">Per-rule counts from <code>hook_decision</code> events with <code>ruleId</code> set. Only rules that have fired appear. Hooks that predate #3849 emit no <code>ruleId</code> and are not shown here.</p>`
+    : `<p class="caption">No ruleId-tagged block events found in this window. Hooks must set <code>ruleId</code> on their result for per-rule breakdown (see #3849).</p>`;
+
+  const denialRow = (gfp.denialBreakerTrips ?? 0) > 0
+    ? `<div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.denialBreakerTrips))}</div><div class="metric-label">Denial-Breaker Trips</div></div>`
+    : '';
+
   return `
   <section id="guardrail-false-positives">
     <h2>Guardrail False Positives</h2>
@@ -37,8 +52,10 @@ export function renderGuardrailFalsePositives(agg: InsightAggregates): string {
       <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.totalPreToolUseBlocks))}</div><div class="metric-label">Total PreToolUse Blocks</div></div>
       <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.sessionsWithTrips))}</div><div class="metric-label">Sessions with Trips</div></div>
       <div class="metric-card"><div class="metric-val">${htmlEscape(safeNum(gfp.sessionsScanned))}</div><div class="metric-label">Sessions Scanned</div></div>
+      ${denialRow}
     </div>
     <p class="caption">Hook-block-repeat meta-guard — a high FP rate suggests the threshold may be too aggressive.</p>
+    ${ruleTable}
   </section>`;
 }
 

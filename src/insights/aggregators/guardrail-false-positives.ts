@@ -48,7 +48,7 @@ import { TraceEventSchema } from '../../agent/trace/events.js';
 import { listSessionIds, getOrDeriveFacet } from '../../agent/facets/index.js';
 import type { InsightsOptions } from '../types.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
-import type { TraceEvent, SessionPhasePayload, ToolCallPayload, HookSummaryPayload } from '../../agent/trace/types.js';
+import type { TraceEvent, SessionPhasePayload, ToolCallPayload, HookDecisionPayload, HookSummaryPayload } from '../../agent/trace/types.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -113,6 +113,30 @@ export interface GuardrailFalsePositiveAggregates {
    * had any trips). Zero when no sessions fell in the window.
    */
   sessionsScanned: number;
+
+  /**
+   * Per-ruleId block counts from `hook_decision` events with
+   * `decision: 'block'` and a `ruleId` field set (#3849).
+   *
+   * Keys are the `ruleId` strings emitted by hooks (e.g.
+   * `'readonly-bash.pipe-to-shell'`, `'write-roots.outside'`). Values are
+   * the total number of block events for that rule across all traced sessions
+   * in the window. Rules that have never fired (or whose hooks predate #3849)
+   * do not appear. An empty record means no ruleId-tagged blocks were found.
+   */
+  byRule: Record<string, number>;
+
+  /**
+   * Total `tool_call` completed events with `failureClass: 'denial-breaker'`
+   * across all traced sessions in the window (#3849 blindspot measurement).
+   *
+   * The denial circuit breaker aborts forked sub-agents that accumulate
+   * N consecutive path-approval read denials. These trips are distinct from
+   * `hook_block_repeat_tripped` and were not previously surfaced in insights.
+   * A non-zero count here signals forks being dispatched with too-narrow read
+   * roots.
+   */
+  denialBreakerTrips: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +151,8 @@ export function zeroGuardrailFalsePositiveAggregates(): GuardrailFalsePositiveAg
     totalPreToolUseBlocks: 0,
     sessionsWithTrips: 0,
     sessionsScanned: 0,
+    byRule: {},
+    denialBreakerTrips: 0,
   };
 }
 
@@ -265,10 +291,28 @@ export function aggregateGuardrailFalsePositives(
       }
     }
 
-    // Harvest PreToolUse block counts from hook_summary.
+    // Harvest PreToolUse block counts from hook_summary, per-ruleId counts
+    // from hook_decision blocks, and denial-breaker trips from tool_call events.
     for (const ev of events) {
-      if (ev.kind !== 'hook_summary') continue;
-      agg.totalPreToolUseBlocks += sumPreToolUseBlocks(ev.payload as HookSummaryPayload);
+      if (ev.kind === 'hook_summary') {
+        agg.totalPreToolUseBlocks += sumPreToolUseBlocks(ev.payload as HookSummaryPayload);
+        continue;
+      }
+
+      if (ev.kind === 'hook_decision') {
+        const p = ev.payload as HookDecisionPayload;
+        if (p.decision === 'block' && typeof p.ruleId === 'string' && p.ruleId.length > 0) {
+          agg.byRule[p.ruleId] = (agg.byRule[p.ruleId] ?? 0) + 1;
+        }
+        continue;
+      }
+
+      if (ev.kind === 'tool_call') {
+        const p = ev.payload as ToolCallPayload;
+        if (p.phase === 'completed' && p.isError && p.failureClass === 'denial-breaker') {
+          agg.denialBreakerTrips++;
+        }
+      }
     }
   }
 
