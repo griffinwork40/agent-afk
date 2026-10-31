@@ -18,6 +18,7 @@ import { type TelegramRoute, routeKey } from './route.js';
 import type { SessionData } from './session-manager.js';
 import { isErrnoCode } from '../utils/errors.js';
 import { writeJsonFileAsync } from '../utils/json-file.js';
+import { palette } from '../cli/palette.js';
 
 /**
  * Encode a routeKey into a filename-safe string.
@@ -136,7 +137,7 @@ export async function loadSessionsFromDisk(
   } catch (error) {
     // Ignore errors if directory doesn't exist
     if (!isErrnoCode(error, 'ENOENT')) {
-      console.error('Failed to load sessions:', error);
+      console.error(palette.error(`Failed to load sessions: ${error instanceof Error ? error.message : String(error)}`));
     }
   }
 }
@@ -173,6 +174,6 @@ export async function saveSessionsToDisk(
       }
     }
   } catch (error) {
-    console.error('Failed to save sessions:', error);
+    console.error(palette.error(`Failed to save sessions: ${error instanceof Error ? error.message : String(error)}`));
   }
 }

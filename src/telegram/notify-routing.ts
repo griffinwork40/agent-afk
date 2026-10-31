@@ -16,6 +16,7 @@
  */
 
 import { parseAllowedChatIds } from './allowlist.js';
+import { palette } from '../cli/palette.js';
 import { loadTelegramConfig } from '../cli/config.js';
 import { env } from '../config/env.js';
 
@@ -82,10 +83,11 @@ export function emitMixedAllowlistHintIfNeeded(
   const hasGroup = allowed.some((id) => id < 0);
   if (hasDm && hasGroup) {
     _mixedAllowlistHintEmitted = true;
-    console.warn(
-      '[telegram] AFK_TELEGRAM_ALLOWED_CHAT_IDS contains both a DM and a group chat. ' +
+    console.warn(palette.warning(
+        '[telegram] AFK_TELEGRAM_ALLOWED_CHAT_IDS contains both a DM and a group chat. ' +
         'Notifications will go to the DM (positive-id chat) by default. ' +
         'Set AFK_TELEGRAM_PRIMARY_CHAT_ID to route notifications to a different chat.',
+      ),
     );
   }
 }

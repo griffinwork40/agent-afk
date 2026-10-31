@@ -35,6 +35,7 @@ import type { AgentConfig, PermissionMode } from '../agent/types.js';
 import type { ModelProvider } from '../agent/provider.js';
 import type { TelegramSessionBuildContext } from './session-context.js';
 import type { TelegramExecutorWiring } from './wire-telegram-executors.js';
+import { palette } from '../cli/palette.js';
 
 /**
  * Minimal grant-manager surface required by `seedPersistedGrants`. All three
@@ -108,10 +109,11 @@ export function finalizeTelegramSession(
   // sessions don't honour it.
   if (sessionConfig.permissionMode === 'plan') {
     // Log to stderr so it's visible in the bot process logs without crashing.
-    console.warn(
-      '[telegram] permissionMode="plan" is not supported on the Telegram surface ' +
-      '(the plan-exit seed drain runs only in the REPL loop). ' +
-      'Downgrading to "default" for this session.',
+    console.warn(palette.warning(
+        '[telegram] permissionMode="plan" is not supported on the Telegram surface ' +
+        '(the plan-exit seed drain runs only in the REPL loop). ' +
+        'Downgrading to "default" for this session.',
+      ),
     );
   }
   // Resolve the effective mode: 'plan' → 'default', anything else unchanged.

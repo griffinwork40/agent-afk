@@ -28,6 +28,7 @@
  */
 
 import { sanitizeField } from './sender-attribution.js';
+import { palette } from '../cli/palette.js';
 import type { MessageOriginUser, MessageOriginHiddenUser, MessageOriginChat, MessageOriginChannel } from 'telegraf/types';
 
 /**
@@ -154,7 +155,7 @@ export function forwardProvenancePrefix(meta: ForwardMetadata): string {
     } else {
       // Unknown future origin type: fall through to legacy fields below.
       // Warn so Bot API drift surfaces in logs rather than silently producing a blank marker.
-      console.warn(`[forward-provenance] unknown forward_origin.type "${(origin as { type: string }).type}" — Bot API may have added a new origin type`);
+      console.warn(palette.warning(`[forward-provenance] unknown forward_origin.type "${(origin as { type: string }).type}" — Bot API may have added a new origin type`));
     }
   }
 
