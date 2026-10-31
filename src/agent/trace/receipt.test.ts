@@ -424,6 +424,24 @@ describe('writeRunReceipt + runReceiptSessionEndHook (filesystem)', () => {
     expect(parsed.outcomes).toMatchObject({ schemaVersion: 1, cwd: home, startHead: null, commits: [] });
   });
 
+  it('stamps the top-level cwd when writeRunReceipt is given one', async () => {
+    const tracePath = await writeTrace('run-cwd-top', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-cwd-top', cwd: home });
+    const parsed = JSON.parse(
+      await readFile(join(getReceiptsDir(), 'run-cwd-top.json'), 'utf8'),
+    ) as RunReceipt;
+    expect(parsed.cwd).toBe(home);
+  });
+
+  it('omits the top-level cwd when writeRunReceipt is given none', async () => {
+    const tracePath = await writeTrace('run-nocwd-top', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-nocwd-top' });
+    const parsed = JSON.parse(
+      await readFile(join(getReceiptsDir(), 'run-nocwd-top.json'), 'utf8'),
+    ) as RunReceipt;
+    expect('cwd' in parsed).toBe(false);
+  });
+
   it('returns null when the trace file is absent', async () => {
     const res = await writeRunReceipt({ tracePath: join(home, 'nope', 'trace.jsonl') });
     expect(res).toBeNull();
@@ -845,5 +863,36 @@ describe('generateReceipt with outcomes (v3)', () => {
   it('renders no Outcomes section when outcomes is null', () => {
     const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: null });
     expect(renderReceiptMarkdown(r)).not.toContain('## Outcomes');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Top-level cwd field (additive, schemaVersion stays 3)
+// ---------------------------------------------------------------------------
+
+describe('RunReceipt cwd field', () => {
+  it('includes cwd in the receipt when meta provides it', () => {
+    const r = generateReceipt([sealed('succeeded')], {
+      tracePath: '/t',
+      witnessLabel: 'l',
+      cwd: '/repo/project',
+    });
+    expect(r.cwd).toBe('/repo/project');
+  });
+
+  it('omits cwd when meta does not provide it', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l' });
+    expect('cwd' in r).toBe(false);
+  });
+
+  it('renders the cwd in the Markdown meta line when present', () => {
+    const withCwd = generateReceipt([sealed('succeeded')], {
+      tracePath: '/t',
+      witnessLabel: 'l',
+      cwd: '/repo/project',
+    });
+    expect(renderReceiptMarkdown(withCwd)).toContain('**Cwd:** /repo/project');
+    const withoutCwd = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l' });
+    expect(renderReceiptMarkdown(withoutCwd)).not.toContain('**Cwd:**');
   });
 });
