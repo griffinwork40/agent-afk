@@ -372,8 +372,8 @@ export async function artifactRead(
  * Return the number of artifact records in the index.
  * Useful for health checks and tests.
  */
-export function artifactCount(_indexPath?: string): number {
-  return readIndex(_indexPath ?? getArtifactIndexPath()).size;
+export function artifactCount(_indexPath?: string, maxIndexBytes?: number): number {
+  return readIndex(_indexPath ?? getArtifactIndexPath(), maxIndexBytes).size;
 }
 
 // ---------------------------------------------------------------------------

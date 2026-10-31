@@ -2,7 +2,7 @@
 import { open, realpath } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { z, ZodError } from 'zod';
-import { artifactGet, artifactList } from '../../artifact-registry/store.js';
+import { artifactCount, artifactGet, artifactList } from '../../artifact-registry/store.js';
 import { getArtifactStoreDir } from '../../../paths.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
@@ -100,7 +100,7 @@ async function readSlice(record: Metadata, offset: number, limit: number) {
     const buffer = Buffer.alloc(Math.min(limit, Math.max(0, stat.size - offset)));
     const { bytesRead } = await fh.read(buffer, 0, buffer.length, offset);
     const bytes = buffer.subarray(0, bytesRead);
-    if (bytes.includes(0)) return { artifact: record, read_path: record.uri, contentOmitted: 'binary' };
+    if (bytes.includes(0)) return { artifact: record, read_path: record.uri, contentOmitted: 'binary', offset, bytes_read: bytesRead, next_offset: offset + bytesRead < stat.size ? offset + bytesRead : undefined };
     return {
       artifact: record, read_path: record.uri, content: bytes.toString('utf8'),
       offset, bytes_read: bytesRead, truncated: offset + bytesRead < stat.size,
@@ -134,9 +134,10 @@ export function createArtifactHandlers(opts: ArtifactHandlerOptions = {}): Map<s
       // Reserve envelope and commas so the complete JSON stays below 32 KiB.
       let bytes = 128;
       let truncatedReason: 'limit' | 'bytes' | 'index_cap' | null = null;
-      const allCandidates = artifactList({ ...filter, limit: 1001 }, opts.indexPath, MAX_INDEX_BYTES);
-      const indexCapped = allCandidates.length > 1000;
-      const candidates = indexCapped ? allCandidates.slice(0, 1000) : allCandidates;
+      // The store hard-caps results at 1000. Use artifactCount (bounded) to determine
+      // whether the raw index contains more records than that cap.
+      const indexCapped = artifactCount(opts.indexPath, MAX_INDEX_BYTES) > 1000;
+      const candidates = artifactList({ ...filter, limit: 1000 }, opts.indexPath, MAX_INDEX_BYTES);
       for (const raw of candidates) {
         signal.throwIfAborted();
         let record: Metadata;
