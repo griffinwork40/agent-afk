@@ -6,7 +6,7 @@ description: "Rewind the conversation, the files the agent edited, or both to an
 `/rewind` can rewind the conversation, the files the agent edited, or both. In the interactive REPL, afk saves a file's state before the agent's first write to it in each turn, so it can put files back to how they were at any earlier prompt.
 
 <Callout type="warn">
-File rewind covers edits made with `write_file`, `edit_file`, and `patch_apply`. It does not undo shell commands, API requests, sent messages, subagent edits, or other external effects. Inspect the workspace before resending an earlier prompt.
+File rewind covers edits made with `write_file`, `edit_file`, and `patch_apply`. For foreground shell commands in git repos, afk captures tracked and untracked non-ignored files before and after the command. Git-ignored files, files outside the repo, and background jobs are not restored. Ctrl+B detachment captures changes only up to detach; later changes are not captured. API requests, sent messages, subagent edits, and other external effects are never undone. The preview lists any shell calls that were not fully captured. Inspect your workspace before resending an earlier prompt.
 </Callout>
 
 ## Rewind to an earlier prompt
@@ -57,7 +57,7 @@ Checkpoints live under the AFK state directory at `file-checkpoints/<sessionId>/
 
 ## Restore file checkpoints from the SDK
 
-For applications embedding afk, file checkpointing is an `AgentConfig` option, off by default, implemented for both providers. Checkpoints save a file's state before the first supported write to that path in a turn. Supported tools are `write_file`, `edit_file`, and a non-dry-run `patch_apply`. Shell changes are not captured.
+For applications embedding afk, file checkpointing is an `AgentConfig` option, off by default, implemented for both providers. Checkpoints save a file's state before the first supported write to that path in a turn. Supported file tools are `write_file`, `edit_file`, and a non-dry-run `patch_apply`. Foreground shell commands in git repos capture prior bytes for tracked and untracked non-ignored files. Git-ignored and out-of-repo files are excluded. Background jobs and subagent bash calls are not captured; detached commands capture only up to detach. `rewindFiles().uncaptured` contains human-readable notes about incomplete bash capture plus a standing warning about ignored/outside-repo files whenever bash ran. `AFK_FILE_CHECKPOINT_BASH_DISABLE=1` disables bash capture; `AFK_FILE_CHECKPOINT_BASH_TIMEOUT_MS` (default 5000 per capture/diff) and `AFK_FILE_CHECKPOINT_BASH_MAX_FILES` (default 1000) bound its work.
 
 <Steps>
 <Step>

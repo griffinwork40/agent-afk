@@ -338,6 +338,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_EPISODE_SYNTHESIS",
+      "description": "Enable automatic episode synthesis at session end. When set to 1, a compressed narrative of each top-level session is synthesized from its sealed journal and stored in cross-session memory (facts table, category: learning). Off by default — opt in once the memory archive is large enough that episodic recall adds value. Requires a valid Anthropic credential; falls back to a deterministic record if the LLM call fails. Use `afk episode synthesize <session-id>` to synthesize a specific session on demand regardless of this flag.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_EVAL_STALENESS_DAYS",
       "description": "Number of days without a completed eval-run before the ground-state pre-flight surfaces a staleness warning. The guard reads the most recent timestamp from the eval-runs index ($AFK_HOME/agent-framework/improve/eval-runs/.index.jsonl) and emits a warning finding when the gap exceeds this threshold. Default: 7. Set to 0 to disable the guard.",
       "type": "number",
@@ -354,6 +363,30 @@
       "default": "60000",
       "example": "30000",
       "category": "daemon"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_BASH_DISABLE",
+      "description": "Disable best-effort git-backed capture of foreground bash file changes for /rewind.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_BASH_MAX_FILES",
+      "description": "Maximum changed files captured per bash call; larger diffs are reported as partial. Default 1000.",
+      "type": "number",
+      "required": false,
+      "default": "1000",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_BASH_TIMEOUT_MS",
+      "description": "Maximum milliseconds per bash checkpoint capture or diff. Default 5000.",
+      "type": "number",
+      "required": false,
+      "default": "5000",
+      "category": "debug"
     },
     {
       "name": "AFK_FILE_CHECKPOINT_MAX_AGE_DAYS",
@@ -448,6 +481,15 @@
       "description": "Maximum number of images the image_generate tool may produce per session. Prevents runaway spend in autonomous loops. Default: 10.",
       "type": "string",
       "required": false,
+      "category": "misc"
+    },
+    {
+      "name": "AFK_INLINE_IMAGES",
+      "description": "Controls inline terminal image rendering after image_generate, image_edit, and browser_screenshot tool calls. When set to \"0\" or \"false\", rendering is disabled and only the file path is logged (the existing behaviour). When unset (default), the hook auto-detects terminal support: Kitty graphics protocol for kitty/ghostty/wezterm, iTerm2 inline images protocol for iTerm2, and plain path logging as a fallback. Set to \"0\" to suppress all inline rendering.",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "example": "0",
       "category": "misc"
     },
     {
@@ -1033,6 +1075,14 @@
     {
       "name": "AFK_RUN_RECEIPT_DISABLED",
       "description": "Disable the post-session run receipt (state/receipts/<label>.json and .md). Set to 1 to skip receipt writes; the underlying witness trace is unaffected. Receipts are also implicitly off when AFK_TRACE_DISABLED=1 (no trace to summarize).",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_RUN_RECEIPT_TEXT_DISABLED",
+      "description": "Suppress conversation-text fields (firstUserMessage, lastAssistantMessage) in the run receipt journalSummary. When set to 1, the receipt v2 journalSummary is still written but text fields are omitted and textRedacted is set to true. Tool names, counts, and all v1 fields are unaffected. Use when receipts are stored in shared locations or CI logs and prompt/response text is considered private.",
       "type": "boolean",
       "required": false,
       "example": "1",
@@ -2012,6 +2062,30 @@
       "required": false,
       "example": "true",
       "category": "telegram"
+    },
+    {
+      "name": "TERM",
+      "description": "Terminal type string set by the outer terminal emulator (e.g. \"xterm-kitty\", \"xterm-256color\"). Not set by AFK. Read by the inline-image hook (#2143) to detect Kitty graphics protocol support (\"xterm-kitty\" means the terminal natively implements the protocol).",
+      "type": "string",
+      "required": false,
+      "example": "xterm-kitty",
+      "category": "process"
+    },
+    {
+      "name": "TERM_PROGRAM",
+      "description": "Terminal program name set by the outer terminal emulator (e.g. \"iTerm.app\", \"ghostty\", \"WezTerm\"). Not set by AFK. Read by the inline-image hook (#2143) to select between Kitty graphics protocol (ghostty, WezTerm) and iTerm2 inline images protocol (iTerm.app).",
+      "type": "string",
+      "required": false,
+      "example": "iTerm.app",
+      "category": "process"
+    },
+    {
+      "name": "TERM_PROGRAM_VERSION",
+      "description": "Terminal program version set by some terminal emulators alongside TERM_PROGRAM. Not set by AFK. Read by the inline-image hook (#2143) as a secondary iTerm2 detection signal.",
+      "type": "string",
+      "required": false,
+      "example": "3.5.0",
+      "category": "process"
     },
     {
       "name": "TMUX",

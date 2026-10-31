@@ -78,7 +78,7 @@ export function buildSubagentsLite(
           callerSessionId &&
           j.parentSessionId === callerSessionId &&
           j.status === 'running' &&
-          j.provenance === 'model'
+          j.provenance !== 'user'
         ) {
           const tail = backgroundRegistry.getTranscript(j.jobId);
           if (tail && tail.length > 0) {

@@ -33,7 +33,7 @@
  */
 
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
-import { pushIfConfigured } from '../telegram/push.js';
+import { operatorNotify } from './operator-notify.js';
 import { setPresenceBlocked } from './awareness/presence.js';
 
 export type ElicitationHandler = (
@@ -74,7 +74,7 @@ function notifyUnattendedElicitation(request: ElicitationRequest): void {
     const label = request.title ?? request.serverName;
     const parts = [`🔔 AFK needs you — stuck on: ${label}`, truncateForNotify(request.message)];
     if (request.url !== undefined && request.url !== '') parts.push(request.url);
-    void pushIfConfigured(parts.join('\n')).catch(() => undefined);
+    void operatorNotify(parts.join('\n')).catch(() => undefined);
   } catch {
     // Never let a notification failure affect the DECLINE path.
   }

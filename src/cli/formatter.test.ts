@@ -233,10 +233,9 @@ describe('renderMarkdownToTerminal', () => {
     /**
      * Inter-row separator contract.
      *
-     * A thin `├─┼─┤` line is inserted between every pair of data rows
-     * (but not after the last). For a 3-data-row table that means: 1
-     * header-to-data separator + 2 inter-row separators = 3 separator lines
-     * starting with `├`.
+     * A thin `├─┼─┤` line is inserted only after a multi-line (wrapped) row,
+     * not between every pair of data rows. Single-line rows produce no
+     * inter-row separator; only the header-to-data separator is emitted.
      */
     it('omits inter-row separators when all rows are single-line', () => {
       const sample = [
@@ -255,17 +254,101 @@ describe('renderMarkdownToTerminal', () => {
 
     it('inserts separator after a multi-line row', () => {
       // Force wrapping by rendering at a narrow width.
+      // Cell content uses short unique strings that survive column truncation
+      // at maxWidth 20 (col-A budget ~9 chars, col-B budget ~8 chars).
       const sample = [
         '| A | B |',
         '|---|---|',
         '| this text is long enough to wrap at a narrow width | 2 |',
-        '| 3 | 4 |',
+        '| rowBa | rowBb |',
         '',
       ].join('\n');
       const out = stripAnsi(renderMarkdownToTerminal(sample, { maxWidth: 20 }));
-      const separators = out.split('\n').filter((l) => l.startsWith('├'));
+      const lines = out.split('\n');
+      const separators = lines.filter((l) => l.startsWith('├'));
       // header-to-data + one after the wrapped row = 2
       expect(separators).toHaveLength(2);
+      // The inter-row separator must sit AFTER the wrapped row content and
+      // BEFORE the next single-line row — not before the wrapped row.
+      // Match the first physical line of the wrapped row: col-A renders 'this' on its own
+      // line alongside col-B's '2' — that combination is unique to this row.
+      const wrappedContentIdx = lines.findIndex((l) => /│\s*this\s*│\s*2\s*│/.test(l));
+      const nextRowIdx = lines.findIndex((l) => l.includes('rowBa'));
+      // Find the inter-row separator (second ├ line, after the header separator)
+      const interRowSepIdx = lines.findIndex(
+        (l, i) => l.startsWith('├') && i > wrappedContentIdx
+      );
+      expect(wrappedContentIdx).toBeGreaterThan(-1);
+      expect(nextRowIdx).toBeGreaterThan(-1);
+      expect(interRowSepIdx).toBeGreaterThan(wrappedContentIdx);
+      expect(interRowSepIdx).toBeLessThan(nextRowIdx);
+    });
+
+    it('emits no trailing separator when multi-line row is the last data row', () => {
+      // The last data row should never produce a trailing separator even if
+      // it wraps to multiple lines. Row 1 also wraps so prevRowHeight > 1
+      // when entering row 2 — this actually exercises the separator guard
+      // (a single-line row 1 makes the guard vacuously true).
+      // Cell content uses short unique strings that survive column truncation
+      // at maxWidth 20 (col-A budget ~8 chars, col-B budget ~9 chars).
+      const sample = [
+        '| A | B |',
+        '|---|---|',
+        '| first row also wraps at narrow width | r1c2 |',
+        '| this text is long enough to wrap at a narrow width | r2c2 |',
+        '',
+      ].join('\n');
+      const out = stripAnsi(renderMarkdownToTerminal(sample, { maxWidth: 20 }));
+      const lines = out.split('\n');
+      const separators = lines.filter((l) => l.startsWith('├'));
+      // header-to-data separator + one inter-row separator after row 1 (which
+      // wraps); no trailing separator after the last (also-wrapped) row 2.
+      expect(separators).toHaveLength(2);
+      // Confirm the bottom border follows the wrapped content (not a ├ line).
+      // Use 'r2c2' as the primary anchor for row 2's col-B cell. The regex also
+      // matches common words from row-2 col-A wrapped lines (both rows share
+      // words like 'this', 'text', etc.), so correctness depends on reduce(max)
+      // landing on the last physical line of row 2 — anchored by r2c2.
+      const lastDataLineIdx = lines.reduce(
+        (acc, l, i) => (/│\s*r2c2\s*│/.test(l) ? i : acc),
+        -1
+      );
+      const bottomBorderIdx = lines.findIndex((l) => l.startsWith('└'));
+      expect(lastDataLineIdx).toBeGreaterThan(-1);
+      expect(bottomBorderIdx).toBeGreaterThan(lastDataLineIdx);
+      const linesBetween = lines
+        .slice(lastDataLineIdx + 1, bottomBorderIdx)
+        .filter((l) => l.length > 0);
+      expect(linesBetween.every((l) => !l.startsWith('├'))).toBe(true);
+    });
+
+    it('inserts separator between each pair of consecutive multi-line rows', () => {
+      // Two consecutive wrapped rows should each be followed by a separator
+      // (except the last one, which should have none).
+      // Cell content uses short unique strings that survive column truncation
+      // at maxWidth 20 (col-A budget ~9 chars, col-B budget ~8 chars).
+      const sample = [
+        '| A | B |',
+        '|---|---|',
+        '| this text is long enough to wrap at a narrow width | 2 |',
+        '| another long text that also wraps at this width setting | 4 |',
+        '| rowCa | rowCb |',
+        '',
+      ].join('\n');
+      const out = stripAnsi(renderMarkdownToTerminal(sample, { maxWidth: 20 }));
+      const lines = out.split('\n');
+      const separators = lines.filter((l) => l.startsWith('├'));
+      // header-to-data + one after first wrapped row + one after second wrapped row = 3
+      expect(separators).toHaveLength(3);
+      // The last data row ("rowCa | rowCb") should have no trailing separator.
+      const lastSingleLineIdx = lines.findIndex((l) => l.includes('rowCa'));
+      const bottomBorderIdx = lines.findIndex((l) => l.startsWith('└'));
+      expect(lastSingleLineIdx).toBeGreaterThan(-1);
+      expect(bottomBorderIdx).toBeGreaterThan(lastSingleLineIdx);
+      const linesBetweenLastAndBottom = lines
+        .slice(lastSingleLineIdx + 1, bottomBorderIdx)
+        .filter((l) => l.length > 0);
+      expect(linesBetweenLastAndBottom.every((l) => !l.startsWith('├'))).toBe(true);
     });
 
     it('suppresses top chrome when consecutive tables have same structure', () => {

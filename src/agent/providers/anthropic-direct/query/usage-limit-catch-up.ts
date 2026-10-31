@@ -9,8 +9,8 @@
  * pause that their typed message ended) is therefore invisible to them: the
  * store already holds account B, nothing changes, and the SDK client, which
  * caches its bearer token at construction, keeps sending account A's token
- * and re-hitting the same limit. Before this module the only way out was a
- * manual `/reauth` and then a fresh message.
+ * and re-hitting the same limit. This module eliminates that failure class
+ * by catching up automatically at every turn start and usage-limit check.
  *
  * Two call sites, one comparison ({@link storeAheadOfClient}):
  *   - `source: 'usage-limit'` — once per turn, when a usage-limit 429 is
@@ -19,7 +19,7 @@
  *   - `source: 'turn-start'` — at the top of every turn
  *     (`RetryLayer.turnWithRetries`), so an account switch with NO error is
  *     picked up on the next message on every surface (REPL, Telegram, web),
- *     not only after a 401/429 or a manual `/reauth`.
+ *     not only after a 401/429.
  *
  * Returns `false` (callers proceed exactly as before) when:
  *   - the session is not OAuth, or its credential came from an env var
@@ -121,8 +121,15 @@ export async function catchUpStaleCredential(
     });
     return true;
   }
-  // Witness layer: a resume with no matching pause, because the turn never
-  // parked. `source` distinguishes it from the park-loop resumes.
+  // Witness layer: intentional divergence from the turn-start / compaction
+  // paths. Those paths emit `credential_swap` because they stand alone — no
+  // surrounding pause/resume lifecycle. This path (`source: 'usage-limit'`)
+  // fires inside the usage-limit tier, where the session IS in a park-then-
+  // resume lifecycle: the swap is the REASON we do not need to park, so the
+  // observable event is a resume (with durationMs: 0, no park) rather than a
+  // bare swap. Consumers correlating `credential_swap` events for account-
+  // switch telemetry must also watch `usage_limit_resume` with
+  // `metadata.hotSwapped === true` to capture this path.
   void emitSessionPhase(runInput.traceWriter, {
     phase: 'usage_limit_resume',
     durationMs: 0,

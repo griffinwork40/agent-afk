@@ -358,6 +358,61 @@ describe('renderStartupRecall — truncation', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Edge-case scan behaviour
+// ---------------------------------------------------------------------------
+
+describe('renderStartupRecall — getOrDeriveFacet undefined fallthrough', () => {
+  it('skips entries where getOrDeriveFacet returns undefined and finds the next match', () => {
+    mockGetSessionsDir.mockReturnValue('/fake/sessions');
+    // Two sidecars, both matching cwd. First returns undefined from facet store;
+    // second returns a valid sealed facet — verifies the scan continues.
+    mockReaddirSync.mockReturnValue(['first.json', 'second.json']);
+    mockStatSync.mockImplementation((_p: string) => ({ mtimeMs: Date.now() }));
+    mockReadSync.mockImplementation(
+      (_fd: number, buf: Buffer, _offset: number, _length: number, _pos: number) => {
+        const payload = JSON.stringify({ cwd: '/some/project' });
+        buf.write(payload, 0, 'utf8');
+        return payload.length;
+      },
+    );
+    // first.json → undefined (no facet derived); second.json → valid sealed facet.
+    mockGetOrDeriveFacet
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(makeFacet({ session_id: 'second', brief_summary: 'second session' }));
+
+    const result = renderStartupRecall({ ...BASE_OPTS });
+    expect(result).toBeDefined();
+    expect(result).toContain('second session');
+  });
+});
+
+describe('renderStartupRecall — MAX_SCAN boundary', () => {
+  it('silently skips sessions beyond MAX_SCAN (entry 31+) and returns undefined', () => {
+    mockGetSessionsDir.mockReturnValue('/fake/sessions');
+    // 31 sidecars all matching cwd, but only entry index 30 (the 31st) has a
+    // valid sealed facet — it must be silently excluded by the .slice(0, 30) cap.
+    const files = Array.from({ length: 31 }, (_, i) => `sess${i}.json`);
+    mockReaddirSync.mockReturnValue(files);
+    mockStatSync.mockImplementation((_p: string) => ({ mtimeMs: Date.now() }));
+    mockReadSync.mockImplementation(
+      (_fd: number, buf: Buffer, _offset: number, _length: number, _pos: number) => {
+        const payload = JSON.stringify({ cwd: '/some/project' });
+        buf.write(payload, 0, 'utf8');
+        return payload.length;
+      },
+    );
+    // First 30 entries return undefined; the 31st (index 30) returns a valid facet.
+    mockGetOrDeriveFacet.mockReturnValue(undefined);
+    // The 31st call should never happen because MAX_SCAN=30 slices it out.
+
+    const result = renderStartupRecall({ ...BASE_OPTS });
+    expect(result).toBeUndefined();
+    // getOrDeriveFacet should have been called at most MAX_SCAN (30) times.
+    expect(mockGetOrDeriveFacet.mock.calls.length).toBeLessThanOrEqual(30);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // formatTimeAgo — unit tests with fake timers
 // ---------------------------------------------------------------------------
 

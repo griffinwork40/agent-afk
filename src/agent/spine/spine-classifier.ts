@@ -16,7 +16,7 @@
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { oneShotCompletion } from '../providers/anthropic-direct/oneshot.js';
+import { oneShotCompletion } from '../providers/whatif-api.js';
 import { loadAnthropicCredential } from '../auth/credential-resolver.js';
 import type { SpineIdPrefix } from './spine-store.js';
 

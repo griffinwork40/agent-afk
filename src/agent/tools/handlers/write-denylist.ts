@@ -213,6 +213,11 @@ export function safeRealpath(p: string): string {
   return resolveRealpath(p, realpathSync);
 }
 
+/** Native spelling for the write floor's Windows long-name comparison. */
+export function safeNativeRealpath(p: string): string {
+  return resolveRealpath(p, realpathSync.native);
+}
+
 /** Keep native and plain canonicalization local to the write-denylist floor. */
 function resolveRealpath(p: string, realpath: (path: string) => string): string {
   const abs = resolve(p);
@@ -257,15 +262,26 @@ function resolveRealpath(p: string, realpath: (path: string) => string): string 
  */
 export function assertNotDenylisted(filePath: string, handlerName = 'write_file'): void {
   const real = safeRealpath(resolve(filePath));
-  const native = resolveRealpath(filePath, realpathSync.native);
+  const result = isCanonicalPathWriteDenied(real, resolveRealpath(filePath, realpathSync.native));
+  if (result.denied) {
+    throw new Error(
+      `${handlerName}: refusing to write to protected path: ${real}` +
+        ` (matches denylist entry: ${result.matched})`,
+    );
+  }
+}
+
+/** Already-canonical candidate forms; denylist entries remain freshly resolved. */
+export function isCanonicalPathWriteDenied(
+  real: string,
+  native: string,
+): { denied: boolean; matched?: string } {
   for (const blocked of getWriteDenylist()) {
     // Invariant: compare like canonical forms on both sides. Native expands
     // Windows 8.3 ancestors; plain realpath can retain their short spelling.
     if (pathIsWithin(real, blocked) || pathIsWithin(native, resolveRealpath(blocked, realpathSync.native))) {
-      throw new Error(
-        `${handlerName}: refusing to write to protected path: ${real}` +
-          ` (matches denylist entry: ${blocked})`,
-      );
+      return { denied: true, matched: blocked };
     }
   }
+  return { denied: false };
 }

@@ -69,6 +69,17 @@ export const STREAM_INCOMPLETE = 'stream_incomplete';
  * {@link STREAM_INCOMPLETE} on an abort. Only canonical "the model finished
  * speaking" reasons count as terminal here.
  *
+ * `'interrupted'` (set by `stampInterrupted` on ESC) IS terminal: the user
+ * explicitly stopped the run, so preserving that intent over
+ * {@link STREAM_INCOMPLETE} is correct.
+ *
+ * Output-token truncation reasons (`'max_tokens'`, `'length'`,
+ * `'max_output_tokens'`) are also terminal for this guard: a prior round was
+ * capped at the token limit, and if the NEXT round aborts, the truncation
+ * reason from the completed round is more informative than
+ * {@link STREAM_INCOMPLETE}. Uses {@link isTruncationStopReason} as the single
+ * source of truth rather than duplicating the literal set.
+ *
  * The empty-`_lastStopReason` case (`undefined`) is treated as non-terminal so
  * that a handle that has never been stamped by `processDoneEvent` also gets
  * {@link STREAM_INCOMPLETE} written — same as before.
@@ -79,9 +90,8 @@ export function isTerminalStopReason(s: string | undefined): boolean {
     s === 'stop' ||
     s === 'stop_sequence' ||
     s === 'pause_turn' ||
-    s === 'max_tokens' ||
-    s === 'length' ||
-    s === 'max_output_tokens'
+    s === 'interrupted' ||
+    isTruncationStopReason(s)
   );
 }
 

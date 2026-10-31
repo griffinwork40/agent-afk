@@ -76,6 +76,8 @@ const READ_TOOLS = new Set([
   'code_symbols',
   // state-tools.ts — read-only queries against the durable cross-session KV store.
   'state_get', 'state_query',
+  // Existing registry reads; IDs never bypass filesystem authorization.
+  'artifact_get', 'artifact_list', 'artifact_read',
 ]);
 const WRITE_TOOLS = new Set([
   'Write', 'Edit', 'NotebookEdit', 'MultiEdit',

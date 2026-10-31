@@ -31,6 +31,31 @@ import {
 import type { OpenAIChunk } from './translate.js';
 import { WIND_DOWN_NOTE } from '../shared/tool-loop-cap.js';
 import { SOFT_DEADLINE_NOTE, SOFT_DEADLINE_WIND_DOWN } from '../shared/soft-deadline.js';
+import { CONTEXT_PRESSURE_WIND_DOWN } from '../shared/context-pressure.js';
+import { INCOMPLETE_MARKER } from './query/turn-driver.js';
+
+// vi.mock is hoisted by vitest before imports. By default each spy calls
+// through to the real implementation so the existing context-pressure tests
+// (which rely on real token-count arithmetic + AFK_CONTEXT_GUARD_PCT env stubs)
+// continue to pass.  The Fix #3963-2 integration suite overrides the spies
+// only within its own beforeEach/afterEach so isolation is complete.
+vi.mock('./query/context-pressure.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./query/context-pressure.js')>();
+  return {
+    ...real,
+    windDownForContextPressure: vi.fn((...args: Parameters<typeof real.windDownForContextPressure>) =>
+      real.windDownForContextPressure(...args),
+    ),
+    canSynthesizeUnderPressure: vi.fn((...args: Parameters<typeof real.canSynthesizeUnderPressure>) =>
+      real.canSynthesizeUnderPressure(...args),
+    ),
+  };
+});
+
+import {
+  windDownForContextPressure,
+  canSynthesizeUnderPressure,
+} from './query/context-pressure.js';
 
 // ---- mock OpenAI client ---------------------------------------------------
 
@@ -1212,5 +1237,174 @@ describe('OpenAICompatibleQuery — tool dispatch without dispatcher', () => {
     });
     await collect(q);
     expect(createCalls[0]!.args.tools).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration test for Fix #3963-2: CONTEXT_PRESSURE_WIND_DOWN +
+// canSynthesizeUnderPressure=false overwrites finalAssistantText with the
+// incomplete marker, not the stale planning text from the earlier round.
+//
+// turn-driver.ts lines 460-469:
+//   if (windDownForContextPressure(ctx, appendedAt)) {
+//     windDownReason = CONTEXT_PRESSURE_WIND_DOWN;
+//     if (!canSynthesizeUnderPressure(ctx, appendedAt)) {
+//       finalAssistantText = 'Context capacity exhausted...';
+//       break;
+//     }
+//     continue; // synthesis round
+//   }
+//
+// The ||= → = fix (#3963-B) ensures the marker always wins, even when an
+// earlier round set finalAssistantText to a non-empty planning sentence.
+// ---------------------------------------------------------------------------
+
+describe('OpenAICompatibleQuery — Fix #3963-2: context-pressure canSynthesizeUnderPressure=false integration', () => {
+
+
+  beforeEach(() => {
+    // Default within this suite: guard does not fire so the control-case test
+    // runs a normal two-round turn without hitting the pressure path.
+    // mockReturnValue overrides call-through for this suite only; afterEach
+    // restores call-through via mockRestore so the outer suite is unaffected.
+    vi.mocked(windDownForContextPressure).mockReturnValue(false);
+    vi.mocked(canSynthesizeUnderPressure).mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    // Restore call-through so the outer suite's real-token-math test still works.
+    vi.mocked(windDownForContextPressure).mockRestore();
+    vi.mocked(canSynthesizeUnderPressure).mockRestore();
+  });
+
+  it('replaces a non-empty prior finalAssistantText with the incomplete marker when canSynthesizeUnderPressure=false', async () => {
+    // Scenario:
+    //   Round 1: model emits planning text ("I will summarize…") + tool_calls finish.
+    //            After dispatch, windDownForContextPressure returns true,
+    //            canSynthesizeUnderPressure returns false.
+    //   Result:  turn-driver.ts overwrites finalAssistantText with the incomplete
+    //            marker and breaks immediately — NO second model call.
+    //   Assert:  assistant.message.text === INCOMPLETE_MARKER (not the planning text).
+
+    // windDownForContextPressure returns true on the first call (after tool dispatch).
+    vi.mocked(windDownForContextPressure).mockReturnValue(true);
+    vi.mocked(canSynthesizeUnderPressure).mockReturnValue(false);
+
+    const fixture = makeDispatcher();
+
+    // Round 1: model streams planning text AND tool_calls in the same chunk,
+    // then stops with finish_reason=tool_calls.  The planning text sets
+    // finalAssistantText; the tool_call triggers dispatch.  After dispatch the
+    // context-pressure guard fires and the turn ends without a second model call.
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  content: 'I will now summarize the results and call the next tool.',
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_pressure',
+                      type: 'function',
+                      function: { name: 'echo', arguments: '{"msg":"data"}' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+          },
+        ],
+      },
+      // No second scripted turn — the guard must fire before any second call.
+    ];
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'config', last4: 'test' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid-pressure',
+      promptStream: singleInput('go'),
+      config: baseConfig({ depth: 1, subagentId: 'child-pressure' }),
+      toolDispatcher: fixture.dispatcher,
+    });
+
+    const events = await collect(q);
+
+    // Exactly ONE model call — the guard fires before any synthesis round.
+    expect(createCalls).toHaveLength(1);
+
+    // The assistant.message must carry the incomplete marker, not the planning text.
+    const assistantMsg = events.find((e) => e.type === 'assistant.message');
+    expect(assistantMsg).toBeDefined();
+    expect(assistantMsg?.type === 'assistant.message' ? assistantMsg.text : '').toBe(INCOMPLETE_MARKER);
+
+    // The stale planning text must not leak through.
+    expect(assistantMsg?.type === 'assistant.message' ? assistantMsg.text : '').not.toContain('I will now summarize');
+
+    // turn.completed must carry the context_pressure_wind_down stop reason.
+    const completed = events.at(-1);
+    expect(completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined).toBe(
+      CONTEXT_PRESSURE_WIND_DOWN,
+    );
+  });
+
+  it('does NOT fire the guard when windDownForContextPressure returns false (control case)', async () => {
+    // Guard stays off (default mock returns false). A normal two-round turn
+    // should complete with the model's own final text, not the marker.
+    const fixture = makeDispatcher();
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  content: 'Planning text.',
+                  tool_calls: [
+                    { index: 0, id: 'call_ctl', type: 'function', function: { name: 'echo', arguments: '{}' } },
+                  ],
+                },
+              },
+            ],
+          },
+          { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
+        ],
+      },
+      {
+        chunks: [
+          { choices: [{ delta: { content: 'Natural final answer.' } }] },
+          { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 } },
+        ],
+      },
+    ];
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'config', last4: 'test' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid-control',
+      promptStream: singleInput('go'),
+      config: baseConfig(),
+      toolDispatcher: fixture.dispatcher,
+    });
+
+    const events = await collect(q);
+
+    // Two model calls: tool round + synthesis round.
+    expect(createCalls).toHaveLength(2);
+
+    const assistantMsg = events.find((e) => e.type === 'assistant.message');
+    expect(assistantMsg?.type === 'assistant.message' ? assistantMsg.text : '').toBe('Natural final answer.');
+    expect(assistantMsg?.type === 'assistant.message' ? assistantMsg.text : '').not.toBe(INCOMPLETE_MARKER);
+
+    const completed = events.at(-1);
+    expect(completed?.type === 'turn.completed' ? completed.usage.stopReason : undefined).not.toBe(
+      CONTEXT_PRESSURE_WIND_DOWN,
+    );
   });
 });

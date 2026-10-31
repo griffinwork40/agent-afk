@@ -91,7 +91,6 @@ function makeQuery(provider: string, userMessageId?: string, duringWrite?: (q: P
       auth: { apiKey: 'test', source: 'config', last4: 'test' }, model: 'gpt-4o-mini', synthesizedSessionId: 'test-session',
       promptStream: input(userMessageId), config: { model: 'gpt-4o-mini', enableFileCheckpointing: true, cwd: tmp },
       toolDispatcher: dispatcher,
-      tools: [{ name: 'write_file', input_schema: { type: 'object' } }],
     });
   }
   return { query, file };

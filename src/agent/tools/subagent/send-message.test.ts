@@ -4,7 +4,9 @@
  * Key behaviors under test:
  *   - Input validation (missing jobId / message)
  *   - Missing registry
- *   - Unknown / user-backgrounded / cross-session / non-running job guards
+ *   - Unknown / cross-session / non-running job guards
+ *   - User-backgrounded (Ctrl+B) jobs are steerable (not refused)
+ *   - Truly user-initiated jobs are refused
  *   - Missing handle guard
  *   - Provider-capability check: returns isError when setBeforeNextRound is absent
  *   - Happy path: queues message and returns success when provider supports steering
@@ -129,12 +131,23 @@ describe('sendMessageToAgent — registry and job guards', () => {
     expect(result.content).toContain('not found');
   });
 
-  it('returns isError for user-backgrounded job', async () => {
+  it('steers user-backgrounded (Ctrl+B) jobs successfully', async () => {
+    const job = makeJob({ provenance: 'user-backgrounded' } as Partial<BackgroundJob>);
+    const session = makeSession(true);
+    const handle = makeHandle(session);
+    const registry = makeRegistry(job, handle);
+    const result = await sendMessageToAgent(registry, makeCall('job-abc', 'hi'));
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('queued');
+    expect(handle.steer).toHaveBeenCalledWith('hi');
+  });
+
+  it('returns isError for truly user-initiated jobs', async () => {
     const job = makeJob({ provenance: 'user' } as Partial<BackgroundJob>);
     const registry = makeRegistry(job, undefined);
     const result = await sendMessageToAgent(registry, makeCall('job-abc', 'hi'));
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('user');
+    expect(result.content).toContain('user-initiated');
   });
 
   it('returns isError for cross-session ownership violation', async () => {

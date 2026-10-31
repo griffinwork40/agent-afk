@@ -109,7 +109,7 @@ export async function* turnWithUsageLimitRetry(
 
     // A usage-limit 429 on a client whose token is older than the store
     // means the operator already switched accounts: replay on the new
-    // credential instead of parking on the old one (which needed /reauth).
+    // credential instead of parking on the old one.
     if (pendingErrorEvent && !credentialCatchUpTried) {
       credentialCatchUpTried = true;
       if (isClosed() || runInput.signal.aborted) return;

@@ -18,7 +18,7 @@
 
 import { debugLog } from '../utils/debug.js';
 import type { BackgroundAgentRegistry } from './background-registry.js';
-import { oneShotCompletion } from './providers/anthropic-direct/oneshot.js';
+import { oneShotCompletion } from './providers/whatif-api.js';
 import { withTransientRetry } from './providers/shared/transient-retry.js';
 import { traceExhaustedRetry } from './providers/shared/transient-retry.trace.js';
 import { redactSecrets } from './redact-secrets.js';

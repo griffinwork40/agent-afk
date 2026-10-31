@@ -89,9 +89,14 @@ export function formatHealthRail(fields: HealthRailFields, maxWidth: number): st
   // terminals — ctx% is more important to keep visible. Only rendered when
   // at least one process has been started (common case: no processes, zero
   // width cost, line is identical to pre-feature output).
+  // Dim when zero-active (all finished), info when any running — mirrors the
+  // subs segment's colour scheme. (Issue #4395, finding #4.)
   const segments = [turnText, elapsedText, callsText, subsText, ctxText];
   if (totalProcs > 0) {
-    const procsText = palette.info(`${activeProcs}/${totalProcs} procs`);
+    const procsText =
+      activeProcs > 0
+        ? palette.info(`${activeProcs}/${totalProcs} procs`)
+        : palette.dim(`0/${totalProcs} procs`);
     segments.push(procsText);
   }
 

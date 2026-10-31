@@ -41,6 +41,15 @@ const DIFF_FORMAT = ['--stat', '--numstat', '--shortstat', '--name-only', '--nam
 const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
   status: { flags: ['-s', '--short', '-b', '--branch', '--porcelain', '--porcelain=v1', '--porcelain=v2', '--untracked-files=no', '--untracked-files=normal', '--untracked-files=all', '--ignored'], valued: [], forced: [], revs: false },
   log: {
+    // `-n` is listed in `flags` (exact-match allowlist) rather than in `valued`
+    // because the allowlist checks tokens individually and `-n` takes its value
+    // as the *next* positional token, not as a `=`-joined suffix. This is
+    // semantically a valued option, not a boolean flag, but it is functionally
+    // correct: the count-shorthand normalizer in planGitRead rewrites `-n <N>`
+    // into `--max-count=<N>` before checkToken runs, so `-n` alone never
+    // reaches git verbatim. The tradeoff (boolean slot for a paired option) was
+    // accepted in #4371 because the normalizer makes the behavior correct and
+    // the prompt steers models toward `--max-count=` anyway (see schemas.git-read.ts).
     flags: ['--oneline', '--graph', '--decorate', '--all', '--merges', '--no-merges', '--first-parent', '--reverse', '-p', '--patch', '--follow', '-n', '-i', '--regexp-ignore-case', '--not', ...DIFF_FORMAT],
     valued: ['--format=', '--pretty=', '--author=', '--committer=', '--grep=', '--since=', '--until=', '--after=', '--before=', '--max-count=', '--skip=', '--date=', '--unified=', '--diff-filter='],
     forced: ['--no-ext-diff', '--no-textconv'], revs: true,
@@ -57,7 +66,7 @@ const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
   },
   grep: { flags: ['-n', '--line-number', '-i', '--ignore-case', '-w', '--word-regexp', '-l', '--files-with-matches', '--count', '-E', '--extended-regexp', '-F', '--fixed-strings', '-I', '--cached', '--untracked'], valued: ['--max-count=', '--max-depth='], forced: ['--no-textconv', '--no-color'], revs: true },
   tag: { flags: [], valued: ['--sort=', '--contains=', '--merged=', '--format='], forced: ['--list'], revs: false },
-  branch: { flags: ['-a', '--all', '-r', '--remotes', '-v', '-vv', '--verbose'], valued: ['--sort=', '--contains=', '--merged=', '--no-merged=', '--format='], forced: ['--list', '--no-color'], revs: false },
+  branch: { flags: ['-a', '--all', '-r', '--remotes', '-v', '-vv', '--verbose', '--show-current'], valued: ['--sort=', '--contains=', '--merged=', '--no-merged=', '--format='], forced: ['--list', '--no-color'], revs: false },
   blame: { flags: ['-w', '-s', '--porcelain', '--line-porcelain', '-l'], valued: ['-L'], forced: ['--no-textconv'], revs: true },
   'ls-files': { flags: ['--cached', '--others', '-o', '--exclude-standard', '--modified', '-m', '--deleted', '-d', '--stage', '-s'], valued: [], forced: [], revs: false },
   'rev-parse': { flags: ['--abbrev-ref', '--short', '--verify', '--show-toplevel', '--show-prefix', '--is-inside-work-tree', '--symbolic-full-name'], valued: [], forced: [], revs: true },
@@ -71,7 +80,7 @@ const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
 
   // rev-list: walks commit graph, no writes. --objects/--disk-usage omitted (can be
   // very expensive / expose object layout). --stdin omitted (network of stdin).
-  'rev-list': { flags: ['--count', '--oneline', '--reverse', '--merges', '--no-merges', '--first-parent', '--ancestry-path', '--topo-order', '--date-order', '--not'], valued: ['--max-count=', '--max-age=', '--min-age=', '--since=', '--until=', '--after=', '--before=', '--format=', '--pretty=', '--author=', '--committer=', '--grep='], forced: [], revs: true },
+  'rev-list': { flags: ['--count', '--oneline', '--reverse', '--merges', '--no-merges', '--first-parent', '--ancestry-path', '--topo-order', '--date-order', '--not', '--left-right'], valued: ['--max-count=', '--max-age=', '--min-age=', '--since=', '--until=', '--after=', '--before=', '--format=', '--pretty=', '--author=', '--committer=', '--grep='], forced: [], revs: true },
 
   // reflog: forced to `show` (the read-only subcommand). `expire`/`delete` are write
   // subcommands and are structurally blocked because `forced` prepends `show` and the
@@ -198,11 +207,28 @@ const NO_PATH_SUBCOMMANDS = new Set<GitReadSubcommand>([
 
 /**
  * Shorthand count flags for the subcommands whose allowlist already admits
- * `--max-count=<N>` (log, shortlog, rev-list). Models routinely emit the
- * shorthand forms `git log -5`, `git log -n 5`, `git log -n5`; each maps onto
- * the long form here so it lands on the allowlist instead of being rejected.
- * A non-numeric value (`-n abc`, `-nabc`) is rejected — it corresponds to no
- * valid count form, so there is nothing to widen.
+ * `--max-count=<N>` (log, shortlog, rev-list, reflog). Models routinely emit
+ * the shorthand forms `git log -5`, `git log -n 5`, `git log -n5`; each maps
+ * onto the long form here so it lands on the allowlist instead of being
+ * rejected. A non-numeric value (`-n abc`, `-nabc`) is rejected — it
+ * corresponds to no valid count form, so there is nothing to widen.
+ *
+ * Note: `reflog` also supports `--max-count=` and therefore receives this
+ * normalization, even though it was not listed in the original doc comment.
+ *
+ * Limitation (item 1): if the first token of `args` equals the subcommand
+ * name (e.g. `{subcommand: "show", args: ["show", "HEAD"]}`), it is always
+ * dropped as an echoed-subcommand artefact. A branch or tag whose name
+ * coincides with a subcommand name (e.g. a branch literally named "show" or
+ * "log") will be silently treated as HEAD. Runtime ref-verification during
+ * policy checking is intentionally avoided, so this edge case is documented
+ * here rather than fixed.
+ *
+ * Ambiguity (item 3): on shortlog, `-n <digits>` is always interpreted as a
+ * count shorthand and normalised to `--max-count=<digits>`. An all-digit short
+ * SHA (e.g. `git shortlog -n 1a2b3c` is fine, but `git shortlog -n 12345`)
+ * would be treated as a count rather than a revision. This is rare but worth
+ * noting if shortlog is ever used with numeric-only short SHAs.
  */
 const COUNT_SHORT_RE = /^-(?:n(\d+)|(\d+))$/;
 
@@ -222,6 +248,18 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   // "show", args: ["show", "HEAD"]}`). git would treat the echo as an
   // operand and fail, so drop a leading echo before any other handling.
   const argsIn = rawArgs.length > 0 && rawArgs[0] === subcommand ? rawArgs.slice(1) : rawArgs;
+  // Contract: models naturally echo forced tokens (e.g. `git stash list`,
+  // `git reflog show`). The policy prepends them unconditionally, so the
+  // echo would be rejected as an unlisted option or bare revision. Strip
+  // echoed tokens from the pre-separator segment only — post-separator
+  // tokens are pathspecs and must never be filtered.
+  const forcedTokens = new Set(policy.forced);
+  const rawSep = argsIn.indexOf('--');
+  const preRaw = rawSep === -1 ? argsIn : argsIn.slice(0, rawSep);
+  const postRaw = rawSep === -1 ? [] : argsIn.slice(rawSep + 1);
+  const argsClean = forcedTokens.size > 0
+    ? preRaw.filter((t) => !forcedTokens.has(t))
+    : preRaw;
   // A pattern is only meaningful for grep. Models that fill optional string
   // fields with "" must not trip the grep-only guard below, so an
   // empty/whitespace-only pattern counts as absent for every other subcommand.
@@ -234,15 +272,14 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   // Accept git's own grammar: a literal `--` in `args` separates revisions
   // from pathspecs. Tokens after it join `paths` and are confined below like
   // any other path, so this widens nothing.
-  const sep = argsIn.indexOf('--');
-  const preSep = sep === -1 ? argsIn : argsIn.slice(0, sep);
+  const preSep = argsClean;
   // Normalise shorthand count flags to `--max-count=<N>` before validation —
   // only where the allowlist already admits --max-count=.
   const args: string[] = [];
   if (subcommand !== 'grep' && policy.valued.includes('--max-count=')) {
     const countOnly = subcommand === 'log' || subcommand === 'rev-list';
     for (let i = 0; i < preSep.length; i++) {
-      const tok = preSep[i] as string;
+      const tok = preSep[i] ?? '';
       const next = preSep[i + 1];
       const m = COUNT_SHORT_RE.exec(tok);
       if (m !== null) {
@@ -251,9 +288,10 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
       }
       if (tok === '-n' && next !== undefined && !next.startsWith('-')) {
         if (!/^\d+$/.test(next)) {
-          // Not a count: on shortlog an attached -n is --numbered followed by
-          // an unrelated token, so only log/rev-list may reject the pair.
-          if (countOnly) return { ok: false, error: `Rejected count flag "-n ${next}": expected a positive integer.` };
+          // Not a count: for shortlog, a bare `-n` without a digit argument
+          // means --numbered (a separate flag), so only log/rev-list reject
+          // the non-digit pair; shortlog passes both tokens through.
+          if (countOnly) return { ok: false, error: `Rejected count flag "-n ${next}": expected a non-negative integer.` };
           args.push(tok, next);
           i++;
         } else {
@@ -271,13 +309,21 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   } else {
     args.push(...preSep);
   }
-  const paths = sep === -1 ? fieldPaths : [...fieldPaths, ...argsIn.slice(sep + 1)];
+  const paths = [...fieldPaths, ...postRaw];
   if (paths.length > MAX_ARGS) return { ok: false, error: `"paths" accepts at most ${MAX_ARGS} entries.` };
   for (const tok of args) {
     const err = checkToken(tok, policy, subcommand);
     if (err !== null) return { ok: false, error: err };
   }
-  const argv: string[] = [subcommand, ...policy.forced];
+  // Invariant: branch --show-current is a read-only query that returns the
+  // current branch name. It is incompatible with the forced --list flag
+  // (which switches branch to pattern-matching mode). Skip --list when
+  // --show-current is present; the safety contract holds because
+  // --show-current never creates branches.
+  const forced = subcommand === 'branch' && args.includes('--show-current')
+    ? policy.forced.filter((f) => f !== '--list')
+    : policy.forced;
+  const argv: string[] = [subcommand, ...forced];
   if (subcommand === 'grep') {
     if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > MAX_TOKEN_LEN || pattern.includes('\0')) {
       return { ok: false, error: 'git grep requires a non-empty "pattern" string.' };

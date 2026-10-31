@@ -14,6 +14,7 @@
  */
 
 import { openSync, readSync, closeSync, readdirSync, statSync } from 'node:fs';
+import { performance } from 'node:perf_hooks';
 import { join } from 'node:path';
 
 import { palette } from '../../palette.js';
@@ -41,8 +42,8 @@ function readFileHead(filePath: string): string {
   const fd = openSync(filePath, 'r');
   try {
     const buf = Buffer.alloc(HEAD_BYTES);
-    readSync(fd, buf, 0, HEAD_BYTES, 0);
-    return buf.toString('utf8');
+    const bytesRead = readSync(fd, buf, 0, HEAD_BYTES, 0);
+    return buf.subarray(0, bytesRead).toString('utf8');
   } finally {
     closeSync(fd);
   }
@@ -76,6 +77,7 @@ function findLatestCwdSession(
   excludeId: string | undefined,
   sessionsDir: string,
 ): SessionFacet | undefined {
+  const t0 = performance.now();
   let entries: Array<{ name: string; mtimeMs: number }>;
   try {
     entries = readdirSync(sessionsDir)
@@ -102,10 +104,20 @@ function findLatestCwdSession(
     try {
       const facet = getOrDeriveFacet(id);
       // Skip unsealed (live) sessions — end_time is set only on session seal.
-      if (facet && facet.end_time) return facet;
+      if (facet && facet.end_time) {
+        const elapsed = performance.now() - t0;
+        if (elapsed > 50) {
+          process.stderr.write(`[startup-recall] findLatestCwdSession took ${elapsed.toFixed(0)}ms\n`);
+        }
+        return facet;
+      }
     } catch {
       // Corrupt or derivation failure — skip.
     }
+  }
+  const elapsed = performance.now() - t0;
+  if (elapsed > 50) {
+    process.stderr.write(`[startup-recall] findLatestCwdSession took ${elapsed.toFixed(0)}ms (no match)\n`);
   }
   return undefined;
 }
@@ -176,12 +188,16 @@ export function renderStartupRecall(opts: StartupRecallOpts): string | undefined
 
   const parts: string[] = [];
 
+  // Strip ANSI escape sequences before rendering — a corrupt sidecar could
+  // embed terminal control codes that bleed into the user's prompt.
+  const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+
   // Summary text — prefer brief_summary, fall back to first_prompt.
   const summary =
     facet.brief_summary?.trim()
-      ? truncate(facet.brief_summary.trim(), SUMMARY_MAX)
+      ? truncate(stripAnsi(facet.brief_summary.trim()), SUMMARY_MAX)
       : facet.first_prompt?.trim()
-        ? truncate(facet.first_prompt.trim(), PROMPT_FALLBACK_MAX)
+        ? truncate(stripAnsi(facet.first_prompt.trim()), PROMPT_FALLBACK_MAX)
         : '';
 
   if (summary) parts.push(summary);
@@ -194,7 +210,9 @@ export function renderStartupRecall(opts: StartupRecallOpts): string | undefined
 
   parts.push(`${facet.total_turns} turns`);
 
-  if (parts.length === 0) return undefined;
+  // total_turns is always pushed above; guard against a zero-turn session
+  // that also has no summary/outcome/age — nothing meaningful to display.
+  if (parts.length === 0 || (parts.length === 1 && facet.total_turns === 0 && !summary && !label && !age)) return undefined;
 
   return palette.dim(`  last: ${parts.join(' · ')}`);
 }

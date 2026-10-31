@@ -90,7 +90,7 @@ export class SubagentManager {
   private readonly parentCanUseTool: CanUseTool | undefined;
   private readonly hookRegistry: HookRegistry | undefined;
   private readonly progressSink: SubagentProgressSink | undefined;
-  // Getter: read live at fork time so /reauth is visible to children (#2471).
+  // Getter: read live at fork time so account switches are visible to children (#2471).
   // Plain-string callers are wrapped at construction for backward compat.
   private readonly parentApiKey: (() => string | undefined) | undefined;
   private readonly parentBaseUrl: string | undefined;

@@ -269,3 +269,49 @@ describe('observation adapters', () => {
     expect(w?.sevenDaySonnet).toEqual({ utilization: 0.2, resetsAt: NOW });
   });
 });
+
+// Item 4 (#4475): model-scoped window filtering in bindingWindow / evaluateUsage
+describe('model-scoped window filtering', () => {
+  const windows = {
+    observedAt: NOW,
+    fiveHour: { utilization: 0.5 },
+    sevenDay: { utilization: 0.6 },
+    sevenDayOpus: { utilization: 1.0 },   // exhausted
+    sevenDaySonnet: { utilization: 0.3 },
+  };
+
+  it('exhausted Opus quota does not block a Sonnet dispatch', () => {
+    // bindingWindow for sonnet should skip sevenDayOpus
+    const binding = bindingWindow(windows, 'claude-sonnet-4-5');
+    expect(binding?.key).not.toBe('sevenDayOpus');
+    // evaluateUsage should not return 'over' for a sonnet model
+    const ev = evaluateUsage({ v: 1, provider: 'anthropic', account: 'oauth', windows }, NOW, undefined, 'claude-sonnet-4-5');
+    expect(ev.level).not.toBe('over');
+  });
+
+  it('exhausted Opus quota still blocks an Opus dispatch', () => {
+    const binding = bindingWindow(windows, 'claude-opus-4-5');
+    expect(binding?.key).toBe('sevenDayOpus');
+    const ev = evaluateUsage({ v: 1, provider: 'anthropic', account: 'oauth', windows }, NOW, undefined, 'claude-opus-4-5');
+    expect(ev.level).toBe('over');
+  });
+
+  it('exhausted Opus quota does not block a Haiku dispatch (no model-scoped window)', () => {
+    const ev = evaluateUsage({ v: 1, provider: 'anthropic', account: 'oauth', windows }, NOW, undefined, 'claude-haiku-3-5');
+    expect(ev.level).not.toBe('over');
+  });
+
+  it('unknown model string fails safe: all windows checked, opus quota blocks', () => {
+    // A completely unrecognised model string must not under-block
+    const ev = evaluateUsage({ v: 1, provider: 'anthropic', account: 'oauth', windows }, NOW, undefined, 'some-unknown-model-xyz');
+    // sevenDayOpus is 1.0 and should bind for unknown models (fail safe)
+    expect(ev.level).toBe('over');
+  });
+
+  it('undefined model checks all windows (existing behaviour preserved)', () => {
+    const binding = bindingWindow(windows, undefined);
+    expect(binding?.key).toBe('sevenDayOpus');
+    const ev = evaluateUsage({ v: 1, provider: 'anthropic', account: 'oauth', windows }, NOW);
+    expect(ev.level).toBe('over');
+  });
+});
