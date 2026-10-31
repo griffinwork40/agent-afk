@@ -1,1 +1,4 @@
-{ "errors": 2687 }
+{
+  "errors": 2689,
+  "growthReason": "workspace-ab-runner.test.ts type errors (TS2339/TS2502) on CI Ubuntu only, from merge with main"
+}
