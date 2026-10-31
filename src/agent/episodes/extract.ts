@@ -16,6 +16,7 @@
  */
 
 import { readJournalRecords, foldJournal } from '../journal/reader.js';
+import { stripPreamble } from '../session/preamble-strip.js';
 import { getOrDeriveFacet } from '../facets/store.js';
 import type { JournalBlock, JournalMarkLabel, JournalMessage } from '../journal/types.js';
 import type { EpisodeInput } from './types.js';
@@ -152,7 +153,7 @@ export function extractEpisodeInput(sessionId: string): EpisodeInput {
       if (rec.kind === 'append' && rec.message.role === 'user') {
         const text = messageText(rec.message);
         if (text) {
-          firstUserMessage = text.slice(0, FIRST_MSG_CAP);
+          firstUserMessage = stripPreamble(text).slice(0, FIRST_MSG_CAP);
           break;
         }
       }
