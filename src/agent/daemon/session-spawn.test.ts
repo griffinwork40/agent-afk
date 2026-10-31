@@ -53,9 +53,9 @@ import { getDaemonStateDir } from '../../paths.js';
 
 describe('parseDaemonEnvLimits', () => {
   // ── AFK_MAX_TOOL_USE_ITERATIONS ───────────────────────────────────────────
-  it('returns undefined parsedMaxToolIters when raw is undefined', () => {
+  it('defaults to 100 rounds when raw is undefined', () => {
     const { parsedMaxToolIters } = parseDaemonEnvLimits(undefined, undefined);
-    expect(parsedMaxToolIters).toBeUndefined();
+    expect(parsedMaxToolIters).toBe(100);
   });
 
   it('returns floored positive integer for valid parsedMaxToolIters', () => {
@@ -63,25 +63,25 @@ describe('parseDaemonEnvLimits', () => {
     expect(parsedMaxToolIters).toBe(3);
   });
 
-  it('returns undefined parsedMaxToolIters for zero (not a valid ceiling)', () => {
+  it('preserves unlimited rounds for numeric zero', () => {
     const { parsedMaxToolIters } = parseDaemonEnvLimits('0', undefined);
-    expect(parsedMaxToolIters).toBeUndefined();
+    expect(parsedMaxToolIters).toBe(0);
   });
 
-  it('returns undefined parsedMaxToolIters for non-numeric string', () => {
+  it('defaults to 100 rounds for non-numeric string', () => {
     const { parsedMaxToolIters } = parseDaemonEnvLimits('lots', undefined);
-    expect(parsedMaxToolIters).toBeUndefined();
+    expect(parsedMaxToolIters).toBe(100);
   });
 
-  it('returns undefined parsedMaxToolIters for negative value', () => {
+  it('preserves unlimited rounds for negative value', () => {
     const { parsedMaxToolIters } = parseDaemonEnvLimits('-1', undefined);
-    expect(parsedMaxToolIters).toBeUndefined();
+    expect(parsedMaxToolIters).toBe(0);
   });
 
   // ── AFK_MAX_BUDGET_USD ────────────────────────────────────────────────────
-  it('returns undefined parsedMaxBudget when raw is undefined', () => {
+  it('defaults to $5 parsedMaxBudget when raw is undefined', () => {
     const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, undefined);
-    expect(parsedMaxBudget).toBeUndefined();
+    expect(parsedMaxBudget).toBe(5);
   });
 
   it('returns valid number for a well-formed budget', () => {
@@ -94,20 +94,20 @@ describe('parseDaemonEnvLimits', () => {
     expect(parsedMaxBudget).toBe(0);
   });
 
-  it('returns undefined for empty string (not a $0 hard-stop)', () => {
+  it('defaults to $5 for empty string (not a $0 hard-stop)', () => {
     const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, '');
-    expect(parsedMaxBudget).toBeUndefined();
+    expect(parsedMaxBudget).toBe(5);
   });
 
-  it('returns undefined for whitespace-only string (treated as unset)', () => {
+  it('defaults to $5 for whitespace-only string (treated as unset)', () => {
     const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, '   ');
-    expect(parsedMaxBudget).toBeUndefined();
+    expect(parsedMaxBudget).toBe(5);
   });
 
-  it('returns undefined and warns for malformed budget (does not throw)', () => {
+  it('defaults to $5 and warns for malformed budget (does not throw)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, 'unlimited');
-    expect(parsedMaxBudget).toBeUndefined();
+    expect(parsedMaxBudget).toBe(5);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0]?.[0]).toMatch(/AFK_MAX_BUDGET_USD/);
   });
@@ -116,7 +116,7 @@ describe('parseDaemonEnvLimits', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const tokenLike = 'sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
     const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, tokenLike);
-    expect(parsedMaxBudget).toBeUndefined();
+    expect(parsedMaxBudget).toBe(5);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const msg: string = warnSpy.mock.calls[0]?.[0] as string;
     expect(msg).not.toContain(tokenLike);
@@ -126,31 +126,31 @@ describe('parseDaemonEnvLimits', () => {
   it('says "finite" in the warning for Infinity budget (#3708)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, 'Infinity');
-    expect(parsedMaxBudget).toBeUndefined();
+    expect(parsedMaxBudget).toBe(5);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const msg: string = warnSpy.mock.calls[0]?.[0] as string;
     expect(msg).toContain('finite');
   });
 
-  it('returns undefined and warns for NaN budget string (does not throw)', () => {
+  it('defaults to $5 and warns for NaN budget string (does not throw)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, 'NaN');
-    expect(parsedMaxBudget).toBeUndefined();
+    expect(parsedMaxBudget).toBe(5);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('returns undefined and warns for negative budget (does not throw)', () => {
+  it('defaults to $5 and warns for negative budget (does not throw)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, '-1');
-    expect(parsedMaxBudget).toBeUndefined();
+    expect(parsedMaxBudget).toBe(5);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
   // #3707: document that "Infinity" (a finite-false number) is rejected
-  it('returns undefined and warns for "Infinity" budget string (#3707)', () => {
+  it('defaults to $5 and warns for "Infinity" budget string (#3707)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, 'Infinity');
-    expect(parsedMaxBudget).toBeUndefined();
+    expect(parsedMaxBudget).toBe(5);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 

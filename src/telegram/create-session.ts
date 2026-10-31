@@ -13,9 +13,10 @@
  */
 
 import { AgentSession } from '../agent/session.js';
+import { resolveUnattendedLimits } from '../agent/unattended-limits.js';
 import { providerForModel } from '../agent/providers/index.js';
 import { resolveModelId } from '../agent/session/model-resolution.js';
-import { getMaxOutputTokens, getMaxToolUseIterations, getMaxBudgetUsd, composeSystemPrompt } from '../cli/shared-helpers.js';
+import { getMaxOutputTokens, composeSystemPrompt } from '../cli/shared-helpers.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { MemoryStore } from '../agent/memory/index.js';
 import type { StateStore } from '../agent/state/state-store.js';
@@ -66,16 +67,9 @@ export function createTelegramSessionFactory(
     const isXaiRouted = isXaiRoutedProvider(sessionProviderName);
     // maxOutputTokens is Anthropic-oriented; skip for OpenAI + xAI Chat Completions.
     const maxOutputTokens = isOpenAiRouted || isXaiRouted ? undefined : getMaxOutputTokens();
-    // Opt-in top-level tool-use-round ceiling (AFK_MAX_TOOL_USE_ITERATIONS).
-    // Unlike maxOutputTokens (Anthropic-only here), this applies to BOTH
-    // providers via resolveMaxToolIterations(), so it is NOT gated on the
-    // provider. undefined = unlimited (no behavior change). No per-chat
-    // override exists, so this is the env default only.
-    const maxToolUseIterations = getMaxToolUseIterations();
-    // Session-wide USD budget ceiling (AFK_MAX_BUDGET_USD). Applies to ALL
-    // providers. undefined = uncapped (no behavior change for operators who
-    // have not set the variable). No per-chat override; env default only.
-    const maxBudgetUsd = getMaxBudgetUsd();
+    const { maxToolUseIterations, maxBudgetUsd } = resolveUnattendedLimits(
+      env.AFK_MAX_TOOL_USE_ITERATIONS, env.AFK_MAX_BUDGET_USD, sessionConfig,
+    );
 
     // System-prompt layering (mirrors chat.ts / bootstrap.ts): the framework
     // base is unconditional; the operator overlay (per-chat sessionConfig

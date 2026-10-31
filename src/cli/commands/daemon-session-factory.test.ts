@@ -433,23 +433,23 @@ describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
     }
   });
 
-  it('leaves maxBudgetUsd undefined when AFK_MAX_BUDGET_USD is unset (uncapped)', () => {
-    const key = 'AFK_MAX_BUDGET_USD';
-    const original = process.env[key];
+  it('defaults to $5 and 100 rounds when both environment limits are unset', () => {
+    vi.stubEnv('AFK_MAX_BUDGET_USD', undefined);
+    vi.stubEnv('AFK_MAX_TOOL_USE_ITERATIONS', undefined);
     let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
     try {
-      delete process.env[key];
       const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
       session = trackSession(factory(makeConfig()));
       const internals = session as unknown as { config?: AgentConfig };
-      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+      expect(internals.config?.maxBudgetUsd).toBe(5);
+      expect(internals.config?.maxToolUseIterations).toBe(100);
     } finally {
-      if (original !== undefined) process.env[key] = original;
+      vi.unstubAllEnvs();
       void session?.close().catch(() => undefined);
     }
   });
 
-  it('leaves maxBudgetUsd undefined when AFK_MAX_BUDGET_USD is empty string (not a $0 hard-stop)', () => {
+  it('defaults maxBudgetUsd to $5 when AFK_MAX_BUDGET_USD is empty string', () => {
     const key = 'AFK_MAX_BUDGET_USD';
     const original = process.env[key];
     let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
@@ -458,7 +458,7 @@ describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
       const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
       session = trackSession(factory(makeConfig()));
       const internals = session as unknown as { config?: AgentConfig };
-      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+      expect(internals.config?.maxBudgetUsd).toBe(5);
     } finally {
       if (original === undefined) delete process.env[key];
       else process.env[key] = original;
@@ -466,7 +466,7 @@ describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
     }
   });
 
-  it('leaves maxBudgetUsd undefined and warns when AFK_MAX_BUDGET_USD is malformed (does not throw)', () => {
+  it('defaults maxBudgetUsd to $5 and warns when AFK_MAX_BUDGET_USD is malformed', () => {
     const key = 'AFK_MAX_BUDGET_USD';
     const original = process.env[key];
     let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
@@ -477,7 +477,7 @@ describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
       // Must not throw even with a malformed env value
       session = trackSession(factory(makeConfig()));
       const internals = session as unknown as { config?: AgentConfig };
-      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+      expect(internals.config?.maxBudgetUsd).toBe(5);
       // A warning must have been emitted
       expect(warnSpy).toHaveBeenCalled();
     } finally {
