@@ -795,7 +795,6 @@ describe('startDaemon', () => {
   it('second concurrent startDaemon call throws DaemonAlreadyRunningError', async () => {
     const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-lock-conc-'));
     vi.stubEnv('AFK_HOME', tmpHome);
-    let second: DaemonHandle | null = null;
     try {
       handle = await startDaemon({
         port: 0,
@@ -814,7 +813,6 @@ describe('startDaemon', () => {
       ).rejects.toThrow(DaemonAlreadyRunningError);
     } finally {
       vi.unstubAllEnvs();
-      await second?.stop();
       rmSync(tmpHome, { recursive: true, force: true });
     }
   });
