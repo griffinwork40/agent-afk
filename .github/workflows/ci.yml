@@ -150,7 +150,7 @@ jobs:
         #   Rule 1 — Core/Infra (agent/, service/, skills/, …) must not import Surfaces (cli/, telegram/, web-server/)
         #   Rule 2 — Foundation (config/, utils/) must not import Core/Infra, Surfaces, or Features
         #   Rule 3 — Features (improve/, insights/, whatif/) must not import Surfaces
-        # Known pre-existing violations are allowlisted in scripts/audit-layer-imports.ts
+        # Known pre-existing violations are allowlisted in scripts/audit-layer-imports.allowlist.ts
         # with tracking issues; the gate blocks any NEW violations from landing.
         # See: issue #4457, decision fact #3548.
         run: pnpm audit:layer:check
