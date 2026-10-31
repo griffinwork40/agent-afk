@@ -21,7 +21,6 @@ const child = spawn(vitestBin, args, {
   stdio: ['inherit', 'pipe', 'inherit'],
 });
 
-let sawOutput = false;
 let sawFailure = false;
 let idleTimer = null;
 
@@ -34,22 +33,30 @@ function resetIdle() {
   }, 5_000);
 }
 
+// Start the idle clock immediately so a pre-output hang (e.g. vitest
+// stalls during module resolution) is caught within 5 s, not 120 s.
+resetIdle();
+
 child.stdout.on('data', (chunk) => {
   process.stdout.write(chunk);
-  sawOutput = true;
   const text = chunk.toString();
-  if (/FAIL|✗|×|failed/.test(text)) sawFailure = true;
+  // Match vitest's summary format ("N failed") but not test names that
+  // happen to contain the word "failed".
+  if (/\bFAIL\b|✗|×|\d+\s+failed/.test(text)) sawFailure = true;
   resetIdle();
 });
 
 child.on('close', (code) => {
   if (idleTimer) clearTimeout(idleTimer);
-  process.exit(code ?? 0);
+  process.exit(code !== null ? code : (sawFailure ? 1 : 0));
 });
 
 // Absolute ceiling: 120 s. If nothing happened by then, something is
-// very wrong — exit non-zero.
+// very wrong — exit non-zero with a diagnostic.
 setTimeout(() => {
+  process.stderr.write(
+    '\n[run-tests] 120s hard timeout reached — killing hung vitest process\n',
+  );
   child.kill('SIGKILL');
   process.exit(1);
 }, 120_000);
