@@ -9,6 +9,10 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/__test-utils__/setup.ts'],
     css: false,
+    // Belt-and-suspenders: any individual test taking > 30 s is almost certainly
+    // blocked on Shiki grammar loading rather than testing logic. Fail fast so
+    // the reporter names the culprit instead of silently timing out the whole job.
+    testTimeout: 30_000,
   },
   resolve: {
     alias: {
