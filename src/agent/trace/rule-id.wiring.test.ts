@@ -74,6 +74,11 @@ describe.each(cases)('ruleId handler → registry → trace ($context.event)', (
       await expect(pending).resolves.not.toThrow();
     }
     const rows = payloads(writer);
+    // metadata-only (ruleId with no decision) is non-informative and suppressed
+    if (mode === 'metadata-only') {
+      expect(rows).toHaveLength(0);
+      return;
+    }
     expect(rows).toHaveLength(1);
     expect(rows[0]?.decision).toBe(isBlock ? 'block' : decision.decision);
     if (mode === 'legacy') expect(rows[0]).not.toHaveProperty('ruleId');
@@ -83,6 +88,17 @@ describe.each(cases)('ruleId handler → registry → trace ($context.event)', (
 });
 
 describe('ruleId registry contract', () => {
+  it('ruleId is informative when accompanied by a decision (approve)', async () => {
+    const registry = createHookRegistry();
+    const writer = new InMemoryTraceWriter();
+    registry.register('SessionStart', () => ({ decision: 'approve' as const, ruleId: 'my-rule' }));
+    await dispatchSessionStart(registry, { event: 'SessionStart' }, { traceWriter: writer });
+    const rows = payloads(writer);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.ruleId).toBe('my-rule');
+    expect(rows[0]?.decision).toBe('approve');
+  });
+
   it('uses only the blocking handler ID, not an earlier approving ID', async () => {
     const registry = createHookRegistry();
     registry.register('PreToolUse', () => ({ decision: 'approve', ruleId: 'earlier' }));
