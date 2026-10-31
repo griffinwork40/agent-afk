@@ -70,7 +70,7 @@ Autocomplete is a discovery aid, not a guarantee that a command can run on the w
 | Terminal-only command | HTTP `422` explaining that the command requires the REPL. |
 | Other registered native commands or ordinary text | Passed to the model as text, not executed as a terminal command. |
 
-Terminal-only commands include `/clear`, `/compact`, `/editor`, `/exit`, `/fast`, `/font-size`, `/fork`, `/keys`, `/model`, `/reauth`, `/resume`, `/rewind`, `/sh`, `/theme`, and `/thinking`. Their aliases are checked too.
+Terminal-only commands include `/clear`, `/compact`, `/editor`, `/exit`, `/fast`, `/font-size`, `/fork`, `/keys`, `/model`, `/resume`, `/rewind`, `/sh`, `/theme`, and `/thinking`. Their aliases are checked too.
 
 The suggestions come from `GET /api/commands`, using the shared slash registry. The browser clears its local cache when the tab becomes visible again, but the server memoizes its command inventory. Restart the server after installing skills if the inventory remains stale.
 

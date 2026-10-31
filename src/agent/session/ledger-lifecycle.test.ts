@@ -16,7 +16,7 @@
  * pattern as session-ledger.test.ts — env must be set before import).
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -28,6 +28,7 @@ process.env['AFK_HOME'] = tmpDir;
 import { LedgerLifecycle, type LedgerEnsureContext } from './ledger-lifecycle.js';
 import { readLedger, type LedgerRecord } from '../session-ledger.js';
 import { getSessionLedgerPath } from '../../paths.js';
+import { readSessionMeta } from './session-meta.js';
 import type { OutputEvent } from '../types.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
 
@@ -350,5 +351,30 @@ describe('LedgerLifecycle.seal', () => {
     expect(b.find((r) => r.kind === 'meta')).toBeDefined();
     expect(b.find((r) => r.kind === 'user')).toMatchObject({ text: 'cycle B' });
     expect(b.at(-1)).toMatchObject({ kind: 'closed', reason: 'close' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// initialize() — AFK_SESSION_LEDGER_DISABLED=1 code path for gitHead
+// ---------------------------------------------------------------------------
+
+describe('LedgerLifecycle.initialize with AFK_SESSION_LEDGER_DISABLED=1', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('does not write a sidecar and carries no gitHead when ledger is disabled', async () => {
+    vi.stubEnv('AFK_SESSION_LEDGER_DISABLED', '1');
+    const id = freshId();
+    const life = new LedgerLifecycle();
+    // initialize() must return early without capturing gitHead.
+    life.initialize({ cwd: tmpDir });
+    // ensure() must also gate off — no writer, no sidecar written.
+    life.ensure(ledgeredCtx(id));
+    // Allow any fire-and-forget async writes to settle.
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    // No ledger file and no session-meta sidecar should exist.
+    expect(fs.existsSync(getSessionLedgerPath(id))).toBe(false);
+    expect(readSessionMeta(id)).toBeNull();
   });
 });

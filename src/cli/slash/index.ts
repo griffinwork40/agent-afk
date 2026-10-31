@@ -29,7 +29,6 @@ import { themeCmd } from './commands/theme.js';
 import { allowDirCmd } from './commands/allow-dir.js';
 import { keysCmd } from './commands/keys.js';
 import { worktreeCmd } from './commands/worktree.js';
-import { reauthCmd } from './commands/reauth.js';
 import { retryCmd } from './commands/retry.js';
 import { transcriptCmd } from './commands/transcript.js';
 import { editorCmd } from './commands/editor.js';
@@ -54,6 +53,7 @@ import { exportCmd } from './commands/export.js';
 import { usageAwarenessCmd } from './commands/usage-awareness.js';
 import { handoffsCommands } from './commands/handoffs.js';
 import { whereCmd } from './commands/where.js';
+import { branchesCmd } from './commands/branches.js';
 import '../trusted-skills-registered.js';
 
 export function registerAll(): void {
@@ -79,7 +79,6 @@ export function registerAll(): void {
   register(themeCmd);
   register(allowDirCmd);
   register(worktreeCmd);
-  register(reauthCmd);
   register(retryCmd);
   register(transcriptCmd);
   register(editorCmd);
@@ -101,6 +100,7 @@ export function registerAll(): void {
   register(usageAwarenessCmd);
   for (const cmd of handoffsCommands) register(cmd);
   register(whereCmd);
+  register(branchesCmd);
   // Placeholders for plugin-backed commands. The real lists get registered
   // after `session.waitForInitialization()` resolves, via
   // `registerPluginSkills(session)` / `registerPluginAgents(session)` in

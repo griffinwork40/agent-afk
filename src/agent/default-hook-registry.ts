@@ -38,6 +38,7 @@ import type { TraceSink } from './trace/index.js';
 import type { LoadedHooksConfig } from './hooks/config-loader.js';
 import { loadAndRegisterConfigHooks } from './hooks/config-bridge.js';
 import { createWhatifEpisodeGate } from './whatif-episode-gate.js';
+import { createEpisodeSessionEndHook } from './episodes/session-end-hook.js';
 import { createUnprovenDiagnosisDetectHook } from './unproven-diagnosis-detect.js';
 import { createInlineImageHook } from './tools/hooks/inline-image-hook.js';
 
@@ -126,6 +127,7 @@ function registerFacetAndOutcomeHooks(
   // Background lane: the SPINE classifier is a model call (measured 1-5s per
   // run) that used to gate `/clear`'s screen clear. See RegisterOptions.background.
   registry.register('SessionEnd', createSpineSessionEndHook({ repoRoot: spineRepoRoot }), { background: true });
+  registry.register('SessionEnd', createEpisodeSessionEndHook(), { background: true });
   registerPreexistingLedgerHook(registry);
 }
 

@@ -418,11 +418,12 @@ describe('parsers', () => {
     expect(parseBatchCheck(Buffer.from(`${'a'.repeat(40)} missing\n`), 1)).toBeNull();
   });
 
-  it('quoteAlternate C-quotes only paths with the separator or a quote', () => {
+  it('quoteAlternate C-quotes only paths with the separator, a quote, or a newline', () => {
     expect(quoteAlternate('/a/b', ':')).toBe('/a/b');
     expect(quoteAlternate('/a:b', ':')).toBe('"/a:b"');
     expect(quoteAlternate('/a"b\\c', ':')).toBe('"/a\\"b\\\\c"');
     expect(quoteAlternate('/é:x\n', ':')).toBe('"/é:x\\012"');
+    expect(quoteAlternate('/a/b\nc', ':')).toBe('"/a/b\\012c"');
   });
 
   it('hasConvertingAttribute matches every form, not substrings', () => {

@@ -37,14 +37,9 @@ import {
   createExitPlanModeHandler,
   EXIT_PLAN_MODE_TOOL_NAME,
 } from '../../tools/handlers/exit-plan-mode.js';
-import {
-  builtinToolSchemas,
-  agentTool,
-  skillTool,
-  composeTool,
-} from '../../tools/schemas.js';
-import { MemoryStore, createMemoryHandlers, guardChildHotWrites, isForkedChildSession, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
-import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspaceQueryTool } from '../../workspace/index.js';
+import { buildProviderSchemas } from './provider-schemas.js';
+import { MemoryStore, createMemoryHandlers, guardChildHotWrites, isForkedChildSession } from '../../memory/index.js';
+import { WorkspaceStore, createWorkspaceHandlers } from '../../workspace/index.js';
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
@@ -52,20 +47,19 @@ import { grantsWorkspacePrompt, providerGrantsTool } from '../shared/tool-grant.
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
 import { sortMcpSchemas } from '../../tools/schemas.order.js';
-import { applyReadOnlyGitPermissions, readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
+import { applyReadOnlyGitPermissions } from '../../tools/readonly-git-surface.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
 import { completeWithWireWithStop, type OpenAIOneShotInput } from './complete-wire.js';
 import {
-  getRuntimeStateTool,
   createGetRuntimeStateHandler,
   buildRuntimeStateSource,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
-import { isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
+import { isStateRestricted } from './index.child-session.js';
 import { headlessSignalOpts, sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
 import { chainProviderClose } from '../shared/chain-provider-close.js';
 import { logFragmentTokens } from '../shared/prompt-fragment-tokens.js';
@@ -83,7 +77,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   // every forked child provider; close() releases only lazily created ones.
   private readonly _injectedMemoryStore: boolean;
   private readonly _injectedStateStore: boolean;
-  private readonly schemas: AnthropicToolDef[];
+  private schemas: AnthropicToolDef[];
   /**
    * Mutable per-session endpoint headers (xAI CLI proxy). Construction-time
    * `defaultHeaders` are the baseline; {@link setEndpointDefaults} can replace
@@ -136,43 +130,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.workspaceStore = opts.workspaceStore;
     this._stateStore = opts.stateStore;
 
-    const schemas: AnthropicToolDef[] = [...builtinToolSchemas, ...readOnlyGitSchemas()];
-    if (opts.readOnlyMemory === true) {
-      schemas.push(memorySearchTool);
-    } else {
-      schemas.push(...memoryToolSchemas);
-    }
-    if (isStateRestricted(opts.readOnlyMemory, opts.readOnlyState)) {
-      schemas.push(...stateReadToolSchemas);
-    } else {
-      schemas.push(...stateToolSchemas);
-    }
-    // Workspace (per-session publish) + awareness (runtime-state) — parity
-    // with anthropic-direct/provider-schemas.ts. Keep the workspace schema in
-    // lockstep with its handler when AFK_WORKSPACE_DISABLED omits the store.
-    // workspace_subscribe schema is intentionally excluded: the handler requires
-    // SubagentHandleImpl wiring (setSubscribeHandler) not yet supported by this provider.
-    // Only publish + query are advertised; subscribe goes through anthropic-direct only.
-    schemas.push(...(this.workspaceStore !== undefined ? [workspacePublishTool, workspaceQueryTool] : []), getRuntimeStateTool);
-    // Nesting tools — placed AFTER memory/state/get_runtime_state (#4217) so
-    // variation in their schemas (present vs absent at max depth, or a
-    // different `agent_type` property when a registry is wired) invalidates
-    // the fewest cached tokens. Executor-supplied `agent` def advertises
-    // named agent types when a registry is wired — parity with
-    // anthropic-direct (see agents/tool-def.ts).
-    if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
-    if (opts.skillExecutor) schemas.push(skillTool);
-    if (opts.composeExecutor) schemas.push(composeTool);
-    // Custom (consumer-registered) tool schemas are appended last so their
-    // names never silently shadow a builtin. A custom schema whose name
-    // collides with an already-present builtin (or an earlier custom tool) is
-    // SKIPPED: otherwise the wire `tools` array carries a duplicate name and
-    // providers that require unique tool names reject the whole request. This
-    // mirrors the handler-map precedence in buildDispatcher (builtins win).
-    for (const t of opts.customTools ?? []) {
-      if (!schemas.some((s) => s.name === t.schema.name)) schemas.push(t.schema);
-    }
-    this.schemas = schemas;
+    this.schemas = buildProviderSchemas(this.providerOpts);
   }
 
   /**
@@ -190,6 +148,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (defaults.defaultHeaders !== undefined) {
       this._defaultHeaders = defaults.defaultHeaders;
     }
+  }
+
+  /** Fork wiring injects this before the first query; refresh schema and handler together. */
+  setSubscribeHandler(handler: import('../../tools/types.js').ToolHandler): void {
+    this.providerOpts.subscribeHandler = handler;
+    this.schemas = buildProviderSchemas(this.providerOpts);
   }
 
   query(args: ProviderQueryArgs): ProviderQuery {
@@ -383,6 +347,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // Skipped when workspace is disabled (AFK_WORKSPACE_DISABLED=1).
     if (this.workspaceStore !== undefined) {
       for (const [n, h] of createWorkspaceHandlers(this.workspaceStore, opts.sessionId ?? '', opts.subagentId)) handlers.set(n, h);
+      if (this.providerOpts.subscribeHandler !== undefined) handlers.set('workspace_subscribe', this.providerOpts.subscribeHandler);
     }
     // State store tools: state_get, state_put, state_cas, state_delete, state_query.
     // Read-only sessions get only state_get and state_query.

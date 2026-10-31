@@ -94,6 +94,7 @@ import { modelCompleteTool } from './schemas.model-complete.js';
 import { gitReadTool } from './schemas.git-read.js';
 import { remoteAgentTool } from './schemas.remote-agent.js';
 import { codeSymbolsTool } from './schemas.lsp-symbols.js';
+import { artifactToolSchemas } from './schemas.artifact.js';
 
 /**
  * The always-on built-in tool definitions,
@@ -133,7 +134,8 @@ import { codeSymbolsTool } from './schemas.lsp-symbols.js';
  *   read_witness, search_witness,
  *   remote_agent, web_scrape, web_request
  *
- * ---- Optional tail (indices 23..44) -----------------------------------------
+ * ---- Optional tail (indices 23..47) -----------------------------------------
+ *   artifact_get, artifact_list, artifact_read,
  *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
  *   image_generate, image_edit,
@@ -177,7 +179,8 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   remoteAgentTool,
   webScrapeTool,
   webRequestTool,
-  // -- Optional tail (23..44): disableable groups / surface-filtered -----------
+  // -- Optional tail (23..47): disableable groups / surface-filtered -----------
+  ...artifactToolSchemas,
   cancelBackgroundJobTool,
   sendMessageToAgentTool,
   getBackgroundJobHealthTool,

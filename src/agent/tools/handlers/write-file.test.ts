@@ -221,7 +221,7 @@ describe('writeFileHandler cwd containment', () => {
     }
   });
 
-  it('rejects absolute path outside context.resolveBase', async () => {
+  it('rejects protected absolute path before containment', async () => {
     const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await writeFileHandler(
       { file_path: '/etc/passwd', content: 'bad' },
@@ -229,7 +229,7 @@ describe('writeFileHandler cwd containment', () => {
       context,
     );
     expect(result.isError).toBe(true);
-    expect(result.content).toMatch(/outside the allowed/);
+    expect(result.content).toMatch(/refusing to write to protected path/);
   });
 
   it('resolves relative path against context.resolveBase', async () => {

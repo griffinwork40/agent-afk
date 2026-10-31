@@ -588,25 +588,6 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * mechanism that delivers Stop on every surface also enables continuation.
    */
   setBeforeTurnEnd?(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void;
-  /**
-   * Optional. Force a fresh SDK client by re-reading whatever credential
-   * source the provider uses (e.g. the macOS Keychain for OAuth tokens).
-   *
-   * Used by the `/reauth` slash command to swap the running session's SDK
-   * client onto a newly-written credential — e.g. after the operator ran
-   * `claude /login` in another terminal to switch accounts.
-   *
-   * Returns `null` when the provider does not support a forced refresh
-   * (api-key mode, local-server mode, providers without keychain integration)
-   * or when the underlying refresh failed. Implementations that succeed
-   * return the active `accountId` and whether the token byte-changed
-   * (`swapped`) so the caller can distinguish "now on a different account"
-   * from "already up to date".
-   *
-   * Implemented by `AnthropicDirectQuery`. Providers that do not implement
-   * leave it undefined; `AgentSession.reauth()` returns `null` in that case.
-   */
-  reauth?(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null>;
   close(): void | Promise<void>;
 }
 

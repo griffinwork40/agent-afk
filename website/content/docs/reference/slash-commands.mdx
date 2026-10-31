@@ -117,6 +117,18 @@ Hint: When you need the full detail view for one specific background job by its 
 
 Flags: None
 
+### `/branches`
+
+List and switch between rewind branches
+
+Usage: `/branches [switch <id>]`
+
+Aliases: None
+
+Hint: When you rewound to an earlier prompt, /branches shows all saved tips of this conversation tree and lets you switch back. Each /rewind saves the abandoned path as a named branch.
+
+Flags: None
+
 ### `/bug`
 
 Report a bug (prefilled GitHub link, or --file to file with gh)
@@ -534,18 +546,6 @@ Usage: `/plan [on\|off\|<prompt>]`
 Aliases: None
 
 Hint: Think through an approach without changing anything — write tools and state-mutating bash are refused until you exit; read-only investigation runs. /plan off saves the plan + implements it; Shift+Tab cycles to the next mode without implementing.
-
-Flags: None
-
-### `/reauth`
-
-Re-read keychain credentials and swap the running session's client
-
-Usage: `/reauth [--check]`
-
-Aliases: None
-
-Hint: Force the running session to pick up a new keychain token (e.g. after `claude /login` in another terminal)
 
 Flags: None
 

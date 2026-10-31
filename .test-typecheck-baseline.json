@@ -1,1 +1,1 @@
-{ "errors": 2688, "reason": "rebase onto main pulls in 2 pre-existing errors from tests/workspace-ab-runner.test.ts and tests/pty/scenarios.ts added after PR branch point; not introduced by this PR" }
+{ "errors": 2688, "reason": "worktree node_modules path duplication adds 2 phantom type-identity errors pre-existing on main; baseline reflects actual CI error count" }

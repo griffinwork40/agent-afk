@@ -3,17 +3,14 @@ import { getApiKeyForModel, getDefaultSubagentModel, getMaxToolUseIterations, ge
 import type { AgentConfig, AgentModelInput } from '../../agent/types.js';
 import { AgentSession } from '../../agent/session.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
-import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
+import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
-import { STATE_TOOL_NAMES } from '../../agent/state/state-tools.js';
 import { getStateDatabasePath } from '../../paths.js';
-import { WORKSPACE_TOOL_NAMES } from '../../agent/workspace/index.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { createStubParentSession } from '../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
-import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
-import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/index.js';
+import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
 
 /**
@@ -153,19 +150,7 @@ export function buildDaemonSessionFactory(
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     }) ?? new AnthropicDirectProvider({
-      permissions: {
-        allowedTools: [
-          ...BUILTIN_TOOL_NAMES,
-          ...MEMORY_TOOL_NAMES,
-          ...STATE_TOOL_NAMES,
-          ...AWARENESS_TOOL_NAMES,
-          ...WORKSPACE_TOOL_NAMES,
-          'agent',
-          'skill',
-          'compose',
-          ...mcpToolWireNames,
-        ],
-      },
+      permissions: { allowedTools: topLevelSurfaceAllowedTools(mcpToolWireNames) },
       subagentExecutor,
       skillExecutor,
       composeExecutor,

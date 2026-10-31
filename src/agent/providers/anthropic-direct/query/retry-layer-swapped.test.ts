@@ -2,9 +2,9 @@
  * Tests for the `swapped` detection fix in {@link RetryLayer.forceClientRefresh}.
  *
  * Bug (#2470): `forceClientRefresh` compared `loadClaudeCodeOauthToken()` BEFORE
- * vs AFTER the refresh. When `claude login` ran externally before `/reauth`,
- * the store already held account B, so both reads returned B and `swapped`
- * was always false — even though the running client moved from A to B.
+ * vs AFTER the refresh. When `claude login` ran externally before the catch-up
+ * fired, the store already held account B, so both reads returned B and
+ * `swapped` was always false — even though the running client moved from A to B.
  *
  * Fix: `RetryLayer` now tracks the token the current client was built with
  * (`_clientToken`, set in the constructor and updated on every swap) and

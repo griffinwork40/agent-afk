@@ -65,6 +65,9 @@ For the fastest availability check, ask the agent to call `get_runtime_state` wi
 | `state_cas` | Update a document at an expected version. | R, D; not standard S |
 | `state_delete` | Delete a durable document. | R, D; not standard S |
 | `state_query` | List durable documents by namespace. | R, S, D |
+| `artifact_get` | Retrieve registered artifact metadata. | R, S, D with existing blob read access |
+| `artifact_list` | List visible registered artifacts. | R, S, D with existing blob read access |
+| `artifact_read` | Read bounded text or return a blob path. | R, S, D with existing blob read access |
 | **Configuration and scheduling** | | |
 | `config_get` | Read masked AFK configuration. | R, S, D |
 | `config_set` | Change allowed configuration for future sessions. | R, S, D |
@@ -92,6 +95,46 @@ For the fastest availability check, ask the agent to call `get_runtime_state` wi
 <Callout type="info">
 A tool appearing here does not grant permission to use it. Check [tool access](/guides/tool-access) and [permissions](/configuration/permissions) for controls, and [MCP and plugins](/guides/mcp-plugins) for extension tools.
 </Callout>
+
+## Artifact registry reads
+
+These read-only tools expose the existing filesystem artifact registry. Each tool rejects indexes larger than 8 MiB before parsing; compact the registry through its maintenance API before retrying. They do not register new outputs or change retention. Automatic screenshot/capture registration, workspace/trace IDs, publication tools, and quota/retention enforcement remain separate work under #1415.
+
+An artifact ID **does not grant access**. All three tools apply the existing credential floor and session read roots to the canonical stored blob. A confined child needs an explicit read grant for that blob/store; inaccessible records are omitted from lists. Missing IDs return `null`. Metadata is a bounded summary (ID, URI, hash, size, MIME type, producer, registration timestamp, retention); arbitrary tags and lineage are not returned. A declared retention policy is metadata, not a guarantee that TTL cleanup has run.
+
+### `artifact_get`
+
+Return metadata for one registered artifact, without loading its content.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | ✓ | Stable `art_<32 lowercase hex>` registry ID. |
+
+### `artifact_list`
+
+List accessible registered artifacts, oldest first. Filters are ANDed. The registry scan considers at most the first 1,000 matching records; `truncated: true` means the scan or response bound was reached. No pagination or exhaustive inventory is promised. Malformed, missing, and inaccessible blobs are omitted.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | | Producing session ID. |
+| `subagent_id` | string | | Producing subagent ID. |
+| `tool_name` | string | | Producing tool name. |
+| `media_type` | string | | Exact MIME type. |
+| `since` | number | | Inclusive registration lower bound, epoch milliseconds. |
+| `until` | number | | Inclusive registration upper bound, epoch milliseconds. |
+| `limit` | integer | | Maximum returned records, default 20, maximum 100. Metadata payload is capped at 32 KiB. |
+
+### `artifact_read`
+
+Read small UTF-8 text in byte slices. Default read is 4 KiB; maximum is 16 KiB. Binary artifacts and text artifacts larger than 64 KiB return metadata plus `read_path` and `contentOmitted`, never inline content. This does not attach images or bypass the authorization of subsequent file/image tools. JSON uses the same text path. Metadata hashes describe the registered bytes; these tools do not perform a full integrity audit of large blobs.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | ✓ | Stable registry ID. |
+| `offset` | integer | | Starting byte offset, default 0 (not a line number). |
+| `limit` | integer | | Maximum bytes, default 4096, maximum 16384. |
+
+A text result includes `bytes_read`, `truncated`, and `next_offset` when more bytes remain. A byte slice can split a UTF-8 character, yielding a replacement character at the boundary. Reads past EOF return empty text. Reads do not mutate registry metadata or blobs.
 
 ## File System
 

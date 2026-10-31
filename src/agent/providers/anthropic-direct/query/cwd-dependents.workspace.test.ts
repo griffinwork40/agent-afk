@@ -63,6 +63,7 @@ function setup(configExtra: Partial<AgentConfig> = {}, buildDispatcher: () => To
     permissionMode: 'default',
     getEnabledToolNames: () => [],
     getMcpTools: () => [] as AnthropicToolDef[],
+    getMcpServerStates: () => [],
     getSubagents: () => ({ active: [], backgroundJobs: [] }),
   });
 
@@ -80,6 +81,7 @@ function setup(configExtra: Partial<AgentConfig> = {}, buildDispatcher: () => To
       userSystem: null,
     }),
     config: { cwd: LAUNCH_CWD, ...configExtra } as AgentConfig,
+    resolvedSessionId: undefined,
     surface: 'cli',
     runtimeStateSource,
     getCurrentCwd: () => currentCwd,
