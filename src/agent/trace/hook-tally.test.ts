@@ -61,6 +61,10 @@ describe('emitHookDecision suppression', () => {
     expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', reason: '' })).toBe(false);
   });
 
+  it('isInformativeHookDecision: ruleId alone (no decision) is NOT informative', () => {
+    expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', ruleId: 'x' })).toBe(false);
+  });
+
   it('isInformativeHookDecision: empty-string reason alone is NOT informative', () => {
     expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', reason: '' })).toBe(false);
     expect(isInformativeHookDecision({ hookEvent: 'Stop', reason: '' })).toBe(false);

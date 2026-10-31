@@ -437,6 +437,7 @@ function parseStdoutDecision(stdout: string): HookDecision {
   }
 
   // Additive metadata from user-authored command hooks; never affects control flow.
+  // Capped at 128 chars to prevent unbounded strings from hook stdout reaching traces.
   if (typeof obj['ruleId'] === 'string') {
     decision.ruleId = obj['ruleId'].slice(0, 128);
   }
