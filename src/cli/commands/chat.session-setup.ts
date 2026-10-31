@@ -9,6 +9,7 @@
  */
 
 import { AgentSession } from '../../agent/session.js';
+import { palette } from '../palette.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
@@ -224,7 +225,7 @@ export async function buildChatSession(
       ? { permissionMode }
       : {}),
     hookRegistry: createDefaultHookRegistry(
-      (info) => { console.log(formatSubagentCompletion(info)); },
+      (info) => { console.log(palette.info(formatSubagentCompletion(info))); },
       'cli',
       sharedMemoryStore,
       getChatPermissionMode,

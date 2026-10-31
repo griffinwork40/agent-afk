@@ -42,7 +42,7 @@ function printScheduleList(schedules: ReturnType<typeof loadSchedules>): void {
   for (const s of schedules) {
     const row = [s.id.padEnd(20), s.name.padEnd(30), s.cron.padEnd(15), String(s.enabled).padEnd(7)];
     if (hasCwd) row.push(s.cwd ?? '');
-    console.log(row.join(' | '));
+    console.log(palette.dim(row.join(' | ')));
   }
 }
 

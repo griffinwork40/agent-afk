@@ -12,6 +12,7 @@
 
 import { Command } from 'commander';
 import { handleCommandError } from '../errors/index.js';
+import { palette } from '../palette.js';
 import { readSessionTrace, searchAcrossSessions } from '../../agent/tools/handlers/witness.query.js';
 
 export function registerWitnessCommand(program: Command): void {
@@ -53,10 +54,7 @@ export function registerWitnessCommand(program: Command): void {
           return;
         }
 
-        console.log(
-          `Session: ${result.sessionId}  (${result.totalInTrace} events, ` +
-            `${result.filtered} matched)\n`,
-        );
+        console.log(palette.info(`Session: ${result.sessionId}  (${result.totalInTrace} events, ${result.filtered} matched)\n`));
         for (const ev of result.events) {
           const payload = ev.payload as unknown as Record<string, unknown>;
           const name = payload['name'] ?? payload['transition'] ?? payload['phase'] ?? '';
@@ -64,7 +62,7 @@ export function registerWitnessCommand(program: Command): void {
           const dur = typeof payload['durationMs'] === 'number'
             ? ` (${payload['durationMs']}ms)`
             : '';
-          console.log(`  ${ev.ts}  [${ev.kind}] ${name}${err}${dur}`);
+          console.log(palette.dim(`  ${ev.ts}  [${ev.kind}] ${name}${err}${dur}`));
         }
       } catch (err) {
         handleCommandError(err);
@@ -100,20 +98,17 @@ export function registerWitnessCommand(program: Command): void {
           return;
         }
 
-        console.log(
-          `Search: "${result.query}"  (${result.sessionsSearched} of ${result.sessionsAvailable} sessions searched, ` +
-            `${result.matches.length} matches)\n`,
-        );
+        console.log(palette.info(`Search: "${result.query}"  (${result.sessionsSearched} of ${result.sessionsAvailable} sessions searched, ${result.matches.length} matches)\n`));
 
         let currentSession = '';
         for (const match of result.matches) {
           if (match.sessionId !== currentSession) {
             currentSession = match.sessionId;
-            console.log(`\n  ── ${currentSession} ──`);
+            console.log(palette.dim(`\n  ── ${currentSession} ──`));
           }
           const payload = match.event.payload as unknown as Record<string, unknown>;
           const name = payload['name'] ?? payload['transition'] ?? payload['phase'] ?? '';
-          console.log(`    ${match.event.ts}  [${match.event.kind}] ${name}`);
+          console.log(palette.dim(`    ${match.event.ts}  [${match.event.kind}] ${name}`));
         }
       } catch (err) {
         handleCommandError(err);

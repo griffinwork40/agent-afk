@@ -132,10 +132,7 @@ export class ThinkingLane {
       // doesn't pollute normal stderr.
       if (!this.startedAt && !this.hasEmitted && isDebugEnabled()) {
         // eslint-disable-next-line no-console
-        console.error(
-          '[afk:thinking] collapse() short-circuited: no thinking chunks received this turn. ' +
-            'Model may not support extended thinking, or API ignored the thinking parameter.',
-        );
+        console.error(palette.warning('[afk:thinking] collapse() short-circuited: no thinking chunks received this turn. Model may not support extended thinking, or API ignored the thinking parameter.'));
       }
       return null;
     }
