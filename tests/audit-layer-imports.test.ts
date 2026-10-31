@@ -495,6 +495,63 @@ describe('scanFile — block-comment state machine', () => {
   });
 });
 
+// ── scanFile — outAllowedHits accumulator ─────────────────────────────────────
+
+describe('scanFile — outAllowedHits accumulator', () => {
+  const fakeRoot = '/fake/src';
+  const absPath = '/fake/src/agent/fake.ts';
+  const relPath = 'src/agent/fake.ts';
+  const importerLayer = 'core-infra' as const;
+
+  it('appends an allowlisted cross-layer import to outAllowedHits and returns no violation', () => {
+    const pairs: ReadonlyArray<AllowedPair> = [
+      { file: relPath, importContains: 'cli/', reason: 'test allowlist' },
+    ];
+    const lines = ["import { Foo } from '../cli/types.js';"];
+    const hits: Array<{ file: string; line: number; rule: string }> = [];
+
+    const violations = scanFile(absPath, relPath, importerLayer, lines, hits, fakeRoot, pairs);
+
+    // The import is allowlisted — no violation should be reported.
+    expect(violations).toHaveLength(0);
+    // The hit should be recorded in the accumulator.
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.file).toBe(relPath);
+    expect(hits[0]?.line).toBe(1);
+    expect(hits[0]?.rule).toContain('Rule 1');
+  });
+
+  it('does not append to outAllowedHits for a non-allowlisted import (violation instead)', () => {
+    const lines = ["import { Foo } from '../cli/types.js';"];
+    const hits: Array<{ file: string; line: number; rule: string }> = [];
+
+    // Pass empty pairs so nothing is allowlisted.
+    const violations = scanFile(absPath, relPath, importerLayer, lines, hits, fakeRoot, []);
+
+    expect(violations).toHaveLength(1);
+    expect(hits).toHaveLength(0);
+  });
+
+  it('accumulates multiple allowlisted imports across lines', () => {
+    const pairs: ReadonlyArray<AllowedPair> = [
+      { file: relPath, importContains: 'cli/', reason: 'test' },
+    ];
+    const lines = [
+      "import { Foo } from '../cli/types.js';",
+      'const x = 1;',
+      "import { Bar } from '../cli/palette.js';",
+    ];
+    const hits: Array<{ file: string; line: number; rule: string }> = [];
+
+    const violations = scanFile(absPath, relPath, importerLayer, lines, hits, fakeRoot, pairs);
+
+    expect(violations).toHaveLength(0);
+    expect(hits).toHaveLength(2);
+    expect(hits[0]?.line).toBe(1);
+    expect(hits[1]?.line).toBe(3);
+  });
+});
+
 // ── scanFile — coordinate-space paths ─────────────────────────────────────────
 
 describe('scanFile — multiline import coordinate space', () => {

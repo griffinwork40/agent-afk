@@ -217,7 +217,7 @@ export function isAllowed(relPath: string, specifier: string, pairs = ALLOWED_PA
     if (idx === -1) return false;
     if (idx === 0) return true;
     const charBefore = specifier[idx - 1];
-    return charBefore === '/' || charBefore === '.';
+    return charBefore === '/' || (charBefore === '.' && specifier[idx - 2] === '/');
   });
 }
 
@@ -245,6 +245,7 @@ export function scanFile(
   lines: string[],
   outAllowedHits?: Array<{ file: string; line: number; rule: string }>,
   scanRoot: string = SCAN_ROOT,
+  pairs = ALLOWED_PAIRS,
 ): Violation[] {
   const violations: Violation[] = [];
   const seg = srcSegment(relPath);
@@ -331,15 +332,14 @@ export function scanFile(
     const importedLayer = classifyDir(imported);
     if (importedLayer === 'unknown') { i += consumed; continue; }
     if (importerLayer === importedLayer) { i += consumed; continue; }
-    if (importerLayer === 'foundation' && importedLayer === 'foundation') { i += consumed; continue; }
 
     const rule = checkPair(importerLayer, seg, importedLayer, imported);
     if (!rule) { i += consumed; continue; }
 
-    if (isAllowed(relPath, specifier)) {
+    if (isAllowed(relPath, specifier, pairs)) {
       outAllowedHits?.push({ file: relPath, line: i + 1, rule });
     } else {
-      violations.push({ file: relPath, line: i + 1, text: rawLine.trim(), rule });
+      violations.push({ file: relPath, line: i + 1, text: (trimmedByComment ? effectiveLine : rawLine).trim(), rule });
     }
 
     i += consumed;
@@ -370,10 +370,9 @@ function main(): void {
     const source = fs.readFileSync(absPath, 'utf8');
     const lines = source.split('\n');
 
-    // Pass outAllowedHits to scanFile when in --list mode so both violation and
-    // allowlisted-hit collection share a single scanning pass.
-    const fileViolations = scanFile(absPath, relPath, importerLayer, lines,
-      listMode ? allowedHits : undefined);
+    // Pass allowedHits unconditionally so the success message always reports the
+    // correct allowlisted site count (not just in --list mode).
+    const fileViolations = scanFile(absPath, relPath, importerLayer, lines, allowedHits);
     allViolations.push(...fileViolations);
   }
 
