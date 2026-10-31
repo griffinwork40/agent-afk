@@ -221,6 +221,7 @@ function formatLspSymbols(symbols: RawSymbol[], rootDir: string): string {
     const normalRoot = rootDir.split(path.sep).join('/');
     const normalFile = filePath.split(path.sep).join('/');
     const rel = path.posix.relative(normalRoot, normalFile);
+    if (/[\x00-\x1f\x7f]/.test(rel) || rel.length > 300) continue;
     if (rel.startsWith('..') || hasDeniedSegment(rel)) continue;
 
     if (!byFile.has(rel)) byFile.set(rel, []);
