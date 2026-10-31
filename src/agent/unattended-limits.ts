@@ -25,6 +25,13 @@ function unattendedRounds(raw: string | undefined): number {
     console.warn('[afk] AFK_MAX_TOOL_USE_ITERATIONS is not finite — using unattended default (100 rounds).');
     return DEFAULT_UNATTENDED_TOOL_ROUNDS;
   }
+  // -0 passes isFinite but is not a deliberate "unlimited" intent.
+  // Treat it like any other non-positive value and warn rather than silently
+  // granting unlimited rounds on a daemon session.
+  if (Object.is(parsed, -0)) {
+    console.warn('[afk] AFK_MAX_TOOL_USE_ITERATIONS is -0 — using unattended default (100 rounds).');
+    return DEFAULT_UNATTENDED_TOOL_ROUNDS;
+  }
   // Preserve the existing numeric <=0 environment escape hatch (unlimited).
   return parsed <= 0 ? 0 : Math.max(1, Math.floor(parsed));
 }

@@ -137,7 +137,7 @@ export function daemonDefaultCwd(): string {
 export function parseDaemonEnvLimits(
   rawMaxToolIters: string | undefined,
   rawMaxBudget: string | undefined,
-): { parsedMaxToolIters: number | undefined; parsedMaxBudget: number | undefined } {
+): { parsedMaxToolIters: number; parsedMaxBudget: number } {
   const limits = resolveUnattendedLimits(rawMaxToolIters, rawMaxBudget);
   return { parsedMaxToolIters: limits.maxToolUseIterations, parsedMaxBudget: limits.maxBudgetUsd };
 }
