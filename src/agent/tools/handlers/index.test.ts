@@ -5,7 +5,7 @@ import { BUILTIN_TOOL_NAMES } from '../schemas.js';
 describe('createBuiltinHandlers', () => {
   it('returns a Map with all built-in tools', () => {
     const handlers = createBuiltinHandlers();
-    expect(handlers.size).toBe(42);
+    expect(handlers.size).toBe(45);
   });
 
   it('has an entry for every tool in BUILTIN_TOOL_NAMES', () => {
@@ -27,7 +27,7 @@ describe('createBuiltinHandlers', () => {
     // when permissionMode is undefined but cwd is set. Ensure we get a
     // valid map back and bash is still callable.
     const handlers = createBuiltinHandlers(undefined, '/tmp');
-    expect(handlers.size).toBe(42);
+    expect(handlers.size).toBe(45);
     expect(typeof handlers.get('bash')).toBe('function');
     expect(typeof handlers.get('grep')).toBe('function');
     expect(typeof handlers.get('glob')).toBe('function');
@@ -35,8 +35,16 @@ describe('createBuiltinHandlers', () => {
 
   it('cwd parameter: builds handler set with both permissionMode and cwd', () => {
     const handlers = createBuiltinHandlers('default', '/tmp');
-    expect(handlers.size).toBe(42);
+    expect(handlers.size).toBe(45);
     expect(typeof handlers.get('bash')).toBe('function');
+  });
+
+  it('registers all three read-only artifact handlers', () => {
+    const handlers = createBuiltinHandlers();
+    for (const name of ['artifact_get', 'artifact_list', 'artifact_read']) {
+      expect(handlers.has(name), `missing artifact handler "${name}"`).toBe(true);
+      expect(typeof handlers.get(name)).toBe('function');
+    }
   });
 
   it('registers all five browser-control handlers', () => {

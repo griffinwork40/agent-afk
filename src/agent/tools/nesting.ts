@@ -210,6 +210,7 @@ export const RECON_ALLOWED_TOOLS: readonly string[] = [
   // State store reads — read-only by construction, no repo mutation.
   // Same rationale as memory_search inclusion above.
   'state_get', 'state_query',
+  'artifact_get', 'artifact_list', 'artifact_read',
 ];
 
 // Skills treated as read-only by NAME, independent of their SKILL.md
