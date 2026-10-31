@@ -14,6 +14,7 @@ import {
   TimeoutError,
   UsageLimitError,
 } from '../../utils/errors.js';
+import { DaemonAlreadyRunningError } from '../../agent/daemon-instance.lock.js';
 
 // ─── auth ─────────────────────────────────────────────────────────────────────
 
@@ -113,6 +114,30 @@ describe('classifyError — usage_limit', () => {
   it('a plain 429 still classifies as rate_limit', () => {
     const err = Object.assign(new Error('Rate limited'), { status: 429, error: { type: 'rate_limit_exceeded' } });
     expect(classifyError(err).kind).toBe('rate_limit');
+  });
+});
+
+// ─── daemon_already_running ───────────────────────────────────────────────────
+
+describe('classifyError — daemon_already_running', () => {
+  it('classifies DaemonAlreadyRunningError with known PID: exitCode 2, kind, hint contains PID', () => {
+    const err = new DaemonAlreadyRunningError('/path/daemon.lock', 42);
+    const result = classifyError(err);
+    expect(result.kind).toBe('daemon_already_running');
+    expect(result.exitCode).toBe(2);
+    expect(result.hint).toContain('42');
+    expect(result.raw).toBe(err);
+  });
+
+  it('classifies DaemonAlreadyRunningError with null ownerPid: exitCode 2, kind, generic hint (no PID number)', () => {
+    const err = new DaemonAlreadyRunningError('/path/daemon.lock', null);
+    const result = classifyError(err);
+    expect(result.kind).toBe('daemon_already_running');
+    expect(result.exitCode).toBe(2);
+    expect(result.hint).toBeDefined();
+    // Generic wording — must not contain a bare integer
+    expect(result.hint).not.toMatch(/\b\d+\b/);
+    expect(result.raw).toBe(err);
   });
 });
 
