@@ -187,5 +187,9 @@ export async function runOneTurn(
     surface.toRunTurnRefs(buildPrompt(ctx.stats.permissionMode)),
   );
 
+  // Release the mascot band's opacity-toggle reservation between turns so
+  // blank rows do not waste screen space while the user reads or types.
+  footer.mascotBar.releaseBand();
+
   return capture;
 }

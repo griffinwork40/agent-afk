@@ -72,6 +72,9 @@ import type { AnthropicToolDef } from './types.js';
  *     removes them; placed in core.
  *   - `worktree` / `config_get` / `config_set`: not in any disable group.
  *   - `remote_agent`: not in any disable group.
+ *   - `artifact_get`, `artifact_list`, `artifact_read`: removed when the
+ *     artifact registry is not wired (registry-filtered). Cannot be in the
+ *     invariant core; placed at the head of the optional tail instead.
  *   - `cancel_background_job`, `get_background_job_health`: removed by
  *     filterBackgroundToolDefs when subagentBackground=false AND
  *     processJobs=false; kept when processJobs=true even without a subagent
@@ -87,7 +90,8 @@ import type { AnthropicToolDef } from './types.js';
  *     construction time and placed after ALL builtins. They do not affect the
  *     core prefix of builtinToolSchemas itself.
  *
- * Optional tail (indices INVARIANT_CORE_COUNT..44):
+ * Optional tail (indices INVARIANT_CORE_COUNT..47):
+ *   artifact_get, artifact_list, artifact_read,
  *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
  *   image_generate, image_edit,
@@ -100,6 +104,11 @@ import type { AnthropicToolDef } from './types.js';
  *   terminal_font_size,
  *   ask_question
  */
+// History: INVARIANT_CORE_COUNT was 23, then PR #4551 moved artifact_get,
+// artifact_list, and artifact_read into the invariant core (23→26). PR #4551
+// fix2 reverts that decision: artifact tools are registry-filtered when the
+// artifact store is not wired, so they belong in the optional tail (26→23).
+// This 26→23 revert restores the original prefix cache baseline.
 export const INVARIANT_CORE_COUNT = 23;
 
 /**

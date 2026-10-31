@@ -15,8 +15,9 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { _resetReadDenylistCacheForTests, isReadDenied } from './read-denylist.js';
-import { gateSshPubKeyDir, isSshPubKeyChild } from './read-denylist-carveout.js';
+import { gateSshPubKeyDir, gateStaticCarveOuts, isSshPubKeyChild } from './read-denylist-carveout.js';
 import { safeRealpath } from './write-denylist.js';
+import { _resetFsCaseCacheForTests } from '../fs-case.js';
 
 const ssh = join(homedir(), '.ssh');
 
@@ -24,11 +25,13 @@ beforeEach(() => {
   delete process.env['AFK_READ_DENYLIST'];
   delete process.env['AFK_HOME'];
   _resetReadDenylistCacheForTests();
+  _resetFsCaseCacheForTests();
 });
 afterEach(() => {
   delete process.env['AFK_READ_DENYLIST'];
   delete process.env['AFK_HOME'];
   _resetReadDenylistCacheForTests();
+  _resetFsCaseCacheForTests();
 });
 
 describe('isReadDenied — SSH public keys', () => {
@@ -123,7 +126,7 @@ describe('gateSshPubKeyDir — per-entry provenance gate', () => {
       { source: src, root: '/home/u/.ssh' },
       { source: '/home/u/.gnupg', root: '/home/u/.gnupg' },
     ];
-    expect(gateSshPubKeyDir(entries, ['/home/u/.afk/config'], src)).toBe('/home/u/.ssh');
+    expect(gateSshPubKeyDir(entries, ['/home/u/afk/config'], src)).toBe('/home/u/.ssh');
   });
 
   it('drops the pattern when ~/.ssh resolves under another builtin floor', () => {
@@ -141,5 +144,61 @@ describe('gateSshPubKeyDir — per-entry provenance gate', () => {
 
   it('fails closed when the ssh source is not present', () => {
     expect(gateSshPubKeyDir([{ source: '/x', root: '/x' }], [], src)).toBeUndefined();
+  });
+});
+
+describe('isReadDenied — AFK_HOME under ssh dir does not widen pub-key carve-out (#4030)', () => {
+  it('a top-level ssh pub key stays allowed when AFK_HOME is a subdir of ssh', () => {
+    // Even when AFK_HOME is relocated inside the ssh dir, a real pub-key child
+    // of the original ssh dir must still pass the carve-out. The relocated
+    // config root gates only the afk config carve-out, not the pub-key pattern.
+    process.env['AFK_HOME'] = join(ssh, 'afk');
+    _resetReadDenylistCacheForTests();
+    expect(isReadDenied(join(ssh, 'id_ed25519.pub')).denied).toBe(false);
+  });
+});
+
+describe('gateStaticCarveOuts — two entries with different sources resolving to same root (#4030 / #4036)', () => {
+  it('excludes both source variants when they share a resolved root (win32 HOME/USERPROFILE case)', () => {
+    // Simulate the win32 scenario: two denylist entries have DIFFERENT source
+    // strings but resolve to the SAME canonical root (HOME/.ssh and
+    // USERPROFILE/.ssh both resolve to the same directory). gateRootsExcludingSource
+    // deduplicates by resolved root so neither variant is retained as a gate
+    // root — the carve-out must survive.
+    //
+    // We use the real HOME-based ssh path because CARVEOUT_PIERCED_SOURCE is
+    // keyed to that exact source string; fake paths would never match the map
+    // and the gate would exclude nothing (always failing open).
+    const realSshRoot = safeRealpath(join(homedir(), '.ssh'));
+    const realSshSource = join(homedir(), '.ssh'); // matches CARVEOUT_PIERCED_SOURCE
+    const realSshConfigPath = join(realSshRoot, 'config');
+    const entries = [
+      { source: realSshSource, root: realSshRoot },
+      // Synthetic duplicate: a different source string that resolves to the
+      // same root (the win32 USERPROFILE variant of the same directory).
+      { source: 'C:\\Users\\u\\.ssh', root: realSshRoot },
+      { source: join(homedir(), 'afk', 'config'), root: join(homedir(), 'afk', 'config') },
+    ];
+    const carveOuts = [{ rel: '.ssh/config', resolved: realSshConfigPath }];
+    const allowed = gateStaticCarveOuts(carveOuts, entries);
+    // The carve-out must survive — both ssh source variants resolve to the
+    // pierced root and must both be excluded from the gate.
+    expect(allowed).toContain(realSshConfigPath);
+  });
+
+  it('still gates a carve-out that resolves under a genuinely different denied root', () => {
+    // A carve-out resolved inside an unrelated denied root must be dropped even
+    // when the rel maps to a different source. Use real paths for source match.
+    const realSshRoot = safeRealpath(join(homedir(), '.ssh'));
+    const realSshSource = join(homedir(), '.ssh');
+    const gnupgRoot = join(homedir(), '.gnupg');
+    const entries = [
+      { source: realSshSource, root: realSshRoot },
+      { source: gnupgRoot, root: gnupgRoot },
+    ];
+    // Carve-out resolved to inside gnupg — must be gated out.
+    const carveOuts = [{ rel: '.ssh/config', resolved: join(gnupgRoot, 'config') }];
+    const allowed = gateStaticCarveOuts(carveOuts, entries);
+    expect(allowed).not.toContain(join(gnupgRoot, 'config'));
   });
 });

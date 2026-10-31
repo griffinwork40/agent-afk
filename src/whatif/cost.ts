@@ -52,8 +52,7 @@
  * @module whatif/cost
  */
 
-import { deriveCallCostUsd } from '../agent/providers/anthropic-direct/pricing.js';
-import { resolveModelId } from '../agent/session/model-resolution.js';
+import { deriveCallCostUsd, resolveModelId } from '../agent/providers/whatif-api.js';
 
 // ---------------------------------------------------------------------------
 // Per-turn token assumptions

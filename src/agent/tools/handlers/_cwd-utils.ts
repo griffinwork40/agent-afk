@@ -9,7 +9,7 @@
  */
 
 import path from 'path';
-import { lstatSync, realpathSync, readlinkSync } from 'fs';
+import { lstatSync, readlinkSync } from 'fs';
 import type { ToolHandlerContext } from '../types.js';
 import {
   READ_DENYLIST_ENTRY_MARKER,
@@ -18,175 +18,14 @@ import {
 import { assertNotDenylisted } from './write-denylist.js';
 import { decidePathAccess } from './path-policy.js';
 import { isEnoent, isErrnoCode } from '../../../utils/errors.js';
-import { isWithinScratchRoot } from './scratch-roots.js';
-
-// Invariant: symlink containment must be resolved at the filesystem level, not
-// lexically. A symlink that lives INSIDE a granted root but points OUTSIDE it
-// would bypass `path.relative` containment if we compare unresolved paths.
-// `realpathSafe` resolves symlinks on the true filesystem before any
-// containment comparison, so such escape attempts are caught. We handle the
-// not-yet-existing-path case (e.g. new write_file targets) by recursively
-// resolving the nearest existing ancestor and re-appending trailing segments —
-// this prevents throwing on legitimate new-file writes while still resolving
-// all existing symlinks in the ancestor chain.
-export function realpathSafe(p: string): string {
-  try {
-    return realpathSync.native(p);
-  } catch {
-    // Path may not exist yet (new write target). Resolve the nearest existing
-    // ancestor, then re-append the trailing segment(s).
-    const dir = path.dirname(p);
-    const base = path.basename(p);
-    if (dir === p) return p; // reached filesystem root
-    return path.join(realpathSafe(dir), base);
-  }
-}
-
-// Invariant: the realpath of a granted root is filesystem-stable within a
-// session — adding or revoking a root mutates the roots array, not what
-// realpathSafe(root) returns for a given string. Under this module's
-// non-adversarial threat model (a granted root's symlink is not retargeted
-// mid-session), caching root -> realpath across calls is safe and removes the
-// N+1 realpath syscalls that resolveAndContain / wouldBeRestricted otherwise
-// pay on EVERY typed-file-tool call (linear in granted-root count). The
-// candidate path is always resolved fresh; only roots are memoized.
-const rootRealpathCache = new Map<string, string>();
-
-function realpathRoot(root: string): string {
-  const cached = rootRealpathCache.get(root);
-  if (cached !== undefined) return cached;
-  const real = realpathSafe(root);
-  rootRealpathCache.set(root, real);
-  return real;
-}
-
-/**
- * Test-only: clear the cross-call root realpath cache so suites that point the
- * same root string at different real targets across cases don't see a stale
- * entry. Production never needs this (root realpaths are session-stable).
- */
-export function _resetRootRealpathCacheForTests(): void {
-  rootRealpathCache.clear();
-}
-
-/**
- * Single source of truth for the path-containment DECISION shared by
- * {@link resolveAndContain} (which throws on a restricted verdict) and
- * {@link wouldBeRestricted} (which returns it). Extracting this one function is
- * what makes the handler's throwing enforcement and the path-approval hook's
- * non-throwing pre-check provably agree: "the two layers must agree" becomes
- * structure instead of two hand-synced copies that drifted across ~6 prior PRs.
- *
- * Contract:
- * - `resolved` is the absolute path `inputPath` resolves to (relative inputs
- *   anchored against the resolveBase tier below). It is NOT symlink-resolved —
- *   realpath is used internally for the containment comparison only, never
- *   returned, so callers get back the same string `resolveAndContain` returns.
- * - `restricted: false` when the session is in bypass mode (`allowAll`), is
- *   unconfined (`resolveBase === undefined`), the resolved path is inside at
- *   least one allowed root, or (write mode only) its realpath is inside the
- *   OS temp dir (`scratch-roots.ts`).
- * - `restricted: true` when a confined session's path escapes every root.
- * - `roots` is the effective allow-list that was compared against (`[]` for the
- *   bypass / unconfined fast-paths, which never consult roots).
- *
- * The read-denylist floor is deliberately NOT applied here — it is a throw-only
- * hard floor owned by `resolveAndContain` (and enforced independently by the
- * path-approval hook), never part of the shared containment verdict. Folding it
- * in would make `wouldBeRestricted` report denylisted paths as `restricted`,
- * which its callers must not see.
- */
-function computeContainment(
-  inputPath: string,
-  context: ToolHandlerContext | undefined,
-  mode: 'read' | 'write',
-  fallbackBase: string | undefined,
-): { restricted: boolean; resolved: string; roots: string[] } {
-  const resolveBase = context?.resolveBase ?? fallbackBase;
-
-  // Resolve to absolute, anchoring relative paths against resolveBase.
-  const abs = path.isAbsolute(inputPath)
-    ? inputPath
-    : path.resolve(resolveBase ?? process.cwd(), inputPath);
-
-  // Bypass mode: the session runs in `bypassPermissions`, which disables all
-  // path containment. Admit any path. This is the same switch the path-approval
-  // hook consults to skip its prompt, so the two stay in sync.
-  if (context?.allowAll === true) {
-    return { restricted: false, resolved: abs, roots: [] };
-  }
-
-  // Invariant: `resolveBase === undefined` marks an UNCONFINED session — a
-  // top-level `afk chat`/`interactive` run with no worktree, where `config.cwd`
-  // is deliberately unset (dispatcher does `this.resolveBase = opts.cwd`). We
-  // disable containment here on purpose so such a session can read/write
-  // anywhere (config files, /tmp, absolute paths). Do NOT "fix" this by
-  // defaulting resolveBase to `process.cwd()`: that confines every top-level
-  // session to its launch dir, and — because the emitted `readRoots`/`writeRoots`
-  // are `[]` for a no-cwd session (`[] ?? [base]` stays `[]`) — would reject ALL
-  // paths. Confinement is opt-in via a set cwd (worktree/fork) or an explicit
-  // `fallbackBase`, never a default. See docs/issue #434.
-  if (resolveBase === undefined) {
-    return { restricted: false, resolved: abs, roots: [] };
-  }
-
-  // Resolve symlinks on the candidate path before containment comparison so a
-  // symlink inside a root that points outside cannot escape containment.
-  const realAbs = realpathSafe(abs);
-
-  // Invariant: `readRoots ?? [resolveBase]` — `[] ?? x` stays `[]`, so a
-  // confined session with EMPTY roots denies every path (writes excepted only
-  // for the OS temp dir, the implicit scratch root below). That empty-roots
-  // deny-all is deliberate (a fork with no grants touches nothing but scratch);
-  // do NOT "fix" it by treating `[]` as "fall back to [resolveBase]".
-  const roots: string[] =
-    mode === 'read'
-      ? (context?.readRoots ?? [resolveBase])
-      : (context?.writeRoots ?? [resolveBase]);
-
-  // Path is allowed if it is inside ANY root (compare real paths throughout).
-  for (const root of roots) {
-    const realRoot = realpathRoot(root);
-    const rel = path.relative(realRoot, realAbs);
-    // Invariant: `!rel.startsWith('..')` alone is NOT a sufficient containment
-    // test on Windows. When realRoot and realAbs sit on different drives — e.g.
-    // root on `C:`, and a drive-relative input like `/etc` resolving to `D:\etc`
-    // (or a drive-less `\etc`) — `path.win32.relative` returns a DRIVE-QUALIFIED
-    // ABSOLUTE string (`D:\etc`, `\etc`) instead of a `..\`-prefixed relative
-    // one. The bare startsWith('..') check then reads that as "inside the root"
-    // and wrongly admits every escaping absolute path (grep/read/write/glob/
-    // list-directory all failed their "rejects absolute path outside cwd" test
-    // on the Windows CI matrix for exactly this reason). Guard with
-    // `!path.isAbsolute(rel)`: path.relative only returns an absolute path when
-    // the two inputs share no common root — precisely the escape case. On POSIX,
-    // relative() between two absolute paths is never absolute, so this is a
-    // no-op there and cannot regress the green Linux/macOS matrices.
-    if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
-      return { restricted: false, resolved: abs, roots };
-    }
-  }
-
-  // Invariant: the OS temp dir is an implicit WRITE root for every confined
-  // session, checked AFTER the granted roots and against the REALPATH'd
-  // candidate, so a temp-dir symlink into a credential dir resolves out of the
-  // allowance first. Containment only: the write-denylist floor still runs in
-  // every write handler afterwards. WRITE mode only: read scope is a separate
-  // axis (`subagent-read-scope.ts`) whose grants this change does not touch.
-  // Rationale + telemetry: `./scratch-roots.ts`.
-  if (mode === 'write' && isWithinScratchRoot(realAbs)) {
-    return { restricted: false, resolved: abs, roots };
-  }
-
-  // All roots rejected.
-  return { restricted: true, resolved: abs, roots };
-}
+import { decideActorContainment, resolvePolicyPath, realpathSafe } from './path-policy.roots.js';
+export { realpathSafe, _resetRootRealpathCacheForTests } from './path-policy.roots.js';
 
 /**
  * Resolve `inputPath` to an absolute path (using `resolveBase` for relative
  * inputs) and verify it is contained within at least one allowed root.
  *
- * Throwing wrapper around {@link computeContainment}: applies the read-only
- * credential denylist floor, then throws when the shared verdict is restricted.
+ * Throwing wrapper around decidePathAccess: credential floor first, then roots.
  *
  * @param inputPath   - The raw path string from the tool input.
  * @param context     - The current handler context (may be undefined for
@@ -212,36 +51,19 @@ export function resolveAndContain(
   mode: 'read' | 'write' = 'read',
   fallbackBase?: string,
 ): string {
-  const { restricted, resolved, roots } = computeContainment(
-    inputPath,
-    context,
-    mode,
-    fallbackBase,
-  );
-
-  // Invariant: the unconditional read-denylist floor — credential/secret paths
-  // (~/.ssh, ~/.afk/config, …) are never readable by a typed file tool. It is
-  // checked HERE (not in computeContainment) and BEFORE the restricted throw so
-  // it fires even for the `allowAll` / unconfined fast-paths that report
-  // not-restricted, and so a denylist hit takes precedence over a containment
-  // hit. This closes the read/write asymmetry (writes are gated by
-  // write-denylist.ts; reads had NO floor); it is applied to the resolved
-  // absolute path, exactly as computed by computeContainment. Writes keep their
-  // own floor in write-file.ts / edit-file.ts.
-  //
-  // Routed through `decidePathAccess` (#3847 first slice) so this layer and
-  // the path-approval hook share one canonicalization rather than each calling
-  // `isReadDenied` independently with their own `path.resolve()` anchors.
-  const decision = decidePathAccess(resolved, mode);
+  const decision = decidePathAccess(inputPath, mode, context, fallbackBase);
+  const { resolved } = decision;
   if (decision.kind === 'deny') {
-    throw new Error(
-      `Path \`${inputPath}\` ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
-        `(${READ_DENYLIST_ENTRY_MARKER} \`${decision.matched}\`) and cannot be read.`,
-    );
-  }
-
-  if (restricted) {
-    const rootList = roots.map((r) => `\`${r}\``).join(', ');
+    if (decision.reason === 'credential') {
+      if (mode === 'write') {
+        throw new Error(`refusing to write to protected path: ${resolved} (matches denylist entry: ${decision.matched})`);
+      }
+      throw new Error(
+        `Path \`${inputPath}\` ${PROTECTED_CREDENTIAL_PATH_MARKER} ` +
+          `(${READ_DENYLIST_ENTRY_MARKER} \`${decision.matched}\`) and cannot be read.`,
+      );
+    }
+    const rootList = decision.roots.map((r) => `\`${r}\``).join(', ');
     const noun = mode === 'read' ? 'read roots' : 'write roots';
     throw new Error(`Path \`${inputPath}\` is outside the allowed ${noun} [${rootList}].`);
   }
@@ -255,13 +77,10 @@ export function resolveAndContain(
  * PreToolUse hook to decide whether to prompt the user BEFORE the handler's
  * resolveAndContain throws, and by the bash handler's advisory write-scan.
  *
- * Both this and `resolveAndContain` delegate to the same private
- * {@link computeContainment}, so their containment decisions cannot drift. The
- * one intentional asymmetry: `resolveAndContain` additionally enforces the
- * read-denylist floor (a throw-only hard floor), which is NOT reflected in this
- * verdict — callers that must honor the floor (the path-approval hook) check
- * the denylist themselves; `restricted` here is purely a roots-containment
- * verdict.
+ * Both this and decidePathAccess share decideActorContainment. This legacy
+ * adapter deliberately reports roots ONLY, never credential-floor denials.
+ * Approval hooks must use decidePathAccess before offering grants; bash
+ * advisories use this adapter without changing their never-block contract.
  *
  * Contract:
  * - `resolved` is always the absolute path that `resolveAndContain` would
@@ -278,7 +97,7 @@ export function wouldBeRestricted(
   mode: 'read' | 'write' = 'read',
   fallbackBase?: string,
 ): { restricted: boolean; resolved: string; roots: string[] } {
-  return computeContainment(inputPath, context, mode, fallbackBase);
+  return decideActorContainment(resolvePolicyPath(inputPath, context, fallbackBase), mode, context, fallbackBase);
 }
 
 /**

@@ -17,6 +17,8 @@ import {
   GithubEventPoller,
   renderCommand,
   SUPPORTED_EVENT_TYPES,
+  _pruneSeen,
+  MAX_SEEN_FOR_TESTS,
   type GhRunner,
   type GithubEventType,
 } from './github-event-poller.js';
@@ -425,5 +427,161 @@ describe('GithubEventPoller — issue_opened PR filtering', () => {
     const tasks = readQueuedTasks();
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.command).toContain('Real issue');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// repo param validation (#4039)
+// ---------------------------------------------------------------------------
+
+describe('GithubEventPoller — repo param validation (#4039)', () => {
+  it('throws on empty repo string', () => {
+    expect(() => new GithubEventPoller({
+      repo: '',
+      events: ['pr_comment'],
+      commandTemplate: '{{event_type}}',
+      queueDir,
+      stateDir,
+      ghRunner: async () => [],
+    })).toThrow('invalid repo');
+  });
+
+  it('throws on repo without a slash', () => {
+    expect(() => new GithubEventPoller({
+      repo: 'justowner',
+      events: ['pr_comment'],
+      commandTemplate: '{{event_type}}',
+      queueDir,
+      stateDir,
+      ghRunner: async () => [],
+    })).toThrow('invalid repo');
+  });
+
+  it('throws on repo with leading slash', () => {
+    expect(() => new GithubEventPoller({
+      repo: '/owner/repo',
+      events: ['pr_comment'],
+      commandTemplate: '{{event_type}}',
+      queueDir,
+      stateDir,
+      ghRunner: async () => [],
+    })).toThrow('invalid repo');
+  });
+
+  it('throws on repo with spaces', () => {
+    expect(() => new GithubEventPoller({
+      repo: 'owner /repo',
+      events: ['pr_comment'],
+      commandTemplate: '{{event_type}}',
+      queueDir,
+      stateDir,
+      ghRunner: async () => [],
+    })).toThrow('invalid repo');
+  });
+
+  it('throws on repo with extra path segments', () => {
+    expect(() => new GithubEventPoller({
+      repo: 'owner/repo/extra',
+      events: ['pr_comment'],
+      commandTemplate: '{{event_type}}',
+      queueDir,
+      stateDir,
+      ghRunner: async () => [],
+    })).toThrow('invalid repo');
+  });
+
+  it('accepts a valid owner/repo', () => {
+    expect(() => new GithubEventPoller({
+      repo: 'owner/repo',
+      events: ['pr_comment'],
+      commandTemplate: '{{event_type}}',
+      queueDir,
+      stateDir,
+      ghRunner: async () => [],
+    })).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pruneSeen unit tests (#4039)
+// ---------------------------------------------------------------------------
+
+describe('_pruneSeen (#4039)', () => {
+  it('returns the same set when size is at or below MAX_SEEN', () => {
+    const s = new Set(['a', 'b', 'c']);
+    expect(_pruneSeen(s)).toBe(s);
+  });
+
+  it('prunes oldest entries when size exceeds MAX_SEEN', () => {
+    // Build a set just over the cap using synthetic ids.
+    const overCap = MAX_SEEN_FOR_TESTS + 100;
+    const entries = Array.from({ length: overCap }, (_, i) => `id-${i}`);
+    const seen = new Set(entries);
+    const pruned = _pruneSeen(seen);
+    const expectedKeep = Math.floor(MAX_SEEN_FOR_TESTS * 0.8);
+    expect(pruned.size).toBe(expectedKeep);
+    // Oldest entries (lowest indices, earliest insertion) should be dropped.
+    expect(pruned.has('id-0')).toBe(false);
+    // Newest entries should be kept.
+    expect(pruned.has(`id-${overCap - 1}`)).toBe(true);
+  });
+
+  it('preserves insertion order in the pruned set', () => {
+    const overCap = MAX_SEEN_FOR_TESTS + 1;
+    const entries = Array.from({ length: overCap }, (_, i) => `x-${i}`);
+    const seen = new Set(entries);
+    const pruned = _pruneSeen(seen);
+    // All kept entries should be from the tail of the original insertion order.
+    const kept = [...pruned];
+    const expectedKeep = Math.floor(MAX_SEEN_FOR_TESTS * 0.8);
+    expect(kept).toEqual(entries.slice(overCap - expectedKeep));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dedup surviving a restart (#4039)
+// ---------------------------------------------------------------------------
+
+describe('GithubEventPoller — dedup survives a restart (#4039)', () => {
+  it('does not re-enqueue an event seen by a previous poller instance on the same stateDir', async () => {
+    const runner = makePrCommentRunner([
+      { id: 42, body: 'hello', html_url: 'https://github.com/owner/repo/pull/1#comment-42', created_at: '2026-01-01T00:00:00Z' },
+    ]);
+
+    // First poller instance sees and enqueues the event.
+    const poller1 = makePoller(runner, ['pr_comment']);
+    await poller1.tick();
+    expect(readQueuedTasks()).toHaveLength(1);
+
+    // Second poller instance starts fresh (simulates a daemon restart) but
+    // shares the same stateDir — it must not re-enqueue the same event.
+    const poller2 = makePoller(runner, ['pr_comment']);
+    await poller2.tick();
+    // Still only 1 task — the second instance deduped via the persisted seen set.
+    expect(readQueuedTasks()).toHaveLength(1);
+  });
+
+  it('enqueues new events that arrived between restarts', async () => {
+    let generation = 1;
+    const runner: GhRunner = async () => {
+      if (generation === 1) {
+        return [{ id: 1, body: 'first', html_url: 'u1', created_at: '2026-01-01T00:00:00Z' }];
+      }
+      return [
+        { id: 1, body: 'first', html_url: 'u1', created_at: '2026-01-01T00:00:00Z' },
+        { id: 2, body: 'second', html_url: 'u2', created_at: '2026-01-02T00:00:00Z' },
+      ];
+    };
+
+    const poller1 = makePoller(runner, ['pr_comment']);
+    await poller1.tick();
+    expect(readQueuedTasks()).toHaveLength(1);
+
+    // Simulate restart: new poller, same stateDir, new events now available.
+    generation = 2;
+    const poller2 = makePoller(runner, ['pr_comment']);
+    await poller2.tick();
+    // Only the new event (id=2) should be enqueued.
+    expect(readQueuedTasks()).toHaveLength(2);
   });
 });

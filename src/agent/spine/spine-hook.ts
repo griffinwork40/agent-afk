@@ -26,7 +26,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { HookHandler } from '../hooks.js';
 import { env } from '../../config/env.js';
-import { pushIfConfigured } from '../../telegram/push.js';
+import { operatorNotify } from '../operator-notify.js';
 import { getAfkStateDir } from '../../paths.js';
 import { resolveRepoRootSync } from '../../utils/git.js';
 import {
@@ -291,7 +291,7 @@ function handleContradiction(
   });
 
   // Best-effort Telegram notification (daemon/unattended path)
-  void pushIfConfigured(
+  void operatorNotify(
     `⚠️ SPINE conflict needs review:\n` +
       `${item.existingId.slice(0, 200)}: ${item.existingDescription.slice(0, 200)}\n` +
       `Conflict: ${item.description.slice(0, 200)}\n` +

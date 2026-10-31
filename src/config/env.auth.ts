@@ -180,4 +180,19 @@ export const AUTH_ENV_REGISTRY = [
     required: false,
     category: 'misc',
   },
+  {
+    name: 'AFK_INLINE_IMAGES',
+    description:
+      'Controls inline terminal image rendering after image_generate, image_edit, and ' +
+      'browser_screenshot tool calls. When set to "0" or "false", rendering is disabled and ' +
+      'only the file path is logged (the existing behaviour). When unset (default), the hook ' +
+      'auto-detects terminal support: Kitty graphics protocol for kitty/ghostty/wezterm, ' +
+      'iTerm2 inline images protocol for iTerm2, and plain path logging as a fallback. ' +
+      'Set to "0" to suppress all inline rendering.',
+    type: 'string',
+    required: false,
+    default: '',
+    example: '0',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];

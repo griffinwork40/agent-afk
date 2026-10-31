@@ -171,6 +171,12 @@ export const webRequestTool: AnthropicToolDef = {
           'Request headers as a string-keyed object. Secret values (Authorization, token patterns) ' +
           'are redacted from traces but sent on the wire.',
       },
+      remote_idempotency: {
+        type: 'boolean',
+        description: 'Opt in only when the remote API documents Idempotency-Key support. The effect ledger ' +
+          'adds a key for mutations and reuses it after an uncertain response. Existing headers (case-insensitive) ' +
+          'are preserved. Does not automatically retry or guarantee exactly-once delivery.',
+      },
       timeout_ms: {
         type: 'number',
         description: 'Request timeout in milliseconds (default 30000, clamped to 120000).',

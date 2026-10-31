@@ -238,7 +238,7 @@ export function runTextInput(
       }
     };
 
-    const controller: PickerController = { renderRows, onKey };
+    const controller: PickerController = { renderRows, onKey, skipBandTruncation: true };
     host.enterPickerMode(controller);
   });
 }

@@ -39,6 +39,7 @@
  */
 
 import { env } from '../../config/env.js';
+import { normalizeSlotProvider, parseStringField } from './model-slots.utils.js';
 
 /**
  * The fixed capability-tier positions plus the `subagent` routing slot.
@@ -498,8 +499,7 @@ export function parseModelsConfig(raw: unknown): Partial<Record<SlotName, ModelS
 
 // Re-exported from sibling (350-line ceiling — see model-slots.coerce.ts).
 export { coerceSlotBindingInput } from './model-slots.coerce.js';
-// Shared low-level helpers (moved from inline copies — see #4120).
-import { normalizeSlotProvider, parseStringField } from './model-slots.utils.js';
+// Shared low-level helpers (moved from inline copies — see #4120); imported at top of file.
 
 /** Max accepted contextWindow override (10M tokens). Values above are ignored at load / rejected at write. */
 export const MAX_CONTEXT_WINDOW_OVERRIDE = 10_000_000;

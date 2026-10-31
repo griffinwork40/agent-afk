@@ -52,6 +52,7 @@ import type {
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 
 import { getOauthPendingPath } from '../../paths.js';
+import { operatorNotify } from '../operator-notify.js';
 
 /** TTL for oauth_pending entries. Flows older than this are treated as absent. */
 const TTL_MS = 10 * 60 * 1_000; // 10 minutes
@@ -391,16 +392,13 @@ export class KeychainOAuthProvider implements OAuthClientProvider {
     // Write oauth_pending state first — constraint: persistence before UI.
     writeOauthPending(this.serverName, urlString);
 
-    // Attempt Telegram push (lazy import to avoid pulling telegram deps into
-    // contexts that don't use it).
+    // Attempt Telegram push via the operator-notify port (agent/ layer boundary).
     let pushed = false;
     try {
-      const { pushIfConfigured } = await import('../../telegram/push.js');
-      const result = await pushIfConfigured(message);
+      const result = await operatorNotify(message);
       pushed = result !== null;
     } catch {
-      // pushIfConfigured import may fail in minimal test environments — fall
-      // through to stderr.
+      // operatorNotify may fail in minimal test environments — fall through to stderr.
     }
 
     if (!pushed) {

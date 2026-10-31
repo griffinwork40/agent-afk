@@ -338,7 +338,15 @@ export type SessionPhaseName =
   // continuation is refused fail-closed), or an unexpected error forced the
   // fallback record. In-flight still clears. `metadata`: `chainId`, `childId`,
   // `reason` ('flush_timeout' | 'checkpoint_unavailable' | 'error').
-  | 'continuation_settle_degraded';
+  | 'continuation_settle_degraded'
+  // Per-fragment token-count snapshot emitted once per session at prompt
+  // assembly time (#4449). `metadata` carries one key per named fragment
+  // (e.g. `toolBase`, `userSystem`, `memoryPrompt`, `workspacePrompt`,
+  // `hotMemory`, `goalPrompt`, `environment`, `manifest`, `agentTypeListing`)
+  // whose value is `Math.ceil(chars / 4)` — a cheap chars-per-token proxy.
+  // Absent fragments (empty strings) are omitted so the record is sparse.
+  // Read-path only: the prompt itself is never mutated.
+  | 'prompt_fragment_sizes';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

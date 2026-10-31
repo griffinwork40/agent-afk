@@ -66,7 +66,7 @@ const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
   },
   grep: { flags: ['-n', '--line-number', '-i', '--ignore-case', '-w', '--word-regexp', '-l', '--files-with-matches', '--count', '-E', '--extended-regexp', '-F', '--fixed-strings', '-I', '--cached', '--untracked'], valued: ['--max-count=', '--max-depth='], forced: ['--no-textconv', '--no-color'], revs: true },
   tag: { flags: [], valued: ['--sort=', '--contains=', '--merged=', '--format='], forced: ['--list'], revs: false },
-  branch: { flags: ['-a', '--all', '-r', '--remotes', '-v', '-vv', '--verbose'], valued: ['--sort=', '--contains=', '--merged=', '--no-merged=', '--format='], forced: ['--list', '--no-color'], revs: false },
+  branch: { flags: ['-a', '--all', '-r', '--remotes', '-v', '-vv', '--verbose', '--show-current'], valued: ['--sort=', '--contains=', '--merged=', '--no-merged=', '--format='], forced: ['--list', '--no-color'], revs: false },
   blame: { flags: ['-w', '-s', '--porcelain', '--line-porcelain', '-l'], valued: ['-L'], forced: ['--no-textconv'], revs: true },
   'ls-files': { flags: ['--cached', '--others', '-o', '--exclude-standard', '--modified', '-m', '--deleted', '-d', '--stage', '-s'], valued: [], forced: [], revs: false },
   'rev-parse': { flags: ['--abbrev-ref', '--short', '--verify', '--show-toplevel', '--show-prefix', '--is-inside-work-tree', '--symbolic-full-name'], valued: [], forced: [], revs: true },
@@ -80,7 +80,7 @@ const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
 
   // rev-list: walks commit graph, no writes. --objects/--disk-usage omitted (can be
   // very expensive / expose object layout). --stdin omitted (network of stdin).
-  'rev-list': { flags: ['--count', '--oneline', '--reverse', '--merges', '--no-merges', '--first-parent', '--ancestry-path', '--topo-order', '--date-order', '--not'], valued: ['--max-count=', '--max-age=', '--min-age=', '--since=', '--until=', '--after=', '--before=', '--format=', '--pretty=', '--author=', '--committer=', '--grep='], forced: [], revs: true },
+  'rev-list': { flags: ['--count', '--oneline', '--reverse', '--merges', '--no-merges', '--first-parent', '--ancestry-path', '--topo-order', '--date-order', '--not', '--left-right'], valued: ['--max-count=', '--max-age=', '--min-age=', '--since=', '--until=', '--after=', '--before=', '--format=', '--pretty=', '--author=', '--committer=', '--grep='], forced: [], revs: true },
 
   // reflog: forced to `show` (the read-only subcommand). `expire`/`delete` are write
   // subcommands and are structurally blocked because `forced` prepends `show` and the
@@ -248,6 +248,18 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   // "show", args: ["show", "HEAD"]}`). git would treat the echo as an
   // operand and fail, so drop a leading echo before any other handling.
   const argsIn = rawArgs.length > 0 && rawArgs[0] === subcommand ? rawArgs.slice(1) : rawArgs;
+  // Contract: models naturally echo forced tokens (e.g. `git stash list`,
+  // `git reflog show`). The policy prepends them unconditionally, so the
+  // echo would be rejected as an unlisted option or bare revision. Strip
+  // echoed tokens from the pre-separator segment only — post-separator
+  // tokens are pathspecs and must never be filtered.
+  const forcedTokens = new Set(policy.forced);
+  const rawSep = argsIn.indexOf('--');
+  const preRaw = rawSep === -1 ? argsIn : argsIn.slice(0, rawSep);
+  const postRaw = rawSep === -1 ? [] : argsIn.slice(rawSep + 1);
+  const argsClean = forcedTokens.size > 0
+    ? preRaw.filter((t) => !forcedTokens.has(t))
+    : preRaw;
   // A pattern is only meaningful for grep. Models that fill optional string
   // fields with "" must not trip the grep-only guard below, so an
   // empty/whitespace-only pattern counts as absent for every other subcommand.
@@ -260,8 +272,7 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   // Accept git's own grammar: a literal `--` in `args` separates revisions
   // from pathspecs. Tokens after it join `paths` and are confined below like
   // any other path, so this widens nothing.
-  const sep = argsIn.indexOf('--');
-  const preSep = sep === -1 ? argsIn : argsIn.slice(0, sep);
+  const preSep = argsClean;
   // Normalise shorthand count flags to `--max-count=<N>` before validation —
   // only where the allowlist already admits --max-count=.
   const args: string[] = [];
@@ -298,13 +309,21 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   } else {
     args.push(...preSep);
   }
-  const paths = sep === -1 ? fieldPaths : [...fieldPaths, ...argsIn.slice(sep + 1)];
+  const paths = [...fieldPaths, ...postRaw];
   if (paths.length > MAX_ARGS) return { ok: false, error: `"paths" accepts at most ${MAX_ARGS} entries.` };
   for (const tok of args) {
     const err = checkToken(tok, policy, subcommand);
     if (err !== null) return { ok: false, error: err };
   }
-  const argv: string[] = [subcommand, ...policy.forced];
+  // Invariant: branch --show-current is a read-only query that returns the
+  // current branch name. It is incompatible with the forced --list flag
+  // (which switches branch to pattern-matching mode). Skip --list when
+  // --show-current is present; the safety contract holds because
+  // --show-current never creates branches.
+  const forced = subcommand === 'branch' && args.includes('--show-current')
+    ? policy.forced.filter((f) => f !== '--list')
+    : policy.forced;
+  const argv: string[] = [subcommand, ...forced];
   if (subcommand === 'grep') {
     if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > MAX_TOKEN_LEN || pattern.includes('\0')) {
       return { ok: false, error: 'git grep requires a non-empty "pattern" string.' };

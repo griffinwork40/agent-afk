@@ -48,9 +48,38 @@ pnpm telegram:start                          # Telegram bot
 
 `pnpm install` installs a pre-push hook running `pnpm check:audits`. Bypass: `git push --no-verify`.
 
-### Observability
+### Observability & Introspection
 
-Every session writes a **witness trace** at `$AFK_HOME/state/witness/<sessionLabel>/trace.jsonl`. View: `afk trace show [<session>]` (`--all`, `-n 40`, `--json`); `afk trace list` for recent sessions. Subagent journals at `~/.afk/state/sessions/<id>/subagents/<subagentId>.jsonl`; view with `afk trace show --results`. For trace internals, journal sync points, witness retention rules: `memory_search "trace internals"` or read `docs/`.
+Quick orientation: `/where` in the REPL shows branch, cwd, session identity, and pointers to deeper tools at a glance.
+
+**Witness traces** — every session writes `$AFK_HOME/state/witness/<sessionLabel>/trace.jsonl`:
+
+```bash
+afk trace list                       # recent sessions by mtime
+afk trace show [session]             # pretty-print trace (--all, -n 40, --json)
+afk trace show --results             # include full tool outputs from journal
+afk trace export-otlp [session]      # convert to OpenTelemetry spans
+```
+
+**Witness search** — query across sessions:
+
+```bash
+afk witness read [session]           # read/filter events by kind, tool, errors-only
+afk witness search "rate limit"      # text-search across recent sessions (--since, --kinds)
+```
+
+**Runtime state** (agent tool `get_runtime_state`; human via `/debug`, `/tools`, `/info`):
+
+| View | What it shows |
+|------|---------------|
+| `self` | sessionId, surface, depth, cwd, model, permissionMode |
+| `tools` | enabled tool names, MCP servers (name + tool count), failed servers |
+| `subagents` | active foreground handles, background jobs (id, status, label) |
+| `workspace` | branch, headSha, dirty, dirtyCount, remoteUrl |
+| `hooks` | merged disk hook config (opt-in, excluded from `all`) |
+| `all` | union of self/tools/subagents/workspace + usage + clock |
+
+For trace internals, journal sync points, witness retention rules: `memory_search "trace internals"` or read `docs/`.
 
 ### Subagent tool-round budget
 

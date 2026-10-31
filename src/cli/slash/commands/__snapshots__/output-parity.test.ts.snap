@@ -101,8 +101,9 @@ exports[`original console bytes (color=0) > usage 1`] = `
 "
 Subscription usage
 ────────────────────────────────────────────────────────────────────────────────
-  5-hour          42%
-  7-day           10%
+  anthropic / oauth   ok
+    5h utilization    42%
+    7d utilization    10%
 
 "
 `;
@@ -111,7 +112,7 @@ exports[`original console bytes (color=0) > usage-empty 1`] = `
 "
 Subscription usage
 ────────────────────────────────────────────────────────────────────────────────
-  No usage windows reported.
+  Status              No providers found.
 
 "
 `;
@@ -120,7 +121,8 @@ exports[`original console bytes (color=0) > usage-unavailable 1`] = `
 "
 Subscription usage
 ────────────────────────────────────────────────────────────────────────────────
-⚠ No Claude subscription token found — run \`claude login\`, then try /usage again.
+  anthropic / oauth   error
+    Usage             No token
 
 "
 `;
@@ -237,9 +239,10 @@ exports[`original console bytes (color=1) > tokens-sdk 1`] = `
 exports[`original console bytes (color=1) > usage 1`] = `
 "
 [1mSubscription usage[22m
-[2m────────────────────────────────────────────────────────────────────────────────[22m
-  5-hour          [90m42%[39m
-  7-day           [90m10%[39m
+────────────────────────────────────────────────────────────────────────────────
+  anthropic / oauth   ok
+    5h utilization    42%
+    7d utilization    10%
 
 "
 `;
@@ -247,8 +250,8 @@ exports[`original console bytes (color=1) > usage 1`] = `
 exports[`original console bytes (color=1) > usage-empty 1`] = `
 "
 [1mSubscription usage[22m
-[2m────────────────────────────────────────────────────────────────────────────────[22m
-[2m  No usage windows reported.[22m
+────────────────────────────────────────────────────────────────────────────────
+  Status              No providers found.
 
 "
 `;
@@ -256,8 +259,9 @@ exports[`original console bytes (color=1) > usage-empty 1`] = `
 exports[`original console bytes (color=1) > usage-unavailable 1`] = `
 "
 [1mSubscription usage[22m
-[2m────────────────────────────────────────────────────────────────────────────────[22m
-[33m⚠ [39mNo Claude subscription token found — run \`claude login\`, then try /usage again.
+────────────────────────────────────────────────────────────────────────────────
+  anthropic / oauth   error
+    Usage             No token
 
 "
 `;

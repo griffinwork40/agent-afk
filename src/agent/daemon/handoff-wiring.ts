@@ -34,7 +34,7 @@ import {
 } from './handoff-store.js';
 import { setLeaseState } from './lease-store.js';
 import { DEFAULT_HANDOFF_TTL_MS, expireHandoff, isHandoffStale } from './handoff-expiry.js';
-import { pushIfConfigured } from '../../telegram/push.js';
+import { operatorNotify } from '../operator-notify.js';
 import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion, clearPendingTextHandoff } from '../../telegram/handoff-answer.js';
 import { buildHandoffCallback } from '../../telegram/handoff-callback-data.js';
@@ -191,7 +191,7 @@ export function makeDaemonElicitationHandler(
       if (!replyMarkup) {
         parts.push(`\nReply to this task's next run to provide your answer.`);
       }
-      void pushIfConfigured(parts.join('\n'), { replyMarkup }).catch(() => undefined);
+      void operatorNotify(parts.join('\n'), { replyMarkup }).catch(() => undefined);
     }
 
     // Step 4: decline — daemon sessions cannot block on a synchronous answer.
@@ -304,7 +304,7 @@ export async function recoverPendingHandoffs(
         if (!replyMarkup) {
           parts.push(`\nReply to this task's next run to provide your answer.`);
         }
-        void pushIfConfigured(parts.join('\n'), { replyMarkup }).catch(() => undefined);
+        void operatorNotify(parts.join('\n'), { replyMarkup }).catch(() => undefined);
       }
       result.renotified += 1;
     } catch {

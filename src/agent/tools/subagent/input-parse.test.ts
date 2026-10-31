@@ -346,8 +346,21 @@ describe('parseAgentInput', () => {
   });
 
   describe('id_prefix', () => {
-    it("defaults to 'agent-tool' when omitted", () => {
+    it("defaults to 'agent-tool' when both id_prefix and agent_type are omitted", () => {
       expect(parseAgentInput({ prompt: 'p' }).id_prefix).toBe('agent-tool');
+    });
+
+    it('derives id_prefix from agent_type when id_prefix is omitted', () => {
+      expect(
+        parseAgentInput({ prompt: 'p', agent_type: 'research-agent' }).id_prefix,
+      ).toBe('research-agent');
+    });
+
+    it('explicit id_prefix takes precedence over agent_type', () => {
+      expect(
+        parseAgentInput({ prompt: 'p', id_prefix: 'custom', agent_type: 'research-agent' })
+          .id_prefix,
+      ).toBe('custom');
     });
 
     it('accepts a custom id_prefix', () => {
@@ -356,11 +369,14 @@ describe('parseAgentInput', () => {
       );
     });
 
-    it('falls back to the default for a blank id_prefix', () => {
-      // Was: used '' verbatim, yielding unlabelled subagent ids. Blank is
-      // not-supplied, so the default applies.
+    it('falls back to agent_type then default for a blank id_prefix', () => {
+      // Blank is not-supplied, so the fallback chain applies:
+      // explicit_prefix (blank→undefined) → agent_type → 'agent-tool'
       expect(parseAgentInput({ prompt: 'p', id_prefix: '' }).id_prefix).toBe('agent-tool');
       expect(parseAgentInput({ prompt: 'p', id_prefix: null }).id_prefix).toBe('agent-tool');
+      expect(
+        parseAgentInput({ prompt: 'p', id_prefix: '', agent_type: 'research-agent' }).id_prefix,
+      ).toBe('research-agent');
     });
 
     it('throws when id_prefix is not a string (number)', () => {

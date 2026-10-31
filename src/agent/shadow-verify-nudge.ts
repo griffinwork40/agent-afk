@@ -76,20 +76,22 @@ const VERIFIER_SIGNATURES: RegExp[] = [
   /\|\s*(claims?|verdicts?)\s*\|/i,
 ];
 
+// Contract: suppression logic lives in code (fromVerifiedOrchestrator,
+// looksLikeVerifierResponse, decisionHits). If the nudge fires, the
+// heuristics already decided this output warrants attention. The message
+// text is imperative and action-gated — no skip conditions that let the
+// model re-adjudicate a decision the code already made.
 const CONTEXT_MESSAGE =
   '[framework-generated context: shadow-verify nudge]\n\n' +
-  'The sub-agent that just finished returned output that reads like ' +
-  '**decision-driving findings** (verdicts, recommendations, audit ' +
-  'conclusions, or claim-style results that could drive file edits, ' +
-  'deletions, commits, or external side-effects).\n\n' +
-  'Single-pass sub-agent reports are prone to confident hallucination — ' +
-  'polished output that falls apart on re-derivation. Before acting on ' +
-  'these conclusions, consider dispatching `/shadow-verify`. Independent ' +
-  'verifiers will re-derive the 2–3 most load-bearing claims from scratch ' +
-  "(without seeing the original reasoning) and flag any that don't hold up.\n\n" +
-  'Skip when: the findings are purely exploratory, the sub-agent ran ' +
-  'inside an already-verifying orchestrator, the user is about to ' +
-  'dismiss the report, or the stakes are low (read-only Q&A).';
+  'The sub-agent above returned **decision-driving findings** (verdicts, ' +
+  'recommendations, audit conclusions, or claims that could drive file ' +
+  'edits, deletions, commits, or external side-effects).\n\n' +
+  'BEFORE editing files, committing, deleting, or taking external action ' +
+  'based on these findings, dispatch `/shadow-verify`. Single-pass ' +
+  'sub-agent reports produce confident hallucination that falls apart on ' +
+  're-derivation. `/shadow-verify` sends independent verifiers to ' +
+  're-derive the 2–3 most load-bearing claims from scratch — without ' +
+  "seeing the original reasoning — and flags any that don't hold up.";
 
 // Match an orchestrator name only at a hyphen/word boundary, never as an
 // arbitrary substring. agentType is `effectiveAgentType ?? idPrefix`

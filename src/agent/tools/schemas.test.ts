@@ -18,15 +18,15 @@ import { filterBackgroundToolDefs } from './process-job-tools.js';
 import type { AnthropicToolDef } from './types.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 45 tools', () => {
-    // 23 invariant core + 22 optional tail = 45
-    expect(builtinToolSchemas).toHaveLength(45);
+  it('contains exactly 48 tools', () => {
+    // 23 invariant core + 25 optional tail = 48
+    expect(builtinToolSchemas).toHaveLength(48);
   });
 
   it('exports the expected tool names', () => {
-    // ORDERING INVARIANT (#4198): invariant core tools occupy indices 0..22;
+    // ORDERING INVARIANT (#4198): invariant core tools occupy indices 0..25;
     // optional/disableable/surface-filtered/registry-filtered tools occupy
-    // indices 23..44. Changing this order breaks prefix-cache reuse across
+    // indices 26..47. Changing this order breaks prefix-cache reuse across
     // tool-config variants. Indices 0..5 are the LOCKED_TOOLS builtins (never
     // operator-disableable).
     //
@@ -61,7 +61,11 @@ describe('builtinToolSchemas', () => {
       'remote_agent',
       'web_scrape',
       'web_request',
-      // -- Optional tail (23..44) --
+      // -- Optional tail (23..47) --
+      // registry-filtered: absent when artifact registry is not wired
+      'artifact_get',
+      'artifact_list',
+      'artifact_read',
       // registry-filtered: absent when no background registry is wired
       'cancel_background_job',
       'send_message_to_agent',
@@ -98,10 +102,13 @@ describe('builtinToolSchemas', () => {
     //   registry is wired (process-job-tools.ts — see #4208)
     const surfaceFiltered = ['ask_question', 'terminal_font_size', 'clipboard_read', 'clipboard_write'];
     const registryFiltered = ['cancel_background_job', 'send_message_to_agent', 'get_background_job_health'];
+    // registry-filtered: absent when artifact registry is not wired
+    const artifactFiltered = ['artifact_get', 'artifact_list', 'artifact_read'];
     const optionalTools = new Set([
       ...Object.values(groups).flat(),
       ...surfaceFiltered,
       ...registryFiltered,
+      ...artifactFiltered,
       'send_telegram',
     ]);
     // Every tool at index < INVARIANT_CORE_COUNT must not be optional.
@@ -171,6 +178,7 @@ describe('builtinToolSchemas', () => {
       'clipboard_read',
       'list_sessions',
       'model_complete',
+      'artifact_list',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();
@@ -285,6 +293,40 @@ describe('agentTool', () => {
   });
 });
 
+describe('agentTool / composeTool readRoots + writeRoots confinement qualifications', () => {
+  // Pins the confinement semantics documented in schemas.agent-tools.ts so
+  // future edits cannot silently drop the "unconfined session" no-op clause
+  // or the confinement-only grant language (#3794).
+
+  it('agentTool readRoots description mentions unconfined-session no-op', () => {
+    const desc: string = (agentTool.input_schema.properties as Record<string, { description?: string }>)['readRoots']?.description ?? '';
+    expect(desc).toContain('unconfined');
+    expect(desc).toContain('do not request confinement');
+    expect(desc).toContain('Grandchildren must be re-granted');
+  });
+
+  it('agentTool writeRoots description mentions unconfined-session no-op', () => {
+    const desc: string = (agentTool.input_schema.properties as Record<string, { description?: string }>)['writeRoots']?.description ?? '';
+    expect(desc).toContain('unconfined');
+    expect(desc).toContain('do not request confinement');
+  });
+
+  it('composeTool node readRoots description mentions unconfined-session no-op', () => {
+    const nodeItems = (composeTool.input_schema.properties as Record<string, { items?: { properties?: Record<string, { description?: string }> } }>)['nodes']?.items;
+    const desc: string = nodeItems?.properties?.['readRoots']?.description ?? '';
+    expect(desc).toContain('unconfined');
+    expect(desc).toContain('do not request confinement');
+    expect(desc).toContain('Grandchildren must be re-granted');
+  });
+
+  it('composeTool node writeRoots description mentions unconfined-session no-op', () => {
+    const nodeItems = (composeTool.input_schema.properties as Record<string, { items?: { properties?: Record<string, { description?: string }> } }>)['nodes']?.items;
+    const desc: string = nodeItems?.properties?.['writeRoots']?.description ?? '';
+    expect(desc).toContain('unconfined');
+    expect(desc).toContain('do not request confinement');
+  });
+});
+
 describe('compose and skill tool descriptions', () => {
   it('documents every tool unavailable to compose leaf nodes', () => {
     expect(CHILD_ALLOWED_TOOLS).not.toContain('compose');
@@ -298,6 +340,11 @@ describe('compose and skill tool descriptions', () => {
     expect(composeTool.description).toContain('invoke `skill` once');
   });
 
+  it('agent and compose descriptions cross-reference each other', () => {
+    expect(agentTool.description).toContain('prefer `compose`');
+    expect(composeTool.description).toContain('prefer the `agent` tool');
+  });
+
   it('does not suggest compose nodes for parallel skill invocation', () => {
     expect(skillTool.description).toContain('parallel `agent` calls');
     expect(skillTool.description).not.toContain('via `agent` or `compose`');
@@ -309,9 +356,10 @@ describe('sendMessageToAgentTool', () => {
     expect(sendMessageToAgentTool.input_schema.required).toEqual(['jobId', 'message']);
   });
 
-  it('description mentions mode="background" and provenance boundary', () => {
-    expect(sendMessageToAgentTool.description).toMatch(/mode="background"/);
-    expect(sendMessageToAgentTool.description).toMatch(/user-owned|user-backgrounded/i);
+  it('description mentions model origin and Ctrl+B, and excludes user-initiated', () => {
+    expect(sendMessageToAgentTool.description).toMatch(/model origin/);
+    expect(sendMessageToAgentTool.description).toMatch(/Ctrl\+B/);
+    expect(sendMessageToAgentTool.description).toMatch(/user-initiated/);
   });
 
   it('has category "subagent"', () => {

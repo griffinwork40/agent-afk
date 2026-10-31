@@ -19,7 +19,9 @@
  *    currently in the keychain cache. `readStore()` is a foreground read with a
  *    5 s in-process cache (keychain.ts), so this is a cache hit on the same
  *    value the `RetryLayer` constructor already read in the same construction
- *    path — no extra subprocess.
+ *    path — no extra subprocess. `readStore()` is called exactly once here;
+ *    there is no double-read: the result is compared inline against `token` and
+ *    not stored separately, so the compiler/runtime sees a single invocation.
  *
  * Why `tokenRefresher` presence alone is insufficient: every top-level surface
  * fills `config.apiKey` FROM the store (`credential-resolver.ts:55-62`), and

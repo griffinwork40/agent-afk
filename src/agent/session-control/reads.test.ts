@@ -1,23 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionStats } from '../../cli/slash/session-stats.js';
 import type { AgentSession } from '../session.js';
-import { readSubscriptionUsage, readContextUsage, readTokenUsage, readLocalTokenUsage, readMcpStatus, readMcpOauthPending } from './index.js';
+import { readContextUsage, readTokenUsage, readLocalTokenUsage, readMcpStatus, readMcpOauthPending } from './index.js';
 
-const { subscription, pending } = vi.hoisted(() => ({ subscription: vi.fn(), pending: vi.fn() }));
-vi.mock('../subscription-usage.js', () => ({ fetchSubscriptionUsage: subscription }));
+const { pending } = vi.hoisted(() => ({ pending: vi.fn() }));
 vi.mock('../mcp/oauth.js', () => ({ readOauthPending: pending }));
 
-beforeEach(() => { subscription.mockReset(); pending.mockReset(); });
+beforeEach(() => { pending.mockReset(); });
 
 describe('session-control reads', () => {
-  it('delegates subscription usage to the canonical reader, including unavailable snapshots', async () => {
-    const ok = { kind: 'ok', fiveHour: { utilization: 0.8 } };
-    subscription.mockResolvedValueOnce(ok).mockResolvedValueOnce({ kind: 'unavailable', reason: 'no-token' });
-    expect(await readSubscriptionUsage()).toBe(ok);
-    expect(await readSubscriptionUsage()).toMatchObject({ kind: 'unavailable', reason: 'no-token' });
-    expect(subscription).toHaveBeenCalledTimes(2);
-  });
-
   it('returns exact provider context breakdown and keeps read errors observable', async () => {
     const usage = { totalTokens: 120, maxTokens: 1000, percentage: 12 };
     const getContextUsage = vi.fn().mockResolvedValue(usage);

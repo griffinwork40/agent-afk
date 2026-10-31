@@ -2,7 +2,8 @@
  * Tool-event aggregation for deriveSessionFacet.
  * Extracted from derive.ts to stay within the 350-code-line ceiling (#3182).
  *
- * Exports: AggregateToolEventsResult, aggregateToolEvents, dedupeToolEvents
+ * Exports: AggregateToolEventsResult, aggregateToolEvents, dedupeToolEvents,
+ * patchApplyPaths
  * (dedupeToolEvents is re-exported from derive.ts for external callers).
  */
 
@@ -32,6 +33,32 @@ export function parseInput(input: string | undefined): Record<string, unknown> |
 
 export function asString(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
+}
+
+/**
+ * Paths touched by a patch_apply call. Tries `changes_paths` first (the
+ * bounded projection persisted by extractRawToolInput, #3182) then falls back
+ * to `changes[].path` (hand-constructed test inputs or old sidecars).
+ * Shared with outcomes/compute-outcomes.ts so both read the same shape.
+ */
+export function patchApplyPaths(parsed: Record<string, unknown> | undefined): string[] {
+  const out: string[] = [];
+  const changesPaths = parsed?.['changes_paths'];
+  if (Array.isArray(changesPaths)) {
+    for (const p of changesPaths) {
+      const fp = asString(p);
+      if (fp) out.push(fp);
+    }
+    return out;
+  }
+  const changes = parsed?.['changes'];
+  if (Array.isArray(changes)) {
+    for (const ch of changes) {
+      const fp = asString((ch as Record<string, unknown> | null)?.['path']);
+      if (fp) out.push(fp);
+    }
+  }
+  return out;
 }
 
 /**
@@ -137,27 +164,11 @@ export function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolE
         evidencePaths.push(fp);
       }
     }
-    // patch_apply: collect evidence paths. Try `changes_paths` first (the
-    // bounded projection persisted by extractRawToolInput, #3182) then fall
-    // back to `changes[].path` (hand-constructed test inputs or old sidecars).
+    // patch_apply: collect evidence paths via the shared projection reader.
     if (name === 'patch_apply') {
-      const changesPaths = parsed?.['changes_paths'];
-      if (Array.isArray(changesPaths)) {
-        for (const p of changesPaths) {
-          const fp = asString(p);
-          if (fp && !evidencePaths.includes(fp) && evidencePaths.length < EVIDENCE_CAP) {
-            evidencePaths.push(fp);
-          }
-        }
-      } else {
-        const changes = parsed?.['changes'];
-        if (Array.isArray(changes)) {
-          for (const ch of changes) {
-            const fp = asString((ch as Record<string, unknown>)?.['path']);
-            if (fp && !evidencePaths.includes(fp) && evidencePaths.length < EVIDENCE_CAP) {
-              evidencePaths.push(fp);
-            }
-          }
+      for (const fp of patchApplyPaths(parsed)) {
+        if (!evidencePaths.includes(fp) && evidencePaths.length < EVIDENCE_CAP) {
+          evidencePaths.push(fp);
         }
       }
     }

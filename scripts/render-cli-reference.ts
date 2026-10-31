@@ -28,6 +28,7 @@ import { registerUpdateCommand } from '../src/cli/commands/update.js';
 import { registerScheduleCommand } from '../src/cli/commands/schedule.js';
 import { registerBgCommand } from '../src/cli/commands/bg.js';
 import { registerTraceCommand } from '../src/cli/commands/trace.js';
+import { registerEpisodeCommand } from '../src/cli/commands/episode.js';
 import { registerWhatifCommand } from '../src/cli/commands/whatif.js';
 import { registerWitnessCommand } from '../src/cli/commands/witness.js';
 import { registerServiceCommand } from '../src/cli/commands/service.js';
@@ -39,6 +40,7 @@ import { registerTranscriptCommand } from '../src/cli/commands/transcript.js';
 import { registerInsightsCommand } from '../src/cli/commands/insights.js';
 import { registerCapturesCommand } from '../src/cli/commands/captures.js';
 import { registerDefectsCommand } from '../src/cli/commands/defects.js';
+import { registerReceiptCommand } from '../src/cli/commands/receipt.js';
 // jscpd:ignore-start — intentional mirror of src/cli/index.ts registrar block;
 // the renderer must declare the same import to build metadata-only, never execute.
 import { registerAcpCommand } from '../src/cli/commands/acp.js';
@@ -118,6 +120,7 @@ export function buildCli(): Command {
   registerScheduleCommand(program);
   registerBgCommand(program);
   registerTraceCommand(program);
+  registerEpisodeCommand(program);
   registerWhatifCommand(program);
   registerWitnessCommand(program);
   registerServiceCommand(program);
@@ -129,6 +132,7 @@ export function buildCli(): Command {
   registerInsightsCommand(program);
   registerCapturesCommand(program);
   registerDefectsCommand(program);
+  registerReceiptCommand(program);
   // jscpd:ignore-start — intentional mirror of src/cli/index.ts registrar block;
   // the renderer must call the same registrar to expose metadata, never execute.
   registerAcpCommand(program);
