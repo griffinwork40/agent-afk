@@ -15,7 +15,7 @@
  * //   macOS   — sandbox-exec -p <profile>. Deprecated in Xcode 14+ but
  * //             functional through macOS 15. Profile uses TinyScheme s-expr syntax.
  * //
- * //   Linux   — bwrap (bubblewrap) when on PATH. When unavailable and the
+ * //   Linux   — bwrap (bubblewrap) from trusted system locations. When unavailable and the
  * //             policy is not 'off', the spawn is REFUSED (fail-closed).
  * //
  * //   Windows — Fail-closed: throws so the caller refuses the spawn. The OS
@@ -140,31 +140,38 @@ function buildMacosSandboxedCommand(
 
 // ── Linux bwrap ────────────────────────────────────────────────────────────
 
-/**
- * Check whether `bwrap` is available on PATH.
- * Caches the result across calls in this process.
- */
+/** Cache availability and the trusted absolute binary path across calls. */
 let _bwrapAvailable: boolean | undefined;
+let _bwrapPath: string | undefined;
 
 /** @internal Exposed for testing only. Resets the bwrap availability cache. */
 export function _resetBwrapCacheForTests(): void {
   _bwrapAvailable = undefined;
+  _bwrapPath = undefined;
 }
 
 /** @internal Exposed for testing only. Forces bwrap-unavailable without exec. */
 export function _forceBwrapUnavailableForTests(): void {
   _bwrapAvailable = false;
+  _bwrapPath = undefined;
 }
 
 function isBwrapAvailable(): boolean {
   if (_bwrapAvailable !== undefined) return _bwrapAvailable;
-  try {
-    execFileSync('bwrap', ['--version'], { stdio: 'ignore', timeout: 3_000 });
-    _bwrapAvailable = true;
-  } catch {
-    _bwrapAvailable = false;
+  // Never resolve through PATH: the workspace may control its entries.
+  for (const directory of [['usr', 'bin'], ['usr', 'local', 'bin'], ['usr', 'sbin']]) {
+    const candidate = path.posix.join('/', ...directory, 'bwrap');
+    try {
+      execFileSync(candidate, ['--version'], { stdio: 'ignore', timeout: 3_000 });
+      _bwrapPath = candidate;
+      _bwrapAvailable = true;
+      return true;
+    } catch {
+      // Try the remaining trusted locations; never fall back to PATH.
+    }
   }
-  return _bwrapAvailable;
+  _bwrapAvailable = false;
+  return false;
 }
 
 /** Root is read-only; private proc/dev directories are remounted read-only.
@@ -175,6 +182,7 @@ function buildLinuxBwrapCommand(
   policy: SandboxPolicy,
   cwd: string,
   temp: string,
+  bwrapPath: string,
 ): SandboxedCommand {
   const root = path.posix.join('/');
   // A host /proc exposes other processes' writable /proc/PID/root aliases.
@@ -192,6 +200,10 @@ function buildLinuxBwrapCommand(
     const device = path.posix.join(dev, name);
     bwrapArgs.push('--dev-bind', device, device);
   }
+  // Preserve standard descriptor aliases before sealing the private /dev.
+  for (const [target, name] of [['fd', 'fd'], ['fd/0', 'stdin'], ['fd/1', 'stdout'], ['fd/2', 'stderr']] as const) {
+    bwrapArgs.push('--symlink', path.posix.join(proc, 'self', target), path.posix.join(dev, name));
+  }
   bwrapArgs.push('--remount-ro', dev);
   if (policy === 'workspace-write') {
     const grants = [...new Set([cwd, temp])];
@@ -202,7 +214,7 @@ function buildLinuxBwrapCommand(
     for (const grant of grants) bwrapArgs.push('--bind', grant, grant);
   }
   bwrapArgs.push('--', path.posix.join('/', 'bin', 'sh'), '-c');
-  return { shell: 'bwrap', args: bwrapArgs, command, sandboxed: true };
+  return { shell: bwrapPath, args: bwrapArgs, command, sandboxed: true };
 }
 
 // ── Platform dispatch ──────────────────────────────────────────────────────
@@ -251,8 +263,8 @@ export function buildSandboxedCommand(
   }
 
   // Only Linux supports this bwrap backend; all other platforms fail closed.
-  if (platform === 'linux' && isBwrapAvailable()) {
-    return buildLinuxBwrapCommand(command, policy, effectiveCwd, effectiveTemp);
+  if (platform === 'linux' && isBwrapAvailable() && _bwrapPath !== undefined) {
+    return buildLinuxBwrapCommand(command, policy, effectiveCwd, effectiveTemp, _bwrapPath);
   }
 
   // bwrap not found — fail closed.

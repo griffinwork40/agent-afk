@@ -234,13 +234,13 @@ describe('buildSandboxedCommand — linux (bwrap available on host)', () => {
     _resetBwrapCacheForTests();
   });
 
-  it('returns sandboxed:true with shell=bwrap when bwrap is on PATH', () => {
+  it('returns sandboxed:true with an absolute trusted bwrap path when installed', () => {
     withPlatform('linux', () => {
       _resetBwrapCacheForTests();
       try {
         const result = buildSandboxedCommand('ls', 'workspace-write', '/work', '/synthetic-disjoint-temp');
         // When bwrap is installed: sandboxed result expected.
-        expect(result.shell).toBe('bwrap');
+        expect(result.shell).toMatch(/^\/usr\/(?:bin|local\/bin|sbin)\/bwrap$/);
         expect(result.sandboxed).toBe(true);
         expect(result.command).toBe('ls');
       } catch (err: unknown) {

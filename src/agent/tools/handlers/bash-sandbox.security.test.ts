@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, symlinkSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
 
 const fixtures = vi.hoisted(() => ({ floor: [] as string[] }));
@@ -22,6 +23,7 @@ beforeEach(() => {
   mkdirSync(temp);
   fixtures.floor = [path.join(root, 'protected')];
   _resetBwrapCacheForTests();
+  vi.mocked(execFileSync).mockReset();
 });
 afterEach(() => {
   Object.defineProperty(process, 'platform', platform);
@@ -89,6 +91,40 @@ describe('sandbox write-floor security builders (synthetic floor only)', () => {
       fixtures.floor = [path.join(alias, 'absent-token')];
     }
     expect(() => buildSandboxedCommand('true', 'workspace-write', cwd, temp)).toThrow(/overlaps protected/);
+  });
+
+  it('Linux probes and caches the same trusted absolute binary used for execution', () => {
+    usePlatform('linux');
+    vi.mocked(execFileSync).mockImplementationOnce(() => { throw new Error('absent'); });
+    const result = buildSandboxedCommand('true', 'read-only', cwd, temp);
+    expect(result.shell).toBe('/usr/local/bin/bwrap');
+    expect(vi.mocked(execFileSync).mock.calls.map(([binary]) => binary)).toEqual(['/usr/bin/bwrap', '/usr/local/bin/bwrap']);
+    expect(execFileSync).toHaveBeenLastCalledWith(result.shell, ['--version'], { stdio: 'ignore', timeout: 3_000 });
+    expect(buildSandboxedCommand('true', 'read-only', cwd, temp).shell).toBe(result.shell);
+    expect(execFileSync).toHaveBeenCalledTimes(2);
+  });
+
+  it('Linux fails closed when no trusted binary works, without a PATH lookup', () => {
+    usePlatform('linux');
+    vi.mocked(execFileSync).mockImplementation(() => { throw new Error('absent'); });
+    expect(() => buildSandboxedCommand('true', 'read-only', cwd, temp)).toThrow(/no sandbox mechanism/);
+    expect(vi.mocked(execFileSync).mock.calls.map(([binary]) => binary)).toEqual(['/usr/bin/bwrap', '/usr/local/bin/bwrap', '/usr/sbin/bwrap']);
+    expect(() => buildSandboxedCommand('true', 'read-only', cwd, temp)).toThrow(/no sandbox mechanism/);
+    expect(execFileSync).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(['workspace-write', 'read-only'] as const)('Linux restores descriptor aliases before sealing /dev for %s', (policy) => {
+    usePlatform('linux');
+    const { args } = buildSandboxedCommand('printf ok > /dev/stdout', policy, cwd, temp);
+    const start = args.indexOf('--symlink');
+    expect(args.slice(start, start + 14)).toEqual([
+      '--symlink', '/proc/self/fd', '/dev/fd',
+      '--symlink', '/proc/self/fd/0', '/dev/stdin',
+      '--symlink', '/proc/self/fd/1', '/dev/stdout',
+      '--symlink', '/proc/self/fd/2', '/dev/stderr',
+      '--remount-ro', '/dev',
+    ]);
+    expect(start).toBeGreaterThan(args.lastIndexOf('--dev-bind'));
   });
 
   it('Linux binds only disjoint cwd/temp; private proc/dev are remounted read-only', () => {
