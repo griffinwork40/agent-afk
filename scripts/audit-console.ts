@@ -93,12 +93,20 @@ function collectFiles(): string[] {
 
 // ── Violation detection ───────────────────────────────────────────────────────
 
+/** Normalize a relative path to forward slashes for cross-platform consistency.
+ * `path.relative()` returns backslash-separated paths on Windows; baseline
+ * keys and `EXCLUDED_FILES` always use forward slashes, so we normalize before
+ * any lookup to avoid false positives on Windows and CI key mismatches. */
+function toKey(absPath: string): string {
+  return path.relative(repoRoot, absPath).split(path.sep).join('/');
+}
+
 function isExcluded(relPath: string): boolean {
   return EXCLUDED_FILES.has(relPath);
 }
 
 function scanFile(absPath: string): Violation[] {
-  const rel = path.relative(repoRoot, absPath);
+  const rel = toKey(absPath);
   if (isExcluded(rel)) return [];
 
   const source = fs.readFileSync(absPath, 'utf8');
@@ -166,8 +174,7 @@ function scanAll(): Map<string, Violation[]> {
   for (const abs of files) {
     const violations = scanFile(abs);
     if (violations.length > 0) {
-      const rel = path.relative(repoRoot, abs);
-      result.set(rel, violations);
+      result.set(toKey(abs), violations);
     }
   }
   return result;

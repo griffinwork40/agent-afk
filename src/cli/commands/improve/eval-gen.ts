@@ -15,6 +15,7 @@ import {
 import type { EvalCase, EvalCaseStatus, FailurePattern } from '../../../improve/schemas.js';
 import { VALID_PATTERNS } from './shared.js';
 import { formatAgeDays } from './triage-helpers.js';
+import { palette } from '../../palette.js';
 
 export function findEvalCaseForEvidenceRow(
   existing: readonly EvalCase[],
@@ -75,7 +76,7 @@ export function registerEvalGenSubcommand(improve: Command): void {
           // 1. Load the card.
           const card = getCard(cardSlug);
           if (!card) {
-            console.error(`Card not found: ${cardSlug}`);
+            console.error(palette.error(`Card not found: ${cardSlug}`));
             process.exit(1);
           }
 
@@ -85,13 +86,11 @@ export function registerEvalGenSubcommand(improve: Command): void {
           if (opts.proposal !== undefined) {
             const proposal = getProposal(opts.proposal);
             if (!proposal) {
-              console.error(`Proposal not found: ${opts.proposal}`);
+              console.error(palette.error(`Proposal not found: ${opts.proposal}`));
               process.exit(1);
             }
             if (proposal.cardSlug !== cardSlug) {
-              console.error(
-                `Proposal ${opts.proposal} targets card '${proposal.cardSlug}', not '${cardSlug}'.`,
-              );
+              console.error(palette.error(`Proposal ${opts.proposal} targets card '${proposal.cardSlug}', not '${cardSlug}'.`));
               process.exit(2);
             }
           }
@@ -104,9 +103,7 @@ export function registerEvalGenSubcommand(improve: Command): void {
           if (opts.evidenceRow !== undefined) {
             const parsed = Number.parseInt(opts.evidenceRow, 10);
             if (!Number.isFinite(parsed) || parsed < 0) {
-              console.error(
-                `Invalid --evidence-row: '${opts.evidenceRow}' (must be non-negative integer)`,
-              );
+              console.error(palette.error(`Invalid --evidence-row: '${opts.evidenceRow}' (must be non-negative integer)`));
               process.exit(2);
             }
             evidenceRowIndex = parsed;
@@ -121,13 +118,11 @@ export function registerEvalGenSubcommand(improve: Command): void {
               evidenceRowIndex,
             );
             if (duplicate) {
-              console.error(
-                `Card '${cardSlug}' already has an eval-case for evidence row ${evidenceRowIndex}:\n` +
+              console.error(palette.error(`Card '${cardSlug}' already has an eval-case for evidence row ${evidenceRowIndex}:\n` +
                   `  ${duplicate.evalCaseId}\n` +
                   `Re-run with --force to regenerate that row, target a different row with ` +
                   `--evidence-row <n>, or --no-write to preview. ` +
-                  `Run the existing one: 'afk improve eval-run ${duplicate.evalCaseId}'.`,
-              );
+                  `Run the existing one: 'afk improve eval-run ${duplicate.evalCaseId}'.`));
               process.exit(1);
             }
           }
@@ -147,11 +142,11 @@ export function registerEvalGenSubcommand(improve: Command): void {
             if (opts.json) {
               console.log(JSON.stringify(evalCase, null, 2));
             } else {
-              console.log('(preview — not persisted; remove --no-write to save)');
-              console.log('');
-              console.log(renderEvalCaseMarkdown(evalCase));
-              console.log('');
-              console.log(`Fixture would be ${sliceBytes.length} bytes, ${evalCase.replay.sliceLineCount} lines.`);
+              console.log(palette.dim('(preview — not persisted; remove --no-write to save)'));
+              console.log(''); // console-ok
+              console.log(renderEvalCaseMarkdown(evalCase)); // console-ok
+              console.log(''); // console-ok
+              console.log(palette.dim(`Fixture would be ${sliceBytes.length} bytes, ${evalCase.replay.sliceLineCount} lines.`));
             }
             return;
           }
@@ -164,21 +159,17 @@ export function registerEvalGenSubcommand(improve: Command): void {
             return;
           }
 
-          console.log(`Wrote eval-case: ${outcome.evalCaseId}`);
-          console.log(`  json:    ${outcome.jsonPath}`);
-          console.log(`  fixture: ${outcome.fixturePath}`);
-          console.log(`  md:      ${outcome.markdownPath}`);
-          console.log(
-            `  pattern: ${evalCase.assertion.patternId} · slice: lines ${evalCase.replay.sliceLineRange.startLine}–${evalCase.replay.sliceLineRange.endLine} (${evalCase.replay.sliceLineCount} lines) · sha256 ${evalCase.replay.sliceSha256.slice(0, 12)}…`,
-          );
+          console.log(palette.success(`Wrote eval-case: ${outcome.evalCaseId}`));
+          console.log(palette.dim(`  json:    ${outcome.jsonPath}`));
+          console.log(palette.dim(`  fixture: ${outcome.fixturePath}`));
+          console.log(palette.dim(`  md:      ${outcome.markdownPath}`));
+          console.log(palette.dim(`  pattern: ${evalCase.assertion.patternId} · slice: lines ${evalCase.replay.sliceLineRange.startLine}–${evalCase.replay.sliceLineRange.endLine} (${evalCase.replay.sliceLineCount} lines) · sha256 ${evalCase.replay.sliceSha256.slice(0, 12)}…`));
           if (evalCase.proposalId) {
-            console.log(
-              `  proposal: ${evalCase.proposalId}  (back-reference only — Sprint 3 does not back-fill validationPlan.evalCases)`,
-            );
+            console.log(palette.dim(`  proposal: ${evalCase.proposalId}  (back-reference only — Sprint 3 does not back-fill validationPlan.evalCases)`));
           }
         } catch (err) {
           if (err instanceof EvalGenError) {
-            console.error(`eval-gen failed [${err.code}]: ${err.message}`);
+            console.error(palette.error(`eval-gen failed [${err.code}]: ${err.message}`));
             // Map error codes to exit codes:
             //   user-input errors → 2 (commander convention)
             //   data / system errors → 1
@@ -219,19 +210,15 @@ export function registerEvalCasesSubcommand(improve: Command): void {
       (opts: { card?: string; pattern?: string; status?: string; triage: boolean; json: boolean }) => {
         try {
           if (opts.pattern && !VALID_PATTERNS.includes(opts.pattern as FailurePattern)) {
-            console.error(
-              `Invalid --pattern: '${opts.pattern}'. Must be one of: ${VALID_PATTERNS.join(', ')}`,
-            );
+            console.error(palette.error(`Invalid --pattern: '${opts.pattern}'. Must be one of: ${VALID_PATTERNS.join(', ')}`));
             process.exit(2);
           }
           if (opts.status && !VALID_EVAL_STATUSES.includes(opts.status as EvalCaseStatus)) {
-            console.error(
-              `Invalid --status: '${opts.status}'. Must be one of: ${VALID_EVAL_STATUSES.join(', ')}`,
-            );
+            console.error(palette.error(`Invalid --status: '${opts.status}'. Must be one of: ${VALID_EVAL_STATUSES.join(', ')}`));
             process.exit(2);
           }
           if (opts.triage && opts.status) {
-            console.warn(`Warning: --status is ignored when --triage is set (--triage always filters to 'draft').`);
+            console.warn(palette.warning(`Warning: --status is ignored when --triage is set (--triage always filters to 'draft').`));
           }
 
           let entries = listEvalCases();
@@ -253,20 +240,18 @@ export function registerEvalCasesSubcommand(improve: Command): void {
 
           if (entries.length === 0) {
             if (opts.triage) {
-              console.log('No draft eval-cases need review. All eval-cases are approved, rejected, or superseded.');
+              console.log(palette.dim('No draft eval-cases need review. All eval-cases are approved, rejected, or superseded.'));
             } else {
-              console.log('No eval-cases found.');
+              console.log(palette.dim('No eval-cases found.'));
             }
             return;
           }
 
           if (opts.triage) {
             const draftCount = entries.length;
-            console.log(
-              `${draftCount} draft eval-case(s) awaiting review (oldest first). ` +
-                `Approve with: afk improve approve <eval-case-id>`,
-            );
-            console.log('');
+            console.log(palette.info(`${draftCount} draft eval-case(s) awaiting review (oldest first). ` +
+                `Approve with: afk improve approve <eval-case-id>`));
+            console.log(''); // console-ok
           }
 
           const showAge = opts.triage;
@@ -274,11 +259,11 @@ export function registerEvalCasesSubcommand(improve: Command): void {
             ? 'AGE   | EVAL CASE ID                                                          | CARD                                       | PATTERN              | CREATED'
             : 'EVAL CASE ID                                                          | CARD                                       | PATTERN              | STATUS    | CREATED';
           const sep = '-'.repeat(header.length);
-          console.log(header);
-          console.log(sep);
+          console.log(palette.heading(header));
+          console.log(palette.dim(sep));
           for (const e of entries) {
             if (showAge) {
-              console.log(
+              console.log( // console-ok
                 [
                   formatAgeDays(e.createdAt).padEnd(5),
                   e.evalCaseId.padEnd(70).slice(0, 70),
@@ -288,7 +273,7 @@ export function registerEvalCasesSubcommand(improve: Command): void {
                 ].join(' | '),
               );
             } else {
-              console.log(
+              console.log( // console-ok
                 [
                   e.evalCaseId.padEnd(70).slice(0, 70),
                   e.cardSlug.padEnd(44).slice(0, 44),
@@ -313,14 +298,14 @@ export function registerEvalCasesSubcommand(improve: Command): void {
       try {
         const ec = getEvalCase(id);
         if (!ec) {
-          console.error(`Eval-case not found: ${id}`);
+          console.error(palette.error(`Eval-case not found: ${id}`));
           process.exit(1);
         }
         if (opts.json) {
           console.log(JSON.stringify(ec, null, 2));
           return;
         }
-        console.log(renderEvalCaseMarkdown(ec));
+        console.log(renderEvalCaseMarkdown(ec)); // console-ok
       } catch (err) {
         handleCommandError(err);
       }
