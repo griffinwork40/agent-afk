@@ -130,7 +130,7 @@ export function registerServiceCommand(program: Command): void {
         }
         for (const name of SERVICE_NAMES) {
           printStatus(mgr.status(name), mgr.configKind);
-          console.log('');
+          console.log(''); // console-ok
         }
       } catch (err) {
         handleCommandError(err);

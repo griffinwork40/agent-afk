@@ -16,6 +16,7 @@ import type { AgentModelInput } from '../../agent/types.js';
 import type { TaskTurnCompleteArgs } from '../../agent/daemon/scheduler.execute-agent-task.js';
 import type { SchedulerOptions } from '../../agent/daemon/scheduler.js';
 import { createSessionAutosaver } from '../session-autosave.js';
+import { palette } from '../palette.js';
 
 /** Build the scheduler's `onTaskTurnComplete` hook for a daemon using `model`. */
 export function makeDaemonTurnPersister(model: AgentModelInput): (args: TaskTurnCompleteArgs) => void {
@@ -29,7 +30,7 @@ export function makeDaemonTurnPersister(model: AgentModelInput): (args: TaskTurn
       ...(cwd !== undefined ? { cwd } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       onError: (err) => {
-        console.error(`[daemon] ${task.taskId}: session sidecar save failed; run will not appear in /resume:`, err);
+        console.error(palette.error(`[daemon] ${task.taskId}: session sidecar save failed; run will not appear in /resume: ${err instanceof Error ? err.message : String(err)}`));
       },
     });
     saver.saveTurn(userInput, response.content, response.metadata);

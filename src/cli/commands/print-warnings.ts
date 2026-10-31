@@ -24,7 +24,7 @@ import { palette } from '../palette.js';
 export function printWarnings(warnings: readonly string[]): boolean {
   if (warnings.length === 0) return false;
 
-  console.log('');
+  console.log(''); // console-ok
   for (const w of warnings) {
     if (w.startsWith('[ERROR]')) {
       console.error(palette.error(w));

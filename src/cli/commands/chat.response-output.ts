@@ -117,7 +117,7 @@ export async function renderTextResponse(params: TextResponseParams): Promise<vo
     }), null, 2));
   } else {
     console.log(palette.heading('\n🤖 Claude:'));
-    console.log(renderMarkdownToTerminal(response.content));
+    console.log(palette.info(renderMarkdownToTerminal(response.content)));
     if (responseMeta) {
       const chatParts: string[] = [];
       if (responseMeta.durationMs) chatParts.push(formatDuration(responseMeta.durationMs));
@@ -132,7 +132,7 @@ export async function renderTextResponse(params: TextResponseParams): Promise<vo
         console.log(palette.dim('  · ' + chatParts.join(' · ')));
       }
     }
-    console.log('');
+    console.log(''); // console-ok
   }
 
   await maybePublish(response.content, false);

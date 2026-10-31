@@ -185,7 +185,7 @@ function detectChromeMajorVersion(): number | null {
 function printSetupGuidance(): void {
   const major = detectChromeMajorVersion();
 
-  console.log('');
+  console.log(''); // console-ok
   console.log(palette.heading('Drive your real Chrome — one-time setup:'));
   if (major === null) {
     console.log(palette.meta('  • Chrome not detected. autoConnect requires Chrome ≥ 144.'));
@@ -199,7 +199,7 @@ function printSetupGuidance(): void {
   console.log(palette.meta('     enable "Google Chrome" (one time; otherwise the agent sees "Could not find DevToolsActivePort").'));
   console.log(palette.meta('  3. The first time the agent drives Chrome, click "Allow" on the prompt.'));
   console.log(palette.meta('  4. Chrome shows a "being controlled by automated test software" banner while active.'));
-  console.log('');
+  console.log(''); // console-ok
   console.log(palette.meta('The agent gains mcp__chrome-devtools__* tools (navigate, click, fill, take_snapshot, …)'));
   console.log(palette.meta('driving your REAL, logged-in profile. Run `/mcp` in the REPL to confirm it connected.'));
   console.log(palette.meta('Undo anytime with `afk browser disconnect`.'));
@@ -323,7 +323,7 @@ export function registerBrowserCommand(program: Command): void {
           // Non-fatal — the user can navigate manually if the initial load fails.
         });
 
-        console.log('');
+        console.log(''); // console-ok
         console.log(palette.heading('Log in to the site in the opened browser window.'));
         console.log(palette.meta('When fully logged in, return here and press Enter to save the session.'));
         console.log(palette.meta('(Do NOT close the browser window yourself — this command closes it for you.)'));
@@ -367,9 +367,9 @@ export function registerBrowserCommand(program: Command): void {
           const hasState = existsSync(join(root, d.name, 'storageState.json'));
           const marker = hasState ? palette.success('●') : palette.meta('○');
           const note = hasState ? '' : palette.meta(' (no saved session)');
-          console.log(`  ${marker} ${d.name}${note}`);
+          console.log(palette.info(`  ${marker} ${d.name}${note}`));
         }
-        console.log('');
+        console.log(''); // console-ok
         console.log(palette.meta('Use one:  export AFK_BROWSER_DEFAULT_PROFILE=<name>'));
       } catch (err) {
         handleCommandError(err);

@@ -114,7 +114,7 @@ export async function handleTurnCompletion(ctx: TurnCompletionContext): Promise<
     // Post-dispose writes still run against the borrowed compositor (still
     // armed in idle mode — surface owns disarm). Route through completionWriter.
     const writeAbove = (line: string): void => {
-      if (completionWriter) { completionWriter.fn(line); } else { console.log(line); }
+      if (completionWriter) { completionWriter.fn(line); } else { console.log(line); } // console-ok
     };
 
     // Verdict card: parse the terminal state from the response text and

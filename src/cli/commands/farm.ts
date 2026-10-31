@@ -139,11 +139,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
     process.exit(1);
   }
   if (labels !== undefined && labels.length !== count) {
-    console.error(
-      palette.error(
-        `--labels count (${labels.length}) must equal --branches (${count})`,
-      ),
-    );
+    console.error(palette.error(`--labels count (${labels.length}) must equal --branches (${count})`));
     process.exit(1);
   }
 
@@ -349,7 +345,7 @@ export function registerFarmCommand(program: Command): void {
           ...(scoreTimeoutMs !== undefined ? { scoreTimeoutMs } : {}),
         });
       } catch (err) {
-        console.error(err);
+        console.error(err); // console-ok
         process.exitCode = 1;
       }
     });
