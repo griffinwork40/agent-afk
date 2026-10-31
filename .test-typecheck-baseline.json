@@ -1,4 +1,5 @@
 {
-  "errors": 2689,
-  "growthReason": "workspace-ab-runner.test.ts type errors (TS2339/TS2502) on CI Ubuntu only, from merge with main"
+  "errors": 2690,
+  "reason": "merge with main + CI-only workspace-ab-runner errors",
+  "growthReason": "merge with main (2688) + 2 CI-only workspace-ab-runner.test.ts errors"
 }
