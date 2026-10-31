@@ -30,7 +30,7 @@ export function makeDaemonTurnPersister(model: AgentModelInput): (args: TaskTurn
       ...(cwd !== undefined ? { cwd } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       onError: (err) => {
-        console.error(palette.error(`[daemon] ${task.taskId}: session sidecar save failed; run will not appear in /resume: ${err instanceof Error ? err.message : String(err)}`));
+        console.error(palette.error(`[daemon] ${task.taskId}: session sidecar save failed; run will not appear in /resume: ${err instanceof Error ? err.message : String(err)}`), err);
       },
     });
     saver.saveTurn(userInput, response.content, response.metadata);

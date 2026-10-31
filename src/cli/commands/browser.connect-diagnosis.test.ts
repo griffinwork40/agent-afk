@@ -13,6 +13,7 @@ vi.mock('../palette.js', () => ({
     meta: (s: string) => s,
     success: (s: string) => s,
     warning: (s: string) => s,
+    info: (s: string) => s,
   },
 }));
 

@@ -117,7 +117,7 @@ export async function renderTextResponse(params: TextResponseParams): Promise<vo
     }), null, 2));
   } else {
     console.log(palette.heading('\n🤖 Claude:'));
-    console.log(palette.info(renderMarkdownToTerminal(response.content)));
+    console.log(renderMarkdownToTerminal(response.content)); // console-ok
     if (responseMeta) {
       const chatParts: string[] = [];
       if (responseMeta.durationMs) chatParts.push(formatDuration(responseMeta.durationMs));
