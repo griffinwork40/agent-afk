@@ -34,20 +34,18 @@ function renderRegressedList(opts: {
   }
 
   if (rows.length === 0) {
-    console.log(
-      palette.dim('No regressed cards found (no resolved/deferred card has fired since its latest triage note).'),
-    );
+    console.log(palette.dim('No regressed cards found (no resolved/deferred card has fired since its latest triage note).'));
     return;
   }
 
   const header =
     'SLUG                                              | PATTERN              | SEV    | STATUS    | N    | LAST SEEN                | LATEST NOTE';
   const sep = '-'.repeat(header.length);
-  console.log(`${rows.length} regressed card(s): triaged, then fired again afterwards.`);
+  console.log(palette.info(`${rows.length} regressed card(s): triaged, then fired again afterwards.`));
   console.log(palette.heading(header));
   console.log(palette.dim(sep));
   for (const e of rows) {
-    console.log(
+    console.log( // console-ok
       [
         e.slug.padEnd(50).slice(0, 50),
         e.pattern.padEnd(20),
@@ -113,7 +111,7 @@ export function registerCardsSubcommand(improve: Command): void {
           console.log(palette.heading(header));
           console.log(palette.dim(sep));
           for (const e of entries) {
-            console.log(
+            console.log( // console-ok
               [
                 e.slug.padEnd(50).slice(0, 50),
                 e.pattern.padEnd(20),
@@ -145,7 +143,7 @@ export function registerCardsSubcommand(improve: Command): void {
           console.log(JSON.stringify(card, null, 2));
           return;
         }
-        console.log(renderMarkdown(card));
+        console.log(renderMarkdown(card)); // console-ok
       } catch (err) {
         handleCommandError(err);
       }
@@ -163,9 +161,7 @@ export function registerCardsSubcommand(improve: Command): void {
           let status: CardStatus | undefined;
           if (opts.status !== undefined) {
             if (!VALID_STATUSES.includes(opts.status as CardStatus)) {
-              console.error(
-                palette.error(`Invalid --status: '${opts.status}'. Must be one of: ${VALID_STATUSES.join(', ')}`),
-              );
+              console.error(palette.error(`Invalid --status: '${opts.status}'. Must be one of: ${VALID_STATUSES.join(', ')}`));
               process.exit(2);
             }
             status = opts.status as CardStatus;
@@ -188,9 +184,9 @@ export function registerCardsSubcommand(improve: Command): void {
               `status: ${outcome.statusChanged.from} → ${outcome.statusChanged.to}`,
             );
           }
-          console.log(`Triaged ${slug}: ${parts.join(' · ')}`);
-          console.log(`  json: ${outcome.jsonPath}`);
-          console.log(`  md:   ${outcome.markdownPath}`);
+          console.log(palette.success(`Triaged ${slug}: ${parts.join(' · ')}`));
+          console.log(palette.dim(`  json: ${outcome.jsonPath}`));
+          console.log(palette.dim(`  md:   ${outcome.markdownPath}`));
         } catch (err) {
           if (err instanceof TriageError) {
             console.error(palette.error(`triage failed [${err.code}]: ${err.message}`));

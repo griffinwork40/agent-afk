@@ -21,6 +21,7 @@
 import { Command } from 'commander';
 import { handleCommandError } from '../../errors/index.js';
 import { approveArtifact, ApproveError } from '../../../improve/approve.js';
+import { palette } from '../../palette.js';
 
 export function registerApproveSubcommand(improve: Command): void {
   improve
@@ -48,19 +49,17 @@ export function registerApproveSubcommand(improve: Command): void {
         }
 
         const kindLabel = outcome.kind === 'proposal' ? 'Proposal' : 'Eval-case';
-        console.log(
-          `${kindLabel} '${outcome.slug}' approved by ${outcome.approvedBy} at ${outcome.approvedAt}`,
-        );
+        console.log(palette.success(`${kindLabel} '${outcome.slug}' approved by ${outcome.approvedBy} at ${outcome.approvedAt}`));
         if (outcome.previousStatus !== 'approved') {
-          console.log(`  status: ${outcome.previousStatus} → ${outcome.newStatus}`);
+          console.log(palette.dim(`  status: ${outcome.previousStatus} → ${outcome.newStatus}`));
         } else {
-          console.log(`  status: approved (re-approved with --force)`);
+          console.log(palette.dim(`  status: approved (re-approved with --force)`));
         }
-        console.log(`  json: ${outcome.jsonPath}`);
-        console.log(`  md:   ${outcome.markdownPath}`);
+        console.log(palette.dim(`  json: ${outcome.jsonPath}`));
+        console.log(palette.dim(`  md:   ${outcome.markdownPath}`));
       } catch (err) {
         if (err instanceof ApproveError) {
-          console.error(`approve failed [${err.code}]: ${err.message}`);
+          console.error(palette.error(`approve failed [${err.code}]: ${err.message}`));
           process.exit(err.code === 'not-found' ? 1 : 2);
         }
         handleCommandError(err);
