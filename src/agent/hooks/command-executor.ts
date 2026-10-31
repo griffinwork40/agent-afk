@@ -438,7 +438,7 @@ function parseStdoutDecision(stdout: string): HookDecision {
 
   // Additive metadata from user-authored command hooks; never affects control flow.
   if (typeof obj['ruleId'] === 'string') {
-    decision.ruleId = obj['ruleId'];
+    decision.ruleId = obj['ruleId'].slice(0, 128);
   }
 
   // `hookSpecificOutput.additionalContext` → injectContext

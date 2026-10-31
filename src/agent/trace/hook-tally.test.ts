@@ -72,6 +72,14 @@ describe('emitHookDecision suppression', () => {
     expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', durationMs: 42 })).toBe(true);
   });
 
+  it('isInformativeHookDecision: ruleId alone is NOT informative', () => {
+    expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', ruleId: 'x' })).toBe(false);
+  });
+
+  it('isInformativeHookDecision: ruleId with decision IS informative', () => {
+    expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', decision: 'block', ruleId: 'x' })).toBe(true);
+  });
+
   it('is a no-op with no writer', async () => {
     await expect(emitHookDecision(undefined, { hookEvent: 'PreToolUse' })).resolves.toBeUndefined();
   });
