@@ -347,7 +347,7 @@ describe('sandboxDescription', () => {
 
 // ── Security: credential paths are always denied ─────────────────────────
 
-describe('credential path denial (macOS profile)', () => {
+describe.skipIf(process.platform !== 'darwin')('credential path denial (macOS profile)', () => {
   it('uses every entry of the actual shared floor, not a partial credential copy', () => {
     withPlatform('darwin', () => {
       const profile = buildSandboxedCommand('true', 'workspace-write', '/work').args[1]!;
