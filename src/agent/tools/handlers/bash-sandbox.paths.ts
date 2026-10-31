@@ -51,7 +51,11 @@ export function sandboxFloorAncestors(floor: readonly string[]): readonly string
 }
 
 function contains(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
+  // Resolve both sides so POSIX kernel roots (path.posix.join) and OS-native
+  // grants (canonicalSandboxPath) share the same drive prefix on Windows.
+  const nr = path.resolve(root);
+  const nt = path.resolve(target);
+  const relative = path.relative(nr, nt);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
