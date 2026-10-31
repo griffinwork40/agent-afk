@@ -103,10 +103,14 @@ To stop importing an asset type, change its toggle in user-global configuration 
 
 Claude Code plugin `commands/*.md` files become user-invoked slash commands:
 
+{/* docs-refs-ignore-start */}
+
 | File | Command |
 | --- | --- |
 | `commands/deploy.md` | `/deploy` |
 | `commands/review/security.md` | `/review:security` |
+
+{/* docs-refs-ignore-end */}
 
 Names come from paths, not a `name` frontmatter field. Plain Markdown command bodies can work without frontmatter. Commands appear in `/skills`, but are not automatically added to the model-facing skill-routing catalog. Collision handling may expose a namespaced command, so inspect the listing rather than assuming a bare name wins.
 
