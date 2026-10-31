@@ -50,6 +50,7 @@ export const AUDIT_GATES: readonly string[] = [
   'docs:links:check',
   'audit:sdk:check',
   'audit:chalk:check',
+  'audit:console:check',
   'audit:width:check',
   'audit:filesize:check',
   'audit:funcsize:check',
