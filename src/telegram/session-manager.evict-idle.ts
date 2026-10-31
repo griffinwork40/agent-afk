@@ -61,7 +61,7 @@ export async function evictIdleSessions(
     // Skip if the session became active since collection.
     if (currentSession.state !== 'idle') continue;
     try { await session.close(); } catch (err) {
-      console.error(palette.error(`[session-manager] idle-evict close error for ${key}: ${err instanceof Error ? err.message : String(err)}`));
+      console.error(palette.error(`[session-manager] idle-evict close error for ${key}`), key, err);
     }
     // Re-verify identity after close() — it yields to the event loop and a new
     // session for this key may have been inserted concurrently (#1715).
