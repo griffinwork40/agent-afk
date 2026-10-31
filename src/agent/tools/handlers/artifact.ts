@@ -94,8 +94,8 @@ async function readSlice(record: Metadata, offset: number, limit: number) {
     if (!stat.isFile() || stat.size !== record.size) throw new Error('Artifact size mismatch');
     const isText = record.media_type.startsWith('text/') ||
       record.media_type === 'application/json';
-    if (!isText || stat.size > 65536) {
-      return { artifact: record, read_path: record.uri, contentOmitted: !isText ? 'binary' : 'large' };
+    if (!isText) {
+      return { artifact: record, read_path: record.uri, contentOmitted: 'binary' };
     }
     const buffer = Buffer.alloc(Math.min(limit, Math.max(0, stat.size - offset)));
     const { bytesRead } = await fh.read(buffer, 0, buffer.length, offset);
@@ -133,18 +133,20 @@ export function createArtifactHandlers(opts: ArtifactHandlerOptions = {}): Map<s
       const records: Metadata[] = [];
       // Reserve envelope and commas so the complete JSON stays below 32 KiB.
       let bytes = 128;
-      let truncated = false;
-      const candidates = artifactList({ ...filter, limit: 1000 }, opts.indexPath, MAX_INDEX_BYTES);
+      let truncatedReason: 'limit' | 'bytes' | 'index_cap' | null = null;
+      const allCandidates = artifactList({ ...filter, limit: 1001 }, opts.indexPath, MAX_INDEX_BYTES);
+      const indexCapped = allCandidates.length > 1000;
+      const candidates = indexCapped ? allCandidates.slice(0, 1000) : allCandidates;
       for (const raw of candidates) {
         signal.throwIfAborted();
         let record: Metadata;
         try { record = await authorizeRecord(raw, context, opts); } catch { continue; }
         const size = Buffer.byteLength(JSON.stringify(record), 'utf8');
-        if (records.length >= filter.limit || bytes + size > 32768) { truncated = true; break; }
+        if (records.length >= filter.limit || bytes + size > 32768) { truncatedReason = records.length >= filter.limit ? 'limit' : 'bytes'; break; }
         records.push(record);
         bytes += size;
       }
-      return { content: JSON.stringify({ artifacts: records, count: records.length, truncated: truncated || candidates.length === 1000 }) };
+      return { content: JSON.stringify({ artifacts: records, count: records.length, truncated: truncatedReason !== null || indexCapped, truncated_reason: truncatedReason ?? (indexCapped ? 'index_cap' : null) }) };
     } catch (err) {
       return { content: safeHandlerError('artifact_list', err), isError: true };
     }

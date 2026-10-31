@@ -126,15 +126,16 @@ import { artifactToolSchemas } from './schemas.artifact.js';
  * index. send_telegram is placed in the optional tail by convention (not
  * grouped, not surface-filtered, but not locked either).
  *
- * ---- Invariant core (indices 0..25) -----------------------------------------
+ * ---- Invariant core (indices 0..22) -----------------------------------------
  *   read_file, write_file, edit_file, grep, glob, list_directory,  <- LOCKED
  *   bash, view_image, extract_document,
  *   wait_for, patch_apply, test_run, get_facet, json_query, model_complete,
  *   worktree, config_get, config_set,
  *   read_witness, search_witness,
- *   remote_agent, web_scrape, web_request, artifact_get, artifact_list, artifact_read
+ *   remote_agent, web_scrape, web_request
  *
- * ---- Optional tail (indices 26..47) -----------------------------------------
+ * ---- Optional tail (indices 23..47) -----------------------------------------
+ *   artifact_get, artifact_list, artifact_read,
  *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
  *   image_generate, image_edit,
@@ -148,7 +149,7 @@ import { artifactToolSchemas } from './schemas.artifact.js';
  *   ask_question
  */
 export const builtinToolSchemas: readonly AnthropicToolDef[] = [
-  // -- Invariant core (0..25) ---------------------------------------------------
+  // -- Invariant core (0..22) ---------------------------------------------------
   // Indices 0..5: LOCKED_TOOLS builtins -- operator config can never disable
   // these six. Placing them first maximises the guaranteed-stable prefix.
   readFileTool,
@@ -157,7 +158,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   grepTool,
   globTool,
   listDirectoryTool,
-  // Indices 6..25: remaining core builtins -- not in any toolGroups() group,
+  // Indices 6..22: remaining core builtins -- not in any toolGroups() group,
   // not surface-filtered, and not registry-filtered (unlike the background-job
   // tools). Individually disableable via tools.disabled / tools.disabledBySlot.
   // Disabling any one truncates the shared prefix there.
@@ -178,8 +179,8 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   remoteAgentTool,
   webScrapeTool,
   webRequestTool,
+  // -- Optional tail (23..47): disableable groups / surface-filtered -----------
   ...artifactToolSchemas,
-  // -- Optional tail (26..47): disableable groups / surface-filtered -----------
   cancelBackgroundJobTool,
   sendMessageToAgentTool,
   getBackgroundJobHealthTool,

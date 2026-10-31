@@ -19,7 +19,7 @@ import type { AnthropicToolDef } from './types.js';
 
 describe('builtinToolSchemas', () => {
   it('contains exactly 48 tools', () => {
-    // 26 invariant core + 22 optional tail = 48
+    // 23 invariant core + 25 optional tail = 48
     expect(builtinToolSchemas).toHaveLength(48);
   });
 
@@ -35,7 +35,7 @@ describe('builtinToolSchemas', () => {
     // because filterBackgroundToolDefs (process-job-tools.ts) removes them
     // when no background registry is wired — they cannot be invariant.
     expect(BUILTIN_TOOL_NAMES).toEqual([
-      // -- Invariant core (0..25) --
+      // -- Invariant core (0..22) --
       // 0..5: LOCKED_TOOLS builtins
       'read_file',
       'write_file',
@@ -43,7 +43,7 @@ describe('builtinToolSchemas', () => {
       'grep',
       'glob',
       'list_directory',
-      // 6..25: remaining core (individually disableable, never registry-filtered)
+      // 6..22: remaining core (individually disableable, never registry-filtered)
       'bash',
       'view_image',
       'extract_document',
@@ -61,10 +61,11 @@ describe('builtinToolSchemas', () => {
       'remote_agent',
       'web_scrape',
       'web_request',
+      // -- Optional tail (23..47) --
+      // registry-filtered: absent when artifact registry is not wired
       'artifact_get',
       'artifact_list',
       'artifact_read',
-      // -- Optional tail (26..47) --
       // registry-filtered: absent when no background registry is wired
       'cancel_background_job',
       'send_message_to_agent',
@@ -101,10 +102,13 @@ describe('builtinToolSchemas', () => {
     //   registry is wired (process-job-tools.ts — see #4208)
     const surfaceFiltered = ['ask_question', 'terminal_font_size', 'clipboard_read', 'clipboard_write'];
     const registryFiltered = ['cancel_background_job', 'send_message_to_agent', 'get_background_job_health'];
+    // registry-filtered: absent when artifact registry is not wired
+    const artifactFiltered = ['artifact_get', 'artifact_list', 'artifact_read'];
     const optionalTools = new Set([
       ...Object.values(groups).flat(),
       ...surfaceFiltered,
       ...registryFiltered,
+      ...artifactFiltered,
       'send_telegram',
     ]);
     // Every tool at index < INVARIANT_CORE_COUNT must not be optional.

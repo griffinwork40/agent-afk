@@ -54,10 +54,10 @@ import type { AnthropicToolDef } from './types.js';
  * LOCKED_TOOLS (operator-denied.ts) guarantees these can never be disabled by
  * operator config, so they form the maximal guaranteed-stable prefix head.
  *
- * The remaining 20 core tools (indices 6..25) are individually disableable via
+ * The remaining 17 core tools (indices 6..22) are individually disableable via
  * tools.disabled / tools.disabledBySlot. Disabling any one truncates the
  * shared prefix at that tool's index. What is invariant by default (absent any
- * disable config) is the membership and order of all 26 core tools.
+ * disable config) is the membership and order of all 23 core tools.
  *
  * Core tools (indices 0..INVARIANT_CORE_COUNT-1):
  *   read_file, write_file, edit_file, grep, glob, list_directory,  <- LOCKED
@@ -65,13 +65,16 @@ import type { AnthropicToolDef } from './types.js';
  *   wait_for, patch_apply, test_run, get_facet, json_query, model_complete,
  *   worktree, config_get, config_set,
  *   read_witness, search_witness,
- *   remote_agent, web_scrape, web_request, artifact_get, artifact_list, artifact_read
+ *   remote_agent, web_scrape, web_request
  *
  * Decision notes:
  *   - `web_scrape` / `web_request`: not in any disable group; no surface filter
  *     removes them; placed in core.
  *   - `worktree` / `config_get` / `config_set`: not in any disable group.
  *   - `remote_agent`: not in any disable group.
+ *   - `artifact_get`, `artifact_list`, `artifact_read`: removed when the
+ *     artifact registry is not wired (registry-filtered). Cannot be in the
+ *     invariant core; placed at the head of the optional tail instead.
  *   - `cancel_background_job`, `get_background_job_health`: removed by
  *     filterBackgroundToolDefs when subagentBackground=false AND
  *     processJobs=false; kept when processJobs=true even without a subagent
@@ -88,6 +91,7 @@ import type { AnthropicToolDef } from './types.js';
  *     core prefix of builtinToolSchemas itself.
  *
  * Optional tail (indices INVARIANT_CORE_COUNT..47):
+ *   artifact_get, artifact_list, artifact_read,
  *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
  *   image_generate, image_edit,
@@ -100,12 +104,12 @@ import type { AnthropicToolDef } from './types.js';
  *   terminal_font_size,
  *   ask_question
  */
-// History: INVARIANT_CORE_COUNT was 23 before PR #4551 added artifact_get,
-// artifact_list, and artifact_read to the invariant core. This 23→26 bump
-// invalidates any Anthropic API prefix cache that was seeded with the
-// previous 23-tool core. No action is required beyond this note: the API
-// will repopulate the cache on the next request with the new 26-tool prefix.
-export const INVARIANT_CORE_COUNT = 26;
+// History: INVARIANT_CORE_COUNT was 23, then PR #4551 moved artifact_get,
+// artifact_list, and artifact_read into the invariant core (23→26). PR #4551
+// fix2 reverts that decision: artifact tools are registry-filtered when the
+// artifact store is not wired, so they belong in the optional tail (26→23).
+// This 26→23 revert restores the original prefix cache baseline.
+export const INVARIANT_CORE_COUNT = 23;
 
 /**
  * Sort a copy of the MCP schema array by tool name using a locale-independent

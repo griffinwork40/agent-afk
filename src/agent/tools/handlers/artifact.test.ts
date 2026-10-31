@@ -72,9 +72,8 @@ describe('artifact read surface', () => {
     expect((await call('artifact_read', { id: rec.id, limit: 16385 })).isError).toBe(true);
   });
 
-  it('returns only metadata/read path for large text and binary blobs', async () => {
+  it('returns only metadata/read path for binary blobs; large text is readable via slices', async () => {
     for (const [content, media, reason] of [
-      ['x'.repeat(65537), 'text/plain', 'large'],
       ['image bytes', 'image/png', 'binary'],
       ['null\0byte', 'text/plain', 'binary'],
     ]) {
@@ -83,6 +82,11 @@ describe('artifact read surface', () => {
       expect(result).toMatchObject({ read_path: rec.uri, contentOmitted: reason });
       expect(result.content).toBeUndefined();
     }
+    // Large text files (>64 KiB) must be readable via sliced access
+    const bigRec = await put('x'.repeat(65537), 'text/plain');
+    const sliceResult = await json('artifact_read', { id: bigRec.id, offset: 0, limit: 4096 });
+    expect(sliceResult.content).toHaveLength(4096);
+    expect(sliceResult.contentOmitted).toBeUndefined();
   });
 
   it('filters by producer, media type and registration dates', async () => {
