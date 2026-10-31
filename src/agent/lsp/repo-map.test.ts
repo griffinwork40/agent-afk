@@ -11,6 +11,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { buildRepoMap, MAX_SYMBOLS, MAX_LINES } from './repo-map.js';
 import type { LspServerPool } from './pool.js';
 import type { LspClient } from './client.js';
@@ -52,7 +53,9 @@ function sym(name: string, kind: number, filePath: string) {
   return {
     name,
     kind,
-    location: { uri: `file://${filePath}` },
+    // Use pathToFileURL so the URI round-trips through fileURLToPath correctly
+    // on all platforms (file:///path on POSIX, file:///C:/path on Windows).
+    location: { uri: pathToFileURL(filePath).href },
   };
 }
 

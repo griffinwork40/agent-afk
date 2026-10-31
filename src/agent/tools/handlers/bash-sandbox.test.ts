@@ -5,6 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as path from 'node:path';
 import {
   parseSandboxPolicy,
   buildSandboxedCommand,
@@ -157,7 +158,12 @@ describe('buildSandboxedCommand — darwin', () => {
     withPlatform('darwin', () => {
       const result = buildSandboxedCommand('touch out.txt', 'workspace-write', '/my/workspace');
       const profile = result.args[1] as string;
-      expect(profile).toContain('(allow file-write* (subpath "/my/workspace"))');
+      // canonicalSandboxPath resolves via path.resolve, so on Windows the
+      // effective path is OS-native (e.g. C:\my\workspace). Use
+      // sandboxSchemeString(path.resolve(...)) to build the expected fragment
+      // identically to how the source does.
+      const expectedPath = sandboxSchemeString(path.resolve('/my/workspace'));
+      expect(profile).toContain(`(allow file-write* (subpath ${expectedPath}))`);
     });
   });
 

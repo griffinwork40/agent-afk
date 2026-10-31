@@ -209,7 +209,9 @@ function buildLinuxBwrapCommand(
     const grants = [...new Set([cwd, temp])];
     // Never let a later grant shadow private proc or expose writable kernel/device
     // interfaces, including ancestor/descendant and canonical-alias grants.
-    const kernelRoots = ['proc', 'dev', 'sys'].map((name) => path.posix.join('/', name));
+    // Use path.resolve so the roots match the OS-native paths that
+    // canonicalSandboxPath returns (cross-platform, including Windows tests).
+    const kernelRoots = ['proc', 'dev', 'sys'].map((name) => path.resolve('/', name));
     assertDisjointSandboxGrants(grants, [...sandboxWriteFloor(), ...kernelRoots]);
     for (const grant of grants) bwrapArgs.push('--bind', grant, grant);
   }
