@@ -11,6 +11,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { buildRepoMap, MAX_SYMBOLS, MAX_LINES } from './repo-map.js';
 import type { LspServerPool } from './pool.js';
 import type { LspClient } from './client.js';
@@ -48,11 +49,16 @@ function makeFakePool(
 
 // ── Helper: build a minimal workspace symbol ──────────────────────────────────
 
+// Resolve to a platform-native absolute path so pathToFileURL produces a
+// correct file URI on both POSIX (/proj/src/a.ts) and Windows (C:\proj\…).
+const PROJ_ROOT = path.resolve('/proj');
+
 function sym(name: string, kind: number, filePath: string) {
+  const resolved = path.resolve(filePath);
   return {
     name,
     kind,
-    location: { uri: `file://${filePath}` },
+    location: { uri: pathToFileURL(resolved).href },
   };
 }
 
@@ -92,7 +98,7 @@ describe('buildRepoMap — LSP path', () => {
       throw new Error(`unexpected method ${method}`);
     });
 
-    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
+    const result = await buildRepoMap({ rootDir: PROJ_ROOT, timeoutMs: 3000, pool });
 
     expect(result).toContain('src/foo.ts');
     expect(result).toContain('class(MyClass)');
@@ -107,7 +113,7 @@ describe('buildRepoMap — LSP path', () => {
 
     const { pool } = makeFakePool(async () => []);
 
-    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 500, pool });
+    const result = await buildRepoMap({ rootDir: PROJ_ROOT, timeoutMs: 500, pool });
     // Empty LSP result → tries fs fallback → likely '' for /proj (nonexistent)
     expect(typeof result).toBe('string');
   });
@@ -135,7 +141,7 @@ describe('buildRepoMap — LSP path', () => {
 
     const { pool } = makeFakePool(async () => symbols);
 
-    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
+    const result = await buildRepoMap({ rootDir: PROJ_ROOT, timeoutMs: 3000, pool });
     expect(result).toContain('fn(TopFn)');
     expect(result).not.toContain('method(myMethod)');
     expect(result).not.toContain('prop(myProp)');
@@ -151,7 +157,7 @@ describe('buildRepoMap — LSP path', () => {
 
     const { pool } = makeFakePool(async () => symbols);
 
-    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
+    const result = await buildRepoMap({ rootDir: PROJ_ROOT, timeoutMs: 3000, pool });
     expect(result).not.toContain('node_modules');
     expect(result).toContain('Internal');
   });
@@ -166,7 +172,7 @@ describe('buildRepoMap — LSP path', () => {
 
     const { pool } = makeFakePool(async () => symbols);
 
-    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
+    const result = await buildRepoMap({ rootDir: PROJ_ROOT, timeoutMs: 3000, pool });
     const lines = result.split('\n');
     expect(lines.length).toBeLessThanOrEqual(MAX_LINES + 1); // +1 for truncation marker
   });
@@ -246,7 +252,7 @@ describe('buildRepoMap — opts forwarding', () => {
       throw new Error(`unexpected method ${method}`);
     });
 
-    await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool, signal: ctl.signal });
+    await buildRepoMap({ rootDir: PROJ_ROOT, timeoutMs: 3000, pool, signal: ctl.signal });
 
     // acquire must have been called with the opts object
     expect(acquireSpy).toHaveBeenCalledOnce();
@@ -306,7 +312,7 @@ describe('buildRepoMap — interior path denylist', () => {
     ];
 
     const { pool } = makeFakePool(async () => symbols);
-    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
+    const result = await buildRepoMap({ rootDir: PROJ_ROOT, timeoutMs: 3000, pool });
 
     expect(result).toContain('class(Good)');
     expect(result).not.toContain('Compiled');
@@ -352,7 +358,7 @@ describe('buildRepoMap — symbol name sanitization', () => {
     ];
 
     const { pool } = makeFakePool(async () => symbols);
-    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
+    const result = await buildRepoMap({ rootDir: PROJ_ROOT, timeoutMs: 3000, pool });
 
     // $ should be replaced with _
     expect(result).toContain('class(_inject)');
@@ -376,7 +382,7 @@ describe('buildRepoMap — MAX_SYMBOLS cap', () => {
     );
 
     const { pool } = makeFakePool(async () => symbols);
-    const result = await buildRepoMap({ rootDir: '/proj', timeoutMs: 3000, pool });
+    const result = await buildRepoMap({ rootDir: PROJ_ROOT, timeoutMs: 3000, pool });
 
     // Count symbols in output — each file has exactly one.
     const symbolLines = result.split('\n').filter((l) => l.includes('class('));

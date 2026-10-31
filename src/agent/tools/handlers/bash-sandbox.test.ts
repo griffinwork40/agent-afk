@@ -12,8 +12,7 @@ import {
   _resetBwrapCacheForTests,
   _forceBwrapUnavailableForTests,
 } from './bash-sandbox.js';
-
-import { sandboxWriteFloor, sandboxSchemeString } from './bash-sandbox.paths.js';
+import { canonicalSandboxPath, sandboxSchemeString, sandboxWriteFloor } from './bash-sandbox.paths.js';
 import { getWriteDenylist } from './write-denylist.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -157,7 +156,8 @@ describe('buildSandboxedCommand — darwin', () => {
     withPlatform('darwin', () => {
       const result = buildSandboxedCommand('touch out.txt', 'workspace-write', '/my/workspace');
       const profile = result.args[1] as string;
-      expect(profile).toContain('(allow file-write* (subpath "/my/workspace"))');
+      const expected = sandboxSchemeString(canonicalSandboxPath('/my/workspace'));
+      expect(profile).toContain(`(allow file-write* (subpath ${expected}))`);
     });
   });
 
