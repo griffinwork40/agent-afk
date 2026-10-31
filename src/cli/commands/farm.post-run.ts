@@ -81,7 +81,7 @@ export async function runFarmPostRun(opts: FarmPostRunOptions): Promise<never> {
         continue;
       }
       const branch = manifest.branches.find((b) => b.index === r.index)!;
-      console.log(`[branch-${r.index}] scoring…`);
+      console.log(palette.dim(`[branch-${r.index}] scoring…`));
       const score = await scoreBranchFn({
         branchPath: branch.path,
         baseSha,

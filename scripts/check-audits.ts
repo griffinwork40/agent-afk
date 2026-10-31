@@ -56,6 +56,7 @@ export const AUDIT_GATES: readonly string[] = [
   'audit:git-locks:check',
   'audit:layer:check',
   'audit:module-state:check',
+  'audit:posix:check',
   'audit:clones:check',
   'fix:pins:check',
 ];
