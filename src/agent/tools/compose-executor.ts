@@ -338,7 +338,7 @@ export class ComposeExecutor {
 
       // spillSessionId declared above for the detach path; reuse it here.
       const content = buildComposeResultContent({
-        result, spillSessionId, callId: call.id, parseWarnings, usageNotice: undefined,
+        result, spillSessionId, callId: call.id, parseWarnings, usageNotice,
       });
       return { content, isError: result.failed.length > 0, ...partialNodeFlag(result.partial) };
     } catch (err) {
