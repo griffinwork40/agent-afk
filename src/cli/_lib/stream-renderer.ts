@@ -174,6 +174,8 @@ export class StreamRenderer {
   private ttfbDone: boolean;
   /** Last annotation string rendered for the TTFB line — drives 1 Hz change detection. */
   private lastTtfbAnnotation = '';
+  /** Summary-mode thinking elapsed — 1 Hz change detection (see lifecycle.ts). */
+  private lastThinkingAnnotation = '';
 
   /** Ref wired in arm() so the edit-preview hook can push diffs to the tool lane. */
   private readonly addPreviewDiffRef: PreviewDiffRef | undefined;
@@ -683,10 +685,12 @@ export class StreamRenderer {
       ttfbStartedAt: this.ttfbStartedAt,
       ttfbDone: this.ttfbDone,
       lastTtfbAnnotation: this.lastTtfbAnnotation,
+      lastThinkingAnnotation: this.lastThinkingAnnotation,
     };
     checkProgressBannerStaleness(lifecycleCtx);
     checkPauseAnnotations(lifecycleCtx);
     this.lastTtfbAnnotation = lifecycleCtx.lastTtfbAnnotation;
+    this.lastThinkingAnnotation = lifecycleCtx.lastThinkingAnnotation;
   }
 
 }
