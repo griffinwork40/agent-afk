@@ -1,1 +1,4 @@
-{ "errors": 2687 }
+{
+  "errors": 2689,
+  "growthReason": "workspace-ab-runner.test.ts type errors from merge with main (CI-only, not reproducible on macOS)"
+}
