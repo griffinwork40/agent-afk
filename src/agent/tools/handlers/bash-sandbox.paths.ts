@@ -51,12 +51,12 @@ export function sandboxFloorAncestors(floor: readonly string[]): readonly string
 }
 
 function contains(root: string, target: string): boolean {
-  // Resolve both sides so POSIX kernel roots (path.posix.join) and OS-native
-  // grants (canonicalSandboxPath) share the same drive prefix on Windows.
-  const nr = path.resolve(root);
-  const nt = path.resolve(target);
-  const relative = path.relative(nr, nt);
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+  // Strip drive letters and normalize separators so POSIX kernel roots
+  // (e.g. /proc from path.posix.join) match OS-native grants (e.g. D:\proc
+  // from canonicalSandboxPath) regardless of which drive resolved them.
+  const norm = (p: string): string => p.replace(/^[a-zA-Z]:/, '').split(path.sep).join('/');
+  const relative = path.posix.relative(norm(root), norm(target));
+  return relative === '' || (!relative.startsWith('../') && relative !== '..');
 }
 
 /** Linux cannot subtract absent credential leaves from a writable bind safely.
