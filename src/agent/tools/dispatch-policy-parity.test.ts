@@ -55,6 +55,7 @@ import { SkillExecutor } from './skill-executor.js';
 import { createChildProviderFactory } from './nesting.js';
 import { DelegationBudget } from './delegation-budget.js';
 import { builtinAgents } from '../agents/builtins.js';
+import type { RegisteredAgent, AgentRegistry } from '../agents/index.js';
 import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
 import * as promptLoader from '../../skills/_lib/prompt-loader.js';
 
@@ -91,6 +92,13 @@ export const POLICIES = [
    * pre-resolves via buildComposeDagNode so was unaffected in practice).
    */
   'model-resolution',
+  /**
+   * Stage 3 (#4042): named-agent `maxTurns` / `maxToolUseIterations` frontmatter
+   * is honoured on every dispatch path (call-site > named-agent > unlimited).
+   * Before this fix the compose path ignored named-agent budget frontmatter and
+   * forwarded only the explicit per-node / per-compose-call values.
+   */
+  'named-agent-budget',
 ] as const;
 export type DispatchPolicy = (typeof POLICIES)[number];
 
@@ -151,6 +159,18 @@ export const DISPATCH_POLICY_MATRIX: Record<DispatchPolicy, Record<DispatchCalle
     agent: 'enforced',
     compose: 'enforced',
     'skill-fork': 'enforced',
+  },
+  'named-agent-budget': {
+    // Stage 3 (#4042): resolveChildBudgets (from child-config.helpers.ts) is
+    // now called by buildComposeDagNode, applying the same call-site >
+    // named-agent > unlimited precedence on the compose path.
+    agent: 'enforced',
+    compose: 'enforced',
+    'skill-fork': {
+      na: 'skill forks do not accept a named agent type in the input; the skill SKILL.md ' +
+        'may declare a model but never declares maxTurns / maxToolUseIterations as frontmatter ' +
+        '(those fields are agent-definition-specific)',
+    },
   },
 };
 
@@ -257,6 +277,7 @@ interface DriverOpts {
   maxDepth?: number;
   delegationBudget?: DelegationBudget;
   nestedAgentAllowlist?: readonly string[];
+  agentRegistry?: AgentRegistry;
 }
 
 async function runAgent(input: Record<string, unknown>, o: DriverOpts = {}): Promise<ToolResult> {
@@ -286,7 +307,7 @@ async function runCompose(node: Record<string, unknown>, o: DriverOpts = {}): Pr
     parentSession: { sessionId: 'parent-session', abortSignal: new AbortController().signal },
     apiKey: 'test-key',
     systemPrompt: 'base prompt',
-    agentRegistry: builtinAgents(),
+    agentRegistry: o.agentRegistry ?? builtinAgents(),
     defaultSubagentModel: 'sonnet',
     resolveApiKeyForModel: () => 'test-key',
     cwd: tmp,
@@ -421,6 +442,60 @@ const PROBES: Partial<Record<CellKey, () => Promise<void>>> = {
   'worktree-isolation:compose': async () => {
     const r = await runCompose({ isolation: 'worktree' });
     expectRefusedWithoutFork(r, 'isolated worktree');
+  },
+
+  // named-agent-budget (Stage 3, #4042)
+  // Agent path: resolveChildBudgets already applies named-agent frontmatter
+  // via child-config.helpers.ts. Probe: research-agent declares
+  // maxToolUseIterations: 50 in its definition; no per-call override →
+  // fork config receives maxToolUseIterations=50.
+  'named-agent-budget:agent': async () => {
+    const registry = builtinAgents();
+    const researchAgent = registry.get('research-agent');
+    expect(researchAgent?.definition.maxToolUseIterations, 'research-agent must declare maxToolUseIterations').toBeGreaterThan(0);
+    const namedAgentBudget = researchAgent!.definition.maxToolUseIterations!;
+    await runAgent({ prompt: 'inspect the module', agent_type: 'research-agent' });
+    expect(forkCalls).toHaveLength(1);
+    expect(forkCalls[0]?.config.maxToolUseIterations).toBe(namedAgentBudget);
+  },
+
+  // Compose path: buildComposeDagNode now calls resolveChildBudgets, so the
+  // named-agent frontmatter budget is forwarded to the DAG node.
+  // Sub-check A: compose node uses research-agent (maxToolUseIterations=50); no
+  // per-node max_tool_rounds override → fork config receives 50.
+  // Sub-check B: synthetic agent declares BOTH maxTurns=7 and maxToolUseIterations=33
+  // (research-agent does not declare maxTurns) — same pattern as
+  // compose-executor.test.ts agentWithBudget — verifying maxTurns is also
+  // forwarded end-to-end through buildComposeDagNode.
+  'named-agent-budget:compose': async () => {
+    // Sub-check A: maxToolUseIterations forwarded via research-agent.
+    const registry = builtinAgents();
+    const researchAgent = registry.get('research-agent');
+    expect(researchAgent?.definition.maxToolUseIterations, 'research-agent must declare maxToolUseIterations').toBeGreaterThan(0);
+    const namedAgentBudget = researchAgent!.definition.maxToolUseIterations!;
+    await runCompose({ agent_type: 'research-agent' });
+    expect(forkCalls).toHaveLength(1);
+    expect(forkCalls[0]?.config.maxToolUseIterations).toBe(namedAgentBudget);
+
+    // Sub-check B: both maxTurns AND maxToolUseIterations forwarded via synthetic agent.
+    forkCalls.splice(0);
+    const syntheticAgent: RegisteredAgent = {
+      name: 'synthetic-budget-agent',
+      definition: {
+        description: 'Synthetic agent for budget forwarding probe.',
+        prompt: 'You are a synthetic budget probe agent.',
+        maxTurns: 7,
+        maxToolUseIterations: 33,
+      },
+      source: 'config',
+    };
+    const syntheticRegistry: AgentRegistry = new Map([
+      ['synthetic-budget-agent', syntheticAgent],
+    ]);
+    await runCompose({ agent_type: 'synthetic-budget-agent' }, { agentRegistry: syntheticRegistry });
+    expect(forkCalls).toHaveLength(1);
+    expect(forkCalls[0]?.config.maxToolUseIterations).toBe(33);
+    expect(forkCalls[0]?.config.maxTurns).toBe(7);
   },
 
   // nested-agent-allowlist

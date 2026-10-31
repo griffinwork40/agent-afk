@@ -3,7 +3,7 @@
  * @module telegram/formatter
  */
 
-import type { UsageResult, UsageWindow } from '../agent/subscription-usage.js';
+import { usageRows, type UsageSummary } from '../agent/usage/usage-formatter.js';
 
 /**
  * Maximum message length for Telegram (4096 chars)
@@ -218,43 +218,29 @@ export function escapeHtml(text: string): string {
 }
 
 /**
- * Format a `UsageResult` (src/agent/subscription-usage.ts) for a plain-text
- * Telegram reply. One line per available window on `kind: 'ok'`; a single
- * clear line on `kind: 'unavailable'` (with a `claude login` hint for the
- * no-token case, since that's operator-actionable from the phone).
+ * Format a {@link UsageSummary} for a plain-text Telegram reply. Renders one
+ * section per provider, with one line per usage row (utilization windows,
+ * per-minute limits, data age). Delegates row construction to the shared
+ * {@link usageRows} pipeline so there is no independent window-label renderer.
  *
- * Plain text by design — no parse_mode, so no HTML-escaping concerns even
- * though the underlying `detail` string comes from an external API response.
+ * Plain text by design — no parse_mode, so no HTML-escaping concerns.
  *
- * @param result - UsageResult from fetchSubscriptionUsage()
+ * @param summary - UsageSummary from collectUsageSummary()
  * @returns Plain-text status message
  */
-export function formatUsage(result: UsageResult): string {
-  if (result.kind === 'unavailable') {
-    if (result.reason === 'no-token') {
-      return '⚠️ No Claude subscription token found. Run `claude login` on the host machine, then try /usage again.';
+export function formatUsage(summary: UsageSummary): string {
+  if (summary.providers.length === 0) {
+    return '📊 Usage: no providers found.';
+  }
+  const lines: string[] = ['📊 Subscription usage:'];
+  for (const p of summary.providers) {
+    const tag = p.status !== 'ok' ? ` [${p.status}]` : '';
+    lines.push(`\n${p.provider} / ${p.account}${tag}:`);
+    for (const row of usageRows(p)) {
+      lines.push(`  ${row.label}: ${row.value}`);
     }
-    return `⚠️ Usage unavailable (${result.reason}): ${result.detail}`;
   }
-
-  const windows: Array<[string, UsageWindow | undefined]> = [
-    ['5-hour', result.fiveHour],
-    ['7-day', result.sevenDay],
-    ['7-day (Sonnet)', result.sevenDaySonnet],
-    ['7-day (Opus)', result.sevenDayOpus],
-  ];
-  const lines = windows
-    .filter((entry): entry is [string, UsageWindow] => entry[1] !== undefined)
-    .map(([label, w]) => {
-      const pct = Math.round(w.utilization * 100);
-      const resets = w.resetsAt ? ` (resets ${w.resetsAt.toLocaleString()})` : '';
-      return `  ${label}: ${pct}%${resets}`;
-    });
-
-  if (lines.length === 0) {
-    return '📊 Usage: no windows reported.';
-  }
-  return ['📊 Claude subscription usage:', ...lines].join('\n');
+  return lines.join('\n');
 }
 
 /**

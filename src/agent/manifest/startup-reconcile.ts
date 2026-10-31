@@ -21,7 +21,7 @@
  */
 
 import { reconcileWaveManifests, formatResumptionOffer, shouldSurfaceResumptionOffer, markManifestOffered } from './reconcile.js';
-import { pushIfConfigured } from '../../telegram/push.js';
+import { operatorNotify } from '../operator-notify.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { errorMessage } from '../../utils/errors.js';
 
@@ -128,7 +128,7 @@ export function runDaemonReconcile(sessionId: string): Promise<void> {
         // so the offer is re-surfaced on the next startup (distinguishes "threw" from
         // "Telegram not configured", where pushIfConfigured returns null).
         let pushThrew = false;
-        const results = await pushIfConfigured(text).catch((pushErr: unknown) => {
+        const results = await operatorNotify(text).catch((pushErr: unknown) => {
           pushThrew = true;
           // eslint-disable-next-line no-console
           console.error('[daemon] wave-resume push failed:', redactInlineSecrets(errorMessage(pushErr)));

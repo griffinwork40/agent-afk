@@ -16,6 +16,14 @@ import { h1ModelFetch } from '../providers/shared/h1-fetch.js';
 
 export const DEFAULT_USAGE_TIMEOUT_MS = 10_000;
 
+/** Reject epoch-seconds values outside a sane [1970, 2100) range. */
+export const MAX_REASONABLE_EPOCH_SECONDS = 4_102_444_800; // 2100-01-01T00:00:00Z
+
+/** Clamp a utilization fraction to [0, 1]. */
+export function clampFraction(n: number): number {
+  return Math.min(1, Math.max(0, n));
+}
+
 export interface UsageHttpOptions {
   readonly fetchImpl?: typeof fetch;
   readonly timeoutMs?: number;

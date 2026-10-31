@@ -115,3 +115,33 @@ describe('journal meta child model/provider (#3808)', () => {
     expect(child1).toBe(child2);
   });
 });
+
+describe('journal meta.cwd (#4426)', () => {
+  it('root journal meta carries cwd when provided', async () => {
+    const j = createMessageJournal({
+      getSessionId: () => 'root-cwd',
+      meta: { model: 'claude-opus-4', provider: 'anthropic', cwd: '/projects/my-app' },
+    });
+    j.append(0, user('hello'));
+    await j.flush();
+
+    const lines = readLines(getSessionJournalPath('root-cwd'));
+    const meta = lines.find((l) => l['kind'] === 'meta');
+    expect(meta).toBeDefined();
+    expect(meta!['cwd']).toBe('/projects/my-app');
+  });
+
+  it('root journal meta omits cwd when not provided', async () => {
+    const j = createMessageJournal({
+      getSessionId: () => 'root-no-cwd',
+      meta: { model: 'claude-opus-4' },
+    });
+    j.append(0, user('hello'));
+    await j.flush();
+
+    const lines = readLines(getSessionJournalPath('root-no-cwd'));
+    const meta = lines.find((l) => l['kind'] === 'meta');
+    expect(meta).toBeDefined();
+    expect('cwd' in meta!).toBe(false);
+  });
+});

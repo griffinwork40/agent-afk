@@ -18,6 +18,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { basename, join, resolve } from 'path';
 import { writeJsonFile, readJsonFileLoose } from '../../utils/json-file.js';
 import { getFacetCacheDir, getSessionJournalPath, getSessionLedgerPath, getSessionsDir, getSubagentJournalPath, getTraceDir, isSafeLedgerSessionId, validateSessionId } from '../../paths.js';
+import { readSessionMeta } from '../session/session-meta.js';
 import { journalExists, listSubagentJournals, readJournalRecords } from '../journal/reader.js';
 import { isMessageJournalDisabled } from '../journal/noop.js';
 import { journalRecordsToToolEvents, summarizeSubagentJournal } from './journal-adapter.js';
@@ -229,25 +230,29 @@ function tryReadTraceSignals(
     if (resolve(sessionsDir) !== resolve(getSessionsDir())) return undefined;
     if (!isSafeLedgerSessionId(sessionId)) return undefined;
 
-    const ledgerPath = getSessionLedgerPath(sessionId);
-    if (!existsSync(ledgerPath)) return undefined;
-
-    // Read the ledger file synchronously and scan for the `meta` record that
-    // carries `traceLabel`. Only the first `meta` record is meaningful.
-    const ledgerContent = readFileSync(ledgerPath, 'utf8');
+    // Try session-meta.json first (O(1) JSON parse); fall back to scanning
+    // the ledger JSONL for pre-sidecar sessions (#4429).
     let traceLabel: string | null | undefined;
-    for (const rawLine of ledgerContent.split('\n')) {
-      const trimmed = rawLine.trim();
-      if (!trimmed) continue;
-      try {
-        const rec = JSON.parse(trimmed) as Record<string, unknown>;
-        if (rec['kind'] === 'meta' && 'traceLabel' in rec) {
-          const tl = rec['traceLabel'];
-          traceLabel = typeof tl === 'string' ? tl : null;
-          break;
+    const meta = readSessionMeta(sessionId);
+    if (meta !== null) {
+      traceLabel = meta.traceLabel;
+    } else {
+      const ledgerPath = getSessionLedgerPath(sessionId);
+      if (!existsSync(ledgerPath)) return undefined;
+      const ledgerContent = readFileSync(ledgerPath, 'utf8');
+      for (const rawLine of ledgerContent.split('\n')) {
+        const trimmed = rawLine.trim();
+        if (!trimmed) continue;
+        try {
+          const rec = JSON.parse(trimmed) as Record<string, unknown>;
+          if (rec['kind'] === 'meta' && 'traceLabel' in rec) {
+            const tl = rec['traceLabel'];
+            traceLabel = typeof tl === 'string' ? tl : null;
+            break;
+          }
+        } catch {
+          // malformed line — skip
         }
-      } catch {
-        // malformed line — skip
       }
     }
 

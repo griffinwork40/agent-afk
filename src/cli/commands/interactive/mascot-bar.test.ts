@@ -504,3 +504,64 @@ describe('MascotBar.onStage', () => {
     expect(stream.writes).toEqual([]);
   });
 });
+
+describe('MascotBar.releaseBand', () => {
+  it('releases the reservation when idle after a working turn', () => {
+    const stream = fakeStream(40);
+    const rowCounts: number[] = [];
+    const bar = new MascotBar({ getAdjacentRows: () => 0, stream });
+    bar.setRowCountChangeHandler((n) => rowCounts.push(n));
+    bar.start();
+    bar.setState('working');
+    bar.setState('idle');
+    // Opacity-toggle: reservation held within the turn.
+    expect(rowCounts).toEqual([MASCOT_BAR_ROWS]);
+    bar.releaseBand();
+    // Between turns: reservation released.
+    expect(rowCounts).toEqual([MASCOT_BAR_ROWS, 0]);
+    expect(bar.getRowCount()).toBe(0);
+  });
+
+  it('reclaims on the next working transition after a release', () => {
+    const stream = fakeStream(40);
+    const rowCounts: number[] = [];
+    const bar = new MascotBar({ getAdjacentRows: () => 0, stream });
+    bar.setRowCountChangeHandler((n) => rowCounts.push(n));
+    bar.start();
+    bar.setState('working');
+    bar.setState('idle');
+    bar.releaseBand();
+    // Next turn: reclaim happens automatically.
+    bar.setState('working');
+    expect(rowCounts).toEqual([MASCOT_BAR_ROWS, 0, MASCOT_BAR_ROWS]);
+    expect(bar.getRowCount()).toBe(MASCOT_BAR_ROWS);
+    bar.stop();
+  });
+
+  it('is a no-op when the band was never claimed', () => {
+    const stream = fakeStream(40);
+    const rowCounts: number[] = [];
+    const bar = new MascotBar({ getAdjacentRows: () => 0, stream });
+    bar.setRowCountChangeHandler((n) => rowCounts.push(n));
+    bar.start();
+    bar.releaseBand();
+    expect(rowCounts).toEqual([]);
+  });
+
+  it('is a no-op while an alert dwell is active', () => {
+    vi.useFakeTimers();
+    const stream = fakeStream(40);
+    const rowCounts: number[] = [];
+    const bar = new MascotBar({ getAdjacentRows: () => 0, stream, frameMs: 100 });
+    bar.setRowCountChangeHandler((n) => rowCounts.push(n));
+    bar.start();
+    bar.onStage('acting');
+    bar.onStage('updating', { toolErrored: true });
+    // Alert dwell is active; releaseBand should be a no-op.
+    bar.releaseBand();
+    expect(bar.getRowCount()).toBe(MASCOT_BAR_ROWS);
+    expect(rowCounts).toEqual([MASCOT_BAR_ROWS]);
+    vi.advanceTimersByTime(2000);
+    bar.stop();
+  });
+});

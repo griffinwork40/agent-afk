@@ -88,6 +88,23 @@ export interface SystemPromptWiringResult {
    * replacement base, not the construction-time default (#2420 P1 invariant).
    */
   systemPromptRebuildFactory: (base: string | undefined) => string;
+  /**
+   * Snapshot of the cwd-independent named fragments captured at construction
+   * time (#4449). Used by the caller to emit per-fragment token-count logging
+   * to the witness trace without re-deriving the fragments from config.
+   * The cwd-dependent `# Environment` fragment is NOT included here — it is
+   * recomputed per `setCwd()` and its size varies continuously.
+   */
+  stableFragments: {
+    toolBase: string;
+    userSystem: string | undefined;
+    memoryPrompt: string;
+    workspacePrompt: string;
+    hotMemory: string;
+    goalPrompt: string;
+    manifest: string;
+    agentTypeListing: string;
+  };
 }
 
 /**
@@ -196,6 +213,16 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
 
   return {
     initialSystemPrompt: assemble(buildEnvFragment(), existingSys),
+    stableFragments: {
+      toolBase,
+      userSystem: existingSys ?? undefined,
+      memoryPrompt,
+      workspacePrompt: resolveWorkspaceSystemPrompt(workspacePromptEnabled) ?? '',
+      hotMemory,
+      goalPrompt,
+      manifest,
+      agentTypeListing,
+    },
     rebuildAfterCwdChange: (): string => {
       // Contract: when systemPromptRebuildFactory was never called (`set` is
       // false), fall back to the construction-time `existingSys` so the preset

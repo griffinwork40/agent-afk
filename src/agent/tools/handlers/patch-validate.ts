@@ -17,8 +17,7 @@
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
 import type { ToolHandlerContext } from '../types.js';
-import { assertNotDenylisted } from './write-denylist.js';
-import { resolveAndContain } from './_cwd-utils.js';
+import { decidePathAccess } from './path-policy.js';
 import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
@@ -102,30 +101,19 @@ export async function validatePatchChanges(
   for (const change of changes) {
     const rawPath = change.path;
 
-    // 1. Resolve path and check containment within write roots.
-    let resolvedPath: string;
-    try {
-      resolvedPath = resolveAndContain(rawPath, context, 'write', resolveBase);
-    } catch (err) {
+    // 1–2. Shared floor-then-roots policy; retain the structured error codes.
+    const access = decidePathAccess(rawPath, 'write', context, resolveBase);
+    if (access.kind === 'deny') {
       errors.push({
         path: rawPath,
-        error: 'path_containment',
-        detail: errorMessage(err),
+        error: access.reason === 'credential' ? 'write_denied' : 'path_containment',
+        detail: access.reason === 'credential'
+          ? `patch_apply: refusing to write to protected path: ${access.canonical} (matches denylist entry: ${access.matched})`
+          : `Path \`${rawPath}\` is outside the allowed write roots [${access.roots.map((r) => `\`${r}\``).join(', ')}].`,
       });
-      continue; // Cannot proceed without a valid resolved path.
+      continue;
     }
-
-    // 2. Write denylist check.
-    try {
-      assertNotDenylisted(resolvedPath, 'patch_apply');
-    } catch (err) {
-      errors.push({
-        path: rawPath,
-        error: 'write_denied',
-        detail: errorMessage(err),
-      });
-      continue; // Cannot validate further for a denied path (matches path_containment pattern).
-    }
+    const resolvedPath = access.resolved;
 
     // 3. Mutual exclusion: edits and content are mutually exclusive.
     if (change.edits !== undefined && change.content !== undefined) {

@@ -14,7 +14,7 @@ export {
   getUsageAwareness, setUsageAwarenessPreference,
 } from './preferences.js';
 export {
-  readSubscriptionUsage, readContextUsage, readLocalTokenUsage, readTokenUsage,
+  readContextUsage, readLocalTokenUsage, readTokenUsage,
   readMcpStatus, readMcpOauthPending,
   type ContextUsage, type LocalTokenUsage, type TokenUsage,
 } from './reads.js';

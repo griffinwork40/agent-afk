@@ -19,8 +19,9 @@ import { getSessionLedgerDir, getSessionLedgerPath } from '../paths.js';
 import { hydrateMessages, loadDisplayMessages } from '../agent/journal/index.js';
 import { projectJournalMessages } from './session-owner.projection.js';
 import type { LedgerPayload } from '../agent/session-ledger.js';
+import { writeSessionMeta } from '../agent/session/session-meta.js';
 
-export function seedForkLedger(forkId: string, meta: { model: string; cwd?: string }): boolean {
+export function seedForkLedger(forkId: string, meta: { model: string; cwd?: string; forkedFrom?: string }): boolean {
   try {
     const path = getSessionLedgerPath(forkId);
     if (existsSync(path)) return false;
@@ -35,6 +36,15 @@ export function seedForkLedger(forkId: string, meta: { model: string; cwd?: stri
     const now = Date.now();
     writeFileSync(temporary, records.map((r) => JSON.stringify({ v: 1, ts: now, ...r })).join('\n') + '\n', { mode: 0o600 });
     renameSync(temporary, path);
+    // Write the identity sidecar for the fork session (#4429). Best-effort:
+    // fire-and-forget so a sidecar failure never breaks the fork flow.
+    void writeSessionMeta({
+      v: 1,
+      sessionId: forkId,
+      model: meta.model,
+      ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
+      ...(meta.forkedFrom !== undefined ? { forkedFrom: meta.forkedFrom } : {}),
+    });
     return true;
   } catch {
     return false;

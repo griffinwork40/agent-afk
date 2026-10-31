@@ -20,6 +20,7 @@
  */
 
 import { env } from '../config/env.js';
+import { palette } from '../cli/palette.js';
 import { TelegramBot } from './bot.js';
 import { parseAllowedChatIds } from './allowlist.js';
 import { validateBotToken } from './setup-wizard.js';
@@ -100,14 +101,14 @@ export async function main(): Promise<void> {
   // on-disk version each tick by the drift watchdog.
   const daemonVersion = readDiskVersion();
   if (daemonVersion === UNKNOWN_VERSION) {
-    console.warn('⚠️ [daemon] Could not read package.json at startup — version drift check disabled.');
+    console.warn(palette.warning('⚠️ [daemon] Could not read package.json at startup — version drift check disabled.'));
   }
 
   let config;
   try {
     config = loadConfig();
   } catch (error) {
-    console.error('❌ Configuration error:', errorMessage(error));
+    console.error(palette.error('❌ Configuration error: ' + errorMessage(error)));
     process.exit(1);
   }
 
@@ -141,11 +142,11 @@ export async function main(): Promise<void> {
 
   const botToken = env.TELEGRAM_BOT_TOKEN;
   if (!botToken) {
-    console.error('❌ Error: TELEGRAM_BOT_TOKEN environment variable is required');
-    console.error('\nHow to get a bot token:');
-    console.error('  1. Open Telegram and search for @BotFather');
-    console.error('  2. Send /newbot and follow the instructions');
-    console.error('  3. Run: afk telegram setup');
+    console.error(palette.error('❌ Error: TELEGRAM_BOT_TOKEN environment variable is required'));
+    console.error(palette.error('\nHow to get a bot token:'));
+    console.error(palette.error('  1. Open Telegram and search for @BotFather'));
+    console.error(palette.error('  2. Send /newbot and follow the instructions'));
+    console.error(palette.error('  3. Run: afk telegram setup'));
     process.exit(1);
   }
 
@@ -154,10 +155,10 @@ export async function main(): Promise<void> {
     console.warn
   );
   if (allowedChatIds.size === 0) {
-    console.error('❌ Error: AFK_TELEGRAM_ALLOWED_CHAT_IDS must list at least one chat ID');
-    console.error('\nThis is an allowlist that gates who can message the bot.');
-    console.error('Run `afk telegram setup` to set it interactively, or set it manually:');
-    console.error('  AFK_TELEGRAM_ALLOWED_CHAT_IDS=123456789,-100987654321');
+    console.error(palette.error('❌ Error: AFK_TELEGRAM_ALLOWED_CHAT_IDS must list at least one chat ID'));
+    console.error(palette.error('\nThis is an allowlist that gates who can message the bot.'));
+    console.error(palette.error('Run `afk telegram setup` to set it interactively, or set it manually:'));
+    console.error(palette.error('  AFK_TELEGRAM_ALLOWED_CHAT_IDS=123456789,-100987654321'));
     process.exit(1);
   }
 
@@ -166,20 +167,20 @@ export async function main(): Promise<void> {
   // importantly surfaces the *resolved bot identity* so the operator
   // sees which bot they're actually running — the single most useful
   // piece of operational data, hidden behind DEBUG=telegraf:* otherwise.
-  console.log('🔎 Validating bot token...');
+  console.log(palette.info('🔎 Validating bot token...'));
   const identity = await validateBotToken(botToken);
   if (!identity) {
-    console.error('❌ Error: TELEGRAM_BOT_TOKEN was rejected by Telegram (getMe failed)');
-    console.error('   The token may be revoked, malformed, or your network may be unreachable.');
-    console.error('   Re-run `afk telegram setup` to refresh it.');
+    console.error(palette.error('❌ Error: TELEGRAM_BOT_TOKEN was rejected by Telegram (getMe failed)'));
+    console.error(palette.error('   The token may be revoked, malformed, or your network may be unreachable.'));
+    console.error(palette.error('   Re-run `afk telegram setup` to refresh it.'));
     process.exit(1);
   }
   const handle = identity.username ? `@${identity.username}` : identity.firstName;
 
   console.log('');
-  console.log(`🤖 Starting Agent AFK Telegram Bot as ${handle} (id ${identity.id})`);
-  console.log(`📡 Model: ${config.model} · Provider: ${providerName}`);
-  console.log(`🔒 Allowlist: ${allowedChatIds.size} chat ID(s)`);
+  console.log(palette.info(`🤖 Starting Agent AFK Telegram Bot as ${handle} (id ${identity.id})`));
+  console.log(palette.info(`📡 Model: ${config.model} · Provider: ${providerName}`));
+  console.log(palette.info(`🔒 Allowlist: ${allowedChatIds.size} chat ID(s)`));
 
   // Opt-in "tag-only" response policy: chats where the bot answers only when
   // addressed (reply to the bot, @mention, or text_mention resolving to the
@@ -192,8 +193,8 @@ export async function main(): Promise<void> {
       ? new Set<number>(configTagOnly)
       : parseAllowedChatIds(env.AFK_TELEGRAM_TAG_ONLY_CHAT_IDS, console.warn);
   if (tagOnlyChats.size > 0) {
-    console.log(`🏷️  Tag-only chats: ${tagOnlyChats.size} chat ID(s) — bot responds only when addressed (reply/@mention)`);
-    console.log('   ⚠️  Set Telegram privacy mode OFF for this bot (@BotFather → /setprivacy → Disable) or non-addressed group messages never reach it.');
+    console.log(palette.info(`🏷️  Tag-only chats: ${tagOnlyChats.size} chat ID(s) — bot responds only when addressed (reply/@mention)`));
+    console.log(palette.warning('   ⚠️  Set Telegram privacy mode OFF for this bot (@BotFather → /setprivacy → Disable) or non-addressed group messages never reach it.'));
   }
 
   const sharedMemoryStore = new MemoryStore();
@@ -248,12 +249,12 @@ export async function main(): Promise<void> {
   const statsInterval = startStatsTicker({ bot, spawnedVersion: daemonVersion });
 
   const shutdown = async () => {
-    console.log('\n\n🛑 Shutting down bot...');
+    console.log(palette.dim('\n\n🛑 Shutting down bot...'));
     clearInterval(statsInterval);
     await bot.stop();
     sharedMemoryStore.close();
     sharedStateStore.close();
-    console.log('✅ Bot stopped.');
+    console.log(palette.success('✅ Bot stopped.'));
     process.exit(0);
   };
 
@@ -276,21 +277,21 @@ export async function main(): Promise<void> {
     // See recordTelegramStartup() above for the daemonVersion rationale.
     if (daemonVersion !== UNKNOWN_VERSION) recordTelegramStartup(daemonVersion);
 
-    console.log('✅ Bot started successfully!');
-    console.log('\n📝 Slash commands (Agent SDK):');
-    console.log('  /start   - Welcome and command list');
-    console.log('  /help    - Show command list');
-    console.log('  /clear   - Clear conversation history');
-    console.log('  /compact - Compact history (summarize older messages)');
-    console.log('  /model   - Switch model (opus/sonnet/haiku/gpt-5.6-sol/...)');
-    console.log('\n💬 Send any message to chat with the agent.');
-    console.log('\n⏹️  Press Ctrl+C to stop the bot.');
+    console.log(palette.success('✅ Bot started successfully!'));
+    console.log(palette.heading('\n📝 Slash commands (Agent SDK):'));
+    console.log(palette.dim('  /start   - Welcome and command list'));
+    console.log(palette.dim('  /help    - Show command list'));
+    console.log(palette.dim('  /clear   - Clear conversation history'));
+    console.log(palette.dim('  /compact - Compact history (summarize older messages)'));
+    console.log(palette.dim('  /model   - Switch model (opus/sonnet/haiku/gpt-5.6-sol/...)'));
+    console.log(palette.dim('\n💬 Send any message to chat with the agent.'));
+    console.log(palette.dim('\n⏹️  Press Ctrl+C to stop the bot.'));
 
   } catch (error) {
     clearInterval(statsInterval);
     process.removeListener('SIGINT', shutdown);
     process.removeListener('SIGTERM', shutdown);
-    console.error('❌ Failed to start bot:', error);
+    console.error(palette.error('❌ Failed to start bot: ' + String(error)));
     process.exit(1);
   }
 }

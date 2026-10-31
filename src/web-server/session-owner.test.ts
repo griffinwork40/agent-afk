@@ -247,6 +247,89 @@ describe('SessionOwner.create — bad AFK_FRAMEWORK_PROMPT_FILE (issue #2388)', 
   });
 });
 
+/**
+ * retire() — direct unit test on the real SessionOwner class.
+ *
+ * Covers issue #4394 item 2: lifecycle tests only mock `retire`; this test
+ * exercises the real implementation via the private-map back-door pattern
+ * established above (avoid widening the public surface for test-only access).
+ *
+ * Three behaviours are pinned:
+ *   a) Every owned-session map entry for the id is cleared after retire().
+ *   b) A WebSessionControl present in the controls map has close() called.
+ *   c) retire() on an unknown id does not throw.
+ */
+describe('SessionOwner — retire()', () => {
+  interface RetireInternals {
+    owned: Set<string>;
+    sessions: Map<string, unknown>;
+    info: Map<string, unknown>;
+    controls: Map<string, { close: () => Promise<void> }>;
+    pending: Map<string, number>;
+    turns: Map<string, unknown>;
+    autosavers: Map<string, unknown>;
+    mcpManagers: Map<string, unknown>;
+  }
+
+  function asInternals(owner: SessionOwner): RetireInternals {
+    return owner as unknown as RetireInternals;
+  }
+
+  it('removes the id from every owner map', () => {
+    const owner = freshOwner();
+    const internals = asInternals(owner);
+    const id = 'retire-test-1';
+
+    // Seed all maps with a stub entry for the id.
+    internals.owned.add(id);
+    internals.sessions.set(id, { close: vi.fn().mockResolvedValue(undefined) });
+    internals.info.set(id, {});
+    internals.controls.set(id, { close: vi.fn().mockResolvedValue(undefined) });
+    internals.pending.set(id, 0);
+    internals.turns.set(id, Promise.resolve());
+    internals.autosavers.set(id, {});
+    internals.mcpManagers.set(id, { disconnectAll: vi.fn().mockResolvedValue(undefined) });
+
+    owner.retire(id);
+
+    expect(internals.owned.has(id)).toBe(false);
+    expect(internals.sessions.has(id)).toBe(false);
+    expect(internals.info.has(id)).toBe(false);
+    expect(internals.controls.has(id)).toBe(false);
+    expect(internals.pending.has(id)).toBe(false);
+    expect(internals.turns.has(id)).toBe(false);
+    expect(internals.autosavers.has(id)).toBe(false);
+    expect(internals.mcpManagers.has(id)).toBe(false);
+  });
+
+  it('calls close() on the WebSessionControl before removing it (#4394)', async () => {
+    const owner = freshOwner();
+    const internals = asInternals(owner);
+    const id = 'retire-test-2';
+
+    const sessionClose = vi.fn().mockResolvedValue(undefined);
+    const controlClose = vi.fn().mockResolvedValue(undefined);
+    internals.sessions.set(id, { close: sessionClose });
+    internals.controls.set(id, { close: controlClose });
+
+    owner.retire(id);
+
+    // close() is fire-and-forget — flush the microtask queue.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sessionClose).toHaveBeenCalledOnce();
+    expect(controlClose).toHaveBeenCalledOnce();
+    // session.close() must be invoked before control.close().
+    const sessionOrder = sessionClose.mock.invocationCallOrder[0] ?? fail('sessionClose not called');
+    const controlOrder = controlClose.mock.invocationCallOrder[0] ?? fail('controlClose not called');
+    expect(sessionOrder).toBeLessThan(controlOrder);
+  });
+
+  it('does not throw when called for an unknown id', () => {
+    const owner = freshOwner();
+    expect(() => owner.retire('does-not-exist')).not.toThrow();
+  });
+});
+
 describe('SessionOwner — completed turns are saved to the session sidecar', () => {
   interface Internals {
     sessions: Map<string, { sendMessageStream: (c: unknown) => AsyncIterable<unknown> }>;

@@ -7,7 +7,7 @@
  *    string (portable: uses injected probe, no chmodSync on directory).
  *  - `TelemetryAlertLatch`: first detection sends a Telegram push; subsequent
  *    detections in the same process do not; real notify() exercises
- *    console.warn and pushIfConfigured.
+ *    console.warn and operatorNotify.
  *  - Integration: CronScheduler.fireOnStart skips agent sessionstart tasks and
  *    sends exactly one alert when the telemetry file is not writable.
  *
@@ -146,12 +146,12 @@ describe('TelemetryAlertLatch', () => {
     expect(pushMock).toHaveBeenCalledTimes(2);
   });
 
-  it('real notify() calls console.warn and pushIfConfigured on first invocation only', async () => {
-    // Exercise the real notify() path (no subclass override) so pushIfConfigured
+  it('real notify() calls console.warn and operatorNotify on first invocation only', async () => {
+    // Exercise the real notify() path (no subclass override) so operatorNotify
     // and console.warn are confirmed to be called.
-    // pushIfConfigured is mocked via the hoisted vi.mock('../../telegram/push.js')
+    // operatorNotify is mocked via the hoisted vi.mock('../../telegram/push.js')
     // below; the mock is active for this whole file at module-evaluation time.
-    vi.mocked(pushIfConfigured).mockClear();
+    vi.mocked(operatorNotify).mockClear();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const fakePath = join(tmpdir(), 'afk-latch-real.jsonl');
     const latch = new TelemetryAlertLatch();
@@ -161,9 +161,9 @@ describe('TelemetryAlertLatch', () => {
 
     expect(warnSpy).toHaveBeenCalledOnce();
     expect(warnSpy.mock.calls[0][0]).toContain('Telemetry file is not writable');
-    // A dropped push call — e.g. if the await pushIfConfigured(...) line were
+    // A dropped push call — e.g. if the await operatorNotify(...) line were
     // removed — would have passed silently before; this assertion closes the gap.
-    expect(vi.mocked(pushIfConfigured)).toHaveBeenCalledOnce();
+    expect(vi.mocked(operatorNotify)).toHaveBeenCalledOnce();
 
     warnSpy.mockRestore();
   });
@@ -173,8 +173,8 @@ describe('TelemetryAlertLatch', () => {
 // Verifies fireOnStart skips agent tasks and sends one alert on a non-writable
 // telemetry file (issue #2955 acceptance criteria).
 
-vi.mock('../../telegram/push.js', () => ({
-  pushIfConfigured: vi.fn().mockResolvedValue(null),
+vi.mock('../operator-notify.js', () => ({
+  operatorNotify: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../providers/index.js', () => ({
@@ -200,7 +200,7 @@ vi.mock('node-cron', () => ({
 
 // Import AFTER vi.mock declarations so mocks are registered first.
 import { CronScheduler } from './scheduler.js';
-import { pushIfConfigured } from '../../telegram/push.js';
+import { operatorNotify } from '../operator-notify.js';
 
 describe.skipIf(!PERMS_ENFORCED)(
   'CronScheduler.fireOnStart — non-writable telemetry file (issue #2955)',
@@ -214,7 +214,7 @@ describe.skipIf(!PERMS_ENFORCED)(
       // Pre-create the file so the W_OK probe detects it as unwritable.
       writeFileSync(telemetryPath, '', 'utf-8');
       chmodSync(telemetryPath, 0o444);
-      vi.mocked(pushIfConfigured).mockClear();
+      vi.mocked(operatorNotify).mockClear();
     });
 
     afterEach(() => {
@@ -287,7 +287,7 @@ describe.skipIf(!PERMS_ENFORCED)(
       // Wait for the fire-and-forget Telegram push to settle.
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
-      expect(vi.mocked(pushIfConfigured)).toHaveBeenCalledOnce();
+      expect(vi.mocked(operatorNotify)).toHaveBeenCalledOnce();
     });
 
     it('does not skip shell sessionstart tasks with the write-guard (they run normally)', async () => {

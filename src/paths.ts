@@ -828,9 +828,7 @@ export { getWhatifDir } from './paths.whatif.js';
 // ---------------------------------------------------------------------------
 export { getPeerInboxRoot, getPeerInboxDir } from './paths.peer.js';
 export { getRemoteHostsPath } from './paths.remote.js';
-export {
-  getFileCheckpointsRoot, getFileCheckpointSessionDir, getFileCheckpointTurnDir, getFileCheckpointBlobDir,
-  getFileCheckpointTurnLogPath, getFileCheckpointRewindLockPath, getFileCheckpointOwnerPath,
-} from './paths.checkpoint.js';
+export * from './paths.checkpoint.js';
 export { getArtifactRegistryDir, getArtifactStoreDir, getArtifactIndexPath } from './paths.artifact.js';
+export { getWorkspaceExperimentDir } from './paths.experiments.js';
 

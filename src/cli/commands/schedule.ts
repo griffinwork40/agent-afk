@@ -22,6 +22,7 @@ import {
 import { validateScheduleCwd } from '../../agent/daemon/cwd-validator.js';
 import { getTelemetryPath } from '../../paths.js';
 import { trySyncToDaemon, SYNC_FAILED_NOTE } from '../../agent/daemon/http-client.js';
+import { palette } from '../palette.js';
 
 /**
  * Print the schedule list as an ASCII table.
@@ -29,15 +30,15 @@ import { trySyncToDaemon, SYNC_FAILED_NOTE } from '../../agent/daemon/http-clien
  */
 function printScheduleList(schedules: ReturnType<typeof loadSchedules>): void {
   if (schedules.length === 0) {
-    console.log('No scheduled tasks.');
+    console.log(palette.dim('No scheduled tasks.'));
     return;
   }
   const hasCwd = schedules.some((s) => s.cwd !== undefined);
   const header = hasCwd
     ? 'ID                   | NAME                           | CRON            | ENABLED | CWD'
     : 'ID                   | NAME                           | CRON            | ENABLED';
-  console.log(header);
-  console.log('-'.repeat(header.length));
+  console.log(palette.heading(header));
+  console.log(palette.dim('-'.repeat(header.length)));
   for (const s of schedules) {
     const row = [s.id.padEnd(20), s.name.padEnd(30), s.cron.padEnd(15), String(s.enabled).padEnd(7)];
     if (hasCwd) row.push(s.cwd ?? '');
@@ -74,7 +75,7 @@ export function registerScheduleCommand(program: Command): void {
         try {
           const executor = opts.executor as 'agent' | 'shell';
           if (executor !== 'agent' && executor !== 'shell') {
-            console.error('Error: --executor must be "agent" or "shell"');
+            console.error(palette.error('Error: --executor must be "agent" or "shell"'));
             process.exitCode = 1;
             return;
           }
@@ -82,7 +83,7 @@ export function registerScheduleCommand(program: Command): void {
           if (opts.cwd !== undefined) {
             const cwdResult = validateScheduleCwd(opts.cwd);
             if (!cwdResult.ok) {
-              console.error(`Error: ${cwdResult.error}`);
+              console.error(palette.error(`Error: ${cwdResult.error}`));
               process.exitCode = 1;
               return;
             }
@@ -113,8 +114,8 @@ export function registerScheduleCommand(program: Command): void {
                 ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
               })
             : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
-          if (!syncAdd.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
-          console.log(`✅ Added: ${config.id} — ${config.name}`);
+          if (!syncAdd.synced) console.error(palette.warning(`⚠️  ${SYNC_FAILED_NOTE}`));
+          console.log(palette.success(`✅ Added: ${config.id} — ${config.name}`));
         } catch (err) {
           handleCommandError(err);
         }
@@ -141,12 +142,12 @@ export function registerScheduleCommand(program: Command): void {
       try {
         const found = removeSchedule(id);
         if (!found) {
-          console.error(`Task not found: ${id}`);
+          console.error(palette.error(`Task not found: ${id}`));
           process.exit(1);
         }
         const syncRemove = await trySyncToDaemon('DELETE', `/tasks/${id}`);
-        if (!syncRemove.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
-        console.log(`✅ Removed: ${id}`);
+        if (!syncRemove.synced) console.error(palette.warning(`⚠️  ${SYNC_FAILED_NOTE}`));
+        console.log(palette.success(`✅ Removed: ${id}`));
       } catch (err) {
         handleCommandError(err);
       }
@@ -157,12 +158,12 @@ export function registerScheduleCommand(program: Command): void {
     try {
       const updated = toggleScheduleEnabled(id, true);
       if (!updated) {
-        console.error(`Task not found: ${id}`);
+        console.error(palette.error(`Task not found: ${id}`));
         process.exit(1);
       }
       const syncEnable = await trySyncToDaemon('POST', '/tasks', toScheduledTask(updated));
-      if (!syncEnable.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
-      console.log(`✅ Enabled: ${id}`);
+      if (!syncEnable.synced) console.error(palette.warning(`⚠️  ${SYNC_FAILED_NOTE}`));
+      console.log(palette.success(`✅ Enabled: ${id}`));
     } catch (err) {
       handleCommandError(err);
     }
@@ -173,12 +174,12 @@ export function registerScheduleCommand(program: Command): void {
     try {
       const updated = toggleScheduleEnabled(id, false);
       if (!updated) {
-        console.error(`Task not found: ${id}`);
+        console.error(palette.error(`Task not found: ${id}`));
         process.exit(1);
       }
       const syncDisable = await trySyncToDaemon('DELETE', `/tasks/${id}`);
-      if (!syncDisable.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
-      console.log(`✅ Disabled: ${id}`);
+      if (!syncDisable.synced) console.error(palette.warning(`⚠️  ${SYNC_FAILED_NOTE}`));
+      console.log(palette.success(`✅ Disabled: ${id}`));
     } catch (err) {
       handleCommandError(err);
     }
@@ -195,7 +196,7 @@ export function registerScheduleCommand(program: Command): void {
         const telemetryPath = getTelemetryPath();
         const results = await readTelemetryHistory(telemetryPath, { taskId: id, limit });
         if (results.length === 0) {
-          console.log(`No history found for task: ${id}`);
+          console.log(palette.dim(`No history found for task: ${id}`));
           return;
         }
         console.log(JSON.stringify(results, null, 2));

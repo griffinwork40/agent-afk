@@ -9,10 +9,9 @@
 
 import type { SubagentDAGNode } from '../dag-subagent.js';
 import type { ComposeNodeInput } from './compose-input-parse.js';
-import { resolveChildModel, defaultTierModelFallback } from '../subagent/resolve-child-model.js';
-import { providerForModel } from '../providers/index.js';
-import { resolveCredentialForModel } from '../auth/credential-resolver.js';
-import { applyParentCredentialFallback } from './child-credential.js';
+import { defaultTierModelFallback } from '../subagent/resolve-child-model.js';
+import { prepareDispatchModel } from './dispatch-preparation.js';
+import { resolveChildBudgets } from './subagent/child-config.helpers.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
 import {
   resolvedAgentToolRestriction,
@@ -20,6 +19,7 @@ import {
   type ResolvedComposeAgent,
 } from './compose-agent-resolve.js';
 import { ensureError } from '../../utils/errors.js';
+import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry as defaultInboundAttachmentRegistry } from '../content/attachment-registry.js';
 import type { ImageBlockAttachment } from '../content/image-blocks.js';
@@ -31,7 +31,8 @@ import type { ComposeExecutorContext } from './compose-executor.context.js';
  */
 export type ComposeNodeBuildResult =
   | SubagentDAGNode
-  | { attachmentError: true; nodeId: string; error: Error };
+  | { attachmentError: true; nodeId: string; error: Error }
+  | { usageBlocked: true; nodeId: string; notice: string };
 
 /** Explicit inputs for {@link buildComposeDagNode}. */
 export interface BuildComposeDagNodeArgs {
@@ -78,28 +79,6 @@ export function buildComposeUpstreamPrompt(prompt: string, inputs: Record<string
 }
 
 /**
- * Resolve the API key forwarded to one compose node.
- *
- * Invariant: resolve credentials fresh per-node at fork time, matching
- * the agent tool path (child-config.ts:302-308). ctx.apiKey is a fallback
- * only when fresh resolution returns empty (expired keychain token).
- * OpenAI-routed nodes receive undefined (cross-provider anti-leak).
- * Uses applyParentCredentialFallback so the isAnthropicCredential gate
- * prevents a non-Anthropic ctx.apiKey from reaching Anthropic children
- * (structural parity with child-config.ts, not just behavioral).
- */
-export function resolveComposeNodeApiKey(
-  nodeModel: string,
-  ctx: Pick<ComposeExecutorContext, 'resolveApiKeyForModel' | 'apiKey'>,
-): string | undefined {
-  const nodeIsOpenAI = providerForModel(typeof nodeModel === 'string' ? nodeModel : undefined) === 'openai-compatible';
-  const freshKey = nodeIsOpenAI ? undefined
-    : (ctx.resolveApiKeyForModel ? ctx.resolveApiKeyForModel(nodeModel) : resolveCredentialForModel(nodeModel));
-  return nodeIsOpenAI ? undefined
-    : applyParentCredentialFallback({ childModel: nodeModel, resolved: freshKey, parentApiKey: ctx.apiKey });
-}
-
-/**
  * Build one runnable {@link SubagentDAGNode} from a parsed compose node, or an
  * attachment-error sentinel when the node's attachments fail to resolve.
  */
@@ -114,17 +93,35 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
   // Named-agent model default feeds into resolveChildModel as
   // `namedAgentModel` (lower precedence than an explicit call-site model,
   // higher than the compose-level defaultSubagentModel).
-  const nodeResolved = resolveChildModel({
-    callSiteModel: n.model,
-    namedAgentModel: resolvedAgent.namedAgentModel,
-    defaultSubagentModel: ctx.defaultSubagentModel,
-    defaultModel: ctx.defaultModel,
-  }, { withSource: true });
+  const nodeResolved = prepareDispatchModel({
+    modelIntent: {
+      callSiteModel: n.model,
+      namedAgentModel: resolvedAgent.namedAgentModel,
+      defaultSubagentModel: ctx.defaultSubagentModel,
+      defaultModel: ctx.defaultModel,
+    },
+    credentialPolicy: 'skip-openai-resolution',
+    resolveApiKeyForModel: ctx.resolveApiKeyForModel,
+    parentApiKey: ctx.apiKey,
+  });
   const nodeModel = nodeResolved.model;
+
+  // Usage gate: evaluate quota per-node against the resolved node model so an
+  // exhausted Opus quota does not wrongly block Haiku nodes. Mirrors the
+  // per-node gate in subagent-executor.execute-once.ts:173.
+  const { notice: usageNotice, blocked: usageBlocked } = await evaluateDispatchUsageForModel(nodeModel, ctx.traceWriter);
+  if (usageBlocked) {
+    return {
+      usageBlocked: true as const,
+      nodeId: n.id,
+      notice: usageNotice ?? 'The subscription quota is exhausted.',
+    };
+  }
+
   // Default-tier fallback: the node's provider is pre-built for nodeModel's
   // family, so the retry rebuilds it with the same gates for the parent model.
   const nodeFallback = defaultTierModelFallback(nodeResolved, ctx.defaultModel);
-  const resolvedNodeApiKey = resolveComposeNodeApiKey(nodeModel, ctx);
+  const resolvedNodeApiKey = nodeResolved.apiKey;
 
   // Attachment resolution: when a node declares `attachments`, resolve
   // them to ImageBlockAttachment[] using the same pipeline as the agent
@@ -174,16 +171,49 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
     model: nodeModel,
     idPrefix: `compose-${n.id}`,
     ...(resolvedNodeApiKey !== undefined ? { apiKey: resolvedNodeApiKey } : {}),
-    // Budget enforcement: per-node max_tool_rounds overrides compose-level
-    // max_tool_rounds_per_node. Omitted when unset so the fork keeps
-    // SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS (subagent.ts).
+    // Budget enforcement (#4042 Stage 3): apply the same call-site > named-agent
+    // > unlimited precedence chain the agent-tool path uses via resolveChildBudgets.
+    // The parsed fields mirror AgentInput: max_turns_explicit is true when
+    // the node sets max_turns explicitly (taking precedence over the named-agent
+    // frontmatter); max_tool_rounds / max_tool_rounds_per_node are the compose
+    // equivalents of max_tool_use_iterations / max_tool_use_iterations_explicit.
+    //
+    // Precedence for tool-use rounds:
+    //   explicit per-node max_tool_rounds
+    //   > named-agent frontmatter maxToolUseIterations
+    //   > compose-level max_tool_rounds_per_node
+    //   > unlimited (omitted from the node so the fork inherits the session default)
+    //
+    // Precedence for turns:
+    //   explicit per-node max_turns
+    //   > named-agent frontmatter maxTurns
+    //   > unlimited (omitted)
     ...(() => {
-      const effectiveRounds = n.max_tool_rounds ?? maxToolRoundsPerNode;
-      return effectiveRounds !== undefined ? { maxToolUseIterations: effectiveRounds } : {};
+      const { effectiveMaxTurns, effectiveMaxToolUseIterations } = resolveChildBudgets(
+        {
+          max_turns: n.max_turns,
+          max_turns_explicit: n.max_turns !== undefined,
+          max_tool_use_iterations: n.max_tool_rounds ?? maxToolRoundsPerNode,
+          max_tool_use_iterations_explicit: (n.max_tool_rounds ?? maxToolRoundsPerNode) !== undefined,
+        },
+        // Expose the named-agent definition fields resolveChildBudgets needs.
+        // The named agent is embedded in resolvedAgent as two forwarded fields;
+        // we pass a shape-compatible shim so the shared helper applies the
+        // same precedence logic without importing RegisteredAgent.
+        resolvedAgent.namedAgentMaxTurns !== undefined || resolvedAgent.namedAgentMaxToolUseIterations !== undefined
+          ? {
+              definition: {
+                maxTurns: resolvedAgent.namedAgentMaxTurns,
+                maxToolUseIterations: resolvedAgent.namedAgentMaxToolUseIterations,
+              },
+            } satisfies import('./subagent/child-config.helpers.js').BudgetHint
+          : undefined,
+      );
+      return {
+        ...(effectiveMaxToolUseIterations > 0 ? { maxToolUseIterations: effectiveMaxToolUseIterations } : {}),
+        ...(effectiveMaxTurns > 0 ? { maxTurns: effectiveMaxTurns } : {}),
+      };
     })(),
-    // Per-node turn budget: forwarded to the fork config as maxTurns.
-    // Omitted when unset so the node inherits the session default.
-    ...(n.max_turns !== undefined ? { maxTurns: n.max_turns } : {}),
     // Per-node filesystem overrides: cwd, extraReadRoots, writeRoots. When
     // set on the node, they refine the fork's scope. extraReadRoots is
     // forwarded as the ADDITIVE field (AgentConfig.extraReadRoots) so the
