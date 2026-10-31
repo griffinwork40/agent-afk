@@ -210,6 +210,7 @@ describe('RetryLayer — credentialFromStore: true + env var set (defence-in-dep
     );
   });
 
+
   it('swaps when credentialFromStore is true and no env var is set', async () => {
     // Positive path: credentialFromStore true, no env-var pin, store moved —
     // the swap must proceed (mirrors the base turn-start test but with the
