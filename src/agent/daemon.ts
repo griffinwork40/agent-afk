@@ -21,6 +21,8 @@ import { CronScheduler, type SchedulerOptions, type TelemetryRecord } from './da
 import type { ScheduledTask, TaskExecutor, TriggerMode } from './daemon/triggers.js';
 import { getDaemonStateDir } from '../paths.js';
 import { listenWithRecovery, closeServer } from './daemon.listen.js';
+import { acquireDaemonLock } from './daemon-instance.lock.js';
+import { startOAuthRefreshTimer, DEFAULT_OAUTH_REFRESH_INTERVAL_MS } from './daemon.oauth-timer.js';
 import { errorMessage } from '../utils/errors.js';
 import { validateScheduleCwd } from './daemon/cwd-validator.js';
 import { getSchedule, toScheduledTask } from './daemon/schedule-store.js';
@@ -164,85 +166,95 @@ const DEFAULT_PORT = 7777;
 const DEFAULT_HOST = '127.0.0.1';
 
 export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHandle> {
-  const scheduler = new CronScheduler({
-    ...(options.sessionConfig !== undefined ? { sessionConfig: options.sessionConfig } : {}),
-    ...(options.telemetryPath !== undefined ? { telemetryPath: options.telemetryPath } : {}),
-    ...(options.sessionFactory !== undefined ? { sessionFactory: options.sessionFactory } : {}),
-    ...(options.cooldownMs !== undefined ? { cooldownMs: options.cooldownMs } : {}),
-    ...(options.now !== undefined ? { now: options.now } : {}),
-    ...(options.onTaskComplete !== undefined ? { onTaskComplete: options.onTaskComplete } : {}),
-    ...(options.doneUnverifiedProbe !== undefined ? { doneUnverifiedProbe: options.doneUnverifiedProbe } : {}),
-    ...(options.onTaskTurnComplete !== undefined ? { onTaskTurnComplete: options.onTaskTurnComplete } : {}),
-    ...(options.pullPollIntervalMs !== undefined ? { pullPollIntervalMs: options.pullPollIntervalMs } : {}),
-    ...(options.queueDir !== undefined ? { queueDir: options.queueDir } : {}),
-    ...(options.bot !== undefined ? { bot: options.bot } : {}),
-    ...(options.primaryChatId !== undefined ? { primaryChatId: options.primaryChatId } : {}),
-    ...(options.primaryThreadId !== undefined ? { primaryThreadId: options.primaryThreadId } : {}),
-    ...(options.resolveNotifyChat !== undefined ? { resolveNotifyChat: options.resolveNotifyChat } : {}),
-  });
-
-  if (options.pullPollIntervalMs !== undefined && options.pullPollIntervalMs > 0) {
-    scheduler.startPullLoop();
-  }
-  // Handoff expiry + answered-handoff resumption run in EVERY trigger mode
-  // (#1416), not only pull. Off for transient instances (`--once`).
-  if (options.handoffMaintenance !== false) scheduler.startHandoffMaintenance();
-
-  registerTasksWithQuarantine(scheduler, options.tasks ?? []);
-
-  // Port file path — written on listen, deleted on stop.
-  // STALE-FILE NOTE: SIGKILL cannot be intercepted — a stale port file may
-  // survive a crash. Tool handlers report this as 'daemon-unreachable'.
+  // ── Single-instance guard ────────────────────────────────────────────────
+  // Acquire an O_EXCL PID lockfile before binding the HTTP control surface.
+  // This prevents two daemon processes from running concurrently on the same
+  // machine. If a live daemon owns the lock, `acquireDaemonLock` throws
+  // `DaemonAlreadyRunningError`. Stale locks (from SIGKILL'd daemons) are
+  // detected via process.kill(pid, 0) and cleared automatically.
+  //
+  // The lock is acquired BEFORE `listenWithRecovery` so that the ghost-socket
+  // fallback (bind alternate loopback on EADDRINUSE) can never produce two
+  // live daemons: the second start fails at the lock step, not at the bind.
+  //
+  // writePortFile:false (transient --once instances, tests) controls port-file
+  // I/O only — the single-instance lock is ALWAYS acquired regardless, so
+  // two --once ticks cannot run concurrently and bypass the guard.
   const writePortFile = options.writePortFile !== false;
+  const releaseDaemonLock = await acquireDaemonLock();
+
+  // Hoist all declarations so they are in scope both inside the try block and
+  // in the return value / stop() closure below.
+  // Contract: if any statement between lock acquisition and the end of this
+  // try block throws, the catch releases the lock before re-throwing so the
+  // next daemon start is never permanently blocked.
+  let scheduler: CronScheduler;
+  let server: ReturnType<typeof createServer>;
+  let port: number, host: string;
+  let oauthRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  // Port file path — STALE-FILE NOTE: SIGKILL cannot be intercepted, so a
+  // stale port file may survive a crash; tool handlers report 'daemon-unreachable'.
   const portFilePath = join(getDaemonStateDir('default'), 'port');
 
-  const server = createServer((req, res) => handleRequest(req, res, scheduler));
-  const { port, address: host } = await listenWithRecovery(
-    server,
-    options.port ?? DEFAULT_PORT,
-    options.host ?? DEFAULT_HOST,
-  );
+  try {
+    scheduler = new CronScheduler({
+      ...(options.sessionConfig !== undefined ? { sessionConfig: options.sessionConfig } : {}),
+      ...(options.telemetryPath !== undefined ? { telemetryPath: options.telemetryPath } : {}),
+      ...(options.sessionFactory !== undefined ? { sessionFactory: options.sessionFactory } : {}),
+      ...(options.cooldownMs !== undefined ? { cooldownMs: options.cooldownMs } : {}),
+      ...(options.now !== undefined ? { now: options.now } : {}),
+      ...(options.onTaskComplete !== undefined ? { onTaskComplete: options.onTaskComplete } : {}),
+      ...(options.doneUnverifiedProbe !== undefined ? { doneUnverifiedProbe: options.doneUnverifiedProbe } : {}),
+      ...(options.onTaskTurnComplete !== undefined ? { onTaskTurnComplete: options.onTaskTurnComplete } : {}),
+      ...(options.pullPollIntervalMs !== undefined ? { pullPollIntervalMs: options.pullPollIntervalMs } : {}),
+      ...(options.queueDir !== undefined ? { queueDir: options.queueDir } : {}),
+      ...(options.bot !== undefined ? { bot: options.bot } : {}),
+      ...(options.primaryChatId !== undefined ? { primaryChatId: options.primaryChatId } : {}),
+      ...(options.primaryThreadId !== undefined ? { primaryThreadId: options.primaryThreadId } : {}),
+      ...(options.resolveNotifyChat !== undefined ? { resolveNotifyChat: options.resolveNotifyChat } : {}),
+    });
 
-  // Write the port file so tool handlers can find the running daemon.
-  // Format: "host:port" (e.g. "127.0.0.1:7777" or "::1:7777"). The host is
-  // needed because ghost-socket recovery may bind an alternate loopback address.
-  // Backward compat: the reader falls back to localhost when only a bare port
-  // is found (pre-existing port files from before this change).
-  if (writePortFile) {
-    try {
-      atomicWriteFile(portFilePath, `${host}:${port}`, { encoding: 'utf-8', mkdirp: true, mode: 0o644 });
-    } catch {
-      // Best-effort; daemon still functional without port file
+    if (options.pullPollIntervalMs !== undefined && options.pullPollIntervalMs > 0) {
+      scheduler.startPullLoop();
     }
-  }
+    // Handoff expiry + answered-handoff resumption run in EVERY trigger mode
+    // (#1416), not only pull. Off for transient instances (`--once`).
+    if (options.handoffMaintenance !== false) scheduler.startHandoffMaintenance();
 
-  // ── Proactive OAuth token refresh timer (#1296) ──────────────────────────
-  // Problem: a long-lived daemon may hold an OAuth access token that expires
-  // hours into its run. The per-request 401-retry path (auth-retry-tier.ts)
-  // only fires on an actual API call, so if the token expires between tasks
-  // there is no request to trigger a refresh — the next task simply fails
-  // with 401 and the daemon cannot recover.
-  //
-  // Fix: when the caller injects an `oauthRefresher`, install a background
-  // setInterval that calls it periodically. The refresher is a no-op when
-  // the token is still valid (keychain.ts checks `expiresAt + REFRESH_MARGIN_MS`
-  // before hitting the network), so the interval cost is negligible.
-  //
-  // The timer is `unref()`'d so it does not prevent `process.exit()` in
-  // `--once` runs or tests that don't call `stop()`.
-  const DEFAULT_OAUTH_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
-  let oauthRefreshTimer: ReturnType<typeof setInterval> | undefined;
-  if (options.oauthRefresher !== undefined) {
-    const refresher = options.oauthRefresher;
-    const intervalMs = options.oauthRefreshIntervalMs ?? DEFAULT_OAUTH_REFRESH_INTERVAL_MS;
-    oauthRefreshTimer = setInterval(() => {
-      void refresher().catch(() => {
-        // Errors are suppressed — the per-request 401 retry remains the
-        // last-resort safety net. A failed proactive refresh is not fatal.
-        process.stderr.write('agent-afk [daemon]: proactive OAuth token refresh failed\n');
-      });
-    }, intervalMs);
-    oauthRefreshTimer.unref();
+    registerTasksWithQuarantine(scheduler, options.tasks ?? []);
+
+    server = createServer((req, res) => handleRequest(req, res, scheduler));
+    ({ port, address: host } = await listenWithRecovery(
+      server,
+      options.port ?? DEFAULT_PORT,
+      options.host ?? DEFAULT_HOST,
+    ));
+
+    // Write the port file so tool handlers can find the running daemon.
+    // Format: "host:port" (e.g. "127.0.0.1:7777" or "::1:7777"). The host is
+    // needed because ghost-socket recovery may bind an alternate loopback address.
+    // Backward compat: the reader falls back to localhost when only a bare port
+    // is found (pre-existing port files from before this change).
+    if (writePortFile) {
+      try {
+        atomicWriteFile(portFilePath, `${host}:${port}`, { encoding: 'utf-8', mkdirp: true, mode: 0o644 });
+      } catch {
+        // Best-effort; daemon still functional without port file
+      }
+    }
+
+    // Install proactive OAuth refresh timer — logic extracted to daemon.oauth-timer.ts (#1296).
+    oauthRefreshTimer = startOAuthRefreshTimer(
+      options.oauthRefresher,
+      options.oauthRefreshIntervalMs ?? DEFAULT_OAUTH_REFRESH_INTERVAL_MS,
+    );
+  } catch (startupErr) {
+    // A failure during init (CronScheduler, listenWithRecovery,
+    // startHandoffMaintenance, registerTasksWithQuarantine) would otherwise
+    // leave the lock file on disk, causing DaemonAlreadyRunningError on the
+    // next start attempt against a recycled or non-existent PID.
+    await releaseDaemonLock?.();
+    throw startupErr;
   }
 
   return {
@@ -286,6 +298,9 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
         }
       }
       await closeServer(server);
+      // Release the single-instance lock last so the port file is already
+      // gone before a new daemon start can acquire the lock and rebind.
+      await releaseDaemonLock();
     },
   };
 }
