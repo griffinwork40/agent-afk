@@ -4,6 +4,7 @@ import { listCards, getCard, listRegressedCards, renderMarkdown } from '../../..
 import type { RegressedCardEntry } from '../../../improve/scan/card-writer.js';
 import { triageCard, TriageError } from '../../../improve/triage.js';
 import type { CardStatus } from '../../../improve/schemas.js';
+import { palette } from '../../palette.js';
 
 const VALID_STATUSES: readonly CardStatus[] = ['open', 'deferred', 'resolved'];
 
@@ -34,7 +35,7 @@ function renderRegressedList(opts: {
 
   if (rows.length === 0) {
     console.log(
-      'No regressed cards found (no resolved/deferred card has fired since its latest triage note).',
+      palette.dim('No regressed cards found (no resolved/deferred card has fired since its latest triage note).'),
     );
     return;
   }
@@ -43,8 +44,8 @@ function renderRegressedList(opts: {
     'SLUG                                              | PATTERN              | SEV    | STATUS    | N    | LAST SEEN                | LATEST NOTE';
   const sep = '-'.repeat(header.length);
   console.log(`${rows.length} regressed card(s): triaged, then fired again afterwards.`);
-  console.log(header);
-  console.log(sep);
+  console.log(palette.heading(header));
+  console.log(palette.dim(sep));
   for (const e of rows) {
     console.log(
       [
@@ -102,15 +103,15 @@ export function registerCardsSubcommand(improve: Command): void {
           }
 
           if (entries.length === 0) {
-            console.log('No failure cards found.');
+            console.log(palette.dim('No failure cards found.'));
             return;
           }
 
           const header =
             'SLUG                                              | PATTERN              | SEV    | STATUS    | N    | LAST SEEN';
           const sep = '-'.repeat(header.length);
-          console.log(header);
-          console.log(sep);
+          console.log(palette.heading(header));
+          console.log(palette.dim(sep));
           for (const e of entries) {
             console.log(
               [
@@ -137,7 +138,7 @@ export function registerCardsSubcommand(improve: Command): void {
       try {
         const card = getCard(slug);
         if (!card) {
-          console.error(`Card not found: ${slug}`);
+          console.error(palette.error(`Card not found: ${slug}`));
           process.exit(1);
         }
         if (opts.json) {
@@ -163,7 +164,7 @@ export function registerCardsSubcommand(improve: Command): void {
           if (opts.status !== undefined) {
             if (!VALID_STATUSES.includes(opts.status as CardStatus)) {
               console.error(
-                `Invalid --status: '${opts.status}'. Must be one of: ${VALID_STATUSES.join(', ')}`,
+                palette.error(`Invalid --status: '${opts.status}'. Must be one of: ${VALID_STATUSES.join(', ')}`),
               );
               process.exit(2);
             }
@@ -192,7 +193,7 @@ export function registerCardsSubcommand(improve: Command): void {
           console.log(`  md:   ${outcome.markdownPath}`);
         } catch (err) {
           if (err instanceof TriageError) {
-            console.error(`triage failed [${err.code}]: ${err.message}`);
+            console.error(palette.error(`triage failed [${err.code}]: ${err.message}`));
             process.exit(err.code === 'card-not-found' ? 1 : 2);
           }
           handleCommandError(err);

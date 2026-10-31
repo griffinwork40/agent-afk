@@ -95,6 +95,14 @@ jobs:
       - name: Audit chalk discipline (no raw chalk styling outside the palette)
         run: pnpm audit:chalk:check
 
+      - name: Audit console output discipline (no raw console.log/error/warn bypassing palette)
+        # `audit-console.ts` enforces that console output in src/cli/commands/ and
+        # src/telegram/ routes through src/cli/palette.ts. Raw console calls bypass
+        # palette formatting and break the single source of truth for output discipline.
+        # The gate is a one-way ratchet: new violations fail CI; existing ones can only
+        # decrease. Regenerate the baseline with `pnpm audit:console:update`.
+        run: pnpm audit:console:check
+
       - name: Audit terminal-width discipline (no raw process.stdout.columns outside terminal-size.ts)
         # `check-terminal-width.ts` enforces that terminal width is only read
         # through `getTerminalWidth()` from `src/cli/terminal-size.ts`. Raw
@@ -163,6 +171,13 @@ jobs:
         # backstop that seals orphaned traces, and writer.test.ts calls the
         # sealer directly, so the existing suite would not catch the fork.
         run: pnpm audit:module-state:check
+
+      - name: Audit POSIX portability guard (ratchet)
+        # tests/posix-guard.test.ts enforces static rules: resolveShell()
+        # not /bin/sh; path.join(os.tmpdir()) not /-rooted literals;
+        # path.posix.* for POSIX paths; never skip tests on win32.
+        # Baseline: .posix-guard-baseline.json (growth-only ratchet).
+        run: pnpm audit:posix:check
 
       - name: Audit new copy-paste clones (jscpd, ratchet against base ref)
         # Fails only on NEW clones whose fragments overlap lines ADDED in
