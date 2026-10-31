@@ -322,7 +322,8 @@ export async function executeCommand(
       if (code === 2) {
         // Explicit block — use stderr as the reason.
         const reason = stderrBuf.trim().slice(0, 500) || 'hook blocked operation';
-        settle({ decision: { decision: 'block', reason } });
+        const { ruleId } = parseStdoutDecision(stdoutBuf);
+        settle({ decision: { decision: 'block', reason, ...(ruleId !== undefined ? { ruleId } : {}) } });
         return;
       }
 
@@ -433,6 +434,12 @@ function parseStdoutDecision(stdout: string): HookDecision {
   // `reason`
   if (typeof obj['reason'] === 'string') {
     decision.reason = obj['reason'];
+  }
+
+  // Additive metadata from user-authored command hooks; never affects control flow.
+  // Capped at 128 chars to prevent unbounded strings from hook stdout reaching traces.
+  if (typeof obj['ruleId'] === 'string') {
+    decision.ruleId = obj['ruleId'].slice(0, 128);
   }
 
   // `hookSpecificOutput.additionalContext` → injectContext

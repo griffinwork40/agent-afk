@@ -13,6 +13,9 @@ import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { executeCommand } from './command-executor.js';
 import type { HookContext } from '../hooks.js';
+import { createHookRegistry } from '../hook-registry.js';
+import { dispatchSessionStart } from '../session/hooks-dispatch.js';
+import { InMemoryTraceWriter } from '../trace/writer.js';
 
 // Windows: genuinely POSIX-only — hooks execute user-authored #!/bin/sh scripts; no Windows shell equivalent (#703)
 describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', () => {
@@ -84,6 +87,34 @@ describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', 
       );
       expect(result.decision.decision).toBe('block');
       expect(result.decision.reason).toBe('blocked!');
+    });
+
+    it.each(['block', 'approve'])('preserves optional ruleId on %s command-hook decisions', async decision => {
+      const result = await executeCommand(makeOpts(`echo '${JSON.stringify({ decision, ruleId: 'command.policy' })}'`));
+      expect(result.decision).toEqual({ decision, ruleId: 'command.policy' });
+    });
+
+    it.each([null, 17, {}, []])('ignores non-string ruleId %j', async ruleId => {
+      const result = await executeCommand(makeOpts(`echo '${JSON.stringify({ decision: 'approve', ruleId })}'`));
+      expect(result.decision).toEqual({ decision: 'approve' });
+    });
+
+    it('forwards a real command-hook ruleId through registry and session trace', async () => {
+      const registry = createHookRegistry();
+      registry.register('SessionStart', async context => {
+        const result = await executeCommand(makeOpts('echo \'{"decision":"block","ruleId":"command.e2e"}\'', context));
+        return result.decision;
+      });
+      const writer = new InMemoryTraceWriter();
+      await expect(dispatchSessionStart(registry, { event: 'SessionStart' }, { traceWriter: writer }))
+        .rejects.toMatchObject({ ruleId: 'command.e2e' });
+      expect(writer.events).toHaveLength(1);
+      expect(writer.events[0]).toMatchObject({ kind: 'hook_decision', payload: { decision: 'block', ruleId: 'command.e2e' } });
+    });
+
+    it('preserves ruleId on exit 2 without changing stderr block semantics', async () => {
+      const result = await executeCommand(makeOpts('echo \'{"decision":"approve","ruleId":"command.exit-block"}\'; echo denied >&2; exit 2'));
+      expect(result.decision).toEqual({ decision: 'block', reason: 'denied', ruleId: 'command.exit-block' });
     });
 
     it('hookSpecificOutput.additionalContext → injectContext', async () => {
