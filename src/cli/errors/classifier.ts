@@ -21,6 +21,7 @@ import { BudgetExceededError, HookBlockedError, TimeoutError, UnsupportedProvide
 import { isRateLimitError, isNetworkError } from '../../utils/error-classifiers.js';
 import { usageLimitInfoOf } from '../../agent/usage/usage-limit-info.js';
 import { describeUsageLimit } from '../../agent/usage/usage-formatter.js';
+import { DaemonAlreadyRunningError } from '../../agent/daemon-instance.lock.js';
 
 type ErrorKind =
   | 'auth'
@@ -33,6 +34,7 @@ type ErrorKind =
   | 'timeout'
   | 'network'
   | 'not_git_repo'
+  | 'daemon_already_running'
   | 'unknown';
 
 export interface ClassifiedError {
@@ -49,6 +51,22 @@ export interface ClassifiedError {
  * Never throws.
  */
 export function classifyError(err: unknown): ClassifiedError {
+  // 0. DaemonAlreadyRunningError — exit 2 so scripts/service managers can
+  // distinguish "already running" from a crash (exit 1). ownerPid is surfaced
+  // in the hint so the operator knows which process to stop.
+  if (err instanceof DaemonAlreadyRunningError) {
+    const pidHint = err.ownerPid !== null
+      ? `Daemon PID ${err.ownerPid} is already running. Stop it with \`afk daemon stop\` before starting a new one.`
+      : 'Another afk daemon is already running. Stop it with `afk daemon stop` before starting a new one.';
+    return {
+      kind: 'daemon_already_running',
+      userMessage: err.message,
+      hint: pidHint,
+      exitCode: 2,
+      raw: err,
+    };
+  }
+
   // 1. BudgetExceededError
   if (err instanceof BudgetExceededError) {
     return {

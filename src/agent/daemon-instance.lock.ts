@@ -100,12 +100,27 @@ export async function acquireDaemonLock(
   platform: string = process.platform,
 ): Promise<() => Promise<void>> {
   // Ensure the parent directory exists before trying to open the lock file.
+  // Note: recursive:true already suppresses EEXIST — the .catch() was removed
+  // so that real errors (EACCES, ENOSPC) propagate instead of being silently
+  // swallowed and later misclassified as lock contention.
   const parentDir = join(lockPath, '..');
-  await fs.mkdir(parentDir, { recursive: true }).catch(() => {});
+  await fs.mkdir(parentDir, { recursive: true });
 
   const handle = await tryOpen(lockPath, platform);
 
-  await handle.writeFile(String(process.pid), 'utf-8');
+  // Contract: the fd from tryOpen must be closed regardless of whether
+  // writeFile succeeds. If writeFile throws (ENOSPC, EROFS, EINTR), we:
+  //   1. Close the fd so it doesn't leak.
+  //   2. Unlink the empty lock file so the next start is not permanently
+  //      blocked by an uninitialised lock.
+  //   3. Re-throw so the caller learns the acquisition failed.
+  try {
+    await handle.writeFile(String(process.pid), 'utf-8');
+  } catch (writeErr) {
+    await handle.close().catch(() => {});
+    await fs.unlink(lockPath).catch(() => {});
+    throw writeErr;
+  }
   await handle.close();
 
   let released = false;

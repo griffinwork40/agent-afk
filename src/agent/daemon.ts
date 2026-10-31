@@ -177,13 +177,11 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   // fallback (bind alternate loopback on EADDRINUSE) can never produce two
   // live daemons: the second start fails at the lock step, not at the bind.
   //
-  // writePortFile:false (transient --once instances, tests) skips the guard
-  // to avoid spurious contention with the long-running service daemon.
+  // writePortFile:false (transient --once instances, tests) controls port-file
+  // I/O only — the single-instance lock is ALWAYS acquired regardless, so
+  // two --once ticks cannot run concurrently and bypass the guard.
   const writePortFile = options.writePortFile !== false;
-  let releaseDaemonLock: (() => Promise<void>) | undefined;
-  if (writePortFile) {
-    releaseDaemonLock = await acquireDaemonLock();
-  }
+  const releaseDaemonLock = await acquireDaemonLock();
 
   // Hoist all declarations so they are in scope both inside the try block and
   // in the return value / stop() closure below.
@@ -302,7 +300,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
       await closeServer(server);
       // Release the single-instance lock last so the port file is already
       // gone before a new daemon start can acquire the lock and rebind.
-      if (releaseDaemonLock !== undefined) await releaseDaemonLock();
+      await releaseDaemonLock();
     },
   };
 }
