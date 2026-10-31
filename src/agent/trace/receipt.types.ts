@@ -38,6 +38,8 @@ export interface RunReceipt {
   tracePath: string;
   /** Logical session id, when the session exposed one (may be absent). */
   sessionId?: string;
+  /** Absolute session working directory when known; omitted otherwise. */
+  cwd?: string;
   /** SessionEnd reason that triggered this receipt ('close' | 'reset' | 'error'). */
   endReason?: string;
   status: 'succeeded' | 'failed' | 'cancelled' | 'unknown';
@@ -107,6 +109,8 @@ export interface ReceiptMeta {
   tracePath: string;
   witnessLabel: string;
   sessionId?: string;
+  /** Absolute session working directory; threaded in from {@link writeRunReceipt}. */
+  cwd?: string;
   endReason?: string;
   /** Override "now" for deterministic tests. */
   now?: Date;
