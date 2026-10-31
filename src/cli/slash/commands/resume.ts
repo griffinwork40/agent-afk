@@ -283,9 +283,9 @@ export const resumeCmd: SlashCommand = {
     try { currentRepoRoot = resolveRepoRootSync({ cwd: currentCwd, mode: 'git-common-dir' }); } catch { /* not a git repo */ }
     const nonDaemon = entries.filter((e) => e.source !== 'daemon');
     const repoRootCache = new Map<string, string | undefined>();
-    // TODO(#4321): `resolveRepoRootSync` calls `execFileSync` and blocks the
-    // event loop for up to ~5 s per unique `cwd` when a legacy session has no
-    // stored `repoRoot` and git must be spawned to resolve it. For the typical
+    // TODO(#4321): Both the current-cwd lookup above and legacy lookups below
+    // call `resolveRepoRootSync`/`execFileSync`, blocking the event loop for up
+    // to ~5 s per lookup (legacy cwds are cached for this listing). For the typical
     // case (a handful of recent sessions, most with a stored `repoRoot`) the
     // synchronous path is imperceptible. A future improvement is to resolve
     // unknown roots asynchronously (e.g. via `resolveRepoRoot`) so that
