@@ -1,10 +1,9 @@
 /** Bounded read-only adapters for the landed artifact registry (#1415). */
 import { open, realpath } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
-import { z } from 'zod';
+import { z, ZodError } from 'zod';
 import { artifactGet, artifactList } from '../../artifact-registry/store.js';
 import { getArtifactStoreDir } from '../../../paths.js';
-import { errorMessage } from '../../../utils/errors.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
 
@@ -78,6 +77,16 @@ async function authorizeRecord(
   return record;
 }
 
+function safeHandlerError(prefix: string, err: unknown): string {
+  if (err instanceof ZodError) return `${prefix}: invalid artifact record`;
+  if (err instanceof Error && err.message === 'Artifact size mismatch') return `${prefix}: ${err.message}`;
+  if (err instanceof Error && (err.message === 'Invalid artifact blob reference' ||
+      err.message === 'Invalid artifact blob location' ||
+      err.message === 'artifact not accessible' ||
+      err.message.startsWith('Artifact index exceeds tool read limit'))) return `${prefix}: ${err.message}`;
+  return `${prefix}: artifact read failed`;
+}
+
 async function readSlice(record: Metadata, offset: number, limit: number) {
   const fh = await open(record.uri, 'r');
   try {
@@ -112,7 +121,7 @@ export function createArtifactHandlers(opts: ArtifactHandlerOptions = {}): Map<s
       const record = raw ? await authorizeRecord(raw, context, opts) : null;
       return { content: JSON.stringify(record) };
     } catch (err) {
-      return { content: `artifact_get: ${errorMessage(err)}`, isError: true };
+      return { content: safeHandlerError('artifact_get', err), isError: true };
     }
   });
   handlers.set('artifact_list', async (input, signal, context) => {
@@ -137,7 +146,7 @@ export function createArtifactHandlers(opts: ArtifactHandlerOptions = {}): Map<s
       }
       return { content: JSON.stringify({ artifacts: records, count: records.length, truncated: truncated || candidates.length === 1000 }) };
     } catch (err) {
-      return { content: `artifact_list: ${errorMessage(err)}`, isError: true };
+      return { content: safeHandlerError('artifact_list', err), isError: true };
     }
   });
   handlers.set('artifact_read', async (input, signal, context) => {
@@ -150,7 +159,7 @@ export function createArtifactHandlers(opts: ArtifactHandlerOptions = {}): Map<s
       signal.throwIfAborted();
       return { content: JSON.stringify(await readSlice(record, offset, limit)) };
     } catch (err) {
-      return { content: `artifact_read: ${errorMessage(err)}`, isError: true };
+      return { content: safeHandlerError('artifact_read', err), isError: true };
     }
   });
   return handlers;
