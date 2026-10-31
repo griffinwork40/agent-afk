@@ -1,4 +1,5 @@
 import { TELEGRAM_MAX_CHARS } from './elicitation-choice-list.js';
+import { palette } from '../cli/palette.js';
 
 // Invariant: Telegram rejects messages with malformed HTML. Every chunk emitted
 // by splitLongPrompt must be self-contained valid HTML — open tags closed before
@@ -172,10 +173,7 @@ export function sendChoiceMessages(
       .sendMessage(chatId, keyboardText, { parse_mode: 'HTML', ...threadOpts, ...keyboardOpts })
       .then(() => undefined)
       .catch((err: unknown) => {
-        console.warn(
-          '[elicitation-handler] keyboard sendMessage failed; declining elicitation for chat',
-          chatId,
-          err,
+        console.warn(palette.warning(`[elicitation-handler] keyboard sendMessage failed; declining elicitation for chat ${chatId}: ${err instanceof Error ? err.message : String(err)}`),
         );
         onFailure();
       });
@@ -193,10 +191,7 @@ export function sendChoiceMessages(
   };
 
   return sendPre().then(sendKeyboard).catch((err: unknown) => {
-    console.warn(
-      '[elicitation-handler] pre-message sendMessage failed; declining elicitation for chat',
-      chatId,
-      err,
+    console.warn(palette.warning(`[elicitation-handler] pre-message sendMessage failed; declining elicitation for chat ${chatId}: ${err instanceof Error ? err.message : String(err)}`),
     );
     onFailure();
   });

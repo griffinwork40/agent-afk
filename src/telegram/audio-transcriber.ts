@@ -23,6 +23,8 @@
  * @module telegram/audio-transcriber
  */
 
+import { palette } from '../cli/palette.js';
+
 /** Result of a transcription attempt. */
 export type TranscribeResult =
   | { status: 'ok'; text: string }
@@ -201,7 +203,7 @@ export function createTranscriber(
   const rawTimeout = env.AFK_TRANSCRIBE_TIMEOUT_MS?.trim();
   const timeoutMs = rawTimeout ? parseInt(rawTimeout, 10) : 60_000;
   if (rawTimeout && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
-    console.warn(`[audio-transcriber] AFK_TRANSCRIBE_TIMEOUT_MS="${rawTimeout}" is not a valid positive integer; falling back to 60 000 ms`);
+    console.warn(palette.warning(`[audio-transcriber] AFK_TRANSCRIBE_TIMEOUT_MS="${rawTimeout}" is not a valid positive integer; falling back to 60 000 ms`));
   }
   const resolvedTimeout =
     Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;

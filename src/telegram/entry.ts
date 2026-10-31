@@ -83,7 +83,7 @@ export function installCrashHandlers(): void {
  */
 function recordTelegramStartup(daemonVersion: string): void {
   if (!writeServiceStartupSidecar('telegram', daemonVersion)) {
-    console.warn('warn: failed to write service startup sidecar — `afk service status` may not show the running version');
+    console.warn('warn: failed to write service startup sidecar — `afk service status` may not show the running version'); // console-ok
   }
 }
 
@@ -177,7 +177,7 @@ export async function main(): Promise<void> {
   }
   const handle = identity.username ? `@${identity.username}` : identity.firstName;
 
-  console.log('');
+  console.log(''); // console-ok
   console.log(palette.info(`🤖 Starting Agent AFK Telegram Bot as ${handle} (id ${identity.id})`));
   console.log(palette.info(`📡 Model: ${config.model} · Provider: ${providerName}`));
   console.log(palette.info(`🔒 Allowlist: ${allowedChatIds.size} chat ID(s)`));

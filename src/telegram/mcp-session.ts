@@ -13,6 +13,7 @@ import { McpManager, loadMcpConfig, getMcpConfigPath } from '../agent/mcp/index.
 import { loadImportFromConfig, resolveImportedRoots } from '../config/import-sources.js';
 import { emitSessionPhase } from '../agent/trace/emit.js';
 import type { TraceWriter } from '../agent/trace/index.js';
+import { palette } from '../cli/palette.js';
 
 export interface LoadTelegramMcpManagerOptions {
   /**
@@ -47,14 +48,14 @@ export async function loadTelegramMcpManager(
   });
   const enabledCount = Object.values(loaded.mcpServers).filter((s) => !s.disabled).length;
   if (enabledCount === 0) {
-    for (const w of loaded.warnings) console.warn(`[mcp] ${w}`);
+    for (const w of loaded.warnings) console.warn(palette.warning(`[mcp] ${w}`));
     return undefined;
   }
 
   const sourcesLabel = loaded.sources.length === 1
     ? loaded.sources[0]
     : `${loaded.sources.length} source(s)`;
-  console.log(`  mcp: ${enabledCount} server(s) from ${sourcesLabel ?? getMcpConfigPath()}`);
+  console.log(palette.dim(`  mcp: ${enabledCount} server(s) from ${sourcesLabel ?? getMcpConfigPath()}`));
 
   const mcpStartedAt = Date.now();
   void emitSessionPhase(opts.traceWriter, {
@@ -81,7 +82,7 @@ export async function loadTelegramMcpManager(
   // warnings (mirrors the REPL's `connectReplMcp` pattern). Callers that
   // supply `sendWarning` route these to the Telegram chat; others fall back
   // to stderr so failures are never silently discarded.
-  const warn = opts.sendWarning ?? ((msg: string) => console.warn(msg));
+  const warn = opts.sendWarning ?? ((msg: string) => console.warn(palette.warning(msg)));
   for (const s of manager.getServerStates()) {
     if (s.status === 'error') {
       warn(`[mcp] server "${s.serverName}" failed to connect: ${s.error ?? 'unknown error'}`);

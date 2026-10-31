@@ -19,6 +19,7 @@ import type { IAgentSession } from '../agent/types.js';
 import type { SessionData } from './session-manager.js';
 import { clearElicitationRoute } from './elicitation-route-registry.js';
 import type { SessionStats } from '../cli/slash/types.js';
+import { palette } from '../cli/palette.js';
 
 /**
  * Close and remove sessions from the live `sessions` map whose matching
@@ -60,7 +61,7 @@ export async function evictIdleSessions(
     // Skip if the session became active since collection.
     if (currentSession.state !== 'idle') continue;
     try { await session.close(); } catch (err) {
-      console.error('[session-manager] idle-evict close error for', key, err);
+      console.error(palette.error(`[session-manager] idle-evict close error for ${key}: ${err instanceof Error ? err.message : String(err)}`));
     }
     // Re-verify identity after close() — it yields to the event loop and a new
     // session for this key may have been inserted concurrently (#1715).

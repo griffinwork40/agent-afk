@@ -25,6 +25,7 @@ import { loadSessionsFromDisk, saveSessionsToDisk } from './session-manager.disk
 import { listChatSessionsImpl, switchToSessionImpl } from './session-manager.switcher.js';
 import { buildAndRegisterSession } from './session-manager.session-builder.js';
 import { beginConversationResetImpl, finishConversationResetImpl, resetSessionImpl } from './session-manager.reset.js';
+import { palette } from '../cli/palette.js';
 
 /**
  * Public methods that used to take a bare `chatId: number` now take a route
@@ -259,7 +260,7 @@ export class SessionManager {
     // Periodic eviction keeps the sessionData AND idle-session maps bounded
     // during long uptime (#1657, #1662). Fire-and-forget: the async return is
     // intentionally not awaited — the timer is best-effort housekeeping.
-    this._evictionTimer = setInterval(() => { this._evictStaleSessionData().catch(err => console.error('[session-manager] eviction cycle error:', err)); }, 60 * 60 * 1000); this._evictionTimer.unref();
+    this._evictionTimer = setInterval(() => { this._evictStaleSessionData().catch(err => console.error(palette.error(`[session-manager] eviction cycle error: ${err instanceof Error ? err.message : String(err)}`))); }, 60 * 60 * 1000); this._evictionTimer.unref();
   }
 
   /**
@@ -383,9 +384,7 @@ export class SessionManager {
         // assumes the conversation is resumable from `afk i --resume`.
         if (!this.autosaveFailureLogged.has(key)) {
           this.autosaveFailureLogged.add(key);
-          console.error(
-            `[session-manager] autosave failed for chat ${route.chatId} — conversation may not be resumable:`,
-            err,
+          console.error(palette.error(`[session-manager] autosave failed for chat ${route.chatId} — conversation may not be resumable: ${err instanceof Error ? err.message : String(err)}`),
           );
         }
       }
@@ -755,7 +754,7 @@ export class SessionManager {
       ...this.sessionData.keys(),
     ]);
     for (const key of allKeys) clearElicitationRouteForKey(key, this.sessionStats, this.sessionData);
-    await Promise.all([...this.sessions.values()].map(s => s.close().catch(e => console.error('Error closing session:', e))));
+    await Promise.all([...this.sessions.values()].map(s => s.close().catch(e => console.error(palette.error(`Error closing session: ${e instanceof Error ? e.message : String(e)}`)))));
     this.sessions.clear();
   }
 
