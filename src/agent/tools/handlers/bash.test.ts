@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 
 const isWin32 = process.platform === 'win32';
-import { promises as fs, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { promises as fs, mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -1065,6 +1065,38 @@ describe('bash path-containment scan — C4 (#354)', () => {
     expect(escapeWarnings()).toHaveLength(0);
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('hi');
+  });
+
+  it('does NOT warn and command executes successfully for a credential path under bypass (allowAll)', async () => {
+    // Counterpart to path-policy.scope.test.ts "floor then actor roots / write:
+    // denies floor under bypass, unconfined and explicitly granted scope" which
+    // tests decidePathAccess directly. Here we verify the BASH HANDLER advisory
+    // scan (wouldBeRestricted, not decidePathAccess) respects bypass: the scan
+    // is roots-only and has no credential floor, so bypass suppresses it and
+    // the command runs — credential enforcement for bash remains out-of-scope
+    // for the advisory scan (documented in docs/decisions/0001-bash-tool-path-containment.md).
+    const fakeHome = realpathSync(mkdtempSync(join(tmpdir(), 'bash-cred-bypass-')));
+    vi.stubEnv('HOME', fakeHome);
+    vi.stubEnv('USERPROFILE', fakeHome);
+    const sshDir = join(fakeHome, '.ssh');
+    mkdirSync(sshDir, { recursive: true });
+    writeFileSync(join(sshDir, 'id_ed25519'), 'fake-key');
+    try {
+      const handler = createBashHandler('default', root);
+      const credPath = join(fakeHome, '.ssh', 'id_ed25519');
+      const result = await handler(
+        { command: `echo hi ${credPath}` },
+        createSignal(),
+        { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: true },
+      );
+      // No escape warning — bypass suppresses the roots-advisory scan entirely.
+      expect(escapeWarnings()).toHaveLength(0);
+      // Command executes successfully; advisory does NOT block.
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('hi');
+    } finally {
+      try { rmSync(fakeHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   });
 
   it('does NOT warn when the command references only in-root paths', async () => {

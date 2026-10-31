@@ -1,0 +1,3280 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`pre-migration command verdict golden receipts (#3846) >  1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > bash -c 'npm publish' 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [npm-publish] — publishes a package to the npm registry, externally irreversible once consumed by dependents; verify changelog, version, and generated docs are current before publishing.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "npm-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > cargo --locked publish --dry-run 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "approve",
+    "reason": "release-boundary observe-only: sync-boundary command [cargo-publish] (dry-run: not blocked)",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "cargo-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > cargo --locked publish 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [cargo-publish] — publishes a crate to crates.io, externally irreversible (crates.io does not allow un-publishing); verify Cargo.toml version and changelog.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "cargo-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > cargo publish 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [cargo-publish] — publishes a crate to crates.io, externally irreversible (crates.io does not allow un-publishing); verify Cargo.toml version and changelog.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "cargo-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > cat <(ls) 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > cat > report <<'EOF'
+npm publish
+git reset --hard
+EOF 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git reset --hard'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > cat > report <<EOF
+$(git reset --hard)
+EOF 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-reset-hard",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git reset --hard'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > cat data | python3 -m json.tool 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "pipe-to-shell (RCE via piped interpreter); to parse JSON use \`| jq\` or \`gh ... --jq <expr>\` instead",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > cat file.txt | grep foo 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > cat file.txt 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > cat installer | bash 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "pipe-to-shell (RCE via piped interpreter); to parse JSON use \`| jq\` or \`gh ... --jq <expr>\` instead",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched '| bash'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > command git reset --hard 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-reset-hard",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git reset --hard'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > curl --data @body.json https://example.com 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-data-flag]",
+  },
+  "destructiveIds": [
+    "curl-data-flag",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "curl data/form payload",
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-data-flag]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'curl --data'",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-data-flag]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > curl --request=DELETE https://example.com 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "curl write method (POST/PUT/PATCH/DELETE)",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > curl -I https://example.com -X "POST" 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "curl write method (POST/PUT/PATCH/DELETE)",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-mutation-guard: curl write method (POST/PUT/PATCH/DELETE)",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > curl -I https://example.com 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > curl -X POST https://example.com 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-write-method]",
+  },
+  "destructiveIds": [
+    "curl-write-method",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "curl write method (POST/PUT/PATCH/DELETE)",
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-write-method]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched '-X POST'",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-write-method]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > curl -XPOST https://example.com 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-write-method]",
+  },
+  "destructiveIds": [
+    "curl-write-method",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "curl write method (POST/PUT/PATCH/DELETE)",
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-write-method]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched '-XPOST'",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-write-method]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > curl -d "{}" https://example.com 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-data-flag]",
+  },
+  "destructiveIds": [
+    "curl-data-flag",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "curl data/form payload",
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-data-flag]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'curl -d'",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-data-flag]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > curl -o out https://example.com 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "curl/wget output-to-file",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > dd if=/dev/zero of=/dev/null 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "filesystem mutation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'dd if='",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > dd if=image of=/dev/sda 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [dd-to-device] — writing directly to a block device is irrecoverable; verify the target path is a file, not a device node.",
+  },
+  "destructiveIds": [
+    "dd-to-device",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "filesystem mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [dd-to-device] — writing directly to a block device is irrecoverable; verify the target path is a file, not a device node.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'dd if='",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [dd-to-device] — writing directly to a block device is irrecoverable; verify the target path is a file, not a device node.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > docker image push image 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [docker-push] — pushes a container image to a registry, externally irreversible once pulled by consumers; verify image tag and contents.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "docker-push",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > docker push image 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [docker-push] — pushes a container image to a registry, externally irreversible once pulled by consumers; verify image tag and contents.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "docker-push",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > docker rm -f app 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [docker-destructive]",
+  },
+  "destructiveIds": [
+    "docker-destructive",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "filesystem mutation",
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [docker-destructive]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'rm '",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [docker-destructive]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > docker system prune -af 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [docker-destructive]",
+  },
+  "destructiveIds": [
+    "docker-destructive",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [docker-destructive]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [docker-destructive]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > echo "$(git reset --hard)" 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-reset-hard",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git reset --hard'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > echo 'git reset --hard' 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-reset-hard",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git reset --hard'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > echo \`git push --force\` 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-push-force",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git push --force'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > echo boot > /dev/sda 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [redirect-to-block-device] — shell redirect to a block device overwrites raw sectors irrecoverably; redirect to a file path instead.",
+  },
+  "destructiveIds": [
+    "redirect-to-block-device",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "output redirection to a file (\`>\`/\`>>\`)",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [redirect-to-block-device] — shell redirect to a block device overwrites raw sectors irrecoverably; redirect to a file path instead.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched ' > '",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [redirect-to-block-device] — shell redirect to a block device overwrites raw sectors irrecoverably; redirect to a file path instead.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > echo hello 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > echo platform retrieval 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > echo x &>file 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "output redirection to a file (\`>\`/\`>>\`)",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > echo x >> file 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "output redirection to a file (\`>\`/\`>>\`)",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched ' >> '",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > echo x>file 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "output redirection to a file (\`>\`/\`>>\`)",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > env -u X git push 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'git push'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > find . -delete 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [find-delete]",
+  },
+  "destructiveIds": [
+    "find-delete",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "find -delete (file removal)",
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [find-delete]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-mutation-guard: find -delete (file removal)",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [find-delete]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > find . -exec 'rm' {} + 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "find -exec with mutating verb",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'rm'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > find . -name "*.ts" 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > g=git; $g push 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > gem push app.gem 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [gem-push] — pushes a gem to RubyGems, externally irreversible once consumed; verify gemspec version and changelog.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "gem-push",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > gh pr create --title "npm publish" --body "terraform destroy" 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "gh write operation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > gh pr view 1 --json title | jq . 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > gh release create v1 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "gh write operation",
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [gh-release-create] — creates a GitHub release, externally visible and triggering downstream workflows; verify release notes and tag.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "gh-release-create",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git --no-pager stash drop 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-stash-mutating",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git stash mutation (only \`stash list\`/\`stash show\` allowed)",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [git-stash-mutating]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git -C repo reset --hard 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-reset-hard",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git branch -D feature 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [git-branch-force-delete]",
+  },
+  "destructiveIds": [
+    "git-branch-force-delete",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git branch delete/rename",
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [git-branch-force-delete]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [git-branch-force-delete]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git branch -d feature 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git branch delete/rename",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git clean --force -x 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview, then move files to a quarantine directory inside the workspace (e.g. ".afk/quarantine/") and report the exact list to the operator instead of deleting. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-clean-force",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview, then move files to a quarantine directory inside the workspace (e.g. ".afk/quarantine/") and report the exact list to the operator instead of deleting. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview, then move files to a quarantine directory inside the workspace (e.g. ".afk/quarantine/") and report the exact list to the operator instead of deleting. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git clean -fd 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview, then move files to a quarantine directory inside the workspace (e.g. ".afk/quarantine/") and report the exact list to the operator instead of deleting. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-clean-force",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview, then move files to a quarantine directory inside the workspace (e.g. ".afk/quarantine/") and report the exact list to the operator instead of deleting. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview, then move files to a quarantine directory inside the workspace (e.g. ".afk/quarantine/") and report the exact list to the operator instead of deleting. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git commit -F - <<'EOF'
+npm publish
+git reset --hard
+EOF 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git reset --hard'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git commit -m "--dry-run"; npm publish 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [npm-publish] — publishes a package to the npm registry, externally irreversible once consumed by dependents; verify changelog, version, and generated docs are current before publishing.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "npm-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'git commit'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git commit -m "git reset --hard; npm publish" 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git reset --hard'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git config --global --get user.name 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git config user.name "Foo" 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git config set (\`<key> <value>\`; only reads allowed)",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git diff HEAD 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git help push 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git log --format=%H\\ x 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git log --grep="git push" --oneline 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'git push'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git log --oneline -5 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git log -S push 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git push --follow-tags 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "approve",
+    "reason": "release-boundary observe-only: sync-boundary command [git-push-tags]",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "git-push-tags",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'git push'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git push --force origin main 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-push-force",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git push --force'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git push --force-with-lease 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git push --force'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git push --mirror 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "approve",
+    "reason": "release-boundary observe-only: sync-boundary command [git-push-mirror]",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "git-push-mirror",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'git push'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git push --tags 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "approve",
+    "reason": "release-boundary observe-only: sync-boundary command [git-push-tags]",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "git-push-tags",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'git push'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git push -f 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-push-force",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git push -f'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git push origin main 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'git push'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git reset --hard HEAD 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-reset-hard",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git reset --hard'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git stash 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-stash-mutating",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git stash mutation (only \`stash list\`/\`stash show\` allowed)",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [git-stash-mutating]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git stash branch rescue 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-stash-mutating",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git stash mutation (only \`stash list\`/\`stash show\` allowed)",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [git-stash-mutating]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git stash create 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git stash mutation (only \`stash list\`/\`stash show\` allowed)",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git stash list 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git stash pop 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-stash-mutating",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git stash mutation (only \`stash list\`/\`stash show\` allowed)",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [git-stash-mutating]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git stash push 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-stash-mutating",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git stash mutation (only \`stash list\`/\`stash show\` allowed)",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [git-stash-mutating]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git stash show stash@{0} 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git stash store 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-stash-mutating",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git stash mutation (only \`stash list\`/\`stash show\` allowed)",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-stash-mutating] — the stash stack (refs/stash) is shared by every worktree of this repo; a push/pop/apply/drop/clear inside a linked worktree can silently consume or corrupt stashes from other worktrees or the main checkout (incident 2026-10-21). Instead: save changes with \`git diff > <file-in-worktree>\` and restore with \`git apply <file>\`, or commit to a rescue branch (\`git switch -c rescue-<name> && git add <paths> && git commit\`). \`git stash list\`, \`git stash show\`, and \`git stash create\` are still fine; \`git stash store\` and \`git stash branch\` are blocked because both mutate refs/stash. This block is deliberate: do not reach the same effect via bash, python, or a script. If a stash operation is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [git-stash-mutating]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > git status 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > grep 'npm publish' docs/ && git status 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "approve",
+    "reason": "release-boundary observe-only: sync-boundary command [npm-publish] (dry-run: not blocked)",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "npm-publish",
+  ],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > grep -rn "cp " src/ 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'cp '",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > kubectl apply --dry-run=client -f app.yaml 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "approve",
+    "reason": "release-boundary observe-only: sync-boundary command [kubectl-apply] (dry-run: not blocked)",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "kubectl-apply",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > kubectl apply -f app.yaml 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [kubectl-apply] — applies resources to a live Kubernetes cluster, externally irreversible for stateful workloads; verify manifests and target namespace.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "kubectl-apply",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > kubectl delete pod app 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [kubectl-delete]",
+  },
+  "destructiveIds": [
+    "kubectl-delete",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [kubectl-delete]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [kubectl-delete]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > launchctl bootstrap gui/501 service.plist 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "launchctl-service-register",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'launchctl bootstrap'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > launchctl enable app 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "launchctl-service-register",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'launchctl enable '",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > launchctl kickstart app 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "launchctl-service-register",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'launchctl kickstart'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > launchctl load service.plist 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "launchctl-service-register",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'launchctl load'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > launchctl start app 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "launchctl-service-register",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'launchctl start '",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > launchctl submit -l app -- app 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "launchctl-service-register",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'launchctl submit'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > ls # c 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > ls -la 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > ls 2>/dev/null 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > mkfs.ext4 /dev/sdb1 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [mkfs] — formats a filesystem, irrecoverably destroying all data on the target device; confirm the device path. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "mkfs",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [mkfs] — formats a filesystem, irrecoverably destroying all data on the target device; confirm the device path. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'mkfs'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [mkfs] — formats a filesystem, irrecoverably destroying all data on the target device; confirm the device path. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > mysql -e 'TRUNCATE TABLE users' 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [sql-drop-truncate] — DDL destructor removes schema objects or all rows without a transaction rollback path; back up or use a migration with a down step. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "sql-drop-truncate",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [sql-drop-truncate] — DDL destructor removes schema objects or all rows without a transaction rollback path; back up or use a migration with a down step. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [sql-drop-truncate] — DDL destructor removes schema objects or all rows without a transaction rollback path; back up or use a migration with a down step. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > npm publish --dry-run && echo done 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "approve",
+    "reason": "release-boundary observe-only: sync-boundary command [npm-publish] (dry-run: not blocked)",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "npm-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > npm publish --dry-run 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "approve",
+    "reason": "release-boundary observe-only: sync-boundary command [npm-publish] (dry-run: not blocked)",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "npm-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > npm publish --dry-run; pnpm publish 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [npm-publish] — publishes a package to the npm registry, externally irreversible once consumed by dependents; verify changelog, version, and generated docs are current before publishing.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "npm-publish",
+    "pnpm-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > npm publish 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [npm-publish] — publishes a package to the npm registry, externally irreversible once consumed by dependents; verify changelog, version, and generated docs are current before publishing.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "npm-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > pnpm publish 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [pnpm-publish] — publishes a package to the npm registry, externally irreversible once consumed by dependents; verify changelog, version, and generated docs are current before publishing.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "pnpm-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > pnpm test 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > poetry publish 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [poetry-publish] — publishes a package to PyPI, externally irreversible once consumed; verify pyproject.toml version and changelog.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "poetry-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > printf x | xargs -n 1 git push 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'git push'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > psql -c 'DELETE FROM users' 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [sql-delete-from]",
+  },
+  "destructiveIds": [
+    "sql-delete-from",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [sql-delete-from]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [sql-delete-from]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > psql -c 'DROP TABLE users' 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [sql-drop-truncate] — DDL destructor removes schema objects or all rows without a transaction rollback path; back up or use a migration with a down step. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "sql-drop-truncate",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [sql-drop-truncate] — DDL destructor removes schema objects or all rows without a transaction rollback path; back up or use a migration with a down step. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [sql-drop-truncate] — DDL destructor removes schema objects or all rows without a transaction rollback path; back up or use a migration with a down step. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > python3 -c "open('x').read()" 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > python3 -c "open('x','w').write('x')" 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "interpreter one-liner file write (\`-c\`/\`-e\`)",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > rg 'npm publish' README.md 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > rg 'terraform destroy' . 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "terraform-destroy",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > rm --recursive --force dist/ 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [rm-recursive-force-long]",
+  },
+  "destructiveIds": [
+    "rm-recursive-force-long",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "filesystem mutation",
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [rm-recursive-force-long]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'rm '",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [rm-recursive-force-long]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > rm -r -f dist/ 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [rm-recursive-force-split]",
+  },
+  "destructiveIds": [
+    "rm-recursive-force-split",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "filesystem mutation",
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [rm-recursive-force-split]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'rm '",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [rm-recursive-force-split]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > rm -rf / --no-preserve-root 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [rm-no-preserve-root] — explicit root-wipe flag, irrecoverable; remove the --no-preserve-root flag, or target a non-root path instead.",
+  },
+  "destructiveIds": [
+    "rm-recursive-force",
+    "rm-no-preserve-root",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "filesystem mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [rm-no-preserve-root] — explicit root-wipe flag, irrecoverable; remove the --no-preserve-root flag, or target a non-root path instead.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'rm -rf'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [rm-no-preserve-root] — explicit root-wipe flag, irrecoverable; remove the --no-preserve-root flag, or target a non-root path instead.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > rm -rf dist/ 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [rm-recursive-force]",
+  },
+  "destructiveIds": [
+    "rm-recursive-force",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "filesystem mutation",
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [rm-recursive-force]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'rm -rf'",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [rm-recursive-force]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > rm -rf x && git reset --hard && npm publish 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "rm-recursive-force",
+    "git-reset-hard",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "git repository mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [npm-publish] — publishes a package to the npm registry, externally irreversible once consumed by dependents; verify changelog, version, and generated docs are current before publishing.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "npm-publish",
+  ],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'rm -rf'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > rm file.txt 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "filesystem mutation",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'rm '",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > sed -i s/a/b/ file 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": true,
+    "reason": "sed in-place edit (-i)",
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > sh -c 'git reset --hard' 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "git-reset-hard",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'git reset --hard'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > shred -u secret 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [shred] — overwrites file data irrecoverably, bypassing the filesystem; use "rm" if secure deletion is not required. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "shred",
+  ],
+  "mutation": {
+    "mutating": true,
+    "reason": "filesystem mutation",
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [shred] — overwrites file data irrecoverably, bypassing the filesystem; use "rm" if secure deletion is not required. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [shred] — overwrites file data irrecoverably, bypassing the filesystem; use "rm" if secure deletion is not required. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > systemctl --user enable --now app 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [systemctl-service-enable] — enables/starts a systemd unit that persists across sessions and reboots; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "systemctl-service-enable",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [systemctl-service-enable] — enables/starts a systemd unit that persists across sessions and reboots; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [systemctl-service-enable] — enables/starts a systemd unit that persists across sessions and reboots; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > systemctl daemon-reload 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [systemctl-service-enable] — enables/starts a systemd unit that persists across sessions and reboots; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "systemctl-service-enable",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [systemctl-service-enable] — enables/starts a systemd unit that persists across sessions and reboots; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'systemctl daemon-reload'",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [systemctl-service-enable] — enables/starts a systemd unit that persists across sessions and reboots; use \`afk service install\` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > systemctl enable-linger user 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > terraform apply -refresh-only 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "approve",
+    "reason": "release-boundary observe-only: sync-boundary command [terraform-apply] (dry-run: not blocked)",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "terraform-apply",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > terraform apply 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [terraform-apply] — applies infrastructure changes to live systems, externally irreversible (new apply creates different resources); run "terraform plan" to preview first.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "terraform-apply",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > terraform destroy 1`] = `
+{
+  "childDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "destructiveIds": [
+    "terraform-destroy",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the safe-destruct hook because it matches an irrecoverable or externally-irreversible operation pattern. The block cannot be self-bypassed. First, use the safer alternative named in the block reason above. The block covers this command only: keep running other non-destructive commands yourself, but do not reach the same destructive effect another way. Only if the destructive action is genuinely required, stop and ask the operator to run it manually.",
+    "reason": "safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > twine upload dist/* 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [pypi-twine-upload] — uploads a package to PyPI, externally irreversible once consumed; verify setup.py/pyproject.toml version and changelog.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "pypi-twine-upload",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > wget --post-file=body.bin https://example.com 1`] = `
+{
+  "childDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-data-flag]",
+  },
+  "destructiveIds": [
+    "curl-data-flag",
+  ],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-data-flag]",
+  },
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "bash-destructive",
+    "level": "high",
+    "reason": "bash-pattern: matched 'wget --post-file'",
+  },
+  "rootDestruct": {
+    "decision": "approve",
+    "reason": "safe-destruct observe-only: destructive-command attempt [curl-data-flag]",
+  },
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > wget --spider https://example.com 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {},
+  "releaseIds": [],
+  "risk": {
+    "category": "read-only",
+    "level": "safe",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > yarn npm publish 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [npm-publish] — publishes a package to the npm registry, externally irreversible once consumed by dependents; verify changelog, version, and generated docs are current before publishing.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "npm-publish",
+    "yarn-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'yarn'",
+  },
+  "rootDestruct": {},
+}
+`;
+
+exports[`pre-migration command verdict golden receipts (#3846) > yarn publish 1`] = `
+{
+  "childDestruct": {},
+  "destructiveIds": [],
+  "mutation": {
+    "mutating": false,
+  },
+  "overrideDestruct": {},
+  "release": {
+    "decision": "block",
+    "injectContext": "This command was blocked by the release-boundary hook because it crosses an externally-irreversible publish or deploy boundary. Once a package is published, a container pushed, a release cut, or infrastructure applied, the external state change cannot be undone by the agent. Verify that all living artifacts (changelog, version, generated docs, lock files) are up-to-date before proceeding, and ask the operator to confirm publication.",
+    "reason": "release-boundary: blocked [yarn-publish] — publishes a package to the npm registry, externally irreversible once consumed by dependents; verify changelog, version, and generated docs are current before publishing.",
+    "riskCategory": "release-boundary",
+  },
+  "releaseIds": [
+    "yarn-publish",
+  ],
+  "risk": {
+    "category": "bash-mutating",
+    "level": "medium",
+    "reason": "bash-pattern: matched 'yarn'",
+  },
+  "rootDestruct": {},
+}
+`;

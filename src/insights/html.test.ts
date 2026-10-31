@@ -14,6 +14,8 @@
 import { describe, it, expect } from 'vitest';
 import { generateHtml, htmlEscape } from './html.js';
 import type { InsightAggregates, Recommendation } from './types.js';
+import { zeroGuardrailFalsePositiveAggregates } from './aggregators/guardrail-false-positives.js';
+import { renderGuardrailFalsePositives } from './html.guardrail-false-positives.js';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -82,14 +84,7 @@ function makeZeroAgg(): InsightAggregates {
       outcomeCount: 0,
       byModelTypeDepth: {},
     },
-    guardrailFalsePositives: {
-      totalTrips: 0,
-      falsePositiveTrips: 0,
-      falsePositiveRate: null,
-      totalPreToolUseBlocks: 0,
-      sessionsWithTrips: 0,
-      sessionsScanned: 0,
-    },
+    guardrailFalsePositives: zeroGuardrailFalsePositiveAggregates(),
   };
 }
 
@@ -193,6 +188,7 @@ function makeNonZeroAgg(): InsightAggregates {
       byModelTypeDepth: {},
     },
     guardrailFalsePositives: {
+      ...zeroGuardrailFalsePositiveAggregates(),
       totalTrips: 5,
       falsePositiveTrips: 2,
       falsePositiveRate: 0.4,
@@ -472,6 +468,61 @@ describe('generateHtml', () => {
     const html = generateHtml(makeNonZeroAgg(), SOME_RECS, OPTS);
     expect(html).not.toContain('NaN');
     expect(html).not.toContain('undefined');
+  });
+});
+
+describe('renderGuardrailFalsePositives', () => {
+  it('renders rule-only blocks without repeat-guard trips', () => {
+    const agg = makeZeroAgg();
+    agg.guardrailFalsePositives.byRule = { 'rule<&>': 3 };
+    const html = renderGuardrailFalsePositives(agg);
+    expect(html).toContain('Blocks by Rule ID');
+    expect(html).toContain('<td>rule&lt;&amp;&gt;</td><td>3</td>');
+    expect(html).not.toContain('Denial-Breaker Tagged Failures');
+    expect(html).not.toContain('NaN');
+  });
+
+  it('renders denial-tagged failures without repeat-guard trips or rule blocks', () => {
+    const agg = makeZeroAgg();
+    agg.guardrailFalsePositives.denialBreakerTaggedFailures = 2;
+    const html = renderGuardrailFalsePositives(agg);
+    expect(html).toContain('<div class="metric-val">2</div><div class="metric-label">Denial-Breaker Tagged Failures</div>');
+    expect(html).toContain('not distinct breaker trip episodes');
+    expect(html).not.toContain('Blocks by Rule ID');
+    expect(html).not.toContain('NaN');
+  });
+
+  it('renders repeat-guard trips without either new population', () => {
+    const html = renderGuardrailFalsePositives(makeNonZeroAgg());
+    expect(html).toContain('Total Trips');
+    expect(html).toContain('40.0%');
+    expect(html).not.toContain('Denial-Breaker Tagged Failures');
+  });
+
+  it('omits the section when all populations are empty, even with scanned sessions', () => {
+    const agg = makeZeroAgg();
+    agg.guardrailFalsePositives.sessionsScanned = 5;
+    expect(renderGuardrailFalsePositives(agg)).toBe('');
+  });
+
+  it('omits the section when the aggregate is missing', () => {
+    const agg = makeZeroAgg();
+    Reflect.deleteProperty(agg, 'guardrailFalsePositives');
+    expect(renderGuardrailFalsePositives(agg)).toBe('');
+  });
+
+  it.each([0, 5])('handles legacy aggregates without the new fields (%i repeat trips)', (totalTrips) => {
+    const agg = makeZeroAgg();
+    agg.guardrailFalsePositives.totalTrips = totalTrips;
+    Reflect.deleteProperty(agg.guardrailFalsePositives, 'byRule');
+    Reflect.deleteProperty(agg.guardrailFalsePositives, 'denialBreakerTaggedFailures');
+    const html = renderGuardrailFalsePositives(agg);
+    if (totalTrips === 0) expect(html).toBe('');
+    else {
+      expect(html).toContain('Total Trips');
+      expect(html).not.toContain('undefined');
+      expect(html).not.toContain('NaN');
+    }
   });
 });
 

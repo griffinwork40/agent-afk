@@ -217,8 +217,8 @@ export async function* usageLimitNoTimestampPause(
   if (!ctx.autoResumeOnUsageLimit) {
     // Fail-fast (autoResumeOnUsageLimit=false, e.g. a subagent fork): no
     // replay follows, so the operator's fix — logging into a different
-    // account — needs the NEXT turn to pick up the new credential
-    // without a manual `/reauth`. See `credentialSnapshotStale`.
+    // account — needs the NEXT turn to pick up the new credential via
+    // the turn-start credential catch-up. See `credentialSnapshotStale`.
     ctx.markCredentialSnapshotStale();
     yield anthropicLimitErrorEvent(pendingErrorEvent);
     return;
@@ -334,8 +334,8 @@ export async function* usageLimitResetPause(
 
   if (!ctx.autoResumeOnUsageLimit) {
     // Fail-fast, has-resetsAt variant — same reasoning as the no-ts branch
-    // above: no replay follows, so the next turn must force a credential
-    // re-resolve instead of waiting on `/reauth`.
+    // above: no replay follows, so the next turn's credential catch-up
+    // must force a re-resolve. See `credentialSnapshotStale`.
     ctx.markCredentialSnapshotStale();
     yield anthropicLimitErrorEvent(pendingErrorEvent, resetsAt);
     return;

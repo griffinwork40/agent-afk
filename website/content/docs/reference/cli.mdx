@@ -49,6 +49,7 @@ Usage: `afk [options] [command]`
 | `schedule` | Manage scheduled daemon tasks |
 | `bg` | Inspect persisted background subagent job logs. Note: bg jobs are tied to the parent REPL process — if the REPL exits, the job dies. This command reads the persisted log. |
 | `trace` | Inspect the witness-layer trace of a session — the durable record of everything the agent did. Reads ~/.afk/state/witness/&lt;session&gt;/trace.jsonl. |
+| `episode` | Synthesize and store compressed episodic narratives from session journals. |
 | `whatif` | Predict how a proposed change to your AFK environment will affect the agent's behaviour. Optionally run episodes to verify empirically.  Pass a plain-English description, explicit flags, or a --spec file. |
 | `witness` | Search and filter the witness-layer trace history — the durable record of everything agents did across sessions. |
 | `service` | Manage AFK background services (launchd on macOS, systemd --user on Linux, Task Scheduler on Windows) — always-on, auto-restart |
@@ -1648,6 +1649,43 @@ Guide: [observability](/guides/observability)
 | --- | --- | --- |
 | `-o, --out <file>` | Write output to a file instead of stdout |  |
 | `--endpoint <url>` | OTLP/HTTP collector URL to POST the payload to (overrides AFK_OTLP_ENDPOINT) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk episode`
+
+Synthesize and store compressed episodic narratives from session journals.
+
+Usage: `afk episode [options] [command]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
+
+### Subcommands
+
+| Command | Description |
+| --- | --- |
+| `synthesize` | Synthesize a compressed episode narrative from a sealed session journal and store it in the cross-session memory archive (facts, category: learning). Defaults to the most recent session when no session-id is given. |
+
+## `afk episode synthesize`
+
+Synthesize a compressed episode narrative from a sealed session journal and store it in the cross-session memory archive (facts, category: learning). Defaults to the most recent session when no session-id is given.
+
+Usage: `afk episode synthesize [options] [session-id]`
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[session-id]` |  |  |
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--latest` | Synthesize the most recent session (same as omitting session-id) |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk whatif`

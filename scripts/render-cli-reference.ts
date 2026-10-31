@@ -28,6 +28,7 @@ import { registerUpdateCommand } from '../src/cli/commands/update.js';
 import { registerScheduleCommand } from '../src/cli/commands/schedule.js';
 import { registerBgCommand } from '../src/cli/commands/bg.js';
 import { registerTraceCommand } from '../src/cli/commands/trace.js';
+import { registerEpisodeCommand } from '../src/cli/commands/episode.js';
 import { registerWhatifCommand } from '../src/cli/commands/whatif.js';
 import { registerWitnessCommand } from '../src/cli/commands/witness.js';
 import { registerServiceCommand } from '../src/cli/commands/service.js';
@@ -119,6 +120,7 @@ export function buildCli(): Command {
   registerScheduleCommand(program);
   registerBgCommand(program);
   registerTraceCommand(program);
+  registerEpisodeCommand(program);
   registerWhatifCommand(program);
   registerWitnessCommand(program);
   registerServiceCommand(program);

@@ -210,10 +210,9 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Cross-platform matrix (closes issue #703).
-    # All three legs are REQUIRED gates with no continue-on-error.
-    # fail-fast: false so one OS failing never cancels another. Public repos
-    # get unlimited free GitHub-hosted minutes on all runners.
+    # Linux/macOS coverage gates; Windows assertions run in shards below.
+    # All platforms remain REQUIRED gates with no continue-on-error.
+    # fail-fast: false so one OS failing never cancels another.
     #
     # Coverage policy: ubuntu runs `pnpm test:coverage` (enforces the stmts 84 /
     # branch 78 floors). macOS also runs coverage. Windows gates on assertions
@@ -222,28 +221,14 @@ jobs:
     # would mask assertion failures behind coverage noise. The ubuntu leg is the
     # authoritative coverage gate.
     #
-    # Windows is pinned to windows-2022 because node-gyp <=10.3.1 does not
-    # recognise VS 2025 (version "18"), which is the only VS on windows-latest
-    # since the 2026-09 image refresh. windows-2022 ships VS 2022 natively, so
-    # no msvs_version pin is needed. Track upstream fix:
-    #   https://github.com/nodejs/node-gyp/issues/2911
-    # Once node-gyp ships a release that handles VS 18, switch the include entry
-    # to windows-latest and drop this comment.
-    #
-    # Windows gates on assertions only; coverage floors are enforced on ubuntu
-    # because ~110 platform-gated tests leave win32-skipped branches uncovered.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         test-cmd: [pnpm test:coverage]
-        include:
-          - os: windows-2022
-            test-cmd: pnpm test
-    # Windows setup (~4-6 min) + test run (~9 min) fits comfortably in 30 min.
     # macOS runners are ~1.5× slower than ubuntu; recent runs hit 9-13 min and
     # occasionally cancel at the 15-min wall. Raise to 25 min to give headroom.
-    timeout-minutes: ${{ matrix.os == 'windows-2022' && 30 || matrix.os == 'macos-latest' && 25 || 15 }}
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 25 || 15 }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -273,6 +258,57 @@ jobs:
           name: coverage-report-${{ matrix.os }}
           path: coverage/
           retention-days: 14
+
+  test-windows-shards:
+    name: Test (windows-2022, shard ${{ matrix.shard }}/2)
+    # node-gyp <=10.3.1 cannot recognise VS 2025 on windows-latest; keep VS 2022.
+    # Track https://github.com/nodejs/node-gyp/issues/2911 before changing images.
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test shard
+        # Vitest partitions the full suite deterministically; retain forks/isolation.
+        run: pnpm test --shard=${{ matrix.shard }}/2
+
+  test-windows:
+    # Preserve the existing check name for consumers and branch protection.
+    name: Test (windows-2022)
+    needs: test-windows-shards
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Windows shard to pass
+        # A skipped/cancelled dependency must fail, not silently green this gate.
+        env:
+          SHARD_RESULT: ${{ needs.test-windows-shards.result }}
+        shell: bash
+        run: |
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "::error::Windows shards did not all pass: $SHARD_RESULT"
+            exit 1
+          fi
 
   # Node 26 compatibility leg (issue #2525).
   #

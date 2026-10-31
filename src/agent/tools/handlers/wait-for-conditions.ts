@@ -11,7 +11,7 @@
 import * as fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { guardedFetch } from '../../../http-client/egress-guard.js';
-import { classifyRisk } from '../../risk-classifier.js';
+import { analyzeCommand } from '../../command-classifier.js';
 import { pollRefusalReason } from './wait-for-command-policy.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import type { SpawnedPidRegistry } from './pid-registry.js';
@@ -243,10 +243,11 @@ export function evaluateCommand(cond: CommandCondition): WaitResult {
   // Invariant: retain the bash classifier's high-risk veto. Only wait_for gets
   // the tokenized read-only supplement; unknown commands still fail closed.
   const cwd = cond.cwd ?? process.cwd();
-  const risk = classifyRisk('bash', { command: cond.command }, { cwd });
+  const analysis = analyzeCommand(cond.command);
+  const risk = analysis.risk.level;
   // pollRefusalReason owns the whole gate (background `&`, syntax, mutation,
   // per-command argv, read-only supplement); see its Invariant.
-  const reason = pollRefusalReason(cond.command, risk, cwd);
+  const reason = pollRefusalReason(cond.command, risk, cwd, analysis);
   if (reason !== undefined) {
     return {
       met: false,

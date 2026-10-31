@@ -6,8 +6,8 @@
  *   "Reconciliation to 'confirmed' through a remote read (e.g. gh pr list
  *    for a PR create), currently reserved but unused."
  *
- * The gap: EffectStore.updateStatus() supports status='confirmed' and writes
- * reconciledAt, but no test verifies the full lifecycle transition:
+ * EffectStore.updateStatus() supports status='confirmed' and writes
+ * reconciledAt. These tests verify the full lifecycle transition:
  *
  *   writePending  →  updateStatus('unknown')  →  updateStatus('confirmed')
  *
@@ -217,16 +217,19 @@ describe('EffectStore — Scenario 2 reconciliation: unknown → confirmed (#371
     expect(all[0]?.status).toBe('confirmed');
   });
 
-  /**
-   * Status-quo pin: there is currently no reconcile() helper method on
-   * EffectStore — callers must call updateStatus({status:'confirmed'})
-   * directly. This pin documents that the reserved reconcile path is
-   * currently a manual two-step (query + updateStatus), not an encapsulated
-   * method. It flips naturally when a reconcile() API is added.
-   *
-   * KNOWN GAP (#3714 Scenario 2): a dedicated reconcile() method that
-   * accepts a remote-read result and atomically transitions unknown→confirmed
-   * does not exist. Callers must wire this manually.
-   */
-  it.todo('reconcile() encapsulation — #3714 known gap');
+  // Encapsulation: callers supply one read-only, exact-identity remote probe.
+  it('reconcile() confirms an exact remote-read match without replaying the mutation', async () => {
+    const pending = store.writePending({ idempotencyKey: 'remote-match', operationType: 'gh_pr_create', args: { head: 'feature' } });
+    await store.updateStatus({ id: pending.id, status: 'unknown' });
+    let reads = 0;
+    const confirmed = await store.reconcile(pending.id, async (record) => {
+      reads++;
+      expect(record.args).toEqual({ head: 'feature' });
+      return { matched: true, evidence: { pr: 42 } };
+    });
+    expect(reads).toBe(1);
+    expect(confirmed.status).toBe('confirmed');
+    expect(confirmed.reconciledAt).toBeDefined();
+    expect((await new EffectStore(ledgerPath).all())[0]).toEqual(confirmed);
+  });
 });
