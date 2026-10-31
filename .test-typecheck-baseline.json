@@ -1,1 +1,5 @@
-{ "errors": 2687 }
+{
+  "errors": 2690,
+  "reason": "merge with main + CI-only workspace-ab-runner errors",
+  "growthReason": "merge with main (2688) + 2 CI-only workspace-ab-runner.test.ts errors"
+}
