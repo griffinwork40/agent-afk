@@ -520,8 +520,12 @@ describe('listWebSessions', () => {
       }
     });
 
-    const results = await listWebSessions(new Set());
-    spy.mockRestore();
+    let results: Awaited<ReturnType<typeof listWebSessions>>;
+    try {
+      results = await listWebSessions(new Set());
+    } finally {
+      spy.mockRestore();
+    }
 
     const entry = results.find((r) => r.id === sessionId);
 
@@ -537,6 +541,33 @@ describe('listWebSessions', () => {
     // (meta at 1, user at 2, then the loop checks record 3 before seeing break).
     // Well under the 20 dummy records that would be consumed without early-exit.
     expect(recordsYielded).toBeLessThanOrEqual(3);
+  });
+
+  it('backfills surface from ledger meta when fork-sidecar has cwd+model but no surface', async () => {
+    // Fork-sidecar shape: session-meta.json has v, sessionId, model, cwd — but NO surface.
+    // The ledger meta record must backfill surface; sidecar supplies model+cwd.
+    const sessionId = 'fork-sidecar-1';
+
+    const sessionDir = path.join(getSessionsDir(), sessionId);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const sessionMetaPath = path.join(sessionDir, 'session-meta.json');
+    const forkMeta = { v: 1, sessionId, model: 'fork-model', cwd: '/fork/cwd' };
+    fs.writeFileSync(sessionMetaPath, JSON.stringify(forkMeta), 'utf8');
+
+    writeLedger(sessionId, [
+      metaLine(sessionId, { cwd: '/ledger/cwd', surface: 'cli' }),
+      userLine('fork sidecar first message'),
+    ]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === sessionId);
+
+    expect(entry).toBeDefined();
+    // surface must be backfilled from ledger meta (absent in fork sidecar)
+    expect(entry?.surface).toBe('cli');
+    // model and cwd come from the sidecar
+    expect(entry?.model).toBe('fork-model');
+    expect(entry?.cwd).toBe('/fork/cwd');
   });
 
   it('reads all identity fields from ledger when no session-meta.json exists (pre-sidecar path)', async () => {
