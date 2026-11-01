@@ -7,7 +7,7 @@ import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { getStateDatabasePath, getDaemonStateDir } from '../../paths.js';
 import { createDefaultHookRegistry } from '../default-hook-registry.js';
-import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../memory/index.js';
+import { MemoryStore, injectHotMemory, injectGoalPrompt, injectEpisodeRecall } from '../memory/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
 import { injectCompanionPrimer } from '../companion/index.js';
 import { AgentSession } from '../session/agent-session.js';
@@ -314,7 +314,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     const traceOwner = options.sessionConfig?.traceWriter === undefined ? hookTraceWriter : undefined;
     const session = options.sessionFactory
       ? options.sessionFactory(config, traceOwner)
-      : new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory(config))), traceOwner);
+      : new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory(config)))), traceOwner);
     // Wire session-layer Stop dispatch for the daemon surface. Daemon/cron tasks
     // are one-shot: there is no next user turn for injectContext delivery.
     // `getHasNextTurn: () => false` causes the session layer to drop injectContext
