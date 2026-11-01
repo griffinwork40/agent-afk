@@ -624,6 +624,12 @@ export class StreamRenderer {
     // affordances during the final overlay flush on a borrowed compositor.
     this.softStopping = false;
     this.interrupting = false;
+    // Cap the thinking-phase window at dispose time so the summary-mode
+    // thinking indicator (`◦ thinking · Xs`) does not repaint during the
+    // borrowed-compositor's final overlay flush. markEnded() is idempotent;
+    // calling it here covers interrupted/errored turns where the normal
+    // thinking→acting transition was never observed.
+    this.thinkingLane.markEnded();
     this.skillIdentity.clear();
     // Clear the wait hint so an aborted/resumed turn cannot leave it stale on a
     // borrowed compositor.
