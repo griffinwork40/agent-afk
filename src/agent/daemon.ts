@@ -253,7 +253,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     // startHandoffMaintenance, registerTasksWithQuarantine) would otherwise
     // leave the lock file on disk, causing DaemonAlreadyRunningError on the
     // next start attempt against a recycled or non-existent PID.
-    await releaseDaemonLock?.();
+    await releaseDaemonLock();
     throw startupErr;
   }
 
