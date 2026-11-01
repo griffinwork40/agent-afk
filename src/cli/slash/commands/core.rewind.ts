@@ -40,7 +40,7 @@ const MODE_LABELS = ['Conversation only (edit and resend the prompt)', 'Files on
  * compositor's keypress listener first and re-arm it after (the selector
  * contract, see input/selectors.ts). getCompositor is null on non-TTY.
  */
-async function pick(ctx: SlashContext, choices: string[], title = 'Rewind'): Promise<number | ':cancel' | null> {
+export async function pick(ctx: SlashContext, choices: string[], title = 'Rewind'): Promise<number | ':cancel' | null> {
   if (ctx.choose) {
     const options = choices.map((label, index) => ({ value: String(index), label }));
     const selected = await ctx.choose({ corrId: randomUUID(), title, options, cancellable: true });
@@ -74,7 +74,7 @@ function showPreview(ctx: SlashContext, changed: string[], conflicts: Set<string
 }
 
 /** Preview, confirm, and restore files. Returns true only when every file restored. */
-async function restoreFiles(ctx: SlashContext, session: Session, checkpointTurnId: string): Promise<boolean> {
+export async function restoreFiles(ctx: SlashContext, session: Session, checkpointTurnId: string): Promise<boolean> {
   const preview = await session.rewindFiles(checkpointTurnId, { dryRun: true });
   const changed = preview.filesChanged ?? [];
   const failures = preview.failures ?? [];

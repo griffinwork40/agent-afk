@@ -7,9 +7,11 @@
  * ancestry. `/branches` discovers all sessions that share a forkedFrom ancestor
  * with the current one and lets the operator switch between them.
  *
- * Switching restores the sibling session by emitting a resume control result
- * that the REPL feeds to `--resume`. The operator can then run `/rewind files`
- * in the switched session to restore the file checkpoint for that branch.
+ * Switching resumes the sibling session and, when a file checkpoint exists for
+ * the branch tip, automatically offers to restore files to that branch's state.
+ * The resumed session's message objects are fresh (WeakMap links do not survive
+ * a cross-session resume), so we recover the checkpoint turnId by reading the
+ * branch's on-disk turn log directly.
  *
  * @module cli/slash/commands/branches
  */
@@ -19,6 +21,8 @@ import { loadSession, findSession, listSessions } from '../../session-store.js';
 import { resolveFromFound } from './resume.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import { isSafeLedgerSessionId } from '../../../paths.js';
+import { latestCheckpointTurnId } from '../../../agent/file-checkpoint/turn-log.js';
+import { restoreFiles, pick } from './core.rewind.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -206,11 +210,27 @@ async function handleSwitch(
         return 'continue';
       }
       const result = await ctx.requestResume(resolveFromFound(found));
-      // After a successful swap the REPL replaces the session; nothing more to emit.
+      // After a successful swap ctx.session.current points at the new session.
       if (result.ok) {
-        ctx.out.success(`Switching to branch ${shortId(branch.id)}…`);
-        ctx.out.line('');
-        ctx.out.line(palette.dim('  To restore that branch\'s files, run /rewind files after switching.'));
+        ctx.out.success(`Switched to branch ${shortId(branch.id)}.`);
+        // Attempt file restore using the branch tip's on-disk checkpoint.
+        // WeakMap links don't survive a cross-session resume, so we recover the
+        // turnId by reading the branch's turn log directly from disk.
+        const checkpointTurnId = latestCheckpointTurnId(resumeKey);
+        if (checkpointTurnId !== undefined) {
+          ctx.out.line('');
+          ctx.out.line(palette.dim('  File checkpoint found for this branch. Restore files?'));
+          ctx.out.line('');
+          const choice = await pick(ctx, ['Restore files to this branch\'s state', 'Skip — keep current files'], 'Restore branch files?');
+          if (choice === 0) {
+            await restoreFiles(ctx, ctx.session.current, checkpointTurnId);
+          } else {
+            ctx.out.info('File restore skipped. Run /rewind files to restore later.');
+          }
+        } else {
+          ctx.out.line('');
+          ctx.out.line(palette.dim('  No file checkpoint for this branch (checkpointing may have been off when it was created).'));
+        }
         ctx.out.line('');
         return 'continue';
       }

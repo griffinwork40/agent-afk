@@ -207,7 +207,7 @@ describe('/branches', () => {
       const result = await branchesCmd.handler(ctx, `switch bbbb`);
       expect(result).toBe('continue');
       expect(requestResume).toHaveBeenCalledOnce();
-      expect(lines.some((l) => l.includes('Switching'))).toBe(true);
+      expect(lines.some((l) => l.includes('Switched'))).toBe(true);
     });
 
     it('falls back to printing the command when requestResume is unavailable', async () => {

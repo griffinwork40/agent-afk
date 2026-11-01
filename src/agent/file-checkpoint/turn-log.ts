@@ -150,3 +150,21 @@ export function hashPaths(paths: Iterable<string>): PathHashes {
   }
   return out;
 }
+
+/**
+ * Return the turnId of the LAST `turn` entry in the log for `sessionId`, or
+ * `undefined` when the log does not exist or contains no `turn` entries.
+ *
+ * Used by `/branches switch` to find the checkpoint to restore when resuming a
+ * sibling session whose message objects have no WeakMap links (the links are
+ * in-process only and do not survive a resume). Reading the on-disk log is the
+ * only way to recover the turnId after a cross-session branch switch.
+ */
+export function latestCheckpointTurnId(sessionId: string, stateDir?: string): string | undefined {
+  const log = readTurnLog(sessionId, stateDir);
+  let latest: string | undefined;
+  for (const entry of log) {
+    if (entry.kind === 'turn') latest = entry.turnId;
+  }
+  return latest;
+}
