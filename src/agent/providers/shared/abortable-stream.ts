@@ -64,6 +64,7 @@ export async function* abortableStream<T>(
         throw abortErrorFrom(signal);
       }
       if (result.done) return;
+      await (await import('../../session/pause-controller.js')).PauseController.instance().check(signal);
       yield result.value;
     }
   } finally {
