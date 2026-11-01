@@ -12,6 +12,19 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- add layout-jump decision table reference (#4609) (ad468b192)
+- summary-mode thinking indicator and unknown-error hint (a0d82bd1a)
+
+### Fixed
+- harden wrapping across 9 files (#4617) (9c687a5d8)
+- disambiguate Windows EPERM in daemon instance lock (#4605) (7aeba989e)
+- skip preamble-only user records in goal extraction (#4604) (09d08195a)
+- add episode backfill CLI command (10bdd60bf)
+- address advisory findings from workspace subscription parity (877cd86a7)
+- address advisory findings from command classifier facets (94f8e37d3)
+- cap thinking lane on dispose + fix stall test fixture (5b4b4361e)
+
 ## [5.344.0] - 2026-11-01
 
 ### Added
