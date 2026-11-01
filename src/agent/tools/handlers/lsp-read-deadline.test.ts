@@ -4,17 +4,20 @@ import { queryLspDiagnostics } from './lsp-diagnostics.js';
 import { queryLspSymbol } from './lsp-symbols.js';
 import { withPooledFile, type QueryContext } from '../../lsp/query.js';
 import { DiagnosticsStore } from '../../lsp/diagnostics-store.js';
+import { resolveLspServer } from './lsp-server.js';
 
 vi.mock('node:fs/promises', async (original) => ({ ...await original<typeof import('node:fs/promises')>(), readFile: vi.fn() }));
 vi.mock('../../lsp/query.js', async (original) => ({
   ...await original<typeof import('../../lsp/query.js')>(),
   withPooledFile: vi.fn(),
 }));
+vi.mock('./lsp-server.js', () => ({ resolveLspServer: vi.fn() }));
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubEnv('AFK_LSP_DIAGNOSTICS_TIMEOUT_MS', '100');
   vi.stubEnv('AFK_LSP_SYMBOLS_TIMEOUT_MS', '100');
   vi.mocked(readFile).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(resolveLspServer).mockResolvedValue({ kind: 'resolved', spec: { definition: {} as never, command: 'fake', args: [], source: 'override' }, root: '/fake' });
 });
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 

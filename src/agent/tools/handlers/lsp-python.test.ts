@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 it('Python symbols and diagnostics share nearest-marker pool root and python didOpen', async () => {
-  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-lsp-python-')));
+  const dir = (realpathSync.native ?? realpathSync)(mkdtempSync(path.join(os.tmpdir(), 'afk-lsp-python-')));
   dirs.push(dir);
   const project = path.join(dir, 'package');
   mkdirSync(path.join(project, 'src'), { recursive: true });
