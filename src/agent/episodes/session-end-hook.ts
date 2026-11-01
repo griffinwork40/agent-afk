@@ -12,6 +12,7 @@ import type { HookHandler } from '../hooks.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import { env } from '../../config/env.js';
 import { synthesizeAndWriteEpisode } from './index.js';
+import { patchFacetDecisions } from '../facets/yield-probe.js';
 
 export function createEpisodeSessionEndHook(): HookHandler {
   return async (context) => {
@@ -28,7 +29,11 @@ export function createEpisodeSessionEndHook(): HookHandler {
     // before fast-shutdown paths (Telegram bot.stop() → process.exit()) fire.
     // Errors are swallowed — episode synthesis is additive, never critical.
     try {
-      await synthesizeAndWriteEpisode(sessionId);
+      const episode = await synthesizeAndWriteEpisode(sessionId);
+      // Backflow: patch the cached facet with LLM-synthesized decisions (#4569).
+      // patchFacetDecisions no-ops when decisions is empty (fallback path) or
+      // the facet cache file is absent — always safe to call.
+      patchFacetDecisions(sessionId, episode.decisions);
     } catch {
       // Swallow all errors — episode synthesis is additive, never critical
     }
