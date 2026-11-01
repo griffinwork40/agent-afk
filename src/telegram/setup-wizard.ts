@@ -239,11 +239,11 @@ export async function runTelegramSetup(): Promise<{
   chatId: number;
 }> {
   const envPath = getEnvConfigPath();
-  console.log('');
+  console.log(''); // console-ok
   console.log(palette.heading('🤖 Telegram bot setup'));
-  console.log('');
+  console.log(''); // console-ok
   console.log(palette.meta(`Config will be written to ${envPath}`));
-  console.log('');
+  console.log(''); // console-ok
 
   // 1. Bot token: env first, then prompt.
   let token = env.TELEGRAM_BOT_TOKEN?.trim() ?? '';
@@ -274,14 +274,14 @@ export async function runTelegramSetup(): Promise<{
 
   upsertEnvVar(envPath, 'TELEGRAM_BOT_TOKEN', token);
   console.log(palette.success(`✓ Saved TELEGRAM_BOT_TOKEN → ${envPath}`));
-  console.log('');
+  console.log(''); // console-ok
 
   // 2. Chat ID: poll getUpdates.
   console.log(palette.heading('Now DM your bot to authorize your account.'));
   const handle = bot.username ? `@${bot.username}` : `"${bot.firstName}"`;
   console.log(`  1. Open Telegram and find ${palette.brand(handle)}`);
-  console.log(`  2. Send any message (e.g. "hi")`);
-  console.log('');
+  console.log(palette.dim(`  2. Send any message (e.g. "hi")`));
+  console.log(''); // console-ok
   console.log(palette.meta('Polling for your chat ID (up to 60s)...'));
 
   const chats = await pollForChats(token);
@@ -305,7 +305,7 @@ export async function runTelegramSetup(): Promise<{
     console.log(palette.heading('\nMultiple chats found:'));
     chats.forEach((c, i) => {
       const who = c.username ? `@${c.username}` : c.firstName ?? c.type;
-      console.log(`  [${i + 1}] ${who} (id ${c.chatId}, ${c.type})`);
+      console.log(palette.dim(`  [${i + 1}] ${who} (id ${c.chatId}, ${c.type})`));
     });
     const choice = await prompt('Which chat should be allowed? [1]: ');
     const idx = Number.parseInt(choice || '1', 10) - 1;
@@ -319,10 +319,10 @@ export async function runTelegramSetup(): Promise<{
 
   upsertEnvVar(envPath, 'AFK_TELEGRAM_ALLOWED_CHAT_IDS', String(pick.chatId));
   console.log(palette.success(`✓ Saved AFK_TELEGRAM_ALLOWED_CHAT_IDS=${pick.chatId} → ${envPath}`));
-  console.log('');
+  console.log(''); // console-ok
   console.log(palette.heading('Setup complete. Start the bot with:'));
   console.log(palette.brand('  afk telegram start'));
-  console.log('');
+  console.log(''); // console-ok
 
   return { envPath, bot, chatId: pick.chatId };
 }

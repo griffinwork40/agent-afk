@@ -19,6 +19,19 @@
  * blue" — anything that wants a second blue should use `fileRef` (teal)
  * or `tool` (steel) instead.
  *
+ * ## Output quality principles
+ *
+ * Every user-facing surface routes through this palette. These principles
+ * govern how:
+ *   - Errors guide, not just report. Every error should answer: what
+ *     happened, why, and what the user should do next.
+ *   - State changes are narrated. Success, failure, and side effects
+ *     are always confirmed — silent success is a bug.
+ *   - Consistency is a contract. The same palette roles, emoji markers,
+ *     and output patterns apply across CLI, Telegram, and daemon.
+ *   - Fast to first signal. Long operations show a progress indicator
+ *     within 100ms — never leave the user wondering if it is running.
+ *
  * ## Theming (dark / light / umber)
  *
  * `palette` is a LIVE view over the active theme. Three theme maps are

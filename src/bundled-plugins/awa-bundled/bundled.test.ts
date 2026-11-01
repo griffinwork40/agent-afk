@@ -39,6 +39,12 @@ const PINNED_HASHES = {
   // framework plugin at the time it was bundled.
   automate: '95645aa07d28ea69384f81ff3e694d7899ee153ede53fda8a8c8790e628437e9',
   contract: '0ea822d8124f5fc55103a3e5e6d0fcb43889bf3f089bc722350da02ecf4f960f',
+  // consumer-map: unified merge of blast-radius + impact-map. Takes either a
+  // diff (PR, patch, git diff) or a named target (symbol, module, config key)
+  // and maps the full consumer surface via 3 parallel context-blind probes.
+  // Bundled-only; no upstream counterpart.
+  'consumer-map':
+    '62fcfd8d8bd4fe596b42b5bf29211d7449a771ef3248a1c22828baf041838b9d',
   // Hash re-bumped during PR #187 review: the Merge section now routes the
   // second convergence condition (≥2 critics agree on the same alternative) to
   // Wave 3.5 — prose-consistency fix only; no behavior change to the guard.
@@ -51,7 +57,7 @@ const PINNED_HASHES = {
   // convergence / ≠original+1-critic) explicitly. No frontmatter change
   // (context: load preserved). Bundled-only body; nothing to back-port.
   'devils-advocate':
-    'ae6f17e553e865d7bfb734bed455d89f4cbbcdd6304ef6a8f8a38679a441600e',
+    '41a9e8a81d1e6f8262da74d575d20e3f8d0cc9fcdf5c0a6b383048c3a1378dc6',
   // diagnose is bundled-only (no upstream counterpart). It ships
   // as the agent-driven /diagnose (context: fork) that replaced the retired
   // vendored TS orchestrator (src/skills/diagnose/). Hash bumps need no parallel
@@ -64,7 +70,7 @@ const PINNED_HASHES = {
   // subagent-executor.isolation.test.ts + input-parse.ts confirm it is honored
   // at any depth, incl. nested inside a forked skill). Behavior-preserving prose
   // correction; frontmatter (context: fork) unchanged.
-  diagnose: '32e74b291f913433efdc524d4e98fde4a75a9cbc6c57a11618f9c18366a671b1',
+  diagnose: 'ef3290af824e5fde88d9d7c15406f64a97d9c6eb9076cb90a1aa23b1a647eba1',
   // false-completion-gate, fix-pr, polish: high-usage user-scope skills bundled
   // in #943. No upstream counterpart — bundled-only.
   'false-completion-gate':
@@ -98,7 +104,7 @@ const PINNED_HASHES = {
   // wave keeps dispatching). The upstream ground-state has neither layer, so
   // both lines are permanent bundled-only divergence.
   'ground-state':
-    '1d0ba01a4c9a3a28713cd1bf1fd7faef57b90b50fd199c0092233049629f9a33',
+    '61b3d0d4c0c86385acc3a592274126754c0f1c69f34b1f7b4c10cab745fd4b70',
 
   polish:
     '03c7d8d1f593d4aca3327247d5c226e957bae84982b8a438c5834ba74ee4184c',

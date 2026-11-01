@@ -52,7 +52,9 @@ describe('LSP spawn-time exit guardian', () => {
       } finally {
         // Cleanup also runs on regression so a failing guardian test never leaks.
         for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
-        rmSync(root, { recursive: true, force: true });
+        // On Windows, child processes may still hold handles briefly after SIGKILL.
+        // maxRetries + retryDelay lets Node retry on EBUSY without throwing.
+        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
       }
     }, 25_000,
   );

@@ -289,9 +289,9 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     parentProvider,
     parentCanUseTool,
   } = args;
-  // Resolve at fork time so a mid-session /reauth or hot-swap is visible to
-  // every child forked after it (fix #2471). The getter is undefined for
-  // callers that never supplied an apiKey; otherwise it is called once here.
+  // Resolve at fork time so a mid-session account switch or hot-swap is
+  // visible to every child forked after it (fix #2471). The getter is
+  // undefined for callers that never supplied an apiKey; otherwise called once.
   const parentApiKey = parentApiKeyGetter?.();
 
   // Query the shared workspace for entries relevant to this child's task

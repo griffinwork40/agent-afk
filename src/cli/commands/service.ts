@@ -21,6 +21,7 @@
  */
 
 import { Command } from 'commander';
+import { padDisplayRight } from '../display.js';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import { parseServiceName, runRestart } from './restart.js';
@@ -130,7 +131,7 @@ export function registerServiceCommand(program: Command): void {
         }
         for (const name of SERVICE_NAMES) {
           printStatus(mgr.status(name), mgr.configKind);
-          console.log('');
+          console.log(''); // console-ok
         }
       } catch (err) {
         handleCommandError(err);
@@ -148,7 +149,7 @@ export function registerServiceCommand(program: Command): void {
           const installed = mgr.isInstalled(name);
           const marker = installed ? palette.success('●') : palette.dim('○');
           const tag = installed ? palette.meta('installed') : palette.meta('not installed');
-          console.log(`  ${marker} ${name.padEnd(10)}  ${tag}  ${palette.meta(mgr.configPath(name))}`);
+          console.log(`  ${marker} ${padDisplayRight(name, 10)}  ${tag}  ${palette.meta(mgr.configPath(name))}`);
         }
       } catch (err) {
         handleCommandError(err);

@@ -190,7 +190,7 @@ describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
     expect(resolveCredentialForModel('claude-sonnet-4-6')).toBe('sk-ant-oat01-refreshed');
   });
 
-  it('prefers the live store over the boot-time cache after an account switch (subagent /reauth bug)', async () => {
+  it('prefers the live store over the boot-time cache after an account switch (subagent credential-swap bug)', async () => {
     // Boot on account A: preload caches A's token.
     await preloadClaudeKeychainOAuth('anthropic-direct');
     // Operator runs `claude login` → store now holds account B.
@@ -212,7 +212,7 @@ describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
     setRefreshedClaudeCodeOauthToken('sk-ant-oat01-account-A');
     expect(loadAnthropicCredential()).toBe('sk-ant-oat01-account-A');
 
-    // /reauth fires → forceClientRefresh() calls setRefreshedClaudeCodeOauthToken
+    // account switch → forceClientRefresh() calls setRefreshedClaudeCodeOauthToken
     // with the new token. The store is still empty (write-back failed).
     setRefreshedClaudeCodeOauthToken('sk-ant-oat01-account-B');
 

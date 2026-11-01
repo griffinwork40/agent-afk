@@ -24,6 +24,7 @@ import { handleCommandError } from '../errors/index.js';
 import { listCaptures } from '../../agent/tools/bash-capture-index.js';
 import { getWitnessRoot } from '../../paths.js';
 import { palette } from '../palette.js';
+import { divider } from '../render/divider.js';
 
 // ---------------------------------------------------------------------------
 // Formatting helpers (local to this command — not shared)
@@ -94,7 +95,7 @@ export function registerCapturesCommand(program: Command): void {
               `${'Timestamp'.padEnd(20)}  ${'Size'.padStart(8)}  ${'Session'.padEnd(32)}  Preview\n`,
             ),
           );
-          process.stdout.write(palette.dim('─'.repeat(100) + '\n'));
+          process.stdout.write(divider() + '\n');
 
           for (const e of entries) {
             const ts = palette.dim(fmtDate(e.mtimeMs));

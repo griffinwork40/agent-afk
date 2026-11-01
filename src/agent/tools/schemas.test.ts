@@ -18,15 +18,15 @@ import { filterBackgroundToolDefs } from './process-job-tools.js';
 import type { AnthropicToolDef } from './types.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 45 tools', () => {
-    // 23 invariant core + 22 optional tail = 45
-    expect(builtinToolSchemas).toHaveLength(45);
+  it('contains exactly 48 tools', () => {
+    // 23 invariant core + 25 optional tail = 48
+    expect(builtinToolSchemas).toHaveLength(48);
   });
 
   it('exports the expected tool names', () => {
-    // ORDERING INVARIANT (#4198): invariant core tools occupy indices 0..22;
+    // ORDERING INVARIANT (#4198): invariant core tools occupy indices 0..25;
     // optional/disableable/surface-filtered/registry-filtered tools occupy
-    // indices 23..44. Changing this order breaks prefix-cache reuse across
+    // indices 26..47. Changing this order breaks prefix-cache reuse across
     // tool-config variants. Indices 0..5 are the LOCKED_TOOLS builtins (never
     // operator-disableable).
     //
@@ -61,7 +61,11 @@ describe('builtinToolSchemas', () => {
       'remote_agent',
       'web_scrape',
       'web_request',
-      // -- Optional tail (23..44) --
+      // -- Optional tail (23..47) --
+      // registry-filtered: absent when artifact registry is not wired
+      'artifact_get',
+      'artifact_list',
+      'artifact_read',
       // registry-filtered: absent when no background registry is wired
       'cancel_background_job',
       'send_message_to_agent',
@@ -98,10 +102,13 @@ describe('builtinToolSchemas', () => {
     //   registry is wired (process-job-tools.ts — see #4208)
     const surfaceFiltered = ['ask_question', 'terminal_font_size', 'clipboard_read', 'clipboard_write'];
     const registryFiltered = ['cancel_background_job', 'send_message_to_agent', 'get_background_job_health'];
+    // registry-filtered: absent when artifact registry is not wired
+    const artifactFiltered = ['artifact_get', 'artifact_list', 'artifact_read'];
     const optionalTools = new Set([
       ...Object.values(groups).flat(),
       ...surfaceFiltered,
       ...registryFiltered,
+      ...artifactFiltered,
       'send_telegram',
     ]);
     // Every tool at index < INVARIANT_CORE_COUNT must not be optional.
@@ -171,6 +178,7 @@ describe('builtinToolSchemas', () => {
       'clipboard_read',
       'list_sessions',
       'model_complete',
+      'artifact_list',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();

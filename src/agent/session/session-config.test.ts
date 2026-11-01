@@ -21,7 +21,6 @@ import {
   setPermissionMode,
   setSystemPrompt,
   setCwd,
-  reauth,
   takePendingPlanExitSeed,
   type ConfigDeps,
 } from './session-config.js';
@@ -58,7 +57,6 @@ function makeProviderQuery(overrides: Partial<ProviderQuery> = {}): ProviderQuer
     setPermissionMode: vi.fn().mockResolvedValue(undefined),
     setSystemPrompt: vi.fn().mockReturnValue(true),
     setCwd: vi.fn(),
-    reauth: vi.fn().mockResolvedValue({ accountId: 'acct-1', oldAccountId: '', swapped: false }),
     interrupt: vi.fn().mockResolvedValue(undefined),
     supportedCommands: vi.fn().mockResolvedValue([]),
     supportedModels: vi.fn().mockResolvedValue([]),
@@ -272,32 +270,6 @@ describe('setCwd', () => {
   it('does not throw when provider setCwd is absent', () => {
     const { deps } = makeMockDeps({ providerQuery: { setCwd: undefined } });
     expect(() => setCwd('/new/dir', deps)).not.toThrow();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// reauth
-// ---------------------------------------------------------------------------
-
-describe('reauth', () => {
-  it('returns the provider reauth result when supported', async () => {
-    const { deps } = makeMockDeps({
-      providerQuery: {
-        reauth: vi.fn().mockResolvedValue({ accountId: 'acct-42', oldAccountId: 'acct-old', swapped: true }),
-      },
-    });
-    const result = await reauth(deps);
-    expect(result).toEqual({ accountId: 'acct-42', oldAccountId: 'acct-old', swapped: true });
-  });
-
-  it('returns null when provider reauth is absent', async () => {
-    const { deps } = makeMockDeps({ providerQuery: { reauth: undefined } });
-    expect(await reauth(deps)).toBeNull();
-  });
-
-  it('returns null when provider reauth returns null', async () => {
-    const { deps } = makeMockDeps({ providerQuery: { reauth: vi.fn().mockResolvedValue(null) } });
-    expect(await reauth(deps)).toBeNull();
   });
 });
 

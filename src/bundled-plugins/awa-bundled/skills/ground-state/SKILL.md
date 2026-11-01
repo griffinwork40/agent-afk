@@ -12,7 +12,7 @@ failure_modes:
 ## Sub-agent contract
 /contract
 
-**Constraint: read-only reconnaissance.** You MUST NOT call `edit_file`, `write_file`, or any mutating bash command (no `git commit`, `git push`, `git checkout`, `mv`, `rm`, file redirection, package installs, etc.). Read-only tools only: `read_file`, `grep`, `glob`, `list_directory`, `memory_search`, and read-only bash (`git status`, `git log`, `git diff`, `cat`, `ls`, `find`, etc.). `memory_search` is non-mutating and is the **only** way to reach the cross-session fact archive — it is in scope for this skill, do not strip it from this list.
+**Constraint: read-only reconnaissance.** You MUST NOT call `edit_file`, `write_file`, or any mutating bash command (no `git commit`, `git push`, `git checkout`, `mv`, `rm`, file redirection, package installs, etc.). Read-only tools only: `read_file`, `grep`, `glob`, `list_directory`, `memory_search`, and git queries (via `bash` or `git_read` when bash is unavailable). Under `git_read`, non-git shell commands (`cat`, `ls`, `stat`, `tail`) are not available; use `read_file`, `glob`, and `list_directory` instead. `memory_search` is non-mutating and is the **only** way to reach the cross-session fact archive — it is in scope for this skill, do not strip it from this list.
 
 If the survey reveals a fix that's tempting to apply, **return it as a recommendation in the snapshot** — the orchestrator decides whether to act. Even if the invoking brief sounds prescriptive ("draft the edit", "apply the change"), this skill stops at the snapshot and the preamble artifact. The orchestrator dispatches a separate implementation step afterward.
 
@@ -48,7 +48,7 @@ Check for relevant tooling and configs. Use the domain table below to decide whi
 
 | Domain | What to scan |
 |--------|-------------|
-| `software` | CI configs (`ls .github/workflows/ 2>/dev/null`), package scripts (`package.json`, `Makefile`, `pyproject.toml`), linters/formatters, authoritative config files for the task. |
+| `software` | CI configs (`list_directory` or `glob` on `.github/workflows/`), package scripts (`package.json`, `Makefile`, `pyproject.toml`), linters/formatters, authoritative config files for the task. |
 | `research` | Reference manager (.bib files), LaTeX setup, data analysis tools (Jupyter, R scripts), collaboration setup. |
 | `design` | Design tool configs, prototyping tools, handoff configs (Storybook), asset pipeline scripts. |
 | `business` | Modeling tool configs, presentation formats, data source configs, collaboration tool structure. |
@@ -66,14 +66,11 @@ Return: relevant facts with 1-line summaries, **plus the stores actually consult
 
 Read `SPINE.md` from the repo root (same directory as `AFK.md`). If the file does not exist or is empty, skip silently -- do not mention it in the snapshot. If it exists and has entries, extract its invariant (INV-*), rejected-pattern (REJ-*), and taste entries (TST-*) and include them in the snapshot so architectural constraints are visible before proposing changes.
 
-### Eval-pipeline recency survey *(bash — software domain only)*
+### Eval-pipeline recency survey *(software domain only)*
 
 For software-domain sessions, check whether the eval-run pipeline is current. This guard catches silent regressions that accumulate when the pipeline goes unrun during high-velocity sprints.
 
-Run:
-```
-tail -1 ~/.afk/agent-framework/improve/eval-runs/.index.jsonl 2>/dev/null
-```
+Read the last line of `~/.afk/agent-framework/improve/eval-runs/.index.jsonl` (use `read_file`; if the file does not exist, treat as "never run").
 
 Parse the `timestamp` field from the output. Then compute the age in days relative to today's date.
 
@@ -110,8 +107,8 @@ After the snapshot is assembled, construct the **Brief Anchor** — a path-verif
 
 **Construction procedure:**
 
-1. From your state survey output, extract the verified `cwd` (absolute path from `pwd`), `branch` (from `git rev-parse --abbrev-ref HEAD`), and `HEAD` SHA (from `git rev-parse HEAD`).
-2. From your infrastructure survey output, extract the 2–4 canonical file paths most relevant to the task. For each, run `stat <path>` — include the path only if `stat` exits 0. Paths that fail `stat` are omitted; if zero paths survive, set the list to `(none verified)`.
+1. From your state survey output, extract the verified `cwd` (from `git rev-parse --show-toplevel` combined with `git rev-parse --show-prefix` to reconstruct the full session path: `<toplevel>/<prefix>`), `branch` (from `git rev-parse --abbrev-ref HEAD`), and `HEAD` SHA (from `git rev-parse HEAD`).
+2. From your infrastructure survey output, extract the 2–4 canonical file paths most relevant to the task. For each, verify existence with `glob` or `read_file`; include the path only if it exists. Paths that don't exist are omitted; if zero paths survive, set the list to `(none verified)`.
 3. Assemble the preamble block:
 
 ```
@@ -119,7 +116,7 @@ After the snapshot is assembled, construct the **Brief Anchor** — a path-verif
 - **cwd**: <absolute path>
 - **branch**: <branch name>
 - **HEAD**: <full SHA>
-- **canonical paths** (stat each on entry; emit GROUNDING_FAILED:<path> and abort if missing):
+- **canonical paths** (verify each on entry; emit GROUNDING_FAILED:<path> and abort if missing):
   - <verified_path_1>
   - <verified_path_2>  ← omit line if not applicable
 ```
@@ -129,7 +126,7 @@ After the snapshot is assembled, construct the **Brief Anchor** — a path-verif
 **Orchestrator usage contract:**
 
 - Prepend the Brief Anchor verbatim to every sub-agent brief that reads files, runs `git`/`gh` commands, or references explicit paths. Skip for pure-reasoning tasks.
-- Sub-agents receiving the anchor `stat` each listed path on entry. A missing path returns `GROUNDING_FAILED:<path>` — the orchestrator re-dispatches once with the corrected path. If the retry also returns `GROUNDING_FAILED`, emit `BRIEF_GROUND_ABORT` with both the expected and actual paths **plus the corrective command** the operator should run — `git worktree list` to find the intended checkout, then `cd <correct-worktree>` — and halt the wave.
+- Sub-agents receiving the anchor verify each listed path on entry (via `glob` or `read_file`). A missing path returns `GROUNDING_FAILED:<path>` — the orchestrator re-dispatches once with the corrected path. If the retry also returns `GROUNDING_FAILED`, emit `BRIEF_GROUND_ABORT` with both the expected and actual paths **plus the corrective command** the operator should run — `git worktree list` to find the intended checkout, then `cd <correct-worktree>` — and halt the wave.
 - The anchor is session-scoped: one construction pass per `ground-state` invocation. Do not re-invoke `ground-state` mid-session to refresh it; instead pass the existing anchor through.
 
 **Skip when:**

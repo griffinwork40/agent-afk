@@ -53,6 +53,14 @@
       "category": "misc"
     },
     {
+      "name": "AFK_BASH_SANDBOX",
+      "description": "Opt-in OS-level filesystem write sandbox for foreground bash invocations. Accepted values:\n  workspace-write  – allow reads everywhere; writes confined to the effective cwd/worktree and actual child TMPDIR (TMP/TEMP fallback). The complete write-denylist floor (including relocated AFK paths and custom entries) remains protected; Linux refuses grants overlapping protected paths in either direction, including symlink aliases and absent leaves. Network is unrestricted by default.\n  read-only        – deny regular-file writes everywhere; narrow standard device IO remains available for process/git functionality.\n  off              – disable the sandbox even if a parent session enabled it (inheriting contexts only).\nPlatform support: macOS uses sandbox-exec (deprecated API, still functional as of macOS 15). Linux requires bwrap (bubblewrap); there is no Landlock fallback. Windows and unsupported platforms refuse the spawn. Background bash spawning is not covered yet; do not use this setting as a sandbox for run_in_background commands. Reads and network access are not restricted. This is not a VM boundary: pre-existing hardlinks, bind-mount aliases and concurrent host topology changes are not covered. When explicitly set but the sandbox mechanism is unavailable, the spawn is REFUSED rather than silently running unsandboxed (fail-closed). Unset (default): sandbox disabled; existing string-based path guards remain active. Do not set this to make security claims before measuring real-world soak data — the string guards remain the primary line for accidental-access prevention.",
+      "type": "string",
+      "required": false,
+      "example": "workspace-write",
+      "category": "misc"
+    },
+    {
       "name": "AFK_BG_AUTO_DELIVER",
       "description": "Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow.",
       "type": "boolean",
@@ -338,6 +346,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_EPISODE_SYNTHESIS",
+      "description": "Enable automatic episode synthesis at session end. When set to 1, a compressed narrative of each top-level session is synthesized from its sealed journal and stored in cross-session memory (facts table, category: learning). Off by default — opt in once the memory archive is large enough that episodic recall adds value. Requires a valid Anthropic credential; falls back to a deterministic record if the LLM call fails. Use `afk episode synthesize <session-id>` to synthesize a specific session on demand regardless of this flag.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_EVAL_STALENESS_DAYS",
       "description": "Number of days without a completed eval-run before the ground-state pre-flight surfaces a staleness warning. The guard reads the most recent timestamp from the eval-runs index ($AFK_HOME/agent-framework/improve/eval-runs/.index.jsonl) and emits a warning finding when the gap exceeds this threshold. Default: 7. Set to 0 to disable the guard.",
       "type": "number",
@@ -542,6 +559,15 @@
       "required": false,
       "default": "300000",
       "example": "60000",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_LSP_REPO_MAP_TIMEOUT_MS",
+      "description": "Total budget in milliseconds for building the repo-map summary (phase 3 of #3904, AFK_LSP_DIAGNOSTICS=1). Covers both the LSP workspace/symbol query and the filesystem fallback scan. Default 8000 ms. Raise for large monorepos; lower to reduce startup latency when the map is not needed.",
+      "type": "number",
+      "required": false,
+      "default": "8000",
+      "example": "4000",
       "category": "misc"
     },
     {

@@ -10,7 +10,8 @@
  */
 
 import { execSync } from 'node:child_process';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
+import { atomicWriteFile } from '../../src/utils/atomic-write.js';
 import { join } from 'node:path';
 import type { TrialResult } from './compare.js';
 
@@ -48,7 +49,7 @@ export interface ExperimentManifest {
   model: string;
   /** SHA-256 hex digest of the experiment prompt (both arms identical). */
   promptHash: string;
-  /** Short git SHA of HEAD at experiment time. */
+  /** Full git SHA of HEAD at experiment time. */
   gitSha: string;
   /** Node.js runtime version (process.version). */
   nodeVersion: string;
@@ -73,7 +74,7 @@ export interface ExperimentManifest {
 
 function safeGitSha(): string {
   try {
-    return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+    return execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
   } catch {
     return 'unknown';
   }
@@ -177,12 +178,27 @@ export function writeManifest(manifest: ExperimentManifest, outputDir: string): 
   markdownPath: string;
 } {
   mkdirSync(outputDir, { recursive: true });
-  const ts = manifest.startedAt.replace(/[:.]/g, '-');
-  const manifestPath = join(outputDir, `manifest-${ts}.json`);
-  const markdownPath = join(outputDir, `summary-${ts}.md`);
+  const manifestPath = join(outputDir, 'manifest.json');
+  if (existsSync(manifestPath)) {
+    throw new Error(`Refusing to replace existing experiment manifest: ${manifestPath}`);
+  }
+  const markdownPath = join(outputDir, 'report.md');
+  const writeJson = (path: string, value: unknown) =>
+    atomicWriteFile(path, JSON.stringify(value, null, 2) + '\n');
 
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-  writeFileSync(markdownPath, buildMarkdown(manifest));
+  // Raw stdout/stderr remain separate; these arm records hold validated metadata.
+  for (const entry of manifest.trials) {
+    writeJson(join(outputDir, entry.arm, `trial-${entry.trialIndex}.json`), entry);
+  }
+  writeJson(join(outputDir, 'comparison.json'), {
+    trialCount: manifest.trialCount,
+    summary: manifest.summary,
+    arms: manifest.trials.map(({ arm, trialIndex, validationPassed, validationFailures, dedupMetrics }) =>
+      ({ arm, trialIndex, validationPassed, validationFailures, dedupMetrics })),
+  });
+  atomicWriteFile(markdownPath, buildMarkdown(manifest));
+  // Write the manifest last: its presence indicates the storage pass completed.
+  writeJson(manifestPath, manifest);
   return { manifestPath, markdownPath };
 }
 

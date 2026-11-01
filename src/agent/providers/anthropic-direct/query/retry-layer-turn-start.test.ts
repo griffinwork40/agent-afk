@@ -1,11 +1,10 @@
 /**
  * Turn-start credential catch-up in {@link RetryLayer.turnWithRetries}.
  *
- * Operator question 2026-10-21: "why is /reauth not automatic?" An account
- * switch (`claude login` in another terminal) with NO error left the running
- * session on the old account until a 401, a usage-limit 429, or a manual
- * `/reauth`, and Telegram / the web UI have no `/reauth` at all. The layer
- * now compares the store with the live client token at the top of every turn.
+ * Account switches (`claude login` in another terminal) with NO error left the
+ * running session on the old account until a 401 or a usage-limit 429, and
+ * Telegram / the web UI had no manual refresh command at all. The layer now
+ * compares the store with the live client token at the top of every turn.
  *
  * Coverage:
  *  - store moved between turns → client rebuilt BEFORE the turn runs, and
@@ -210,6 +209,7 @@ describe('RetryLayer — credentialFromStore: true + env var set (defence-in-dep
       expect.objectContaining({ phase: 'credential_swap' }),
     );
   });
+
 
   it('swaps when credentialFromStore is true and no env var is set', async () => {
     // Positive path: credentialFromStore true, no env-var pin, store moved —

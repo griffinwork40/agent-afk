@@ -12,6 +12,121 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- add layout-jump decision table reference (#4609) (ad468b192)
+- summary-mode thinking indicator and unknown-error hint (a0d82bd1a)
+
+### Fixed
+- harden wrapping across 9 files (#4617) (9c687a5d8)
+- disambiguate Windows EPERM in daemon instance lock (#4605) (7aeba989e)
+- skip preamble-only user records in goal extraction (#4604) (09d08195a)
+- add episode backfill CLI command (10bdd60bf)
+- address advisory findings from workspace subscription parity (877cd86a7)
+- address advisory findings from command classifier facets (94f8e37d3)
+- cap thinking lane on dispose + fix stall test fixture (5b4b4361e)
+
+## [5.344.0] - 2026-11-01
+
+### Added
+- LSP repo map summary for system prompt (#3904, phase 3) (3b5c1d603)
+- console output discipline CI gate (`audit:console:check`) (af289de75)
+- fit-and-finish quality sweep + POSIX guard CI gate (#4594) (8ef8f1b45)
+- worktree tool accepts explicit repo parameter (#4430) (341862851)
+- stamp session cwd on run receipt (#4582) (d4aea92d7)
+
+### Fixed
+- single-instance guard to prevent concurrent daemon execution (#4434) (9e629b249)
+- opt-in OS-level bash sandbox (`sandbox-exec` / `bwrap`) (#4554) (9229778aa)
+- per-rule instrumentation, denial-breaker blindspot, and insights panel (#3849) (8e257ec0c)
+- expose bounded read-only artifact registry tools (#1415) (687024cca)
+- forward opt-in idempotency keys and reconcile uncertain effects (#3714) (f344834e6)
+- prepare canonical workspace experiment storage (#1539) (ac3538cd3)
+- ESLint `import/no-restricted-paths` CI rule for layer contract (#4464) (f27b95dbe)
+- audit-layer non-blocking findings from #4464 review (#4588) (d9df6666e)
+- test runner wrapper for vitest jsdom hang (#4595) (9ecb26831)
+- strip harness preamble from episode goal extraction (#4585) (6868a7e08)
+- Windows test failures in repo-map and bash-sandbox tests (#4593) (ab3704482)
+- bound every bash output viewer row to available width (#4510) (3b623548b)
+- name sanctioned alternatives in restricted-path block reasons (#3850) (4b316bbad)
+- readLedgerHead entry-guard asymmetry and test gaps (#4524) (4014fac71)
+- exercise resume repository filtering and daemon fallback (#4504) (612f7cee2)
+- pin explicit read-root replacement in query setup tests (#4505) (87106cf11)
+- cover newline-only alternate paths (#4511) (8b7a99902)
+
+### Changed
+- route console output through palette across cli, telegram, and improve surfaces (d804b67b9, f6ad97936, bb58b7249)
+
+## [5.343.0] - 2026-10-30
+
+### Added
+- compute outcomes once at SessionEnd for receipt v3 and outcome store (99ee9bb2d)
+- pure computeOutcomes and OutcomesV1 schema with git-range adapter (39e2d5124)
+
+### Fixed
+- receipt schemaVersion v3 + Windows path normalization in outcomes (#4581) (21ea68311)
+- address 4 blocking review findings on PR #4535 (a3f3c98d3)
+- bound git command matching to avoid backtracking (13450fa3c)
+- preserve attributed outcomes and bound teardown input (be3eb5f27)
+- use u flag instead of v flag for FTS5 regex (ES2022 compat) (0ebce56a5)
+- use Unicode-aware boundaries in FTS5 sanitization regex (f59b0e2f5)
+- use Unknown goal sentinel instead of unreachable empty-field guard (a225af857)
+- episode synthesis quality — compaction, promise tracking, tests (69dbf3263)
+- use word boundaries in FTS5 sanitization regex (d490928ca)
+
+## [5.342.0] - 2026-10-30
+
+### Added
+- agent episode synthesis — opt-in, journal-based, deferred (#4565) (c32e1ac4f)
+- consumer-surface annotation + unified skill (#4564) (3d7c0ada4)
+
+### Fixed
+- allowlist gaps causing ground-state errors (#4560) (cb4b700e0)
+
+### Changed
+- remove /reauth slash command and dead-code chain (#4575) (1bb7a2600)
+
+## [5.341.0] - 2026-10-30
+
+### Added
+- keep abandoned conversations as branches and switch with /branches (#4294) (8d4adf1e3)
+- add PTY integration test for type-during-tool-round steering (6e63f85e0)
+- add docs/acp.md — editor integration guide for afk acp (42d68c80f)
+- add /where slash command and enrich AFK.md introspection surface (8fd77f752)
+
+### Fixed
+- canonical paths in credential denials, drop matched from roots variant (72fc000f3)
+- unify daemon allowedTools and wire web backgroundAutoDeliver (#4539) (7d3a5b428)
+- share command analysis facets across security consumers (331530078)
+- share write-floor and actor-root path decisions (637a357fe)
+- share model-intent and credential dispatch preparation (2a25323b4)
+- pill positioning and transcript tab-stop (#4435) (d97a3747d)
+- delete .git-commit-msg.txt and add CLAUDE_CODE_OAUTH_TOKEN test (#4528) (d48726eeb)
+- /where slash command — tests, security, null guard (#4527) (b6a45ad7a)
+- whatif provider cleanup — unused exports, import migration, test (#4531) (564077b6e)
+- add afk receipt regenerate to rebuild v1 receipts as v2 (#4463) (26ea1b44b)
+- prevent ghost branches on failed rewind; add isSafeLedgerSessionId guard and fork tests (#4495) (2e1385a37)
+- add isSameSession guard in handleSwitch; eliminate newId! assertion in forkBeforeRewind (802e509a7)
+- check forkJournal return value; memoize loadSession in collectBranches (c0256be7e)
+- export resolveFromFound; split forkBeforeRewind try/catch with orphan cleanup (e4297d8a9)
+- address 6 review findings — security, correctness, tests (79ca958ee)
+- narrow RegisteredAgent cast to BudgetHint; add maxTurns parity probe (68e3f7edf)
+- correct acp.md — done response shape, AbortController cancel, remove Cursor MCP section (88387da8d)
+- three P0 tool reliability improvements from 30-day audit (#4475) (bfd0affb3)
+- session-meta follow-up cleanups from #4453 sidecar migration (#4460) (5ddb756e1)
+- gate claude login hint on anthropic provider; preserve codex detail (9c45397ae)
+- replace ! non-null assertions with ?? fail() for noUncheckedIndexedAccess (45d7825a6)
+- drop /orient alias collision and guard non-git directories (1ca34fedd)
+- restore claude login hint and stale status tag in formatUsage (d6f4adf31)
+- compose-level max_tool_rounds_per_node wins over named-agent frontmatter budget (4e0fd3d51)
+- surface whatif/ provider imports through stable agent/ public API (33ae3b079)
+- address advisory findings from #4259 auth account switch review (349e51e94)
+
+### Changed
+- shard Windows tests and preserve aggregate check (53a2ccff9)
+- consolidate usage formatter with shared pipeline (2e43da5de)
+- stage 3 — named-agent budget parity in buildComposeDagNode (8ec4ecc49)
+- add introspection reference docs and glossary (f8ee1faca)
+
 ## [5.340.0] - 2026-10-29
 
 ### Added

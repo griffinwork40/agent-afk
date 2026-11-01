@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import { palette } from '../../palette.js';
 import { elicitationRouter } from '../../../agent/elicitation-router.js';
 import { makeReplElicitationHandler } from '../../elicitation-repl.js';
 import type { ModelProvider } from '../../../agent/provider.js';
@@ -100,10 +101,7 @@ export function wireProviderGrants(
     // explicit rather than silent — the bash interpreter denylist still fires,
     // but the elicitation prompt and bash restricted-path check will not.
     // eslint-disable-next-line no-console
-    console.warn(
-      '[path-approval] active provider does not implement GrantManager — ' +
-        'path-approval elicitation and bash restricted-path checks will not fire.',
-    );
+    console.warn(palette.warning('[path-approval] active provider does not implement GrantManager — path-approval elicitation and bash restricted-path checks will not fire.'));
   }
 }
 

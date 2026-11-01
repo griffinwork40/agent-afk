@@ -81,7 +81,7 @@ export async function runFarmPostRun(opts: FarmPostRunOptions): Promise<never> {
         continue;
       }
       const branch = manifest.branches.find((b) => b.index === r.index)!;
-      console.log(`[branch-${r.index}] scoring…`);
+      console.log(palette.dim(`[branch-${r.index}] scoring…`));
       const score = await scoreBranchFn({
         branchPath: branch.path,
         baseSha,
@@ -91,9 +91,7 @@ export async function runFarmPostRun(opts: FarmPostRunOptions): Promise<never> {
       try {
         await writeScoreFn(manifest.farmDir, r.index, score);
       } catch (err) {
-        console.error(
-          palette.warning(`[branch-${r.index}] score.json write failed: ${errorMessage(err)}`),
-        );
+        console.error(palette.warning(`[branch-${r.index}] score.json write failed: ${errorMessage(err)}`));
       }
     }
   }
@@ -121,11 +119,7 @@ export async function runFarmPostRun(opts: FarmPostRunOptions): Promise<never> {
     if (digestEnabled) {
       const digestResult = await sendFarmDigestFn(farmRecord);
       if (digestResult.sent) {
-        console.log(
-          palette.dim(
-            `[telegram] digest sent (${digestResult.chatCount} chat${digestResult.chatCount === 1 ? '' : 's'})`,
-          ),
-        );
+        console.log(palette.dim(`[telegram] digest sent (${digestResult.chatCount} chat${digestResult.chatCount === 1 ? '' : 's'})`));
       } else if (digestResult.reason && digestResult.reason !== 'telegram unconfigured') {
         console.error(palette.warning(`[telegram] digest failed: ${digestResult.reason}`));
       }

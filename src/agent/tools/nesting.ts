@@ -203,6 +203,7 @@ export const RECON_ALLOWED_TOOLS: readonly string[] = [
   ...AWARENESS_TOOL_NAMES,
   'memory_search',
   // Ephemeral per-session workspace publish + query — see this block's header note.
+  // workspace_subscribe excluded: recon children have no SubagentHandle delivery buffer.
   'workspace_publish',
   'workspace_query',
   'agent',
@@ -210,6 +211,7 @@ export const RECON_ALLOWED_TOOLS: readonly string[] = [
   // State store reads — read-only by construction, no repo mutation.
   // Same rationale as memory_search inclusion above.
   'state_get', 'state_query',
+  'artifact_get', 'artifact_list', 'artifact_read',
 ];
 
 // Skills treated as read-only by NAME, independent of their SKILL.md
@@ -279,6 +281,7 @@ export function createChildProviderFactory(
       // never write to the state store (state_put/cas/delete). Independent of
       // readOnlyMemory so fact writes remain open while state writes stay closed.
       readOnlyState: true as const,
+      ...(subscribeHandler !== undefined ? { subscribeHandler } : {}),
       // Custom tools injected at fork time (e.g. emit_progress). The provider
       // constructor is the only read point — config.customTools is not consulted
       // at query time when a pre-built provider is set.
@@ -299,7 +302,6 @@ export function createChildProviderFactory(
     return new AnthropicDirectProvider({
       ...providerOpts,
       ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
-      ...(subscribeHandler !== undefined ? { subscribeHandler } : {}),
     });
   };
 }

@@ -95,13 +95,9 @@ export function registerConfigCommand(program: Command): void {
         console.log(`  Provider: ${palette.plan(provider)}`);
 
         if (provider === 'anthropic') {
-          console.log(
-            `  API Key: ${apiKey ? palette.success('✓ Set (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN)') : palette.warning('⚠ Not set — subprocess will fall back to OAuth / keychain')}`,
-          );
+          console.log(`  API Key: ${apiKey ? palette.success('✓ Set (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN)') : palette.warning('⚠ Not set — subprocess will fall back to OAuth / keychain')}`);
         } else {
-          console.log(
-            `  API Key: ${apiKey ? palette.success('✓ Set (OPENAI_API_KEY / CODEX_API_KEY)') : palette.warning('⚠ Not set — falling back to `codex login` state')}`,
-          );
+          console.log(`  API Key: ${apiKey ? palette.success('✓ Set (OPENAI_API_KEY / CODEX_API_KEY)') : palette.warning('⚠ Not set — falling back to \`codex login\` state')}`);
         }
 
         const thinkingVal = env.AFK_THINKING || '(unset — SDK default)';
@@ -110,18 +106,14 @@ export function registerConfigCommand(program: Command): void {
         const effortVal = env.AFK_EFFORT || '(unset — SDK default)';
         console.log(`  Effort: ${palette.info(effortVal)}`);
 
-        console.log(
-          `  Permission Mode: ${bypassEnabled
-            ? palette.warning(`${permissionMode} (bypass — path containment off)`)
-            : palette.info(`${permissionMode} (path containment on)`)}`,
-        );
+        console.log(`  Permission Mode: ${bypassEnabled ? palette.warning(`${permissionMode} (bypass — path containment off)`) : palette.info(`${permissionMode} (path containment on)`)}`);
 
         console.log(palette.meta('\n  Edit config:'));
         console.log(palette.meta('    afk config set permissionMode default  # re-enable path containment'));
         console.log(palette.meta('    afk config set <key> <value>      e.g. afk config set model opus'));
         console.log(palette.meta('    afk config env set <KEY> [value]  e.g. afk config env set AFK_EFFORT high'));
         console.log(palette.meta('    afk config get [key] / afk config env get [key]'));
-        console.log('');
+        console.log(''); // console-ok
       }
     });
 

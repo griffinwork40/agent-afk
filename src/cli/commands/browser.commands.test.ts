@@ -45,8 +45,12 @@ vi.mock('../palette.js', () => ({
   palette: {
     success: (s: string) => s,
     warning: (s: string) => s,
+    error: (s: string) => s,
     meta: (s: string) => s,
+    info: (s: string) => s,
     heading: (s: string) => s,
+    dim: (s: string) => s,
+    bold: (s: string) => s,
   },
 }));
 

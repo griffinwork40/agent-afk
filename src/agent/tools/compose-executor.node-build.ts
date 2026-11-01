@@ -9,11 +9,9 @@
 
 import type { SubagentDAGNode } from '../dag-subagent.js';
 import type { ComposeNodeInput } from './compose-input-parse.js';
-import { resolveChildModel, defaultTierModelFallback } from '../subagent/resolve-child-model.js';
+import { defaultTierModelFallback } from '../subagent/resolve-child-model.js';
+import { prepareDispatchModel } from './dispatch-preparation.js';
 import { resolveChildBudgets } from './subagent/child-config.helpers.js';
-import { providerForModel } from '../providers/index.js';
-import { resolveCredentialForModel } from '../auth/credential-resolver.js';
-import { applyParentCredentialFallback } from './child-credential.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
 import {
   resolvedAgentToolRestriction,
@@ -21,6 +19,7 @@ import {
   type ResolvedComposeAgent,
 } from './compose-agent-resolve.js';
 import { ensureError } from '../../utils/errors.js';
+import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry as defaultInboundAttachmentRegistry } from '../content/attachment-registry.js';
 import type { ImageBlockAttachment } from '../content/image-blocks.js';
@@ -32,7 +31,8 @@ import type { ComposeExecutorContext } from './compose-executor.context.js';
  */
 export type ComposeNodeBuildResult =
   | SubagentDAGNode
-  | { attachmentError: true; nodeId: string; error: Error };
+  | { attachmentError: true; nodeId: string; error: Error }
+  | { usageBlocked: true; nodeId: string; notice: string };
 
 /** Explicit inputs for {@link buildComposeDagNode}. */
 export interface BuildComposeDagNodeArgs {
@@ -79,34 +79,6 @@ export function buildComposeUpstreamPrompt(prompt: string, inputs: Record<string
 }
 
 /**
- * Resolve the API key forwarded to one compose node.
- *
- * Invariant: resolve credentials fresh per-node at fork time, matching
- * the agent tool path (child-config.ts:302-308). ctx.apiKey is a fallback
- * only when fresh resolution returns empty (expired keychain token).
- * OpenAI-routed nodes receive undefined (cross-provider anti-leak).
- * Uses applyParentCredentialFallback so the isAnthropicCredential gate
- * prevents a non-Anthropic ctx.apiKey from reaching Anthropic children
- * (structural parity with child-config.ts, not just behavioral).
- *
- * Note: this function performs an explicit OpenAI early-exit BEFORE calling
- * applyParentCredentialFallback. This is intentional: resolveApiKeyForModel
- * may return an Anthropic-shaped key even when the node model is OpenAI-routed
- * (e.g. a misconfigured resolver), and applyParentCredentialFallback's
- * `resolved !== undefined` guard would return it unchanged. The explicit
- * nodeIsOpenAI guard prevents that cross-provider leak at source.
- */
-export function resolveComposeNodeApiKey(
-  nodeModel: string,
-  ctx: Pick<ComposeExecutorContext, 'resolveApiKeyForModel' | 'apiKey'>,
-): string | undefined {
-  const nodeIsOpenAI = providerForModel(typeof nodeModel === 'string' ? nodeModel : undefined) === 'openai-compatible';
-  if (nodeIsOpenAI) return undefined;
-  const freshKey = ctx.resolveApiKeyForModel ? ctx.resolveApiKeyForModel(nodeModel) : resolveCredentialForModel(nodeModel);
-  return applyParentCredentialFallback({ childModel: nodeModel, resolved: freshKey, parentApiKey: ctx.apiKey });
-}
-
-/**
  * Build one runnable {@link SubagentDAGNode} from a parsed compose node, or an
  * attachment-error sentinel when the node's attachments fail to resolve.
  */
@@ -121,17 +93,35 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
   // Named-agent model default feeds into resolveChildModel as
   // `namedAgentModel` (lower precedence than an explicit call-site model,
   // higher than the compose-level defaultSubagentModel).
-  const nodeResolved = resolveChildModel({
-    callSiteModel: n.model,
-    namedAgentModel: resolvedAgent.namedAgentModel,
-    defaultSubagentModel: ctx.defaultSubagentModel,
-    defaultModel: ctx.defaultModel,
-  }, { withSource: true });
+  const nodeResolved = prepareDispatchModel({
+    modelIntent: {
+      callSiteModel: n.model,
+      namedAgentModel: resolvedAgent.namedAgentModel,
+      defaultSubagentModel: ctx.defaultSubagentModel,
+      defaultModel: ctx.defaultModel,
+    },
+    credentialPolicy: 'skip-openai-resolution',
+    resolveApiKeyForModel: ctx.resolveApiKeyForModel,
+    parentApiKey: ctx.apiKey,
+  });
   const nodeModel = nodeResolved.model;
+
+  // Usage gate: evaluate quota per-node against the resolved node model so an
+  // exhausted Opus quota does not wrongly block Haiku nodes. Mirrors the
+  // per-node gate in subagent-executor.execute-once.ts:173.
+  const { notice: usageNotice, blocked: usageBlocked } = await evaluateDispatchUsageForModel(nodeModel, ctx.traceWriter);
+  if (usageBlocked) {
+    return {
+      usageBlocked: true as const,
+      nodeId: n.id,
+      notice: usageNotice ?? 'The subscription quota is exhausted.',
+    };
+  }
+
   // Default-tier fallback: the node's provider is pre-built for nodeModel's
   // family, so the retry rebuilds it with the same gates for the parent model.
   const nodeFallback = defaultTierModelFallback(nodeResolved, ctx.defaultModel);
-  const resolvedNodeApiKey = resolveComposeNodeApiKey(nodeModel, ctx);
+  const resolvedNodeApiKey = nodeResolved.apiKey;
 
   // Attachment resolution: when a node declares `attachments`, resolve
   // them to ImageBlockAttachment[] using the same pipeline as the agent
