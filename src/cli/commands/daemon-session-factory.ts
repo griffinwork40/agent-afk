@@ -3,7 +3,7 @@ import { getApiKeyForModel, getDefaultSubagentModel, getMaxToolUseIterations, ge
 import type { AgentConfig, AgentModelInput } from '../../agent/types.js';
 import { AgentSession } from '../../agent/session.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
-import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
+import { MemoryStore, injectHotMemory, injectGoalPrompt, injectEpisodeRecall } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
@@ -172,7 +172,7 @@ export function buildDaemonSessionFactory(
     // session-spawn.ts pre-populating config.maxBudgetUsd.
     // undefined/NaN/negative → undefined = uncapped (no behavior change).
     const daemonMaxBudgetUsd = config.maxBudgetUsd ?? getMaxBudgetUsd();
-    const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
+    const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory({
       ...config,
       provider,
       // Daemon sessions are headless by default: no human watches to answer
@@ -194,7 +194,7 @@ export function buildDaemonSessionFactory(
         ? { maxToolUseIterations: daemonMaxToolUseIterations }
         : {}),
       ...(daemonMaxBudgetUsd !== undefined ? { maxBudgetUsd: daemonMaxBudgetUsd } : {}),
-    }))), ownedTraceWriter);
+    })))), ownedTraceWriter);
     bound = session;
     const close = session.close.bind(session);
     let closing: Promise<void> | undefined;

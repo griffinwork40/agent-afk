@@ -30,4 +30,20 @@ export const EPISODE_ENV_REGISTRY = [
     example: '1',
     category: 'misc',
   },
+  {
+    name: 'AFK_EPISODE_RECALL',
+    description:
+      'Enable automatic episode recall at session start. When set to 1, ' +
+      'stored episodes whose filesKey or branch overlaps with the current ' +
+      'git context are surfaced as a <recent-episodes> block in the system ' +
+      'prompt (up to 3 episodes, capped at ~6K tokens). Off by default — ' +
+      'opt in once the episode archive is large enough to make associative ' +
+      'recall useful (≥50 episodes). Requires AFK_EPISODE_SYNTHESIS to have ' +
+      'been running long enough to accumulate episodes.',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];
