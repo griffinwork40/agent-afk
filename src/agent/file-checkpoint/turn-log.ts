@@ -59,6 +59,7 @@ export type TurnLogEntry =
   | { kind: 'turn'; turnId: string; ts: number }
   | { kind: 'post'; turnId: string; paths: PathHashes; ts: number }
   | { kind: 'restore'; paths: PathHashes; ts: number }
+  | { kind: 'tip'; turnId: string; ts: number }
   | BashLogEntry;
 
 /** SHA-256 of `bytes`, or `null` for an absent file. */
@@ -95,6 +96,7 @@ function isEntry(value: unknown): value is TurnLogEntry {
   if (v['kind'] === 'turn') return typeof v['turnId'] === 'string';
   if (v['kind'] === 'post') return typeof v['turnId'] === 'string' && typeof v['paths'] === 'object' && v['paths'] !== null;
   if (v['kind'] === 'restore') return typeof v['paths'] === 'object' && v['paths'] !== null;
+  if (v['kind'] === 'tip') return typeof v['turnId'] === 'string';
   if (v['kind'] === 'bash') return typeof v['turnId'] === 'string' && (v['status'] === 'captured' || v['status'] === 'partial' || v['status'] === 'skipped');
   return false;
 }
@@ -123,11 +125,14 @@ export function readTurnLog(sessionId: string, stateDir?: string): TurnLogEntry[
  * `undefined` when the turn was never logged (legacy checkpoint).
  */
 export function turnsFrom(log: readonly TurnLogEntry[], turnId: string): string[] | undefined {
-  const start = log.findIndex((e) => e.kind === 'turn' && e.turnId === turnId);
+  const start = log.findIndex(
+    (e) => (e.kind === 'turn' || e.kind === 'tip') && e.turnId === turnId,
+  );
   if (start < 0) return undefined;
   const ids: string[] = [];
   for (const entry of log.slice(start)) {
-    if (entry.kind === 'turn' && !ids.includes(entry.turnId)) ids.push(entry.turnId);
+    if ((entry.kind === 'turn' || entry.kind === 'tip') && !ids.includes(entry.turnId))
+      ids.push(entry.turnId);
   }
   return ids;
 }
@@ -136,7 +141,7 @@ export function turnsFrom(log: readonly TurnLogEntry[], turnId: string): string[
 export function expectedHashes(log: readonly TurnLogEntry[]): Map<string, string | null> {
   const expected = new Map<string, string | null>();
   for (const entry of log) {
-    if (entry.kind === 'turn' || entry.kind === 'bash') continue;
+    if (entry.kind === 'turn' || entry.kind === 'bash' || entry.kind === 'tip') continue;
     for (const [path, hash] of Object.entries(entry.paths)) expected.set(path, hash as string | null);
   }
   return expected;
@@ -165,6 +170,26 @@ export function latestCheckpointTurnId(sessionId: string, stateDir?: string): st
   let latest: string | undefined;
   for (const entry of log) {
     if (entry.kind === 'turn') latest = entry.turnId;
+  }
+  return latest;
+}
+
+/**
+ * Return the turnId of the LAST `tip` entry in the log for `sessionId`, or
+ * `undefined` when the log does not exist or contains no `tip` entries.
+ *
+ * Used by `/branches switch` to restore files to the END of the branch's last
+ * turn (not the start). The `tip` entry is written after the `post` entry by
+ * `endCheckpointTurn`, so its turnId represents the finished-turn boundary.
+ * Passing this turnId to `restoreFiles` → `planRewind` yields an empty
+ * snapshot list (no checkpoint directory exists for the synthetic tip id),
+ * which is a correct no-op: files are already at branch-tip state.
+ */
+export function latestTipTurnId(sessionId: string, stateDir?: string): string | undefined {
+  const log = readTurnLog(sessionId, stateDir);
+  let latest: string | undefined;
+  for (const entry of log) {
+    if (entry.kind === 'tip') latest = entry.turnId;
   }
   return latest;
 }

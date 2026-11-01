@@ -21,8 +21,8 @@ import { loadSession, findSession, listSessions } from '../../session-store.js';
 import { resolveFromFound } from './resume.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import { isSafeLedgerSessionId } from '../../../paths.js';
-import { latestCheckpointTurnId } from '../../../agent/file-checkpoint/turn-log.js';
-import { restoreFiles, pick } from './core.rewind.js';
+import { latestTipTurnId } from '../../../agent/file-checkpoint/turn-log.js';
+import { restoreFiles } from './core.rewind.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ function collectBranches(currentId: string): BranchEntry[] {
 
     branches.push({
       id: entry.id,
-      sessionId: entry.sessionId,
+      sessionId: entry.sessionId !== undefined && isSafeLedgerSessionId(entry.sessionId) ? entry.sessionId : undefined,
       name: entry.name,
       model: typeof entry.model === 'string' ? entry.model : String(entry.model),
       savedAt: entry.savedAt,
@@ -194,6 +194,10 @@ async function handleSwitch(
   }
 
   const resumeKey = branch.sessionId ?? branch.id;
+  if (!isSafeLedgerSessionId(resumeKey)) {
+    ctx.out.error(`Refusing to switch: unsafe session id in branch sidecar.`);
+    return 'continue';
+  }
   const command = formatResumeCommand(resumeKey, branch.model);
 
   // Use requestResume when available (REPL interactive swap).
@@ -216,17 +220,11 @@ async function handleSwitch(
         // Attempt file restore using the branch tip's on-disk checkpoint.
         // WeakMap links don't survive a cross-session resume, so we recover the
         // turnId by reading the branch's turn log directly from disk.
-        const checkpointTurnId = latestCheckpointTurnId(resumeKey);
-        if (checkpointTurnId !== undefined) {
+        const tipTurnId = latestTipTurnId(resumeKey);
+        if (tipTurnId !== undefined) {
+          await restoreFiles(ctx, ctx.session.current, tipTurnId);
           ctx.out.line('');
-          ctx.out.line(palette.dim('  File checkpoint found for this branch. Restore files?'));
-          ctx.out.line('');
-          const choice = await pick(ctx, ['Restore files to this branch\'s state', 'Skip — keep current files'], 'Restore branch files?');
-          if (choice === 0) {
-            await restoreFiles(ctx, ctx.session.current, checkpointTurnId);
-          } else {
-            ctx.out.info('File restore skipped. Run /rewind files to restore later.');
-          }
+          ctx.out.line(palette.dim('  Files restored to this branch\'s state.'));
         } else {
           ctx.out.line('');
           ctx.out.line(palette.dim('  No file checkpoint for this branch (checkpointing may have been off when it was created).'));

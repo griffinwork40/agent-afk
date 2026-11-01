@@ -43,8 +43,10 @@ export function endCheckpointTurn(
   if (registry === undefined || finished.has(registry)) return;
   finished.add(registry);
   const touched = registry.touchedPaths();
-  if (touched.length === 0) return;
-  appendTurnLog(sessionId, { kind: 'post', turnId: registry.turnId, paths: hashPaths(touched), ts: Date.now() }, stateDir);
+  if (touched.length > 0) {
+    appendTurnLog(sessionId, { kind: 'post', turnId: registry.turnId, paths: hashPaths(touched), ts: Date.now() }, stateDir);
+  }
+  appendTurnLog(sessionId, { kind: 'tip', turnId: registry.turnId, ts: Date.now() }, stateDir);
 }
 
 /** Associate a user message object with the checkpoint turn it started. */
