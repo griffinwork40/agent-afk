@@ -124,6 +124,13 @@ export function registerEpisodeCommand(program: Command): void {
 
         const episode = await synthesizeAndWriteEpisode(resolvedId as string);
 
+        if (!episode) {
+          process.stdout.write(
+            palette.dim(`Skipped: session ${resolvedId} has no user content or tool usage.\n`),
+          );
+          return;
+        }
+
         // Item 3 guard: warn when the episode input was empty. resolveLatestSession()
         // returns witness directory labels which may differ from runtime session IDs
         // for `afk chat` sessions — those produce empty episodes.
