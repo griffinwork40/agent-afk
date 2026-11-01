@@ -4,7 +4,7 @@ import { getApiKeyForModel, getDefaultSubagentModel, parseProvider } from '../sh
 import type { AgentConfig, AgentModelInput } from '../../agent/types.js';
 import { AgentSession } from '../../agent/session.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
-import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
+import { MemoryStore, injectHotMemory, injectGoalPrompt, injectEpisodeRecall } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
@@ -163,7 +163,7 @@ export function buildDaemonSessionFactory(
     const unattendedLimits = resolveUnattendedLimits(
       env.AFK_MAX_TOOL_USE_ITERATIONS, env.AFK_MAX_BUDGET_USD, config,
     );
-    const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
+    const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory({
       ...config,
       provider,
       // Daemon sessions are headless by default: no human watches to answer
@@ -182,7 +182,7 @@ export function buildDaemonSessionFactory(
       // scheduler/cron session routes through here → 'daemon'.
       surface: 'daemon',
       ...unattendedLimits,
-    }))), ownedTraceWriter);
+    })))), ownedTraceWriter);
     bound = session;
     const close = session.close.bind(session);
     let closing: Promise<void> | undefined;
