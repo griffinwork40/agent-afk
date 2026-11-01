@@ -50,16 +50,36 @@ export class DaemonAlreadyRunningError extends Error {
   /** PID of the live daemon that holds the lock, when determinable. */
   readonly ownerPid: number | null;
 
-  constructor(lockPath: string, ownerPid: number | null) {
+  /**
+   * `true` when the lock-file open failed with `EPERM` on Windows.
+   *
+   * On Windows, `EPERM` is ambiguous: it can mean the file is in a
+   * "delete-pending" state (another process holds it open — genuine
+   * contention) **or** that a real permission denial occurred (e.g.
+   * antivirus software or restrictive ACLs). The daemon treats both
+   * cases identically for safety, but surfaces this flag so callers
+   * and users can see the ambiguity in the error message.
+   */
+  readonly windowsEpermAmbiguous: boolean;
+
+  constructor(
+    lockPath: string,
+    ownerPid: number | null,
+    windowsEpermAmbiguous = false,
+  ) {
     const pidClause =
       ownerPid !== null ? ` (owned by PID ${ownerPid})` : '';
+    const epermNote = windowsEpermAmbiguous
+      ? ' (Windows EPERM: may be a permission denial by antivirus or ACLs rather than a running daemon — check security software if this is unexpected)'
+      : '';
     super(
       `Another afk daemon is already running${pidClause}. ` +
         `Lock file: ${lockPath}. ` +
-        `Stop the existing daemon before starting a new one.`,
+        `Stop the existing daemon before starting a new one.${epermNote}`,
     );
     this.name = 'DaemonAlreadyRunningError';
     this.ownerPid = ownerPid;
+    this.windowsEpermAmbiguous = windowsEpermAmbiguous;
   }
 }
 
@@ -148,7 +168,15 @@ async function tryOpen(
   try {
     return await fs.open(lockPath, 'wx');
   } catch (err) {
-    if (!isErrnoCode(err, 'EEXIST') && !isWindowsLockContention(err, platform)) throw err;
+    const isContention = isErrnoCode(err, 'EEXIST') || isWindowsLockContention(err, platform);
+    if (!isContention) throw err;
+
+    // On Windows, EPERM is ambiguous: it can mean the file is in a
+    // "delete-pending" state (genuine lock contention) OR that a real
+    // permission denial occurred (antivirus, ACLs). Track this so we can
+    // surface the ambiguity in the error message if we end up throwing.
+    const triggeredByWindowsEperm =
+      platform === 'win32' && isErrnoCode(err, 'EPERM');
 
     // Read the PID from the existing lock file.
     let ownerPid: number | null = null;
@@ -174,7 +202,7 @@ async function tryOpen(
       }
 
       if (alive) {
-        throw new DaemonAlreadyRunningError(lockPath, ownerPid);
+        throw new DaemonAlreadyRunningError(lockPath, ownerPid, triggeredByWindowsEperm);
       }
 
       // Stale lock (dead PID) — remove it and retry once.
@@ -196,13 +224,15 @@ async function tryOpen(
       }
       // Lost the race on retry — another process acquired it between our unlink
       // and our retry open. Re-read the new owner PID for the error message.
+      const retryTriggeredByWindowsEperm =
+        platform === 'win32' && isErrnoCode(retryErr, 'EPERM');
       let retryOwnerPid: number | null = null;
       try {
         const raw = await fs.readFile(lockPath, 'utf-8');
         const parsed = parseInt(raw.trim(), 10);
         if (!Number.isNaN(parsed) && parsed > 0) retryOwnerPid = parsed;
       } catch { /* ignore */ }
-      throw new DaemonAlreadyRunningError(lockPath, retryOwnerPid);
+      throw new DaemonAlreadyRunningError(lockPath, retryOwnerPid, retryTriggeredByWindowsEperm);
     }
   }
 }
