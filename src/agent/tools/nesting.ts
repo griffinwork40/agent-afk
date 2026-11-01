@@ -203,6 +203,7 @@ export const RECON_ALLOWED_TOOLS: readonly string[] = [
   ...AWARENESS_TOOL_NAMES,
   'memory_search',
   // Ephemeral per-session workspace publish + query — see this block's header note.
+  // workspace_subscribe excluded: recon children have no SubagentHandle delivery buffer.
   'workspace_publish',
   'workspace_query',
   'agent',

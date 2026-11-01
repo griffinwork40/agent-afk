@@ -44,6 +44,7 @@ function makeCtx(toolLane: ToolLane, sources: Map<string, SourceState>): Lifecyc
     ttfbStartedAt: undefined,
     ttfbDone: true,
     lastTtfbAnnotation: '',
+    lastThinkingAnnotation: '',
     isTTY: false,
     disposed: false,
   };
