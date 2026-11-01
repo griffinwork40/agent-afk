@@ -15,13 +15,59 @@
 import { Command } from 'commander';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
-import { synthesizeAndWriteEpisode } from '../../agent/episodes/index.js';
+import { synthesizeAndWriteEpisode, ingestEpisodes } from '../../agent/episodes/index.js';
 import { resolveLatestSession } from '../../agent/trace/listing.js';
 
 export function registerEpisodeCommand(program: Command): void {
   const episode = program
     .command('episode')
     .description('Synthesize and store compressed episodic narratives from session journals.');
+
+  episode
+    .command('ingest')
+    .description(
+      'Ingest episode facts from the AFK memory archive into the Q episodes store.\n' +
+        'Reads memory.db (category: learning, prefix: [episode:]) and upserts each\n' +
+        'episode into a local Q episodes SQLite store for SQL-based recall.\n' +
+        'Idempotent — a watermark ensures only new episodes are processed on\n' +
+        'subsequent runs.',
+    )
+    .action(async () => {
+      try {
+        process.stdout.write(palette.dim('Ingesting episodes from AFK memory archive…\n'));
+
+        const result = ingestEpisodes();
+
+        if (result.found === 0) {
+          process.stdout.write(
+            palette.dim('No episode facts found in the memory archive.\n') +
+              palette.dim(
+                'Run `afk episode synthesize` or set AFK_EPISODE_SYNTHESIS=1 to generate episodes.\n',
+              ),
+          );
+          process.exit(0);
+        }
+
+        process.stdout.write(
+          [
+            '',
+            `${palette.bold('Episode ingest complete')}`,
+            `${palette.dim('found:')}    ${result.found} episode fact${result.found === 1 ? '' : 's'} in memory archive`,
+            `${palette.dim('upserted:')} ${result.upserted}`,
+            `${palette.dim('total:')}    ${result.totalStored} episode${result.totalStored === 1 ? '' : 's'} in Q store`,
+            ...(result.watermark
+              ? [`${palette.dim('watermark:')} ${result.watermark}`]
+              : []),
+            '',
+          ].join('\n'),
+        );
+
+        process.exit(0);
+      } catch (err) {
+        handleCommandError(err);
+        process.exit(1);
+      }
+    });
 
   episode
     .command('synthesize [session-id]')

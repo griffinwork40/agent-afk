@@ -1667,7 +1667,20 @@ Usage: `afk episode [options] [command]`
 
 | Command | Description |
 | --- | --- |
+| `ingest` | Ingest episode facts from the AFK memory archive into the Q episodes store. Reads memory.db (category: learning, prefix: [episode:]) and upserts each episode into a local Q episodes SQLite store for SQL-based recall. Idempotent — a watermark ensures only new episodes are processed on subsequent runs. |
 | `synthesize` | Synthesize a compressed episode narrative from a sealed session journal and store it in the cross-session memory archive (facts, category: learning). Defaults to the most recent session when no session-id is given. |
+
+## `afk episode ingest`
+
+Ingest episode facts from the AFK memory archive into the Q episodes store. Reads memory.db (category: learning, prefix: [episode:]) and upserts each episode into a local Q episodes SQLite store for SQL-based recall. Idempotent — a watermark ensures only new episodes are processed on subsequent runs.
+
+Usage: `afk episode ingest [options]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
 
 ## `afk episode synthesize`
 
