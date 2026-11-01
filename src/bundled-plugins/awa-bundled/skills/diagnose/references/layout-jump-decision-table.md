@@ -23,7 +23,7 @@ Layout jumps caused by dynamic element insertion are structurally identical rega
 |---------|-----------|-------------|----------------------|
 | Element appears and displaces siblings | Conditional render inserts new layout space | Reserve space with hidden/opacity-zero placeholder; toggle visibility, not existence | z-index layering, absolute positioning, animation-delay |
 | Element disappears and siblings collapse | Conditional render removes layout space | Keep element in DOM with `visibility: hidden` or `opacity: 0`; preserve its layout box | Removing from DOM and re-inserting |
-| Element animates in and causes reflow | Height/width transition from 0 triggers layout recalc | Use `max-height` or `transform: scale` for animation; keep layout box stable | Animating `height`/`width` from 0 to auto |
+| Element animates in and causes reflow | Height/width transition from 0 triggers layout recalc | Reserve full space in a fixed-size wrapper; animate content within it using `transform: scale` or `opacity` | Animating `height`/`width`/`max-height` from 0 (all change the layout box) |
 | Content shifts after async load | Placeholder absent during fetch; content insertion changes layout | Reserve exact or minimum dimensions before content arrives | Rendering nothing then inserting loaded content |
 | Show/hide toggle causes jump per cycle | Each toggle adds/removes layout participation | Toggle `opacity` or `visibility`, not `display: none`/DOM presence | Conditional rendering (`if`/`v-if`/ternary) that adds/removes nodes |
 
