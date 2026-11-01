@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.344.0] - 2026-11-01
+
 ### Added
 - LSP repo map summary for system prompt (#3904, phase 3) (3b5c1d603)
 - console output discipline CI gate (`audit:console:check`) (af289de75)
