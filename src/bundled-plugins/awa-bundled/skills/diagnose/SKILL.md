@@ -5,6 +5,8 @@ context: fork
 category: Debug & fix
 ---
 
+**Reference documents.** Before forming hypotheses, check `references/` alongside this SKILL.md for decision tables matching the bug's domain keywords (e.g. layout jumps, reflow). When a reference applies, use it to constrain the hypothesis space rather than exploring from scratch.
+
 Gather context: read the failing test or bug description, relevant error output, and recent git changes. If no failing test exists yet, write a minimal reproducer test (or identify a concrete verification command) before proceeding — hypotheses need a pass/fail signal to validate against. Dispatch two sub-agents in parallel — one to search the codebase for code paths involved in the failure (`subagent_type: research-agent`, read-only), and one to check recent commits and diffs that could have introduced the regression (`subagent_type: general-purpose` — requires Bash for `git log`/`git diff`/`git show`). When both return, synthesize findings into 2–4 ranked hypotheses, each with a specific code location and proposed cause.
 
 **TUI label convention.** Set `id_prefix` on each Agent dispatch to a short, descriptive label so the live progress view shows the agent's role:

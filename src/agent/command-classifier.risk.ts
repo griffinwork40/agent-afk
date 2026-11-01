@@ -176,6 +176,23 @@ const BASH_SAFE: readonly string[] = [
   'wget --spider',
 ];
 
+/**
+ * Classify the risk level of a bash command string.
+ *
+ * @param cmd      - The raw command string to classify.
+ * @param mutation - Lazy accessor for the mutation verdict (avoids work when
+ *                   the command is high-risk and mutation need not be checked).
+ * @param tokenize - Dual-view tokenizer accessor. Callers MUST preserve the
+ *                   distinction between the raw view (`cmd` itself) and any
+ *                   neutral-redirect-stripped view: each view string is used as
+ *                   a Map key inside {@link analyzeCommand}, so passing the
+ *                   wrong view collapses two logically distinct cache entries
+ *                   into one and can return stale tokens for the wrong input.
+ *                   Concretely: raw tokens are used for mutation/hook matching;
+ *                   the redirect-stripped view is used for approval risk only.
+ *                   Future callers that introduce a third view must pass a
+ *                   distinct key string so the cache entry remains isolated.
+ */
 export function classifyCommandRisk(
   cmd: string,
   mutation: () => MutationVerdict,
