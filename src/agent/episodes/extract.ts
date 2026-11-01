@@ -16,7 +16,7 @@
  */
 
 import { readJournalRecords, foldJournal } from '../journal/reader.js';
-import { stripPreamble } from '../session/preamble-strip.js';
+import { isPreamble, extractUserContent } from '../session/preamble-strip.js';
 import { getOrDeriveFacet } from '../facets/store.js';
 import type { JournalBlock, JournalMarkLabel, JournalMessage } from '../journal/types.js';
 import type { EpisodeInput } from './types.js';
@@ -152,8 +152,14 @@ export function extractEpisodeInput(sessionId: string): EpisodeInput {
     for (const rec of records) {
       if (rec.kind === 'append' && rec.message.role === 'user') {
         const text = messageText(rec.message);
-        if (text) {
-          firstUserMessage = stripPreamble(text).slice(0, FIRST_MSG_CAP);
+        if (!text) continue;
+        // Use extractUserContent directly so pure-preamble records
+        // (e.g. [placeholder-prevent]) yield undefined and we keep
+        // scanning for the real user message instead of falling back
+        // to the raw harness text via stripPreamble's ?? text path.
+        const stripped = isPreamble(text) ? extractUserContent(text) : text;
+        if (stripped) {
+          firstUserMessage = stripped.slice(0, FIRST_MSG_CAP);
           break;
         }
       }

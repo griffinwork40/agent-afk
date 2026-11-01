@@ -113,6 +113,11 @@ function deterministicFallback(input: EpisodeInput): EpisodeRecord {
  * Falls back to a deterministic record if the LLM call fails.
  */
 export async function synthesizeEpisode(input: EpisodeInput): Promise<EpisodeRecord> {
+  // No real user content — skip the LLM call, use cheap deterministic fallback
+  if (!input.firstUserMessage) {
+    return deterministicFallback(input);
+  }
+
   const token = loadAnthropicCredential();
   if (!token) {
     return deterministicFallback(input);
