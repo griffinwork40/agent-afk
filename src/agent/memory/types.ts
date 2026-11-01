@@ -93,6 +93,8 @@ export interface SearchOpts {
   category?: FactCategory;
   since?: string;
   limit?: number;
+  /** Filter by exact source_surface value; limits access-count side effects to matching rows. */
+  source_surface?: string;
 }
 
 export interface MemorySearchResult {
