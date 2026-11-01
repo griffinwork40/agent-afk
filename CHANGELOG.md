@@ -12,6 +12,35 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- LSP repo map summary for system prompt (#3904, phase 3) (3b5c1d603)
+- console output discipline CI gate (`audit:console:check`) (af289de75)
+- fit-and-finish quality sweep + POSIX guard CI gate (#4594) (8ef8f1b45)
+- worktree tool accepts explicit repo parameter (#4430) (341862851)
+- stamp session cwd on run receipt (#4582) (d4aea92d7)
+
+### Fixed
+- single-instance guard to prevent concurrent daemon execution (#4434) (9e629b249)
+- opt-in OS-level bash sandbox (`sandbox-exec` / `bwrap`) (#4554) (9229778aa)
+- per-rule instrumentation, denial-breaker blindspot, and insights panel (#3849) (8e257ec0c)
+- expose bounded read-only artifact registry tools (#1415) (687024cca)
+- forward opt-in idempotency keys and reconcile uncertain effects (#3714) (f344834e6)
+- prepare canonical workspace experiment storage (#1539) (ac3538cd3)
+- ESLint `import/no-restricted-paths` CI rule for layer contract (#4464) (f27b95dbe)
+- audit-layer non-blocking findings from #4464 review (#4588) (d9df6666e)
+- test runner wrapper for vitest jsdom hang (#4595) (9ecb26831)
+- strip harness preamble from episode goal extraction (#4585) (6868a7e08)
+- Windows test failures in repo-map and bash-sandbox tests (#4593) (ab3704482)
+- bound every bash output viewer row to available width (#4510) (3b623548b)
+- name sanctioned alternatives in restricted-path block reasons (#3850) (4b316bbad)
+- readLedgerHead entry-guard asymmetry and test gaps (#4524) (4014fac71)
+- exercise resume repository filtering and daemon fallback (#4504) (612f7cee2)
+- pin explicit read-root replacement in query setup tests (#4505) (87106cf11)
+- cover newline-only alternate paths (#4511) (8b7a99902)
+
+### Changed
+- route console output through palette across cli, telegram, and improve surfaces (d804b67b9, f6ad97936, bb58b7249)
+
 ## [5.343.0] - 2026-10-30
 
 ### Added
