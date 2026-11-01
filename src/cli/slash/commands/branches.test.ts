@@ -27,8 +27,14 @@ vi.mock('../../resume-command.js', () => ({
   formatResumeCommand: vi.fn((id: string) => `afk interactive --resume ${id}`),
 }));
 
+vi.mock('../../../agent/file-checkpoint/turn-log.js', () => ({
+  latestCheckpointTurnId: vi.fn(() => undefined),
+  latestTipTurnId: vi.fn(() => undefined),
+}));
+
 import { branchesCmd } from './branches.js';
 import { loadSession, listSessions, findSession } from '../../session-store.js';
+import { latestTipTurnId } from '../../../agent/file-checkpoint/turn-log.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -37,6 +43,7 @@ import { loadSession, listSessions, findSession } from '../../session-store.js';
 const loadSessionMock = loadSession as Mock;
 const listSessionsMock = listSessions as Mock;
 const findSessionMock = findSession as Mock;
+const latestTipTurnIdMock = latestTipTurnId as Mock;
 
 function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
@@ -207,7 +214,7 @@ describe('/branches', () => {
       const result = await branchesCmd.handler(ctx, `switch bbbb`);
       expect(result).toBe('continue');
       expect(requestResume).toHaveBeenCalledOnce();
-      expect(lines.some((l) => l.includes('Switching'))).toBe(true);
+      expect(lines.some((l) => l.includes('Switched'))).toBe(true);
     });
 
     it('falls back to printing the command when requestResume is unavailable', async () => {
