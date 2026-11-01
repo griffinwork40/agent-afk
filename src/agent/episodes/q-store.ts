@@ -13,6 +13,8 @@
  *
  * Idempotency: upsertEpisode() uses INSERT OR REPLACE so re-ingesting an
  * already-known session updates all fields without creating duplicates.
+ * `recursive_triggers` is enabled so the episodes_ad trigger fires during the
+ * internal DELETE that INSERT OR REPLACE performs, keeping FTS5 in sync.
  *
  * Watermark: the ingest adapter stores the highest `synthesized_at` ISO timestamp
  * it processed. Subsequent runs query only facts synthesized after that mark,
@@ -105,17 +107,26 @@ export class QEpisodesStore {
 
     this.db = new Database(join(this.dir, DB_FILE));
     configureSqliteConnection(this.db);
+    // Enable recursive triggers so episodes_ad fires during the internal DELETE
+    // that INSERT OR REPLACE performs, keeping FTS5 postings in sync.
+    this.db.pragma('recursive_triggers = ON');
 
     const existingVersion = this.db.pragma('user_version', { simple: true }) as number;
     if (existingVersion === 0) {
       this.db.exec(SCHEMA_SQL);
       this.db.pragma(`user_version = ${Q_EPISODES_SCHEMA_VERSION}`);
     } else if (existingVersion < Q_EPISODES_SCHEMA_VERSION) {
-      // Future migrations go here; for v1 there is nothing to migrate.
-      this.db.exec(SCHEMA_SQL);
-      this.db.pragma(`user_version = ${Q_EPISODES_SCHEMA_VERSION}`);
+      // History: v1 is the initial schema — existingVersion < 1 is handled above (=0).
+      // Add per-version ALTER TABLE / CREATE TABLE migration DDL here when bumping
+      // Q_EPISODES_SCHEMA_VERSION. Never re-run SCHEMA_SQL wholesale.
+      throw new Error(
+        `q-episodes.db schema upgrade from v${existingVersion} to ` +
+        `v${Q_EPISODES_SCHEMA_VERSION} is not implemented.`,
+      );
     }
     // existingVersion === Q_EPISODES_SCHEMA_VERSION → no-op
+    // existingVersion > Q_EPISODES_SCHEMA_VERSION → DB was created by a newer
+    // version of agent-afk; we continue read-only-safe but writes may fail.
   }
 
   // ── Watermark ────────────────────────────────────────────────────────────
@@ -143,6 +154,8 @@ export class QEpisodesStore {
    * Idempotently upsert one episode.
    * Uses INSERT OR REPLACE so re-ingesting an already-known session updates
    * all fields in place without creating duplicates.
+   * recursive_triggers ensures the FTS5 delete trigger fires on the internal
+   * DELETE, keeping the search index consistent.
    */
   upsertEpisode(input: QEpisodeInput): void {
     const now = new Date().toISOString();
@@ -178,6 +191,7 @@ export class QEpisodesStore {
    * List episodes, optionally filtered by domain tag and/or a since cutoff.
    *
    * @param opts.domain  — match episodes whose tags_json contains this string
+   *                       (% and _ are escaped so they are treated as literals)
    * @param opts.since   — ISO timestamp lower bound on synthesized_at
    * @param opts.limit   — max rows (default 20)
    */
@@ -194,9 +208,14 @@ export class QEpisodesStore {
       params.push(opts.since);
     }
     if (opts.domain) {
+      // Escape LIKE special characters so domain values are matched literally.
+      const escaped = opts.domain
+        .replace(/\\/g, '\\\\')
+        .replace(/%/g, '\\%')
+        .replace(/_/g, '\\_');
       // tags_json is a JSON array; a simple LIKE check is sufficient for tags.
-      conditions.push('tags_json LIKE ?');
-      params.push(`%${opts.domain}%`);
+      conditions.push("tags_json LIKE ? ESCAPE '\\'");
+      params.push(`%${escaped}%`);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -213,20 +232,26 @@ export class QEpisodesStore {
   /**
    * FTS5 keyword search over goal and narrative.
    *
+   * Returns [] on malformed FTS5 query strings instead of throwing.
+   *
    * @param query  FTS5 match expression (e.g. "auth refactor")
    * @param limit  max results (default 10)
    */
   searchEpisodes(query: string, limit = 10): QEpisodeRow[] {
-    return this.db
-      .prepare(
-        `SELECT e.*
-           FROM episodes e
-           JOIN episodes_fts ON episodes_fts.rowid = e.rowid
-          WHERE episodes_fts MATCH ?
-          ORDER BY rank
-          LIMIT ?`,
-      )
-      .all(query, limit) as QEpisodeRow[];
+    try {
+      return this.db
+        .prepare(
+          `SELECT e.*
+             FROM episodes e
+             JOIN episodes_fts ON episodes_fts.rowid = e.rowid
+            WHERE episodes_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?`,
+        )
+        .all(query, limit) as QEpisodeRow[];
+    } catch {
+      return [];
+    }
   }
 
   /** Total episode count — useful for ingest summaries. */

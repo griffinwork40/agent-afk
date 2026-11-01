@@ -9,7 +9,7 @@
  *
  * Idempotency: a watermark (highest `synthesized_at` seen so far) is stored
  * in the Q episodes DB. Subsequent runs only process facts with
- * `synthesized_at` strictly after the watermark, so cost is O(new episodes).
+ * `created_at` strictly after the watermark row, so cost is O(new episodes).
  *
  * The adapter is strictly read-only with respect to the AFK memory archive:
  * it opens memory.db in read-only mode and never writes to it.
@@ -65,6 +65,10 @@ export interface IngestResult {
  *   tags: <csv>               (optional)
  *   narrative: <text>         (optional)
  *   synthesized: <iso-ts>
+ *
+ * Multi-line values: continuation lines (lines that do NOT start with a
+ * known `key: ` pattern, i.e. `/^[a-z]+: /`) are appended to the current
+ * field's value separated by a newline.
  */
 export interface ParsedEpisodeContent {
   sessionId: string;
@@ -74,6 +78,9 @@ export interface ParsedEpisodeContent {
   files: string[];
   synthesizedAt: string;
 }
+
+/** Pattern that identifies the start of a new key: value line. */
+const KEY_PREFIX_RE = /^[a-z]+: /;
 
 export function parseEpisodeContent(
   content: string,
@@ -89,13 +96,21 @@ export function parseEpisodeContent(
   const sessionId = headerMatch[1] ?? fallbackSessionId;
   if (!sessionId) return null;
 
+  // Accumulate fields, appending continuation lines to the current field.
   const fields: Record<string, string> = {};
+  let currentKey: string | null = null;
+
   for (const line of lines.slice(1)) {
-    const colon = line.indexOf(': ');
-    if (colon === -1) continue;
-    const key = line.slice(0, colon).trim();
-    const value = line.slice(colon + 2).trim();
-    fields[key] = value;
+    if (KEY_PREFIX_RE.test(line)) {
+      const colon = line.indexOf(': ');
+      const key = line.slice(0, colon).trim();
+      const value = line.slice(colon + 2).trim();
+      fields[key] = value;
+      currentKey = key;
+    } else if (currentKey !== null) {
+      // Continuation line — append to the current field value.
+      fields[currentKey] = (fields[currentKey] ?? '') + '\n' + line.trim();
+    }
   }
 
   const goal = fields['goal'] ?? '';
@@ -149,16 +164,19 @@ export function ingestEpisodes(
   let found = 0;
   let upserted = 0;
   let newWatermark: string | null = watermark;
+  let totalStored = 0;
 
   try {
     // Query only episode facts, optionally filtered by watermark for efficiency.
+    // The watermark filters on `created_at` (the column used in ORDER BY) with
+    // strict `>` so the watermark row itself is excluded on the next run.
     const sql = watermark
       ? `SELECT id, session_id, created_at, category, content, source_surface, evidence
            FROM facts
           WHERE category = 'learning'
             AND content LIKE '[episode:%'
             AND content LIKE '%synthesized: %'
-            AND content >= ?
+            AND created_at > ?
           ORDER BY created_at ASC`
       : `SELECT id, session_id, created_at, category, content, source_surface, evidence
            FROM facts
@@ -167,8 +185,6 @@ export function ingestEpisodes(
             AND content LIKE '%synthesized: %'
           ORDER BY created_at ASC`;
 
-    // The watermark filter uses `created_at` ordering for efficiency; the
-    // precise deduplication key is session_id via upsert in the Q store.
     const rows = (
       watermark
         ? memDb.prepare(sql).all(watermark)
@@ -205,15 +221,13 @@ export function ingestEpisodes(
     if (upserted > 0 && newWatermark !== null) {
       store.setWatermark(newWatermark);
     }
+
+    // Read total count before closing the store (avoids TOCTOU re-open).
+    totalStored = store.count();
   } finally {
     memDb.close();
     store.close();
   }
-
-  // Re-open briefly to read the total count.
-  const countStore = new QEpisodesStore(resolvedStoreDir);
-  const totalStored = countStore.count();
-  countStore.close();
 
   return { found, upserted, watermark: newWatermark, totalStored };
 }

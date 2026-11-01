@@ -122,6 +122,49 @@ describe('parseEpisodeContent', () => {
     expect(parsed!.tags).toEqual([]);
     expect(parsed!.files).toEqual([]);
   });
+
+  it('accumulates multiline goal (continuation lines joined)', () => {
+    const content = [
+      '[episode:session-ml]',
+      'goal: First line of goal',
+      'second line of goal',
+      'third line of goal',
+      'narrative: Short narrative.',
+      'synthesized: 2026-05-01T00:00:00.000Z',
+    ].join('\n');
+    const parsed = parseEpisodeContent(content, null);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.goal).toBe('First line of goal\nsecond line of goal\nthird line of goal');
+  });
+
+  it('accumulates multiline narrative (continuation lines joined)', () => {
+    const content = [
+      '[episode:session-ml2]',
+      'goal: Single line goal.',
+      'narrative: Narrative line one.',
+      'Narrative line two.',
+      'Narrative line three.',
+      'synthesized: 2026-05-01T00:00:00.000Z',
+    ].join('\n');
+    const parsed = parseEpisodeContent(content, null);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.narrative).toBe(
+      'Narrative line one.\nNarrative line two.\nNarrative line three.',
+    );
+  });
+
+  it('treats a line starting with a new key as a field boundary, not continuation', () => {
+    const content = [
+      '[episode:session-boundary]',
+      'goal: Goal text.',
+      'narrative: Narrative text.',
+      'synthesized: 2026-05-01T00:00:00.000Z',
+    ].join('\n');
+    const parsed = parseEpisodeContent(content, null);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.goal).toBe('Goal text.');
+    expect(parsed!.narrative).toBe('Narrative text.');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -247,5 +290,28 @@ describe('ingestEpisodes', () => {
 
     const result = ingestEpisodes(dir, dir);
     expect(result.watermark).toBe('2026-06-01T00:00:00.000Z');
+  });
+
+  it('watermark filter uses created_at > ? — row at exact watermark is not re-ingested', () => {
+    // Insert two facts with distinct created_at values.
+    const ts1 = '2026-03-01T00:00:00.000Z';
+    const ts2 = '2026-04-01T00:00:00.000Z';
+    insertFact(memDb, makeEpisodeContent({ sessionId: 's-wm1', synthesizedAt: ts1 }), 's-wm1', 'learning', ts1);
+    insertFact(memDb, makeEpisodeContent({ sessionId: 's-wm2', synthesizedAt: ts2 }), 's-wm2', 'learning', ts2);
+    memDb.close();
+
+    // First run ingests both.
+    const r1 = ingestEpisodes(dir, dir);
+    expect(r1.upserted).toBe(2);
+
+    // Manually set watermark back to ts1 so the next run filters on created_at > ts1.
+    const store = new QEpisodesStore(dir);
+    store.setWatermark(ts1);
+    store.close();
+
+    // Second run against the SAME memory.db (memDb is already closed, file still there).
+    // The watermark is ts1, so only the row with created_at > ts1 (i.e. ts2) should be found.
+    const r2 = ingestEpisodes(dir, dir);
+    expect(r2.found).toBe(1);
   });
 });
