@@ -1,28 +1,3 @@
 {
-  "entries": {
-    "src/cli/commands/improve/approve.ts": {
-      "count": 6,
-      "reason": "grandfathered: predates console-palette sweep gate"
-    },
-    "src/cli/commands/improve/cards.ts": {
-      "count": 9,
-      "reason": "grandfathered: predates console-palette sweep gate"
-    },
-    "src/cli/commands/improve/eval-gen.ts": {
-      "count": 30,
-      "reason": "grandfathered: predates console-palette sweep gate"
-    },
-    "src/cli/commands/improve/eval-run.ts": {
-      "count": 11,
-      "reason": "grandfathered: predates console-palette sweep gate"
-    },
-    "src/cli/commands/improve/propose.ts": {
-      "count": 21,
-      "reason": "grandfathered: predates console-palette sweep gate"
-    },
-    "src/cli/commands/improve/scan.ts": {
-      "count": 17,
-      "reason": "grandfathered: predates console-palette sweep gate"
-    }
-  }
+  "entries": {}
 }
