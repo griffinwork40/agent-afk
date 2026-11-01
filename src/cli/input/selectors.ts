@@ -1,4 +1,6 @@
 import { sanitizeSchemaString } from '../_lib/sanitize.js';
+import { displayWidth } from '../display.js';
+import { getTerminalWidth } from '../terminal-size.js';
 import { emitKeypressEventsImmediateEscape } from './emit-keypress.js';
 import { palette } from '../palette.js';
 
@@ -43,6 +45,16 @@ type KeyEvent = { name?: string; ctrl?: boolean; sequence?: string };
  * @param abortSignal - Optional signal; resolves `:cancel` and tears down
  *                      raw-mode when fired.
  */
+/** Count physical terminal rows a set of logical lines occupies (handles wrap). */
+function physicalRows(lines: string[], cols: number): number {
+  let rows = 0;
+  for (const line of lines) {
+    const w = displayWidth(line);
+    rows += w > 0 ? Math.ceil(w / cols) : 1;
+  }
+  return rows;
+}
+
 function runSelectorLoop<T>(
   choices: string[],
   renderLines: (cursor: number, scrollOffset: number) => string[],
@@ -62,12 +74,12 @@ function runSelectorLoop<T>(
   // Initial render — write lines fresh (no cursor-up on first paint)
   const initialLines = renderLines(cursor, scrollOffset);
   process.stdout.write(initialLines.join('\n') + '\n');
-  let renderedLineCount = initialLines.length;
+  let renderedLineCount = physicalRows(initialLines, getTerminalWidth());
 
   function repaint(): void {
     const lines = renderLines(cursor, scrollOffset);
     process.stdout.write(`\x1b[${renderedLineCount}A\x1b[0J` + lines.join('\n') + '\n');
-    renderedLineCount = lines.length;
+    renderedLineCount = physicalRows(lines, getTerminalWidth());
   }
 
   return new Promise<T | ':cancel'>((resolve) => {
