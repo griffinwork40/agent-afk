@@ -77,6 +77,8 @@ The three tree-wide budget variables are opt-in; each stops a dispatch when its 
 
 `AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT=1` lets forked children park on a usage-limit 429 instead of failing immediately; it is off by default. The environment default is ignored for daemon children because there may be no human to change accounts, although an explicit caller setting can override that. An interrupted parallel wave can produce a `[wave-resume]` offer at the next interactive session start: it lists unsettled units, missing worktrees, and dependencies. This **does not** automatically re-dispatch work or accept a yes/no reply. Re-dispatch ready units deliberately after checking their listed working directories. Unattended sessions show offers only with `AFK_WAVE_RESUME_UNATTENDED=1`.
 
+In the REPL, `/tasks:view` opens a child's conversation by ID and tails running output; `/tasks:cancel` cancels a running or idle child by ID.
+
 Cancelling a parent cascades to its running children. A child failure reports to its parent, not automatically to all siblings unless compose's fail-fast policy applies. Ask for concise answers with file and line references, then independently check high-risk conclusions.
 
 ## Related

@@ -12,6 +12,7 @@
  *   - pnpm audit:env:check
  *   - pnpm scan:env:check
  *   - pnpm scan:cli:check / scan:slash:check / scan:config:check
+ *   - pnpm scan:surface:check / docs:surface:check / docs:refs:check
  *   - pnpm scan:docs-coverage:check / docs:links:check
  *   - pnpm audit:sdk:check
  *   - pnpm audit:chalk:check
@@ -46,6 +47,9 @@ export const AUDIT_GATES: readonly string[] = [
   'scan:cli:check',
   'scan:slash:check',
   'scan:config:check',
+  'scan:surface:check',
+  'docs:surface:check',
+  'docs:refs:check',
   'scan:docs-coverage:check',
   'docs:links:check',
   'audit:sdk:check',

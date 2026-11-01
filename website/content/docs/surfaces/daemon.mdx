@@ -38,7 +38,7 @@ afk schedule logs daily-review
 </Step>
 </Steps>
 
-You can also supply an ad hoc task directly: `afk daemon --cron "0 */6 * * *" --task "Review the repository"`. Test one tick with `--once`; the daemon prints a JSON telemetry record and exits.
+You can also supply an ad hoc task directly: `afk daemon --cron "0 */6 * * *" --task "Review the repository"`. Test one tick with `--once`; the daemon prints a JSON telemetry record and exits. In configuration, `daemon.task` stores the ad hoc prompt and `daemon.taskId` stores its task identifier.
 
 ## Triggers and the pull queue
 
