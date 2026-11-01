@@ -247,7 +247,11 @@ export function patchFacetDecisions(
     decisions,
   };
 
-  atomicWriteFile(cachePath, `${JSON.stringify(facet, null, 2)}\n`, { mode: 0o600, encoding: 'utf-8' });
+  try {
+    atomicWriteFile(cachePath, `${JSON.stringify(facet, null, 2)}\n`, { mode: 0o600, encoding: 'utf-8' });
+  } catch {
+    // Swallow write errors — episode backflow is additive, never critical.
+  }
 }
 
 // ---------------------------------------------------------------------------
