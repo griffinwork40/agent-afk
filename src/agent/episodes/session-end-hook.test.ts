@@ -124,7 +124,9 @@ describe('createEpisodeSessionEndHook — gating logic', () => {
       narrative: 'Test narrative',
       synthesizedAt: '2026-01-01T00:00:00.000Z',
     });
+    const mockPatch = vi.fn();
     vi.doMock('./index.js', () => ({ synthesizeAndWriteEpisode: mockSynthesize }));
+    vi.doMock('../facets/yield-probe.js', () => ({ patchFacetDecisions: mockPatch }));
 
     const { createEpisodeSessionEndHook } = await import('./session-end-hook.js');
     const hook = createEpisodeSessionEndHook();
@@ -135,9 +137,65 @@ describe('createEpisodeSessionEndHook — gating logic', () => {
     expect(result).toEqual({});
   });
 
+  it('backflows decisions into the facet cache after synthesis (#4569)', async () => {
+    const decisions = ['chose atomic write over in-place edit', 'skipped validation gate for additive fields'];
+    const mockSynthesize = vi.fn().mockResolvedValue({
+      sessionId: 'sess-abc',
+      goal: 'Test goal',
+      approach: 'Test approach',
+      pivots: [],
+      decisions,
+      outcome: 'Test outcome',
+      openQuestions: [],
+      filesKey: [],
+      tags: [],
+      narrative: 'Test narrative',
+      synthesizedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const mockPatch = vi.fn();
+    vi.doMock('./index.js', () => ({ synthesizeAndWriteEpisode: mockSynthesize }));
+    vi.doMock('../facets/yield-probe.js', () => ({ patchFacetDecisions: mockPatch }));
+
+    const { createEpisodeSessionEndHook } = await import('./session-end-hook.js');
+    const hook = createEpisodeSessionEndHook();
+    await hook(sessionEndContext());
+
+    expect(mockPatch).toHaveBeenCalledOnce();
+    expect(mockPatch).toHaveBeenCalledWith('sess-abc', decisions);
+  });
+
+  it('does not call patchFacetDecisions when synthesis returns empty decisions', async () => {
+    const mockSynthesize = vi.fn().mockResolvedValue({
+      sessionId: 'sess-abc',
+      goal: 'Test goal',
+      approach: 'Test approach',
+      pivots: [],
+      decisions: [],
+      outcome: 'Test outcome',
+      openQuestions: [],
+      filesKey: [],
+      tags: [],
+      narrative: 'Test narrative',
+      synthesizedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const mockPatch = vi.fn();
+    vi.doMock('./index.js', () => ({ synthesizeAndWriteEpisode: mockSynthesize }));
+    vi.doMock('../facets/yield-probe.js', () => ({ patchFacetDecisions: mockPatch }));
+
+    const { createEpisodeSessionEndHook } = await import('./session-end-hook.js');
+    const hook = createEpisodeSessionEndHook();
+    await hook(sessionEndContext());
+
+    // patchFacetDecisions is still called; it no-ops internally for empty arrays
+    expect(mockPatch).toHaveBeenCalledOnce();
+    expect(mockPatch).toHaveBeenCalledWith('sess-abc', []);
+  });
+
   it('swallows errors from synthesizeAndWriteEpisode and returns {}', async () => {
     const mockSynthesize = vi.fn().mockRejectedValue(new Error('synthesis failed'));
+    const mockPatch = vi.fn();
     vi.doMock('./index.js', () => ({ synthesizeAndWriteEpisode: mockSynthesize }));
+    vi.doMock('../facets/yield-probe.js', () => ({ patchFacetDecisions: mockPatch }));
 
     const { createEpisodeSessionEndHook } = await import('./session-end-hook.js');
     const hook = createEpisodeSessionEndHook();
@@ -147,5 +205,7 @@ describe('createEpisodeSessionEndHook — gating logic', () => {
 
     expect(result).toEqual({});
     expect(mockSynthesize).toHaveBeenCalledOnce();
+    // patch is not called when synthesis throws
+    expect(mockPatch).not.toHaveBeenCalled();
   });
 });
