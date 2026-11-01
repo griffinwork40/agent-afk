@@ -1668,6 +1668,7 @@ Usage: `afk episode [options] [command]`
 | Command | Description |
 | --- | --- |
 | `synthesize` | Synthesize a compressed episode narrative from a sealed session journal and store it in the cross-session memory archive (facts, category: learning). Defaults to the most recent session when no session-id is given. |
+| `backfill` | Retroactively synthesize episodes for existing sessions that have journals on disk. Idempotent: sessions that already have an episode in memory are skipped. Use --dry-run to preview which sessions would be processed. |
 
 ## `afk episode synthesize`
 
@@ -1686,6 +1687,21 @@ Usage: `afk episode synthesize [options] [session-id]`
 | Flags | Description | Default |
 | --- | --- | --- |
 | `--latest` | Synthesize the most recent session (same as omitting session-id) |  |
+| `-h, --help` | display help for command |  |
+
+## `afk episode backfill`
+
+Retroactively synthesize episodes for existing sessions that have journals on disk. Idempotent: sessions that already have an episode in memory are skipped. Use --dry-run to preview which sessions would be processed.
+
+Usage: `afk episode backfill [options]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `--since <date>` | Only process sessions whose journal was last modified on or after this date (ISO 8601 or YYYY-MM-DD). |  |
+| `--limit <n>` | Maximum number of sessions to synthesize in this run. |  |
+| `--dry-run` | Preview which sessions would be processed without synthesizing. |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk whatif`
