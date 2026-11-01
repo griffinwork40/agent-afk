@@ -8,6 +8,10 @@ export type { EpisodeRecord, EpisodeInput } from './types.js';
 export { extractEpisodeInput } from './extract.js';
 export { synthesizeEpisode } from './synthesize.js';
 export { writeEpisode, formatEpisodeContent, sanitizeNarrative } from './writer.js';
+export { ingestEpisodes } from './q-ingest.js';
+export type { IngestResult, ParsedEpisodeContent } from './q-ingest.js';
+export { QEpisodesStore, Q_EPISODES_SCHEMA_VERSION } from './q-store.js';
+export type { QEpisodeRow, QEpisodeInput } from './q-store.js';
 
 import { extractEpisodeInput } from './extract.js';
 import { synthesizeEpisode } from './synthesize.js';
