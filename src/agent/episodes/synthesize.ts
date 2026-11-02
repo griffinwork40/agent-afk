@@ -8,7 +8,7 @@
  * Design invariants:
  *   - Uses the same oneShotCompletion pattern as spine-classifier.ts.
  *   - Fallback path never throws: always returns a usable (if thin) record.
- *   - Output is bounded: maxTokens 512 to keep cost minimal.
+ *   - Output is bounded: maxTokens 1024 to keep cost minimal.
  *
  * @module agent/episodes/synthesize
  */
@@ -18,7 +18,7 @@ import { loadAnthropicCredential } from '../auth/credential-resolver.js';
 import type { EpisodeInput, EpisodeRecord } from './types.js';
 
 const SYNTHESIS_MODEL = 'claude-haiku-4-5';
-const MAX_TOKENS = 512;
+const MAX_TOKENS = 1024;
 
 const SYSTEM_PROMPT = `You synthesize compressed episodic narratives from agent session data.
 Given structured session signals, produce a JSON object with these exact fields:
