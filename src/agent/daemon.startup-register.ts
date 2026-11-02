@@ -32,7 +32,6 @@ export function registerTasksWithQuarantine(
   options: { telemetryPath?: string } = {},
 ): void {
   const resolvedTelemetryPath = options.telemetryPath ?? getTelemetryPath();
-  const nowMs = Date.now();
 
   for (const task of tasks) {
     try {
@@ -52,7 +51,7 @@ export function registerTasksWithQuarantine(
         command: task.command,
         trigger: 'cron',
         ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
-        triggeredAt: new Date(nowMs).toISOString(),
+        triggeredAt: new Date().toISOString(),
         durationMs: 0,
         status: 'skipped',
         skipReason: 'malformed',

@@ -23,6 +23,7 @@ import { registerTasksWithQuarantine } from './daemon.startup-register.js';
 import { getDaemonStateDir, getAfkHome } from '../paths.js';
 import { toScheduledTask } from './daemon/schedule-store.js';
 import { DaemonAlreadyRunningError } from './daemon-instance.lock.js';
+import { readLastTickTime } from './daemon/gates.js';
 
 // node-cron schedules tasks against real wall-clock time. We never let them
 // fire — every test uses scheduler.tick(taskId) directly to invoke the
@@ -597,6 +598,72 @@ describe('registerTasksWithQuarantine', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it('writes a status:skipped telemetry record with correct shape for a quarantined task', () => {
+    const task: ScheduledTask = {
+      taskId: 'dup-shape',
+      command: '/check',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // First registration succeeds; second is a duplicate — triggers quarantine.
+      registerTasksWithQuarantine(scheduler, [task, task], { telemetryPath });
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    const records = readTelemetryRecords(telemetryPath);
+    expect(records).toHaveLength(1);
+    const rec = records[0] as Record<string, unknown>;
+    expect(rec['taskId']).toBe('dup-shape');
+    expect(rec['status']).toBe('skipped');
+    expect(rec['skipReason']).toBe('malformed');
+    expect(typeof rec['triggeredAt']).toBe('string');
+    expect(Date.parse(rec['triggeredAt'] as string)).not.toBeNaN();
+  });
+
+  it('does not throw when the telemetry path is not writable', () => {
+    const task: ScheduledTask = {
+      taskId: 'dup-nowrite',
+      command: '/check',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // Pass a path inside a non-existent directory — appendFileSync would throw.
+      expect(() =>
+        registerTasksWithQuarantine(scheduler, [task, task], {
+          telemetryPath: '/nonexistent-dir-afk-test/forge-telemetry.jsonl',
+        }),
+      ).not.toThrow();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('quarantine skipped record does not poison the cooldown gate (regression for #4632)', async () => {
+    const task: ScheduledTask = {
+      taskId: 'dup-cooldown',
+      command: '/check',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // Second registration is a duplicate — writes status:'skipped' telemetry.
+      registerTasksWithQuarantine(scheduler, [task, task], { telemetryPath });
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // readLastTickTime must ignore the skipped record and return null,
+    // so the cooldown gate is not triggered by a quarantine event.
+    const result = await readLastTickTime('dup-cooldown', telemetryPath);
+    expect(result).toBeNull();
   });
 });
 
