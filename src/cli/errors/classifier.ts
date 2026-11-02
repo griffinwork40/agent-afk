@@ -244,6 +244,7 @@ export function classifyError(err: unknown): ClassifiedError {
   return {
     kind: 'unknown',
     userMessage: unknownMsg || 'An unexpected error occurred.',
+    hint: 'If this keeps happening, check `afk trace show` for the full error or try `afk doctor`.',
     exitCode: 1,
     raw: err,
   };

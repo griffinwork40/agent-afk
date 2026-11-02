@@ -155,7 +155,7 @@ export const MODEL_ENV_REGISTRY = [
   },
   {
     name: 'AFK_MAX_BUDGET_USD',
-    description: 'Opt-in cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this. Unset by default (no cap applied).',
+    description: 'Cumulative USD budget ceiling for the session, enforced at accounted completion boundaries (overshoot is possible). Daemon and Telegram default to $5 when unset/empty/invalid; other surfaces remain opt-in. Explicit session config wins.',
     type: 'number',
     required: false,
     example: '5.00',
@@ -282,11 +282,10 @@ export const MODEL_ENV_REGISTRY = [
   {
     name: 'AFK_MAX_TOOL_USE_ITERATIONS',
     description:
-      'Opt-in ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both ' +
+      'Ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both ' +
       'providers. Mirrors the maxToolUseIterations config key / max_tool_use_iterations tool param. ' +
-      'Unset, non-numeric, or <=0 means unlimited (the default — zero behavior change): a top-level ' +
-      'turn ends only when the model stops calling tools, the abort signal fires, the provider ' +
-      'errors, or the dollar budget trips. A positive integer N makes top-level turns wind down ' +
+      'Daemon and Telegram default to 100 when unset/empty/invalid; other surfaces stay opt-in. ' +
+      'Numeric <=0 retains the unlimited-round escape hatch. A positive integer N makes turns wind down ' +
       'gracefully after N tool rounds (one tools-stripped final round). An explicit config/CLI ' +
       'value wins over this env default. Does NOT affect subagent forks — they keep their own ' +
       'non-zero anti-hang default (SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS) regardless of this var.',

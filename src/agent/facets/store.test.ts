@@ -210,6 +210,48 @@ describe('getOrDeriveFacet yield_tracking carry-forward (#2777)', () => {
   });
 });
 
+// #4569: episode synthesis patches decisions after derivation; a FACET_VERSION
+// bump re-derives and resets decisions to []. The store must carry forward
+// patched decisions from the stale cache — same class as #2777.
+describe('getOrDeriveFacet decisions carry-forward (#4569)', () => {
+  function writeStaleCache(id: string, decisions: string[]): void {
+    getOrDeriveFacet(id, { sessionsDir, cacheDir });
+    const cached = readCache(id);
+    cached['facet_version'] = 6;
+    cached['decisions'] = decisions;
+    writeFileSync(join(cacheDir, `${id}.json`), JSON.stringify(cached), 'utf8');
+  }
+
+  it('carries synthesized decisions across a version bump', () => {
+    writeSession('d-a', sampleSession('d-a'));
+    writeStaleCache('d-a', ['Used streaming API', 'Chose WebSocket over SSE']);
+
+    const facet = getOrDeriveFacet('d-a', { sessionsDir, cacheDir });
+    expect(facet?.facet_version).toBeGreaterThan(6);
+    expect(facet?.decisions).toEqual(['Used streaming API', 'Chose WebSocket over SSE']);
+  });
+
+  it('does not carry forward an empty decisions array', () => {
+    writeSession('d-b', sampleSession('d-b'));
+    writeStaleCache('d-b', []);
+
+    const facet = getOrDeriveFacet('d-b', { sessionsDir, cacheDir });
+    expect(facet?.decisions).toEqual([]);
+  });
+
+  it('filters non-string elements from stale decisions', () => {
+    writeSession('d-c', sampleSession('d-c'));
+    getOrDeriveFacet('d-c', { sessionsDir, cacheDir });
+    const cached = readCache('d-c');
+    cached['facet_version'] = 6;
+    cached['decisions'] = ['valid', 42, null, 'also valid'];
+    writeFileSync(join(cacheDir, 'd-c.json'), JSON.stringify(cached), 'utf8');
+
+    const facet = getOrDeriveFacet('d-c', { sessionsDir, cacheDir });
+    expect(facet?.decisions).toEqual(['valid', 'also valid']);
+  });
+});
+
 describe('loadStoredSession', () => {
   it('returns undefined on corrupt JSON', () => {
     writeFileSync(join(sessionsDir, 'broken.json'), 'not json {{{', 'utf8');
