@@ -70,4 +70,6 @@ describe('Scenario 2 / #3714 — remote idempotency forwarding', () => {
     expect(rows.map((row) => row.status)).toEqual(['unknown', 'executed', 'pending', 'pending']);
     expect(rows[1]?.retryOf).toBe(rows[0]?.id);
   });
+
+  it.todo('extend no-clobber test to POST/PUT/PATCH — see #3714');
 });
