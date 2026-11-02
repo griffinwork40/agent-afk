@@ -44,7 +44,7 @@ describe('turn log', () => {
     const logPath = path.join(stateDir, 'file-checkpoints', SESSION, 'turns.jsonl');
     writeFileSync(logPath, `${readFileSync(logPath, 'utf8')}{"kind":"turn","tu`);
     const log = readTurnLog(SESSION, stateDir);
-    expect(log.map((e) => e.kind)).toEqual(['turn', 'post', 'turn']);
+    expect(log.map((e) => e.kind)).toEqual(['turn', 'post', 'tip', 'turn', 'tip']);
     expect(turnsFrom(log, 't1')).toEqual(['t1', 't2']);
     expect(turnsFrom(log, 'never')).toBeUndefined();
     expect(expectedHashes(log).get(file('a'))).toBe(hashBytes(Buffer.from('v1')));
