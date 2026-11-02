@@ -42,6 +42,19 @@ export interface RunReceipt {
   cwd?: string;
   /** SessionEnd reason that triggered this receipt ('close' | 'reset' | 'error'). */
   endReason?: string;
+  /**
+   * Operator-typed model identifier for the root session (e.g. `"sonnet"`,
+   * `"gpt-4o"`). Extracted from the `session_init_start` phase event.
+   * Absent when the trace predates model-provenance emission or the phase
+   * event was not present.
+   */
+  model?: string;
+  /**
+   * Resolved wire model id the provider actually called (e.g.
+   * `"claude-sonnet-4-5-20251101"`). Extracted from `session_init_start`.
+   * Absent for the same reasons as `model`.
+   */
+  resolvedModel?: string;
   status: 'succeeded' | 'failed' | 'cancelled' | 'unknown';
   closureReason?: ClosureReason;
   lastStopReason?: string;
@@ -118,4 +131,8 @@ export interface ReceiptMeta {
   journalSummary?: JournalSummary;
   /** Session outcomes; threaded in from {@link writeRunReceipt}. */
   outcomes?: OutcomesV1 | null;
+  /** Operator-typed model id for the root session; threaded in from the trace or session context. */
+  model?: string;
+  /** Resolved wire model id; threaded in from the trace or session context. */
+  resolvedModel?: string;
 }
