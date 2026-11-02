@@ -30,6 +30,14 @@ export async function synthesizeAndWriteEpisode(sessionId: string): Promise<Epis
     return null;
   }
 
+  // Daemon gate: scheduled/cron sessions produce repetitive low-signal episodes
+  // where the "goal" is the scheduler prompt, not a user intent. The review/brief
+  // output is already posted to its destination (GitHub, Telegram). Skip them;
+  // manual `afk episode synthesize <id>` still works for one-offs.
+  if (input.source === 'daemon') {
+    return null;
+  }
+
   const episode = await synthesizeEpisode(input);
   await writeEpisode(episode);
   return episode;

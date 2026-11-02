@@ -83,7 +83,10 @@ function parseLLMResponse(raw: string, sessionId: string): EpisodeRecord | null 
       narrative: str(obj['narrative']),
       synthesizedAt: new Date().toISOString(),
     };
-  } catch {
+  } catch (err) {
+    // Canary: surface parse failures so truncation rate is measurable.
+    const hint = err instanceof SyntaxError ? 'JSON parse' : 'unknown';
+    console.error(`[episode-synthesis] parseLLMResponse failed (${hint}) for ${sessionId}`);
     return null;
   }
 }
@@ -136,6 +139,8 @@ export async function synthesizeEpisode(input: EpisodeInput): Promise<EpisodeRec
     const parsed = parseLLMResponse(raw, input.sessionId);
     if (parsed && parsed.goal) return parsed;
 
+    // Canary: LLM returned output but it was unparseable or missing goal field
+    console.error(`[episode-synthesis] LLM output unparseable or empty goal for ${input.sessionId}`);
     return deterministicFallback(input);
   } catch {
     return deterministicFallback(input);
