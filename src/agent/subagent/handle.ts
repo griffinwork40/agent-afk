@@ -219,6 +219,18 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     return [...this._pendingBillingStreams];
   }
 
+  /**
+   * Number of workspace entries buffered for delivery at the next
+   * tool-call boundary. Zero when the buffer has been drained or when
+   * no workspace_subscribe tool call has been issued by this child.
+   *
+   * Exposed as a public accessor so tests can assert buffer state without
+   * reaching into the `_pendingWorkspaceEntries` internal array directly.
+   */
+  get pendingWorkspaceEntryCount(): number {
+    return this._pendingWorkspaceEntries.length;
+  }
+
   /** Compatibility accessor for package-internal callers of the previous ledger. */
   get _runBilling(): BillingUsage | undefined { return this._billingContext.total; }
   set _runBilling(value: BillingUsage | undefined) { this._billingContext.total = value; }
