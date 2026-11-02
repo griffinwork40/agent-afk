@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { appendFileSync, mkdirSync, mkdtempSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -8,13 +8,14 @@ import { getSessionLedgerDir, getSessionLedgerPath } from '../paths.js';
 import { handleStream } from './stream-route.js';
 import { parseSseChunk } from './sse-protocol.js';
 import { ChoiceBroker } from './choice-broker.js';
+import { renameWithRetrySync } from '../utils/atomic-write.js';
 
 const id = 'reset-stream';
 const record = (text: string) => JSON.stringify({ v: 1, ts: Date.now(), kind: 'assistant', text }) + '\n';
 function replace(text: string) {
   const file = getSessionLedgerPath(id);
   writeFileSync(`${file}.next`, record(text));
-  renameSync(`${file}.next`, file);
+  renameWithRetrySync(`${file}.next`, file);
 }
 function connect(lastEventId?: string, choices?: ChoiceBroker) {
   const req = Object.assign(new EventEmitter(), { headers: { ...(lastEventId ? { 'last-event-id': lastEventId } : {}) } });
