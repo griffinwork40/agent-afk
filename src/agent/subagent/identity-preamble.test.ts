@@ -7,6 +7,7 @@ vi.mock('../tools/nesting.js', () => ({
 import {
   injectSubagentIdentityPreamble,
   renderSubagentIdentityPreamble,
+  shouldEmitOrientationBlock,
   WORKTREE_STASH_RULE,
 } from './identity-preamble.js';
 import type { AgentConfig } from '../types/config-types.js';
@@ -291,5 +292,145 @@ describe('injectSubagentIdentityPreamble', () => {
     } as AgentConfig;
     const sp = injectSubagentIdentityPreamble(cfg).systemPrompt as string;
     expect(sp).not.toContain(STASH_RULE);
+  });
+});
+
+// ── orientation block ─────────────────────────────────────────────────────────
+
+const ORIENTATION_HEADER = '# Introspection surface';
+const ORIENTATION_RUNTIME = 'get_runtime_state';
+const ORIENTATION_TRACE = 'afk trace';
+
+describe('shouldEmitOrientationBlock', () => {
+  it('returns true for undefined (unnamed/bare dispatch)', () => {
+    expect(shouldEmitOrientationBlock(undefined)).toBe(true);
+  });
+
+  it('returns true for general-purpose', () => {
+    expect(shouldEmitOrientationBlock('general-purpose')).toBe(true);
+  });
+
+  it('returns false for research-agent', () => {
+    expect(shouldEmitOrientationBlock('research-agent')).toBe(false);
+  });
+
+  it('returns false for Explore', () => {
+    expect(shouldEmitOrientationBlock('Explore')).toBe(false);
+  });
+
+  it('returns false for git-investigator', () => {
+    expect(shouldEmitOrientationBlock('git-investigator')).toBe(false);
+  });
+
+  it('returns false for any other named type', () => {
+    expect(shouldEmitOrientationBlock('my-custom-agent')).toBe(false);
+  });
+});
+
+describe('renderSubagentIdentityPreamble — orientation block', () => {
+  it('emits the orientation block for unnamed (bare) dispatch', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      resolvedAgentType: undefined,
+    });
+    expect(out).toContain(ORIENTATION_HEADER);
+    expect(out).toContain(ORIENTATION_RUNTIME);
+    expect(out).toContain(ORIENTATION_TRACE);
+  });
+
+  it('emits the orientation block for general-purpose', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      resolvedAgentType: 'general-purpose',
+    });
+    expect(out).toContain(ORIENTATION_HEADER);
+    expect(out).toContain(ORIENTATION_RUNTIME);
+  });
+
+  it('does NOT emit the orientation block for research-agent', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      resolvedAgentType: 'research-agent',
+    });
+    expect(out).not.toContain(ORIENTATION_HEADER);
+    expect(out).not.toContain(ORIENTATION_TRACE);
+  });
+
+  it('does NOT emit the orientation block for Explore', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      resolvedAgentType: 'Explore',
+    });
+    expect(out).not.toContain(ORIENTATION_HEADER);
+  });
+
+  it('includes parent session id in the orientation block when provided', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      resolvedAgentType: undefined,
+      parentSessionId: 'sess-abc-123',
+    });
+    expect(out).toContain('sess-abc-123');
+  });
+
+  it('does not include a parent session id line when parentSessionId is absent', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      resolvedAgentType: undefined,
+    });
+    // Orientation block present but no parent id line
+    expect(out).toContain(ORIENTATION_HEADER);
+    expect(out).not.toContain('Parent session id:');
+  });
+
+  it('orientation block appears after the nesting-depth section', () => {
+    const out = renderSubagentIdentityPreamble({
+      isNonInteractive: true,
+      depth: 1,
+      maxDepth: 3,
+      resolvedAgentType: undefined,
+    });
+    const nestIdx = out.indexOf('Dispatch');
+    const orientIdx = out.indexOf(ORIENTATION_HEADER);
+    expect(nestIdx).toBeGreaterThan(-1);
+    expect(orientIdx).toBeGreaterThan(nestIdx);
+  });
+});
+
+describe('injectSubagentIdentityPreamble — orientation block wiring', () => {
+  it('wires resolvedAgentType through to suppress the block for research-agent', () => {
+    const cfg: AgentConfig = { systemPrompt: 'TASK', isNonInteractive: true, depth: 1, maxDepth: 3 };
+    const sp = injectSubagentIdentityPreamble(cfg, undefined, undefined, 'research-agent').systemPrompt as string;
+    expect(sp).not.toContain(ORIENTATION_HEADER);
+  });
+
+  it('wires resolvedAgentType through to include the block for general-purpose', () => {
+    const cfg: AgentConfig = { systemPrompt: 'TASK', isNonInteractive: true, depth: 1, maxDepth: 3 };
+    const sp = injectSubagentIdentityPreamble(cfg, undefined, undefined, 'general-purpose').systemPrompt as string;
+    expect(sp).toContain(ORIENTATION_HEADER);
+  });
+
+  it('includes the block for unnamed dispatch (no resolvedAgentType)', () => {
+    const cfg: AgentConfig = { systemPrompt: 'TASK', isNonInteractive: true, depth: 1, maxDepth: 3 };
+    const sp = injectSubagentIdentityPreamble(cfg).systemPrompt as string;
+    expect(sp).toContain(ORIENTATION_HEADER);
+  });
+
+  it('includes parentSessionId in the block when provided', () => {
+    const cfg: AgentConfig = { systemPrompt: 'TASK', isNonInteractive: true, depth: 1, maxDepth: 3 };
+    const sp = injectSubagentIdentityPreamble(cfg, undefined, undefined, undefined, 'parent-sess-xyz').systemPrompt as string;
+    expect(sp).toContain('parent-sess-xyz');
   });
 });

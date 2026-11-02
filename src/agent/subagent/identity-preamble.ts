@@ -98,11 +98,92 @@ export interface SubagentIdentityFacts {
    * "proceed on the most reasonable assumption" language is used instead.
    */
   yieldEnabled?: boolean;
+  /**
+   * The resolved registered agent type for this child (e.g. `'general-purpose'`,
+   * `'research-agent'`). When absent the child is an unnamed bare dispatch.
+   *
+   * Used to gate the session-start orientation block: the block is emitted for
+   * unnamed children AND for `general-purpose` children, because both lack a
+   * curated type-specific prompt that already covers introspection tools. Named
+   * typed agents (research-agent, Explore, git-investigator, …) have their own
+   * vendored prompts with tool-surface documentation — they do NOT receive the
+   * orientation block.
+   */
+  resolvedAgentType?: string;
+  /**
+   * The parent session id, included in the orientation block so the child
+   * can reference it when calling `get_runtime_state` or correlating traces.
+   * Absent when the parent carries no session id (stub parents, in-process
+   * harnesses).
+   */
+  parentSessionId?: string;
 }
 
 function isFiniteNumber(n: unknown): n is number {
   return typeof n === 'number' && Number.isFinite(n);
 }
+
+/**
+ * The agent types that receive the session-start orientation block.
+ *
+ * Named typed agents (research-agent, Explore, git-investigator, and any
+ * user/plugin agent) have curated vendored prompts that already describe their
+ * tool surface. The orientation block is for children that arrive without that
+ * context: unnamed (bare) dispatches and the `general-purpose` builtin, which
+ * inherits the full tool surface but no type-specific documentation.
+ */
+const ORIENTATION_AGENT_TYPES = new Set(['general-purpose']);
+
+/**
+ * Return `true` when `resolvedAgentType` should receive the session-start
+ * orientation block.
+ *
+ * - `undefined` (unnamed / bare dispatch): yes — no curated prompt at all.
+ * - `'general-purpose'`: yes — inherits the full surface but has no type-specific
+ *   introspection docs.
+ * - any other named type: no — they have vendored prompts that cover their surface.
+ */
+function shouldEmitOrientationBlock(resolvedAgentType: string | undefined): boolean {
+  return resolvedAgentType === undefined || ORIENTATION_AGENT_TYPES.has(resolvedAgentType);
+}
+
+/**
+ * Render a compact session-start orientation block for unnamed and
+ * `general-purpose` subagents.
+ *
+ * Covers the introspection surface the agent cannot easily discover on its
+ * own: `get_runtime_state` views, the `afk trace` / `afk witness` CLI
+ * commands, and the parent session id for cross-session correlation.
+ *
+ * Design constraints (issue #4514):
+ *   - Built into the fork path, not a hook — simpler, right default for v1.
+ *   - Only for unnamed and general-purpose children — named types have their
+ *     own curated prompts.
+ *   - Compact: a few lines per tool, not a full manual.
+ */
+function renderOrientationBlock(parentSessionId: string | undefined): string {
+  const lines: string[] = [
+    '# Introspection surface',
+    '',
+    'Key tools for self-orientation (call these when you need to know your context):',
+    '',
+    '- `get_runtime_state view:"self"` — your session id, model, depth, cwd, permissions.',
+    '- `get_runtime_state view:"tools"` — enabled tools and MCP servers available to you.',
+    '- `get_runtime_state view:"workspace"` — git branch, HEAD SHA, dirty files, remote URL.',
+    '- `get_runtime_state view:"subagents"` — active subagent handles you have dispatched.',
+    '',
+    'CLI introspection (run via the `bash` tool):',
+    '- `afk trace [session-id]` — structured witness trace of tool calls and lifecycle events.',
+    '- `afk witness [session-id]` — raw witness log for debugging.',
+  ];
+  if (parentSessionId !== undefined) {
+    lines.push('', `Parent session id: ${parentSessionId}`);
+  }
+  return lines.join('\n');
+}
+
+/** Exported for tests. */
+export { shouldEmitOrientationBlock };
 
 /**
  * Render the identity block for a child with the given resolved facts.
@@ -213,6 +294,15 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
     }
   }
 
+  // Session-start orientation block: emitted for unnamed (bare) dispatches and
+  // general-purpose children — both lack a curated type-specific prompt that
+  // already covers the introspection surface. Named typed agents (research-agent,
+  // Explore, git-investigator, …) are excluded because their vendored prompts
+  // already document their tool surface.
+  if (shouldEmitOrientationBlock(facts.resolvedAgentType)) {
+    lines.push('', renderOrientationBlock(facts.parentSessionId));
+  }
+
   return lines.join('\n');
 }
 
@@ -228,11 +318,19 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
  *   context (set from `resolvedAccess.nestedAgentTypes` in child-config.ts).
  *   When provided, the rendered block names the allowed types so the child
  *   never needs to guess. Mirrors the executor's enforcement gate exactly.
+ * @param yieldEnabled - When true, include the Asking-block yield paragraph.
+ * @param resolvedAgentType - The registered agent type for this child. When
+ *   absent (bare dispatch) or `'general-purpose'`, the session-start
+ *   orientation block is appended. Named typed agents are excluded.
+ * @param parentSessionId - Parent session id included in the orientation block
+ *   for cross-session correlation via `get_runtime_state` and `afk trace`.
  */
 export function injectSubagentIdentityPreamble(
   config: AgentConfig,
   nestedAgentAllowlist?: readonly string[],
   yieldEnabled?: boolean,
+  resolvedAgentType?: string,
+  parentSessionId?: string,
 ): AgentConfig {
   const block = renderSubagentIdentityPreamble({
     isNonInteractive: config.isNonInteractive,
@@ -241,6 +339,8 @@ export function injectSubagentIdentityPreamble(
     nestedAgentAllowlist,
     cwd: config.cwd,
     yieldEnabled,
+    resolvedAgentType,
+    parentSessionId,
   });
   return appendSystemPromptBlock(config, block);
 }

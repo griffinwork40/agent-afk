@@ -91,6 +91,16 @@ export interface AssembleChildConfigArgs<T> {
    * Empty array = deny-all (preamble says dispatch is forbidden).
    */
   nestedAgentAllowlist?: readonly string[];
+  /**
+   * The resolved registered agent type for this child (from
+   * `ForkSubagentOptions.resolvedAgentType`). Forwarded to the identity
+   * preamble to gate the session-start orientation block: emitted for unnamed
+   * (bare) dispatches and `general-purpose` children; suppressed for all other
+   * named typed agents, which carry their own curated tool-surface docs.
+   *
+   * Undefined = unnamed/bare dispatch → orientation block emitted.
+   */
+  resolvedAgentType?: string;
 }
 
 /** The manager-owned parent fields every fork passes (`SubagentManager.parentForkFields`). */
@@ -116,9 +126,20 @@ export type ParentForkFields = Pick<
  * @param nestedAgentAllowlist - Forwarded from {@link AssembleChildConfigArgs}
  *   to {@link injectSubagentIdentityPreamble} so the child's preamble names
  *   the types it may dispatch. Single source: same value the executor enforces.
+ * @param resolvedAgentType - Forwarded to gate the session-start orientation
+ *   block: emitted for unnamed and `general-purpose` children only.
+ * @param parentSessionId - Parent session id included in the orientation block.
  */
-function applyForkPreambles(config: AgentConfig, nestedAgentAllowlist?: readonly string[], yieldEnabled?: boolean): AgentConfig {
-  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config, nestedAgentAllowlist, yieldEnabled));
+function applyForkPreambles(
+  config: AgentConfig,
+  nestedAgentAllowlist?: readonly string[],
+  yieldEnabled?: boolean,
+  resolvedAgentType?: string,
+  parentSessionId?: string,
+): AgentConfig {
+  return injectToolBudgetPreamble(
+    injectSubagentIdentityPreamble(config, nestedAgentAllowlist, yieldEnabled, resolvedAgentType, parentSessionId),
+  );
 }
 
 /**
@@ -468,7 +489,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     ...(options.phaseRole === 'read-only'
       ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel, args.workspaceStore) }
       : {}),
-  }, args.nestedAgentAllowlist, args.yieldEnabled);
+  }, args.nestedAgentAllowlist, args.yieldEnabled, args.resolvedAgentType, options.parent.sessionId);
 
   return applyWorkspacePreamble(assembled, args.workspaceStore, workspaceEntries);
 }
