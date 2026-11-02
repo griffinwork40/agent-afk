@@ -1970,9 +1970,10 @@ describe('SubagentManager', () => {
       await mgr.forkSubagent({
         parent: { sessionId: 'p' },
         config: { model: 'sonnet', cwd: childCwd },
+        agentType: 'unconfinement-check',
       });
 
-      const cfg = shared.lastConfig as Record<string, unknown>;
+      const cfg = shared.lastConfig as unknown as Record<string, unknown>;
       // The child's readRoots must be the read-open root, not just [childCwd].
       expect(cfg['readRoots']).toEqual([readOpenRootFor(childCwd)]);
     });
@@ -1987,9 +1988,10 @@ describe('SubagentManager', () => {
       await mgr.forkSubagent({
         parent: { sessionId: 'p' },
         config: { model: 'sonnet' }, // no cwd
+        agentType: 'unconfinement-check',
       });
 
-      const cfg = shared.lastConfig as Record<string, unknown>;
+      const cfg = shared.lastConfig as unknown as Record<string, unknown>;
       expect(cfg['readRoots']).toBeUndefined();
     });
 
