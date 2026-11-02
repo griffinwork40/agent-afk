@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { parseDiffOutput, hasMergeBase, fragmentOverlapsAdded, CloneFile } from '../scripts/lib/clone-gate.js';
+import { parseDiffOutput, hasMergeBase, addedLinesByFile, fragmentOverlapsAdded, CloneFile } from '../scripts/lib/clone-gate.js';
 
 // vi.mock must be top-level (hoisted by vitest).
 vi.mock('node:child_process', () => ({ execFileSync: vi.fn() }));
@@ -262,5 +262,55 @@ describe('hasMergeBase', () => {
       throw new Error('fatal: origin/main...HEAD: no merge base');
     });
     expect(hasMergeBase('origin/main')).toBe(false);
+  });
+});
+
+// ── Tests: addedLinesByFile (parsed.size === 0 log branch) ────────────────────
+
+describe('addedLinesByFile', () => {
+  afterEach(() => {
+    mockExec.mockReset();
+  });
+
+  it('logs a warning when the diff has no added lines (parsed.size === 0)', () => {
+    // merge-base succeeds → three-dot diff path
+    mockExec
+      .mockReturnValueOnce('abc123\n') // git merge-base
+      .mockReturnValueOnce('');        // git diff → empty → parseDiffOutput returns size 0
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const result = addedLinesByFile('origin/main');
+      expect(result.size).toBe(0);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('diff has no added lines'),
+      );
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it('returns a populated map and does not log the warning when lines are present', () => {
+    const diff = [
+      '+++ b/src/foo.ts',
+      '@@ -1,0 +1,2 @@',
+      '+line1',
+      '+line2',
+    ].join('\n');
+
+    mockExec
+      .mockReturnValueOnce('abc123\n') // git merge-base
+      .mockReturnValueOnce(diff);      // git diff
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const result = addedLinesByFile('origin/main');
+      expect(result.size).toBeGreaterThan(0);
+      expect(consoleSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('diff has no added lines'),
+      );
+    } finally {
+      consoleSpy.mockRestore();
+    }
   });
 });
