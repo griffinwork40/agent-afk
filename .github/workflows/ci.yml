@@ -236,7 +236,8 @@ jobs:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Linux/macOS coverage gates; Windows assertions run in shards below.
-    # All platforms remain REQUIRED gates with no continue-on-error.
+    # All platforms remain REQUIRED gates with no continue-on-error (Windows is
+    # mediated through the ubuntu-based `test-windows` proxy job).
     # fail-fast: false so one OS failing never cancels another.
     #
     # Coverage policy: ubuntu runs `pnpm test:coverage` (enforces the stmts 84 /
@@ -276,7 +277,7 @@ jobs:
         run: ${{ matrix.test-cmd }}
 
       - name: Upload coverage report
-        if: always() && matrix.os != 'windows-2022'
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           # Per-OS name — a matrix can't upload multiple artifacts under one immutable name.

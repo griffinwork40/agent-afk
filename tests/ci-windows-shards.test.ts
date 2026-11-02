@@ -10,6 +10,10 @@ const workflow = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8')
 
 // Like check-audits-drift.test.ts, inspect job blocks without a YAML dependency.
 function job(id: string): string {
+  // The alternation `^  [a-zA-Z0-9_-]+:` matches the next job header; `$(?![\s\S])` is
+  // the end-of-input guard for the last job in the file (multiline $ matches line-end,
+  // but lazy [\s\S]*? exhausts to EOF when no next-job header exists — the lookahead
+  // firing order makes the guard redundant in practice, but it documents intent).
   const block = workflow.match(new RegExp(`^  ${id}:\\n([\\s\\S]*?)(?=^  [a-zA-Z0-9_-]+:|$(?![\\s\\S]))`, 'm'))?.[1];
   expect(block, `Missing CI job ${id}`).toBeDefined();
   return block!;
@@ -20,7 +24,12 @@ function bashCommand(): string {
   if (shell.shell === true) return 'bash';
   if (typeof shell.shell === 'string' && /(?:^|[/\\])bash(?:\.exe)?$/i.test(shell.shell)) return shell.shell;
   // Windows runners ship Git Bash even when the default shell is PowerShell.
-  const gitExec = execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim();
+  let gitExec: string;
+  try {
+    gitExec = execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim();
+  } catch {
+    throw new Error('CI gate tests require Bash (Git Bash on Windows) — git not found');
+  }
   for (const relative of ['../../bin/bash.exe', '../../../bin/bash.exe']) {
     const candidate = resolve(gitExec, relative);
     if (existsSync(candidate)) return candidate;
