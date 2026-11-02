@@ -145,8 +145,7 @@ export function _pruneSeen(seen: Set<string>): Set<string> {
   const entries = [...seen];
   return new Set(entries.slice(entries.length - keep));
 }
-// Internal alias keeps call sites unchanged.
-const pruneSeen = _pruneSeen;
+
 
 // ---------------------------------------------------------------------------
 // Command rendering — untrusted payload is delimited
@@ -306,7 +305,7 @@ export class GithubEventPoller {
     // Validate repo format: must be `owner/repo` with no leading slash, spaces,
     // or extra path segments — anything else would silently build malformed API
     // paths like `repos//repo/pulls/comments`.
-    if (!/^[^/\s]+\/[^/\s]+$/.test(opts.repo)) {
+    if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(opts.repo)) {
       throw new Error(
         `GithubEventPoller: invalid repo "${opts.repo}" — expected "owner/repo" format`,
       );
@@ -385,7 +384,7 @@ export class GithubEventPoller {
     }
 
     if (dirty) {
-      const pruned = pruneSeen(seen);
+      const pruned = _pruneSeen(seen);
       saveSeen(this.stateDir, pruned);
     }
   }

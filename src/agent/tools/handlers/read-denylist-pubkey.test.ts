@@ -126,7 +126,7 @@ describe('gateSshPubKeyDir — per-entry provenance gate', () => {
       { source: src, root: '/home/u/.ssh' },
       { source: '/home/u/.gnupg', root: '/home/u/.gnupg' },
     ];
-    expect(gateSshPubKeyDir(entries, ['/home/u/afk/config'], src)).toBe('/home/u/.ssh');
+    expect(gateSshPubKeyDir(entries, ['/home/u/.afk/config'], src)).toBe('/home/u/.ssh');
   });
 
   it('drops the pattern when ~/.ssh resolves under another builtin floor', () => {

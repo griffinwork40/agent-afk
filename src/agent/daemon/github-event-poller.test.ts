@@ -512,6 +512,14 @@ describe('_pruneSeen (#4039)', () => {
     expect(_pruneSeen(s)).toBe(s);
   });
 
+  it('returns the same set when size is exactly MAX_SEEN (boundary: <= is inclusive)', () => {
+    // The guard is `seen.size <= MAX_SEEN`, so a set of exactly MAX_SEEN entries
+    // must NOT be pruned — it is still within the cap.
+    const entries = Array.from({ length: MAX_SEEN_FOR_TESTS }, (_, i) => `id-${i}`);
+    const seen = new Set(entries);
+    expect(_pruneSeen(seen)).toBe(seen);
+  });
+
   it('prunes oldest entries when size exceeds MAX_SEEN', () => {
     // Build a set just over the cap using synthetic ids.
     const overCap = MAX_SEEN_FOR_TESTS + 100;
@@ -527,6 +535,10 @@ describe('_pruneSeen (#4039)', () => {
   });
 
   it('preserves insertion order in the pruned set', () => {
+    // ES2015+ guarantees that Set iterates in insertion order (ECMAScript spec
+    // §23.2.3.6 — SetIterator preserves insertion order). _pruneSeen spreads
+    // the Set to an array and slices the tail, so the relative order of kept
+    // entries must equal their original insertion order.
     const overCap = MAX_SEEN_FOR_TESTS + 1;
     const entries = Array.from({ length: overCap }, (_, i) => `x-${i}`);
     const seen = new Set(entries);
