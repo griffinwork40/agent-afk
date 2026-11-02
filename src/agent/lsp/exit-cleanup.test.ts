@@ -54,7 +54,9 @@ describe('LSP spawn-time exit guardian', () => {
         for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
         // On Windows, child processes may still hold handles briefly after SIGKILL.
         // maxRetries + retryDelay lets Node retry on EBUSY without throwing.
-        rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+        // Use a generous budget (10 × 500 ms = 5 s) because Windows CI runners
+        // can hold file handles longer than the previous 3 × 200 ms = 600 ms.
+        rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
       }
     }, 25_000,
   );
