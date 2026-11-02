@@ -60,6 +60,7 @@ vi.mock('../cli/palette.js', () => ({
     warning: (s: string) => s,
     error: (s: string) => s,
     brand: (s: string) => s,
+    dim: (s: string) => s,
   },
 }));
 vi.mock('../cli/input/stdin-claim.js', () => ({

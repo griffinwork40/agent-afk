@@ -16,6 +16,7 @@
  */
 
 import type { Command } from 'commander';
+import { palette } from '../palette.js';
 import { collectUsage, ANTHROPIC_OAUTH } from '../../agent/usage/usage-snapshot.js';
 import { CODEX_SUBSCRIPTION } from '../../agent/usage/codex-usage.js';
 import type { UsageResult } from '../../agent/subscription-usage.js';
@@ -120,7 +121,7 @@ export function registerUsageCommand(program: Command): void {
           return;
         }
         const asOf = new Date(summary.asOfMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-        console.log('\n' + statusPanel(`Agent AFK · Usage  (as of ${asOf})`, panelRows(summary)) + '\n');
+        console.log(palette.info('\n' + statusPanel(`Agent AFK · Usage  (as of ${asOf})`, panelRows(summary)) + '\n'));
       } catch (error) {
         handleCommandError(error);
       }

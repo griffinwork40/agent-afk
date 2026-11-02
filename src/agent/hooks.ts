@@ -83,6 +83,8 @@ export interface HookDecision {
   decision?: 'block' | 'approve';
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
+  /** Stable guard identifier forwarded verbatim to hook_decision traces. Optional for legacy hooks. */
+  ruleId?: string;
   /**
    * Named risk category for the gate verdict — the stable "why" dimension
    * recorded in `hook_decision` trace events alongside `reason`. When set by

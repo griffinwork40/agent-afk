@@ -115,7 +115,7 @@ function printLine(line: RestartLine): void {
     return;
   }
   const style = line.level === 'success' ? palette.success : line.level === 'warning' ? palette.warning : palette.meta;
-  console.log(style(line.text));
+  console.log(style(line.text)); // console-ok
 }
 
 /**

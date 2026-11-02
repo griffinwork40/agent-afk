@@ -74,8 +74,8 @@ function truncateTitle(text: string): string {
  * Best-effort identity read: `cwd`/`surface`/`model` from session-meta.json
  * (O(1)) when present, falling back to a head-of-ledger scan for pre-sidecar
  * sessions. `title` always comes from the ledger `user` record (session-meta
- * does not store it). Stops the ledger scan once both `title` and all identity
- * fields are found, or after {@link HEAD_RECORD_SCAN_LIMIT} records.
+ * does not store it). Stops the ledger scan once both `title`, `cwd`, and
+ * `model` are found, or after {@link HEAD_RECORD_SCAN_LIMIT} records.
  *
  * Never throws. `readLedger` re-throws non-ENOENT filesystem errors (e.g. a
  * permission error), and a session's ledger content can be malformed or

@@ -1,1 +1,1 @@
-{ "errors": 2688, "reason": "worktree node_modules path duplication adds 2 phantom type-identity errors pre-existing on main; baseline reflects actual CI error count" }
+{ "errors": 2688, "reason": "pre-existing TS4111 index-signature error in abort-cascade.bench.test.ts; not introduced by this PR" }

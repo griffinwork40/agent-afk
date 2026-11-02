@@ -1,4 +1,5 @@
 import { palette } from '../../palette.js';
+import { divider } from '../../render/divider.js';
 import { writeKeyValue } from '../output-blocks.js';
 import { collectUsageSummary } from '../../commands/usage.js';
 import { usageRows } from '../../../agent/usage/usage-formatter.js';
@@ -27,7 +28,7 @@ export const usageCmd: SlashCommand = {
 
     writeKeyValue(out, { title: 'Subscription usage', entries }, () => {
       out.line(palette.bold('Subscription usage'));
-      out.line('─'.repeat(80));
+      out.line(divider());
       for (const e of entries) {
         out.line(`  ${e.key.padEnd(20)}${e.value}`);
       }

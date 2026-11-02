@@ -239,7 +239,7 @@ exports[`original console bytes (color=1) > tokens-sdk 1`] = `
 exports[`original console bytes (color=1) > usage 1`] = `
 "
 [1mSubscription usage[22m
-────────────────────────────────────────────────────────────────────────────────
+[2m────────────────────────────────────────────────────────────────────────────────[22m
   anthropic / oauth   ok
     5h utilization    42%
     7d utilization    10%
@@ -250,7 +250,7 @@ exports[`original console bytes (color=1) > usage 1`] = `
 exports[`original console bytes (color=1) > usage-empty 1`] = `
 "
 [1mSubscription usage[22m
-────────────────────────────────────────────────────────────────────────────────
+[2m────────────────────────────────────────────────────────────────────────────────[22m
   Status              No providers found.
 
 "
@@ -259,7 +259,7 @@ exports[`original console bytes (color=1) > usage-empty 1`] = `
 exports[`original console bytes (color=1) > usage-unavailable 1`] = `
 "
 [1mSubscription usage[22m
-────────────────────────────────────────────────────────────────────────────────
+[2m────────────────────────────────────────────────────────────────────────────────[22m
   anthropic / oauth   error
     Usage             No token
 

@@ -204,4 +204,39 @@ describe('extractEpisodeInput', () => {
     expect(result.toolsUsed).toEqual([]);
     expect(result.lastAssistantMessage).toBe('');
   });
+
+  it('skips preamble-only user records and extracts the real user message', async () => {
+    const sessionId = 'test-extract-preamble-skip';
+    const preamble =
+      '[placeholder-prevent] Prefer running commands yourself with your tools; ' +
+      'this note applies only to commands you must hand to the user.';
+    writeJournal(sessionId, [
+      appendRecord(0, 'user', [textBlock(preamble)]),
+      appendRecord(1, 'assistant', [textBlock('Understood.')]),
+      appendRecord(2, 'user', [textBlock('Fix the auth bug in login.ts')]),
+      appendRecord(3, 'assistant', [textBlock('Done.')]),
+    ]);
+
+    const { extractEpisodeInput } = await import('./extract.js');
+    const result = extractEpisodeInput(sessionId);
+
+    expect(result.firstUserMessage).toBe('Fix the auth bug in login.ts');
+    expect(result.firstUserMessage).not.toContain('placeholder-prevent');
+  });
+
+  it('returns empty firstUserMessage when all user records are preamble', async () => {
+    const sessionId = 'test-extract-all-preamble';
+    const preamble =
+      '[placeholder-prevent] Prefer running commands yourself with your tools; ' +
+      'this note applies only to commands you must hand to the user.';
+    writeJournal(sessionId, [
+      appendRecord(0, 'user', [textBlock(preamble)]),
+      appendRecord(1, 'assistant', [textBlock('Understood.')]),
+    ]);
+
+    const { extractEpisodeInput } = await import('./extract.js');
+    const result = extractEpisodeInput(sessionId);
+
+    expect(result.firstUserMessage).toBe('');
+  });
 });

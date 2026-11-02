@@ -218,11 +218,7 @@ export function registerInteractiveCommand(program: Command): void {
 
       spinner.succeed('Session ready');
       if (worktreeHandleRef.current !== undefined) {
-        console.log(
-          palette.dim('  ↪ worktree: ') +
-          palette.dim(formatCwd(worktreeHandleRef.current.path, { maxWidth: 60 })) +
-          palette.dim(` (branch: ${worktreeHandleRef.current.branch})`),
-        );
+        console.log(palette.dim('  ↪ worktree: ') + palette.dim(formatCwd(worktreeHandleRef.current.path, { maxWidth: 60 })) + palette.dim(` (branch: ${worktreeHandleRef.current.branch})`));
       } else if (deferredWorktree !== undefined) {
         console.log(palette.dim('  ↪ worktree: named & created from your first message'));
       }

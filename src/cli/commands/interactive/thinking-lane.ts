@@ -132,10 +132,7 @@ export class ThinkingLane {
       // doesn't pollute normal stderr.
       if (!this.startedAt && !this.hasEmitted && isDebugEnabled()) {
         // eslint-disable-next-line no-console
-        console.error(
-          '[afk:thinking] collapse() short-circuited: no thinking chunks received this turn. ' +
-            'Model may not support extended thinking, or API ignored the thinking parameter.',
-        );
+        console.error(palette.warning('[afk:thinking] collapse() short-circuited: no thinking chunks received this turn. Model may not support extended thinking, or API ignored the thinking parameter.'));
       }
       return null;
     }
@@ -168,5 +165,22 @@ export class ThinkingLane {
       : `${(duration / 1000).toFixed(1)}s`;
     const tokenCount = Math.ceil(this.buffer.length / 4);
     return `thought ${durationStr} · ${tokenCount} tokens`;
+  }
+
+  /**
+   * Elapsed thinking time in milliseconds while thinking is actively in
+   * progress: {@link startedAt} is set, the phase has not been capped by
+   * {@link markEnded}, and the buffer has not been consumed/collapsed.
+   * Returns null otherwise.
+   *
+   * Contract: the returned value tracks the THINKING window only — it
+   * stops growing when `markEnded()` fires on the first non-thinking
+   * event (tool dispatch or content), so tool-execution time is never
+   * conflated with thinking time. Used by the summary-mode progress
+   * banner to show a live `◦ thinking · Xs` indicator.
+   */
+  activeThinkingElapsedMs(): number | null {
+    if (!this.startedAt || this.endedAt !== null || this.hasEmitted) return null;
+    return Math.max(0, Date.now() - this.startedAt);
   }
 }

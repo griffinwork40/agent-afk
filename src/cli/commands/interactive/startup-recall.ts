@@ -18,6 +18,7 @@ import { performance } from 'node:perf_hooks';
 import { join } from 'node:path';
 
 import { palette } from '../../palette.js';
+import { stripAnsi } from '../../display.js';
 import { getSessionsDir } from '../../../paths.js';
 import { getOrDeriveFacet } from '../../../agent/facets/store.js';
 import type { SessionFacet } from '../../../agent/facets/schema.js';
@@ -190,7 +191,6 @@ export function renderStartupRecall(opts: StartupRecallOpts): string | undefined
 
   // Strip ANSI escape sequences before rendering — a corrupt sidecar could
   // embed terminal control codes that bleed into the user's prompt.
-  const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
 
   // Summary text — prefer brief_summary, fall back to first_prompt.
   const summary =

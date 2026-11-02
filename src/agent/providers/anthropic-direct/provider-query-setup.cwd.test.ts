@@ -86,11 +86,28 @@ describe('setUpQuerySession dispatcher cwd', () => {
     // (as a forked subagent would do), setUpQuerySession must propagate them
     // into the provider's sharedReadRoots so the dispatcher is built with the
     // correct read scope (#3775).
+    const cwd = fileURLToPath(new URL('..', import.meta.url));
     const extraRoot = fileURLToPath(new URL('.', import.meta.url));
-    const { ctx } = setup(extraRoot, [extraRoot]);
-    const roots = ctx.getSharedReadRoots();
-    expect(roots).toBeDefined();
-    expect(roots).toContain(extraRoot);
+    // Defaults seed [cwd]; distinct roots expose missing replacement or append-only updates.
+    expect(cwd).not.toBe(extraRoot);
+    const { ctx } = setup(cwd, [extraRoot]);
+    expect(ctx.getSharedReadRoots()).toEqual([extraRoot]);
+  });
+
+  it('inherits explicit readRoots without confining a child on initial build or rebuild', () => {
+    const extraRoot = fileURLToPath(new URL('.', import.meta.url));
+    const { ctx, build, session } = setup(undefined, [extraRoot]);
+    expect(ctx.getSharedReadRoots()).toEqual([extraRoot]);
+    expect(ctx.getCurrentCwd()).toBeUndefined();
+    expect(session.cwd).toBe(process.cwd());
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(build.mock.calls[0]?.[1]?.cwd).toBeUndefined();
+
+    session.modelToolsFactory('claude-opus-4-5', 'default');
+    expect(ctx.getSharedReadRoots()).toEqual([extraRoot]);
+    expect(ctx.getCurrentCwd()).toBeUndefined();
+    expect(build).toHaveBeenCalledTimes(2);
+    expect(build.mock.calls[1]?.[1]?.cwd).toBeUndefined();
   });
 
   it('lets an unconfined child read an absolute path through the real dispatcher', async () => {

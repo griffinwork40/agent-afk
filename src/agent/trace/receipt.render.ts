@@ -29,6 +29,7 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
   );
   const metaParts: string[] = [];
   if (r.sessionId !== undefined) metaParts.push(`**Session:** ${r.sessionId}`);
+  if (r.cwd !== undefined) metaParts.push(`**Cwd:** ${r.cwd}`);
   if (r.endedAt !== undefined) metaParts.push(`**Ended:** ${r.endedAt}`);
   if (r.durationMs !== undefined) metaParts.push(`**Duration:** ${formatDuration(r.durationMs)}`);
   if (metaParts.length > 0) lines.push(metaParts.join(' · '));

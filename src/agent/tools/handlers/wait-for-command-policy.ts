@@ -40,7 +40,12 @@ export function isReadOnlyPoll(command: string, cwd: string): boolean {
     const name = tokens[0];
     if (name === undefined) return false;
     if (READ_ONLY.has(name)) return name !== '[' || tokens.at(-1) === ']';
-    // Reuse existing gh/git/curl reads, including in mixed builtin pipelines.
+    // One classifyRisk call per pipeline segment, not per command string. Each
+    // segment is a distinct command whose leading word must be independently
+    // safe-listed. This is intentional: the migration doc's "one shared
+    // analyzeCommand instance" refers to the CommandAnalysis object passed in by
+    // callers (pollMutationReason / pollSyntaxReason / pollRefusalReason), not to
+    // the per-segment risk probe here, which operates on reassembled token strings.
     // Quote each token so a data argument cannot become shell syntax on reparse.
     const quoted = tokens.map((token) => `'${token.replaceAll("'", "'\\''")}'`).join(' ');
     return classifyRisk('bash', { command: quoted }, { cwd }) === 'safe';

@@ -150,7 +150,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
   }
 
-  /** Fork wiring injects this before the first query; refresh schema and handler together. */
+  /**
+   * Inject a workspace_subscribe handler post-construction.
+   * Called by forkSubagent after wireWorkspaceSubscriptions() produces the
+   * handler and the pre-built child provider is already in childConfig.
+   * Must be called before the first query fires (before AgentSession starts).
+   * Rebuilds `schemas` so the tool appears in the schema array passed to each
+   * per-query dispatcher.
+   */
   setSubscribeHandler(handler: import('../../tools/types.js').ToolHandler): void {
     this.providerOpts.subscribeHandler = handler;
     this.schemas = buildProviderSchemas(this.providerOpts);

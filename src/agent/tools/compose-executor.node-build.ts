@@ -19,6 +19,7 @@ import {
   type ResolvedComposeAgent,
 } from './compose-agent-resolve.js';
 import { ensureError } from '../../utils/errors.js';
+import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry as defaultInboundAttachmentRegistry } from '../content/attachment-registry.js';
 import type { ImageBlockAttachment } from '../content/image-blocks.js';
@@ -30,7 +31,8 @@ import type { ComposeExecutorContext } from './compose-executor.context.js';
  */
 export type ComposeNodeBuildResult =
   | SubagentDAGNode
-  | { attachmentError: true; nodeId: string; error: Error };
+  | { attachmentError: true; nodeId: string; error: Error }
+  | { usageBlocked: true; nodeId: string; notice: string };
 
 /** Explicit inputs for {@link buildComposeDagNode}. */
 export interface BuildComposeDagNodeArgs {
@@ -103,6 +105,19 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
     parentApiKey: ctx.apiKey,
   });
   const nodeModel = nodeResolved.model;
+
+  // Usage gate: evaluate quota per-node against the resolved node model so an
+  // exhausted Opus quota does not wrongly block Haiku nodes. Mirrors the
+  // per-node gate in subagent-executor.execute-once.ts:173.
+  const { notice: usageNotice, blocked: usageBlocked } = await evaluateDispatchUsageForModel(nodeModel, ctx.traceWriter);
+  if (usageBlocked) {
+    return {
+      usageBlocked: true as const,
+      nodeId: n.id,
+      notice: usageNotice ?? 'The subscription quota is exhausted.',
+    };
+  }
+
   // Default-tier fallback: the node's provider is pre-built for nodeModel's
   // family, so the retry rebuilds it with the same gates for the parent model.
   const nodeFallback = defaultTierModelFallback(nodeResolved, ctx.defaultModel);

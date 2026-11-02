@@ -9,6 +9,7 @@
 
 import type { ToolHandler } from '../types.js';
 import { bashHandler, createBashHandler } from './bash.js';
+import { createArtifactHandlers } from './artifact.js';
 import { readFileHandler, createReadFileHandler } from './read-file.js';
 import { extractDocumentHandler, createExtractDocumentHandler } from './extract-document.js';
 import { writeFileHandler, createWriteFileHandler } from './write-file.js';
@@ -146,6 +147,7 @@ export function createBuiltinHandlers(
     ['list_sessions', listSessionsHandler],
     ['send_to_session', sendToSessionHandler],
   ]);
+  for (const [name, handler] of createArtifactHandlers({ cwd })) handlers.set(name, handler);
   // Opt-in structured read-only git tool (#3754); absent unless AFK_READONLY_GIT_TOOL is on.
   if (isReadOnlyGitToolEnabled()) handlers.set(GIT_READ_TOOL_NAME, createGitReadHandler(cwd));
   // Opt-in LSP symbol lookup (#3904 phase 2); absent unless AFK_LSP_DIAGNOSTICS is on.

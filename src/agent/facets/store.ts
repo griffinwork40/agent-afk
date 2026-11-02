@@ -202,6 +202,24 @@ function extractLooseYieldTracking(loose: Record<string, unknown> | null): {
 }
 
 /**
+ * Extract decisions from a loosely-read cached facet. Returns null when the
+ * cached file has no decisions or the array is empty.
+ *
+ * Used by getOrDeriveFacet to carry forward LLM-synthesized decisions on
+ * version bumps (#4569): episode synthesis patches decisions after derivation,
+ * so without this carry-forward a FACET_VERSION bump permanently erases
+ * decisions for all previously-patched sessions — same class as #2777.
+ */
+function extractLooseDecisions(loose: Record<string, unknown> | null): string[] | null {
+  if (!loose) return null;
+  const raw = loose['decisions'];
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  // Only carry forward string elements; silently drop malformed entries.
+  const strings = raw.filter((item): item is string => typeof item === 'string');
+  return strings.length > 0 ? strings : null;
+}
+
+/**
  * Attempt to read trace signals for a session by locating the witness trace
  * through the session ledger's `meta.traceLabel`. Returns undefined when:
  * - the ledger file is absent (old session, tracing disabled);
@@ -351,6 +369,16 @@ export function getOrDeriveFacet(
       : {}),
     ...(traceSignals !== undefined ? { traceSignals } : {}),
   });
+
+  // Carry forward decisions that the new derivation left empty (#4569).
+  // Episode synthesis patches decisions after derivation; without carry-forward
+  // a FACET_VERSION bump would permanently erase them — same class as #2777.
+  // Contract: only fill in from stale when the new derive produced an empty
+  // array (the schema default); never overwrite real derived decisions.
+  const staleDecisions = extractLooseDecisions(staleCached);
+  if (staleDecisions !== null && facet.decisions.length === 0) {
+    facet.decisions = staleDecisions;
+  }
 
   // Carry forward yield fields that the new derivation left null (#2777).
   // Contract: never downgrade — if derive already set produced_pr=true (from

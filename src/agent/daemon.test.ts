@@ -22,6 +22,7 @@ import { startDaemon, type DaemonHandle } from './daemon.js';
 import { registerTasksWithQuarantine } from './daemon.startup-register.js';
 import { getDaemonStateDir, getAfkHome } from '../paths.js';
 import { toScheduledTask } from './daemon/schedule-store.js';
+import { DaemonAlreadyRunningError } from './daemon-instance.lock.js';
 
 // node-cron schedules tasks against real wall-clock time. We never let them
 // fire — every test uses scheduler.tick(taskId) directly to invoke the
@@ -781,6 +782,70 @@ describe('startDaemon', () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('expiresAt'));
     } finally {
       warnSpy.mockRestore();
+    }
+  });
+
+  // ── Single-instance guard integration ──────────────────────────────────────
+  // These tests exercise the lock wired into startDaemon, not the lock module
+  // itself (which has thorough unit tests in daemon-instance.lock.test.ts).
+  // Each test stubs AFK_HOME to an isolated tmp dir so the default lock path
+  // (getDaemonStateDir('default')/daemon.lock) never collides between tests or
+  // with any live daemon on the host machine.
+
+  it('second concurrent startDaemon call throws DaemonAlreadyRunningError', async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-lock-conc-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    try {
+      handle = await startDaemon({
+        port: 0,
+        writePortFile: false,
+        handoffMaintenance: false,
+        telemetryPath,
+      });
+
+      await expect(
+        startDaemon({
+          port: 0,
+          writePortFile: false,
+          handoffMaintenance: false,
+          telemetryPath,
+        }),
+      ).rejects.toThrow(DaemonAlreadyRunningError);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('startDaemon releases the lock when startup fails, allowing a subsequent start', async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-lock-fail-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    try {
+      // Force a startup failure after lock acquisition by making the server
+      // construction blow up. We do this by passing an invalid port type that
+      // causes listenWithRecovery to reject.
+      const badPort = -1;
+      await expect(
+        startDaemon({
+          port: badPort,
+          writePortFile: false,
+          handoffMaintenance: false,
+          telemetryPath,
+        }),
+      ).rejects.toThrow();
+
+      // Lock must have been released — a fresh start on the same lock path
+      // (same AFK_HOME) must succeed.
+      handle = await startDaemon({
+        port: 0,
+        writePortFile: false,
+        handoffMaintenance: false,
+        telemetryPath,
+      });
+      expect(handle.port).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(tmpHome, { recursive: true, force: true });
     }
   });
 });

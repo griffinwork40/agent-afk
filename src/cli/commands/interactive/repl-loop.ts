@@ -195,7 +195,7 @@ export async function runReplLoop(
     // dead object. The goodbye banner in interactive.ts writes via
     // `console.log` directly, but defensive: any plugin teardown that
     // routes through completionWriter is now safe.
-    const resetToConsole = (line: string) => console.log(line);
+    const resetToConsole = (line: string) => console.log(line); // console-ok
     ctx.completionWriter.fn = resetToConsole;
     ctx.completionWriter.idleFn = resetToConsole;
     // Invariant: restoreConsole must run BEFORE surface.dispose(). The bridge

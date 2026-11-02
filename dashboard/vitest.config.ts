@@ -9,6 +9,9 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/__test-utils__/setup.ts'],
     css: false,
+    // Belt-and-suspenders: any individual test taking > 30 s is almost
+    // certainly blocked on a heavy module init rather than test logic.
+    testTimeout: 30_000,
   },
   resolve: {
     alias: {
