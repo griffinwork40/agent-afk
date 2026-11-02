@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.346.0] - 2026-11-02
+
 ### Added
 - add afk pause/resume to freeze and unfreeze all sessions (#4566) (bd8a6172f)
 - populate facet decisions from episode synthesis (#4610) (3b152a75e)
