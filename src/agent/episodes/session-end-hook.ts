@@ -33,9 +33,7 @@ export function createEpisodeSessionEndHook(): HookHandler {
       // Backflow: patch the cached facet with LLM-synthesized decisions (#4569).
       // patchFacetDecisions no-ops when decisions is empty (fallback path) or
       // the facet cache file is absent — always safe to call.
-      if (episode) {
-        patchFacetDecisions(sessionId, episode.decisions);
-      }
+      if (episode !== null) patchFacetDecisions(sessionId, episode.decisions);
     } catch {
       // Swallow all errors — episode synthesis is additive, never critical
     }
