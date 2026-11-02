@@ -32,20 +32,20 @@ export function registerPauseCommand(program: Command): void {
       // writePauseLock uses O_EXCL — returns false (not throws) on EEXIST.
       const wrote = writePauseLock();
       if (!wrote) {
-        console.log(palette.warning('⚠  AFK is already paused.'));
-        console.log(palette.dim(`   Lock file: ${lockPath}`));
+        console.log(palette.warning('⚠  AFK is already paused.')); // console-ok
+        console.log(palette.dim(`   Lock file: ${lockPath}`)); // console-ok
         process.exit(0);
       }
 
       if (sessionCount === 0) {
-        console.log(palette.success('⏸  AFK paused.') + palette.dim(' (no active sessions detected)'));
+        console.log(palette.success('⏸  AFK paused.') + palette.dim(' (no active sessions detected)')); // console-ok
       } else {
         const plural = sessionCount === 1 ? 'session' : 'sessions';
-        console.log(
+        console.log( // console-ok
           palette.success('⏸  AFK paused.') +
             palette.dim(` ${sessionCount} active ${plural} will block at their next checkpoint.`),
         );
       }
-      console.log(palette.dim(`   Run ${palette.fileRef('afk resume')} to unfreeze.`));
+      console.log(palette.dim(`   Run ${palette.fileRef('afk resume')} to unfreeze.`)); // console-ok
     });
 }

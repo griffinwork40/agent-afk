@@ -18,6 +18,6 @@ export function registerResumeAllCommand(program: Command): void {
     .action(() => {
       // removePauseLock already swallows ENOENT — idempotent, no TOCTOU.
       removePauseLock();
-      console.log(palette.success('▶  AFK resumed.') + palette.dim(' All paused sessions will continue.'));
+      console.log(palette.success('▶  AFK resumed.') + palette.dim(' All paused sessions will continue.')); // console-ok
     });
 }
