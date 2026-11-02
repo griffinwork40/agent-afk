@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.345.0] - 2026-11-02
+
 ### Added
 - add layout-jump decision table reference (#4609) (ad468b192)
 - summary-mode thinking indicator and unknown-error hint (a0d82bd1a)
