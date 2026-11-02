@@ -9,7 +9,6 @@
  */
 
 import { Command } from 'commander';
-import { existsSync } from 'fs';
 import { readPresenceFiles } from '../../agent/awareness/presence.js';
 import { writePauseLock, getPauseLockPath } from '../../agent/session/pause-controller.js';
 import { palette } from '../palette.js';
@@ -21,12 +20,6 @@ export function registerPauseCommand(program: Command): void {
     .action(async () => {
       const lockPath = getPauseLockPath();
 
-      if (existsSync(lockPath)) {
-        console.log(palette.warning('⚠  AFK is already paused.'));
-        console.log(palette.dim(`   Lock file: ${lockPath}`));
-        process.exit(0);
-      }
-
       // Count live sessions before writing the lock.
       let sessionCount = 0;
       try {
@@ -36,7 +29,13 @@ export function registerPauseCommand(program: Command): void {
         // Best-effort — don't abort the pause if presence dir is missing.
       }
 
-      writePauseLock();
+      // writePauseLock uses O_EXCL — returns false (not throws) on EEXIST.
+      const wrote = writePauseLock();
+      if (!wrote) {
+        console.log(palette.warning('⚠  AFK is already paused.'));
+        console.log(palette.dim(`   Lock file: ${lockPath}`));
+        process.exit(0);
+      }
 
       if (sessionCount === 0) {
         console.log(palette.success('⏸  AFK paused.') + palette.dim(' (no active sessions detected)'));

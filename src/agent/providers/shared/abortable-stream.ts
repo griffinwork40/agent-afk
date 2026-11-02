@@ -30,6 +30,8 @@
  * their SDK stream with this helper. See the interrupt-halt regression tests
  * alongside this module and in each provider.
  */
+import { PauseController } from '../../session/pause-controller.js';
+
 export async function* abortableStream<T>(
   source: AsyncIterable<T>,
   signal: AbortSignal,
@@ -64,7 +66,11 @@ export async function* abortableStream<T>(
         throw abortErrorFrom(signal);
       }
       if (result.done) return;
-      await (await import('../../session/pause-controller.js')).PauseController.instance().check(signal);
+      // Pause gate: block without passing `signal` so the stall watchdog
+      // (which feeds into `signal`) cannot fire through the pause and abort
+      // the stream. After check() returns we test signal separately (R1.2).
+      await PauseController.instance().check();
+      if (signal.aborted) throw abortErrorFrom(signal);
       yield result.value;
     }
   } finally {

@@ -75,7 +75,9 @@ export async function runOneTurn(
   autosaveState: [autosaveFailureLogged: boolean],
   rawUserText: string,
 ): Promise<TerminalCapture> {
-  await PauseController.instance().check(); // pause gate: block before each model turn
+  // TODO: pass session abort signal when available so a graceful abort can
+  // interrupt a pause without waiting for removePauseLock() (R1.6).
+  await PauseController.instance().check();
   const { verdictLedger, loopStageBar, mascotBar, healthRail } = footer;
   const capture: TerminalCapture = { kind: undefined, doneHasEvidence: undefined, doneClassification: undefined };
 

@@ -11,13 +11,15 @@
  * `setInterval` poll (reliable fallback for network/container file systems
  * where inotify is unavailable).
  *
- * Lock file format: `{ pid: number, timestamp: string }` — the PID lets
- * `check()` auto-clean a stale lock whose writer process is no longer alive.
+ * Lock file format: `{ pid: number, timestamp: string }` — the PID is
+ * informational only (for display/debugging). Lock file EXISTENCE is the
+ * sole pause signal; PID liveness is never used for auto-cleanup.
+ * `afk resume` (removePauseLock) is the only way to clear the lock.
  *
  * @module agent/session/pause-controller
  */
 
-import { existsSync, watchFile, unwatchFile, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
+import { existsSync, watchFile, unwatchFile, writeFileSync, unlinkSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { getAfkStateDir } from '../../paths.js';
 
@@ -30,38 +32,12 @@ export function getPauseLockPath(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Lock file schema
+// Lock file schema — written by writePauseLock for display/debugging only
 // ---------------------------------------------------------------------------
 
 interface PauseLockData {
   pid: number;
   timestamp: string;
-}
-
-/** Milliseconds after which a lock from a dead PID is considered stale. */
-const STALE_LOCK_AGE_MS = 30_000;
-
-function parseLock(path: string): PauseLockData | null {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as PauseLockData;
-  } catch {
-    return null;
-  }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isLockStale(lock: PauseLockData): boolean {
-  if (isProcessAlive(lock.pid)) return false;
-  const age = Date.now() - new Date(lock.timestamp).getTime();
-  return age > STALE_LOCK_AGE_MS;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,13 +106,6 @@ export class PauseController {
     // Fast path: not paused.
     if (!this._paused) return;
 
-    // Check for stale lock before blocking.
-    const lock = parseLock(this._watchPath);
-    if (lock === null || isLockStale(lock)) {
-      this._handleResume();
-      return;
-    }
-
     if (signal?.aborted) throw abortError(signal);
 
     return new Promise<void>((resolve, reject) => {
@@ -177,17 +146,14 @@ export class PauseController {
   }
 
   private _syncState(): void {
-    const exists = existsSync(this._watchPath);
-    if (exists) {
-      const lock = parseLock(this._watchPath);
-      if (lock !== null && !isLockStale(lock)) {
-        this._handlePause();
-        return;
-      }
-      // Stale lock — auto-clean and treat as resumed.
-      try { unlinkSync(this._watchPath); } catch { /* best-effort */ }
+    // Invariant: lock file existence is the sole pause signal. PID liveness
+    // is never consulted here — the PID in the lock is metadata only.
+    // `removePauseLock()` (called by `afk resume`) is the only way to clear.
+    if (existsSync(this._watchPath)) {
+      this._handlePause();
+    } else {
+      this._handleResume();
     }
-    this._handleResume();
   }
 
   private _startWatching(): void {
@@ -233,11 +199,24 @@ function abortError(signal: AbortSignal): Error {
 // Lock file writer/remover — used by CLI commands
 // ---------------------------------------------------------------------------
 
-export function writePauseLock(): void {
+/**
+ * Write the pause lock file. Returns `true` on success, `false` if the lock
+ * file already exists (EEXIST — already paused). Uses O_CREAT|O_EXCL so no
+ * symlink is followed for creation (atomic, no TOCTOU).
+ */
+export function writePauseLock(): boolean {
   const path = getPauseLockPath();
   try { mkdirSync(join(path, '..'), { recursive: true }); } catch { /* exists */ }
   const data: PauseLockData = { pid: process.pid, timestamp: new Date().toISOString() };
-  writeFileSync(path, JSON.stringify(data), 'utf8');
+  try {
+    // O_CREAT | O_EXCL: fails with EEXIST if path already exists and follows
+    // no symlinks for the creation itself — prevents symlink overwrite (R1.4).
+    writeFileSync(path, JSON.stringify(data), { encoding: 'utf8', flag: 'wx' });
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw err;
+  }
 }
 
 export function removePauseLock(): void {

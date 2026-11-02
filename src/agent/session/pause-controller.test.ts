@@ -117,24 +117,53 @@ describe('PauseController', () => {
     }
   });
 
-  it('auto-cleans a stale lock (dead PID, old timestamp)', async () => {
+  it('lock with dead PID still keeps controller paused (existence = paused)', async () => {
     const { PauseController, getPauseLockPath } = await getPauseMod();
 
     fs.mkdirSync(path.join(tmpDir, 'state'), { recursive: true });
 
-    // Write a lock with a very unlikely PID and a 60s-old timestamp.
+    // Write a lock with a very unlikely (dead) PID and a 60s-old timestamp.
+    // Under the old design this would be auto-cleaned; now it must stay.
     const lockPath = getPauseLockPath();
-    const staleData = {
+    const deadPidData = {
       pid: 999999999,
       timestamp: new Date(Date.now() - 60_000).toISOString(),
     };
-    fs.writeFileSync(lockPath, JSON.stringify(staleData), 'utf8');
+    fs.writeFileSync(lockPath, JSON.stringify(deadPidData), 'utf8');
 
     const ctrl = PauseController.instance();
     try {
       await new Promise((r) => setTimeout(r, 600));
+      // Lock file existence is the sole pause signal — dead PID is irrelevant.
+      expect(ctrl.isPaused()).toBe(true);
+      expect(fs.existsSync(lockPath)).toBe(true);
+    } finally {
+      ctrl.dispose();
+    }
+  });
+
+  it('removePauseLock() is the only way to resume (lock is not auto-cleaned)', async () => {
+    const { PauseController, writePauseLock, removePauseLock, getPauseLockPath } = await getPauseMod();
+
+    fs.mkdirSync(path.join(tmpDir, 'state'), { recursive: true });
+    writePauseLock();
+    expect(fs.existsSync(getPauseLockPath())).toBe(true);
+
+    const ctrl = PauseController.instance();
+    try {
+      await new Promise((r) => setTimeout(r, 600));
+      expect(ctrl.isPaused()).toBe(true);
+
+      // Waiting longer should NOT auto-clean the lock.
+      await new Promise((r) => setTimeout(r, 400));
+      expect(ctrl.isPaused()).toBe(true);
+      expect(fs.existsSync(getPauseLockPath())).toBe(true);
+
+      // Only removePauseLock() clears it.
+      removePauseLock();
+      await new Promise((r) => setTimeout(r, 400));
       expect(ctrl.isPaused()).toBe(false);
-      expect(fs.existsSync(lockPath)).toBe(false);
+      expect(fs.existsSync(getPauseLockPath())).toBe(false);
     } finally {
       ctrl.dispose();
     }
