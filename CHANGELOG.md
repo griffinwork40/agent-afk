@@ -12,6 +12,23 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- add afk pause/resume to freeze and unfreeze all sessions (#4566) (bd8a6172f)
+- populate facet decisions from episode synthesis (#4610) (3b152a75e)
+
+### Fixed
+- auto-restore files on /branches switch using on-disk turn log (#4613) (c18fb7306)
+- finite unattended session defaults (bounded partial) (#4548) (ace41b9e2)
+- use renameWithRetrySync to fix Windows EPERM on rename (c1dfc5b96)
+- increase Windows EBUSY retry budget in LSP exit-cleanup test (bb1b48dce)
+- address advisory findings from CI Windows shard PR (5ebe05de5)
+- add agentType + double-cast to fix lint:tests ratchet (+4 errors) (88b15d4be)
+- use rmSyncRetry in useTmpAfkHome to avoid ENOTEMPTY teardown race (61d8ea1fe)
+- reduce test coupling to SubagentHandle internals (880a35ff2)
+- add empty-string facet test, document dropped path, fix declaration order (22478ccbb)
+- correct precedence comment in compose node builder (af833b2a4)
+- add missing test todo and insertion-order comment (56780355e)
+
 ## [5.345.0] - 2026-11-02
 
 ### Added
