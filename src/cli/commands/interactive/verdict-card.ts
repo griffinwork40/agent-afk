@@ -289,6 +289,7 @@ function collectRows(state: TerminalState): Row[] {
       if (state.deferred?.trim() !== state.whatWasDone?.trim()) {
         push('deferred', state.deferred);
       }
+      push('worth doing', state.worthDoing);
       break;
     case 'blocked':
       push('blocks', state.whatBlocks);
