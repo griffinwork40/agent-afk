@@ -106,4 +106,23 @@ describe('shared command analysis', () => {
     expect(analyzeCommand('cat data | python3 -m json.tool').mutation.reason)
       .toBe(mutationRules.PIPE_TO_SHELL_REASON);
   });
+
+  it('handles empty string consistently across all five facets', () => {
+    const result = analyzeCommand('');
+    // segments: tokenizing an empty string yields no segments
+    expect(result.segments).toEqual([]);
+    // mutation: empty command is not mutating
+    expect(result.mutation.mutating).toBe(false);
+    // readOnly: consistent with non-mutating
+    expect(result.readOnly).toBe(true);
+    // destructive: empty command matches no destructive patterns
+    expect(result.destructive).toEqual([]);
+    // releaseBoundary: empty command matches no release-boundary patterns
+    expect(result.releaseBoundary).toEqual([]);
+    // memoization holds for empty results too
+    expect(result.segments).toBe(result.segments);
+    expect(result.mutation).toBe(result.mutation);
+    expect(result.destructive).toBe(result.destructive);
+    expect(result.releaseBoundary).toBe(result.releaseBoundary);
+  });
 });

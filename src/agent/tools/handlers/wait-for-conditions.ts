@@ -244,6 +244,9 @@ export function evaluateCommand(cond: CommandCondition): WaitResult {
   // the tokenized read-only supplement; unknown commands still fail closed.
   const cwd = cond.cwd ?? process.cwd();
   const analysis = analyzeCommand(cond.command);
+  // `isBackgroundBashLaunch` promotes safe→medium for `run_in_background:true`
+  // bash calls, but CommandCondition has no `run_in_background` field, so that
+  // path is intentionally dropped here — it can never apply.
   const risk = analysis.risk.level;
   // pollRefusalReason owns the whole gate (background `&`, syntax, mutation,
   // per-command argv, read-only supplement); see its Invariant.
