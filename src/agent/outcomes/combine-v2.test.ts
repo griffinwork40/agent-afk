@@ -474,6 +474,7 @@ describe('collapseSingleCountVotes', () => {
     const result = collapseSingleCountVotes(votes);
     // Both positive votes pass through; the single negative vote is kept
     expect(result).toHaveLength(3);
+    // filter preserves insertion order
     const positives = result.filter((v) => v.vote === 1);
     const negatives = result.filter((v) => v.vote === -1);
     expect(positives).toHaveLength(2);
