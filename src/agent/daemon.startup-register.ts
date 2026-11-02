@@ -7,8 +7,10 @@
  * @module agent/daemon.startup-register
  */
 
+import { appendFileSync } from 'node:fs';
 import { errorMessage } from '../utils/errors.js';
-import type { CronScheduler } from './daemon/scheduler.js';
+import { getTelemetryPath } from '../paths.js';
+import type { CronScheduler, TelemetryRecord } from './daemon/scheduler.js';
 import type { ScheduledTask } from './daemon/triggers.js';
 
 /**
@@ -19,16 +21,19 @@ import type { ScheduledTask } from './daemon/triggers.js';
  * fully operational.
  *
  * `scheduler.register()` calls `validateScheduledTask()`, which throws on
- * an invalid ISO 8601 date string. Unlike the post-startup `'malformed'` gate
- * path in `evaluateRunAtGate` (scheduler.runat-gate.ts), startup quarantine
- * only emits a `console.warn` — it does NOT write a `status:'skipped'`
- * telemetry record, because the scheduler tick loop has not started yet.
- * (#4052)
+ * an invalid ISO 8601 date string. A `status:'skipped' skipReason:'malformed'`
+ * telemetry record is written for each quarantined task, matching the
+ * post-startup malformed-gate path in `evaluateRunAtGate`
+ * (scheduler.runat-gate.ts). (#4502)
  */
 export function registerTasksWithQuarantine(
   scheduler: CronScheduler,
   tasks: ScheduledTask[],
+  options: { telemetryPath?: string } = {},
 ): void {
+  const resolvedTelemetryPath = options.telemetryPath ?? getTelemetryPath();
+  const nowMs = Date.now();
+
   for (const task of tasks) {
     try {
       scheduler.register(task);
@@ -39,6 +44,26 @@ export function registerTasksWithQuarantine(
         `[daemon] skipping task ${task.taskId} at startup: ${errorMessage(err)}. ` +
           'Fix schedules.json to restore normal behaviour.',
       );
+
+      // Emit a telemetry record so the quarantine is observable in the
+      // forge-telemetry.jsonl log — mirrors the post-startup malformed path.
+      const record: TelemetryRecord = {
+        taskId: task.taskId,
+        command: task.command,
+        trigger: 'cron',
+        ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
+        triggeredAt: new Date(nowMs).toISOString(),
+        durationMs: 0,
+        status: 'skipped',
+        skipReason: 'malformed',
+        errorMessage: `Task ${task.taskId} quarantined at startup: ${errorMessage(err)}`,
+      };
+
+      try {
+        appendFileSync(resolvedTelemetryPath, `${JSON.stringify(record)}\n`, 'utf-8');
+      } catch {
+        // Best-effort: a telemetry write failure must never crash the daemon.
+      }
     }
   }
 }
