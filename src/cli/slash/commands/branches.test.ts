@@ -32,9 +32,15 @@ vi.mock('../../../agent/file-checkpoint/turn-log.js', () => ({
   latestTipTurnId: vi.fn(() => undefined),
 }));
 
+vi.mock('./core.rewind.js', () => ({
+  restoreFiles: vi.fn().mockResolvedValue(true),
+  pick: vi.fn(),
+}));
+
 import { branchesCmd } from './branches.js';
 import { loadSession, listSessions, findSession } from '../../session-store.js';
 import { latestTipTurnId } from '../../../agent/file-checkpoint/turn-log.js';
+import { restoreFiles } from './core.rewind.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,6 +50,7 @@ const loadSessionMock = loadSession as Mock;
 const listSessionsMock = listSessions as Mock;
 const findSessionMock = findSession as Mock;
 const latestTipTurnIdMock = latestTipTurnId as Mock;
+const restoreFilesMock = restoreFiles as Mock;
 
 function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
@@ -204,6 +211,19 @@ describe('/branches', () => {
   });
 
   describe('switch subcommand', () => {
+    it('restores files when latestTipTurnId returns a value (auto-restore happy path)', async () => {
+      setupSidecars();
+      latestTipTurnIdMock.mockReturnValue('tip-turn-123');
+      const requestResume = vi.fn().mockResolvedValue({ ok: true, sessionId: SESSION_B });
+      findSessionMock.mockReturnValue({ id: SESSION_B, data: sidecarB });
+
+      const { ctx, lines } = makeCtx({ sessionId: SESSION_A, requestResume });
+      const result = await branchesCmd.handler(ctx, 'switch bbbb');
+      expect(result).toBe('continue');
+      expect(restoreFilesMock).toHaveBeenCalledOnce();
+      expect(lines.some((l) => l.includes('Files restored'))).toBe(true);
+    });
+
     it('switches to a branch by id prefix using requestResume', async () => {
       setupSidecars();
       const requestResume = vi.fn().mockResolvedValue({ ok: true, sessionId: SESSION_B });
