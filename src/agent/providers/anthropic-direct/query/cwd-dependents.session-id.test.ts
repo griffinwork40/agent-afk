@@ -35,6 +35,7 @@ vi.mock('../../../awareness/workspace-source.js', () => ({
 const LAUNCH_CWD = '/repo';
 const WORKTREE_CWD = '/repo/.afk-worktrees/feature';
 const MINTED_ID = 'a1b2c3d4-minted-session-id';
+const SESSION_ID_PREFIX = MINTED_ID.slice(0, 8);
 
 type BuildDispatcher = CwdDependentsFactoryArgs['buildDispatcher'];
 
@@ -105,7 +106,7 @@ describe('cwd-dependents sessionId fix — resolvedSessionId threads through aft
 
     // The assembled prompt includes `- Session: <first-8-chars> (cli)` — the
     // prefix is the first 8 hex chars of the resolved id.
-    expect(userSystem).toContain('- Session: a1b2c3d4 (cli)');
+    expect(userSystem).toContain(`- Session: ${SESSION_ID_PREFIX} (cli)`);
   });
 
   it('does not regress when config.sessionId is set (resume path)', () => {
@@ -119,6 +120,25 @@ describe('cwd-dependents sessionId fix — resolvedSessionId threads through aft
       'default',
       expect.objectContaining({ sessionId: MINTED_ID }),
     );
+  });
+
+  it('minted id is invariant across repeated factory invocations', () => {
+    const buildDispatcher = vi.fn<BuildDispatcher>(() => ({}) as ToolDispatcher);
+    const factory = makeFactory({ sessionId: undefined }, MINTED_ID, buildDispatcher);
+
+    const { userSystem: sys1 } = factory(WORKTREE_CWD);
+    const { userSystem: sys2 } = factory(WORKTREE_CWD);
+
+    // sessionId must be the same on every call
+    expect(buildDispatcher).toHaveBeenCalledTimes(2);
+    expect(buildDispatcher.mock.calls[0]![1]).toEqual(
+      expect.objectContaining({ sessionId: MINTED_ID }),
+    );
+    expect(buildDispatcher.mock.calls[1]![1]).toEqual(
+      expect.objectContaining({ sessionId: MINTED_ID }),
+    );
+    expect(sys1).toContain(`- Session: ${SESSION_ID_PREFIX} (cli)`);
+    expect(sys2).toContain(`- Session: ${SESSION_ID_PREFIX} (cli)`);
   });
 
   it('dispatcher sessionId is undefined when resolvedSessionId is undefined (depth>0 subagent)', () => {

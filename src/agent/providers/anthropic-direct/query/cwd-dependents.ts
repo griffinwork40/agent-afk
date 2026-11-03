@@ -23,6 +23,7 @@ export type CwdDependentsFactory = (newCwd: string) => {
   dispatcher: ToolDispatcher;
 };
 
+/** @internal */
 export interface CwdDependentsFactoryArgs {
   stableSystemPrefix: StableSystemParts;
   config: AgentConfig;
@@ -93,9 +94,8 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
 
     // 2. Rebuild the system prompt with the new `# Environment` line via the
     //    SAME assembler the first-turn path uses (query/system-prompt.ts), so
-    //    the two can never drift. Identity fields (sessionId/surface/depth/
-    //    maxDepth) are stable across cwd swaps, so we reuse the config
-    //    snapshot.
+    //    the two can never drift. Identity fields (surface/depth/maxDepth) are
+    //    stable across cwd swaps, so we reuse the config snapshot.
     //
     //    Invariant: `workspace` is NOT stable across a cwd swap — a different
     //    worktree is a different branch and HEAD — so it MUST be re-read from
