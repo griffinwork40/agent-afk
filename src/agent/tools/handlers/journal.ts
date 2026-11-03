@@ -13,13 +13,13 @@
  * @module agent/tools/handlers/journal
  */
 
+import { readdir, stat } from 'node:fs/promises';
 import type { ToolHandler } from '../types.js';
 import { findToolResultAsync, journalExistsAsync } from '../../journal/reader.async.js';
 import { loadJournalMessages } from '../../journal/reader.js';
-import { resolveLatestSession } from '../../trace/listing.js';
 import { resolveSessionByName } from '../../trace/session-name-resolver.js';
-import { isSafeLedgerSessionId } from '../../../paths.js';
-import { errorMessage } from '../../../utils/errors.js';
+import { getSessionsDir, isSafeLedgerSessionId } from '../../../paths.js';
+import { errorMessage, isErrnoCode } from '../../../utils/errors.js';
 import type { JournalMessage, JournalResultPart } from '../../journal/types.js';
 
 // ---------------------------------------------------------------------------
@@ -73,6 +73,43 @@ const RESULT_PREVIEW_CAP = 500;
 // ---------------------------------------------------------------------------
 
 /**
+ * Scan state/sessions/ for directories containing `journal.jsonl`,
+ * sorted by mtime descending. Returns the session ID of the newest one,
+ * or null when none exist.
+ *
+ * Uses the sessions dir (keyed by SDK session ID) rather than the witness
+ * root (keyed by trace label UUID) so the resolved ID is always valid for
+ * `getSessionJournalPath(id)`.
+ */
+async function resolveLatestJournalSession(): Promise<string | null> {
+  const sessionsDir = getSessionsDir();
+  let names: string[];
+  try {
+    names = await readdir(sessionsDir);
+  } catch (err) {
+    if (isErrnoCode(err, 'ENOENT')) return null;
+    throw err;
+  }
+
+  let bestId: string | null = null;
+  let bestMtime = 0;
+  for (const name of names) {
+    if (!isSafeLedgerSessionId(name)) continue;
+    try {
+      const journalPath = `${sessionsDir}/${name}/journal.jsonl`;
+      const st = await stat(journalPath);
+      if (st.isFile() && st.mtimeMs > bestMtime) {
+        bestMtime = st.mtimeMs;
+        bestId = name;
+      }
+    } catch {
+      // no journal in this dir — skip
+    }
+  }
+  return bestId;
+}
+
+/**
  * Resolve a session identifier to a validated session ID with a journal.
  * Tries: direct ID, session-name lookup. Returns null when unresolvable.
  */
@@ -80,7 +117,7 @@ async function resolveSessionId(
   raw: string | undefined,
 ): Promise<{ sessionId: string } | { error: string }> {
   if (!raw || raw === 'latest') {
-    const latest = await resolveLatestSession();
+    const latest = await resolveLatestJournalSession();
     if (!latest) return { error: 'No sessions found.' };
     return { sessionId: latest };
   }
@@ -300,6 +337,9 @@ export const readJournalHandler: ToolHandler = async (input) => {
 
   // Mode A: single tool result lookup.
   const toolUseId = typeof obj['tool_use_id'] === 'string' ? obj['tool_use_id'] : undefined;
+  if (toolUseId && toolUseId.length > 512) {
+    return { content: 'read_journal failed: tool_use_id exceeds maximum length (512).', isError: true };
+  }
   if (toolUseId) {
     try {
       return await lookupToolResult(sessionId, toolUseId);
