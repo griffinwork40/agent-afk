@@ -26,11 +26,13 @@ const VALID_HOOK_EVENTS = new Set([
   'PreToolUse',
   'PostToolUse',
   'PostToolUseFailure',
+  'PreCompact',
   'SessionStart',
   'SessionEnd',
   'Stop',
   'SubagentStart',
   'SubagentStop',
+  'UserPromptSubmit',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -116,7 +118,9 @@ export async function checkDaemonState(deps: DaemonStateDeps = {}): Promise<Chec
       try {
         process.kill(pid, 0);
         return true;
-      } catch {
+      } catch (err) {
+        // EPERM means the process exists but we lack permission to signal it.
+        if (isErrnoCode(err, 'EPERM')) return true;
         return false;
       }
     });
@@ -132,7 +136,15 @@ export async function checkDaemonState(deps: DaemonStateDeps = {}): Promise<Chec
         fix: `Remove stale lock file: ${lockPath}`,
       };
     }
-    if (isAlive(pid)) {
+    // isAlive may throw EPERM when the process exists but the current user
+    // lacks permission to signal it — treat that as alive.
+    let alive: boolean;
+    try {
+      alive = isAlive(pid);
+    } catch (killErr) {
+      alive = isErrnoCode(killErr, 'EPERM');
+    }
+    if (alive) {
       return { name: 'Daemon State', state: 'pass', detail: `running (pid ${pid})` };
     }
     return {
@@ -229,18 +241,25 @@ export async function checkNodeVersion(deps: NodeVersionDeps = {}): Promise<Chec
   // `null` means "caller explicitly says it's absent" (test sentinel).
   let enginesNode: string | null | undefined = deps.enginesNode;
   if (enginesNode === undefined) {
-    try {
-      // Walk up from __dirname to find package.json (works compiled or source).
-      const pkgPath = nodePath.resolve(
-        nodePath.dirname(new URL(import.meta.url).pathname),
-        '../../../package.json',
-      );
-      const pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as {
-        engines?: { node?: string };
-      };
-      enginesNode = pkg.engines?.node;
-    } catch {
-      enginesNode = undefined;
+    // Walk up from __dirname to find package.json.  In source layout this
+    // file lives at src/cli/commands/, so ../../.. reaches the repo root.
+    // In the published bundle it is at dist/cli.mjs, so ../  reaches the
+    // repo root.  Try both candidates (same strategy as version-drift.ts).
+    const searchDir = nodePath.dirname(new URL(import.meta.url).pathname);
+    const candidates = ['../../../package.json', '../package.json'];
+    for (const relative of candidates) {
+      try {
+        const pkgPath = nodePath.resolve(searchDir, relative);
+        const pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as {
+          engines?: { node?: string };
+        };
+        if (pkg.engines?.node) {
+          enginesNode = pkg.engines.node;
+          break;
+        }
+      } catch {
+        // Missing or unreadable — try the next candidate.
+      }
     }
   }
 

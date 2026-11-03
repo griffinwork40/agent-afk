@@ -95,6 +95,24 @@ describe('checkDaemonState', () => {
     expect(result.detail).toContain('non-numeric');
   });
 
+  it('treats EPERM from isAlive as alive (process exists, no signal permission)', async () => {
+    // When process.kill(pid, 0) throws EPERM the process IS alive but the
+    // current user lacks permission to signal it.  The default isAlive
+    // lambda handles this internally, but if a custom isAlive lets EPERM
+    // escape, checkDaemonState must still treat it as "alive" rather than
+    // falling through to the generic warn path.
+    const result = await checkDaemonState({
+      lockPath: '/fake/daemon.lock',
+      readLockFile: async () => '99999\n',
+      isAlive: () => {
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      },
+    });
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('running');
+    expect(result.detail).toContain('99999');
+  });
+
   it('warns when lock file cannot be read (non-ENOENT error)', async () => {
     const result = await checkDaemonState({
       lockPath: '/fake/daemon.lock',
@@ -211,6 +229,26 @@ describe('checkHookConfig', () => {
     expect(result.state).toBe('warn');
     expect(result.detail).toContain('UnknownEvent');
     expect(result.fix).toContain('PreToolUse');
+  });
+
+  it('passes when UserPromptSubmit is configured as a hook event', async () => {
+    const result = await checkHookConfig({
+      settingsPath: '/fake/settings.json',
+      readFile: async () =>
+        JSON.stringify({ hooks: { UserPromptSubmit: [] } }),
+    });
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('1 event configured');
+  });
+
+  it('passes when PreCompact is configured as a hook event', async () => {
+    const result = await checkHookConfig({
+      settingsPath: '/fake/settings.json',
+      readFile: async () =>
+        JSON.stringify({ hooks: { PreCompact: [] } }),
+    });
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('1 event configured');
   });
 
   it('warns when settings.json cannot be read (non-ENOENT)', async () => {
