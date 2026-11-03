@@ -305,7 +305,7 @@ describe('Schema versioning', () => {
     const db = new Database(join(tmpMemDir, 'memory.db'));
     const version = db.pragma('user_version', { simple: true });
     db.close();
-    expect(version).toBe(5);
+    expect(version).toBe(6);
   });
 
   it('opens cleanly when user_version matches SCHEMA_VERSION', () => {
