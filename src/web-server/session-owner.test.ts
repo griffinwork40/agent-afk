@@ -115,6 +115,50 @@ describe('SessionOwner — closeAll on an empty owner', () => {
 });
 
 /**
+ * closeAll() ordering invariant (#4444):
+ * sessions close BEFORE controls, controls BEFORE MCP disconnect — a closing
+ * session may emit a final tool call that needs the MCP transport alive, and
+ * control.close() must not race ahead of session teardown.
+ *
+ * Uses the private-map back-door to inject fake sessions/controls/mcpManagers
+ * with tracked call-order, then flushes microtasks and asserts the sequence.
+ */
+describe('SessionOwner — closeAll() closes in session → control → MCP order (#4444)', () => {
+  interface CloseAllInternals {
+    sessions: Map<string, { close: () => Promise<void> }>;
+    controls: Map<string, { close: () => Promise<void> }>;
+    mcpManagers: Map<string, { disconnectAll: () => Promise<void> }>;
+  }
+
+  it('calls session.close() before control.close() before mcp.disconnectAll()', async () => {
+    const owner = freshOwner();
+    const internals = owner as unknown as CloseAllInternals;
+    const id = 'close-all-order-1';
+
+    const sessionClose = vi.fn().mockResolvedValue(undefined);
+    const controlClose = vi.fn().mockResolvedValue(undefined);
+    const mcpDisconnect = vi.fn().mockResolvedValue(undefined);
+
+    internals.sessions.set(id, { close: sessionClose });
+    internals.controls.set(id, { close: controlClose });
+    internals.mcpManagers.set(id, { disconnectAll: mcpDisconnect });
+
+    await owner.closeAll();
+
+    expect(sessionClose).toHaveBeenCalledOnce();
+    expect(controlClose).toHaveBeenCalledOnce();
+    expect(mcpDisconnect).toHaveBeenCalledOnce();
+
+    const sessionOrder = sessionClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('sessionClose not called'); })();
+    const controlOrder = controlClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('controlClose not called'); })();
+    const mcpOrder = mcpDisconnect.mock.invocationCallOrder[0] ?? (() => { throw new Error('mcpDisconnect not called'); })();
+
+    expect(sessionOrder).toBeLessThan(controlOrder);
+    expect(controlOrder).toBeLessThan(mcpOrder);
+  });
+});
+
+/**
  * Invariant: `isBusy` must flip true SYNCHRONOUSLY inside `submitPrompt`,
  * before it returns — not from inside the chained `.then()` that actually
  * runs the turn.
@@ -302,7 +346,7 @@ describe('SessionOwner — retire()', () => {
     expect(internals.mcpManagers.has(id)).toBe(false);
   });
 
-  it('calls close() on the WebSessionControl before removing it (#4394)', async () => {
+  it('calls session.close() before control.close() during retire (#4394, #4444)', async () => {
     const owner = freshOwner();
     const internals = asInternals(owner);
     const id = 'retire-test-2';
@@ -319,8 +363,8 @@ describe('SessionOwner — retire()', () => {
     expect(sessionClose).toHaveBeenCalledOnce();
     expect(controlClose).toHaveBeenCalledOnce();
     // session.close() must be invoked before control.close().
-    const sessionOrder = sessionClose.mock.invocationCallOrder[0] ?? fail('sessionClose not called');
-    const controlOrder = controlClose.mock.invocationCallOrder[0] ?? fail('controlClose not called');
+    const sessionOrder = sessionClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('sessionClose not called'); })();
+    const controlOrder = controlClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('controlClose not called'); })();
     expect(sessionOrder).toBeLessThan(controlOrder);
   });
 
