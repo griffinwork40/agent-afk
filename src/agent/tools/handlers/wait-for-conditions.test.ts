@@ -449,7 +449,7 @@ describe('evaluateCommand', () => {
     expect(mockExecSync).not.toHaveBeenCalled();
   });
 
-  it('calls analyzeCommand exactly once per evaluateCommand invocation (call-site wiring)', () => {
+  it('analyzeCommand is called once per evaluateCommand invocation', () => {
     // Note: the mock shim calls real analyzeCommand internally, so this assertion
     // verifies that evaluateCommand invokes the shared analyzeCommand at the right
     // call site and passes its result through to pollRefusalReason — not that the
