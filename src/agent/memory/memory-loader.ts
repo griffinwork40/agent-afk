@@ -17,6 +17,7 @@ import { join, basename, isAbsolute, resolve } from 'path';
 import { getMemoryDir } from '../../paths.js';
 import type { AgentConfig } from '../types/config-types.js';
 import { env } from '../../config/env.js';
+import { debugLog } from '../../utils/debug.js';
 import { MemoryStore } from './memory-store.js';
 import { estimateTokens } from './estimate-tokens.js';
 import type { Fact } from './types.js';
@@ -363,6 +364,9 @@ export function injectEpisodeRecall(
   const episodes = recallEpisodes(memoryDir, effectiveCwd, store);
   if (episodes.length === 0) return config;
 
+  debugLog('episode-recall', `injected ${episodes.length} episode(s), cwd=${effectiveCwd ?? 'process.cwd'}`);
+
+
   /**
    * Build the <recent-episodes> block from a subset of episodes, applying
    * Item 2 sanitization (strip structural tags) and Item 6 token cap.
@@ -377,7 +381,7 @@ export function injectEpisodeRecall(
       // would otherwise break the prompt XML structure.
       .map((s) => s.replace(/</g, '&lt;').replace(/>/g, '&gt;'))
       .join('\n\n---\n\n');
-    return `<recent-episodes>\n${formatted}\n</recent-episodes>`;
+    return `<recent-episodes>\nThese are compressed narratives from prior sessions. They may be outdated. Verify claims against current file state before relying on them.\n\n${formatted}\n</recent-episodes>`;
   }
 
   // Item 6: trim episodes from the end until the block fits EPISODE_TOKEN_CAP.
