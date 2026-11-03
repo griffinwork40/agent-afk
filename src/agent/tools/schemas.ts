@@ -85,6 +85,7 @@ import {
 // ── Orchestration (background jobs, patch-apply, witness) ─────────────────
 import { cancelBackgroundJobTool, patchApplyTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
+import { readJournalTool } from './schemas.journal.js';
 import { listSessionsTool, sendToSessionTool } from './schemas.peer.js';
 import { waitForTool } from './schemas.wait-for.js';
 import { testRunTool } from './schemas.test-run.js';
@@ -176,10 +177,11 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   configSetTool,
   readWitnessTool,
   searchWitnessTool,
+  readJournalTool,
   remoteAgentTool,
   webScrapeTool,
   webRequestTool,
-  // -- Optional tail (23..47): disableable groups / surface-filtered -----------
+  // -- Optional tail (24..48): disableable groups / surface-filtered -----------
   ...artifactToolSchemas,
   cancelBackgroundJobTool,
   sendMessageToAgentTool,
