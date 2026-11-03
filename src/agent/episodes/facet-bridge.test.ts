@@ -5,7 +5,7 @@
  * EpisodeRecord fields.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SessionFacet } from '../facets/schema.js';
 
 // ---------------------------------------------------------------------------
@@ -64,6 +64,10 @@ beforeEach(() => {
   vi.resetModules();
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -75,7 +79,7 @@ describe('buildEpisodeFromFacet', () => {
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
-    expect(ep.goal).toBe('Refactor the auth module for dependency injection');
+    expect(ep!.goal).toBe('Refactor the auth module for dependency injection');
   });
 
   it('maps primary_success to outcome', async () => {
@@ -84,7 +88,7 @@ describe('buildEpisodeFromFacet', () => {
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
-    expect(ep.outcome).toBe('Auth module refactored with full test coverage');
+    expect(ep!.outcome).toBe('Auth module refactored with full test coverage');
   });
 
   it('builds approach from skills and commands', async () => {
@@ -93,8 +97,8 @@ describe('buildEpisodeFromFacet', () => {
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
-    expect(ep.approach).toContain('Skills: diagnose, ship');
-    expect(ep.approach).toContain('Commands: pnpm test, pnpm lint');
+    expect(ep!.approach).toContain('Skills: diagnose, ship');
+    expect(ep!.approach).toContain('Commands: pnpm test, pnpm lint');
   });
 
   it('falls back to top tools when skills and commands are empty', async () => {
@@ -103,8 +107,8 @@ describe('buildEpisodeFromFacet', () => {
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
-    expect(ep.approach).toContain('Tools:');
-    expect(ep.approach).toContain('read_file');
+    expect(ep!.approach).toContain('Tools:');
+    expect(ep!.approach).toContain('read_file');
   });
 
   it('maps decisions from facet (max 4)', async () => {
@@ -115,8 +119,8 @@ describe('buildEpisodeFromFacet', () => {
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
-    expect(ep.decisions).toHaveLength(4);
-    expect(ep.decisions).toEqual(['a', 'b', 'c', 'd']);
+    expect(ep!.decisions).toHaveLength(4);
+    expect(ep!.decisions).toEqual(['a', 'b', 'c', 'd']);
   });
 
   it('maps evidence_pointers to filesKey (max 5)', async () => {
@@ -125,7 +129,7 @@ describe('buildEpisodeFromFacet', () => {
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
-    expect(ep.filesKey).toEqual(['src/auth.ts:42', 'src/auth.test.ts:10']);
+    expect(ep!.filesKey).toEqual(['src/auth.ts:42', 'src/auth.test.ts:10']);
   });
 
   it('maps goal_categories keys to tags', async () => {
@@ -134,8 +138,8 @@ describe('buildEpisodeFromFacet', () => {
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
-    expect(ep.tags).toContain('refactor');
-    expect(ep.tags).toContain('security');
+    expect(ep!.tags).toContain('refactor');
+    expect(ep!.tags).toContain('security');
   });
 
   it('produces a narrative combining goal, approach, and outcome', async () => {
@@ -144,8 +148,8 @@ describe('buildEpisodeFromFacet', () => {
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
-    expect(ep.narrative).toContain('Refactor the auth module');
-    expect(ep.narrative).toContain('Auth module refactored');
+    expect(ep!.narrative).toContain('Refactor the auth module');
+    expect(ep!.narrative).toContain('Auth module refactored');
   });
 
   it('returns null when facet is null', async () => {
@@ -172,7 +176,7 @@ describe('buildEpisodeFromFacet', () => {
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
-    expect(() => new Date(ep.synthesizedAt)).not.toThrow();
-    expect(new Date(ep.synthesizedAt).toISOString()).toBe(ep.synthesizedAt);
+    expect(() => new Date(ep!.synthesizedAt)).not.toThrow();
+    expect(new Date(ep!.synthesizedAt).toISOString()).toBe(ep!.synthesizedAt);
   });
 });

@@ -122,7 +122,7 @@ export function registerEpisodeCommand(program: Command): void {
 
         process.stdout.write(palette.dim(`Synthesizing episode for ${resolvedId}…\n`));
 
-        const episode = await synthesizeAndWriteEpisode(resolvedId as string, { force: true });
+        const episode = await synthesizeAndWriteEpisode(resolvedId as string);
 
         if (!episode) {
           process.stdout.write(
