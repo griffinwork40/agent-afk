@@ -394,7 +394,7 @@ function mapBulletsToFields(
       // marked completed sessions partially_achieved.
       const deferred = find('pending', 'deferred', 'follow-up', 'followup');
       if (deferred !== undefined) out.deferred = deferred;
-      const worthDoing = find('worth doing', 'worth');
+      const worthDoing = find('worth doing');
       if (worthDoing !== undefined) out.worthDoing = worthDoing;
       return out;
     }
