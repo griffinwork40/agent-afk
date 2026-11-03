@@ -173,8 +173,8 @@ function renderOrientationBlock(parentSessionId: string | undefined): string {
     '- `get_runtime_state view:"subagents"` — active subagent handles you have dispatched.',
     '',
     'CLI introspection (run via the `bash` tool):',
-    '- `afk trace [session-id]` — structured witness trace of tool calls and lifecycle events.',
-    '- `afk witness [session-id]` — raw witness log for debugging.',
+    '- `afk trace show [session-id]` — structured witness trace of tool calls and lifecycle events.',
+    '- `afk witness read [session-id]` — raw witness log for debugging.',
   ];
   if (parentSessionId !== undefined) {
     lines.push('', `Parent session id: ${parentSessionId}`);
