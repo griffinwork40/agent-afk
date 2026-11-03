@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.347.0] - 2026-11-03
+
 ### Added
 - named delegation profiles via AFK_DELEGATION_PROFILE (#4313) (339f2086a)
 - add read_journal tool for structured journal access (#4658) (80722d184)
