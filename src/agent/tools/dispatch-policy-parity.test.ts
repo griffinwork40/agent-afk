@@ -302,7 +302,7 @@ async function runAgent(input: Record<string, unknown>, o: DriverOpts = {}): Pro
   return executor.execute(call('agent', { model: 'sonnet', ...input }));
 }
 
-async function runCompose(node: Record<string, unknown>, o: DriverOpts = {}): Promise<ToolResult> {
+async function runCompose(node: Record<string, unknown>, o: DriverOpts = {}, topLevel: Record<string, unknown> = {}): Promise<ToolResult> {
   const executor = new ComposeExecutor({
     parentSession: { sessionId: 'parent-session', abortSignal: new AbortController().signal },
     apiKey: 'test-key',
@@ -316,7 +316,7 @@ async function runCompose(node: Record<string, unknown>, o: DriverOpts = {}): Pr
     ...(o.delegationBudget !== undefined ? { delegationBudget: o.delegationBudget } : {}),
   });
   return executor.execute(
-    call('compose', { nodes: [{ id: 'a', prompt: 'inspect the module', model: 'sonnet', ...node }] }),
+    call('compose', { nodes: [{ id: 'a', prompt: 'inspect the module', model: 'sonnet', ...node }], ...topLevel }),
   );
 }
 
@@ -496,6 +496,18 @@ const PROBES: Partial<Record<CellKey, () => Promise<void>>> = {
     expect(forkCalls).toHaveLength(1);
     expect(forkCalls[0]?.config.maxToolUseIterations).toBe(33);
     expect(forkCalls[0]?.config.maxTurns).toBe(7);
+
+    // Sub-check C: compose-level maxToolRoundsPerNode suppresses named-agent
+    // frontmatter when no per-node max_tool_rounds is set.
+    // buildComposeDagNode resolves: n.max_tool_rounds ?? maxToolRoundsPerNode
+    // When that expression is defined it wins over the named-agent frontmatter
+    // (resolveChildBudgets treats it as an explicit call-site value).
+    // Here: no per-node max_tool_rounds, compose-level max_tool_rounds_per_node=99,
+    // named-agent frontmatter maxToolUseIterations=50 → fork must receive 99.
+    forkCalls.splice(0);
+    await runCompose({ agent_type: 'research-agent' }, {}, { max_tool_rounds_per_node: 99 });
+    expect(forkCalls).toHaveLength(1);
+    expect(forkCalls[0]?.config.maxToolUseIterations).toBe(99);
   },
 
   // nested-agent-allowlist
