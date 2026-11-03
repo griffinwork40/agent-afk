@@ -15,9 +15,12 @@
  * @module agent/episodes/extract
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { readJournalRecords, foldJournal } from '../journal/reader.js';
 import { isPreamble, extractUserContent } from '../session/preamble-strip.js';
 import { getOrDeriveFacet } from '../facets/store.js';
+import { getSessionsDir } from '../../paths.js';
 import type { JournalBlock, JournalMarkLabel, JournalMessage } from '../journal/types.js';
 import type { EpisodeInput } from './types.js';
 
@@ -216,6 +219,16 @@ export function extractEpisodeInput(sessionId: string): EpisodeInput {
       // facet is optional — swallow
     }
 
+    // Sidecar source (best-effort — absent on legacy sessions)
+    let source: string | undefined;
+    try {
+      const sidecarPath = join(getSessionsDir(), `${sessionId}.json`);
+      const raw = JSON.parse(readFileSync(sidecarPath, 'utf-8')) as Record<string, unknown>;
+      if (typeof raw['source'] === 'string') source = raw['source'];
+    } catch {
+      // sidecar is optional — swallow
+    }
+
     return {
       sessionId,
       firstUserMessage,
@@ -225,6 +238,7 @@ export function extractEpisodeInput(sessionId: string): EpisodeInput {
       lastAssistantMessage,
       ...(facetSummary !== undefined ? { facetSummary } : {}),
       ...(costUsd !== undefined ? { costUsd } : {}),
+      ...(source !== undefined ? { source } : {}),
     };
   } catch {
     return stub;

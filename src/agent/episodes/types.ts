@@ -45,4 +45,6 @@ export interface EpisodeInput {
   facetSummary?: string;
   durationMs?: number;
   costUsd?: number;
+  /** Session origin surface from sidecar ('cli' | 'telegram' | 'daemon' | 'web'). */
+  source?: string;
 }

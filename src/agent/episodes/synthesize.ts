@@ -8,7 +8,7 @@
  * Design invariants:
  *   - Uses the same oneShotCompletion pattern as spine-classifier.ts.
  *   - Fallback path never throws: always returns a usable (if thin) record.
- *   - Output is bounded: maxTokens 512 to keep cost minimal.
+ *   - Output is bounded: maxTokens 1024 to keep cost minimal.
  *
  * @module agent/episodes/synthesize
  */
@@ -18,7 +18,7 @@ import { loadAnthropicCredential } from '../auth/credential-resolver.js';
 import type { EpisodeInput, EpisodeRecord } from './types.js';
 
 const SYNTHESIS_MODEL = 'claude-haiku-4-5';
-const MAX_TOKENS = 512;
+const MAX_TOKENS = 1024;
 
 const SYSTEM_PROMPT = `You synthesize compressed episodic narratives from agent session data.
 Given structured session signals, produce a JSON object with these exact fields:
@@ -83,7 +83,10 @@ function parseLLMResponse(raw: string, sessionId: string): EpisodeRecord | null 
       narrative: str(obj['narrative']),
       synthesizedAt: new Date().toISOString(),
     };
-  } catch {
+  } catch (err) {
+    // Canary: surface parse failures so truncation rate is measurable.
+    const hint = err instanceof SyntaxError ? 'JSON parse' : 'unknown';
+    console.error(`[episode-synthesis] parseLLMResponse failed (${hint}) for ${sessionId}`);
     return null;
   }
 }
@@ -136,6 +139,13 @@ export async function synthesizeEpisode(input: EpisodeInput): Promise<EpisodeRec
     const parsed = parseLLMResponse(raw, input.sessionId);
     if (parsed && parsed.goal) return parsed;
 
+    // Canary: LLM returned parseable output but goal field was empty/missing.
+    // Distinct from the parseLLMResponse canary which covers JSON parse failures.
+    if (parsed && !parsed.goal) {
+      console.error(`[episode-synthesis] LLM output parsed but goal empty for ${input.sessionId}`);
+    } else {
+      console.error(`[episode-synthesis] LLM output unparseable for ${input.sessionId}`);
+    }
     return deterministicFallback(input);
   } catch {
     return deterministicFallback(input);
