@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { env } from '../../config/env.js';
+import { palette } from '../palette.js';
 import ora from 'ora';
 import { handleCommandError } from '../errors/index.js';
 import { AgentSession } from '../../agent/session.js';
@@ -92,7 +93,7 @@ export function registerStatusCommand(program: Command): void {
           const bypassRow = permissionMode === 'bypassPermissions'
             ? { label: 'Permissions', value: 'Bypass — path containment off (read/write anywhere)', kind: 'warn' as const }
             : { label: 'Permissions', value: `Contained — mode: ${permissionMode}`, kind: 'info' as const };
-          console.log(
+          console.log(palette.info(
             '\n' +
               statusPanel('Agent AFK · Status', [
                 { label: 'Provider', value: provider, kind: 'info' },
@@ -114,7 +115,7 @@ export function registerStatusCommand(program: Command): void {
                 { label: 'Model', value: String(model), kind: 'info' },
                 bypassRow,
               ]) +
-              '\n',
+              '\n'),
           );
         }
       } catch (error) {

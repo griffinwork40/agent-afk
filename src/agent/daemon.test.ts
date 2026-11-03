@@ -22,6 +22,8 @@ import { startDaemon, type DaemonHandle } from './daemon.js';
 import { registerTasksWithQuarantine } from './daemon.startup-register.js';
 import { getDaemonStateDir, getAfkHome } from '../paths.js';
 import { toScheduledTask } from './daemon/schedule-store.js';
+import { DaemonAlreadyRunningError } from './daemon-instance.lock.js';
+import { readLastTickTime } from './daemon/gates.js';
 
 // node-cron schedules tasks against real wall-clock time. We never let them
 // fire — every test uses scheduler.tick(taskId) directly to invoke the
@@ -597,6 +599,72 @@ describe('registerTasksWithQuarantine', () => {
       warnSpy.mockRestore();
     }
   });
+
+  it('writes a status:skipped telemetry record with correct shape for a quarantined task', () => {
+    const task: ScheduledTask = {
+      taskId: 'dup-shape',
+      command: '/check',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // First registration succeeds; second is a duplicate — triggers quarantine.
+      registerTasksWithQuarantine(scheduler, [task, task], { telemetryPath });
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    const records = readTelemetryRecords(telemetryPath);
+    expect(records).toHaveLength(1);
+    const rec = records[0] as Record<string, unknown>;
+    expect(rec['taskId']).toBe('dup-shape');
+    expect(rec['status']).toBe('skipped');
+    expect(rec['skipReason']).toBe('malformed');
+    expect(typeof rec['triggeredAt']).toBe('string');
+    expect(Date.parse(rec['triggeredAt'] as string)).not.toBeNaN();
+  });
+
+  it('does not throw when the telemetry path is not writable', () => {
+    const task: ScheduledTask = {
+      taskId: 'dup-nowrite',
+      command: '/check',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // Pass a path inside a non-existent directory — appendFileSync would throw.
+      expect(() =>
+        registerTasksWithQuarantine(scheduler, [task, task], {
+          telemetryPath: '/nonexistent-dir-afk-test/forge-telemetry.jsonl',
+        }),
+      ).not.toThrow();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('quarantine skipped record does not poison the cooldown gate (regression for #4632)', async () => {
+    const task: ScheduledTask = {
+      taskId: 'dup-cooldown',
+      command: '/check',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // Second registration is a duplicate — writes status:'skipped' telemetry.
+      registerTasksWithQuarantine(scheduler, [task, task], { telemetryPath });
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // readLastTickTime must ignore the skipped record and return null,
+    // so the cooldown gate is not triggered by a quarantine event.
+    const result = await readLastTickTime('dup-cooldown', telemetryPath);
+    expect(result).toBeNull();
+  });
 });
 
 describe('startDaemon', () => {
@@ -781,6 +849,70 @@ describe('startDaemon', () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('expiresAt'));
     } finally {
       warnSpy.mockRestore();
+    }
+  });
+
+  // ── Single-instance guard integration ──────────────────────────────────────
+  // These tests exercise the lock wired into startDaemon, not the lock module
+  // itself (which has thorough unit tests in daemon-instance.lock.test.ts).
+  // Each test stubs AFK_HOME to an isolated tmp dir so the default lock path
+  // (getDaemonStateDir('default')/daemon.lock) never collides between tests or
+  // with any live daemon on the host machine.
+
+  it('second concurrent startDaemon call throws DaemonAlreadyRunningError', async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-lock-conc-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    try {
+      handle = await startDaemon({
+        port: 0,
+        writePortFile: false,
+        handoffMaintenance: false,
+        telemetryPath,
+      });
+
+      await expect(
+        startDaemon({
+          port: 0,
+          writePortFile: false,
+          handoffMaintenance: false,
+          telemetryPath,
+        }),
+      ).rejects.toThrow(DaemonAlreadyRunningError);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('startDaemon releases the lock when startup fails, allowing a subsequent start', async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-lock-fail-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    try {
+      // Force a startup failure after lock acquisition by making the server
+      // construction blow up. We do this by passing an invalid port type that
+      // causes listenWithRecovery to reject.
+      const badPort = -1;
+      await expect(
+        startDaemon({
+          port: badPort,
+          writePortFile: false,
+          handoffMaintenance: false,
+          telemetryPath,
+        }),
+      ).rejects.toThrow();
+
+      // Lock must have been released — a fresh start on the same lock path
+      // (same AFK_HOME) must succeed.
+      handle = await startDaemon({
+        port: 0,
+        writePortFile: false,
+        handoffMaintenance: false,
+        telemetryPath,
+      });
+      expect(handle.port).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(tmpHome, { recursive: true, force: true });
     }
   });
 });

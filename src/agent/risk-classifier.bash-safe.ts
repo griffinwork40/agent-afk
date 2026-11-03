@@ -121,13 +121,17 @@ function segmentIsSafe(rawTokens: readonly string[], patterns: readonly (readonl
  * non-safe segment and the caller's `medium` default applies. Fail-closed:
  * an empty command is not safe.
  */
-export function isSafeAtCommandPosition(cmd: string, safePatterns: readonly string[]): boolean {
+export function isSafeAtCommandPosition(
+  cmd: string,
+  safePatterns: readonly string[],
+  tokenize: (view: string) => readonly (readonly string[])[] = tokenizeSegments,
+): boolean {
   // `2>&1` / `>&2` / `2>/dev/null` neither write a file nor separate commands.
   // Drop them before tokenizing: the tokenizer splits on every `&`, and the
   // remaining-`>` check below must only see real file writes.
   const normalized = cmd.replace(NEUTRAL_REDIRECT, ' ');
   if (hasUnquotedWriteRedirect(normalized)) return false;
-  const segments = tokenizeSegments(normalized);
+  const segments = tokenize(normalized);
   if (segments.length === 0) return false;
   const patterns = safePatterns.map((p) => p.trim().split(/\s+/));
   return segments.every((seg) => segmentIsSafe(seg, patterns));

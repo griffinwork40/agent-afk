@@ -601,24 +601,13 @@ export function scanAllPluginRoots(opts?: CollectSkillEntriesOptions): SdkPlugin
  * Options for {@link ensurePluginEntrypointsLoaded}.
  */
 export interface EnsurePluginEntrypointsOptions {
-  /**
-   * Session-level StateStore to share with plugin state closures.
-   *
-   * When supplied the plugin API state closures wrap THIS store directly rather
-   * than opening a second SQLite handle via the process singleton. Pass the
-   * same `stateStore` the surface (REPL, chat, Telegram) already opened so all
-   * state ops share ONE handle — preserving CAS atomicity across the plugin
-   * layer and the provider layer.
-   *
-   * When absent the plugin-runtime-api singleton is used (lazy-opened on first
-   * call). Only one of the two paths opens a handle; they are never both active
-   * in the same call.
-   */
-  stateStore?: import('../state/state-store.js').StateStore;
+  // Reserved for future options. stateStore injection was removed (#4396 #3):
+  // the opts.stateStore path was dead code — no production caller ever passed it.
+  // Plugin state closures always use the plugin-runtime-api singleton.
 }
 
 export async function ensurePluginEntrypointsLoaded(
-  opts?: EnsurePluginEntrypointsOptions,
+  _opts?: EnsurePluginEntrypointsOptions,
 ): Promise<void> {
   // Inject the host's runtime API so a code-backed plugin's default-export
   // entrypoint (a) registers against THIS process's singleton registry, and
@@ -627,15 +616,10 @@ export async function ensurePluginEntrypointsLoaded(
   // State and peer API closures live in plugin-runtime-api.ts to keep this
   // module near its prior size and avoid circular imports through load-entrypoints.
   //
-  // S-1 fix: share the caller-supplied StateStore rather than opening a new
-  // handle per plugin load. When opts.stateStore is present, bind the six
-  // state closures directly to that instance instead of creating a new one.
-  //
-  // S-2 fix: use buildPluginApi so each plugin's state closures are scoped
-  // to `plugin:<pluginId>:` — preventing a plugin from reading or writing
+  // S-2 fix: use buildStateApiClosures so each plugin's state closures are
+  // scoped to `plugin:<pluginId>:` — preventing a plugin from reading or writing
   // host-owned namespaces. The shared non-state fields (registerSkill, env,
   // SubagentManager, …) are assembled once and reused across all plugins.
-  const injectedStore = opts?.stateStore;
   const peerApi = buildPeerApiClosures();
 
   // Shared fields that do not vary by plugin.
@@ -666,24 +650,7 @@ export async function ensurePluginEntrypointsLoaded(
       // the plugin degrades to the global namespace rather than being
       // silently broken. This matches the no-manifest behaviour of the
       // pre-fix code while still being explicit about the missing identity.
-      const stateApi = injectedStore !== undefined
-        // S-1: wrap the injected store directly, bypassing the singleton.
-        ? {
-            stateGet: (ns: string, key: string) => injectedStore.get(
-              pluginName ? `plugin:${pluginName}:${ns}` : ns, key),
-            statePut: (ns: string, key: string, value: unknown, o?: Parameters<typeof injectedStore.put>[3]) =>
-              injectedStore.put(pluginName ? `plugin:${pluginName}:${ns}` : ns, key, value, o),
-            stateCas: (ns: string, key: string, ev: number, value: unknown, o?: Parameters<typeof injectedStore.cas>[4]) =>
-              injectedStore.cas(pluginName ? `plugin:${pluginName}:${ns}` : ns, key, ev, value, o),
-            stateDel: (ns: string, key: string) =>
-              injectedStore.del(pluginName ? `plugin:${pluginName}:${ns}` : ns, key),
-            stateInsertIfAbsent: (ns: string, key: string, value: unknown, o?: Parameters<typeof injectedStore.insertIfAbsent>[3]) =>
-              injectedStore.insertIfAbsent(pluginName ? `plugin:${pluginName}:${ns}` : ns, key, value, o),
-            stateQuery: (ns: string, o?: Parameters<typeof injectedStore.query>[1]) =>
-              injectedStore.query(pluginName ? `plugin:${pluginName}:${ns}` : ns, o),
-          }
-        // S-1+S-2: use singleton with per-plugin namespace prefix.
-        : buildStateApiClosures(pluginName ?? undefined);
+      const stateApi = buildStateApiClosures(pluginName ?? undefined);
       return { ...sharedBase, ...stateApi, ...peerApi };
     },
   });

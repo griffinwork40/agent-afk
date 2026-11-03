@@ -44,8 +44,8 @@ export const readWitnessTool: AnthropicToolDef = {
     'error/success, session phases, and some semantic snippets (e.g. subagent ' +
     'promptHead, compaction summaries, claims). They do NOT contain full ' +
     'conversation text, user/assistant messages, complete tool arguments, or ' +
-    'tool output. To find a session by what was *discussed*, search transcripts ' +
-    'or session events via bash (paths vary with AFK_STATE_DIR). ' +
+    'tool output. Use read_journal to access full conversation content, ' +
+    'tool arguments, and tool output from a session\'s message journal. ' +
     'To recall cross-session context by topic, use memory_search.' +
     HOOK_SEMANTICS,
   input_schema: {
@@ -100,9 +100,9 @@ export const searchWitnessTool: AnthropicToolDef = {
     'error classes, timing, and semantic snippets like subagent promptHead (first 80 ' +
     'chars), compaction summaries, and claims. Does NOT contain full conversation ' +
     'text, user/assistant messages, complete tool arguments, or tool output. ' +
-    'To find a prior session by topic or what was said, search transcripts ' +
-    'or session events via bash (paths vary with AFK_STATE_DIR), ' +
-    'or use memory_search for cross-session topic recall.' +
+    'Use read_journal to access full conversation content, tool arguments, ' +
+    'and tool output from a session\'s message journal. ' +
+    'To recall cross-session context by topic, use memory_search.' +
     HOOK_SEMANTICS,
   input_schema: {
     type: 'object',

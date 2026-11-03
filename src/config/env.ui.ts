@@ -164,4 +164,38 @@ export const UI_ENV_REGISTRY = [
     example: 'truecolor',
     category: 'process',
   },
+
+  // ── Terminal identity (inline image protocol detection, #2143) ───────────
+  {
+    name: 'TERM',
+    description:
+      'Terminal type string set by the outer terminal emulator (e.g. "xterm-kitty", "xterm-256color"). ' +
+      'Not set by AFK. Read by the inline-image hook (#2143) to detect Kitty graphics protocol support ' +
+      '("xterm-kitty" means the terminal natively implements the protocol).',
+    type: 'string',
+    required: false,
+    example: 'xterm-kitty',
+    category: 'process',
+  },
+  {
+    name: 'TERM_PROGRAM',
+    description:
+      'Terminal program name set by the outer terminal emulator (e.g. "iTerm.app", "ghostty", "WezTerm"). ' +
+      'Not set by AFK. Read by the inline-image hook (#2143) to select between Kitty graphics protocol ' +
+      '(ghostty, WezTerm) and iTerm2 inline images protocol (iTerm.app).',
+    type: 'string',
+    required: false,
+    example: 'iTerm.app',
+    category: 'process',
+  },
+  {
+    name: 'TERM_PROGRAM_VERSION',
+    description:
+      'Terminal program version set by some terminal emulators alongside TERM_PROGRAM. ' +
+      'Not set by AFK. Read by the inline-image hook (#2143) as a secondary iTerm2 detection signal.',
+    type: 'string',
+    required: false,
+    example: '3.5.0',
+    category: 'process',
+  },
 ] as const satisfies readonly EnvVarMeta[];

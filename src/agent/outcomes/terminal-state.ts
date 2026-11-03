@@ -52,6 +52,8 @@ export interface TerminalState {
   whatChanged?: string;
   /** Done: "Anything still pending or deferred, with why". */
   deferred?: string;
+  /** Done: "Worth doing / recommendation". */
+  worthDoing?: string;
   /** Blocked: "What blocks". */
   whatBlocks?: string;
   /** Blocked: "What must change to unblock". */
@@ -392,6 +394,8 @@ function mapBulletsToFields(
       // marked completed sessions partially_achieved.
       const deferred = find('pending', 'deferred', 'follow-up', 'followup');
       if (deferred !== undefined) out.deferred = deferred;
+      const worthDoing = find('worth doing', 'worth');
+      if (worthDoing !== undefined) out.worthDoing = worthDoing;
       return out;
     }
     case 'blocked': {

@@ -90,7 +90,7 @@ export class SubagentManager {
   private readonly parentCanUseTool: CanUseTool | undefined;
   private readonly hookRegistry: HookRegistry | undefined;
   private readonly progressSink: SubagentProgressSink | undefined;
-  // Getter: read live at fork time so /reauth is visible to children (#2471).
+  // Getter: read live at fork time so account switches are visible to children (#2471).
   // Plain-string callers are wrapped at construction for backward compat.
   private readonly parentApiKey: (() => string | undefined) | undefined;
   private readonly parentBaseUrl: string | undefined;
@@ -435,6 +435,11 @@ export class SubagentManager {
         // agent-tool and skill-fork call sites set yieldEnabled: true; compose/DAG
         // nodes and background children omit it (#4297 F-C2).
         ...(options.yieldEnabled === true ? { yieldEnabled: true } : {}),
+        // Session-start orientation block gate (#4514): forward the resolved
+        // registered type so assembleChildConfig can suppress the orientation
+        // block for named typed agents that carry their own curated prompts.
+        // Absent (undefined) for bare/unnamed dispatches — they receive the block.
+        ...(options.resolvedAgentType !== undefined ? { resolvedAgentType: options.resolvedAgentType } : {}),
       });
       childConfig = applyContinuationSeed(childConfig, options); // D8: no-op unless a continuation
 

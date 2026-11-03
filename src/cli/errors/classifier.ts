@@ -18,9 +18,33 @@
  */
 
 import { BudgetExceededError, HookBlockedError, TimeoutError, UnsupportedProviderConfigError, errorMessage } from '../../utils/errors.js';
+
+/**
+ * Check if the error carries Anthropic SDK error structure.
+ * Anthropic API errors nest an `error` object with a `type` field from a known
+ * set (authentication_error, overloaded_error, etc.). Neither the OpenAI SDK
+ * nor xAI errors use this shape, so it is a reliable provider signal without
+ * importing any SDK.
+ */
+function isAnthropicSdkError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const inner = (err as Record<string, unknown>)['error'];
+  if (!inner || typeof inner !== 'object') return false;
+  const type = (inner as Record<string, unknown>)['type'];
+  return typeof type === 'string' && (
+    type === 'authentication_error' ||
+    type === 'permission_error' ||
+    type === 'overloaded_error' ||
+    type === 'api_error' ||
+    type === 'rate_limit_error' ||
+    type === 'invalid_request_error' ||
+    type === 'not_found_error'
+  );
+}
 import { isRateLimitError, isNetworkError } from '../../utils/error-classifiers.js';
 import { usageLimitInfoOf } from '../../agent/usage/usage-limit-info.js';
 import { describeUsageLimit } from '../../agent/usage/usage-formatter.js';
+import { DaemonAlreadyRunningError } from '../../agent/daemon-instance.lock.js';
 
 type ErrorKind =
   | 'auth'
@@ -33,6 +57,7 @@ type ErrorKind =
   | 'timeout'
   | 'network'
   | 'not_git_repo'
+  | 'daemon_already_running'
   | 'unknown';
 
 export interface ClassifiedError {
@@ -49,6 +74,22 @@ export interface ClassifiedError {
  * Never throws.
  */
 export function classifyError(err: unknown): ClassifiedError {
+  // 0. DaemonAlreadyRunningError — exit 2 so scripts/service managers can
+  // distinguish "already running" from a crash (exit 1). ownerPid is surfaced
+  // in the hint so the operator knows which process to stop.
+  if (err instanceof DaemonAlreadyRunningError) {
+    const pidHint = err.ownerPid !== null
+      ? `Daemon PID ${err.ownerPid} is already running. Stop it with \`afk daemon stop\` before starting a new one.`
+      : 'Another afk daemon is already running. Stop it with `afk daemon stop` before starting a new one.';
+    return {
+      kind: 'daemon_already_running',
+      userMessage: err.message,
+      hint: pidHint,
+      exitCode: 2,
+      raw: err,
+    };
+  }
+
   // 1. BudgetExceededError
   if (err instanceof BudgetExceededError) {
     return {
@@ -103,10 +144,13 @@ export function classifyError(err: unknown): ClassifiedError {
     errObj['status'] === 401 ||
     (err instanceof Error && err.name === 'AuthenticationError')
   ) {
+    const isAnthropic = isAnthropicSdkError(err);
     return {
       kind: 'auth',
       userMessage: 'Authentication failed. Check that your API key is valid and has not expired.',
-      hint: 'Verify the ANTHROPIC_API_KEY environment variable or run `afk login --force`.',
+      hint: isAnthropic
+        ? 'Verify the ANTHROPIC_API_KEY environment variable or run `afk login --force`.'
+        : 'Check the API key for your configured provider (OPENAI_API_KEY, per-slot AFK_MODEL_<TIER>_API_KEY, or XAI_API_KEY). Run `afk doctor` for credential diagnostics.',
       exitCode: 1,
       raw: err,
     };
@@ -158,9 +202,12 @@ export function classifyError(err: unknown): ClassifiedError {
   // 6b. HTTP 529 (overloaded) / HTTP 503 (service unavailable)
   if (errObj['status'] === 529 || errObj['status'] === 503) {
     const code = errObj['status'] as number;
+    const isAnthropic = isAnthropicSdkError(err);
     return {
       kind: 'overloaded',
-      userMessage: `Anthropic API is temporarily overloaded (HTTP ${code}). All retry attempts were exhausted.`,
+      userMessage: isAnthropic
+        ? `Anthropic API is temporarily overloaded (HTTP ${code}). All retry attempts were exhausted.`
+        : `API is temporarily overloaded (HTTP ${code}). All retry attempts were exhausted.`,
       hint: 'Wait a minute and try again, or switch to a less loaded model (e.g. sonnet).',
       exitCode: 1,
       raw: err,
@@ -197,6 +244,7 @@ export function classifyError(err: unknown): ClassifiedError {
   return {
     kind: 'unknown',
     userMessage: unknownMsg || 'An unexpected error occurred.',
+    hint: 'If this keeps happening, check `afk trace show` for the full error or try `afk doctor`.',
     exitCode: 1,
     raw: err,
   };

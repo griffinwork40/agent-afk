@@ -7,6 +7,7 @@
  */
 
 import { z } from 'zod';
+import { OutcomesV1Schema } from './outcomes-v1.schema.js';
 
 // ---------------------------------------------------------------------------
 // Vote record — one labeling-function's contribution
@@ -58,6 +59,8 @@ export const ArtifactsSchema = z.object({
   commits: z.array(z.string()),
   prs: z.array(z.string()),
   repo: z.string().nullable(),
+  /** Per-commit repository provenance; absent on legacy single-repo records. */
+  commitRepos: z.record(z.string(), z.string()).optional(),
 });
 
 export type Artifacts = z.infer<typeof ArtifactsSchema>;
@@ -129,6 +132,12 @@ export const VerifiedOutcomeSchema = z.object({
    * original behavior) — no regression for records already on disk.
    */
   session_ended_at: z.string().optional(),
+  /**
+   * Full OutcomesV1 computed once at SessionEnd (session-outcomes.ts). Absent
+   * on older records; null when the computation failed or timed out.
+   * `artifacts` is derived from this for back-compat.
+   */
+  outcomes: OutcomesV1Schema.nullable().optional(),
 });
 
 export type VerifiedOutcome = z.infer<typeof VerifiedOutcomeSchema>;

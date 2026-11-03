@@ -105,15 +105,9 @@ export function buildFirstTurnHook(
         ? formatAutonameSkipReason(outcome.reason, outcome.detail)
         : undefined;
       const note = reasonText !== undefined ? palette.dim(` — ${reasonText}`) : '';
-      console.log(
-        palette.dim('  ↪ worktree: ') + `${rel} ` +
-        palette.dim(`(branch: ${outcome.branch})`) + note,
-      );
+      console.log(palette.dim('  ↪ worktree: ') + `${rel} ` + palette.dim(`(branch: ${outcome.branch})`) + note);
     } else {
-      console.warn(
-        palette.warning('⚠ ') + `Worktree creation failed: ${outcome.reason}. ` +
-        palette.dim(`Continuing in ${formatCwd(process.cwd(), { maxWidth: 60 })} (no isolation).`),
-      );
+      console.warn(palette.warning('⚠ ') + `Worktree creation failed: ${outcome.reason}. ` + palette.dim(`Continuing in ${formatCwd(process.cwd(), { maxWidth: 60 })} (no isolation).`));
     }
   };
 }
@@ -261,7 +255,7 @@ export async function printStartupBanner(params: StartupBannerParams): Promise<v
   const resumeMeta = ctx.resumeTarget
     ? `Resuming ${ctx.resumeTarget.id} · ${ctx.stats.totalTurns} prior turn${ctx.stats.totalTurns === 1 ? '' : 's'}`
     : undefined;
-  console.log(welcomeBanner({
+  console.log(welcomeBanner({ // console-ok
     mode: 'Interactive Mode',
     model: ctx.stats.model,
     version: getVersion(),
@@ -281,17 +275,17 @@ export async function printStartupBanner(params: StartupBannerParams): Promise<v
     isResume, isTTY: tty, isFirstRun: firstRun,
     currentSessionId: ctx.session.current.sessionId,
   });
-  if (recallLine) console.log(recallLine);
+  if (recallLine) console.log(recallLine); // console-ok
   const dashboardLines = await renderStartupDashboard({
     isTTY: tty, isFirstRun: firstRun,
     bootPruneStaleCount: bootPruneRemovedCount,
   });
-  for (const line of dashboardLines) console.log(line);
+  for (const line of dashboardLines) console.log(line); // console-ok
 
   if (ctx.resumeTarget) await printResumeBanner(ctx.stats, ctx.completionWriter);
   printFirstRunBanner({ isTTY: tty, isResume });
   drainBootWarnings(ctx.bootWarnings);
-  console.log();
+  console.log(); // console-ok
 }
 
 // ---------------------------------------------------------------------------

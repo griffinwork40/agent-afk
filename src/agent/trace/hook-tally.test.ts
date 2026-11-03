@@ -61,6 +61,10 @@ describe('emitHookDecision suppression', () => {
     expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', reason: '' })).toBe(false);
   });
 
+  it('isInformativeHookDecision: ruleId alone (no decision) is NOT informative', () => {
+    expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', ruleId: 'x' })).toBe(false);
+  });
+
   it('isInformativeHookDecision: empty-string reason alone is NOT informative', () => {
     expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', reason: '' })).toBe(false);
     expect(isInformativeHookDecision({ hookEvent: 'Stop', reason: '' })).toBe(false);
@@ -70,6 +74,14 @@ describe('emitHookDecision suppression', () => {
 
   it('isInformativeHookDecision: durationMs alone is informative', () => {
     expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', durationMs: 42 })).toBe(true);
+  });
+
+  it('isInformativeHookDecision: ruleId alone is NOT informative', () => {
+    expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', ruleId: 'x' })).toBe(false);
+  });
+
+  it('isInformativeHookDecision: ruleId with decision IS informative', () => {
+    expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', decision: 'block', ruleId: 'x' })).toBe(true);
   });
 
   it('is a no-op with no writer', async () => {

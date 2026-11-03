@@ -16,6 +16,7 @@ import { sessionLabelFromTracePath } from '../../paths.js';
 import { SessionLedgerWriter } from '../session-ledger.js';
 import type { OutputEvent } from '../types.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
+import { captureGitHead, writeSessionMeta, type SessionStart } from './session-meta.js';
 
 /**
  * Inputs for {@link LedgerLifecycle.ensure}. `getMetadata` is a lazy accessor so
@@ -40,6 +41,16 @@ export class LedgerLifecycle {
   private writer: SessionLedgerWriter | null = null;
   /** Set true once ledger creation has been attempted (success or not). */
   private initAttempted = false;
+  private start: { cwd: string; gitHead: SessionStart } | undefined;
+
+  /** Capture before provider initialization or SessionStart hooks can change HEAD. */
+  initialize(ctx: { depth?: number; parentSessionId?: string; cwd?: string }): void {
+    this.start = undefined;
+    if (ctx.depth !== undefined || ctx.parentSessionId !== undefined) return;
+    if (env.AFK_SESSION_LEDGER_DISABLED === '1') return;
+    const cwd = ctx.cwd ?? process.cwd();
+    this.start = { cwd, gitHead: captureGitHead(cwd) };
+  }
 
   /**
    * Create the ledger writer on first use.
@@ -61,16 +72,35 @@ export class LedgerLifecycle {
     if (!writer.active) return;
     this.writer = writer;
     const meta = ctx.getMetadata();
+    const traceLabel = sessionLabelFromTracePath(ctx.tracePath);
+    const model = meta.model ?? ctx.fallbackModel;
+    // Invariant: journal meta always carries cwd so receipts and facets can
+    // attribute sessions to a directory. Prefer the initialization cwd paired
+    // with the git snapshot. Do not set config.cwd at surface sites: undefined
+    // marks an UNCONFINED session for tool containment (see _cwd-utils.ts:119-128).
+    const effectiveCwd = this.start?.cwd ?? meta.cwd ?? process.cwd();
     writer.record({
       kind: 'meta',
       sessionId: id,
-      model: meta.model ?? ctx.fallbackModel,
-      ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
+      model,
+      cwd: effectiveCwd,
       // Correlate this id-keyed ledger to its witness trace: fresh sessions
       // label the trace dir with a random UUID (not the session id), so the
       // ledger is the durable id→label bridge. `null` when tracing is
       // disabled/unwired, so absence is explicit rather than silent.
-      traceLabel: sessionLabelFromTracePath(ctx.tracePath),
+      traceLabel,
+    });
+    // Best-effort identity sidecar (#4429). Fire-and-forget: the await is
+    // intentionally dropped so session startup is never blocked by it.
+    void writeSessionMeta({
+      v: 1,
+      sessionId: id,
+      model,
+      cwd: effectiveCwd,
+      traceLabel,
+      // Persist the initialization baseline, never recapture on the first turn.
+      // No snapshot means initialization did not opt into git tracking.
+      gitHead: this.start?.gitHead,
     });
   }
 

@@ -146,6 +146,20 @@ export const DEBUG_ENV_REGISTRY = [
     category: 'debug',
   },
   {
+    name: 'AFK_RUN_RECEIPT_TEXT_DISABLED',
+    description:
+      'Suppress conversation-text fields (firstUserMessage, lastAssistantMessage) ' +
+      'in the run receipt journalSummary. When set to 1, the receipt v2 ' +
+      'journalSummary is still written but text fields are omitted and ' +
+      'textRedacted is set to true. Tool names, counts, and all v1 fields are ' +
+      'unaffected. Use when receipts are stored in shared locations or CI logs ' +
+      'and prompt/response text is considered private.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'debug',
+  },
+  {
     name: 'AFK_SUBAGENT_RESULT_CAP_BYTES',
     description:
       'Foreground subagent result size cap in bytes. When a subagent\'s final message exceeds ' +

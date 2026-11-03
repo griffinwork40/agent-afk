@@ -226,8 +226,8 @@ export interface ForkSubagentOptions<T = unknown> {
  * Use this instead of the separate `apiKey` + `parentModel` options whenever
  * a credential is available at construction time. The getter form of `key` is
  * preferred for long-lived managers (fix #2471): it lets the credential be
- * re-read at fork time so a mid-session `/reauth` or usage-limit hot-swap is
- * reflected in every child forked after it.
+ * re-read at fork time so a mid-session account switch or usage-limit hot-swap
+ * is reflected in every child forked after it.
  */
 export interface ParentCredential {
   /** The API key (or OAuth token) the parent session runs with. */
@@ -276,8 +276,8 @@ export interface SubagentManagerOptions {
    * supplied, `parentCredential` takes precedence.
    *
    * The getter form of `key` is preferred for long-lived managers (fix #2471):
-   * it lets the credential be re-read at fork time so a mid-session `/reauth`
-   * or usage-limit hot-swap is reflected in every child forked after it.
+   * it lets the credential be re-read at fork time so a mid-session account
+   * switch or usage-limit hot-swap is reflected in every child forked after it.
    */
   parentCredential?: ParentCredential;
   /**
@@ -287,8 +287,8 @@ export interface SubagentManagerOptions {
    *
    * May be a plain string (backward-compatible) or a zero-arg getter.
    * The getter form is preferred for long-lived managers (fix #2471): it
-   * lets the credential be re-read at fork time so a mid-session `/reauth`
-   * or usage-limit hot-swap is reflected in every child forked after it.
+   * lets the credential be re-read at fork time so a mid-session account
+   * switch or usage-limit hot-swap is reflected in every child forked after it.
    *
    * @deprecated Use {@link parentCredential} instead — pairing the key with its
    * source model prevents provider mismatches (#2844). This option remains

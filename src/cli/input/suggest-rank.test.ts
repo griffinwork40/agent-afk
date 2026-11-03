@@ -103,11 +103,10 @@ describe('compareByRecency', () => {
 });
 
 describe('sortByRecency', () => {
-  const REAL_COLLISION = ['/reauth', '/recover', '/refactor', '/reground', '/research', '/review'];
+  const REAL_COLLISION = ['/recover', '/refactor', '/reground', '/research', '/review'];
 
   it('is pure alphabetical with no history (preserves prior behaviour)', () => {
     expect(sortByRecency(REAL_COLLISION, [])).toEqual([
-      '/reauth',
       '/recover',
       '/refactor',
       '/reground',
@@ -117,8 +116,8 @@ describe('sortByRecency', () => {
   });
 
   it('surfaces the recently used command ahead of the alphabetical winner', () => {
-    // The motivating case: `/re` alphabetically resolves to `/reauth`, which is
-    // almost never what a user who just ran /review wants.
+    // The motivating case: `/re` alphabetically resolves to `/recover`, but a
+    // user who just ran /review almost certainly wants /review.
     expect(sortByRecency(REAL_COLLISION, ['/review something'])[0]).toBe('/review');
   });
 
@@ -126,7 +125,6 @@ describe('sortByRecency', () => {
     expect(sortByRecency(REAL_COLLISION, ['/research x', '/refactor y'])).toEqual([
       '/research',
       '/refactor',
-      '/reauth',
       '/recover',
       '/reground',
       '/review',

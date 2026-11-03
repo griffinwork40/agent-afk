@@ -56,6 +56,7 @@ import { MCP_ENV_REGISTRY } from './env.mcp.js';
 import { MISC_ENV_REGISTRY } from './env.misc.js';
 import { MODEL_ENV_REGISTRY } from './env.model.js';
 import { MODEL_TIERS_ENV_REGISTRY } from './env.model-tiers.js';
+import { MODEL_SLOT_CONCURRENCY_ENV_REGISTRY } from './env.model-slot-concurrency.js';
 import { SUGGEST_ENV_REGISTRY } from './env.model-tiers.suggest.js';
 import { PATHS_ENV_REGISTRY } from './env.paths.js';
 import { PEER_ENV_REGISTRY } from './env.peer.js';
@@ -67,6 +68,8 @@ import { MEMORY_GC_ENV_REGISTRY } from './env.memory-gc.js';
 import { VITALS_ENV_REGISTRY } from './env.vitals.js';
 import { TOOLS_ENV_REGISTRY } from './env.tools.js';
 import { CONTINUATION_ENV_REGISTRY } from './env.continuation.js';
+import { SANDBOX_ENV_REGISTRY } from './env.sandbox.js';
+import { EPISODE_ENV_REGISTRY } from './env.episode.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -131,6 +134,7 @@ export const ENV_REGISTRY = [
   ...MODEL_ENV_REGISTRY,
   // Model tiers, timeouts, suggestions, legacy aliases (env.model-tiers.ts)
   ...MODEL_TIERS_ENV_REGISTRY,
+  ...MODEL_SLOT_CONCURRENCY_ENV_REGISTRY,
   // REPL suggestion vars (env.model-tiers.suggest.ts)
   ...SUGGEST_ENV_REGISTRY,
   // Memory GC env vars (env.memory-gc.ts)
@@ -188,6 +192,12 @@ export const ENV_REGISTRY = [
 
   // ── Subagent continuation chain limits (env.continuation.ts) ─────────────
   ...CONTINUATION_ENV_REGISTRY,
+
+  // ── OS-level bash sandbox (#3845, env.sandbox.ts) ─────────────────────────
+  ...SANDBOX_ENV_REGISTRY,
+
+  // ── Episode synthesis (env.episode.ts) ────────────────────────────────────
+  ...EPISODE_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];
 
 /**

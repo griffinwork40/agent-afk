@@ -128,7 +128,7 @@ export async function runTurn(
     if (borrowedCompositor) {
       borrowedCompositor.commitAbove('');
     } else {
-      console.log();
+      console.log(); // console-ok
     }
 
     // Install the per-turn ESC soft-stop handler BEFORE arm() to close the

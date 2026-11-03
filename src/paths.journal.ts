@@ -43,6 +43,11 @@ export function getSessionBlobsDir(sessionId: string): string {
  * `events.jsonl` by exact name, so archives are never mistaken for the live
  * ledger; they exist so a reset never destroys the durable tool-call record.
  */
+/** Canonical identity sidecar for O(1) metadata lookups (#4429). */
+export function getSessionMetaPath(sessionId: string): string {
+  return join(getSessionLedgerDir(sessionId), 'session-meta.json');
+}
+
 export function getSessionLedgerArchivePath(sessionId: string, stamp: string): string {
   if (!SUBAGENT_ID_SAFE.test(stamp)) {
     throw new Error(`Invalid ledger archive stamp: ${JSON.stringify(stamp)}`);

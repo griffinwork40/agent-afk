@@ -9,7 +9,7 @@
 
 import type { TraceActor } from '../session/session-identity.js';
 
-export type FactCategory = 'preference' | 'convention' | 'decision' | 'learning';
+export type FactCategory = 'preference' | 'convention' | 'decision' | 'learning' | 'episode';
 export type SessionOutcome = 'completed' | 'failed' | 'abandoned';
 export type MemoryUpdateAction = 'set' | 'supersede' | 'remove';
 export type MemoryUpdateTarget = 'hot' | 'fact';

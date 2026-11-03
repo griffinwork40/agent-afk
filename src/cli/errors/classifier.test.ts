@@ -14,6 +14,7 @@ import {
   TimeoutError,
   UsageLimitError,
 } from '../../utils/errors.js';
+import { DaemonAlreadyRunningError } from '../../agent/daemon-instance.lock.js';
 
 // ─── auth ─────────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,36 @@ describe('classifyError — auth', () => {
     const result = classifyError(err);
     expect(result.kind).toBe('auth');
     expect(result.exitCode).toBe(1);
+  });
+
+  it('shows Anthropic-specific hint when error carries Anthropic SDK structure', () => {
+    const err = Object.assign(new Error('Invalid API Key'), {
+      status: 401,
+      error: { type: 'authentication_error', message: 'Invalid API Key' },
+    });
+    const result = classifyError(err);
+    expect(result.kind).toBe('auth');
+    expect(result.hint).toContain('ANTHROPIC_API_KEY');
+    expect(result.hint).toContain('afk login --force');
+  });
+
+  it('shows generic provider hint for plain 401 without Anthropic error structure', () => {
+    const err = Object.assign(new Error('Unauthorized'), { status: 401 });
+    const result = classifyError(err);
+    expect(result.kind).toBe('auth');
+    expect(result.hint).toContain('OPENAI_API_KEY');
+    expect(result.hint).toContain('AFK_MODEL_<TIER>_API_KEY');
+    expect(result.hint).not.toContain('ANTHROPIC_API_KEY');
+  });
+
+  it('shows generic provider hint for non-Anthropic AuthenticationError', () => {
+    // OpenAI SDK also throws errors named AuthenticationError but without
+    // the Anthropic error.type structure.
+    const err = Object.assign(new Error('Incorrect API key provided'), { name: 'AuthenticationError' });
+    const result = classifyError(err);
+    expect(result.kind).toBe('auth');
+    expect(result.hint).toContain('afk doctor');
+    expect(result.hint).not.toContain('ANTHROPIC_API_KEY');
   });
 
   it('classifies PermissionDeniedError (Anthropic SDK) as auth with seat-removal guidance', () => {
@@ -113,6 +144,30 @@ describe('classifyError — usage_limit', () => {
   it('a plain 429 still classifies as rate_limit', () => {
     const err = Object.assign(new Error('Rate limited'), { status: 429, error: { type: 'rate_limit_exceeded' } });
     expect(classifyError(err).kind).toBe('rate_limit');
+  });
+});
+
+// ─── daemon_already_running ───────────────────────────────────────────────────
+
+describe('classifyError — daemon_already_running', () => {
+  it('classifies DaemonAlreadyRunningError with known PID: exitCode 2, kind, hint contains PID', () => {
+    const err = new DaemonAlreadyRunningError('/path/daemon.lock', 42);
+    const result = classifyError(err);
+    expect(result.kind).toBe('daemon_already_running');
+    expect(result.exitCode).toBe(2);
+    expect(result.hint).toContain('42');
+    expect(result.raw).toBe(err);
+  });
+
+  it('classifies DaemonAlreadyRunningError with null ownerPid: exitCode 2, kind, generic hint (no PID number)', () => {
+    const err = new DaemonAlreadyRunningError('/path/daemon.lock', null);
+    const result = classifyError(err);
+    expect(result.kind).toBe('daemon_already_running');
+    expect(result.exitCode).toBe(2);
+    expect(result.hint).toBeDefined();
+    // Generic wording — must not contain a bare integer
+    expect(result.hint).not.toMatch(/\b\d+\b/);
+    expect(result.raw).toBe(err);
   });
 });
 
@@ -210,6 +265,24 @@ describe('classifyError — overloaded', () => {
     expect(result.kind).toBe('overloaded');
     expect(result.exitCode).toBe(1);
     expect(result.userMessage).toContain('503');
+  });
+
+  it('shows "Anthropic API" when error carries Anthropic SDK structure', () => {
+    const err = Object.assign(new Error('Overloaded'), {
+      status: 529,
+      error: { type: 'overloaded_error', message: 'Overloaded' },
+    });
+    const result = classifyError(err);
+    expect(result.kind).toBe('overloaded');
+    expect(result.userMessage).toContain('Anthropic API');
+  });
+
+  it('shows generic "API" for non-Anthropic overloaded errors', () => {
+    const err = Object.assign(new Error('Service Unavailable'), { status: 503 });
+    const result = classifyError(err);
+    expect(result.kind).toBe('overloaded');
+    expect(result.userMessage).not.toContain('Anthropic');
+    expect(result.userMessage).toContain('API is temporarily overloaded');
   });
 
   it('does not leak raw SDK JSON into userMessage', () => {

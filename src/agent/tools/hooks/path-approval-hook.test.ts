@@ -195,13 +195,13 @@ describe('createPathApprovalHook — session-scoped grants via context.grantMana
     const decision = await preToolUse({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/etc/hosts', content: 'x' },
+      input: { file_path: '/sibling/repo/hosts', content: 'x' },
       sessionId: 'child-1',
       parentSessionId: 'parent-1',
       grantManager: childMgr,
     });
 
-    // /etc/hosts is outside the CHILD's writeRoots → restricted → fork auto-deny.
+    // The sibling path is outside the CHILD's writeRoots → fork auto-deny.
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('Sub-agent path access denied');
   });
@@ -272,7 +272,7 @@ describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
     const decision = await preToolUse({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/etc/hosts', content: 'x' },
+      input: { file_path: '/sibling/repo/hosts', content: 'x' },
       sessionId: 'child-1',
       parentSessionId: 'parent-1',
       grantManager: mgr,
@@ -412,14 +412,14 @@ describe('createPathApprovalHook — outcome mapping', () => {
     });
 
     const decision = await preToolUse(
-      preCtx('write_file', { file_path: '/etc/hosts', content: 'x' }, mgr),
+      preCtx('write_file', { file_path: '/sibling/repo/hosts', content: 'x' }, mgr),
     );
 
     expect(decision).toEqual({});
-    expect(mgr._writeRoots).toContain('/etc/hosts');
+    expect(mgr._writeRoots).toContain('/sibling/repo/hosts');
     expect(append).toHaveBeenCalledTimes(1);
     expect(append.mock.calls[0]?.[0]).toMatchObject({
-      path: '/etc/hosts',
+      path: '/sibling/repo/hosts',
       mode: 'write',
       decision: 'allow',
       source: 'elicit:telegram',
@@ -708,7 +708,7 @@ describe('createPathApprovalHook — M5: audit log line emitted per decision', (
     });
 
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await preToolUse(preCtx('write_file', { file_path: '/etc/hosts', content: 'x' }, mgr));
+    await preToolUse(preCtx('write_file', { file_path: '/sibling/repo/hosts', content: 'x' }, mgr));
 
     const calls = spy.mock.calls.map((args) => String(args[0]));
     const logLine = calls.find((l) => l.startsWith('[path-approval]'));
@@ -840,6 +840,32 @@ describe('createPathApprovalHook — read-denylist floor', () => {
       resolveAndContain(`${homedir()}/.afk/config/afk.env`, unconfined, 'read'),
     ).toThrow(/credential\/secret/);
   });
+});
+
+describe('createPathApprovalHook — write credential floor', () => {
+  for (const grants of [
+    { allowAll: true },
+    { resolveBase: undefined, writeRoots: [] },
+    { writeRoots: [homedir()] },
+  ]) {
+    it(`never prompts or grants protected writes: ${JSON.stringify(grants)}`, async () => {
+      const handler = vi.fn(async () => ({ action: 'accept' as const, content: { choice: 'session' } }));
+      elicitationRouter.install(handler);
+      const mgr = makeMockGrantManager(grants);
+      const { preToolUse } = createPathApprovalHook({ getCwd: () => BASE, surface: 'repl' });
+      for (const toolName of ['write_file', 'edit_file', 'patch_apply']) {
+        const target = `${homedir()}/.ssh/config`;
+        const input = toolName === 'patch_apply'
+          ? { changes: [{ path: target, content: 'bad' }] }
+          : { file_path: target, content: 'bad' };
+        const decision = await preToolUse(preCtx(toolName, input, mgr));
+        expect(decision.decision).toBe('block');
+        expect(decision.reason).toContain('refusing to write to protected path');
+      }
+      expect(handler).not.toHaveBeenCalled();
+      expect(mgr._events).toHaveLength(0);
+    });
+  }
 });
 
 describe('path-approval hook ↔ handler parity (the divergence six PRs kept re-introducing)', () => {

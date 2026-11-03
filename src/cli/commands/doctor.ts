@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { palette } from '../palette.js';
 import { healthCheckRows, healthCheckSummary } from '../render/status-panel.js';
 import { runDoctorChecks } from './doctor-checks.js';
 
@@ -21,10 +22,10 @@ export function registerDoctorCommand(program: Command): void {
       } else {
         for (const check of checks) {
           for (const line of healthCheckRows(check)) {
-            console.log(line);
+            console.log(palette.info(line));
           }
         }
-        console.log('\n' + healthCheckSummary(checks));
+        console.log(palette.info('\n' + healthCheckSummary(checks)));
       }
 
       process.exit(summary.failed > 0 ? 1 : 0);

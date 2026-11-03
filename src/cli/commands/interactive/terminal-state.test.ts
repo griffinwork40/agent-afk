@@ -127,6 +127,14 @@ describe('parseTerminalState — bullet field mapping', () => {
     expect(parseTerminalState(text)?.deferred).toBe('wire the renderer');
   });
 
+  // Regression: worthDoing was never wired into the pipeline, so the
+  // "Worth doing" bullet was silently dropped from the Done block.
+  it('done: "Worth doing" maps to worthDoing', () => {
+    const text = `prose\n\nDone\n- What was done: shipped it\n- Deferred: none\n- Worth doing: ★ run backfill · add hit-rate counter`;
+    const v = parseTerminalState(text);
+    expect(v?.worthDoing).toBe('★ run backfill · add hit-rate counter');
+  });
+
   it('asking: "next" still maps to followup', () => {
     const text = `prose\n\nAsking\n- Question: keep or delete?\n- Next: I will archive it`;
     expect(parseTerminalState(text)?.followup).toBe('I will archive it');

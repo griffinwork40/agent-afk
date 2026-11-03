@@ -23,6 +23,7 @@ import type { TurnState } from './repl-loop-shared.js';
 import type { TranscriptHandle } from './transcript.js';
 import type { InputSurface } from '../../input/input-surface.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
+import { PauseController } from '../../../agent/session/pause-controller.js';
 
 /**
  * Mutable per-turn verdict capture. Reset before every `runOneTurn` so a
@@ -74,6 +75,9 @@ export async function runOneTurn(
   autosaveState: [autosaveFailureLogged: boolean],
   rawUserText: string,
 ): Promise<TerminalCapture> {
+  // TODO: pass session abort signal when available so a graceful abort can
+  // interrupt a pause without waiting for removePauseLock() (R1.6).
+  await PauseController.instance().check();
   const { verdictLedger, loopStageBar, mascotBar, healthRail } = footer;
   const capture: TerminalCapture = { kind: undefined, doneHasEvidence: undefined, doneClassification: undefined };
 
@@ -186,6 +190,10 @@ export async function runOneTurn(
     ctx.completionWriter,
     surface.toRunTurnRefs(buildPrompt(ctx.stats.permissionMode)),
   );
+
+  // Release the mascot band's opacity-toggle reservation between turns so
+  // blank rows do not waste screen space while the user reads or types.
+  footer.mascotBar.releaseBand();
 
   return capture;
 }

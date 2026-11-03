@@ -53,6 +53,14 @@
       "category": "misc"
     },
     {
+      "name": "AFK_BASH_SANDBOX",
+      "description": "Opt-in OS-level filesystem write sandbox for foreground bash invocations. Accepted values:\n  workspace-write  – allow reads everywhere; writes confined to the effective cwd/worktree and actual child TMPDIR (TMP/TEMP fallback). The complete write-denylist floor (including relocated AFK paths and custom entries) remains protected; Linux refuses grants overlapping protected paths in either direction, including symlink aliases and absent leaves. Network is unrestricted by default.\n  read-only        – deny regular-file writes everywhere; narrow standard device IO remains available for process/git functionality.\n  off              – disable the sandbox even if a parent session enabled it (inheriting contexts only).\nPlatform support: macOS uses sandbox-exec (deprecated API, still functional as of macOS 15). Linux requires bwrap (bubblewrap); there is no Landlock fallback. Windows and unsupported platforms refuse the spawn. Background bash spawning is not covered yet; do not use this setting as a sandbox for run_in_background commands. Reads and network access are not restricted. This is not a VM boundary: pre-existing hardlinks, bind-mount aliases and concurrent host topology changes are not covered. When explicitly set but the sandbox mechanism is unavailable, the spawn is REFUSED rather than silently running unsandboxed (fail-closed). Unset (default): sandbox disabled; existing string-based path guards remain active. Do not set this to make security claims before measuring real-world soak data — the string guards remain the primary line for accidental-access prevention.",
+      "type": "string",
+      "required": false,
+      "example": "workspace-write",
+      "category": "misc"
+    },
+    {
       "name": "AFK_BG_AUTO_DELIVER",
       "description": "Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow.",
       "type": "boolean",
@@ -346,6 +354,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_EPISODE_SYNTHESIS",
+      "description": "Enable automatic episode synthesis at session end. When set to 1, a deterministic summary of each top-level session is built from its facet and stored in cross-session memory (facts table, category: episode). Off by default — opt in once the memory archive is large enough that episodic recall adds value. No LLM call is required; episodes are derived from existing facet data. Use `afk episode synthesize <session-id>` to synthesize a specific session on demand regardless of this flag.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_EVAL_STALENESS_DAYS",
       "description": "Number of days without a completed eval-run before the ground-state pre-flight surfaces a staleness warning. The guard reads the most recent timestamp from the eval-runs index ($AFK_HOME/agent-framework/improve/eval-runs/.index.jsonl) and emits a warning finding when the gap exceeds this threshold. Default: 7. Set to 0 to disable the guard.",
       "type": "number",
@@ -362,6 +379,30 @@
       "default": "60000",
       "example": "30000",
       "category": "daemon"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_BASH_DISABLE",
+      "description": "Disable best-effort git-backed capture of foreground bash file changes for /rewind.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_BASH_MAX_FILES",
+      "description": "Maximum changed files captured per bash call; larger diffs are reported as partial. Default 1000.",
+      "type": "number",
+      "required": false,
+      "default": "1000",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_FILE_CHECKPOINT_BASH_TIMEOUT_MS",
+      "description": "Maximum milliseconds per bash checkpoint capture or diff. Default 5000.",
+      "type": "number",
+      "required": false,
+      "default": "5000",
+      "category": "debug"
     },
     {
       "name": "AFK_FILE_CHECKPOINT_MAX_AGE_DAYS",
@@ -459,6 +500,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_INLINE_IMAGES",
+      "description": "Controls inline terminal image rendering after image_generate, image_edit, and browser_screenshot tool calls. When set to \"0\" or \"false\", rendering is disabled and only the file path is logged (the existing behaviour). When unset (default), the hook auto-detects terminal support: Kitty graphics protocol for kitty/ghostty/wezterm, iTerm2 inline images protocol for iTerm2, and plain path logging as a fallback. Set to \"0\" to suppress all inline rendering.",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_INTERNAL",
       "description": "Tier gate. Set to exactly `1` to unlock — only the literal string \"1\" unlocks (other truthy values like \"true\"/\"yes\" leave the tier locked). When unlocked, skills tagged `audience: 'internal'` (e.g. /audit-fit, harvest/distill plugins) become visible at end-user surfaces (slash-command list, --help, tab-complete, system-prompt skill manifest). Default unset = public tier — internal skills are hidden. Not an access-control boundary; it gates surfacing, not the underlying registry.",
       "type": "boolean",
@@ -520,6 +570,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_LSP_REPO_MAP_TIMEOUT_MS",
+      "description": "Total budget in milliseconds for building the repo-map summary (phase 3 of #3904, AFK_LSP_DIAGNOSTICS=1). Covers both the LSP workspace/symbol query and the filesystem fallback scan. Default 8000 ms. Raise for large monorepos; lower to reduce startup latency when the map is not needed.",
+      "type": "number",
+      "required": false,
+      "default": "8000",
+      "example": "4000",
+      "category": "misc"
+    },
+    {
       "name": "AFK_LSP_SYMBOLS_TIMEOUT_MS",
       "description": "Hard timeout in milliseconds for code_symbols (go-to-definition / find-references) LSP queries (AFK_LSP_DIAGNOSTICS=1). Symbol queries can require a cold-start index build and therefore need a longer budget than the post-edit diagnostics timeout (AFK_LSP_DIAGNOSTICS_TIMEOUT_MS). Default 5000 (5 s). Raise for large monorepos where the first query triggers a full project load.",
       "type": "number",
@@ -530,7 +589,7 @@
     },
     {
       "name": "AFK_MAX_BUDGET_USD",
-      "description": "Opt-in cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this. Unset by default (no cap applied).",
+      "description": "Cumulative USD budget ceiling for the session, enforced at accounted completion boundaries (overshoot is possible). Daemon and Telegram default to $5 when unset/empty/invalid; other surfaces remain opt-in. Explicit session config wins.",
       "type": "number",
       "required": false,
       "example": "5.00",
@@ -623,7 +682,7 @@
     },
     {
       "name": "AFK_MAX_TOOL_USE_ITERATIONS",
-      "description": "Opt-in ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both providers. Mirrors the maxToolUseIterations config key / max_tool_use_iterations tool param. Unset, non-numeric, or <=0 means unlimited (the default — zero behavior change): a top-level turn ends only when the model stops calling tools, the abort signal fires, the provider errors, or the dollar budget trips. A positive integer N makes top-level turns wind down gracefully after N tool rounds (one tools-stripped final round). An explicit config/CLI value wins over this env default. Does NOT affect subagent forks — they keep their own non-zero anti-hang default (SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS) regardless of this var.",
+      "description": "Ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both providers. Mirrors the maxToolUseIterations config key / max_tool_use_iterations tool param. Daemon and Telegram default to 100 when unset/empty/invalid; other surfaces stay opt-in. Numeric <=0 retains the unlimited-round escape hatch. A positive integer N makes turns wind down gracefully after N tool rounds (one tools-stripped final round). An explicit config/CLI value wins over this env default. Does NOT affect subagent forks — they keep their own non-zero anti-hang default (SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS) regardless of this var.",
       "type": "number",
       "required": false,
       "default": "0",
@@ -742,6 +801,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_LARGE_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"large\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_LOCAL",
       "description": "Bind the \"local\" capability tier (cheapest/fastest, user-configured) to a model id. Overrides afk.config.json models.local. Point at a local Ollama, LM Studio, or any OpenAI-compatible shim.",
       "type": "string",
@@ -763,6 +830,14 @@
       "type": "string",
       "required": false,
       "example": "http://localhost:11434/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_LOCAL_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"local\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously (shared with any other slot targeting the same baseUrl). Useful for single-request local servers (Ollama, LM Studio, MLX). Unset = unlimited. Accepted range 1-32; out-of-range or unparseable input is ignored. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
       "category": "model"
     },
     {
@@ -790,6 +865,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_MEDIUM_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"medium\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_MODEL_SMALL",
       "description": "Bind the \"small\" capability tier (cheap/fast) to a model id/alias. Overrides afk.config.json models.small.",
       "type": "string",
@@ -811,6 +894,14 @@
       "type": "string",
       "required": false,
       "example": "http://localhost:8080/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_SMALL_MAX_CONCURRENCY",
+      "description": "Per-slot concurrency cap for the \"small\" tier. When set, at most N model requests to this slot's endpoint are in flight simultaneously. Unset = unlimited. Accepted range 1-32. Part of #3886.",
+      "type": "number",
+      "required": false,
+      "example": "1",
       "category": "model"
     },
     {
@@ -1009,6 +1100,14 @@
     {
       "name": "AFK_RUN_RECEIPT_DISABLED",
       "description": "Disable the post-session run receipt (state/receipts/<label>.json and .md). Set to 1 to skip receipt writes; the underlying witness trace is unaffected. Receipts are also implicitly off when AFK_TRACE_DISABLED=1 (no trace to summarize).",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
+      "name": "AFK_RUN_RECEIPT_TEXT_DISABLED",
+      "description": "Suppress conversation-text fields (firstUserMessage, lastAssistantMessage) in the run receipt journalSummary. When set to 1, the receipt v2 journalSummary is still written but text fields are omitted and textRedacted is set to true. Tool names, counts, and all v1 fields are unaffected. Use when receipts are stored in shared locations or CI logs and prompt/response text is considered private.",
       "type": "boolean",
       "required": false,
       "example": "1",
@@ -1988,6 +2087,30 @@
       "required": false,
       "example": "true",
       "category": "telegram"
+    },
+    {
+      "name": "TERM",
+      "description": "Terminal type string set by the outer terminal emulator (e.g. \"xterm-kitty\", \"xterm-256color\"). Not set by AFK. Read by the inline-image hook (#2143) to detect Kitty graphics protocol support (\"xterm-kitty\" means the terminal natively implements the protocol).",
+      "type": "string",
+      "required": false,
+      "example": "xterm-kitty",
+      "category": "process"
+    },
+    {
+      "name": "TERM_PROGRAM",
+      "description": "Terminal program name set by the outer terminal emulator (e.g. \"iTerm.app\", \"ghostty\", \"WezTerm\"). Not set by AFK. Read by the inline-image hook (#2143) to select between Kitty graphics protocol (ghostty, WezTerm) and iTerm2 inline images protocol (iTerm.app).",
+      "type": "string",
+      "required": false,
+      "example": "iTerm.app",
+      "category": "process"
+    },
+    {
+      "name": "TERM_PROGRAM_VERSION",
+      "description": "Terminal program version set by some terminal emulators alongside TERM_PROGRAM. Not set by AFK. Read by the inline-image hook (#2143) as a secondary iTerm2 detection signal.",
+      "type": "string",
+      "required": false,
+      "example": "3.5.0",
+      "category": "process"
     },
     {
       "name": "TMUX",

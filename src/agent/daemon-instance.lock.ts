@@ -1,0 +1,238 @@
+/**
+ * Single-instance guard for the afk daemon.
+ *
+ * Prevents two daemon processes from running concurrently on the same machine
+ * by acquiring an O_EXCL PID lockfile at startup. Stale locks left by a
+ * SIGKILL'd daemon are detected via `process.kill(pid, 0)` and cleared
+ * automatically so a crash never permanently blocks future starts.
+ *
+ * # Design
+ *
+ * The lock file lives at `<getDaemonStateDir('default')>/daemon.lock` and
+ * contains the owning process's PID as a decimal string. Acquisition uses
+ * `open(path, 'wx')` (O_CREAT | O_EXCL) which is atomic on POSIX and NTFS
+ * — only one concurrent opener wins; all others get EEXIST.
+ *
+ * This module is intentionally a thin wrapper over the same pattern used by
+ * the worktree-sweep advisory lock (`worktree-sweep.lock.ts`). It differs in
+ * two ways:
+ *   1. The error type is `DaemonAlreadyRunningError` (vs `LockContestedError`)
+ *      so callers can distinguish a daemon-level guard from a sweep-level one.
+ *   2. The lock path is derived from `getDaemonStateDir` (daemon state dir)
+ *      rather than being caller-supplied, because there is exactly one
+ *      per-instance daemon lock.
+ *
+ * # SIGKILL safety
+ *
+ * A `kill -9`'d daemon cannot run its `stop()` cleanup. The stale lock file
+ * persists until the next `startDaemon()` call detects that the recorded PID
+ * is dead and removes it. This is the same "stale-PID detection" pattern used
+ * by the sweep lock — no additional mechanism is needed.
+ *
+ * @module agent/daemon-instance.lock
+ */
+
+import { promises as fs } from 'node:fs';
+import { join } from 'node:path';
+import { getDaemonStateDir } from '../paths.js';
+import { isErrnoCode, isWindowsLockContention } from '../utils/errors.js';
+
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown by `acquireDaemonLock` when a live daemon process already owns the
+ * lock. Callers should treat this as a non-retriable startup failure and exit
+ * with a clear user-facing message.
+ */
+export class DaemonAlreadyRunningError extends Error {
+  /** PID of the live daemon that holds the lock, when determinable. */
+  readonly ownerPid: number | null;
+
+  /**
+   * `true` when the lock-file open failed with `EPERM` on Windows.
+   *
+   * On Windows, `EPERM` is ambiguous: it can mean the file is in a
+   * "delete-pending" state (another process holds it open — genuine
+   * contention) **or** that a real permission denial occurred (e.g.
+   * antivirus software or restrictive ACLs). The daemon treats both
+   * cases identically for safety, but surfaces this flag so callers
+   * and users can see the ambiguity in the error message.
+   */
+  readonly windowsEpermAmbiguous: boolean;
+
+  constructor(
+    lockPath: string,
+    ownerPid: number | null,
+    windowsEpermAmbiguous = false,
+  ) {
+    const pidClause =
+      ownerPid !== null ? ` (owned by PID ${ownerPid})` : '';
+    const epermNote = windowsEpermAmbiguous
+      ? ' (Windows EPERM: may be a permission denial by antivirus or ACLs rather than a running daemon — check security software if this is unexpected)'
+      : '';
+    super(
+      `Another afk daemon is already running${pidClause}. ` +
+        `Lock file: ${lockPath}. ` +
+        `Stop the existing daemon before starting a new one.${epermNote}`,
+    );
+    this.name = 'DaemonAlreadyRunningError';
+    this.ownerPid = ownerPid;
+    this.windowsEpermAmbiguous = windowsEpermAmbiguous;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * The path at which the daemon instance lock is written.
+ *
+ * Exported so tests can inject a tmp-dir override and so the CLI can surface
+ * it in diagnostic messages.
+ */
+export function getDaemonLockPath(instanceId: string = 'default'): string {
+  return join(getDaemonStateDir(instanceId), 'daemon.lock');
+}
+
+/**
+ * Acquire the daemon-level single-instance lock.
+ *
+ * Returns a `release` callback that removes the lock file. Call it in a
+ * `finally` / `stop()` handler so the lock is always relinquished on
+ * graceful shutdown.
+ *
+ * The returned release callback is **idempotent** — safe to call multiple
+ * times (subsequent calls are no-ops).
+ *
+ * @throws {DaemonAlreadyRunningError} when a live daemon process holds the
+ *   lock.
+ * @throws {NodeJS.ErrnoException} for unexpected filesystem errors (EACCES,
+ *   ENOSPC, etc.).
+ *
+ * @param lockPath - Override the lock file path (tests only).
+ * @param platform - Override `process.platform` (tests only).
+ */
+export async function acquireDaemonLock(
+  lockPath: string = getDaemonLockPath(),
+  platform: string = process.platform,
+): Promise<() => Promise<void>> {
+  // Ensure the parent directory exists before trying to open the lock file.
+  // Note: recursive:true already suppresses EEXIST — the .catch() was removed
+  // so that real errors (EACCES, ENOSPC) propagate instead of being silently
+  // swallowed and later misclassified as lock contention.
+  const parentDir = join(lockPath, '..');
+  await fs.mkdir(parentDir, { recursive: true });
+
+  const handle = await tryOpen(lockPath, platform);
+
+  // Contract: the fd from tryOpen must be closed regardless of whether
+  // writeFile succeeds. If writeFile throws (ENOSPC, EROFS, EINTR), we:
+  //   1. Close the fd so it doesn't leak.
+  //   2. Unlink the empty lock file so the next start is not permanently
+  //      blocked by an uninitialised lock.
+  //   3. Re-throw so the caller learns the acquisition failed.
+  try {
+    await handle.writeFile(String(process.pid), 'utf-8');
+  } catch (writeErr) {
+    await handle.close().catch(() => {});
+    await fs.unlink(lockPath).catch(() => {});
+    throw writeErr;
+  }
+  await handle.close();
+
+  let released = false;
+  return async () => {
+    if (released) return;
+    released = true;
+    await fs.unlink(lockPath).catch(() => {});
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Internals
+// ---------------------------------------------------------------------------
+
+/**
+ * Attempt to open the lock file with O_CREAT | O_EXCL (atomic exclusive
+ * create). On EEXIST, check whether the recorded PID is still alive:
+ *   - alive  → throw `DaemonAlreadyRunningError`
+ *   - dead   → delete stale lock, retry once
+ */
+async function tryOpen(
+  lockPath: string,
+  platform: string,
+): Promise<import('node:fs/promises').FileHandle> {
+  try {
+    return await fs.open(lockPath, 'wx');
+  } catch (err) {
+    const isContention = isErrnoCode(err, 'EEXIST') || isWindowsLockContention(err, platform);
+    if (!isContention) throw err;
+
+    // On Windows, EPERM is ambiguous: it can mean the file is in a
+    // "delete-pending" state (genuine lock contention) OR that a real
+    // permission denial occurred (antivirus, ACLs). Track this so we can
+    // surface the ambiguity in the error message if we end up throwing.
+    const triggeredByWindowsEperm =
+      platform === 'win32' && isErrnoCode(err, 'EPERM');
+
+    // Read the PID from the existing lock file.
+    let ownerPid: number | null = null;
+    try {
+      const raw = await fs.readFile(lockPath, 'utf-8');
+      const parsed = parseInt(raw.trim(), 10);
+      if (!Number.isNaN(parsed) && parsed > 0) ownerPid = parsed;
+    } catch {
+      // Lock file vanished between open() and readFile() — another process may
+      // have won the race and released already. Fall through to retry.
+    }
+
+    // If we read a PID, check whether that process is still alive.
+    if (ownerPid !== null) {
+      let alive = false;
+      try {
+        process.kill(ownerPid, 0);
+        alive = true;
+      } catch (killErr) {
+        // EPERM means the process is alive but we lack permission to signal it.
+        // ESRCH means the process is gone — stale lock.
+        if (isErrnoCode(killErr, 'EPERM')) alive = true;
+      }
+
+      if (alive) {
+        throw new DaemonAlreadyRunningError(lockPath, ownerPid, triggeredByWindowsEperm);
+      }
+
+      // Stale lock (dead PID) — remove it and retry once.
+      await fs.unlink(lockPath).catch(() => {});
+    } else {
+      // ownerPid is null: the lock file exists but contains no valid PID.
+      // This happens when a process was killed between O_EXCL open and
+      // writeFile. The file is safe to remove — no live process owns it.
+      await fs.unlink(lockPath).catch(() => {});
+    }
+
+    // Retry once after clearing the stale/empty lock (or if the lock file
+    // vanished on its own between our open() and readFile() calls above).
+    try {
+      return await fs.open(lockPath, 'wx');
+    } catch (retryErr) {
+      if (!isErrnoCode(retryErr, 'EEXIST') && !isWindowsLockContention(retryErr, platform)) {
+        throw retryErr;
+      }
+      // Lost the race on retry — another process acquired it between our unlink
+      // and our retry open. Re-read the new owner PID for the error message.
+      const retryTriggeredByWindowsEperm =
+        platform === 'win32' && isErrnoCode(retryErr, 'EPERM');
+      let retryOwnerPid: number | null = null;
+      try {
+        const raw = await fs.readFile(lockPath, 'utf-8');
+        const parsed = parseInt(raw.trim(), 10);
+        if (!Number.isNaN(parsed) && parsed > 0) retryOwnerPid = parsed;
+      } catch { /* ignore */ }
+      throw new DaemonAlreadyRunningError(lockPath, retryOwnerPid, retryTriggeredByWindowsEperm);
+    }
+  }
+}

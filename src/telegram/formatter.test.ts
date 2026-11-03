@@ -24,7 +24,7 @@ import {
   formatQueued,
   formatUsage,
 } from './formatter';
-import type { UsageResult } from '../agent/subscription-usage.js';
+import type { UsageSummary } from '../agent/usage/usage-formatter.js';
 
 describe('splitLongMessage', () => {
   test('should not split short messages', () => {
@@ -738,52 +738,168 @@ describe('markdownToTelegramHtml — mis-nested emphasis safety net', () => {
 });
 
 describe('formatUsage', () => {
-  test('kind: ok with all windows renders one line per window with percentage and reset time', () => {
-    const resetsAt = new Date('2026-01-01T00:00:00Z');
-    const result: UsageResult = {
-      kind: 'ok',
-      fiveHour: { utilization: 0.42, resetsAt },
-      sevenDay: { utilization: 0.7 },
-      sevenDaySonnet: { utilization: 0.1, resetsAt },
-      sevenDayOpus: { utilization: 0.99 },
+  const NOW = 1_750_000_000_000;
+
+  test('renders one line per window with percentage and reset info', () => {
+    const resetsAtMs = NOW + 2 * 60 * 60 * 1000; // 2h from now
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'ok',
+          fiveHour: { utilization: 0.42, utilizationPct: 42, resetsAtMs, resetsIn: '2h' },
+          sevenDay: { utilization: 0.7, utilizationPct: 70 },
+          sevenDaySonnet: { utilization: 0.1, utilizationPct: 10, resetsAtMs, resetsIn: '2h' },
+          sevenDayOpus: { utilization: 0.99, utilizationPct: 99 },
+        },
+      ],
     };
-    const out = formatUsage(result);
+    const out = formatUsage(summary);
     expect(out).toContain('42%');
     expect(out).toContain('70%');
     expect(out).toContain('10%');
     expect(out).toContain('99%');
-    expect(out).toMatch(/5-hour/);
-    expect(out).toMatch(/7-day \(Sonnet\)/);
-    expect(out).toMatch(/7-day \(Opus\)/);
-    expect(out).toContain(resetsAt.toLocaleString());
+    expect(out).toMatch(/5h/i);
+    expect(out).toMatch(/sonnet/i);
+    expect(out).toMatch(/opus/i);
+    expect(out).toContain('resets in');
   });
 
-  test('kind: ok with only fiveHour renders exactly one line, no other windows', () => {
-    const result: UsageResult = { kind: 'ok', fiveHour: { utilization: 0.5 } };
-    const out = formatUsage(result);
-    expect(out).toContain('5-hour');
+  test('with only fiveHour renders that window, no 7-day rows', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'ok',
+          fiveHour: { utilization: 0.5, utilizationPct: 50 },
+        },
+      ],
+    };
+    const out = formatUsage(summary);
     expect(out).toContain('50%');
-    expect(out).not.toMatch(/7-day/);
+    expect(out).toMatch(/5h/i);
+    expect(out).not.toMatch(/7d/i);
   });
 
-  test('kind: unavailable / no-token tells the operator to run claude login', () => {
-    const result: UsageResult = {
-      kind: 'unavailable',
-      reason: 'no-token',
-      detail: 'no credentials found',
+  test('unknown provider surfaces no-signal message', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [{ provider: 'codex', account: 'chatgpt', status: 'unknown' }],
     };
-    const out = formatUsage(result);
-    expect(out).toMatch(/claude login/);
+    const out = formatUsage(summary);
+    expect(out).toContain('codex');
+    expect(out).toMatch(/no usage data|no signal/i);
   });
 
-  test('kind: unavailable / other reasons surface the reason and detail', () => {
-    const result: UsageResult = {
-      kind: 'unavailable',
-      reason: 'http-error',
-      detail: '503 Service Unavailable',
+  test('error provider surfaces error detail', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'error',
+          errorDetail: '503 Service Unavailable',
+        },
+      ],
     };
-    const out = formatUsage(result);
-    expect(out).toMatch(/http-error/);
+    const out = formatUsage(summary);
     expect(out).toContain('503 Service Unavailable');
+  });
+
+  test('multi-provider summary includes both providers', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'ok',
+          fiveHour: { utilization: 0.3, utilizationPct: 30 },
+        },
+        { provider: 'codex', account: 'chatgpt', status: 'unknown' },
+      ],
+    };
+    const out = formatUsage(summary);
+    expect(out).toContain('anthropic');
+    expect(out).toContain('codex');
+    expect(out).toContain('30%');
+  });
+
+  test('empty providers list returns no-providers message', () => {
+    const summary: UsageSummary = { asOfMs: NOW, providers: [] };
+    const out = formatUsage(summary);
+    expect(out).toMatch(/no providers/i);
+  });
+
+  test('stale provider header includes [stale] tag', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'stale',
+          fiveHour: { utilization: 0.5, utilizationPct: 50 },
+        },
+      ],
+    };
+    const out = formatUsage(summary);
+    expect(out).toContain('[stale]');
+    expect(out).toContain('anthropic / oauth [stale]:');
+  });
+
+  test('error provider header includes [error] tag', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'error',
+          errorDetail: '503 Service Unavailable',
+        },
+      ],
+    };
+    const out = formatUsage(summary);
+    expect(out).toContain('[error]');
+    expect(out).toContain('anthropic / oauth [error]:');
+  });
+
+  test('ok provider header has no status tag', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'ok',
+          fiveHour: { utilization: 0.3, utilizationPct: 30 },
+        },
+      ],
+    };
+    const out = formatUsage(summary);
+    expect(out).toContain('anthropic / oauth:');
+    expect(out).not.toContain('[ok]');
+  });
+
+  test('no-token error surfaces claude login hint', () => {
+    const summary: UsageSummary = {
+      asOfMs: NOW,
+      providers: [
+        {
+          provider: 'anthropic',
+          account: 'oauth',
+          status: 'error',
+          errorDetail: 'No Claude Code OAuth token found. Run `claude login` on the host machine, then try again.',
+        },
+      ],
+    };
+    const out = formatUsage(summary);
+    expect(out).toContain('claude login');
   });
 });

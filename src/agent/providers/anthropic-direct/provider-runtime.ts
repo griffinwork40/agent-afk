@@ -108,7 +108,7 @@ export class AnthropicDirectProvider implements ModelProvider {
   private readonly providerFactory?: AnthropicClientFactory;
   private readonly skillExecutor?: SkillExecutor;
   // Fields retained for per-query dispatcher construction (fixes C2 env race).
-  private readonly schemas: readonly import('../../tools/types.js').AnthropicToolDef[];
+  private schemas: readonly import('../../tools/types.js').AnthropicToolDef[];
   private readonly hookRegistry: import('../../hooks.js').HookRegistry | undefined;
   private readonly permissions: ToolPermissionConfig | undefined;
   private readonly canUseTool: CanUseTool | undefined;
@@ -289,9 +289,21 @@ export class AnthropicDirectProvider implements ModelProvider {
    * Called by forkSubagent after wireWorkspaceSubscriptions() produces the
    * handler and the pre-built child provider is already in childConfig.
    * Must be called before the first query fires (before AgentSession starts).
+   * Rebuilds `schemas` so the tool appears in the schema array passed to each
+   * per-query dispatcher (mirrors the OAI-side mutable-schemas + rebuild pattern).
    */
   setSubscribeHandler(handler: import('../../tools/types.js').ToolHandler): void {
     this.subscribeHandler = handler;
+    this.schemas = buildProviderSchemas({
+      readOnlyMemory: this.readOnlyMemory,
+      readOnlyState: this.readOnlyState,
+      workspaceStore: this.workspaceStore,
+      subscribeHandler: handler,
+      subagentExecutor: this.subagentExecutor,
+      skillExecutor: this.skillExecutor,
+      composeExecutor: this.composeExecutor,
+      customTools: this.customTools,
+    });
   }
 
   /** See {@link ModelProvider.grantsTool}. Same permissions + store the dispatcher uses. */

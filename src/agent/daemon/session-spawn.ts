@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
+import { resolveUnattendedLimits } from '../unattended-limits.js';
+
 import { errCodeOrString } from '../../utils/errors.js';
 import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
@@ -128,45 +130,16 @@ export function daemonDefaultCwd(): string {
  * is pure with respect to the env object and its contract is visible at the
  * call site.
  *
- * `rawMaxToolIters` — raw value of `AFK_MAX_TOOL_USE_ITERATIONS`:
- *   - `undefined` / non-numeric / `<= 0` → `undefined` (unlimited, no change)
- *   - positive number → `Math.floor(parsed)` (integer ceiling)
- *
- * `rawMaxBudget` — raw value of `AFK_MAX_BUDGET_USD`:
- *   - `undefined` → `undefined` (uncapped, no change)
- *   - empty / whitespace-only → `undefined` (treated as unset, not $0 hard-stop)
- *   - malformed / negative / NaN → `undefined` + `console.warn` (never throws)
- *   - valid non-negative number → parsed value
+ * Unset/empty/invalid values use finite unattended defaults. Numeric <=0
+ * rounds preserve the unlimited escape hatch; dollar zero remains a stop
+ * sentinel. See resolveUnattendedLimits for the shared surface policy.
  */
 export function parseDaemonEnvLimits(
   rawMaxToolIters: string | undefined,
   rawMaxBudget: string | undefined,
-): { parsedMaxToolIters: number | undefined; parsedMaxBudget: number | undefined } {
-  const parsedMaxToolIters =
-    rawMaxToolIters !== undefined &&
-    Number.isFinite(Number(rawMaxToolIters)) &&
-    Number(rawMaxToolIters) > 0
-      ? Math.floor(Number(rawMaxToolIters))
-      : undefined;
-
-  let parsedMaxBudget: number | undefined;
-  if (rawMaxBudget === undefined || rawMaxBudget.trim() === '') {
-    // undefined or empty/whitespace → uncapped (not a $0 hard-stop)
-    parsedMaxBudget = undefined;
-  } else {
-    const n = Number(rawMaxBudget);
-    if (!Number.isFinite(n) || n < 0) {
-      console.warn(
-        `[daemon] AFK_MAX_BUDGET_USD is not a valid finite non-negative number — ` +
-          `ignoring (budget uncapped). Set AFK_MAX_BUDGET_USD to a non-negative number or leave it unset.`,
-      );
-      parsedMaxBudget = undefined;
-    } else {
-      parsedMaxBudget = n;
-    }
-  }
-
-  return { parsedMaxToolIters, parsedMaxBudget };
+): { parsedMaxToolIters: number; parsedMaxBudget: number } {
+  const limits = resolveUnattendedLimits(rawMaxToolIters, rawMaxBudget);
+  return { parsedMaxToolIters: limits.maxToolUseIterations, parsedMaxBudget: limits.maxBudgetUsd };
 }
 
 export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOptions): Promise<{
@@ -255,16 +228,16 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     throw err;
   }
 
-  // Opt-in top-level tool-use-round ceiling and USD budget ceiling.
+  // Finite unattended defaults; explicit session settings still win.
   // Delegated to the named helper below to keep spawnDaemonSession under the
   // 200-line function-size ceiling (spec item 1). The helper reads from the
   // `env` object (the single read-point) with explicit params rather than a
   // closure, making it independently testable.
-  // Placed BEFORE the `...sessionConfig` spread so an explicit caller value
-  // still wins (escape-hatch parity with permissionMode/surface).
-  const { parsedMaxToolIters, parsedMaxBudget } = parseDaemonEnvLimits(
+  // Resolve explicit config too so undefined fields cannot erase defaults.
+  const unattendedLimits = resolveUnattendedLimits(
     env.AFK_MAX_TOOL_USE_ITERATIONS,
     env.AFK_MAX_BUDGET_USD,
+    options.sessionConfig,
   );
   const config: AgentConfig = {
     model: 'sonnet',
@@ -295,15 +268,11 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // permissionMode).
     ...(hookTraceWriter ? { traceWriter: hookTraceWriter } : {}),
     ...(mcpManager !== undefined ? { mcpManager } : {}),
-    // Opt-in top-level tool-round ceiling default; overridable by an explicit
-    // sessionConfig.maxToolUseIterations via the spread below.
-    ...(parsedMaxToolIters !== undefined ? { maxToolUseIterations: parsedMaxToolIters } : {}),
-    // USD budget ceiling default; overridable by an explicit
-    // sessionConfig.maxBudgetUsd via the spread below.
-    ...(parsedMaxBudget !== undefined ? { maxBudgetUsd: parsedMaxBudget } : {}),
+
     // sessionConfig may override permissionMode if the operator explicitly
     // wants a different mode for daemon tasks (intentional escape hatch).
     ...options.sessionConfig,
+    ...unattendedLimits,
     // Per-task cwd wins over sessionConfig.cwd (daemon-wide AFK_DAEMON_CWD).
     // Placed AFTER the sessionConfig spread so the task-level value is never
     // overwritten by the daemon-wide one. agentCwd already encodes the correct

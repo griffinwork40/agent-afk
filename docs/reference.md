@@ -2,6 +2,27 @@
 
 Full env-var table, slash-command taxonomy, plugin/marketplace deep-dive. For architecture and runtime concepts, see [`architecture.md`](architecture.md). For build/test/release, see [`development.md`](development.md).
 
+## Glossary
+
+| Term | Definition |
+|------|-----------|
+| **session** | One conversation between a user (or scheduler) and the agent, from first message to seal. Identified by a UUID. |
+| **turn** | One user message + one assistant response within a session, including all tool calls in between. |
+| **surface** | The execution context a session runs in: `cli` (one-shot chat), `repl` (interactive), `telegram`, `daemon`, `web`, `subagent`, or `sdk`. |
+| **witness / trace** | The append-only NDJSON record of everything an agent did (`trace.jsonl`). See [afk-trace.md](afk-trace.md). |
+| **facet** | A structured, validated projection of a completed session's sidecar: tool counts, error categories, outcome, summary, cost. |
+| **sidecar** | The `<sessionId>.json` file persisted alongside a session, holding turn records, metadata, and stats. |
+| **ledger** | A bounded append-only log. The **effect ledger** tracks external side-effects (file writes, git ops, API calls). The **tool-call ledger** tracks per-turn tool invocations. |
+| **journal** | The message journal: the full conversation history (user + assistant + tool results) persisted for replay and `/history`. |
+| **subagent** | A child agent session forked from a parent via `agent`, `compose`, or `skill` tools, running in its own context window. |
+| **skill** | A reusable procedure (markdown instructions) that the agent executes inline or in a forked subagent. Lives in `~/.afk/skills/` or a plugin. |
+| **hook** | A shell or builtin handler that fires at session lifecycle points (PreToolUse, PostToolUse, etc.) to block, approve, or inject context. |
+| **agent type** | A named agent definition (system prompt + tool allowlist + model defaults) used when dispatching subagents. E.g. `research-agent`, `general-purpose`. |
+| **DAG / compose** | The directed acyclic graph executor for multi-node subagent workflows dispatched via the `compose` tool. |
+| **MCP** | Model Context Protocol: the standard for connecting external tool servers to a session. Config: `~/.afk/config/mcp.json` or `<cwd>/.mcp.json`. |
+
+---
+
 ## Environment variables
 
 **Authoritative catalogue:** [`env-registry.md`](env-registry.md) (generated from `src/config/env.ts`).

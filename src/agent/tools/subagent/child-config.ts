@@ -19,6 +19,7 @@
  * @module agent/tools/subagent/child-config
  */
 
+import { prepareDispatchModel } from '../dispatch-preparation.js';
 import { defaultTierModelFallback, type ChildModelSource } from '../../subagent/resolve-child-model.js';
 import type { ForkSubagentOptions } from '../../subagent/fork-types.js';
 import { SubagentManager } from '../../subagent.js';
@@ -38,10 +39,8 @@ import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-exec
 import type { AgentInput } from './input-parse.js';
 import type { ChildProviderFactoryArgs } from '../nesting.js';
 import {
-  resolveChildModelAndProvider,
   resolveChildToolAccess,
   resolveChildBudgets,
-  resolveChildCredential,
   buildBaseChildConfig,
   wireChildNesting,
 } from './child-config.helpers.js';
@@ -202,16 +201,24 @@ export interface BuildChildConfigResult {
 export function buildChildConfigWithoutNesting(args: BuildChildConfigArgs) {
   const { parsed, namedAgent, depth, maxDepth, defaultConfig } = args;
 
-  const { childModel, childIsOpenAI, childModelSource } = resolveChildModelAndProvider(
-    parsed, namedAgent, args.defaultSubagentModel, args.parentModel,
-  );
+  const namedModel = namedAgent?.definition.model;
+  const { model: childModel, isOpenAI: childIsOpenAI, source: childModelSource, apiKey } = prepareDispatchModel({
+    modelIntent: {
+      callSiteModel: parsed.model,
+      namedAgentModel: namedModel === 'inherit' ? args.parentModel : namedModel,
+      defaultSubagentModel: args.defaultSubagentModel,
+      // Unlike compose, parent inheritance here is opt-in via model: 'inherit'.
+    },
+    credentialPolicy: 'resolve-then-omit-openai',
+    resolveApiKeyForModel: args.resolveApiKeyForModel,
+    parentApiKey: defaultConfig.apiKey,
+  });
   const { resolvedAccess, effectiveAllowedTools, effectiveReadOnlyBash, childWriteCapable, childSideEffectFree } =
     resolveChildToolAccess(namedAgent, args.allowedTools, args.readOnlyBash, args.agentRegistry);
   const { effectiveMaxTurns, effectiveMaxToolUseIterations } = resolveChildBudgets(parsed, namedAgent);
-  const resolvedChildApiKey = resolveChildCredential(childModel, args.resolveApiKeyForModel, defaultConfig.apiKey);
   const childConfig = buildBaseChildConfig(
     parsed, namedAgent, defaultConfig,
-    childModel, childIsOpenAI, resolvedChildApiKey,
+    childModel, childIsOpenAI, apiKey,
     effectiveMaxTurns, effectiveMaxToolUseIterations,
     depth, maxDepth,
   );

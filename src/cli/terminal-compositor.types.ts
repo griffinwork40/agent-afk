@@ -224,6 +224,21 @@ export type FramePlacementMode = 'cursor-follow' | 'bottom-pinned' | 'content-hu
 export interface PickerController {
   renderRows: () => readonly string[];
   onKey: (char: string | undefined, key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean; sequence?: string }) => void;
+  /**
+   * When true, the frame assembler skips band-width truncation for this
+   * picker's rows. Required for two distinct cases:
+   *
+   * 1. Editable overlays (e.g. {@link ./render/text-input.ts#runTextInput}):
+   *    rows embed an inline caret; truncating from the right hides the caret
+   *    and all text after the cursor when the user types a long answer.
+   *
+   * 2. Pre-formatted viewers (e.g. bash-output-viewer): rows are already
+   *    sized to the viewport and must not be clipped by a narrower band width.
+   *
+   * Absent / false for static pickers (choice lists) where truncation
+   * prevents autowrap inside the content band.
+   */
+  skipBandTruncation?: boolean;
 }
 
 /**

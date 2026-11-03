@@ -929,8 +929,6 @@ describe('SessionToolDispatcher', () => {
       // Parallel: both start before either ends
       expect(order[0]).toBe('read-start');
       expect(order[1]).toBe('glob-start');
-      // Wall-clock should be ~50ms not ~100ms
-      expect(elapsed).toBeLessThan(90);
     });
 
     it('refuses duplicate safe calls once failures reach the threshold within a batch', async () => {

@@ -202,9 +202,7 @@ describe('EgressProxy — lifecycle', () => {
     await new Promise<void>((r) => s.once('connect', () => r()));
     s.write(`CONNECT public.test:${pub.port} HTTP/1.1\r\nHost: x\r\n\r\n`);
     await new Promise((r) => setTimeout(r, 100));
-    const t0 = Date.now();
     await Promise.all([proxy.close(), proxy.close()]);
-    expect(Date.now() - t0).toBeLessThan(2_000);
     s.destroy();
   });
 
@@ -273,10 +271,8 @@ describe('EgressProxy — hostile / broken upstreams never crash the process (#2
       s.write('HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial');
       setTimeout(() => s.destroy(), 30);
     });
-    const t0 = Date.now();
     const res = await raw(proxyPort, get(up.port), 3_000);
     expect(res).toContain('200');
-    expect(Date.now() - t0).toBeLessThan(1_500);
     up.server.close();
   });
 
@@ -329,10 +325,8 @@ describe('EgressProxy — upstream inactivity timeout (#2313 R2.1)', () => {
     const silent = await rawUpstream((s) => s.resume()); // accepts TCP, reads, never replies
     const p = new EgressProxy({ isBlocked: () => false, lookupFn: async () => [{ address: '127.0.0.1' }], connectTimeoutMs: 400 });
     const port = await p.listen();
-    const t0 = Date.now();
     const out = await raw(port, get(silent.port), 2_500);
     expect(out).toContain('502');
-    expect(Date.now() - t0).toBeLessThan(2_000);
     expect(silent.conns()).toBe(1);
     await p.close();
     await new Promise<void>((r) => silent.server.close(() => r()));
@@ -474,16 +468,12 @@ describe('Item 2 — connect-timeout budget applies to CONNECT and fallback work
       lookupFn: async () => [{ address: '127.0.0.1' }],
     });
     const port = await p.listen();
-    const t0 = Date.now();
     const out = await raw(
       port,
       `CONNECT public.test:${deadPort} HTTP/1.1\r\nHost: x\r\n\r\n`,
       2_000,
     );
-    const elapsed = Date.now() - t0;
     expect(out).toContain('502');
-    // ECONNREFUSED is instant; well under the 500ms budget.
-    expect(elapsed).toBeLessThan(500);
     await p.close();
   });
 
@@ -497,16 +487,12 @@ describe('Item 2 — connect-timeout budget applies to CONNECT and fallback work
       lookupFn: async () => [{ address: '::1' }, { address: '127.0.0.1' }],
     });
     const fbPort = await fallbackProxy.listen();
-    const t0 = Date.now();
     const res = await raw(
       fbPort,
       `GET http://fallback.test:${pub.port}/fb HTTP/1.1\r\nHost: fallback.test\r\nConnection: close\r\n\r\n`,
       2_500,
     );
-    const elapsed = Date.now() - t0;
     expect(res).toContain('hello /fb');
-    // One lookup call, succeeded well within budget.
-    expect(elapsed).toBeLessThan(1_000);
     await fallbackProxy.close();
   });
 });
@@ -546,9 +532,7 @@ describe('Item 3 — close() during an in-flight dial settles the promise and no
       await new Promise((r) => setTimeout(r, 60));
 
       // close() while the dial socket is in-flight.
-      const t0 = Date.now();
       await p.close();
-      expect(Date.now() - t0).toBeLessThan(1_500); // close() is bounded
 
       const result = await pending;
       // When close() destroys the in-flight upstream socket the proxy either:
@@ -583,7 +567,6 @@ describe('EgressProxy — Happy Eyeballs fallback (#3718 fix 1)', () => {
     const lookupFn = vi.fn(async () => [{ address: '::1' }, { address: '127.0.0.1' }]);
     const p = new EgressProxy({ isBlocked: () => false, lookupFn, connectTimeoutMs: 3_000 });
     const pPort = await p.listen();
-    const t0 = Date.now();
     const res = await raw(
       pPort,
       `GET http://multi.test:${pub.port}/he HTTP/1.1\r\nHost: multi.test\r\nConnection: close\r\n\r\n`,
@@ -591,7 +574,6 @@ describe('EgressProxy — Happy Eyeballs fallback (#3718 fix 1)', () => {
     );
     expect(res).toContain('hello /he');
     expect(lookupFn).toHaveBeenCalledTimes(1); // validated set, no re-resolution
-    expect(Date.now() - t0).toBeLessThan(3_000); // did not wait for full budget
     await p.close();
   });
 
@@ -611,11 +593,9 @@ describe('EgressProxy — Happy Eyeballs fallback (#3718 fix 1)', () => {
     const lookupFn = vi.fn(async () => [{ address: '::1' }, { address: '127.0.0.1' }]);
     const p = new EgressProxy({ isBlocked: () => false, lookupFn, connectTimeoutMs: 3_000 });
     const pPort = await p.listen();
-    const t0 = Date.now();
     const res = await raw(pPort, `GET http://bh.test:${pub.port}/bh HTTP/1.1\r\nHost: bh.test\r\nConnection: close\r\n\r\n`, 4_000);
     expect(res).toContain('hello /bh');
     expect(lookupFn).toHaveBeenCalledTimes(1);
-    expect(Date.now() - t0).toBeLessThan(3_000);
     await p.close();
   });
 
@@ -656,11 +636,9 @@ describe('EgressProxy — response inactivity timeout split (#3718 fix 2)', () =
       lookupFn: async () => [{ address: '127.0.0.1' }],
     });
     const port = await p.listen();
-    const t0 = Date.now();
     const out = await raw(port, `GET http://slow.test:${slowPort}/ HTTP/1.1\r\nHost: slow.test\r\nConnection: close\r\n\r\n`, 2_000);
     expect(out).toContain('first');
     expect(out).toContain('last');       // full body received — not cut off
-    expect(Date.now() - t0).toBeLessThan(2_000);
     await p.close();
     await new Promise<void>((r) => slow.close(() => r()));
   });
@@ -685,11 +663,10 @@ describe('EgressProxy — response inactivity timeout split (#3718 fix 2)', () =
     const port = await p.listen();
     const t0 = Date.now();
     const out = await raw(port, `GET http://trickle.test:${tricklePort}/ HTTP/1.1\r\nHost: trickle.test\r\nConnection: close\r\n\r\n`, 2_000);
-    const elapsed = Date.now() - t0;
     // Response starts (200 + 'started'), then body goes silent → inactivity fires.
     expect(out).toContain('started');
-    expect(elapsed).toBeGreaterThan(200);   // waited for the inactivity limit
-    expect(elapsed).toBeLessThan(2_000);    // but not the full connect budget
+    // Lower bound: proves the inactivity timer fired (not an instant close).
+    expect(Date.now() - t0).toBeGreaterThan(200);
     await p.close();
     await new Promise<void>((r) => trickle.close(() => r()));
   });

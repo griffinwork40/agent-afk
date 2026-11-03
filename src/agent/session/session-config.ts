@@ -7,7 +7,6 @@
  *   - `setPermissionMode()` — flip plan/default mode
  *   - `setSystemPrompt()` — override the base system prompt
  *   - `setCwd()` — update the working directory
- *   - `reauth()` — trigger a provider credential refresh
  *   - `takePendingPlanExitSeed()` — atomically drain and apply a queued plan-exit
  *
  * Also exports the {@link ConfigDeps} interface that threads dependencies into
@@ -82,11 +81,6 @@ export function setCwd(cwd: string, deps: ConfigDeps): void {
   deps.getProviderQuery().setCwd?.(cwd);
   const sessionId = deps.getConfig().sessionId;
   if (sessionId !== undefined) void updatePresenceCwd(sessionId, cwd);
-}
-
-/** Trigger a provider credential refresh. Returns null if unsupported. */
-export async function reauth(deps: ConfigDeps): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
-  return (await deps.getProviderQuery().reauth?.()) ?? null;
 }
 
 /**

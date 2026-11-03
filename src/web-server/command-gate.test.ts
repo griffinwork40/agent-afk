@@ -23,7 +23,7 @@ describe('web command capability gate', () => {
   );
 
   it.each([
-    '/plan', '/afk', '/retry', '/reauth', '/init', '/sh',
+    '/plan', '/afk', '/retry', '/init', '/sh',
     '/editor', '/copy', '/font-size', '/theme', '/ghost',
     '/suggestions', '/keys', '/tasks:view',
   ])('preserves unsupported command %s through positive metadata', (name) => {

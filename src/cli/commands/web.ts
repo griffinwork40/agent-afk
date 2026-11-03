@@ -72,20 +72,11 @@ export function registerWebCommand(program: Command): void {
           console.log(palette.warning(`  (port ${port} was busy; using ${handle.port})`));
         }
         if (handle.host !== '127.0.0.1' && handle.host !== 'localhost') {
-          console.log(
-            palette.warning(
-              `  Bound to a non-loopback address. This surface can run tools and edit files — ` +
-                `keep the token secret and prefer a tunnel over exposing the port.`,
-            ),
-          );
+          console.log(palette.warning(`  Bound to a non-loopback address. This surface can run tools and edit files — keep the token secret and prefer a tunnel over exposing the port.`));
         }
         console.log(palette.meta(`  New sessions run in ${process.cwd()} on ${model}.`));
         if (options.bypassPermissions === true) {
-          console.log(
-            palette.warning(
-              '  --bypass-permissions: browser-started sessions run tools with NO approval step.',
-            ),
-          );
+          console.log(palette.warning('  --bypass-permissions: browser-started sessions run tools with NO approval step.'));
         }
         console.log(palette.meta('  Press Ctrl+C to stop.'));
 

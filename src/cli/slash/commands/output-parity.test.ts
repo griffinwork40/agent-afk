@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import chalk from 'chalk';
 import { promises as fs } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { fetchSubscriptionUsage } from '../../../agent/subscription-usage.js';
+import * as usageModule from '../../commands/usage.js';
 import * as sessionControl from '../../../agent/session-control/index.js';
 import { runSweep } from '../../../agent/worktree/worktree-sweep.js';
 import { readOauthPending } from '../../../agent/mcp/oauth.js';
@@ -18,7 +18,10 @@ import type { OutputBlock } from '../output-blocks.js';
 vi.mock('node:child_process', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:child_process')>(), execFileSync: vi.fn(),
 }));
-vi.mock('../../../agent/subscription-usage.js', () => ({ fetchSubscriptionUsage: vi.fn() }));
+vi.mock('../../commands/usage.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../commands/usage.js')>(),
+  collectUsageSummary: vi.fn(),
+}));
 vi.mock('../../../agent/worktree/worktree-sweep.js', () => ({ runSweep: vi.fn() }));
 vi.mock('../../../utils/git.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../../utils/git.js')>(),
@@ -49,7 +52,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(Date, 'now').mockReturnValue(180000);
   vi.spyOn(fs, 'readFile').mockResolvedValue(JSON.stringify({ pid: process.pid }));
-  vi.mocked(fetchSubscriptionUsage).mockResolvedValue({ kind: 'ok', fiveHour: { utilization: 0.42 }, sevenDay: { utilization: 0.1 } } as never);
+  vi.mocked(usageModule.collectUsageSummary).mockResolvedValue({
+    asOfMs: 180000,
+    providers: [{
+      provider: 'anthropic', account: 'oauth', status: 'ok', ageMs: 0,
+      fiveHour: { utilization: 0.42, utilizationPct: 42 },
+      sevenDay: { utilization: 0.1, utilizationPct: 10 },
+    }],
+  } as never);
   vi.mocked(execFileSync).mockReturnValue(rawDiff);
   vi.mocked(readOauthPending).mockReturnValue({ browser: { authorizationUrl: 'https://example.test/oauth', timestamp: 60000 } } as never);
   vi.mocked(runSweep).mockResolvedValue({ candidates: [
@@ -87,8 +97,11 @@ describe.each([0, 1] as const)('original console bytes (color=%i)', (level) => {
   it.each(cases)('%s', async (scenario) => {
     chalk.level = level;
     const { ctx, bytes } = context();
-    if (scenario === 'usage-empty') vi.mocked(fetchSubscriptionUsage).mockResolvedValue({ kind: 'ok' } as never);
-    if (scenario === 'usage-unavailable') vi.mocked(fetchSubscriptionUsage).mockResolvedValue({ kind: 'unavailable', reason: 'no-token', detail: 'No token' });
+    if (scenario === 'usage-empty') vi.mocked(usageModule.collectUsageSummary).mockResolvedValue({ asOfMs: 180000, providers: [] } as never);
+    if (scenario === 'usage-unavailable') vi.mocked(usageModule.collectUsageSummary).mockResolvedValue({
+      asOfMs: 180000,
+      providers: [{ provider: 'anthropic', account: 'oauth', status: 'error', errorDetail: 'No token' }],
+    } as never);
     if (scenario === 'tokens-local') vi.mocked(ctx.session.current.getContextUsage).mockRejectedValue(new Error('offline'));
     const name = scenario.startsWith('tokens-') ? '/tokens' : scenario.startsWith('usage') ? '/usage' : scenario.startsWith('mcp') ? '/mcp' : `/${scenario}`;
     const command = [...infoCommands, ...coreCommands, diffCmd, worktreeCmd].find((cmd) => cmd.name === name)!;
@@ -99,16 +112,20 @@ describe.each([0, 1] as const)('original console bytes (color=%i)', (level) => {
 });
 
 describe('Stage1 canonical read services survive structured migration', () => {
-  it('/usage renders the canonical subscription reader result', async () => {
-    const read = vi.spyOn(sessionControl, 'readSubscriptionUsage').mockResolvedValue({
-      kind: 'ok', fiveHour: { utilization: 0.73 },
+  it('/usage renders the multi-provider collectUsageSummary result', async () => {
+    vi.mocked(usageModule.collectUsageSummary).mockResolvedValue({
+      asOfMs: 180000,
+      providers: [{
+        provider: 'anthropic', account: 'oauth', status: 'ok', ageMs: 0,
+        fiveHour: { utilization: 0.73, utilizationPct: 73 },
+      }],
     } as never);
     const { ctx } = context();
     const blocks: OutputBlock[] = [];
     ctx.out.block = (block) => { blocks.push(block); };
     await infoCommands.find((cmd) => cmd.name === '/usage')!.handler(ctx, '');
-    expect(read).toHaveBeenCalledOnce();
-    expect(blocks[0]).toMatchObject({ kind: 'keyValue', entries: [{ key: '5-hour', value: '73%' }] });
+    expect(usageModule.collectUsageSummary).toHaveBeenCalledOnce();
+    expect(blocks[0]).toMatchObject({ kind: 'keyValue', entries: expect.arrayContaining([{ key: 'anthropic / oauth', value: 'ok' }]) });
   });
 
   it('/tokens renders the canonical local DTO rather than recalculating stats', async () => {
@@ -170,7 +187,7 @@ describe('structured command output uses source data', () => {
       expect(typeof block.ansi).toBe('string');
       expect(block.text).not.toContain('\u001b[');
     }
-    if (name === '/usage') expect(blocks[0]).toMatchObject({ entries: [{ key: '5-hour', value: '42%' }, { key: '7-day', value: '10%' }] });
+    if (name === '/usage') expect(blocks[0]).toMatchObject({ kind: 'keyValue', entries: expect.arrayContaining([{ key: 'anthropic / oauth', value: 'ok' }]) });
     if (name === '/tokens') {
       expect(blocks.map((block) => block.kind)).toEqual(['keyValue', 'keyValue', 'table', 'keyValue']);
       expect(blocks[2]).toMatchObject({ rows: [['history', '9k'], ['system', '3k']] });
@@ -196,13 +213,13 @@ describe('structured command output uses source data', () => {
   });
 
   it('preserves the empty usage explanation on structured surfaces', async () => {
-    vi.mocked(fetchSubscriptionUsage).mockResolvedValue({ kind: 'ok' } as never);
+    vi.mocked(usageModule.collectUsageSummary).mockResolvedValue({ asOfMs: 180000, providers: [] } as never);
     const { ctx } = context();
     const blocks: OutputBlock[] = [];
     ctx.out.block = (block) => { blocks.push(block); };
     await infoCommands.find((cmd) => cmd.name === '/usage')!.handler(ctx, '');
     expect(blocks[0]).toMatchObject({ kind: 'keyValue', entries: [
-      { key: 'Status', value: 'No usage windows reported.' },
+      { key: 'Status', value: 'No providers found.' },
     ] });
   });
 

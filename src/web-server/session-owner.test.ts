@@ -115,6 +115,50 @@ describe('SessionOwner — closeAll on an empty owner', () => {
 });
 
 /**
+ * closeAll() ordering invariant (#4444):
+ * sessions close BEFORE controls, controls BEFORE MCP disconnect — a closing
+ * session may emit a final tool call that needs the MCP transport alive, and
+ * control.close() must not race ahead of session teardown.
+ *
+ * Uses the private-map back-door to inject fake sessions/controls/mcpManagers
+ * with tracked call-order, then flushes microtasks and asserts the sequence.
+ */
+describe('SessionOwner — closeAll() closes in session → control → MCP order (#4444)', () => {
+  interface CloseAllInternals {
+    sessions: Map<string, { close: () => Promise<void> }>;
+    controls: Map<string, { close: () => Promise<void> }>;
+    mcpManagers: Map<string, { disconnectAll: () => Promise<void> }>;
+  }
+
+  it('calls session.close() before control.close() before mcp.disconnectAll()', async () => {
+    const owner = freshOwner();
+    const internals = owner as unknown as CloseAllInternals;
+    const id = 'close-all-order-1';
+
+    const sessionClose = vi.fn().mockResolvedValue(undefined);
+    const controlClose = vi.fn().mockResolvedValue(undefined);
+    const mcpDisconnect = vi.fn().mockResolvedValue(undefined);
+
+    internals.sessions.set(id, { close: sessionClose });
+    internals.controls.set(id, { close: controlClose });
+    internals.mcpManagers.set(id, { disconnectAll: mcpDisconnect });
+
+    await owner.closeAll();
+
+    expect(sessionClose).toHaveBeenCalledOnce();
+    expect(controlClose).toHaveBeenCalledOnce();
+    expect(mcpDisconnect).toHaveBeenCalledOnce();
+
+    const sessionOrder = sessionClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('sessionClose not called'); })();
+    const controlOrder = controlClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('controlClose not called'); })();
+    const mcpOrder = mcpDisconnect.mock.invocationCallOrder[0] ?? (() => { throw new Error('mcpDisconnect not called'); })();
+
+    expect(sessionOrder).toBeLessThan(controlOrder);
+    expect(controlOrder).toBeLessThan(mcpOrder);
+  });
+});
+
+/**
  * Invariant: `isBusy` must flip true SYNCHRONOUSLY inside `submitPrompt`,
  * before it returns — not from inside the chained `.then()` that actually
  * runs the turn.
@@ -244,6 +288,89 @@ describe('SessionOwner.create — bad AFK_FRAMEWORK_PROMPT_FILE (issue #2388)', 
     await owner.create().catch(() => {});
     expect(owner.owned.size).toBe(0);
     expect(owner.list()).toEqual([]);
+  });
+});
+
+/**
+ * retire() — direct unit test on the real SessionOwner class.
+ *
+ * Covers issue #4394 item 2: lifecycle tests only mock `retire`; this test
+ * exercises the real implementation via the private-map back-door pattern
+ * established above (avoid widening the public surface for test-only access).
+ *
+ * Three behaviours are pinned:
+ *   a) Every owned-session map entry for the id is cleared after retire().
+ *   b) A WebSessionControl present in the controls map has close() called.
+ *   c) retire() on an unknown id does not throw.
+ */
+describe('SessionOwner — retire()', () => {
+  interface RetireInternals {
+    owned: Set<string>;
+    sessions: Map<string, unknown>;
+    info: Map<string, unknown>;
+    controls: Map<string, { close: () => Promise<void> }>;
+    pending: Map<string, number>;
+    turns: Map<string, unknown>;
+    autosavers: Map<string, unknown>;
+    mcpManagers: Map<string, unknown>;
+  }
+
+  function asInternals(owner: SessionOwner): RetireInternals {
+    return owner as unknown as RetireInternals;
+  }
+
+  it('removes the id from every owner map', () => {
+    const owner = freshOwner();
+    const internals = asInternals(owner);
+    const id = 'retire-test-1';
+
+    // Seed all maps with a stub entry for the id.
+    internals.owned.add(id);
+    internals.sessions.set(id, { close: vi.fn().mockResolvedValue(undefined) });
+    internals.info.set(id, {});
+    internals.controls.set(id, { close: vi.fn().mockResolvedValue(undefined) });
+    internals.pending.set(id, 0);
+    internals.turns.set(id, Promise.resolve());
+    internals.autosavers.set(id, {});
+    internals.mcpManagers.set(id, { disconnectAll: vi.fn().mockResolvedValue(undefined) });
+
+    owner.retire(id);
+
+    expect(internals.owned.has(id)).toBe(false);
+    expect(internals.sessions.has(id)).toBe(false);
+    expect(internals.info.has(id)).toBe(false);
+    expect(internals.controls.has(id)).toBe(false);
+    expect(internals.pending.has(id)).toBe(false);
+    expect(internals.turns.has(id)).toBe(false);
+    expect(internals.autosavers.has(id)).toBe(false);
+    expect(internals.mcpManagers.has(id)).toBe(false);
+  });
+
+  it('calls session.close() before control.close() during retire (#4394, #4444)', async () => {
+    const owner = freshOwner();
+    const internals = asInternals(owner);
+    const id = 'retire-test-2';
+
+    const sessionClose = vi.fn().mockResolvedValue(undefined);
+    const controlClose = vi.fn().mockResolvedValue(undefined);
+    internals.sessions.set(id, { close: sessionClose });
+    internals.controls.set(id, { close: controlClose });
+
+    owner.retire(id);
+
+    // close() is fire-and-forget — flush the microtask queue.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sessionClose).toHaveBeenCalledOnce();
+    expect(controlClose).toHaveBeenCalledOnce();
+    // session.close() must be invoked before control.close().
+    const sessionOrder = sessionClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('sessionClose not called'); })();
+    const controlOrder = controlClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('controlClose not called'); })();
+    expect(sessionOrder).toBeLessThan(controlOrder);
+  });
+
+  it('does not throw when called for an unknown id', () => {
+    const owner = freshOwner();
+    expect(() => owner.retire('does-not-exist')).not.toThrow();
   });
 });
 

@@ -350,6 +350,14 @@ export interface HookDecisionPayload {
    * `'credential-path'`, `'network-mutation'`.
    */
   riskCategory?: import('../risk-classifier.js').RiskCategory;
+  /**
+   * Stable rule identifier for the hook that emitted this decision (#3849).
+   * Present when the emitting hook sets a `ruleId` on its result. Absent on
+   * pre-#3849 traces and untagged pass-through events. Example values:
+   * `'readonly-bash.pipe-to-shell'`, `'write-roots.outside'`,
+   * `'bash-restriction.restricted-path'`, `'afk-gate.release-boundary'`.
+   */
+  ruleId?: string;
 }
 
 // ---------------------------------------------------------------------------

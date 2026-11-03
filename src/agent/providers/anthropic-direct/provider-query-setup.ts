@@ -21,9 +21,10 @@ import { setUpQueryClient } from './query/client-setup.js';
 import { wireQueryDispatcher } from './query/dispatcher-wiring.js';
 import { assembleQueryPrompt } from './query/prompt-assembly.js';
 import { dumpIfEnabled } from '../../session/prompt-dump.js';
+import { logStablePartsTokens } from '../shared/prompt-fragment-tokens.js';
 import type { ProviderQueryContext } from './provider-context.js';
 import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
-import { grantsWorkspacePrompt } from '../shared/tool-grant.js';
+import { grantsWorkspacePrompt, grantsToolStrict } from '../shared/tool-grant.js';
 import { deriveCredentialFromStore } from './provider-query-setup.credential.js';
 import { loadClaudeCodeOauthToken } from '../../auth/keychain.js';
 
@@ -189,7 +190,7 @@ export function setUpQuerySession(
     // #4060: the section tells the model to call workspace_publish/query, so it
     // also needs both tools granted, not just a store.
     workspaceEnabled: ctx.workspaceStore !== undefined
-      && grantsWorkspacePrompt((toolName) => ctx.grantsTool?.(toolName) ?? true),
+      && grantsWorkspacePrompt((toolName) => grantsToolStrict(ctx.grantsTool, toolName)),
     // Pass the executor (not just a boolean) so assembleQueryPrompt can call
     // getManifestScope() for plugin/allowlist scoping. The truthiness gate is
     // preserved: manifest is built iff skillExecutor is truthy (same invariant
@@ -204,12 +205,23 @@ export function setUpQuerySession(
     // past the operator tool-toggle filter) and granted by this provider's
     // permissions, the same #4060 grant answer the workspace section uses, so
     // the prompt never lists agent types for a tool the model cannot call.
-    agentTypeListing: toolDefs.some((t) => t.name === 'agent') && (ctx.grantsTool?.('agent') ?? true)
+    //
+    // Contract (parity with openai-compatible/index.ts): FAIL-CLOSED — an
+    // embedder that omits `grantsTool` gets NO listing. The previous `?? true`
+    // fallback was fail-open: it injected the listing whenever `grantsTool` was
+    // absent, which could expose agent names the embedder never intended to grant.
+    // Both providers now use the same rule: listing is emitted iff the tool is
+    // present in the advertised set AND `grantsTool` explicitly returns true.
+    agentTypeListing: toolDefs.some((t) => t.name === 'agent') && grantsToolStrict(ctx.grantsTool, 'agent')
       ? (ctx.subagentExecutor?.describeAgentTypeListing?.() ?? '')
       : '',
   });
 
   dumpQuerySetupPrompt({ args, config, model, maxTokens, toolSystemAppend });
+
+  // Emit per-fragment token estimates to the witness trace (#4449). Read-path
+  // only — the assembled prompt is never mutated by this call.
+  logStablePartsTokens(config.traceWriter, stableSystemPrefix);
 
   // Contract: `credentialFromStore` is true IFF the session token was sourced
   // from the Claude Code OAuth keychain store (not an env var or slot-pinned

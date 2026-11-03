@@ -1959,7 +1959,10 @@ describe('SubagentExecutor', () => {
         input: { jobId: userJob.jobId, reason: 'obsolete' },
       }));
       expect(refused.isError).toBe(true);
-      expect(refused.content).toMatch(/backgrounded by the user/);
+      expect(refused.content).toMatch(/started directly by the user/);
+      expect(refused.content).not.toMatch(/send_message_to_agent/); // not suggested for 'user' provenance
+      expect(refused.content).not.toMatch(/Ctrl\+B/); // not a Ctrl+B job
+      expect(refused.content).toContain(`/bgsub:cancel ${userJob.jobId}`);
       expect(userHandle.cancelMock).not.toHaveBeenCalled();
       expect(registry.get(userJob.jobId)?.status).toBe('running');
 
@@ -1970,6 +1973,45 @@ describe('SubagentExecutor', () => {
       expect(cancelled.isError).toBeUndefined();
       expect(cancelled.content).toContain(modelJob.label);
       expect(modelHandle.cancelMock).toHaveBeenCalledOnce();
+    });
+
+    // B4 — the PR's central behavioral invariant: cancel_background_job must
+    // refuse a user-backgrounded job (provenance: 'user-backgrounded') with isError: true,
+    // leave the job running, and hint that send_message_to_agent still works.
+    it('cancel_background_job refuses a user-backgrounded job: isError, job still running, steer hint included', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const { handle, cancelMock } = bgHandle('user-bg-job');
+      const job = registry.register({
+        handle,
+        prompt: 'user investigation',
+        model: 'sonnet',
+        provenance: 'user-backgrounded',
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.cancelBackgroundJob(makeCall({
+        name: 'cancel_background_job',
+        input: { jobId: job.jobId, reason: 'no longer needed' },
+      }));
+
+      // Must be refused with isError
+      expect(result.isError).toBe(true);
+      // Message must correctly describe the situation (user Ctrl+B'd, not model-dispatched)
+      expect(result.content).toMatch(/Ctrl\+B/);
+      expect(result.content).not.toMatch(/was backgrounded by the user\./); // old wrong phrasing gone
+      // Must hint that send_message_to_agent still works
+      expect(result.content).toMatch(/send_message_to_agent/);
+      // Must tell user how to cancel it themselves
+      expect(result.content).toContain(`/bgsub:cancel ${job.jobId}`);
+      // Job must still be running — cancel was not called
+      expect(cancelMock).not.toHaveBeenCalled();
+      expect(registry.get(job.jobId)?.status).toBe('running');
     });
 
     it('cancel_background_job reports unknown ids with known ids and treats terminal jobs as non-errors', async () => {
@@ -2063,7 +2105,7 @@ describe('SubagentExecutor', () => {
       expect(result.content).toContain(job.jobId);
     });
 
-    it('send_message_to_agent: refuses to steer user-owned jobs', async () => {
+    it('send_message_to_agent: steers user-backgrounded (Ctrl+B) jobs', async () => {
       const registry = new BackgroundAgentRegistry({});
       const steerMock = vi.fn();
       const handle = {
@@ -2074,7 +2116,8 @@ describe('SubagentExecutor', () => {
         handle,
         prompt: 'user work',
         model: 'sonnet',
-        provenance: 'user',
+        provenance: 'user-backgrounded',
+        parentSessionId: 'parent-session-id',
       });
       const bgExecutor = new SubagentExecutor({
         subagentManager: mockSubagentMgr as any,
@@ -2088,9 +2131,9 @@ describe('SubagentExecutor', () => {
         name: 'send_message_to_agent',
         input: { jobId: job.jobId, message: 'change plan' },
       }));
-      expect(result.isError).toBe(true);
-      expect(result.content).toMatch(/backgrounded by the user/);
-      expect(steerMock).not.toHaveBeenCalled();
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toMatch(/queued/i);
+      expect(steerMock).toHaveBeenCalledWith('change plan');
     });
 
     it('send_message_to_agent: returns non-error for terminal jobs (already done)', async () => {
@@ -2184,7 +2227,7 @@ describe('SubagentExecutor', () => {
       expect(steerMock).not.toHaveBeenCalled();
     });
 
-    it('send_message_to_agent: known-ID enumeration filters out user-owned jobs', async () => {
+    it('send_message_to_agent: known-ID enumeration includes user-backgrounded jobs', async () => {
       const registry = new BackgroundAgentRegistry({});
       const modelHandle = bgHandle('model-job');
       const userHandle = bgHandle('user-job');
@@ -2195,9 +2238,17 @@ describe('SubagentExecutor', () => {
         provenance: 'model',
         parentSessionId: 'parent-session-id',
       });
-      registry.register({
+      const userJob = registry.register({
         handle: userHandle.handle,
         prompt: 'user work',
+        model: 'sonnet',
+        provenance: 'user-backgrounded',
+        parentSessionId: 'parent-session-id',
+      });
+      const trulyUserHandle = bgHandle('truly-user-job');
+      const trulyUserJob = registry.register({
+        handle: trulyUserHandle.handle,
+        prompt: 'truly user initiated',
         model: 'sonnet',
         provenance: 'user',
         parentSessionId: 'parent-session-id',
@@ -2215,9 +2266,11 @@ describe('SubagentExecutor', () => {
         input: { jobId: 'bg-nonexistent', message: 'redirect' },
       }));
       expect(result.isError).toBe(true);
-      // Should list model-owned job but not user-owned job
+      // Model-owned and user-backgrounded jobs should appear; truly user-initiated should not
       expect(result.content).toContain(modelJob.jobId);
-      expect(result.content).not.toContain('user-job');
+      expect(result.content).toContain(userJob.jobId);
+      // 'user'-provenance jobs must be excluded from the enumeration hint
+      expect(result.content).not.toContain(trulyUserJob.jobId);
     });
 
     it('send_message_to_agent: returns isError when registry is unavailable', async () => {
@@ -2480,7 +2533,7 @@ describe('SubagentExecutor', () => {
 
       // Observable as a running registry job; the trigger is cleared.
       expect(registry.get(payload.jobId)?.status).toBe('running');
-      expect(registry.get(payload.jobId)?.provenance).toBe('user');
+      expect(registry.get(payload.jobId)?.provenance).toBe('user-backgrounded');
       expect(exec.hasPromotableForeground()).toBe(false);
 
       // Resolving the in-flight run drives the adopted job to terminal.
@@ -2652,7 +2705,7 @@ describe('SubagentExecutor', () => {
       const result = await executor.execute(makeCall());
 
       expect(result.isError).toBeUndefined();
-      expect(result.content).toBe(`subagent findings\n\n${nudge}`);
+      expect(result.content).toBe(`subagent findings\n\n---\n\n${nudge}`);
     });
 
     it('calls teardown with deferInjectContextToCaller: true (suppresses queue push)', async () => {
@@ -2692,7 +2745,7 @@ describe('SubagentExecutor', () => {
 
       const result = await exec.execute(makeCall());
 
-      expect(result.content).toBe(`body\n\n${nudge}`);
+      expect(result.content).toBe(`body\n\n---\n\n${nudge}`);
       // The mock handle does not fire the real SubagentStop → queue path, but
       // the executor must never itself push to either channel for this path.
       expect(queueSpy).not.toHaveBeenCalled();
@@ -2742,7 +2795,7 @@ describe('SubagentExecutor', () => {
       // The JSON payload is followed by the appended nudge, separated by \n\n.
       // The JSON prefix must still parse on its own.
       const [jsonPart, ...rest] = result.content.split('\n\n');
-      expect(rest.join('\n\n')).toBe(nudge);
+      expect(rest.join('\n\n')).toBe(`---\n\n${nudge}`);
       const payload = JSON.parse(jsonPart!);
       expect(payload.status).toBe('failed');
       expect(payload.error).toBe('kaboom');
@@ -2867,6 +2920,90 @@ describe('SubagentExecutor', () => {
       b.resolveRun({ id: 'sub-b', status: 'cancelled' as SubagentResult['status'], error: new Error('x') } as SubagentResult);
       await Promise.allSettled([p1, p2]);
       expect(executor.hasActiveForeground()).toBe(false);
+    });
+  });
+
+  // History: #4438 added getReadScopeInputs() so executeOnce could derive
+  // childInheritedReadRoots. #4472 found no executor-level test for the
+  // parentCwd fallback path and documents the pre-existing unwired-manager
+  // collapse (finding #2 in execute-once.ts). These tests capture the nested
+  // child SubagentManager built by wireChildNesting (same technique as the
+  // cwd/traceWriter chain tests above) and call getReadScopeInputs() on it.
+  describe('executeOnce read-scope: root-manager parentCwd fallback (#4472)', () => {
+    /** Build an executor with a childProviderFactory that captures the child
+     *  executor's ctx.subagentManager for inspection after execute() resolves. */
+    function makeReadScopeExecutor(inputs: {
+      parentReadRoots: string[] | undefined;
+      parentCwd: string | undefined;
+    }): {
+      exec: SubagentExecutor;
+      getChildManager: () => SubagentExecutorContext['subagentManager'] | undefined;
+    } {
+      let childCtx: SubagentExecutorContext | undefined;
+      const mgr = mockManager();
+      (mgr as any).getReadScopeInputs = () => inputs;
+      const factory = vi.fn().mockImplementation(({ childExecutor }: { childExecutor: SubagentExecutor }) => {
+        childCtx = (childExecutor as any).ctx as SubagentExecutorContext;
+        return { name: 'p', query: vi.fn() };
+      });
+      const exec = new SubagentExecutor({
+        subagentManager: mgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        childProviderFactory: factory,
+        defaultSubagentModel: 'sonnet',
+        depth: 0,
+        maxDepth: DEFAULT_MAX_NESTING_DEPTH,
+      });
+      return { exec, getChildManager: () => childCtx?.subagentManager };
+    }
+
+    it('parentCwd fallback: child SubagentManager receives [parentCwd] as parentReadRoots when parentReadRoots is undefined', async () => {
+      // executeOnce computes childInheritedReadRoots = ['/repo'] and passes it
+      // into wireChildNesting → buildNestedChildManager → new SubagentManager
+      // ({ parentReadRoots: ['/repo'] }). The child executor ctx captures that
+      // manager, so getReadScopeInputs() on it returns parentReadRoots = ['/repo'].
+      const { exec, getChildManager } = makeReadScopeExecutor({
+        parentReadRoots: undefined,
+        parentCwd: '/repo',
+      });
+
+      const result = await exec.execute(makeCall({ input: { prompt: 'test' } }));
+      expect(result.isError).toBeUndefined();
+
+      const childReadScope = getChildManager()?.getReadScopeInputs();
+      expect(childReadScope?.parentReadRoots).toEqual(['/repo']);
+    });
+
+    it('explicit parentReadRoots: child SubagentManager receives them verbatim', async () => {
+      // When getReadScopeInputs() returns explicit parentReadRoots, executeOnce
+      // forwards them unchanged (does not substitute or wrap with parentCwd).
+      const roots = ['/repo', '/shared/data'];
+      const { exec, getChildManager } = makeReadScopeExecutor({
+        parentReadRoots: roots,
+        parentCwd: '/repo',
+      });
+
+      await exec.execute(makeCall({ input: { prompt: 'test' } }));
+
+      const childReadScope = getChildManager()?.getReadScopeInputs();
+      expect(childReadScope?.parentReadRoots).toEqual(roots);
+    });
+
+    it('both undefined: child SubagentManager gets no parentReadRoots (cwd-derivation governs)', async () => {
+      // Both undefined collapses "unwired manager" and "known-unconfined parent"
+      // (#4438 finding #2, documented in execute-once.ts). No
+      // childInheritedReadRoots is seeded, so the child manager's own
+      // cwd-derivation applies and parentReadRoots stays undefined.
+      const { exec, getChildManager } = makeReadScopeExecutor({
+        parentReadRoots: undefined,
+        parentCwd: undefined,
+      });
+
+      await exec.execute(makeCall({ input: { prompt: 'test' } }));
+
+      const childReadScope = getChildManager()?.getReadScopeInputs();
+      expect(childReadScope?.parentReadRoots).toBeUndefined();
     });
   });
 });

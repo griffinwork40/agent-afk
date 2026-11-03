@@ -68,6 +68,7 @@ vi.mock('../../agent/memory/index.js', () => ({
   injectHotMemory: (c: unknown) => c,
   injectGoalPrompt: (config: unknown) => config,
   MEMORY_TOOL_NAMES: [],
+  memoryToolSchemas: [],
 }));
 
 vi.mock('../../agent/subagent.js', () => {

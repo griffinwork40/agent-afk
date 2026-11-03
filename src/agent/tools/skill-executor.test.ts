@@ -1637,8 +1637,8 @@ describe('SkillExecutor', () => {
       const result = await executor.execute(makeCall({ name: 'inject-success' }));
 
       expect(result.isError).toBeUndefined();
-      expect(result.content).toBe(`skill findings\n\n${nudge}`);
-      expect(result.content.endsWith(`\n\n${nudge}`)).toBe(true);
+      expect(result.content).toBe(`skill findings\n\n---\n\n${nudge}`);
+      expect(result.content.endsWith(`\n\n---\n\n${nudge}`)).toBe(true);
       // Delivered exactly once, via the caller-deferred channel.
       expect(teardown).toHaveBeenCalledWith({ deferInjectContextToCaller: true });
       expect(getLastStopInjectContext).toHaveBeenCalled();
@@ -1690,7 +1690,7 @@ describe('SkillExecutor', () => {
       const result = await executor.execute(makeCall({ name: 'inject-failed' }));
 
       expect(result.isError).toBe(true);
-      expect(result.content).toBe(`subagent boom\n\n${nudge}`);
+      expect(result.content).toBe(`subagent boom\n\n---\n\n${nudge}`);
     });
 
     // CATCH PATH (runToResult throws, toolResult stays undefined): the note is

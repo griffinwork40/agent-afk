@@ -38,6 +38,14 @@ export async function renderStartupDashboard(
 
   const lines: string[] = [];
 
+  // -- Fetch both data sources in parallel ----------------------------------
+  // readLivePresenceFiles is async; loadSchedules is sync but wrapped so both
+  // settle together rather than sequentially.
+  const [presenceResult, schedulesResult] = await Promise.allSettled([
+    readLivePresenceFiles(),
+    Promise.resolve().then(() => loadSchedules()),
+  ]);
+
   // -- Line 1: local state (stale worktrees + live peers) ------------------
   const localItems: string[] = [];
 
@@ -46,15 +54,13 @@ export async function renderStartupDashboard(
     localItems.push(`${stale} stale worktree${stale === 1 ? '' : 's'}`);
   }
 
-  try {
-    const presence = await readLivePresenceFiles();
-    const peers = presence.filter((r) => r.surface === 'cli');
+  if (presenceResult.status === 'fulfilled') {
+    const peers = presenceResult.value.filter((r) => r.surface === 'cli');
     if (peers.length > 0) {
       localItems.push(`${peers.length} peer${peers.length === 1 ? '' : 's'} live`);
     }
-  } catch {
-    // Presence read failed — omit silently. Bootstrap must not be blocked.
   }
+  // Presence read failed — omit silently. Bootstrap must not be blocked.
 
   if (localItems.length > 0) {
     lines.push(palette.dim(`  ◈ ${localItems.join(' · ')}`));
@@ -63,17 +69,15 @@ export async function renderStartupDashboard(
   // -- Line 2: daemon state (scheduled tasks) -------------------------------
   const daemonItems: string[] = [];
 
-  try {
-    const schedules = loadSchedules();
-    const enabled = schedules.filter((s) => s.enabled);
+  if (schedulesResult.status === 'fulfilled') {
+    const enabled = schedulesResult.value.filter((s) => s.enabled);
     if (enabled.length > 0) {
       daemonItems.push(
         `${enabled.length} scheduled task${enabled.length === 1 ? '' : 's'}`,
       );
     }
-  } catch {
-    // Schedule read failed — omit silently.
   }
+  // Schedule read failed — omit silently.
 
   if (daemonItems.length > 0) {
     lines.push(palette.dim(`  ◈ ${daemonItems.join(' · ')}`));

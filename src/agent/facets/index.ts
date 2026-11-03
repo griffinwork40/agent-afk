@@ -48,3 +48,5 @@ export {
 } from './store.js';
 
 export { createFacetSessionEndHook } from './session-end-hook.js';
+
+export { patchFacetDecisions } from './yield-probe.js';

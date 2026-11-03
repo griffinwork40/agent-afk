@@ -32,6 +32,6 @@ export function appendInjectContext(
   injectContext: string | undefined,
 ): void {
   if (toolResult !== undefined && injectContext !== undefined && injectContext.length > 0) {
-    toolResult.content = `${toolResult.content}\n\n${injectContext}`;
+    toolResult.content = `${toolResult.content}\n\n---\n\n${injectContext}`;
   }
 }

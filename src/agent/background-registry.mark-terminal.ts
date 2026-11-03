@@ -34,7 +34,7 @@ export interface MarkTerminalJob {
   startedAt: number;
   endedAt?: number;
   result?: SubagentResult;
-  provenance: 'user' | 'model';
+  provenance: 'user' | 'model' | 'user-backgrounded';
   parentSessionId?: string;
   cancelSource?: 'explicit' | 'cascade';
   modelCancelReason?: string;

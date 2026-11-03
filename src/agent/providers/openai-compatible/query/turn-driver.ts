@@ -57,6 +57,15 @@ import { emitQueuedUserMessage, emitSessionPhase } from '../../../trace/emit.js'
 import { emitTurnTerminal } from './turn-driver.emit-terminal.js';
 import { windDownFinalText } from './wind-down-final.js';
 
+/**
+ * Marker text emitted as the final assistant message when context pressure
+ * forces an incomplete wind-down (Fix #3963-B).
+ * Exported so tests can import the production definition instead of duplicating
+ * the literal.
+ */
+export const INCOMPLETE_MARKER =
+  'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
+
 /** Full context the inner turn driver needs from the owning query. */
 export interface TurnDriverContext extends IterationContext, FinishTurnContext {
   /** Abort coordinator — shared with the outer turn loop. */
@@ -463,7 +472,7 @@ export async function* runTurnInner(
           // Fix #3963 (B): always overwrite finalAssistantText with the incomplete
           // marker — the ||= would silently pass a stale planning sentence as the
           // answer when an earlier round had text.
-          finalAssistantText = 'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
+          finalAssistantText = INCOMPLETE_MARKER;
           break;
         }
         continue;

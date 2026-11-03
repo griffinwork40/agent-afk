@@ -209,14 +209,20 @@ describe('isTerminalStopReason — buffered-partial branch stale-reason gate (#3
   );
 
   // Truncation sentinels: a prior round ended at the output-token cap. If the
-  // NEXT round then aborts, we could argue either way, but consistency with the
-  // existing zero-output branch (which unconditionally overwrites) wins: an
-  // output-token truncation in a previous round does not mean the CURRENT abort
-  // is clean. We include them here to document the decision explicitly.
+  // NEXT round then aborts, the truncation reason from the completed prior round
+  // is more informative than STREAM_INCOMPLETE, so we preserve it. Uses
+  // isTruncationStopReason as the single source of truth (item 5 / #4400).
   it.each(['max_tokens', 'length', 'max_output_tokens'])(
     'is true for truncation sentinel %s (prior round capped; preserved over STREAM_INCOMPLETE)',
     (r) => { expect(isTerminalStopReason(r)).toBe(true); },
   );
+
+  // `interrupted` is stamped by stampInterrupted() on ESC (abort reason
+  // 'interrupted'). The user explicitly stopped the run, so preserving that
+  // intent over STREAM_INCOMPLETE is correct — it is a terminal reason (#4400).
+  it('is true for interrupted (ESC soft-stop)', () => {
+    expect(isTerminalStopReason('interrupted')).toBe(true);
+  });
 
   // Tool stops must never be preserved — they are inter-round, not terminal.
   it.each(['tool_use', 'tool_calls'])(

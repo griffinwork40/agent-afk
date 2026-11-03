@@ -444,10 +444,6 @@ export class AnthropicDirectQuery implements ProviderQuery {
    * fresh `this.retry.client` read at the start of every new turn. The next
    * user message therefore sees the swapped client automatically.
    */
-  async reauth(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
-    return this.retry.forceClientRefresh();
-  }
-
   async rewindFiles(
     userMessageId: string,
     options?: { dryRun?: boolean },

@@ -1,11 +1,10 @@
 /**
  * Turn-start credential catch-up in {@link RetryLayer.turnWithRetries}.
  *
- * Operator question 2026-10-21: "why is /reauth not automatic?" An account
- * switch (`claude login` in another terminal) with NO error left the running
- * session on the old account until a 401, a usage-limit 429, or a manual
- * `/reauth`, and Telegram / the web UI have no `/reauth` at all. The layer
- * now compares the store with the live client token at the top of every turn.
+ * Account switches (`claude login` in another terminal) with NO error left the
+ * running session on the old account until a 401 or a usage-limit 429, and
+ * Telegram / the web UI had no manual refresh command at all. The layer now
+ * compares the store with the live client token at the top of every turn.
  *
  * Coverage:
  *  - store moved between turns → client rebuilt BEFORE the turn runs, and
@@ -152,6 +151,92 @@ describe('RetryLayer.turnWithRetries — turn-start credential catch-up', () => 
   });
 });
 
+describe('RetryLayer — credentialFromStore: true + env var set (defence-in-depth)', () => {
+  it('never swaps when credentialFromStore is true but ANTHROPIC_API_KEY pins the credential', async () => {
+    // Defence-in-depth: even when credentialFromStore is explicitly true, the
+    // env-var guard in storeAheadOfClient must still block the swap. This path
+    // covers the case where the flag was set optimistically but an env var
+    // (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN) is also present — the env
+    // var takes precedence so the session must not be silently moved.
+    vi.stubEnv('ANTHROPIC_API_KEY', 'env-pinned-key');
+
+    loadClaudeCodeOauthTokenMock.mockReturnValueOnce('store-tok'); // constructor snapshot
+    const refresher = vi.fn(async () => client('client-new'));
+    const layer = new RetryLayer({
+      client: client('client-store-tok'),
+      authMode: 'oauth',
+      initSessionId: 's1',
+      autoResumeOnUsageLimit: true,
+      tokenRefresher: refresher,
+      credentialFromStore: true,
+    });
+    // Store has moved to a different token — but env var pins the credential.
+    loadClaudeCodeOauthTokenMock.mockReturnValue('store-tok-new');
+
+    await drain(layer.turnWithRetries(makeInput(layer), () => false));
+
+    expect(refresher).not.toHaveBeenCalled();
+    expect(emitSessionPhaseMock).not.toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ phase: 'credential_swap' }),
+    );
+  });
+
+  it('never swaps when credentialFromStore is true but CLAUDE_CODE_OAUTH_TOKEN pins the credential', async () => {
+    // Parallel case for CLAUDE_CODE_OAUTH_TOKEN: the env-var guard in
+    // storeAheadOfClient covers both vars, so the same block applies when
+    // CLAUDE_CODE_OAUTH_TOKEN is set instead of ANTHROPIC_API_KEY.
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'env-oauth-pinned');
+
+    loadClaudeCodeOauthTokenMock.mockReturnValueOnce('store-tok'); // constructor snapshot
+    const refresher = vi.fn(async () => client('client-new'));
+    const layer = new RetryLayer({
+      client: client('client-store-tok'),
+      authMode: 'oauth',
+      initSessionId: 's1',
+      autoResumeOnUsageLimit: true,
+      tokenRefresher: refresher,
+      credentialFromStore: true,
+    });
+    // Store has moved to a different token — but env var pins the credential.
+    loadClaudeCodeOauthTokenMock.mockReturnValue('store-tok-new');
+
+    await drain(layer.turnWithRetries(makeInput(layer), () => false));
+
+    expect(refresher).not.toHaveBeenCalled();
+    expect(emitSessionPhaseMock).not.toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ phase: 'credential_swap' }),
+    );
+  });
+
+
+  it('swaps when credentialFromStore is true and no env var is set', async () => {
+    // Positive path: credentialFromStore true, no env-var pin, store moved —
+    // the swap must proceed (mirrors the base turn-start test but with the
+    // explicit provenance flag set).
+    loadClaudeCodeOauthTokenMock.mockReturnValueOnce('tok-a'); // constructor snapshot
+    const refresher = vi.fn(async () => client(`client-${loadClaudeCodeOauthTokenMock() ?? 'none'}`));
+    const layer = new RetryLayer({
+      client: client('client-tok-a'),
+      authMode: 'oauth',
+      initSessionId: 's1',
+      autoResumeOnUsageLimit: true,
+      tokenRefresher: refresher,
+      credentialFromStore: true,
+    });
+    loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b'); // store moved
+
+    await drain(layer.turnWithRetries(makeInput(layer), () => false));
+
+    expect(refresher).toHaveBeenCalledTimes(1);
+    expect(emitSessionPhaseMock).toHaveBeenCalledWith(undefined, expect.objectContaining({
+      phase: 'credential_swap',
+      metadata: expect.objectContaining({ source: 'turn-start' }),
+    }));
+  });
+});
+
 describe('RetryLayer — credentialFromStore: false (explicit non-store credential)', () => {
   it('never swaps a session whose credential was NOT sourced from the store', async () => {
     // Simulate a slot-pinned OAuth key (AFK_MODEL_<TIER>_API_KEY set to an
@@ -173,7 +258,7 @@ describe('RetryLayer — credentialFromStore: false (explicit non-store credenti
 
     expect(refresher).not.toHaveBeenCalled();
     expect(emitSessionPhaseMock).not.toHaveBeenCalledWith(
-      expect.anything(),
+      undefined,
       expect.objectContaining({ phase: 'credential_swap' }),
     );
   });

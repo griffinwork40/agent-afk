@@ -13,7 +13,7 @@ vi.mock('../dag-subagent.js', () => ({ runSubagentDAG: runDag }));
 vi.mock('../routing-telemetry.js', () => ({ appendRoutingDecision: vi.fn(async () => {}) }));
 vi.mock('./usage-notice.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./usage-notice.js')>(),
-  evaluateDispatchUsageForModel: vi.fn(async () => undefined),
+  evaluateDispatchUsageForModel: vi.fn(async () => ({ notice: undefined, blocked: false })),
 }));
 vi.mock('./compose-executor.node-build.js', () => ({
   buildComposeDagNode: vi.fn(async () => ({ id: 'a', prompt: 'go', config: { model: 'sonnet' } })),

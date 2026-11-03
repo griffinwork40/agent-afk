@@ -117,6 +117,18 @@ Hint: When you need the full detail view for one specific background job by its 
 
 Flags: None
 
+### `/branches`
+
+List and switch between rewind branches
+
+Usage: `/branches [switch <id>]`
+
+Aliases: None
+
+Hint: When you rewound to an earlier prompt, /branches shows all saved tips of this conversation tree and lets you switch back. Each /rewind saves the abandoned path as a named branch.
+
+Flags: None
+
 ### `/bug`
 
 Report a bug (prefilled GitHub link, or --file to file with gh)
@@ -537,18 +549,6 @@ Hint: Think through an approach without changing anything — write tools and st
 
 Flags: None
 
-### `/reauth`
-
-Re-read keychain credentials and swap the running session's client
-
-Usage: `/reauth [--check]`
-
-Aliases: None
-
-Hint: Force the running session to pick up a new keychain token (e.g. after `claude /login` in another terminal)
-
-Flags: None
-
 ### `/reload-plugins`
 
 Reload plugin skills from disk and refresh the slash registry
@@ -779,13 +779,13 @@ Flags: None
 
 ### `/usage`
 
-Show Claude subscription usage (5h / 7d windows)
+Show subscription usage per provider (Claude, Codex) — 5h / 7d windows
 
 Usage: `/usage`
 
 Aliases: None
 
-Hint: When you want to know how close you are to hitting your Claude subscription's rolling usage limits — distinct from /cost, which is session-local spend.
+Hint: When you want to know how close you are to hitting your subscription's rolling usage limits — distinct from /cost, which is session-local spend.
 
 Flags: None
 
@@ -812,6 +812,18 @@ Aliases: None
 Hint: Use when you want to safely preview what would happen if you changed your AFK.md, a memory fact, a model, or any other setting — before committing to it.
 
 Flags: `--append`, `--append-project`, `--file`, `--hot`, `--memory-add`, `--memory-category`, `--memory-remove`, `--disable-skill`, `--disable-plugin`, `--model`, `--effort`, `--env`, `--spec`, `--agent-model`, `--analyst-model`, `--verify`, `--quick`, `--turns`, `--samples`, `--max-usd`, `--judge`, `--concurrency`, `--max-turns`, `--timeout`, `--keep-sandboxes`, `--predict`, `--probes`, `--max-predictions`, `--no-baseline-sample`, `--yes`, `--force`, `--json`
+
+### `/where`
+
+Show workspace, session, and introspection surface at a glance
+
+Usage: `/where`
+
+Aliases: None
+
+Hint: When you feel lost — shows branch, cwd, session identity, and pointers to deeper inspection tools.
+
+Flags: None
 
 ### `/worktree`
 
