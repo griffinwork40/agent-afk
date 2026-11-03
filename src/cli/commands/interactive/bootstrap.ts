@@ -162,7 +162,7 @@ export async function bootstrapSession(
 
   await activatePluginEntrypoints(hookRegistry);
 
-  const session = buildAgentSession(sharedDeps);
+  const session = buildAgentSession(sharedDeps, sharedMemoryStore);
   // Populate sessionRef (declared above deferredParent so the proxy works).
   sessionRef.current = session;
 

@@ -295,6 +295,10 @@ export class MemoryStore {
       conditions.push('f.created_at >= ?');
       params.push(opts.since);
     }
+    if (opts?.source_surface) {
+      conditions.push('f.source_surface = ?');
+      params.push(opts.source_surface);
+    }
     conditions.push('f.superseded_by IS NULL');
 
     const sql = `
