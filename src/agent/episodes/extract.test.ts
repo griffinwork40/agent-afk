@@ -239,4 +239,58 @@ describe('extractEpisodeInput', () => {
 
     expect(result.firstUserMessage).toBe('');
   });
+
+  it('extracts source field from session sidecar', async () => {
+    const sessionId = 'test-extract-source';
+    writeJournal(sessionId, [
+      appendRecord(0, 'user', [textBlock('Run the build')]),
+      appendRecord(1, 'assistant', [textBlock('Done.')]),
+    ]);
+    // Write a sidecar with source field
+    const sessionsDir = join(tmpRoot, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, `${sessionId}.json`),
+      JSON.stringify({ sessionId, source: 'daemon' }),
+      'utf8',
+    );
+
+    const { extractEpisodeInput } = await import('./extract.js');
+    const result = extractEpisodeInput(sessionId);
+
+    expect(result.source).toBe('daemon');
+  });
+
+  it('returns undefined source when sidecar has no source field', async () => {
+    const sessionId = 'test-extract-no-source';
+    writeJournal(sessionId, [
+      appendRecord(0, 'user', [textBlock('Hello')]),
+      appendRecord(1, 'assistant', [textBlock('Hi.')]),
+    ]);
+    const sessionsDir = join(tmpRoot, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, `${sessionId}.json`),
+      JSON.stringify({ sessionId }),
+      'utf8',
+    );
+
+    const { extractEpisodeInput } = await import('./extract.js');
+    const result = extractEpisodeInput(sessionId);
+
+    expect(result.source).toBeUndefined();
+  });
+
+  it('returns undefined source when sidecar does not exist', async () => {
+    const sessionId = 'test-extract-missing-sidecar';
+    writeJournal(sessionId, [
+      appendRecord(0, 'user', [textBlock('Hello')]),
+      appendRecord(1, 'assistant', [textBlock('Hi.')]),
+    ]);
+
+    const { extractEpisodeInput } = await import('./extract.js');
+    const result = extractEpisodeInput(sessionId);
+
+    expect(result.source).toBeUndefined();
+  });
 });

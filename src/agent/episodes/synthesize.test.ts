@@ -228,3 +228,70 @@ describe('synthesizeEpisode — no credential', () => {
     expect(result.goal).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Canary logging — split canaries for parse failure vs empty goal
+// ---------------------------------------------------------------------------
+
+describe('synthesizeEpisode — canary logging', () => {
+  it('emits parse-failure canary from parseLLMResponse on malformed JSON', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.doMock('../../agent/auth/credential-resolver.js', () => ({
+      loadAnthropicCredential: () => 'fake-token',
+    }));
+    vi.doMock('../../agent/providers/whatif-api.js', () => ({
+      oneShotCompletion: async () => 'not json {{{',
+    }));
+
+    const { synthesizeEpisode } = await import('./synthesize.js');
+    await synthesizeEpisode(makeInput());
+
+    // parseLLMResponse emits its own canary for JSON parse failure
+    const parseCanary = spy.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('parseLLMResponse failed'),
+    );
+    expect(parseCanary).toBeTruthy();
+
+    // The outer canary should say "unparseable", not "goal empty"
+    const outerCanary = spy.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('unparseable'),
+    );
+    expect(outerCanary).toBeTruthy();
+
+    // Should NOT emit the "goal empty" canary
+    const goalCanary = spy.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('goal empty'),
+    );
+    expect(goalCanary).toBeFalsy();
+
+    spy.mockRestore();
+  });
+
+  it('emits empty-goal canary (not parse-failure) when JSON is valid but goal is empty', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const noGoal = JSON.stringify({ approach: 'something', outcome: 'done' });
+    vi.doMock('../../agent/auth/credential-resolver.js', () => ({
+      loadAnthropicCredential: () => 'fake-token',
+    }));
+    vi.doMock('../../agent/providers/whatif-api.js', () => ({
+      oneShotCompletion: async () => noGoal,
+    }));
+
+    const { synthesizeEpisode } = await import('./synthesize.js');
+    await synthesizeEpisode(makeInput());
+
+    // Should NOT emit the parseLLMResponse failure canary (JSON was valid)
+    const parseCanary = spy.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('parseLLMResponse failed'),
+    );
+    expect(parseCanary).toBeFalsy();
+
+    // Should emit the "goal empty" canary
+    const goalCanary = spy.mock.calls.find(
+      (c) => typeof c[0] === 'string' && c[0].includes('goal empty'),
+    );
+    expect(goalCanary).toBeTruthy();
+
+    spy.mockRestore();
+  });
+});

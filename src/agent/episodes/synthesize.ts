@@ -139,8 +139,13 @@ export async function synthesizeEpisode(input: EpisodeInput): Promise<EpisodeRec
     const parsed = parseLLMResponse(raw, input.sessionId);
     if (parsed && parsed.goal) return parsed;
 
-    // Canary: LLM returned output but it was unparseable or missing goal field
-    console.error(`[episode-synthesis] LLM output unparseable or empty goal for ${input.sessionId}`);
+    // Canary: LLM returned parseable output but goal field was empty/missing.
+    // Distinct from the parseLLMResponse canary which covers JSON parse failures.
+    if (parsed && !parsed.goal) {
+      console.error(`[episode-synthesis] LLM output parsed but goal empty for ${input.sessionId}`);
+    } else {
+      console.error(`[episode-synthesis] LLM output unparseable for ${input.sessionId}`);
+    }
     return deterministicFallback(input);
   } catch {
     return deterministicFallback(input);

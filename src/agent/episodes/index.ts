@@ -22,7 +22,10 @@ import type { EpisodeRecord } from './types.js';
  * message and no tool usage) to avoid polluting the fact archive with
  * "Unknown goal" noise from empty or trivial sessions.
  */
-export async function synthesizeAndWriteEpisode(sessionId: string): Promise<EpisodeRecord | null> {
+export async function synthesizeAndWriteEpisode(
+  sessionId: string,
+  options?: { force?: boolean },
+): Promise<EpisodeRecord | null> {
   const input = extractEpisodeInput(sessionId);
 
   // Substance gate: skip sessions with no real user content and no tool usage
@@ -34,7 +37,7 @@ export async function synthesizeAndWriteEpisode(sessionId: string): Promise<Epis
   // where the "goal" is the scheduler prompt, not a user intent. The review/brief
   // output is already posted to its destination (GitHub, Telegram). Skip them;
   // manual `afk episode synthesize <id>` still works for one-offs.
-  if (input.source === 'daemon') {
+  if (input.source === 'daemon' && !options?.force) {
     return null;
   }
 
