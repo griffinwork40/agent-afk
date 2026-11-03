@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EffectStore } from './store.js';
@@ -13,7 +14,7 @@ beforeEach(async () => {
   id = store.writePending({ idempotencyKey: 'effect', operationType: 'gh_pr_create', args: {} }).id;
   await store.updateStatus({ id, status: 'unknown' });
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmSyncRetry(dir));
 
 it.each(['negative', 'throw', 'missing-evidence'])('preserves unknown on %s read', async (mode) => {
   const record = await store.reconcile(id, async () => {

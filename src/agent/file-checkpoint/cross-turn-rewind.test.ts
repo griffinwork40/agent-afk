@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import os from 'node:os';
 import path from 'node:path';
 import { beginCheckpointTurn, endCheckpointTurn } from './turn-lifecycle.js';
@@ -19,7 +20,7 @@ beforeEach(() => {
   stateDir = path.join(tmp, 'state');
   mkdirSync(stateDir, { recursive: true });
 });
-afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+afterEach(() => { rmSyncRetry(tmp); });
 
 const deps = () => ({ sessionId: SESSION, enableFileCheckpointing: true, _stateDir: stateDir });
 const file = (name: string) => path.join(tmp, name);

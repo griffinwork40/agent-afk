@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
@@ -29,7 +30,7 @@ beforeEach(() => {
   proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), pid: undefined }) as unknown as ChildProcess;
   vi.mocked(spawnBashProcess).mockReturnValue(proc);
 });
-afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); rmSyncRetry(root); });
 const outcome = () => readTurnLog('session', root).filter((entry) => entry.kind === 'bash');
 async function runClose(code: number) {
   vi.mocked(spawnBashProcess).mockImplementation(() => { setTimeout(() => proc.emit('close', code), 0); return proc; });

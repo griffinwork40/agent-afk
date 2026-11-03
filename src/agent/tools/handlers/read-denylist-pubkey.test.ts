@@ -10,7 +10,8 @@
  * pure gate functions.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -95,7 +96,7 @@ describe('isSshPubKeyChild — symlink safety is the caller-resolved path', () =
     writeFileSync(join(root, 'outside.pub'), 'x');
     symlinkSync(join(root, 'outside.pub'), join(root, '.ssh', 'escape.pub'));
   });
-  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  afterEach(() => rmSyncRetry(root));
 
   it('a real .pub child qualifies', () => {
     const dir = join(root, '.ssh');
