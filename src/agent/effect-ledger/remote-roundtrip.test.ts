@@ -1,6 +1,7 @@
 // Real dispatcher + HTTP handler, injected local fetch/DNS; no network or model.
 import { afterEach, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionToolDispatcher } from '../tools/dispatcher.js';
@@ -11,7 +12,7 @@ import { createEffectLedgerHooks } from './hook.js';
 import { EffectStore } from './store.js';
 
 const dirs: string[] = [];
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { for (const dir of dirs.splice(0)) rmSyncRetry(dir); });
 
 it('lost response is not auto-retried; explicit retry forwards the same key and applies only once', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'effect-remote-'));

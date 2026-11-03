@@ -5,7 +5,8 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { planGitRead, confinePathspec, GIT_READ_SUBCOMMANDS } from '../git-read.policy.js';
@@ -221,7 +222,7 @@ describe('git_read handler (live repo)', () => {
     git('commit', '-q', '-m', 'init');
     git('tag', 'v1.0.0');
   });
-  afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
+  afterAll(() => { rmSyncRetry(repo); });
 
   it('runs log, grep and tag listing', async () => {
     const h = createGitReadHandler(repo);
@@ -562,7 +563,7 @@ describe('git_read handler (#4058 live repo)', () => {
     git('commit', '-q', '-m', 'second');
     git('tag', 'v0.1.0');
   });
-  afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
+  afterAll(() => { rmSyncRetry(repo); });
 
   it('rev-list --count HEAD returns a number', async () => {
     const h = createGitReadHandler(repo);
