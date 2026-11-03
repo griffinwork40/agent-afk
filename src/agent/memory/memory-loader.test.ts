@@ -47,7 +47,7 @@ function storeEpisode(s: MemoryStore, files: string[], branch?: string): number 
   const branchLine = branch ? `\nbranch: ${branch}` : '';
   const content = `[episode:test-${Date.now()}]\nfiles: ${fileList}${branchLine}\nsummary: worked on things`;
   return s.storeFact({
-    category: 'learning',
+    category: 'episode',
     content,
     source_surface: 'episode-synthesis',
   });
@@ -91,7 +91,7 @@ describe('recallEpisodes — integration', () => {
     // It must NOT be returned by recallEpisodes even if it contains the
     // word "episode" (FTS match) and has a high-scoring files: line.
     store.storeFact({
-      category: 'learning',
+      category: 'episode',
       content: '[episode:fake] files: src/memory-loader.ts\nbranch: main\nsummary: test',
       source_surface: 'cli', // not episode-synthesis
     });

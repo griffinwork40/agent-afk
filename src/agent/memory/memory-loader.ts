@@ -289,15 +289,11 @@ export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
   const ownsStore = !store;
   const s = store ?? new MemoryStore(memoryDir);
   try {
-    // Scope the FTS search to episode-synthesis rows only so that
-    // access_count is not bumped on unrelated learning facts (Item 5b).
-    // No limit here — scoring happens after retrieval, so truncating the
-    // candidate pool before scoring would lose high-scoring episodes in
-    // installations with many episode facts.
-    const allEpisodes = s.searchFacts('"episode"', {
-      category: 'learning',
-      source_surface: 'episode-synthesis',
-    });
+    // Retrieve all episode-synthesis rows via a direct SQL query — episodes
+    // are a known partition, not an FTS search topic. The dedicated method
+    // avoids the searchFacts default-limit footgun and the unused FTS rank
+    // computation. Scoring happens after retrieval in scoreEpisode().
+    const allEpisodes = s.getEpisodes();
 
     if (allEpisodes.length === 0) return [];
 

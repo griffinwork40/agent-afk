@@ -282,6 +282,26 @@ export class MemoryStore {
     return queryAccessStats(this.db);
   }
 
+  /**
+   * Return all episode-synthesis facts, newest first.
+   *
+   * Unlike {@link searchFacts}, this bypasses FTS entirely — episodes are a
+   * known partition of the facts table, not a full-text search topic. The
+   * caller (recallEpisodes) applies its own git-context scoring, so FTS
+   * relevance ranking would be discarded anyway.
+   */
+  getEpisodes(limit = 200): Fact[] {
+    const sql = `
+      SELECT * FROM facts
+      WHERE category = 'episode'
+        AND source_surface = 'episode-synthesis'
+        AND superseded_by IS NULL
+      ORDER BY created_at DESC
+      LIMIT ?
+    `;
+    return this.db.prepare(sql).all(limit) as Fact[];
+  }
+
   searchFacts(query: string, opts?: SearchOpts): Fact[] {
     const limit = opts?.limit ?? 10;
     const conditions: string[] = ['facts_fts MATCH ?'];
