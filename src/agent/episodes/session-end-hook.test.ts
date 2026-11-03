@@ -5,6 +5,8 @@
  *   - returns {} when AFK_EPISODE_SYNTHESIS env flag is not '1'
  *   - returns {} when sessionId is missing
  *   - calls synthesizeAndWriteEpisode when all gates pass
+ *   - calls patchFacetDecisions with synthesized decisions on happy path
+ *   - calls patchFacetDecisions with [] when synthesis returns empty decisions (no-ops internally)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -116,6 +118,36 @@ describe('createEpisodeSessionEndHook — gating logic', () => {
       goal: 'Test goal',
       approach: 'Test approach',
       pivots: [],
+      decisions: ['Chose approach A', 'Avoided approach B'],
+      outcome: 'Test outcome',
+      openQuestions: [],
+      filesKey: [],
+      tags: [],
+      narrative: 'Test narrative',
+      synthesizedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const mockPatch = vi.fn();
+    vi.doMock('./index.js', () => ({ synthesizeAndWriteEpisode: mockSynthesize }));
+    vi.doMock('../facets/yield-probe.js', () => ({ patchFacetDecisions: mockPatch }));
+
+    const { createEpisodeSessionEndHook } = await import('./session-end-hook.js');
+    const hook = createEpisodeSessionEndHook();
+    const result = await hook(sessionEndContext());
+
+    expect(mockSynthesize).toHaveBeenCalledOnce();
+    expect(mockSynthesize).toHaveBeenCalledWith('sess-abc');
+    // Backflow: patchFacetDecisions must fire with the synthesized decisions (#4569)
+    expect(mockPatch).toHaveBeenCalledOnce();
+    expect(mockPatch).toHaveBeenCalledWith('sess-abc', ['Chose approach A', 'Avoided approach B']);
+    expect(result).toEqual({});
+  });
+
+  it('calls patchFacetDecisions with [] when synthesis returns empty decisions (no-ops internally)', async () => {
+    const mockSynthesize = vi.fn().mockResolvedValue({
+      sessionId: 'sess-abc',
+      goal: 'Test goal',
+      approach: 'Test approach',
+      pivots: [],
       decisions: [],
       outcome: 'Test outcome',
       openQuestions: [],
@@ -124,14 +156,17 @@ describe('createEpisodeSessionEndHook — gating logic', () => {
       narrative: 'Test narrative',
       synthesizedAt: '2026-01-01T00:00:00.000Z',
     });
+    const mockPatch = vi.fn();
     vi.doMock('./index.js', () => ({ synthesizeAndWriteEpisode: mockSynthesize }));
+    vi.doMock('../facets/yield-probe.js', () => ({ patchFacetDecisions: mockPatch }));
 
     const { createEpisodeSessionEndHook } = await import('./session-end-hook.js');
     const hook = createEpisodeSessionEndHook();
     const result = await hook(sessionEndContext());
 
     expect(mockSynthesize).toHaveBeenCalledOnce();
-    expect(mockSynthesize).toHaveBeenCalledWith('sess-abc');
+    // Empty decisions array: patchFacetDecisions is NOT called (guard in hook)
+    expect(mockPatch).not.toHaveBeenCalled();
     expect(result).toEqual({});
   });
 
