@@ -58,6 +58,6 @@ describe('LSP spawn-time exit guardian', () => {
         // can hold file handles longer than the previous 3 × 200 ms = 600 ms.
         rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
       }
-    }, 25_000,
+    }, 30_000,
   );
 });
