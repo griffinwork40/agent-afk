@@ -1,7 +1,7 @@
 /**
  * Agent tool definition builder + agent-type listing formatter.
  *
- * `buildAgentToolDef(registry)` returns the `agent` tool schema.  The
+ * `buildAgentToolDef(registry, parentModel?)` returns the `agent` tool schema.  The
  * **description is now static** — it no longer embeds the registry listing.
  * Two sessions whose agent sets differ therefore produce a byte-identical
  * `agent` tool schema, preserving the prefix cache across the tool block.
@@ -38,8 +38,7 @@ import { agentTool, composeTool } from '../tools/schemas.js';
 import type { AnthropicToolDef } from '../tools/types.js';
 import type { AgentRegistry } from './types.js';
 import { getSlotBindings, SLOT_NAMES } from '../session/model-slots.js';
-import { getDefaultSubagentModel } from '../session/default-subagent-model.js';
-import { env } from '../../config/env.js';
+import { getDefaultSubagentModel, describeDefaultSubagentModelSource } from '../session/default-subagent-model.js';
 import type { AgentModelInput } from '../types.js';
 
 /** Truncate a description to one compact line for the system-prompt listing. */
@@ -77,14 +76,9 @@ export function buildAgentModelParamDescription(parentModel?: AgentModelInput): 
   const defaultModel = getDefaultSubagentModel(parentModel);
 
   // Describe the resolved default with its source for transparency.
-  // Mirror getDefaultSubagentModel's precedence to label the source correctly.
-  const defaultDesc = (() => {
-    const raw = env.AFK_DEFAULT_SUBAGENT_MODEL;
-    if (raw && raw.length > 0) return `\`${String(defaultModel)}\` (from AFK_DEFAULT_SUBAGENT_MODEL)`;
-    const subagentId = bindings.subagent?.id;
-    if (subagentId && subagentId.length > 0) return `\`subagent\` slot → \`${subagentId}\``;
-    return `\`${String(defaultModel)}\``;
-  })();
+  // Delegate source-labelling to getDefaultSubagentModel's own precedence logic
+  // via describeDefaultSubagentModelSource so this site does not duplicate it.
+  const defaultDesc = describeDefaultSubagentModelSource(defaultModel, bindings);
 
   // Enumerate bound slots (non-empty id, excluding subagent which is shown in default).
   const boundSlots: string[] = [];
@@ -195,7 +189,12 @@ export function buildComposeTool(parentModel?: AgentModelInput): AnthropicToolDe
     items?: { type?: string; properties?: Record<string, object>; required?: string[]; additionalProperties?: boolean };
     description?: string;
   }>)['nodes'];
-  if (!nodesSchema?.items?.properties) return composeTool;
+  if (!nodesSchema?.items?.properties) {
+    throw new Error(
+      'buildComposeTool: composeTool schema shape changed — ' +
+      'nodes.items.properties is absent; the compose node model description cannot be patched.',
+    );
+  }
 
   return {
     ...composeTool,
