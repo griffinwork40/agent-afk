@@ -47,13 +47,17 @@ export interface GateOptions {
  * Return the `triggeredAt` timestamp (ms) of the most recent telemetry entry
  * for `taskId`, or `null` when no prior fire is recorded.
  *
- * Delegates to {@link readTelemetryHistory} with `limit: 10` and walks
+ * Delegates to {@link readTelemetryHistory} with `limit: 50` and walks
  * backwards to find the most recent record that is NOT a skip — quarantine
  * and malformed-gate telemetry (`status:'skipped'`) must not poison the
  * cooldown gate and suppress future real executions.
+ *
+ * A larger limit (50 vs the previous 10) prevents window exhaustion when a
+ * task accumulates many consecutive `status:'skipped'` records (e.g. repeated
+ * daemon restarts with a persistently broken task). See #4647.
  */
 export async function readLastTickTime(taskId: string, telemetryPath: string): Promise<number | null> {
-  const records = await readTelemetryHistory(telemetryPath, { taskId, limit: 10 });
+  const records = await readTelemetryHistory(telemetryPath, { taskId, limit: 50 });
   // Walk backwards (most recent first) to find the last record that was NOT
   // a skip — quarantine and malformed-gate telemetry must not reset cooldowns.
   for (let i = records.length - 1; i >= 0; i -= 1) {
