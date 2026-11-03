@@ -242,7 +242,7 @@ describe('readJournalHandler — session resolution (R1.1)', () => {
 
   it('invalid session identifier → error', async () => {
     mockJournalExistsAsync.mockResolvedValue(false);
-    mockResolveSessionByName.mockReturnValue(null);
+    mockResolveSessionByName.mockReturnValue(undefined);
     const res = await readJournalHandler({ session: '../../etc/passwd' }, signal);
     expect(res.isError).toBe(true);
     expect(res.content).toMatch(/invalid or unresolvable/i);
