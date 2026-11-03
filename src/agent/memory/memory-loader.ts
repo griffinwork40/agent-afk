@@ -13,7 +13,7 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { execFileSync } from 'child_process';
-import { join, basename } from 'path';
+import { join, basename, isAbsolute, resolve } from 'path';
 import { getMemoryDir } from '../../paths.js';
 import type { AgentConfig } from '../types/config-types.js';
 import { env } from '../../config/env.js';
@@ -93,10 +93,25 @@ const HIGH_FREQ_THRESHOLD = 0.3;
  * Item 1: uses execFileSync (array args, no implicit shell) instead of
  * execSync (string command).
  */
+/**
+ * Validate and canonicalize a cwd before passing to execFileSync.
+ * Requires an absolute path and resolves it to eliminate symlinks and
+ * `..` segments — on git <2.35.2 an adversary-controlled cwd can
+ * trigger RCE via `.git/config` hooks.
+ */
+function validateCwd(cwd?: string): string {
+  const raw = cwd ?? process.cwd();
+  if (!isAbsolute(raw)) {
+    throw new Error(`cwd must be absolute, got: ${raw}`);
+  }
+  return resolve(raw);
+}
+
 export function getCurrentBranch(cwd?: string): string | null {
   try {
+    const safeCwd = validateCwd(cwd);
     const result = execFileSync('git', ['--no-optional-locks', 'rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: cwd ?? process.cwd(),
+      cwd: safeCwd,
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 3_000,
     });
@@ -118,7 +133,7 @@ export function getCurrentBranch(cwd?: string): string | null {
  */
 export function getRecentlyModifiedFiles(cwd?: string): string[] {
   try {
-    const effectiveCwd = cwd ?? process.cwd();
+    const effectiveCwd = validateCwd(cwd);
 
     // Detect the upstream default branch dynamically.
     let base = 'origin/main'; // final fallback
@@ -269,14 +284,18 @@ export function formatEpisodeForRecall(fact: Fact): string {
  *   second SQLite handle on the shared DB when the caller already owns one.
  */
 export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryStore): Fact[] {
+  // Track whether we created the store locally so we can close it in finally.
+  const ownsStore = !store;
+  const s = store ?? new MemoryStore(memoryDir);
   try {
-    const s = store ?? new MemoryStore(memoryDir);
     // Scope the FTS search to episode-synthesis rows only so that
     // access_count is not bumped on unrelated learning facts (Item 5b).
+    // No limit here — scoring happens after retrieval, so truncating the
+    // candidate pool before scoring would lose high-scoring episodes in
+    // installations with many episode facts.
     const allEpisodes = s.searchFacts('"episode"', {
       category: 'learning',
       source_surface: 'episode-synthesis',
-      limit: 200,
     });
 
     if (allEpisodes.length === 0) return [];
@@ -300,6 +319,11 @@ export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
   } catch {
     // Swallow all errors — recall is additive, never critical
     return [];
+  } finally {
+    // Close only if we created the store locally to avoid leaking SQLite handles.
+    if (ownsStore) {
+      try { s.close(); } catch { /* best-effort */ }
+    }
   }
 }
 
@@ -348,7 +372,10 @@ export function injectEpisodeRecall(
     // with attributes) from each formatted episode to prevent XML injection.
     const formatted = eps
       .map(formatEpisodeForRecall)
-      .map((s) => s.replace(/<\/?recent-episodes\b[^>]*>/gi, ''))
+      // Entity-encode < and > to prevent XML injection into the system
+      // prompt. A stored fact containing e.g. '</recent-episodes><tool_use>'
+      // would otherwise break the prompt XML structure.
+      .map((s) => s.replace(/</g, '&lt;').replace(/>/g, '&gt;'))
       .join('\n\n---\n\n');
     return `<recent-episodes>\n${formatted}\n</recent-episodes>`;
   }

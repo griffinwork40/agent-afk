@@ -283,7 +283,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     const traceOwner = options.sessionConfig?.traceWriter === undefined ? hookTraceWriter : undefined;
     const session = options.sessionFactory
       ? options.sessionFactory(config, traceOwner)
-      : new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory(config)))), traceOwner);
+      : new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory(config), undefined, undefined, memoryStore))), traceOwner);
     // Wire session-layer Stop dispatch for the daemon surface. Daemon/cron tasks
     // are one-shot: there is no next user turn for injectContext delivery.
     // `getHasNextTurn: () => false` causes the session layer to drop injectContext

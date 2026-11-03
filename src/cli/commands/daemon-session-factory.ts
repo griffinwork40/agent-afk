@@ -182,7 +182,7 @@ export function buildDaemonSessionFactory(
       // scheduler/cron session routes through here → 'daemon'.
       surface: 'daemon',
       ...unattendedLimits,
-    })))), ownedTraceWriter);
+    }), undefined, undefined, memoryStore))), ownedTraceWriter);
     bound = session;
     const close = session.close.bind(session);
     let closing: Promise<void> | undefined;

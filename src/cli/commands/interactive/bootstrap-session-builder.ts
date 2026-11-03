@@ -87,7 +87,7 @@ export interface BuildAgentSessionDeps {
  * mid-session swap path can build a new session with a different `resumeConfig`
  * without duplicating the constructor argument list.
  */
-export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
+export function buildAgentSession(deps: BuildAgentSessionDeps, sharedMemoryStore?: import('../../../agent/memory/memory-store.js').MemoryStore): AgentSession {
   return new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory({
     model: deps.model,
     // User-facing surface for trace `origin` attribution. The REPL is a CLI
@@ -134,7 +134,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.baseUrl !== undefined ? { baseUrl: deps.baseUrl } : {}),
     ...(deps.enableFileCheckpointing !== undefined ? { enableFileCheckpointing: deps.enableFileCheckpointing } : {}),
     providerFactory: deps.providerFactory,
-  })))), deps.traceWriter);
+  }), undefined, undefined, sharedMemoryStore))), deps.traceWriter);
 }
 
 /**
