@@ -107,7 +107,7 @@ describe('shared command analysis', () => {
       .toBe(mutationRules.PIPE_TO_SHELL_REASON);
   });
 
-  it('handles empty string consistently across all five facets', () => {
+  it('handles empty string consistently across all six facets', () => {
     const result = analyzeCommand('');
     // segments: tokenizing an empty string yields no segments
     expect(result.segments).toEqual([]);
@@ -115,6 +115,8 @@ describe('shared command analysis', () => {
     expect(result.mutation.mutating).toBe(false);
     // readOnly: consistent with non-mutating
     expect(result.readOnly).toBe(true);
+    // risk: empty command has no safe-table match, falls through to default-medium
+    expect(result.risk.level).toBe('medium');
     // destructive: empty command matches no destructive patterns
     expect(result.destructive).toEqual([]);
     // releaseBoundary: empty command matches no release-boundary patterns
@@ -122,6 +124,7 @@ describe('shared command analysis', () => {
     // memoization holds for empty results too
     expect(result.segments).toBe(result.segments);
     expect(result.mutation).toBe(result.mutation);
+    expect(result.risk).toBe(result.risk);
     expect(result.destructive).toBe(result.destructive);
     expect(result.releaseBoundary).toBe(result.releaseBoundary);
   });
