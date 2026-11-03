@@ -300,6 +300,42 @@ describe('bundled skills', () => {
       expect(content).toContain('Capture prior reviewer feedback');
     });
 
+    // Invariant: #4622 — diagnose ships a behavioral reference file
+    // (skills/diagnose/references/layout-jump-decision-table.md) that is
+    // recursively packaged at build time. The SKILL.md hash above guards the
+    // skill body but not this auxiliary file: a deletion or content change
+    // leaves the skill hash unchanged. These two tests close that gap.
+    it('diagnose reference file exists (#4622)', () => {
+      const refPath = join(
+        __dirname,
+        'skills',
+        'diagnose',
+        'references',
+        'layout-jump-decision-table.md',
+      );
+      // Throws ENOENT if the file is absent — that is the intended failure signal.
+      const content = readFileSync(refPath, 'utf8');
+      expect(content.length).toBeGreaterThan(0);
+    });
+
+    it('diagnose reference file matches pinned hash (#4622)', () => {
+      const refPath = join(
+        __dirname,
+        'skills',
+        'diagnose',
+        'references',
+        'layout-jump-decision-table.md',
+      );
+      const content = readFileSync(refPath, 'utf8');
+      const hash = computeHash(content);
+      // To update: recompute with node -e "require('crypto').createHash('sha256')
+      //   .update(require('fs').readFileSync('<path>', 'utf8').replace(/\r\n/g,'\n'))
+      //   .digest('hex')"
+      expect(hash).toBe(
+        'a5e19cee7598151e3112eb99b79e724e910d02747926eb9d30a5c179f950b620',
+      );
+    });
+
     // Invariant: #1134 — ground-state runs inline reconnaissance only. The skill
     // body explicitly forbids dispatching sub-agents so that every survey is a
     // deterministic read in the same fork, not a spawned child that could stall,
