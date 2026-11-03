@@ -25,6 +25,17 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+/**
+ * Assert that `v` is non-nullish and return it, or throw with `msg`.
+ *
+ * Replaces the inline `?? (() => { throw new Error('...') })()` pattern that
+ * appeared 5× in this file (issue #4664 finding 2).
+ */
+function required<T>(v: T | null | undefined, msg: string): T {
+  if (v == null) throw new Error(msg);
+  return v;
+}
+
 // Mock shared-helpers BEFORE importing SessionOwner so the module resolution
 // is intercepted. The mock is controlled per-test via `vi.mocked`.
 vi.mock('../cli/shared-helpers.js', async (importOriginal) => {
@@ -149,12 +160,131 @@ describe('SessionOwner — closeAll() closes in session → control → MCP orde
     expect(controlClose).toHaveBeenCalledOnce();
     expect(mcpDisconnect).toHaveBeenCalledOnce();
 
-    const sessionOrder = sessionClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('sessionClose not called'); })();
-    const controlOrder = controlClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('controlClose not called'); })();
-    const mcpOrder = mcpDisconnect.mock.invocationCallOrder[0] ?? (() => { throw new Error('mcpDisconnect not called'); })();
+    const sessionOrder = required(sessionClose.mock.invocationCallOrder[0], 'sessionClose not called');
+    const controlOrder = required(controlClose.mock.invocationCallOrder[0], 'controlClose not called');
+    const mcpOrder = required(mcpDisconnect.mock.invocationCallOrder[0], 'mcpDisconnect not called');
 
     expect(sessionOrder).toBeLessThan(controlOrder);
     expect(controlOrder).toBeLessThan(mcpOrder);
+  });
+
+  /**
+   * Wave-settlement ordering: each wave must fully settle before the next begins.
+   *
+   * Finding 1 from issue #4664: the previous test only checked `invocationCallOrder`,
+   * which a refactor collapsing three waves into a single `Promise.all` would
+   * still pass (JS array iteration invokes all three in order). This test uses
+   * deferred promises that only resolve when explicitly released, so the assert
+   * can distinguish "all three called before any settled" from
+   * "each wave settled before the next wave's call".
+   */
+  it('each wave fully settles before the next wave begins', async () => {
+    const owner = freshOwner();
+    const internals = owner as unknown as CloseAllInternals;
+    const id = 'close-all-wave-settle';
+
+    // Track when each closer was CALLED and when it SETTLED.
+    const events: string[] = [];
+
+    // Deferred helpers.
+    type Release = () => void;
+    function deferred(): [Promise<void>, Release] {
+      let release!: Release;
+      const p = new Promise<void>((res) => { release = res; });
+      return [p, release];
+    }
+
+    const [sessionDone, releaseSession] = deferred();
+    const [controlDone, releaseControl] = deferred();
+    const [mcpDone, releaseMcp] = deferred();
+
+    internals.sessions.set(id, {
+      close: vi.fn(async () => {
+        events.push('session:called');
+        await sessionDone;
+        events.push('session:settled');
+      }),
+    });
+    internals.controls.set(id, {
+      close: vi.fn(async () => {
+        events.push('control:called');
+        await controlDone;
+        events.push('control:settled');
+      }),
+    });
+    internals.mcpManagers.set(id, {
+      disconnectAll: vi.fn(async () => {
+        events.push('mcp:called');
+        await mcpDone;
+        events.push('mcp:settled');
+      }),
+    });
+
+    // Drain the full microtask queue (setTimeout(0) flushes all pending
+    // microtasks before the macro-task fires, which is sufficient here).
+    const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+
+    // Fire closeAll without awaiting — it will block at Wave 1.
+    const closing = owner.closeAll();
+
+    // Flush microtasks: Wave 1 (sessions) should have been called.
+    await flush();
+    expect(events).toContain('session:called');
+    expect(events).not.toContain('control:called');
+    expect(events).not.toContain('mcp:called');
+
+    // Let Wave 1 settle → Wave 2 (controls) should start but not Wave 3.
+    releaseSession();
+    await flush();
+    expect(events).toContain('session:settled');
+    expect(events).toContain('control:called');
+    expect(events).not.toContain('mcp:called');
+
+    // Let Wave 2 settle → Wave 3 (mcp) should start.
+    releaseControl();
+    await flush();
+    expect(events).toContain('control:settled');
+    expect(events).toContain('mcp:called');
+
+    // Let Wave 3 settle → closeAll resolves.
+    releaseMcp();
+    await closing;
+    expect(events).toContain('mcp:settled');
+
+    // Full expected order.
+    expect(events).toEqual([
+      'session:called', 'session:settled',
+      'control:called', 'control:settled',
+      'mcp:called',     'mcp:settled',
+    ]);
+  });
+
+  /**
+   * Rejection-isolation: a rejection in Wave 1 must not suppress Waves 2 and 3.
+   *
+   * Finding 3 from issue #4664: `closeAll` wraps each wave call in `.catch(() => {})`
+   * but no test asserted that a throwing Wave 1 close leaves Waves 2 and 3 intact.
+   */
+  it('a rejection in Wave 1 does not suppress Waves 2 and 3', async () => {
+    const owner = freshOwner();
+    const internals = owner as unknown as CloseAllInternals;
+    const id = 'close-all-rejection';
+
+    const sessionClose = vi.fn().mockRejectedValue(new Error('session boom'));
+    const controlClose = vi.fn().mockResolvedValue(undefined);
+    const mcpDisconnect = vi.fn().mockResolvedValue(undefined);
+
+    internals.sessions.set(id, { close: sessionClose });
+    internals.controls.set(id, { close: controlClose });
+    internals.mcpManagers.set(id, { disconnectAll: mcpDisconnect });
+
+    // closeAll must resolve (not reject) even when Wave 1 throws.
+    await expect(owner.closeAll()).resolves.toBeUndefined();
+
+    // All three waves must have been attempted.
+    expect(sessionClose).toHaveBeenCalledOnce();
+    expect(controlClose).toHaveBeenCalledOnce();
+    expect(mcpDisconnect).toHaveBeenCalledOnce();
   });
 });
 
@@ -363,8 +493,8 @@ describe('SessionOwner — retire()', () => {
     expect(sessionClose).toHaveBeenCalledOnce();
     expect(controlClose).toHaveBeenCalledOnce();
     // session.close() must be invoked before control.close().
-    const sessionOrder = sessionClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('sessionClose not called'); })();
-    const controlOrder = controlClose.mock.invocationCallOrder[0] ?? (() => { throw new Error('controlClose not called'); })();
+    const sessionOrder = required(sessionClose.mock.invocationCallOrder[0], 'sessionClose not called');
+    const controlOrder = required(controlClose.mock.invocationCallOrder[0], 'controlClose not called');
     expect(sessionOrder).toBeLessThan(controlOrder);
   });
 
