@@ -7,8 +7,8 @@
  *                                       — retroactively synthesize episodes for
  *                                         all existing session journals on disk
  *
- * Episode synthesis extracts structural signals from a sealed session journal
- * and stores a compressed narrative in the cross-session memory archive.
+ * Episode synthesis builds deterministic summaries from session facets
+ * and stores them in the cross-session memory archive.
  * This command is opt-in and independent of AFK_EPISODE_SYNTHESIS — it runs
  * synthesis unconditionally for the named session.
  *
@@ -30,8 +30,8 @@ import { isErrnoCode } from '../../utils/errors.js';
 // Backfill helpers
 // ---------------------------------------------------------------------------
 
-/** Delay between LLM calls to avoid rate limits (~$0.002/session on haiku). */
-const BACKFILL_DELAY_MS = 500;
+/** Delay between sessions to avoid I/O pressure during batch processing. */
+const BACKFILL_DELAY_MS = 100;
 
 /**
  * Discover session IDs that have a journal.jsonl on disk.
@@ -100,7 +100,7 @@ export function registerEpisodeCommand(program: Command): void {
     .command('synthesize [session-id]')
     .description(
       'Synthesize a compressed episode narrative from a sealed session journal\n' +
-        'and store it in the cross-session memory archive (facts, category: learning).\n' +
+        'and store it in the cross-session memory archive (facts, category: episode).\n' +
         'Defaults to the most recent session when no session-id is given.',
     )
     .option('--latest', 'Synthesize the most recent session (same as omitting session-id)')
@@ -122,7 +122,7 @@ export function registerEpisodeCommand(program: Command): void {
 
         process.stdout.write(palette.dim(`Synthesizing episode for ${resolvedId}…\n`));
 
-        const episode = await synthesizeAndWriteEpisode(resolvedId as string, { force: true });
+        const episode = await synthesizeAndWriteEpisode(resolvedId as string);
 
         if (!episode) {
           process.stdout.write(
@@ -264,7 +264,7 @@ export function registerEpisodeCommand(program: Command): void {
             process.stdout.write(`${palette.dim('failed:')} ${msg}\n`);
           }
 
-          // Rate-limit: small delay between LLM calls.
+          // Small delay between sessions to avoid I/O pressure.
           if (synthesized + failed < total) {
             await sleep(BACKFILL_DELAY_MS);
           }

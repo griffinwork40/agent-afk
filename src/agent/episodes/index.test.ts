@@ -1,34 +1,23 @@
 /**
- * Tests for the synthesizeAndWriteEpisode barrel (index.ts):
- *   - daemon gate blocks daemon-sourced sessions
- *   - daemon gate is bypassed when options.force is true
- *   - substance gate still works as before
+ * Tests for the synthesizeAndWriteEpisode barrel (index.ts).
+ *
+ * The new implementation delegates to buildEpisodeFromFacet (facet-bridge)
+ * and writeEpisode (writer). No LLM call, no extract/synthesize pipeline.
+ *
+ * Covered:
+ *   - happy path: builds from facet and writes
+ *   - returns null when facet yields no substance (empty goal + outcome)
+ *   - does not call writeEpisode when returning null
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { EpisodeInput, EpisodeRecord } from './types.js';
+import type { EpisodeRecord } from './types.js';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeInput(overrides: Partial<EpisodeInput> = {}): EpisodeInput {
+function makeEpisode(overrides: Partial<EpisodeRecord> = {}): EpisodeRecord {
   return {
     sessionId: 'test-session-123',
-    firstUserMessage: 'Please refactor the auth module',
-    markSequence: [],
-    toolsUsed: ['read_file', 'edit_file'],
-    toolErrors: [],
-    lastAssistantMessage: 'Done! The auth module has been refactored.',
-    ...overrides,
-  };
-}
-
-function makeEpisode(sessionId = 'test-session-123'): EpisodeRecord {
-  return {
-    sessionId,
     goal: 'Refactor the auth module',
-    approach: 'Read and edit',
+    approach: 'Read and edit files',
     pivots: [],
     decisions: [],
     outcome: 'Done',
@@ -37,12 +26,9 @@ function makeEpisode(sessionId = 'test-session-123'): EpisodeRecord {
     tags: ['refactor'],
     narrative: 'Refactored auth.',
     synthesizedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Setup
-// ---------------------------------------------------------------------------
 
 beforeEach(() => {
   vi.resetModules();
@@ -53,99 +39,58 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Daemon gate
+// Happy path
 // ---------------------------------------------------------------------------
 
-describe('synthesizeAndWriteEpisode — daemon gate', () => {
-  it('returns null for daemon-sourced sessions', async () => {
-    const mockExtract = vi.fn().mockReturnValue(makeInput({ source: 'daemon' }));
-    const mockSynthesize = vi.fn();
-    const mockWrite = vi.fn();
-
-    vi.doMock('./extract.js', () => ({ extractEpisodeInput: mockExtract }));
-    vi.doMock('./synthesize.js', () => ({ synthesizeEpisode: mockSynthesize }));
-    vi.doMock('./writer.js', () => ({ writeEpisode: mockWrite }));
-
-    const { synthesizeAndWriteEpisode } = await import('./index.js');
-    const result = await synthesizeAndWriteEpisode('daemon-sess');
-
-    expect(result).toBeNull();
-    expect(mockSynthesize).not.toHaveBeenCalled();
-    expect(mockWrite).not.toHaveBeenCalled();
-  });
-
-  it('bypasses daemon gate when options.force is true', async () => {
-    const episode = makeEpisode('daemon-sess');
-    const mockExtract = vi.fn().mockReturnValue(makeInput({ sessionId: 'daemon-sess', source: 'daemon' }));
-    const mockSynthesize = vi.fn().mockResolvedValue(episode);
-    const mockWrite = vi.fn().mockResolvedValue(undefined);
-
-    vi.doMock('./extract.js', () => ({ extractEpisodeInput: mockExtract }));
-    vi.doMock('./synthesize.js', () => ({ synthesizeEpisode: mockSynthesize }));
-    vi.doMock('./writer.js', () => ({ writeEpisode: mockWrite }));
-
-    const { synthesizeAndWriteEpisode } = await import('./index.js');
-    const result = await synthesizeAndWriteEpisode('daemon-sess', { force: true });
-
-    expect(result).toBe(episode);
-    expect(mockSynthesize).toHaveBeenCalledOnce();
-    expect(mockWrite).toHaveBeenCalledOnce();
-  });
-
-  it('does not block non-daemon sources', async () => {
+describe('synthesizeAndWriteEpisode — happy path', () => {
+  it('builds from facet and writes the episode', async () => {
     const episode = makeEpisode();
-    const mockExtract = vi.fn().mockReturnValue(makeInput({ source: 'cli' }));
-    const mockSynthesize = vi.fn().mockResolvedValue(episode);
+    const mockBuild = vi.fn().mockReturnValue(episode);
     const mockWrite = vi.fn().mockResolvedValue(undefined);
 
-    vi.doMock('./extract.js', () => ({ extractEpisodeInput: mockExtract }));
-    vi.doMock('./synthesize.js', () => ({ synthesizeEpisode: mockSynthesize }));
-    vi.doMock('./writer.js', () => ({ writeEpisode: mockWrite }));
+    vi.doMock('./facet-bridge.js', () => ({ buildEpisodeFromFacet: mockBuild }));
+    vi.doMock('./writer.js', () => ({ writeEpisode: mockWrite, formatEpisodeContent: vi.fn(), sanitizeNarrative: vi.fn() }));
 
     const { synthesizeAndWriteEpisode } = await import('./index.js');
     const result = await synthesizeAndWriteEpisode('test-session-123');
 
-    expect(result).toBe(episode);
-    expect(mockSynthesize).toHaveBeenCalledOnce();
-  });
-
-  it('does not block sessions with no source field', async () => {
-    const episode = makeEpisode();
-    const mockExtract = vi.fn().mockReturnValue(makeInput()); // no source
-    const mockSynthesize = vi.fn().mockResolvedValue(episode);
-    const mockWrite = vi.fn().mockResolvedValue(undefined);
-
-    vi.doMock('./extract.js', () => ({ extractEpisodeInput: mockExtract }));
-    vi.doMock('./synthesize.js', () => ({ synthesizeEpisode: mockSynthesize }));
-    vi.doMock('./writer.js', () => ({ writeEpisode: mockWrite }));
-
-    const { synthesizeAndWriteEpisode } = await import('./index.js');
-    const result = await synthesizeAndWriteEpisode('test-session-123');
-
+    expect(mockBuild).toHaveBeenCalledWith('test-session-123');
+    expect(mockWrite).toHaveBeenCalledWith(episode);
     expect(result).toBe(episode);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Substance gate (pre-existing, but confirm not broken)
+// Null / substance gate
 // ---------------------------------------------------------------------------
 
-describe('synthesizeAndWriteEpisode — substance gate', () => {
-  it('returns null for sessions with no user content and no tools', async () => {
-    const mockExtract = vi.fn().mockReturnValue(
-      makeInput({ firstUserMessage: '', toolsUsed: [] }),
-    );
-    const mockSynthesize = vi.fn();
+describe('synthesizeAndWriteEpisode — null gate', () => {
+  it('returns null when buildEpisodeFromFacet returns null', async () => {
+    const mockBuild = vi.fn().mockReturnValue(null);
     const mockWrite = vi.fn();
 
-    vi.doMock('./extract.js', () => ({ extractEpisodeInput: mockExtract }));
-    vi.doMock('./synthesize.js', () => ({ synthesizeEpisode: mockSynthesize }));
-    vi.doMock('./writer.js', () => ({ writeEpisode: mockWrite }));
+    vi.doMock('./facet-bridge.js', () => ({ buildEpisodeFromFacet: mockBuild }));
+    vi.doMock('./writer.js', () => ({ writeEpisode: mockWrite, formatEpisodeContent: vi.fn(), sanitizeNarrative: vi.fn() }));
 
     const { synthesizeAndWriteEpisode } = await import('./index.js');
     const result = await synthesizeAndWriteEpisode('empty-sess');
 
     expect(result).toBeNull();
-    expect(mockSynthesize).not.toHaveBeenCalled();
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('returns null when episode has empty goal and outcome', async () => {
+    const episode = makeEpisode({ goal: '', outcome: '' });
+    const mockBuild = vi.fn().mockReturnValue(episode);
+    const mockWrite = vi.fn();
+
+    vi.doMock('./facet-bridge.js', () => ({ buildEpisodeFromFacet: mockBuild }));
+    vi.doMock('./writer.js', () => ({ writeEpisode: mockWrite, formatEpisodeContent: vi.fn(), sanitizeNarrative: vi.fn() }));
+
+    const { synthesizeAndWriteEpisode } = await import('./index.js');
+    const result = await synthesizeAndWriteEpisode('thin-sess');
+
+    expect(result).toBeNull();
+    expect(mockWrite).not.toHaveBeenCalled();
   });
 });

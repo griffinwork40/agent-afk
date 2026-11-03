@@ -1,9 +1,9 @@
 /**
- * Episode writer — stores a synthesized EpisodeRecord in the memory archive.
+ * Episode writer — stores an EpisodeRecord in the memory archive.
  *
- * Uses the existing facts table (category: 'learning') so no schema change
- * is required. The narrative is FTS5-sanitized before storage and capped at
- * 2000 chars. Content includes a [episode:<sessionId>] prefix for searchability.
+ * Uses the facts table with category: 'episode' (schema v6). The narrative
+ * is FTS5-sanitized before storage and capped at 2000 chars. Content
+ * includes a [episode:<sessionId>] prefix for searchability.
  *
  * @module agent/episodes/writer
  */
@@ -72,7 +72,7 @@ export function formatEpisodeContent(episode: EpisodeRecord): string {
 
 /**
  * Write the episode to the cross-session memory archive.
- * Uses category 'learning' on the existing facts table (no schema bump).
+ * Uses category 'episode' on the facts table (schema v6).
  */
 export async function writeEpisode(
   episode: EpisodeRecord,
@@ -81,7 +81,7 @@ export async function writeEpisode(
   const store = new MemoryStore(memoryDir);
   store.storeFact({
     session_id: episode.sessionId,
-    category: 'learning',
+    category: 'episode',
     content: formatEpisodeContent(episode),
     source_surface: 'episode-synthesis',
     evidence: episode.sessionId,

@@ -411,7 +411,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(5);
+      expect(check.pragma('user_version', { simple: true })).toBe(6);
       const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -446,7 +446,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(join(migDir, 'memory.db'), { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(5);
+      expect(check.pragma('user_version', { simple: true })).toBe(6);
       const row = check
         .prepare('SELECT actor FROM sessions WHERE session_id = ?')
         .get('s') as { actor: string | null };
@@ -470,7 +470,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(5);
+      expect(check.pragma('user_version', { simple: true })).toBe(6);
       const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -521,7 +521,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(5);
+      expect(check.pragma('user_version', { simple: true })).toBe(6);
     } finally {
       check.close();
       interrupted.close();
@@ -585,8 +585,8 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     try {
       expect(
         check2.pragma('user_version', { simple: true }),
-        'user_version must be 5 after self-heal',
-      ).toBe(5);
+        'user_version must be 6 after self-heal',
+      ).toBe(6);
       const cols = (check2.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );

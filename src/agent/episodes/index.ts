@@ -4,44 +4,23 @@
  * @module agent/episodes
  */
 
-export type { EpisodeRecord, EpisodeInput } from './types.js';
-export { extractEpisodeInput } from './extract.js';
-export { synthesizeEpisode } from './synthesize.js';
+export type { EpisodeRecord } from './types.js';
+export { buildEpisodeFromFacet } from './facet-bridge.js';
 export { writeEpisode, formatEpisodeContent, sanitizeNarrative } from './writer.js';
 
-import { extractEpisodeInput } from './extract.js';
-import { synthesizeEpisode } from './synthesize.js';
+import { buildEpisodeFromFacet } from './facet-bridge.js';
 import { writeEpisode } from './writer.js';
 import type { EpisodeRecord } from './types.js';
 
 /**
- * Convenience: extract → synthesize → write in one call.
- * Returns the synthesized EpisodeRecord (useful for CLI display).
- *
- * Skips synthesis and write entirely for stub sessions (no real user
- * message and no tool usage) to avoid polluting the fact archive with
- * "Unknown goal" noise from empty or trivial sessions.
+ * Convenience: build from facet → write in one call.
+ * Returns the EpisodeRecord (useful for CLI display), or null when the facet
+ * is missing or yields no substance (empty goal and outcome), so callers can
+ * distinguish a skipped session from a written one.
  */
-export async function synthesizeAndWriteEpisode(
-  sessionId: string,
-  options?: { force?: boolean },
-): Promise<EpisodeRecord | null> {
-  const input = extractEpisodeInput(sessionId);
-
-  // Substance gate: skip sessions with no real user content and no tool usage
-  if (!input.firstUserMessage && input.toolsUsed.length === 0) {
-    return null;
-  }
-
-  // Daemon gate: scheduled/cron sessions produce repetitive low-signal episodes
-  // where the "goal" is the scheduler prompt, not a user intent. The review/brief
-  // output is already posted to its destination (GitHub, Telegram). Skip them;
-  // manual `afk episode synthesize <id>` still works for one-offs.
-  if (input.source === 'daemon' && !options?.force) {
-    return null;
-  }
-
-  const episode = await synthesizeEpisode(input);
+export async function synthesizeAndWriteEpisode(sessionId: string): Promise<EpisodeRecord | null> {
+  const episode = buildEpisodeFromFacet(sessionId);
+  if (!episode || (!episode.goal && !episode.outcome)) return null;
   await writeEpisode(episode);
   return episode;
 }

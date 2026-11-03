@@ -347,7 +347,7 @@
     },
     {
       "name": "AFK_EPISODE_SYNTHESIS",
-      "description": "Enable automatic episode synthesis at session end. When set to 1, a compressed narrative of each top-level session is synthesized from its sealed journal and stored in cross-session memory (facts table, category: learning). Off by default — opt in once the memory archive is large enough that episodic recall adds value. Requires a valid Anthropic credential; falls back to a deterministic record if the LLM call fails. Use `afk episode synthesize <session-id>` to synthesize a specific session on demand regardless of this flag.",
+      "description": "Enable automatic episode synthesis at session end. When set to 1, a deterministic summary of each top-level session is built from its facet and stored in cross-session memory (facts table, category: episode). Off by default — opt in once the memory archive is large enough that episodic recall adds value. No LLM call is required; episodes are derived from existing facet data. Use `afk episode synthesize <session-id>` to synthesize a specific session on demand regardless of this flag.",
       "type": "boolean",
       "required": false,
       "default": "0",

@@ -434,9 +434,15 @@ describe('SubagentExecutor named-agent dispatch', () => {
   });
 
   describe('describeAgentTool', () => {
-    it('returns the static def without a registry', () => {
+    it('returns a def structurally equivalent to the static def when no registry is wired', () => {
       const executor = makeExecutor({ agentRegistry: undefined });
-      expect(executor.describeAgentTool()).toBe(agentTool);
+      const def = executor.describeAgentTool();
+      // Since #4509 buildAgentToolDef always patches the model.description with live slot bindings,
+      // so it returns a new object rather than the static agentTool reference.
+      expect(def.name).toBe(agentTool.name);
+      expect(def.description).toBe(agentTool.description);
+      // The input_schema is a superset: model.description is dynamic, all other props are identical.
+      expect(def.input_schema.type).toBe(agentTool.input_schema.type);
     });
 
     it('description is static even when a registry is wired (#4217)', () => {
