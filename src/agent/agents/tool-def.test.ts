@@ -142,6 +142,16 @@ describe('buildAgentModelParamDescription', () => {
     const desc = buildAgentModelParamDescription();
     expect(desc).toMatch(/Default:.*`medium`/);
   });
+
+  it('inherits a non-default parentModel when it resolves to openai-compatible (#4663)', () => {
+    // The OpenAI-compatible parent-inherit path: when no env var or subagent
+    // slot overrides the default, a GPT/o-series parent should be inherited
+    // so local/OpenAI-only setups don't silently dispatch Anthropic subagents.
+    const desc = buildAgentModelParamDescription('gpt-4o');
+    expect(desc).toMatch(/Default: `gpt-4o`/);
+    // Must NOT fall back to medium for an OpenAI-compatible parent.
+    expect(desc).not.toMatch(/Default: `medium`/);
+  });
 });
 
 // ---------------------------------------------------------------------------
