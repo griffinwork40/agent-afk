@@ -148,25 +148,22 @@ describe('buildEpisodeFromFacet', () => {
     expect(ep.narrative).toContain('Auth module refactored');
   });
 
-  it('returns stub when facet is null', async () => {
+  it('returns null when facet is null', async () => {
     vi.doMock('../facets/store.js', () => ({
       getOrDeriveFacet: () => null,
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('missing-session');
-    expect(ep.sessionId).toBe('missing-session');
-    expect(ep.goal).toBe('');
+    expect(ep).toBeNull();
   });
 
-  it('returns stub when getOrDeriveFacet throws', async () => {
+  it('returns null when getOrDeriveFacet throws', async () => {
     vi.doMock('../facets/store.js', () => ({
       getOrDeriveFacet: () => { throw new Error('boom'); },
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('error-session');
-    expect(ep.sessionId).toBe('error-session');
-    expect(ep.goal).toBe('');
-    expect(ep.approach).toBe('');
+    expect(ep).toBeNull();
   });
 
   it('sets synthesizedAt to a valid ISO timestamp', async () => {

@@ -23,26 +23,14 @@ import type { EpisodeRecord } from './types.js';
 
 /**
  * Build an EpisodeRecord deterministically from facet fields.
- * Never throws — returns a minimal stub on any error.
+ * Returns null when the facet is unavailable or an error occurs, so callers
+ * can distinguish a missing episode from an empty one and avoid writing
+ * substance-free stubs into the fact archive.
  */
-export function buildEpisodeFromFacet(sessionId: string): EpisodeRecord {
-  const stub: EpisodeRecord = {
-    sessionId,
-    goal: '',
-    approach: '',
-    pivots: [],
-    decisions: [],
-    outcome: '',
-    openQuestions: [],
-    filesKey: [],
-    tags: [],
-    narrative: '',
-    synthesizedAt: new Date().toISOString(),
-  };
-
+export function buildEpisodeFromFacet(sessionId: string): EpisodeRecord | null {
   try {
     const facet = getOrDeriveFacet(sessionId);
-    if (!facet) return stub;
+    if (!facet) return null;
 
     const goal = facet.underlying_goal || facet.first_prompt.slice(0, 200) || 'Unknown goal';
     const outcome = facet.primary_success || facet.outcome || 'Unknown outcome';
@@ -90,6 +78,6 @@ export function buildEpisodeFromFacet(sessionId: string): EpisodeRecord {
       synthesizedAt: new Date().toISOString(),
     };
   } catch {
-    return stub;
+    return null;
   }
 }
