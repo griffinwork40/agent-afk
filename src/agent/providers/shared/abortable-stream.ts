@@ -35,6 +35,15 @@ import { PauseController } from '../../session/pause-controller.js';
 export async function* abortableStream<T>(
   source: AsyncIterable<T>,
   signal: AbortSignal,
+  /**
+   * Optional callback invoked immediately after `PauseController.check()`
+   * unblocks (i.e. the session was paused and has just resumed). Callers
+   * that run a stall watchdog should pass `() => stall.progress()` here so
+   * the watchdog's idle window is reset after the pause — preventing a stall
+   * timer that accumulated during the pause from firing spuriously once the
+   * stream resumes (issue #4638 item 1).
+   */
+  onResumedFromPause?: () => void,
 ): AsyncGenerator<T> {
   // Already aborted before the first pull — never touch the source.
   if (signal.aborted) throw abortErrorFrom(signal);
@@ -69,7 +78,13 @@ export async function* abortableStream<T>(
       // Pause gate: block without passing `signal` so the stall watchdog
       // (which feeds into `signal`) cannot fire through the pause and abort
       // the stream. After check() returns we test signal separately (R1.2).
+      const wasPaused = PauseController.instance().isPaused();
       await PauseController.instance().check();
+      // Reset the stall watchdog after a blocked pause so that time
+      // accumulated while paused does not count against the stall window
+      // (issue #4638 item 1). Only reset when we actually blocked — not on
+      // every token — so fast paths pay no extra cost.
+      if (wasPaused) onResumedFromPause?.();
       if (signal.aborted) throw abortErrorFrom(signal);
       yield result.value;
     }

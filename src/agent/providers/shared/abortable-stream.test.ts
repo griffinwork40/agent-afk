@@ -7,10 +7,33 @@
  * user's next message landed a turn late (they learned to poke "." to force it).
  * `abortableStream` makes the halt deterministic by racing each pull against the
  * signal. The load-bearing case is `throws promptly when a read is parked`.
+ *
+ * Also covers issue #4638 item 1: the `onResumedFromPause` callback must be
+ * called after a blocked `PauseController.check()` resolves so the caller can
+ * reset their stall watchdog timer. The callback must NOT fire when the
+ * controller was not paused (i.e. `check()` returned immediately).
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { abortableStream } from './abortable-stream.js';
+import * as pauseControllerModule from '../../session/pause-controller.js';
+
+// ---------------------------------------------------------------------------
+// Helpers for mocking PauseController in onResumedFromPause tests
+// ---------------------------------------------------------------------------
+
+/** Build a fake PauseController instance. */
+function fakePauseController(opts: { paused: boolean; resumeAfterMs?: number }) {
+  let _paused = opts.paused;
+  return {
+    isPaused: () => _paused,
+    check: async () => {
+      if (!_paused) return;
+      // Simulate a pause that resolves after a short delay.
+      await new Promise<void>((resolve) => setTimeout(() => { _paused = false; resolve(); }, opts.resumeAfterMs ?? 10));
+    },
+  };
+}
 
 async function* fromArray<T>(arr: T[]): AsyncIterable<T> {
   for (const x of arr) yield x;
@@ -175,5 +198,68 @@ describe('abortableStream', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(true).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #4638 item 1: onResumedFromPause callback
+// ---------------------------------------------------------------------------
+
+describe('abortableStream — onResumedFromPause (issue #4638)', () => {
+  let instanceSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    instanceSpy = vi.spyOn(pauseControllerModule.PauseController, 'instance');
+  });
+
+  afterEach(() => {
+    instanceSpy.mockRestore();
+  });
+
+  it('calls onResumedFromPause once after a blocked pause resolves', async () => {
+    const fake = fakePauseController({ paused: true, resumeAfterMs: 10 });
+    instanceSpy.mockReturnValue(fake as unknown as pauseControllerModule.PauseController);
+
+    const onResumedFromPause = vi.fn();
+    const ac = new AbortController();
+    const collected: number[] = [];
+
+    for await (const v of abortableStream(fromArray([1, 2]), ac.signal, onResumedFromPause)) {
+      collected.push(v);
+    }
+
+    expect(collected).toEqual([1, 2]);
+    // Called once per value that went through a paused gate.
+    // The fake only blocks on the first check (isPaused flips to false).
+    expect(onResumedFromPause).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT call onResumedFromPause when the controller is not paused', async () => {
+    const fake = fakePauseController({ paused: false });
+    instanceSpy.mockReturnValue(fake as unknown as pauseControllerModule.PauseController);
+
+    const onResumedFromPause = vi.fn();
+    const ac = new AbortController();
+    const collected: number[] = [];
+
+    for await (const v of abortableStream(fromArray([1, 2, 3]), ac.signal, onResumedFromPause)) {
+      collected.push(v);
+    }
+
+    expect(collected).toEqual([1, 2, 3]);
+    expect(onResumedFromPause).not.toHaveBeenCalled();
+  });
+
+  it('works without an onResumedFromPause callback (backward compat)', async () => {
+    const fake = fakePauseController({ paused: false });
+    instanceSpy.mockReturnValue(fake as unknown as pauseControllerModule.PauseController);
+
+    const ac = new AbortController();
+    const collected: number[] = [];
+    // No callback passed — must not throw.
+    for await (const v of abortableStream(fromArray([10, 20]), ac.signal)) {
+      collected.push(v);
+    }
+    expect(collected).toEqual([10, 20]);
   });
 });
