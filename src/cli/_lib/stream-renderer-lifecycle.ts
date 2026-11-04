@@ -42,6 +42,14 @@ export const WAITING_LABEL_PREFIX = ' · waiting ';
  */
 export const AWAITING_LABEL_PREFIX = ' · awaiting ';
 const K = 375;
+/**
+ * Grace period before showing the summary-mode thinking indicator. Matches
+ * {@link TTFB_GRACE_MS} so both "waiting for first byte" and "waiting for
+ * thinking to finish" use the same 2 s threshold.
+ *
+ * Exported for test files only — not part of the public API surface.
+ */
+export const THINKING_GRACE_MS = 2_000;
 
 /**
  * Context for lifecycle methods — encapsulates the pieces needed to arm the
@@ -63,6 +71,12 @@ export interface LifecycleContext extends TtfbTickCtx {
   sources: Map<string, SourceState>;
   pauseTickInterval: ReturnType<typeof setInterval> | null;
   resizeUnsub: (() => void) | null;
+  /**
+   * 1 Hz change-detection string for the summary-mode thinking elapsed
+   * counter, mirroring {@link TtfbTickCtx.lastTtfbAnnotation}. Set to ''
+   * when not actively thinking; `thinking:${secs}` during the live window.
+   */
+  lastThinkingAnnotation: string;
 }
 
 /**
@@ -78,6 +92,11 @@ export interface LifecycleContext extends TtfbTickCtx {
  * DECSTBM extra-row mechanism as `BackgroundStatusBar`), not as part of the
  * live overlay frame. The `stageTracker` field is kept in the context type for
  * the `LifecycleContext` interface but is no longer consumed here.
+ *
+ * Summary-mode thinking: the `'thinking-live'` slot is intentionally empty
+ * when `thinkingMode === 'summary'`. A lightweight `◦ thinking · Xs` banner
+ * is shown instead via the `'progress-banner'` slot (see the summary-mode
+ * branch inside that slot's render function).
  */
 export function registerOverlaySlots(
   overlayComposer: OverlayComposer,
@@ -220,6 +239,26 @@ export function registerOverlaySlots(
           ),
         );
       }
+      // Summary-mode thinking indicator: the thinking-live overlay slot is
+      // intentionally empty in summary mode (only live/digest render the
+      // paragraph). Show a lightweight banner when the model is actively
+      // thinking and no other content is driving the banner. Uses
+      // activeThinkingElapsedMs() which tracks the real thinking window
+      // only — stops at markEnded(), so tool time is excluded.
+      if (bannerLines.length === 0 && ctx.thinkingMode === 'summary') {
+        const thinkingMs = ctx.thinkingLane.activeThinkingElapsedMs();
+        if (thinkingMs !== null && thinkingMs >= THINKING_GRACE_MS) {
+          bannerLines.push(
+            ...formatProgressBanner(
+              { taskId: '__thinking__', description: `thinking \u00b7 ${formatDuration(thinkingMs)}`, totalTokens: 0, toolUses: 0, durationMs: 0 },
+              undefined,
+              undefined,
+              stopping,
+              runningCount,
+            ),
+          );
+        }
+      }
       return bannerLines.length > 0 ? bannerLines.join('\n') : '';
     },
   });
@@ -314,6 +353,12 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
   // ctx.lastTtfbAnnotation in place when the displayed second advances.
   checkTtfbAnnotation(ctx, now);
 
+  // Summary-mode thinking elapsed counter: same 1 Hz pattern as TTFB. Shows
+  // a `◦ thinking · Xs` banner while the model is actively thinking in summary
+  // mode (where the thinking-live overlay slot is intentionally empty). Clears
+  // when markEnded() fires on the first non-thinking event.
+  if (checkThinkingAnnotation(ctx, now)) changed = true;
+
   if (ctx.isTTY && ctx.overlayComposer) {
     if (changed) ctx.overlayComposer.markDirty('tool-lane');
     // The progress banner is already marked dirty by checkTtfbAnnotation.
@@ -395,4 +440,47 @@ function tickStalledSource(
   source.pauseAnnotation = annotation;
   const label = source.agentType ?? sourceId;
   return ctx.toolLane.annotateIfPresent(syntheticId, 'Agent', `(${label})${annotation}`);
+}
+
+/**
+ * Drive the summary-mode thinking elapsed overlay update. Called on every 80ms
+ * tick from {@link checkPauseAnnotations}; marks the progress-banner dirty at
+ * most once per second (1 Hz change detection on the annotation string, same
+ * pattern as {@link checkTtfbAnnotation}).
+ *
+ * Active when thinkingMode is NOT 'live' or 'digest' (those modes show the
+ * full thinking paragraph in the thinking-live overlay slot) and the
+ * ThinkingLane reports active thinking via {@link ThinkingLane.activeThinkingElapsedMs}.
+ * Clears when thinking ends (markEnded fires on the first non-thinking event).
+ */
+export function checkThinkingAnnotation(ctx: LifecycleContext, now: number): boolean {
+  if (
+    ctx.disposed ||
+    !ctx.isTTY ||
+    !ctx.overlayComposer ||
+    ctx.thinkingMode === 'live' ||
+    ctx.thinkingMode === 'digest'
+  ) {
+    return false;
+  }
+  void now; // passed for API symmetry with checkTtfbAnnotation; activeThinkingElapsedMs() owns its own clock
+  const elapsedMs = ctx.thinkingLane.activeThinkingElapsedMs();
+
+  // Thinking ended or below grace — clear any stale annotation.
+  if (elapsedMs === null || elapsedMs < THINKING_GRACE_MS) {
+    if (ctx.lastThinkingAnnotation !== '') {
+      ctx.lastThinkingAnnotation = '';
+      ctx.overlayComposer.markDirty('progress-banner');
+      return true;
+    }
+    return false;
+  }
+
+  const secs = Math.floor(elapsedMs / 1000);
+  const annotation = `thinking:${secs}`;
+  if (ctx.lastThinkingAnnotation === annotation) return false;
+
+  ctx.lastThinkingAnnotation = annotation;
+  ctx.overlayComposer.markDirty('progress-banner');
+  return true;
 }

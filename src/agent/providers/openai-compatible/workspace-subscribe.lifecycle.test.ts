@@ -75,11 +75,11 @@ describe('OpenAI fork workspace subscription lifecycle (#1418)', () => {
     expect(messages[2]).not.toContain('ENTRY_0_END');
     expect(messages[2]).not.toContain('ENTRY_1_END');
     expect(messages[2]!.indexOf('ENTRY_2_END')).toBeLessThan(messages[2]!.indexOf('ENTRY_3_END'));
-    expect(handle._pendingWorkspaceEntries).toHaveLength(0);
+    expect(handle.pendingWorkspaceEntryCount).toBe(0);
     await handle.teardown();
     expect(unsubscribe).toHaveBeenCalledWith(handle.id);
     publish(store, 'AFTER_TEARDOWN');
-    expect(handle._pendingWorkspaceEntries).toHaveLength(0);
+    expect(handle.pendingWorkspaceEntryCount).toBe(0);
     // Child close must not close the caller-owned store.
     expect(store.queryRelevant(null, 'AFTER_TEARDOWN')).toHaveLength(1);
   });
@@ -100,13 +100,13 @@ describe('OpenAI fork workspace subscription lifecycle (#1418)', () => {
     const run = handle.run('Subscribe and continue.').catch(() => undefined);
     await atSecondRequest;
     publish(store, 'BEFORE_CANCEL');
-    expect(handle._pendingWorkspaceEntries).toHaveLength(1);
+    expect(handle.pendingWorkspaceEntryCount).toBe(1);
     await handle.cancel();
     await run;
     expect(handle.status).toBe('cancelled');
     expect(unsubscribe).toHaveBeenCalledWith(handle.id);
-    const pending = handle._pendingWorkspaceEntries.length;
+    const pending = handle.pendingWorkspaceEntryCount;
     publish(store, 'AFTER_CANCEL');
-    expect(handle._pendingWorkspaceEntries).toHaveLength(pending);
+    expect(handle.pendingWorkspaceEntryCount).toBe(pending);
   });
 });

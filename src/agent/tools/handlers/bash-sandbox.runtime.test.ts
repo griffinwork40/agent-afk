@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, symlinkSync, realpathSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, symlinkSync, realpathSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
@@ -36,7 +37,7 @@ beforeEach(() => {
   writeFileSync(sentinel, 'unchanged');
   fixtures.floor = [protectedDir];
 });
-afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { rmSyncRetry(root); });
 
 async function run(command: string, policy: 'workspace-write' | 'read-only' = 'workspace-write', workingDir = cwd): Promise<string> {
   const wrapped = buildSandboxedCommand(command, policy, workingDir, temp);

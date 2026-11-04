@@ -70,7 +70,7 @@ Read `SPINE.md` from the repo root (same directory as `AFK.md`). If the file doe
 
 For software-domain sessions, check whether the eval-run pipeline is current. This guard catches silent regressions that accumulate when the pipeline goes unrun during high-velocity sprints.
 
-Read the last line of `~/.afk/agent-framework/improve/eval-runs/.index.jsonl` (use `read_file`; if the file does not exist, treat as "never run").
+Read `~/.afk/agent-framework/improve/eval-runs/.index.jsonl` in full (use `read_file` with no `offset` or `limit`; the file is operationally small — typically a few dozen lines — so a full read is safe). If the file does not exist, treat as "never run". Take the last non-empty line as the most recent entry.
 
 Parse the `timestamp` field from the output. Then compute the age in days relative to today's date.
 

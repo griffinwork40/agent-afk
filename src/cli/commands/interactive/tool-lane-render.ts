@@ -4,7 +4,7 @@ import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { wrapToWidth } from '../../wrap.js';
-import { truncateDisplayWidth } from '../../display.js';
+import { displayWidth, truncateDisplayWidth } from '../../display.js';
 import { capToMeasure, contentBand } from '../../render/measure.js';
 import { TOOL_LANE_INDENT } from './tool-lane-flush-margin.js';
 import { sanitizeTextParagraph } from './tool-lane-format.js';
@@ -438,7 +438,7 @@ export function renderTextChildLines(text: string, indent: string, g: Readonly<G
   // Derived from `toolLaneWidth()` — the same row budget `clampLineToTerminal`
   // enforces on the composed line below — so the wrapped text can never
   // exceed the clamp that will later be applied to it (see `render/measure.ts`).
-  const maxWidth = Math.max(1, toolLaneWidth() - indent.length - 3 - 2);
+  const maxWidth = Math.max(1, toolLaneWidth() - displayWidth(indent) - 3 - 2);
   const colored = colorizeIndent(indent, g, startDepth);
   const out: string[] = [];
   for (const para of text.split('\n')) {

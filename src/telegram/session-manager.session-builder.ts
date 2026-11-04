@@ -13,7 +13,7 @@
  */
 
 import type { IAgentSession, AgentConfig, AgentModelInput, ThinkingConfig, EffortLevel, PermissionMode } from '../agent/types.js';
-import { injectHotMemory, injectGoalPrompt } from '../agent/memory/index.js';
+import { injectHotMemory, injectGoalPrompt, injectEpisodeRecall } from '../agent/memory/index.js';
 import { injectCompanionPrimer } from '../agent/companion/index.js';
 import { setElicitationRoute } from './elicitation-route-registry.js';
 import { runTelegramReconcile } from '../agent/manifest/startup-reconcile.js';
@@ -123,7 +123,7 @@ export async function buildAndRegisterSession(
     );
   }
 
-  const session = await opts.createSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory(config))));
+  const session = await opts.createSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory(config)))));
   sc.sessions.set(key, session);
   sc.sessionData.set(key, data);
   // Register with the session registry (best-effort: never orphan the live session).

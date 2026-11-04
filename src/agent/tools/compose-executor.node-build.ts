@@ -180,8 +180,8 @@ export async function buildComposeDagNode(args: BuildComposeDagNodeArgs): Promis
     //
     // Precedence for tool-use rounds:
     //   explicit per-node max_tool_rounds
+    //   > compose-level max_tool_rounds_per_node (safety cap; passed as the ?? fallback)
     //   > named-agent frontmatter maxToolUseIterations
-    //   > compose-level max_tool_rounds_per_node
     //   > unlimited (omitted from the node so the fork inherits the session default)
     //
     // Precedence for turns:

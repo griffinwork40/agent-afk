@@ -70,7 +70,7 @@ const PINNED_HASHES = {
   // subagent-executor.isolation.test.ts + input-parse.ts confirm it is honored
   // at any depth, incl. nested inside a forked skill). Behavior-preserving prose
   // correction; frontmatter (context: fork) unchanged.
-  diagnose: '32e74b291f913433efdc524d4e98fde4a75a9cbc6c57a11618f9c18366a671b1',
+  diagnose: 'ef3290af824e5fde88d9d7c15406f64a97d9c6eb9076cb90a1aa23b1a647eba1',
   // false-completion-gate, fix-pr, polish: high-usage user-scope skills bundled
   // in #943. No upstream counterpart — bundled-only.
   'false-completion-gate':
@@ -104,7 +104,7 @@ const PINNED_HASHES = {
   // wave keeps dispatching). The upstream ground-state has neither layer, so
   // both lines are permanent bundled-only divergence.
   'ground-state':
-    '61b3d0d4c0c86385acc3a592274126754c0f1c69f34b1f7b4c10cab745fd4b70',
+    '3cc5be5a2c6e30261893de8ff123424dab198583a84dbf223d90cc73b647fd68',
 
   polish:
     '03c7d8d1f593d4aca3327247d5c226e957bae84982b8a438c5834ba74ee4184c',
@@ -298,6 +298,42 @@ describe('bundled skills', () => {
       expect(content).toContain('addressed since prior review');
       // Assert the prior-feedback capture section exists
       expect(content).toContain('Capture prior reviewer feedback');
+    });
+
+    // Invariant: #4622 — diagnose ships a behavioral reference file
+    // (skills/diagnose/references/layout-jump-decision-table.md) that is
+    // recursively packaged at build time. The SKILL.md hash above guards the
+    // skill body but not this auxiliary file: a deletion or content change
+    // leaves the skill hash unchanged. These two tests close that gap.
+    it('diagnose reference file exists (#4622)', () => {
+      const refPath = join(
+        __dirname,
+        'skills',
+        'diagnose',
+        'references',
+        'layout-jump-decision-table.md',
+      );
+      // Throws ENOENT if the file is absent — that is the intended failure signal.
+      const content = readFileSync(refPath, 'utf8');
+      expect(content.length).toBeGreaterThan(0);
+    });
+
+    it('diagnose reference file matches pinned hash (#4622)', () => {
+      const refPath = join(
+        __dirname,
+        'skills',
+        'diagnose',
+        'references',
+        'layout-jump-decision-table.md',
+      );
+      const content = readFileSync(refPath, 'utf8');
+      const hash = computeHash(content);
+      // To update: recompute with node -e "require('crypto').createHash('sha256')
+      //   .update(require('fs').readFileSync('<path>', 'utf8').replace(/\r\n/g,'\n'))
+      //   .digest('hex')"
+      expect(hash).toBe(
+        'a5e19cee7598151e3112eb99b79e724e910d02747926eb9d30a5c179f950b620',
+      );
     });
 
     // Invariant: #1134 — ground-state runs inline reconnaissance only. The skill

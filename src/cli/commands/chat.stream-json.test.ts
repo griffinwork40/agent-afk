@@ -104,6 +104,7 @@ vi.mock('../../agent/memory/index.js', () => {
   return {
     MemoryStore: vi.fn(function () { return { close }; }),
     injectHotMemory: (config: unknown) => config,
+    injectEpisodeRecall: (config: unknown) => config,
     injectGoalPrompt: (config: unknown) => config,
     MEMORY_TOOL_NAMES: [],
     // The (unmocked) openai-compatible provider imports these from

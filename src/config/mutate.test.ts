@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { rmSyncRetry } from '../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -32,7 +33,7 @@ describe('config mutation engine', () => {
     envFile = join(dir, 'afk.env');
     jsonFile = join(dir, 'afk.config.json');
   });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => rmSyncRetry(dir));
 
   describe('maskSecret', () => {
     it('never reveals the raw value', () => {

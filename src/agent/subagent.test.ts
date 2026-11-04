@@ -107,6 +107,7 @@ import { resolveSoftDeadlineMs } from './providers/shared/soft-deadline.js';
 import { ENV_REGISTRY } from '../config/env.js';
 import { IdleWatchdogError } from '../utils/errors.js';
 import { WorkspaceStore } from './workspace/workspace-store.js';
+import { readOpenRootFor } from './subagent-read-scope.js';
 
 /**
  * Abort-aware sleep for the mock stream helpers. Rejects with the signal reason
@@ -1927,6 +1928,80 @@ describe('SubagentManager', () => {
       expect(disposed.some((id) => id === handle.id)).toBe(true);
 
       vi.restoreAllMocks();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // History: #3794 advisory found that unconfinement fork inheritance through
+  // SubagentManager was not exercised — provider-query-setup.cwd.test.ts:78-92
+  // covered the query dispatcher path but not forkSubagent itself. #4501 adds
+  // this describe block to close that gap.
+  //
+  // An unconfined SubagentManager (no `cwd`, no `parentReadRoots`) must:
+  //   1. Report { parentReadRoots: undefined, parentCwd: undefined } from
+  //      getReadScopeInputs() — the canonical "unconfined" signal.
+  //   2. When forking a child that has an explicit `cwd`, propagate a read-open
+  //      root ([readOpenRootFor(childCwd)]) into the child's AgentConfig so the
+  //      child is NOT silently re-confined to its own cwd.
+  //   3. When forking a child with no explicit `cwd`, leave readRoots unset
+  //      (the child is already unconfined because its resolveBase is undefined).
+  // -------------------------------------------------------------------------
+  describe('unconfinement fork inheritance (#4501)', () => {
+    it('getReadScopeInputs returns both fields undefined for an unconfined manager', () => {
+      // A manager constructed with no cwd and no parentReadRoots is the
+      // canonical representation of an unconfined parent session. The
+      // getReadScopeInputs() contract is what executeOnce, skill-executor and
+      // compose-executor use to decide how to seed a grandchild manager.
+      const mgr = new SubagentManager();
+      const scope = mgr.getReadScopeInputs();
+      expect(scope.parentReadRoots).toBeUndefined();
+      expect(scope.parentCwd).toBeUndefined();
+    });
+
+    it('forkSubagent propagates a read-open root when unconfined parent forks a child with explicit cwd', async () => {
+      // Regression guard for the SubagentManager code path:
+      // computeInheritedReadRoots({ parentReadRoots: undefined, parentCwd: undefined, childCwd })
+      // must return [readOpenRootFor(childCwd)] so the child is read-open, not
+      // silently confined to its own cwd.
+      shared.lastConfig = null;
+      const childCwd = '/tmp/wt/unconfined-child';
+      const mgr = new SubagentManager(); // unconfined: no cwd, no parentReadRoots
+
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet', cwd: childCwd },
+        agentType: 'unconfinement-check',
+      });
+
+      const cfg = shared.lastConfig as unknown as Record<string, unknown>;
+      // The child's readRoots must be the read-open root, not just [childCwd].
+      expect(cfg['readRoots']).toEqual([readOpenRootFor(childCwd)]);
+    });
+
+    it('forkSubagent leaves readRoots unset when unconfined parent forks a child with no cwd', async () => {
+      // A child with no cwd is already unconfined (resolveBase undefined →
+      // containment bypassed entirely). computeInheritedReadRoots returns
+      // undefined in this case, so readRoots must not be set on the config.
+      shared.lastConfig = null;
+      const mgr = new SubagentManager(); // unconfined: no cwd, no parentReadRoots
+
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' }, // no cwd
+        agentType: 'unconfinement-check',
+      });
+
+      const cfg = shared.lastConfig as unknown as Record<string, unknown>;
+      expect(cfg['readRoots']).toBeUndefined();
+    });
+
+    it('getReadScopeInputs reflects the manager cwd when constructed with one', () => {
+      // Contrast: a confined manager (has parentCwd) must expose it in
+      // getReadScopeInputs so callers can derive a properly-confined child scope.
+      const mgr = new SubagentManager({ cwd: '/repo/main' });
+      const scope = mgr.getReadScopeInputs();
+      expect(scope.parentReadRoots).toBeUndefined();
+      expect(scope.parentCwd).toBe('/repo/main');
     });
   });
 });

@@ -2,8 +2,14 @@
  * Session-end hook for automatic episode synthesis.
  *
  * Fires at SessionEnd for top-level (non-subagent) sessions when
- * AFK_EPISODE_SYNTHESIS=1. Runs in the background lane (fire-and-forget)
- * and never propagates errors into teardown.
+ * AFK_EPISODE_SYNTHESIS=1. Builds a deterministic episode from the
+ * session facet (no LLM call). Runs in the background lane and never
+ * propagates errors into teardown.
+ *
+ * History: the original hook (PR #4565) called Haiku for narrative
+ * synthesis and backflowed LLM-derived decisions into the facet cache
+ * (#4569). The facet-bridge rewrite reads decisions FROM the facet, so
+ * backflow is no longer needed.
  *
  * @module agent/episodes/session-end-hook
  */

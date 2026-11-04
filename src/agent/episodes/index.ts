@@ -4,27 +4,27 @@
  * @module agent/episodes
  */
 
-export type { EpisodeRecord, EpisodeInput } from './types.js';
-export { extractEpisodeInput } from './extract.js';
-export { synthesizeEpisode } from './synthesize.js';
+export type { EpisodeRecord } from './types.js';
+export { buildEpisodeFromFacet } from './facet-bridge.js';
 export { writeEpisode, formatEpisodeContent, sanitizeNarrative } from './writer.js';
 export { ingestEpisodes } from './q-ingest.js';
 export type { IngestResult, ParsedEpisodeContent } from './q-ingest.js';
 export { QEpisodesStore, Q_EPISODES_SCHEMA_VERSION } from './q-store.js';
 export type { QEpisodeRow, QEpisodeInput } from './q-store.js';
 
-import { extractEpisodeInput } from './extract.js';
-import { synthesizeEpisode } from './synthesize.js';
+import { buildEpisodeFromFacet } from './facet-bridge.js';
 import { writeEpisode } from './writer.js';
 import type { EpisodeRecord } from './types.js';
 
 /**
- * Convenience: extract → synthesize → write in one call.
- * Returns the synthesized EpisodeRecord (useful for CLI display).
+ * Convenience: build from facet → write in one call.
+ * Returns the EpisodeRecord (useful for CLI display), or null when the facet
+ * is missing or yields no substance (empty goal and outcome), so callers can
+ * distinguish a skipped session from a written one.
  */
-export async function synthesizeAndWriteEpisode(sessionId: string): Promise<EpisodeRecord> {
-  const input = extractEpisodeInput(sessionId);
-  const episode = await synthesizeEpisode(input);
+export async function synthesizeAndWriteEpisode(sessionId: string): Promise<EpisodeRecord | null> {
+  const episode = buildEpisodeFromFacet(sessionId);
+  if (!episode || (!episode.goal && !episode.outcome)) return null;
   await writeEpisode(episode);
   return episode;
 }
