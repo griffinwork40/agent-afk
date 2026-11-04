@@ -45,7 +45,7 @@ function insertFact(
   db: Database.Database,
   content: string,
   sessionId: string | null = null,
-  category = 'learning',
+  category = 'episode',
   createdAt = new Date().toISOString(),
 ): void {
   db.prepare(
@@ -207,7 +207,7 @@ describe('ingestEpisodes', () => {
       goal: 'Fix the bug',
       synthesizedAt: createdAt,
     });
-    insertFact(memDb, content, 'session-001', 'learning', createdAt);
+    insertFact(memDb, content, 'session-001', 'episode', createdAt);
     memDb.close();
 
     const result = ingestEpisodes(dir, dir);
@@ -239,7 +239,7 @@ describe('ingestEpisodes', () => {
     expect(result.upserted).toBe(1);
   });
 
-  it('skips non-learning category facts', () => {
+  it('skips non-episode category facts', () => {
     const content = makeEpisodeContent({ sessionId: 'session-001', synthesizedAt: '2026-01-01T00:00:00.000Z' });
     insertFact(memDb, content, 'session-001', 'preference');
     memDb.close();
@@ -291,8 +291,8 @@ describe('ingestEpisodes', () => {
     // is deterministic regardless of when the test runs.
     const ts1 = '2026-01-01T00:00:00.000Z';
     const ts2 = '2026-06-01T00:00:00.000Z';
-    insertFact(memDb, makeEpisodeContent({ sessionId: 's1', synthesizedAt: ts1 }), 's1', 'learning', ts1);
-    insertFact(memDb, makeEpisodeContent({ sessionId: 's2', synthesizedAt: ts2 }), 's2', 'learning', ts2);
+    insertFact(memDb, makeEpisodeContent({ sessionId: 's1', synthesizedAt: ts1 }), 's1', 'episode', ts1);
+    insertFact(memDb, makeEpisodeContent({ sessionId: 's2', synthesizedAt: ts2 }), 's2', 'episode', ts2);
     memDb.close();
 
     const result = ingestEpisodes(dir, dir);
@@ -303,8 +303,8 @@ describe('ingestEpisodes', () => {
     // Insert two facts with distinct created_at values.
     const ts1 = '2026-03-01T00:00:00.000Z';
     const ts2 = '2026-04-01T00:00:00.000Z';
-    insertFact(memDb, makeEpisodeContent({ sessionId: 's-wm1', synthesizedAt: ts1 }), 's-wm1', 'learning', ts1);
-    insertFact(memDb, makeEpisodeContent({ sessionId: 's-wm2', synthesizedAt: ts2 }), 's-wm2', 'learning', ts2);
+    insertFact(memDb, makeEpisodeContent({ sessionId: 's-wm1', synthesizedAt: ts1 }), 's-wm1', 'episode', ts1);
+    insertFact(memDb, makeEpisodeContent({ sessionId: 's-wm2', synthesizedAt: ts2 }), 's-wm2', 'episode', ts2);
     memDb.close();
 
     // First run ingests both.

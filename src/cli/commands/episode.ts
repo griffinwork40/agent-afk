@@ -201,7 +201,7 @@ export function registerEpisodeCommand(program: Command): void {
     .command('ingest')
     .description(
       'Ingest episode facts from the AFK memory archive into the Q episodes store.\n' +
-        'Reads memory.db (category: learning, prefix: [episode:]) and upserts each\n' +
+        'Reads memory.db (category: episode, prefix: [episode:]) and upserts each\n' +
         'episode into a local Q episodes SQLite store for SQL-based recall.\n' +
         'Idempotent — a watermark ensures only new episodes are processed on\n' +
         'subsequent runs.',

@@ -3,7 +3,7 @@
  *
  * This is the read-only consumer path described in issue #4567:
  *   - Reads `~/.afk/state/memory/memory.db` (AFK facts table).
- *   - Queries facts WHERE category='learning' AND content LIKE '[episode:%'.
+ *   - Queries facts WHERE category='episode' AND content LIKE '[episode:%'.
  *   - Parses the structured content written by `writer.ts`.
  *   - Upserts each episode into the Q episodes store (`q-store.ts`).
  *
@@ -180,14 +180,14 @@ export function ingestEpisodes(
     const sql = watermark
       ? `SELECT id, session_id, created_at, category, content, source_surface, evidence
            FROM facts
-          WHERE category = 'learning'
+          WHERE category = 'episode'
             AND content LIKE '[episode:%'
             AND content LIKE '%synthesized: %'
             AND created_at > ?
           ORDER BY created_at ASC`
       : `SELECT id, session_id, created_at, category, content, source_surface, evidence
            FROM facts
-          WHERE category = 'learning'
+          WHERE category = 'episode'
             AND content LIKE '[episode:%'
             AND content LIKE '%synthesized: %'
           ORDER BY created_at ASC`;
