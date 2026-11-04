@@ -83,8 +83,8 @@ export async function* abortableStream<T>(
       // and wastes CPU on hot-path streams).
       const paused = PauseController.instance().isPaused();
       if (paused) stallHandle?.suspend();
-      await PauseController.instance().check();
-      if (paused) stallHandle?.resumeTimer();
+      try { await PauseController.instance().check(); }
+      finally { if (paused) stallHandle?.resumeTimer(); }
       if (signal.aborted) throw abortErrorFrom(signal);
       yield result.value;
     }
