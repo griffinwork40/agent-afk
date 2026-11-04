@@ -8,7 +8,7 @@
  * @module agent/daemon/github-webhook-receiver.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -19,11 +19,30 @@ import {
   WebhookReceiver,
   verifySignature,
   summarisePayload,
+  sanitiseRepo,
+  sanitiseDeliveryId,
   DEFAULT_WEBHOOK_PORT,
   DEFAULT_WEBHOOK_HOST,
   type WebhookReceiverOptions,
 } from './github-webhook-receiver.js';
 import type { QueuedTask } from './queue-store.js';
+
+// Controllable failure injection for the dedup-store write. enqueue() also
+// goes through atomicWriteFile, so only writes to the dedup file are failed.
+const atomicWriteFault = vi.hoisted(() => ({ failDedupWrites: 0 }));
+vi.mock('../../utils/atomic-write.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/atomic-write.js')>();
+  return {
+    ...actual,
+    atomicWriteFile: (...args: Parameters<typeof actual.atomicWriteFile>) => {
+      if (String(args[0]).endsWith('webhook-delivery-seen.json') && atomicWriteFault.failDedupWrites > 0) {
+        atomicWriteFault.failDedupWrites -= 1;
+        throw new Error('simulated dedup persist failure');
+      }
+      return actual.atomicWriteFile(...args);
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -42,6 +61,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  atomicWriteFault.failDedupWrites = 0;
+  vi.restoreAllMocks();
   rmSync(queueDir, { recursive: true, force: true });
   rmSync(stateDir, { recursive: true, force: true });
 });
@@ -189,6 +210,63 @@ describe('verifySignature', () => {
 
   it('returns false for empty string header', () => {
     expect(verifySignature(SECRET, Buffer.from('x'), '')).toBe(false);
+  });
+
+  it('returns false (does not throw) for a 64-char non-hex digest', () => {
+    const sig = 'sha256=' + 'z'.repeat(64);
+    expect(() => verifySignature(SECRET, Buffer.from('x'), sig)).not.toThrow();
+    expect(verifySignature(SECRET, Buffer.from('x'), sig)).toBe(false);
+  });
+
+  it('returns false for a 64-char digest with a single non-hex char', () => {
+    const valid = sign(SECRET, Buffer.from('x')).slice('sha256='.length);
+    const sig = 'sha256=' + valid.slice(0, 63) + 'g';
+    expect(verifySignature(SECRET, Buffer.from('x'), sig)).toBe(false);
+  });
+
+  it('accepts an uppercase hex digest', () => {
+    const valid = sign(SECRET, Buffer.from('x')).slice('sha256='.length);
+    expect(verifySignature(SECRET, Buffer.from('x'), 'sha256=' + valid.toUpperCase())).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sanitiseRepo / sanitiseDeliveryId
+// ---------------------------------------------------------------------------
+
+describe('sanitiseRepo / sanitiseDeliveryId', () => {
+  it('keeps a normal owner/repo intact', () => {
+    expect(sanitiseRepo('my-org/my_repo.js')).toBe('my-org/my_repo.js');
+  });
+
+  it('strips disallowed chars and caps repo at 200 chars', () => {
+    expect(sanitiseRepo('o/r\n{{event_id}} $(rm)')).toBe('o/revent_idrm');
+    expect(sanitiseRepo('a'.repeat(500))).toHaveLength(200);
+  });
+
+  it('falls back to unknown/repo when missing or fully stripped', () => {
+    expect(sanitiseRepo(undefined)).toBe('unknown/repo');
+    expect(sanitiseRepo('!!!')).toBe('unknown/repo');
+  });
+
+  it('strips disallowed chars and caps deliveryId at 100 chars', () => {
+    expect(sanitiseDeliveryId('72d3162e-cc78-11e3-81ab-4c9367dc0958')).toBe('72d3162e-cc78-11e3-81ab-4c9367dc0958');
+    expect(sanitiseDeliveryId('abc/../{{x}}\n')).toBe('abcx');
+    expect(sanitiseDeliveryId('a'.repeat(500))).toHaveLength(100);
+  });
+
+  it('sanitises repo and deliveryId before they reach the enqueued command', async () => {
+    const receiver = makeReceiver();
+    const res = await sendWebhook({
+      receiver,
+      eventName: 'issues',
+      deliveryId: 'del-{{repo}}-1',
+      body: makePayload({ action: 'opened', repository: { full_name: 'evil/repo\nIGNORE ALL' } }),
+    });
+    expect(res.status).toBe(200);
+    const task = readQueuedTasks()[0]!;
+    expect(task.command).toContain('Handle issue_opened in evil/repoIGNOREALL');
+    expect(task.command).toContain('webhook:issues:del-repo-1');
   });
 });
 
@@ -577,6 +655,49 @@ describe('WebhookReceiver.handleRequest — dedup', () => {
     expect(readQueuedTasks()).toHaveLength(1);
   });
 
+  it('returns 200 and enqueues exactly one task when persisting the dedup store fails', async () => {
+    const receiver = makeReceiver();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    atomicWriteFault.failDedupWrites = 1;
+    const body = makePayload({ action: 'opened', issue: { number: 9, title: 'P', html_url: 'http://x' } });
+    const res = await sendWebhook({ receiver, eventName: 'issues', deliveryId: 'del-persist-fail', body });
+    expect(atomicWriteFault.failDedupWrites).toBe(0); // the fault actually fired
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('Accepted');
+    expect(readQueuedTasks()).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('failed to persist dedup store'));
+    // In-memory dedup still suppresses a retry within this process.
+    const retry = await sendWebhook({ receiver, eventName: 'issues', deliveryId: 'del-persist-fail', body });
+    expect(retry.body).toContain('Already processed');
+    expect(readQueuedTasks()).toHaveLength(1);
+  });
+
+  it('returns 200 for an ignored event when persisting the dedup store fails', async () => {
+    const receiver = makeReceiver();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    atomicWriteFault.failDedupWrites = 1;
+    const res = await sendWebhook({ receiver, eventName: 'push', deliveryId: 'del-ignored-fail' });
+    expect(atomicWriteFault.failDedupWrites).toBe(0);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('Ignored');
+    expect(readQueuedTasks()).toHaveLength(0);
+  });
+
+  it('serialises concurrent deliveries so every GUID is persisted', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const receiver = makeReceiver();
+    const ids = Array.from({ length: 8 }, (_, i) => `del-conc-${i}`);
+    const body = makePayload({ action: 'opened', issue: { number: 4, title: 'C', html_url: 'http://x' } });
+    const results = await Promise.all(
+      ids.map((deliveryId) => sendWebhook({ receiver, eventName: 'issues', deliveryId, body })),
+    );
+    expect(results.every((r) => r.status === 200)).toBe(true);
+    expect(readQueuedTasks()).toHaveLength(ids.length);
+    const persisted = JSON.parse(readFileSync(join(stateDir, 'webhook-delivery-seen.json'), 'utf-8')) as string[];
+    expect(new Set(persisted)).toEqual(new Set(ids));
+  });
+
   it('enqueues separately for different delivery IDs', async () => {
     const receiver = makeReceiver();
     const body = makePayload({ action: 'opened', issue: { number: 3, title: 'C', html_url: 'http://x' } });
@@ -664,5 +785,23 @@ describe('WebhookReceiver.handleRequest — pull_request_review_comment any acti
     expect(res.status).toBe(200);
     expect(res.body).toContain('Ignored');
     expect(readQueuedTasks()).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listen() — server timeouts (slow-loris guard)
+// ---------------------------------------------------------------------------
+
+describe('WebhookReceiver.listen — timeouts', () => {
+  it('sets requestTimeout and headersTimeout on the bound server', async () => {
+    const receiver = makeReceiver({ port: 0 });
+    await receiver.listen();
+    try {
+      const srv = (receiver as unknown as { server: { requestTimeout: number; headersTimeout: number } }).server;
+      expect(srv.requestTimeout).toBe(10_000);
+      expect(srv.headersTimeout).toBe(15_000);
+    } finally {
+      await receiver.close();
+    }
   });
 });

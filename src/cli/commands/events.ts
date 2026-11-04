@@ -16,7 +16,7 @@
  */
 
 import { Command } from 'commander';
-import { env } from '../../config/env.js';
+import { env, ENV_REGISTRY, type EnvVarName } from '../../config/env.js';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import {
@@ -124,9 +124,18 @@ async function runServeAction(opts: ServeOpts): Promise<void> {
   // Resolve the secret via the env registry indirection.
   // --secret-env names the env var (default AFK_EVENTS_WEBHOOK_SECRET) so
   // the raw secret never appears in the process argv / process table.
-  const secret = opts.secretEnv === 'AFK_EVENTS_WEBHOOK_SECRET'
-    ? env.AFK_EVENTS_WEBHOOK_SECRET
-    : env[opts.secretEnv as keyof typeof env] as string | undefined;
+  // Only registry entries flagged `secret: true` are accepted, so the flag
+  // cannot be used to read arbitrary env vars or `env` object keys.
+  const secretEnvName = resolveSecretEnvName(opts.secretEnv);
+  if (secretEnvName === undefined) {
+    console.error(
+      palette.error(
+        `--secret-env must name a registered secret env var (e.g. AFK_EVENTS_WEBHOOK_SECRET), got: ${opts.secretEnv}`,
+      ),
+    );
+    process.exit(1);
+  }
+  const secret = env[secretEnvName];
   if (!secret) {
     console.error(
       palette.error(`Missing webhook secret. Set ${opts.secretEnv} in your environment.`),
@@ -161,6 +170,14 @@ async function runServeAction(opts: ServeOpts): Promise<void> {
 
   await untilSignal(() => void receiver.close());
   console.log(palette.dim('\nStopped.'));
+}
+
+/** Return `name` iff it is an ENV_REGISTRY entry with `secret: true`. */
+export function resolveSecretEnvName(name: string): EnvVarName | undefined {
+  const entry = ENV_REGISTRY.find(
+    (e) => e.name === name && 'secret' in e && e.secret === true,
+  );
+  return entry?.name;
 }
 
 function resolveWebhookPort(flagPort: string): number {

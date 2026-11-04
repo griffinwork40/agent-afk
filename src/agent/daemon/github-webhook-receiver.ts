@@ -177,16 +177,32 @@ export function verifySignature(
   const prefix = 'sha256=';
   if (!signatureHeader.startsWith(prefix)) return false;
   const received = signatureHeader.slice(prefix.length);
+  // Validate the format up front: a 64-char non-hex string would otherwise
+  // decode to a short buffer and make timingSafeEqual throw, giving the
+  // exception path a timing-distinguishable shape. Reject without throwing.
+  if (!SHA256_HEX_RE.test(received)) return false;
   const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
-  // Both must be the same length for timingSafeEqual; pad/truncate is not
-  // needed because hex digests of the same algo are always 64 chars.
-  if (received.length !== expected.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(received, 'hex'), Buffer.from(expected, 'hex'));
-  } catch {
-    // Buffer.from('hex') can throw on non-hex chars — treat as invalid.
-    return false;
-  }
+  return timingSafeEqual(Buffer.from(received, 'hex'), Buffer.from(expected, 'hex'));
+}
+
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/i;
+
+// ---------------------------------------------------------------------------
+// Header / payload sanitisation — values interpolated into the task prompt
+// ---------------------------------------------------------------------------
+
+const MAX_REPO_CHARS = 200;
+const MAX_DELIVERY_ID_CHARS = 100;
+
+/** Strip chars outside `[A-Za-z0-9_.-/]` and cap at 200 chars. */
+export function sanitiseRepo(raw: string | undefined): string {
+  const cleaned = (raw ?? '').replace(/[^A-Za-z0-9_.\-/]/g, '').slice(0, MAX_REPO_CHARS);
+  return cleaned || 'unknown/repo';
+}
+
+/** Strip chars outside `[A-Za-z0-9-]` and cap at 100 chars. */
+export function sanitiseDeliveryId(raw: string): string {
+  return raw.replace(/[^A-Za-z0-9-]/g, '').slice(0, MAX_DELIVERY_ID_CHARS);
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +224,11 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
       }
       chunks.push(chunk);
     });
-    req.on('end', () => { if (!settled) resolve(Buffer.concat(chunks)); });
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
+    });
     req.on('error', (err) => { if (!settled) { settled = true; reject(err); } });
   });
 }
@@ -283,6 +303,12 @@ export class WebhookReceiver {
   private readonly dedupPath: string;
   private readonly seen: Set<string>;
   private server: Server | null = null;
+  /**
+   * Serialises dedup-store writes. Each persist is chained onto the previous
+   * one so concurrent requests can never interleave reads/writes of the
+   * seen-set file. The chain never rejects (failures are logged).
+   */
+  private persistLock: Promise<void> = Promise.resolve();
 
   constructor(opts: WebhookReceiverOptions) {
     const host = opts.host ?? DEFAULT_WEBHOOK_HOST;
@@ -320,6 +346,11 @@ export class WebhookReceiver {
       const srv = createServer((req, res) => {
         void this.handleRequest(req, res);
       });
+      // Bound slow-loris exposure under --allow-external: cap the whole
+      // request (headers + body) at 10s and header receipt at 15s, rather
+      // than relying on Node-version-dependent defaults.
+      srv.requestTimeout = 10_000;
+      srv.headersTimeout = 15_000;
       srv.on('error', reject);
       srv.listen(this.port, this.host, () => {
         this.server = srv;
@@ -343,6 +374,26 @@ export class WebhookReceiver {
       this.server.close((err) => (err ? reject(err) : resolve()));
       this.server = null;
     });
+  }
+
+  /**
+   * Record a delivery as seen and persist the dedup store under the write
+   * lock. Never rejects: a persist failure is logged, not propagated, because
+   * by the time this runs the delivery has already been handled (and for the
+   * enqueue path, returning non-2xx would make GitHub retry → duplicate task).
+   */
+  private markSeen(deliveryId: string): Promise<void> {
+    this.seen.add(deliveryId);
+    const run = this.persistLock.then(() => {
+      try {
+        persistSeenSet(this.dedupPath, this.seen);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[github-webhook-receiver] failed to persist dedup store: ${errorMessage(err)}`);
+      }
+    });
+    this.persistLock = run;
+    return run;
   }
 
   // -------------------------------------------------------------------------
@@ -386,7 +437,8 @@ export class WebhookReceiver {
       }
 
       const githubEvent = req.headers['x-github-event'] as string | undefined;
-      const deliveryId = req.headers['x-github-delivery'] as string | undefined;
+      const rawDeliveryId = req.headers['x-github-delivery'] as string | undefined;
+      const deliveryId = rawDeliveryId ? sanitiseDeliveryId(rawDeliveryId) : '';
 
       if (!githubEvent || !deliveryId) {
         sendResponse(res, 400, 'Missing X-GitHub-Event or X-GitHub-Delivery header');
@@ -411,14 +463,14 @@ export class WebhookReceiver {
       // Unknown or non-actionable combinations are silently dropped.
       const eventType = resolveEventType(githubEvent, payload);
       if (eventType === undefined) {
-        // Record the delivery as seen so retries don't re-evaluate.
-        this.seen.add(deliveryId);
-        persistSeenSet(this.dedupPath, this.seen);
+        // Record the delivery as seen so retries don't re-evaluate. A persist
+        // failure is logged inside markSeen and never turns this into a 500.
+        await this.markSeen(deliveryId);
         sendResponse(res, 200, `Ignored: unsupported event ${githubEvent}/${payload.action ?? 'unknown'}`);
         return;
       }
 
-      const repo = payload.repository?.full_name ?? 'unknown/repo';
+      const repo = sanitiseRepo(payload.repository?.full_name);
       const eventId = `webhook:${githubEvent}:${deliveryId}`;
       const summary = summarisePayload(rawBody, githubEvent);
 
@@ -432,9 +484,10 @@ export class WebhookReceiver {
 
       enqueue(command, {}, this.queueDir);
 
-      // Record delivery as processed after successful enqueue.
-      this.seen.add(deliveryId);
-      persistSeenSet(this.dedupPath, this.seen);
+      // Record delivery as processed after successful enqueue. Once enqueued
+      // we MUST return 200 even if persisting the dedup store fails — a 500
+      // here would make GitHub retry and create a duplicate task.
+      await this.markSeen(deliveryId);
 
       // eslint-disable-next-line no-console
       console.log(`[github-webhook-receiver] enqueued task for ${githubEvent} delivery ${deliveryId}`);
