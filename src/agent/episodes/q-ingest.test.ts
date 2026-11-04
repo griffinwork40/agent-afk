@@ -201,19 +201,21 @@ describe('ingestEpisodes', () => {
   });
 
   it('ingests a single episode fact', () => {
+    const createdAt = '2026-02-01T00:00:00.000Z';
     const content = makeEpisodeContent({
       sessionId: 'session-001',
       goal: 'Fix the bug',
-      synthesizedAt: '2026-02-01T00:00:00.000Z',
+      synthesizedAt: createdAt,
     });
-    insertFact(memDb, content, 'session-001');
+    insertFact(memDb, content, 'session-001', 'learning', createdAt);
     memDb.close();
 
     const result = ingestEpisodes(dir, dir);
     expect(result.found).toBe(1);
     expect(result.upserted).toBe(1);
     expect(result.totalStored).toBe(1);
-    expect(result.watermark).toBe('2026-02-01T00:00:00.000Z');
+    // Watermark is the row's created_at, not synthesizedAt.
+    expect(result.watermark).toBe(createdAt);
   });
 
   it('ingests multiple episode facts', () => {
@@ -283,13 +285,18 @@ describe('ingestEpisodes', () => {
     store.close();
   });
 
-  it('tracks the watermark as the highest synthesized_at seen', () => {
-    insertFact(memDb, makeEpisodeContent({ sessionId: 's1', synthesizedAt: '2026-01-01T00:00:00.000Z' }), 's1');
-    insertFact(memDb, makeEpisodeContent({ sessionId: 's2', synthesizedAt: '2026-06-01T00:00:00.000Z' }), 's2');
+  it('tracks the watermark as the highest created_at seen', () => {
+    // Watermark is now keyed on created_at (the column the SQL filter uses),
+    // not synthesizedAt. Pass explicit created_at values so the assertion
+    // is deterministic regardless of when the test runs.
+    const ts1 = '2026-01-01T00:00:00.000Z';
+    const ts2 = '2026-06-01T00:00:00.000Z';
+    insertFact(memDb, makeEpisodeContent({ sessionId: 's1', synthesizedAt: ts1 }), 's1', 'learning', ts1);
+    insertFact(memDb, makeEpisodeContent({ sessionId: 's2', synthesizedAt: ts2 }), 's2', 'learning', ts2);
     memDb.close();
 
     const result = ingestEpisodes(dir, dir);
-    expect(result.watermark).toBe('2026-06-01T00:00:00.000Z');
+    expect(result.watermark).toBe(ts2);
   });
 
   it('watermark filter uses created_at > ? — row at exact watermark is not re-ingested', () => {

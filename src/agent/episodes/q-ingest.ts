@@ -79,8 +79,12 @@ export interface ParsedEpisodeContent {
   synthesizedAt: string;
 }
 
-/** Pattern that identifies the start of a new key: value line. */
-const KEY_PREFIX_RE = /^[a-z]+: /;
+/** Pattern that identifies the start of a new key: value line.
+ *
+ * Restricted to known keys so narrative continuation lines like
+ * "goal: to understand X" are not mistaken for a new field boundary.
+ */
+const KEY_PREFIX_RE = /^(goal|approach|outcome|pivots|decisions|open|files|tags|narrative|synthesized): /;
 
 export function parseEpisodeContent(
   content: string,
@@ -159,7 +163,10 @@ export function ingestEpisodes(
   const watermark = store.getWatermark();
 
   // Open AFK memory.db read-only — the adapter must never write to it.
-  const memDb = new Database(memoryDbPath, { readonly: true });
+  // null-init so the finally guard can use optional-chaining even when
+  // the Database constructor throws before assignment completes.
+  let memDb: InstanceType<typeof Database> | null = null;
+  memDb = new Database(memoryDbPath, { readonly: true });
 
   let found = 0;
   let upserted = 0;
@@ -208,24 +215,27 @@ export function ingestEpisodes(
 
       upserted++;
 
-      // Track the highest synthesized_at for the new watermark.
+      // Track created_at (the column the watermark filter runs on) so the
+      // next run's `created_at > ?` query uses the same timestamp domain.
       if (
         newWatermark === null ||
-        parsed.synthesizedAt > newWatermark
+        row.created_at > newWatermark
       ) {
-        newWatermark = parsed.synthesizedAt;
+        newWatermark = row.created_at;
       }
     }
 
-    // Persist the new watermark only if we actually ingested something.
-    if (upserted > 0 && newWatermark !== null) {
+    // Persist the new watermark after every run that fetched rows, regardless
+    // of whether any parsed successfully. Advancing over unparseable rows
+    // prevents them from being re-fetched on every subsequent run.
+    if (found > 0 && newWatermark !== null) {
       store.setWatermark(newWatermark);
     }
 
     // Read total count before closing the store (avoids TOCTOU re-open).
     totalStored = store.count();
   } finally {
-    memDb.close();
+    memDb?.close();
     store.close();
   }
 
