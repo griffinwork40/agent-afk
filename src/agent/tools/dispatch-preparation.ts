@@ -47,6 +47,8 @@ export interface PrepareDispatchModelResult extends ResolvedChildModel {
  */
 export function prepareDispatchModel(input: DispatchModelPreparationInput): PrepareDispatchModelResult {
   const { modelIntent } = input;
+  // SYNC: this exhaustive check must list every tier defined in ResolveChildModelOpts.
+  // If a new tier is added to ResolveChildModelOpts, add it here too.
   if (
     modelIntent.callSiteModel === undefined &&
     modelIntent.namedAgentModel === undefined &&
