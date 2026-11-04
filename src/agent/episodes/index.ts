@@ -7,6 +7,10 @@
 export type { EpisodeRecord } from './types.js';
 export { buildEpisodeFromFacet } from './facet-bridge.js';
 export { writeEpisode, formatEpisodeContent, sanitizeNarrative } from './writer.js';
+export { ingestEpisodes } from './q-ingest.js';
+export type { IngestResult, ParsedEpisodeContent } from './q-ingest.js';
+export { QEpisodesStore, Q_EPISODES_SCHEMA_VERSION } from './q-store.js';
+export type { QEpisodeRow, QEpisodeInput } from './q-store.js';
 
 import { buildEpisodeFromFacet } from './facet-bridge.js';
 import { writeEpisode } from './writer.js';
