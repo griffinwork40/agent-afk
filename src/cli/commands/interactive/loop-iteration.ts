@@ -72,8 +72,16 @@ interface TurnInput {
   attachments: ReadWithAutocompleteResult['attachments'];
   silentSeed: boolean;
   queuedHumanTurn: boolean;
+  /**
+   * True when a seed was consumed this iteration (seed path). False on the
+   * readline path. Guards the seedBuffer update so a seed set by tryAutoResume
+   * during abortPendingRead is not overwritten by nextSeedBuffer: undefined.
+   */
+  seedConsumed: boolean;
   /** Updated seed buffer after consumption (undefined = consumed). */
-  nextSeedBuffer: { text: string; attachments: readonly ImageAttachment[]; echo?: 'normal' | 'silent'; queuedSubmission?: boolean } | undefined;
+  nextSeedBuffer: { text: string; attachments: readonly ImageAttachment[]; echo?: 'normal' | 'silent'; queuedSubmission?: boolean; provenance?: TurnProvenance } | undefined;
+  /** Provenance carried from a seeded entry; undefined on the readline path. */
+  provenance: TurnProvenance | undefined;
 }
 
 /**
@@ -113,7 +121,9 @@ async function resolveTurnInput(
       attachments: queued.attachments as ReadWithAutocompleteResult['attachments'],
       silentSeed,
       queuedHumanTurn: queued.queuedSubmission === true,
+      seedConsumed: true,
       nextSeedBuffer: undefined,
+      provenance: queued.provenance,
     };
   }
 
@@ -134,7 +144,9 @@ async function resolveTurnInput(
     attachments: result.attachments,
     silentSeed: false,
     queuedHumanTurn: result.queuedSubmission === true,
+    seedConsumed: false,
     nextSeedBuffer: undefined,
+    provenance: undefined,
   };
 }
 
@@ -180,7 +192,7 @@ export async function runInputLoop(
 
   // Slash-command submit queue: pre-seeded from ctx.initialInput when the
   // session was launched with a first-message argument. See original docs.
-  let seedBuffer: { text: string; attachments: readonly ImageAttachment[]; echo?: 'normal' | 'silent'; queuedSubmission?: boolean } | undefined =
+  let seedBuffer: { text: string; attachments: readonly ImageAttachment[]; echo?: 'normal' | 'silent'; queuedSubmission?: boolean; provenance?: TurnProvenance } | undefined =
     ctx.initialInput !== undefined ? { text: ctx.initialInput, attachments: [] } : undefined;
 
   // Rewind reload-for-edit: `/rewind` returns a prefill payload; unlike
@@ -221,10 +233,7 @@ export async function runInputLoop(
     if (!bgPending && !peerNotifier.hasPendingInjections()) return;
     autoResumeCount++;
     ringBellIfEnabled(process.stdout);
-    seedBuffer = { text: autoResumeDirective(bgPending), attachments: [], echo: 'silent' };
-    // Stamp provenance for this auto-resume wake so runOneTurn can forward it
-    // to the presence file and (future) PreToolUse context.
-    currentTurnProvenance = autoResumeTurnProvenance(bgPending);
+    seedBuffer = { text: autoResumeDirective(bgPending), attachments: [], echo: 'silent', provenance: autoResumeTurnProvenance(bgPending) };
     surface.abortPendingRead();
   };
   for (const n of [bgResultNotifier, peerNotifier, processJobNotifier]) if (n) n.onInjectable = tryAutoResume;
@@ -233,9 +242,6 @@ export async function runInputLoop(
   while (true) {
     autoResumeCount = 0;
     queuedHumanTurn = false;
-    // Reset provenance to 'human' at each loop top; tryAutoResume overwrites it
-    // when a bg/peer wake seeds the buffer before readline.
-    currentTurnProvenance = humanTurnProvenance();
 
     if (pendingInitMeta) {
       ctx.replRenderer.writeLine(pendingInitMeta);
@@ -251,7 +257,14 @@ export async function runInputLoop(
 
     const turnInput = await resolveTurnInput(ctx, surface, sigintHandler, prefillBuffer, seedBuffer);
     prefillBuffer = undefined;
-    seedBuffer = turnInput.nextSeedBuffer;
+    // Only advance seedBuffer when a seed was consumed. On the readline path
+    // (seedConsumed: false), tryAutoResume may have set seedBuffer during
+    // abortPendingRead — overwriting it with nextSeedBuffer: undefined would
+    // silently drop the queued auto-resume directive.
+    if (turnInput.seedConsumed) seedBuffer = turnInput.nextSeedBuffer;
+    // Use the provenance carried by a seeded entry; fall back to 'human' on the
+    // readline path (where provenance is undefined — no seed was consumed).
+    currentTurnProvenance = turnInput.provenance ?? humanTurnProvenance();
     const { text, attachments, silentSeed } = turnInput;
     queuedHumanTurn = turnInput.queuedHumanTurn;
     // Invariant: await readLine first so idle upgrades are checked before

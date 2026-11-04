@@ -51,6 +51,11 @@ export interface PeerEnvelope {
    * round-trips.  Optional / back-compat — absent on envelopes from older
    * builds.
    */
+  /**
+   * UNTRUSTED — self-reported by the sender. Never an access-control or
+   * enforcement input. Parsed from peer JSON with shape validation only;
+   * the sender can set any valid value, including origin 'human'.
+   */
   senderTurn?: import('../turn-provenance.js').TurnProvenance;
 }
 

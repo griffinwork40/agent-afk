@@ -208,6 +208,9 @@ export async function* runTurn(
   // interrupt→halt latency stamp. loop_end fires from the generator's finally
   // block so all exit paths — abort, error, clean end-of-turn, capped — are
   // covered without per-site annotation.
+  // FIXME(PR-B): turnProvenance is seeded once at construction and never
+  // refreshed per turn for REPL sessions. Needs a per-turn setter wired
+  // from the session layer. Same gap as openai-compatible/query.ts:260.
   const trace = new TurnTrace(input.signal, input.traceWriter, 'anthropic-direct', input.turnProvenance);
 
   try {
