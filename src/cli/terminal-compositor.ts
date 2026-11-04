@@ -323,6 +323,13 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   backgrounded = false;
   /**
+   * Chord leader state for the Ctrl+X two-key chord sequence.
+   * Set to 'x' when Ctrl+X is pressed; cleared when the second key fires or
+   * any other key is pressed. Undefined between chords.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  pendingChordKey: string | undefined = undefined;
+  /**
    * True while the current turn is parked in a usage-limit pause (set by the
    * turn handler on the `paused` provider event, cleared on `resumed` / turn
    * end). While set, a submitted line in {@link handleEnter} additionally

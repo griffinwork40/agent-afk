@@ -17,6 +17,7 @@ import {
   wireCompositorIntoCtx,
   wireSlashCtxCallbacks,
 } from './surface-setup.wiring.js';
+import { cycleDiffCap } from './tool-lane-diff-cap.js';
 
 /**
  * Dependencies surface-setup needs from phases that have not been
@@ -126,6 +127,14 @@ export async function setupSurface(
     // Ctrl+O → open $EDITOR seeded with the input buffer, mirroring the
     // /editor slash command. See buildOpenEditorCallback in surface-setup.wiring.ts.
     onOpenEditor: buildOpenEditorCallback(surface, ctx),
+    // Ctrl+X D → cycle diff body-line cap: compact → expanded → full → compact.
+    // The state lives in tool-lane-diff-cap.ts (pure module-level state machine);
+    // the repaint is triggered via ctx.statusLine.rearm() so the footer hint
+    // updates to reflect the new state.
+    onCycleDiffCap: () => {
+      cycleDiffCap();
+      ctx.statusLine.rearm();
+    },
     onOpenOutputViewer: buildOutputViewerCallback(ctx.capturePathRef, () => surface.getCompositor()),
     // StatusLine doubles as DECSTBM scroll-region guard so commitAbove
     // writes survive the persistent bottom-row reservation.
