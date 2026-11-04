@@ -18,7 +18,7 @@ import { OpenAICompatibleProvider } from '../../agent/providers/openai-compatibl
 import { XaiProvider } from '../../agent/providers/xai/index.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
-import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
+import { MemoryStore, injectHotMemory, injectEpisodeRecall, injectGoalPrompt } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
@@ -212,7 +212,7 @@ export async function buildChatSession(
   const getChatPermissionMode = (): PermissionMode =>
     dangerouslySkipPermissions ? 'bypassPermissions' : (permissionMode ?? 'bypassPermissions');
 
-  const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
+  const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory({
     model: sessionModel,
     surface: 'cli',
     apiKey: getApiKeyForModel(sessionModel, providerHints),
@@ -247,7 +247,7 @@ export async function buildChatSession(
     ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
     ...resumeConfig,
     provider,
-  }))), traceWriter);
+  })))), traceWriter);
 
   boundSession = session;
 
