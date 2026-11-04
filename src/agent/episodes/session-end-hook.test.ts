@@ -126,9 +126,7 @@ describe('createEpisodeSessionEndHook — gating logic', () => {
       narrative: 'Test narrative',
       synthesizedAt: '2026-01-01T00:00:00.000Z',
     });
-    const mockPatch = vi.fn();
     vi.doMock('./index.js', () => ({ synthesizeAndWriteEpisode: mockSynthesize }));
-    vi.doMock('../facets/yield-probe.js', () => ({ patchFacetDecisions: mockPatch }));
 
     const { createEpisodeSessionEndHook } = await import('./session-end-hook.js');
     const hook = createEpisodeSessionEndHook();
@@ -136,13 +134,10 @@ describe('createEpisodeSessionEndHook — gating logic', () => {
 
     expect(mockSynthesize).toHaveBeenCalledOnce();
     expect(mockSynthesize).toHaveBeenCalledWith('sess-abc');
-    // Backflow: patchFacetDecisions must fire with the synthesized decisions (#4569)
-    expect(mockPatch).toHaveBeenCalledOnce();
-    expect(mockPatch).toHaveBeenCalledWith('sess-abc', ['Chose approach A', 'Avoided approach B']);
     expect(result).toEqual({});
   });
 
-  it('calls patchFacetDecisions with [] when synthesis returns empty decisions (no-ops internally)', async () => {
+  it('synthesizeAndWriteEpisode return value is ignored (no backflow)', async () => {
     const mockSynthesize = vi.fn().mockResolvedValue({
       sessionId: 'sess-abc',
       goal: 'Test goal',
@@ -156,17 +151,13 @@ describe('createEpisodeSessionEndHook — gating logic', () => {
       narrative: 'Test narrative',
       synthesizedAt: '2026-01-01T00:00:00.000Z',
     });
-    const mockPatch = vi.fn();
     vi.doMock('./index.js', () => ({ synthesizeAndWriteEpisode: mockSynthesize }));
-    vi.doMock('../facets/yield-probe.js', () => ({ patchFacetDecisions: mockPatch }));
 
     const { createEpisodeSessionEndHook } = await import('./session-end-hook.js');
     const hook = createEpisodeSessionEndHook();
     const result = await hook(sessionEndContext());
 
     expect(mockSynthesize).toHaveBeenCalledOnce();
-    // Empty decisions array: patchFacetDecisions is NOT called (guard in hook)
-    expect(mockPatch).not.toHaveBeenCalled();
     expect(result).toEqual({});
   });
 

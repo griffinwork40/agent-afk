@@ -69,7 +69,7 @@ export function buildEpisodeFromFacet(sessionId: string): EpisodeRecord | null {
       goal,
       approach,
       pivots: [],
-      decisions: facet.decisions.slice(0, 4),
+      decisions: facet.decisions,
       outcome,
       openQuestions: [],
       filesKey: facet.evidence_pointers.slice(0, 5),
