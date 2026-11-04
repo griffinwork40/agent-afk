@@ -46,6 +46,8 @@ const K = 375;
  * Grace period before showing the summary-mode thinking indicator. Matches
  * {@link TTFB_GRACE_MS} so both "waiting for first byte" and "waiting for
  * thinking to finish" use the same 2 s threshold.
+ *
+ * Exported for test files only — not part of the public API surface.
  */
 export const THINKING_GRACE_MS = 2_000;
 
@@ -90,6 +92,11 @@ export interface LifecycleContext extends TtfbTickCtx {
  * DECSTBM extra-row mechanism as `BackgroundStatusBar`), not as part of the
  * live overlay frame. The `stageTracker` field is kept in the context type for
  * the `LifecycleContext` interface but is no longer consumed here.
+ *
+ * Summary-mode thinking: the `'thinking-live'` slot is intentionally empty
+ * when `thinkingMode === 'summary'`. A lightweight `◦ thinking · Xs` banner
+ * is shown instead via the `'progress-banner'` slot (see the summary-mode
+ * branch inside that slot's render function).
  */
 export function registerOverlaySlots(
   overlayComposer: OverlayComposer,
@@ -238,7 +245,7 @@ export function registerOverlaySlots(
       // thinking and no other content is driving the banner. Uses
       // activeThinkingElapsedMs() which tracks the real thinking window
       // only — stops at markEnded(), so tool time is excluded.
-      if (bannerLines.length === 0 && ctx.thinkingMode !== 'live' && ctx.thinkingMode !== 'digest') {
+      if (bannerLines.length === 0 && ctx.thinkingMode === 'summary') {
         const thinkingMs = ctx.thinkingLane.activeThinkingElapsedMs();
         if (thinkingMs !== null && thinkingMs >= THINKING_GRACE_MS) {
           bannerLines.push(
@@ -446,7 +453,7 @@ function tickStalledSource(
  * ThinkingLane reports active thinking via {@link ThinkingLane.activeThinkingElapsedMs}.
  * Clears when thinking ends (markEnded fires on the first non-thinking event).
  */
-export function checkThinkingAnnotation(ctx: LifecycleContext, _now: number): boolean {
+export function checkThinkingAnnotation(ctx: LifecycleContext, now: number): boolean {
   if (
     ctx.disposed ||
     !ctx.isTTY ||
@@ -456,6 +463,7 @@ export function checkThinkingAnnotation(ctx: LifecycleContext, _now: number): bo
   ) {
     return false;
   }
+  void now; // passed for API symmetry with checkTtfbAnnotation; activeThinkingElapsedMs() owns its own clock
   const elapsedMs = ctx.thinkingLane.activeThinkingElapsedMs();
 
   // Thinking ended or below grace — clear any stale annotation.

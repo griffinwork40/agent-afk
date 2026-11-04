@@ -67,10 +67,12 @@ export function analyzeCommand(command: string): CommandAnalysis {
     get readOnly() { return !analysis.mutation.mutating; },
     get risk() { return risk ??= classifyCommandRisk(command, () => analysis.mutation, tokensFor); },
     get destructive() {
+      // empty command bypasses masking
       return destructive ??= command
         ? DESTRUCTIVE_PATTERNS.filter(({ re }) => re.test(maskedDestructive())) : [];
     },
     get releaseBoundary() {
+      // empty command bypasses masking
       return releaseBoundary ??= command
         ? RELEASE_BOUNDARY_PATTERNS.filter(({ re }) => re.test(maskedRelease())) : [];
     },

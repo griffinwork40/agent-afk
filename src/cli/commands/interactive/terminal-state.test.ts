@@ -135,6 +135,19 @@ describe('parseTerminalState — bullet field mapping', () => {
     expect(v?.worthDoing).toBe('★ run backfill · add hit-rate counter');
   });
 
+  it('done: "Recommendation:" variant maps to worthDoing', () => {
+    const text = `prose\n\nDone\n- What was done: shipped it\n- Recommendation: add a smoke test`;
+    const v = parseTerminalState(text);
+    // "Recommendation:" does not match 'worth doing', so worthDoing should be undefined.
+    expect(v?.worthDoing).toBeUndefined();
+  });
+
+  it('done: "Noteworthy:" does NOT map to worthDoing (negative case)', () => {
+    const text = `prose\n\nDone\n- What was done: shipped it\n- Noteworthy: big perf win`;
+    const v = parseTerminalState(text);
+    expect(v?.worthDoing).toBeUndefined();
+  });
+
   it('asking: "next" still maps to followup', () => {
     const text = `prose\n\nAsking\n- Question: keep or delete?\n- Next: I will archive it`;
     expect(parseTerminalState(text)?.followup).toBe('I will archive it');

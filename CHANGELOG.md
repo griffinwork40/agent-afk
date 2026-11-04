@@ -12,6 +12,35 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.347.0] - 2026-11-03
+
+### Added
+- named delegation profiles via AFK_DELEGATION_PROFILE (#4313) (339f2086a)
+- add read_journal tool for structured journal access (#4658) (80722d184)
+- add model identifier to session receipts (#4657) (77c6ac4df)
+- subagent orientation context injection at fork time (212d2e8df)
+- enrich afk doctor with subsystem health checks (917f40a6a)
+
+### Fixed
+- address 4 blocking review findings on PR #4659 (5357791c9)
+- remove false read_file tail-return claim in ground-state SKILL.md (8c61607d6)
+- use correct subcommands in CLI orientation block (a841f2467)
+- handle EPERM as alive, add missing hook events, fix bundle path (e77ea8f77)
+- address advisory findings from #4503 review (#4648) (33e0051b0)
+- fix inverted log message, add remoteDetail and size===0 test coverage (#4649) (f5ac931c2)
+- fix stale comment, add @internal tag, and improve session-id test coverage (#4653) (0276d7413)
+- raise maxBuffer to 4096, emit debugLog on signal, add ENOBUFS test, fix docs, rename interface (#4656) (594272a03)
+- fix fail() usage, test description, and add closeAll ordering test (a891a38c0)
+- dynamic model param description with slot and default info (19bba464e)
+- restructure test describe block and add startup quarantine telemetry (#4632) (aac50ec4f)
+- bump episode MAX_TOKENS from 512 to 1024 (1257faf1f)
+- wire "Worth doing" bullet through terminal-state pipeline (#4643) (00a030009)
+- skip daemon sessions and add synthesis canary logging (f8c0c8b1e)
+
+### Changed
+- replace LLM synthesis with deterministic facet bridge (155457e87)
+- guide read_file offset/limit in ground-state eval-pipeline check (3e0dbd951)
+
 ## [5.346.0] - 2026-11-02
 
 ### Added
