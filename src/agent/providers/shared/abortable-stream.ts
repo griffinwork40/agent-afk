@@ -32,9 +32,16 @@
  */
 import { PauseController } from '../../session/pause-controller.js';
 
+/** Subset of {@link StreamStallHandle} needed to freeze the stall timer during pause. */
+interface PauseSuspendable {
+  suspend(): void;
+  resumeTimer(): void;
+}
+
 export async function* abortableStream<T>(
   source: AsyncIterable<T>,
   signal: AbortSignal,
+  stallHandle?: PauseSuspendable,
 ): AsyncGenerator<T> {
   // Already aborted before the first pull — never touch the source.
   if (signal.aborted) throw abortErrorFrom(signal);
@@ -68,8 +75,16 @@ export async function* abortableStream<T>(
       if (result.done) return;
       // Pause gate: block without passing `signal` so the stall watchdog
       // (which feeds into `signal`) cannot fire through the pause and abort
-      // the stream. After check() returns we test signal separately (R1.2).
+      // the stream. Suspend the stall timer so the pause duration is not
+      // counted as stall time. After check() returns we re-arm and test
+      // signal separately (R1.2).
+      // Guard: only suspend/resume when actually paused — calling them on
+      // every non-paused SSE event would churn timers (breaks fake-timer tests
+      // and wastes CPU on hot-path streams).
+      const paused = PauseController.instance().isPaused();
+      if (paused) stallHandle?.suspend();
       await PauseController.instance().check();
+      if (paused) stallHandle?.resumeTimer();
       if (signal.aborted) throw abortErrorFrom(signal);
       yield result.value;
     }
