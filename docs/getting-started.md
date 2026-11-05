@@ -10,7 +10,7 @@
 npm install -g agent-afk
 ```
 
-**Node 22.22.2+, 24.15+, or 26+** required. (23.x and 25.x are excluded.)
+**Node 22.22.2+, 24.15.0+, or 26+** required. (23.x and 25.x are excluded.)
 
 Want to try it before installing globally?
 
@@ -73,7 +73,7 @@ You'll see something like:
 [tool_call]  bash           -> git log --oneline -5
 [tool_call]  read_file      -> README.md (1,842 bytes)
 [tool_call]  bash           -> cat package.json
-[session_sealed]  3 tool calls · $0.004 · 12s
+[SEALED]  fully_achieved  turns=1  $0.004  (closed 12s)
 ```
 
 This is your **learning tool**. When the agent does something unexpected, `afk trace show` tells you exactly what it did and in what order. Every run is auditable.
