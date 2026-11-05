@@ -12,6 +12,29 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- wire Q as read-only consumer of episode facts (#4612) (1aecfc063)
+- automatic episode retrieval at session start (#4614) (393a999f0)
+
+### Fixed
+- bracket-notation for index-signature payloads and update stale snapshot (581742f0e)
+- suspend stall watchdog during afk pause and inject resume context (#4691) (a96cb6b98)
+- correct category mismatch and wire inject into session (#4684) (ccde4a7f5)
+- add risk facet to empty-string test and document command guard asymmetry (#4671) (06d0eb75e)
+- address advisory findings for dynamic model param description (#4669) (1215899cb)
+- migrate remaining afterEach/afterAll teardown sites to rmSyncRetry (#4673) (3ecee23e3)
+- raise readLastTickTime limit to prevent window exhaustion by skipped records (#4665) (a4f6ab95c)
+- address summary-mode thinking indicator advisory findings (#4678) (fc4d02841)
+- address workspace subscription parity advisory findings (#4677) (d916a35cb)
+- harden Worth doing pipeline — drop fallback needle, add tests, document omission (#4666) (3d359c5a6)
+- address advisory findings from SubagentHandle test coupling review (#4670) (7748bddfb)
+- harden closeAll ordering test and extract required helper (#4668) (c9f39fdb5)
+
+### Changed
+- commit stale SPINE.md date bump and snapshot update (2f3232594)
+- add Sub-check C for compose-level maxToolRoundsPerNode precedence (#4639) (#4672) (f0f4333ee)
+- protect bundled reference file integrity (#4676) (df2e67b41)
+
 ## [5.347.0] - 2026-11-03
 
 ### Added
