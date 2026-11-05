@@ -99,24 +99,6 @@ describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', 
       expect(result.decision).toEqual({ decision: 'approve' });
     });
 
-    it('forwards a real command-hook ruleId through registry and session trace', async () => {
-      const registry = createHookRegistry();
-      registry.register('SessionStart', async context => {
-        const result = await executeCommand(makeOpts('echo \'{"decision":"block","ruleId":"command.e2e"}\'', context));
-        return result.decision;
-      });
-      const writer = new InMemoryTraceWriter();
-      await expect(dispatchSessionStart(registry, { event: 'SessionStart' }, { traceWriter: writer }))
-        .rejects.toMatchObject({ ruleId: 'command.e2e' });
-      expect(writer.events).toHaveLength(1);
-      expect(writer.events[0]).toMatchObject({ kind: 'hook_decision', payload: { decision: 'block', ruleId: 'command.e2e' } });
-    });
-
-    it('preserves ruleId on exit 2 without changing stderr block semantics', async () => {
-      const result = await executeCommand(makeOpts('echo \'{"decision":"approve","ruleId":"command.exit-block"}\'; echo denied >&2; exit 2'));
-      expect(result.decision).toEqual({ decision: 'block', reason: 'denied', ruleId: 'command.exit-block' });
-    });
-
     it('hookSpecificOutput.additionalContext → injectContext', async () => {
       const result = await executeCommand(
         makeOpts(
@@ -216,6 +198,30 @@ describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', 
       );
       expect(result.decision.decision).toBe('block');
       expect((result.decision.reason?.length ?? 0) <= 500).toBe(true);
+    });
+
+    it('preserves ruleId on exit 2 without changing stderr block semantics', async () => {
+      const result = await executeCommand(makeOpts('echo \'{"decision":"approve","ruleId":"command.exit-block"}\'; echo denied >&2; exit 2'));
+      expect(result.decision).toEqual({ decision: 'block', reason: 'denied', ruleId: 'command.exit-block' });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // E2E — registry wiring
+  // ---------------------------------------------------------------------------
+
+  describe('e2e — registry wiring', () => {
+    it('forwards a real command-hook ruleId through registry and session trace', async () => {
+      const registry = createHookRegistry();
+      registry.register('SessionStart', async context => {
+        const result = await executeCommand(makeOpts('echo \'{"decision":"block","ruleId":"command.e2e"}\'', context));
+        return result.decision;
+      });
+      const writer = new InMemoryTraceWriter();
+      await expect(dispatchSessionStart(registry, { event: 'SessionStart' }, { traceWriter: writer }))
+        .rejects.toMatchObject({ ruleId: 'command.e2e' });
+      expect(writer.events).toHaveLength(1);
+      expect(writer.events[0]).toMatchObject({ kind: 'hook_decision', payload: { decision: 'block', ruleId: 'command.e2e' } });
     });
   });
 
