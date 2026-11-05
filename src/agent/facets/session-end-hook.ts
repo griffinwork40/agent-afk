@@ -32,6 +32,7 @@ import { getOrDeriveFacet } from './store.js';
 import { writeFacetYield } from './yield-probe.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import { execFileAsync } from '../../utils/exec-file.js';
+import { MemoryStore } from '../memory/memory-store.js';
 
 export function createFacetSessionEndHook(): HookHandler {
   return (context) => {
@@ -54,6 +55,16 @@ export function createFacetSessionEndHook(): HookHandler {
     }
 
     if (!facet) return {};
+
+    // Phase 1b: index the facet into the facet FTS store for memory_search
+    // type:'session' results. Best-effort — failures must never block teardown.
+    try {
+      const memStore = new MemoryStore();
+      memStore.indexFacet(facet);
+      memStore.close();
+    } catch {
+      // Swallow: FTS index failures are additive, never critical.
+    }
 
     // Phase 2: enrich yield fields asynchronously — never blocks teardown.
     // Scheduled sessions have is_scheduled_session=true already (set by derive);
