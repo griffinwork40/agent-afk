@@ -25,7 +25,7 @@ Commands
   /diff [file] Show changes
 
   Tip: Ctrl+C interrupts a running turn; a second press exits.
-  /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode
+  Hidden: /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode
 
 "
 `;
@@ -164,7 +164,7 @@ exports[`original console bytes (color=1) > help 1`] = `
   [33m/diff [file][39m [2mShow changes[22m
 
 [2m  Tip: Ctrl+C interrupts a running turn; a second press exits.[22m
-[2m  /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode[22m
+[2m  Hidden: /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode[22m
 
 "
 `;
