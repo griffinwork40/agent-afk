@@ -106,7 +106,7 @@ export interface SearchOpts {
 }
 
 export interface MemorySearchResult {
-  type: 'fact' | 'procedure';
+  type: 'fact' | 'procedure' | 'session';
   content: string;
   category?: FactCategory;
   created_at: string;
