@@ -501,6 +501,7 @@ Guide: [repl](/surfaces/repl)
 | `--no-worktree-autoname` | Disable mid-session rename of auto-named worktrees from the first user message via haiku. Default on. Also: AFK_WORKTREE_AUTONAME=0, or interactive.worktreeAutoname:false in afk.config.json. |  |
 | `--no-shell-passthrough` | Disable the ! shell-passthrough feature. When set, inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Also: AFK_SHELL_PASSTHROUGH set to 0, false, off, or no. |  |
 | `--plain` | Force the session to fully behave like a non-TTY surface for rendering: append-only plain-stdout output instead of the live-overlay renderer, AND the input surface downgrades to the simple line reader — even when stdout/stdin ARE a TTY. Full opt-out escape hatch for tmux/SSH/multiplexer sessions. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default. |  |
+| `--no-recall` | Suppress automatic episode recall for this session, even when AFK_EPISODE_RECALL=1 is set globally. Equivalent to AFK_NO_EPISODE_RECALL=1 for this invocation. The /recall slash command is unaffected. |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk login`

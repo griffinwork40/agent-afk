@@ -259,6 +259,13 @@ export interface CliOptions {
    * (`isTTY`).
    */
   plain?: boolean;
+  /**
+   * Commander emits `recall: false` when `--no-recall` is passed, suppressing
+   * automatic episode recall for this session even when AFK_EPISODE_RECALL=1 is
+   * set globally. `true` or `undefined` means recall is not suppressed by this
+   * flag (the env var still controls whether recall fires).
+   */
+  recall?: boolean;
 }
 
 /**
