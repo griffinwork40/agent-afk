@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.348.0] - 2026-11-05
+
 ### Added
 - wire Q as read-only consumer of episode facts (#4612) (1aecfc063)
 - automatic episode retrieval at session start (#4614) (393a999f0)
