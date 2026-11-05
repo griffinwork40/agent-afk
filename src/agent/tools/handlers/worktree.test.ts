@@ -121,6 +121,19 @@ describe('worktree handler — input validation', () => {
     // Must NOT say "does not appear to be inside a git repository" (the misleading ENOENT message)
     expect(result.content).not.toContain('does not appear to be inside a git repository');
   });
+
+  it('rejects a file path with a "not a directory" error (not a misleading git error)', async () => {
+    // Create a real file so fs.stat succeeds but isDirectory() returns false.
+    const filePath = join(repoRoot, 'not-a-dir.txt');
+    await fs.writeFile(filePath, 'hello');
+    const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
+    const result = await handler({ action: 'list', repo: filePath }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('not a directory');
+    expect(result.content).toContain(filePath);
+    // Must NOT fall through to the git layer and produce a misleading git error.
+    expect(result.content).not.toContain('does not appear to be inside a git repository');
+  });
 });
 
 describe('worktree handler — create', () => {
