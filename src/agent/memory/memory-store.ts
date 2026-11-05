@@ -246,6 +246,39 @@ export class MemoryStore {
     return Number(result.lastInsertRowid);
   }
 
+  /**
+   * Write an episode fact using INSERT OR IGNORE for idempotency (#4661,
+   * constraint 4). The UNIQUE index on facts(content, created_at, session_id,
+   * category) means a re-derive or duplicate session-end hook invocation would
+   * otherwise hit a constraint violation and generate WAL noise. OR IGNORE
+   * turns duplicates into a silent no-op.
+   *
+   * Contract: unlike storeFact, this method does NOT append a WAL entry before
+   * the INSERT. Episode facts are derived on-demand from the facet cache; they
+   * are not user-authored data and do not need WAL crash-recovery — a missing
+   * episode row is simply re-synthesised on the next backfill run.
+   *
+   * Returns the rowid of the inserted row, or -1 when the row was ignored
+   * (duplicate). Callers that need to distinguish written vs skipped can inspect
+   * the return value; most callers (the session-end hook) can safely ignore it.
+   */
+  storeEpisodeFact(fact: NewFact): number {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      INSERT OR IGNORE INTO facts (session_id, created_at, category, content, source_surface, evidence)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(
+      fact.session_id ?? null,
+      now,
+      fact.category,
+      fact.content,
+      fact.source_surface,
+      fact.evidence ?? null,
+    );
+    return result.changes > 0 ? Number(result.lastInsertRowid) : -1;
+  }
+
   supersedeFact(
     factId: number,
     newContent: string,
