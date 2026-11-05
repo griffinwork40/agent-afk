@@ -6,7 +6,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, statSync, createReadStream } from 'fs';
+import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import Database from 'better-sqlite3';
@@ -89,7 +90,7 @@ describe('parseEpisodeContent', () => {
       files: 'src/auth.ts, src/auth.test.ts',
       synthesizedAt: '2026-03-01T00:00:00.000Z',
     });
-    const parsed = parseEpisodeContent(content, null);
+    const parsed = parseEpisodeContent(content);
     expect(parsed).not.toBeNull();
     expect(parsed!.sessionId).toBe('session-abc');
     expect(parsed!.goal).toBe('Refactor auth');
@@ -101,24 +102,23 @@ describe('parseEpisodeContent', () => {
 
   it('returns null when header is missing', () => {
     const content = 'goal: something\nsynthesized: 2026-01-01T00:00:00.000Z';
-    expect(parseEpisodeContent(content, null)).toBeNull();
+    expect(parseEpisodeContent(content)).toBeNull();
   });
 
   it('returns null when synthesized timestamp is missing', () => {
     const content = '[episode:session-abc]\ngoal: something';
-    expect(parseEpisodeContent(content, null)).toBeNull();
+    expect(parseEpisodeContent(content)).toBeNull();
   });
 
-  it('uses fallback session_id from DB row when header has no session_id', () => {
+  it('returns null when header session id is empty (regex requires at least one char)', () => {
     // Malformed header without sessionId — should not parse (header must match /\[episode:(.+)\]/)
     const content = '[episode:]\ngoal: x\nsynthesized: 2026-01-01T00:00:00.000Z';
-    // The regex requires at least one char after "episode:", so this returns null
-    expect(parseEpisodeContent(content, 'fallback-id')).toBeNull();
+    expect(parseEpisodeContent(content)).toBeNull();
   });
 
   it('handles missing tags and files gracefully', () => {
     const content = makeEpisodeContent({ sessionId: 'session-abc' });
-    const parsed = parseEpisodeContent(content, null);
+    const parsed = parseEpisodeContent(content);
     expect(parsed!.tags).toEqual([]);
     expect(parsed!.files).toEqual([]);
   });
@@ -132,7 +132,7 @@ describe('parseEpisodeContent', () => {
       'narrative: Short narrative.',
       'synthesized: 2026-05-01T00:00:00.000Z',
     ].join('\n');
-    const parsed = parseEpisodeContent(content, null);
+    const parsed = parseEpisodeContent(content);
     expect(parsed).not.toBeNull();
     expect(parsed!.goal).toBe('First line of goal\nsecond line of goal\nthird line of goal');
   });
@@ -146,7 +146,7 @@ describe('parseEpisodeContent', () => {
       'Narrative line three.',
       'synthesized: 2026-05-01T00:00:00.000Z',
     ].join('\n');
-    const parsed = parseEpisodeContent(content, null);
+    const parsed = parseEpisodeContent(content);
     expect(parsed).not.toBeNull();
     expect(parsed!.narrative).toBe(
       'Narrative line one.\nNarrative line two.\nNarrative line three.',
@@ -160,7 +160,7 @@ describe('parseEpisodeContent', () => {
       'narrative: Narrative text.',
       'synthesized: 2026-05-01T00:00:00.000Z',
     ].join('\n');
-    const parsed = parseEpisodeContent(content, null);
+    const parsed = parseEpisodeContent(content);
     expect(parsed).not.toBeNull();
     expect(parsed!.goal).toBe('Goal text.');
     expect(parsed!.narrative).toBe('Narrative text.');
@@ -297,6 +297,48 @@ describe('ingestEpisodes', () => {
 
     const result = ingestEpisodes(dir, dir);
     expect(result.watermark).toBe(ts2);
+  });
+
+  it('memory.db is unchanged after ingest — read-only invariant', async () => {
+    // Insert a valid episode fact, close the writer handle, record the
+    // checksum and mtime of memory.db, run ingest, then verify both are
+    // identical — confirming no byte was written through the readonly handle.
+    const content = makeEpisodeContent({
+      sessionId: 'session-ro',
+      goal: 'Read-only invariant check',
+      synthesizedAt: '2026-06-01T00:00:00.000Z',
+    });
+    insertFact(memDb, content, 'session-ro', 'episode', '2026-06-01T00:00:00.000Z');
+    memDb.close();
+
+    const dbPath = join(dir, 'memory.db');
+
+    function sha256(path: string): Promise<string> {
+      return new Promise((resolve, reject) => {
+        const hash = createHash('sha256');
+        const stream = createReadStream(path);
+        stream.on('data', (chunk) => hash.update(chunk));
+        stream.on('end', () => resolve(hash.digest('hex')));
+        stream.on('error', reject);
+      });
+    }
+
+    const checksumBefore = await sha256(dbPath);
+    const mtimeBefore = statSync(dbPath).mtimeMs;
+    const countBefore = new Database(dbPath, { readonly: true })
+      .prepare('SELECT COUNT(*) as n FROM facts').get() as { n: number };
+
+    ingestEpisodes(dir, dir);
+
+    const checksumAfter = await sha256(dbPath);
+    const mtimeAfter = statSync(dbPath).mtimeMs;
+    const dbAfter = new Database(dbPath, { readonly: true });
+    const countAfter = dbAfter.prepare('SELECT COUNT(*) as n FROM facts').get() as { n: number };
+    dbAfter.close();
+
+    expect(checksumAfter).toBe(checksumBefore);
+    expect(mtimeAfter).toBe(mtimeBefore);
+    expect(countAfter.n).toBe(countBefore.n);
   });
 
   it('watermark filter uses created_at > ? — row at exact watermark is not re-ingested', () => {
