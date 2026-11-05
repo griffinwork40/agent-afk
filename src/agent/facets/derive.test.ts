@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(13); // v13: token_breakdown total/subagent cost (#3879)
+    expect(facet.facet_version).toBe(14); // v14: surface field for structural daemon filtering (#4645)
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -54,6 +54,45 @@ describe('deriveSessionFacet', () => {
     expect(facet.model).toBe('opus');
     expect(facet.duration_minutes).toBe(5);
     expect(facet.start_time).toBe(new Date(1_000_000).toISOString());
+  });
+
+  // --- surface field (#4645) ---
+
+  it('surface: defaults to "cli" when session.source is undefined', () => {
+    const facet = deriveSessionFacet(richSession()); // richSession has no source field
+    expect(facet.surface).toBe('cli');
+  });
+
+  it('surface: "telegram" when session.source is "telegram"', () => {
+    const facet = deriveSessionFacet({ ...richSession(), source: 'telegram' });
+    expect(facet.surface).toBe('telegram');
+    expect(facet.source).toBe('telegram');
+  });
+
+  it('surface: "daemon" when session.source is "daemon"', () => {
+    const facet = deriveSessionFacet({ ...richSession(), source: 'daemon' });
+    expect(facet.surface).toBe('daemon');
+    expect(facet.source).toBe('daemon');
+  });
+
+  it('surface: "web" when session.source is "web"', () => {
+    const facet = deriveSessionFacet({ ...richSession(), source: 'web' });
+    expect(facet.surface).toBe('web');
+    expect(facet.source).toBe('web');
+  });
+
+  it('surface: "cli" when session.source is "cli"', () => {
+    const facet = deriveSessionFacet({ ...richSession(), source: 'cli' });
+    expect(facet.surface).toBe('cli');
+    expect(facet.source).toBe('cli');
+  });
+
+  it('surface: schema-valid on derived facets', () => {
+    for (const src of ['cli', 'telegram', 'daemon', 'web'] as const) {
+      const facet = deriveSessionFacet({ ...richSession(), source: src });
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+      expect(facet.surface).toBe(src);
+    }
   });
 
   it('aggregates tool counts and errors mechanically', () => {
