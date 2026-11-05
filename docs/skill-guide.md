@@ -19,7 +19,7 @@ Skills that cover the everyday development loop. Learn these first.
 
 | Skill | What it does | Example |
 |-------|-------------|---------|
-| `mint` | Takes a feature idea and delivers a ship-ready, verified implementation end-to-end (spec → research → build → verify → heal). | `/mint "add rate-limit middleware"` |
+| `mint` | Takes a feature idea and delivers a ship-ready, verified implementation end-to-end (spec → research → build → verify). | `/mint "add rate-limit middleware"` |
 | `ship` | Pushes local changes, runs tests, drafts a commit message, and opens a PR. | `/ship` or `/ship --verify` |
 | `review` | Parallel multi-dimension code review (security, correctness, API compat, test coverage, perf) across a diff, PR, branch, or commit. | `/review 312` or `/review --staged` |
 | `fix-pr` | Fetches unresolved reviewer feedback and red CI from a PR, fixes everything in an isolated worktree, and pushes. | `/fix-pr 286` |
@@ -54,7 +54,7 @@ Situationally valuable skills that unlock significant leverage once you know whe
 | `parallelize` | Transforms an existing plan into a parallel sub-agent wave orchestration. |
 | `orient` | End-of-session survey that drafts a priming prompt for the next session to orient itself. |
 | `polish` | Iteratively refines any artifact (prose, spec, prompt, code) via a decoupled evaluator → generator loop until criteria are met or cap is reached. |
-| `automate` | Sets up a scheduled headless afk run that pushes a summary to Telegram. |
+| `automate` | Sets up a scheduled headless afk run that pushes a summary to Telegram. Requires Telegram and daemon configured first (run `/telegram-setup` and `/service-setup`). |
 
 ---
 
@@ -104,5 +104,4 @@ afk plugin list
 ```
 
 Plugin-contributed skills appear in your session's skill list alongside the
-bundled ones. For plugin development, see the `example-template` skill under
-`src/skills/example-template/`.
+bundled ones. Run `afk plugin list` to see what each installed plugin provides.
