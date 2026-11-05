@@ -1,8 +1,9 @@
 # Outcome keying diagnosis — 2026-10-29
 
 Status: **diagnosis only, no code fix**. The briefed gap does not reproduce on the
-live stores. No candidate hypothesis explains more than 80% of the residual gap
-that does exist, so per the task's stop rule nothing was changed in `src/`.
+live stores. No single candidate hypothesis explains more than 80% of the residual
+gap that does exist (H2 explains 43%, H3 explains 57% — jointly exhaustive), so
+per the task's stop rule nothing was changed in `src/`.
 
 Measured read-only on this machine on 2026-10-29 at about 22:30 EDT. The stores
 were still growing during the measurement.
@@ -57,8 +58,9 @@ PreToolUse context loses `sessionId`, so the effect ledger writes records with
 no `sessionId`.
 
 - First build uses the resolved or minted id:
-  `src/agent/providers/anthropic-direct/query/dispatcher-wiring.ts:136-146`
-  (`resolveTopLevelSessionId`) → `:184`/`:221` (`sessionId: resolvedSession.id`).
+  `src/agent/providers/anthropic-direct/query/dispatcher-wiring.ts:138,157,184,221`
+  (`resolveTopLevelSessionId` at :138, `sessionId: resolvedSession.id` assignments
+  at :157, :184, :221).
 - The rebuild uses the resume-only field:
   `src/agent/providers/anthropic-direct/query/cwd-dependents.ts:132`
   (`sessionId: args.config.sessionId`). The rebuilt system prompt has the same
@@ -97,8 +99,10 @@ null-keyed commits are invisible to anything joining by id.
   `b662afb1`, `f6a80421`, `e3ebdf39`, `974cddf4`, `773e3dda`). All 6 have
   `closed` events and receipts but **no outcomes file**. Sessions on 10-10 and
   10-12 do have outcomes files. Probable cause is an outcomes-hook regression
-  window that day (fix commits `f147fd64`/#3571 on 10-11 and `45ddcb2e`/#3593
-  on 10-12). **Not verified.**
+  window that day. `f147fd64`/#3571 (10-11) and `45ddcb2e`/#3593 (10-12) are
+  nearby commits but both touch only `outcomes/index.ts` as barrel doc changes
+  and do not modify the hook write path — the specific fix commit is
+  **[unverified]**.
 - The outcomes dir is not a pruned window. Its earliest `session_ended_at` is
   2026-10-10, and the ledger range is 2026-10-11 → 2026-10-29.
 
@@ -120,7 +124,10 @@ The root key is the top-level session's resolved id, `resolvedSession.id` from
 Recommended fix, not applied because of the stop rule:
 
 - Thread `resolvedSession.id` into `createCwdDependentsFactory`, replacing
-  `args.config.sessionId` at `cwd-dependents.ts:106,132`.
+  `args.config.sessionId` at `cwd-dependents.ts:106,132`. This applies to all
+  cwd-dependent rebuilds triggered via `createCwdDependentsFactory` (not only
+  born-named `afk -w` worktree paths — any mid-session `setCwd` re-anchor
+  that calls the factory is affected).
 - Optionally add `rootSessionId` to ledger records, computed as
   `context.rootSessionId ?? context.parentSessionId ?? context.sessionId`.
 
