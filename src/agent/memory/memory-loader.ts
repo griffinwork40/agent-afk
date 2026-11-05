@@ -191,30 +191,74 @@ export function parseEpisodeFiles(content: string): string[] {
 }
 
 /**
- * Score an episode fact against a set of candidate file basenames and an
- * optional branch name. Higher = more relevant.
+ * Recency decay window in days. Episodes older than this floor out at
+ * RECENCY_DECAY_FLOOR rather than reaching zero, so very old but highly
+ * relevant episodes can still surface.
+ */
+const RECENCY_DECAY_DAYS = 90;
+
+/**
+ * Minimum recency multiplier (floor). Keeps ancient episodes scoreable but
+ * heavily discounted vs. recent ones.
+ */
+const RECENCY_DECAY_FLOOR = 0.1;
+
+/**
+ * Score an episode fact against a set of candidate file paths, an optional
+ * branch name, and the episode's age. Higher = more relevant.
  *
- * Scoring:
- *   - +2 per matching file basename (after high-frequency filter)
+ * Scoring (before recency decay):
+ *   - +3 per matching full relative path (after high-frequency filter)
+ *   - +1 per matching file basename that did NOT already match by full path
+ *     (after high-frequency filter); handles episodes that stored abbreviated
+ *     paths that don't align with the caller's working-tree paths
  *   - +3 for branch name match (branch episodes are highly contextual)
+ *
+ * Full-path matches (+3) outweigh basename-only matches (+1) so that
+ * `src/utils.ts` and `lib/utils.ts` are disambiguated rather than treated
+ * as identical signals. Basename-only matching is kept as a fallback for
+ * episodes that stored relative paths that differ from the caller's tree root.
+ *
+ * The raw score is then multiplied by a linear recency decay over
+ * RECENCY_DECAY_DAYS days, floored at RECENCY_DECAY_FLOOR, so stale episodes
+ * are deprioritised relative to recent ones without being fully suppressed.
  *
  * Item 4: branch match uses a word-boundary regex so short names like `fix`,
  * `dev`, or `add` do not spuriously match arbitrary episode text.
  */
 export function scoreEpisode(
   fact: Fact,
-  fileBasenames: Set<string>,
+  filePaths: Set<string>,
   branch: string | null,
   highFreqFiles: Set<string>,
 ): number {
   let score = 0;
   const episodeFiles = parseEpisodeFiles(fact.content);
+
+  // Build a set of basenames derived from the caller's file paths so we can
+  // detect basename-only overlaps without double-counting files that already
+  // matched by full path.
+  const callerBasenames = new Map<string, string[]>();
+  for (const p of filePaths) {
+    const base = basename(p);
+    const list = callerBasenames.get(base) ?? [];
+    list.push(p);
+    callerBasenames.set(base, list);
+  }
+
   for (const f of episodeFiles) {
     const base = basename(f);
-    if (!highFreqFiles.has(base) && fileBasenames.has(base)) {
-      score += 2;
+    if (highFreqFiles.has(base)) continue;
+
+    if (filePaths.has(f)) {
+      // Full relative-path match — strong signal.
+      score += 3;
+    } else if (callerBasenames.has(base)) {
+      // Basename-only match — weaker signal (possible collision).
+      score += 1;
     }
   }
+
   if (branch) {
     // Require whole-word match: branch name must not be preceded or followed
     // by word characters or path separators ([\w/-]). This prevents short
@@ -225,6 +269,14 @@ export function scoreEpisode(
     );
     if (branchRe.test(fact.content)) score += 3;
   }
+
+  // Apply linear recency decay so older episodes are deprioritised.
+  if (score > 0) {
+    const ageDays = (Date.now() - new Date(fact.created_at).getTime()) / 86_400_000;
+    const decay = Math.max(RECENCY_DECAY_FLOOR, 1 - ageDays / RECENCY_DECAY_DAYS);
+    score *= decay;
+  }
+
   return score;
 }
 
@@ -299,7 +351,7 @@ export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
 
     const branch = getCurrentBranch(cwd);
     const modifiedFiles = getRecentlyModifiedFiles(cwd);
-    const fileBasenames = new Set(modifiedFiles.map((f) => basename(f)));
+    const filePaths = new Set(modifiedFiles);
 
     const highFreqFiles = buildHighFreqFiles(allEpisodes);
 
@@ -307,7 +359,7 @@ export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
     const scored = allEpisodes
       .map((ep) => ({
         ep,
-        score: scoreEpisode(ep, fileBasenames, branch, highFreqFiles),
+        score: scoreEpisode(ep, filePaths, branch, highFreqFiles),
       }))
       .filter(({ score }) => score > 0)
       .sort((a, b) => b.score - a.score || b.ep.created_at.localeCompare(a.ep.created_at));

@@ -284,33 +284,102 @@ describe('scoreEpisode', () => {
     expect(score).toBe(0);
   });
 
-  it('scores +2 per matching file basename', () => {
+  it('scores +3 per full relative-path match (recent episode, decay ≈ 1)', () => {
+    // Episode stores src/foo.ts and src/bar.ts; caller passes the same full paths.
     const fact = makeFact({ content: '[episode:s]\nfiles: src/foo.ts, src/bar.ts' });
-    const fileBasenames = new Set(['foo.ts', 'bar.ts']);
-    const score = scoreEpisode(fact, fileBasenames, null, new Set());
-    expect(score).toBe(4); // 2 files × 2
+    const filePaths = new Set(['src/foo.ts', 'src/bar.ts']);
+    const score = scoreEpisode(fact, filePaths, null, new Set());
+    expect(score).toBeCloseTo(6, 1); // 2 files × 3 (full-path match)
+  });
+
+  it('scores +1 per basename-only match when full path does not match', () => {
+    // Episode stores src/foo.ts; caller has lib/foo.ts — basename matches but
+    // full path does not, so only +1 (weaker collision signal).
+    const fact = makeFact({ content: '[episode:s]\nfiles: src/foo.ts, src/bar.ts' });
+    const filePaths = new Set(['lib/foo.ts', 'lib/bar.ts']);
+    const score = scoreEpisode(fact, filePaths, null, new Set());
+    expect(score).toBeCloseTo(2, 1); // 2 files × 1 (basename-only match)
+  });
+
+  it('full-path match outweighs basename-only match for the same file', () => {
+    // src/utils.ts in episode; caller has both src/utils.ts (full match) and
+    // lib/utils.ts (basename collision). Only src/utils.ts should score (+3),
+    // lib/utils.ts must not add an extra +1 for the same episode file entry.
+    const fact = makeFact({ content: '[episode:s]\nfiles: src/utils.ts' });
+    const filePaths = new Set(['src/utils.ts', 'lib/utils.ts']);
+    const score = scoreEpisode(fact, filePaths, null, new Set());
+    expect(score).toBeCloseTo(3, 1); // full-path match only, no double-count
   });
 
   it('skips high-frequency files in scoring', () => {
-    const fact = makeFact({ content: '[episode:s]\nfiles: package.json, foo.ts' });
-    const fileBasenames = new Set(['package.json', 'foo.ts']);
+    const fact = makeFact({ content: '[episode:s]\nfiles: package.json, src/foo.ts' });
+    const filePaths = new Set(['package.json', 'src/foo.ts']);
     const highFreq = new Set(['package.json']);
-    const score = scoreEpisode(fact, fileBasenames, null, highFreq);
-    expect(score).toBe(2); // only foo.ts counts
+    const score = scoreEpisode(fact, filePaths, null, highFreq);
+    expect(score).toBeCloseTo(3, 1); // only src/foo.ts counts (full-path match)
   });
 
   it('scores +3 for branch name match in content', () => {
     const fact = makeFact({ content: '[episode:s]\nfiles:\nnarrative: worked on feat/auth branch' });
     const score = scoreEpisode(fact, new Set(), 'feat/auth', new Set());
-    expect(score).toBe(3);
+    expect(score).toBeCloseTo(3, 1);
   });
 
-  it('combines file and branch scores', () => {
+  it('combines full-path file and branch scores', () => {
     const fact = makeFact({
       content: '[episode:s]\nfiles: src/session.ts\nnarrative: fixed on feat/session branch',
     });
-    const score = scoreEpisode(fact, new Set(['session.ts']), 'feat/session', new Set());
-    expect(score).toBe(5); // 2 (file) + 3 (branch)
+    const score = scoreEpisode(fact, new Set(['src/session.ts']), 'feat/session', new Set());
+    expect(score).toBeCloseTo(6, 1); // 3 (full-path file) + 3 (branch)
+  });
+
+  it('applies recency decay: a 90-day-old episode is multiplied by the floor (0.1)', () => {
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    const fact = makeFact({
+      content: '[episode:s]\nfiles: src/foo.ts',
+      created_at: ninetyDaysAgo,
+    });
+    const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
+    // Raw score = 3 (full-path match); decay = max(0.1, 1 - 90/90) = max(0.1, 0) = 0.1
+    expect(score).toBeCloseTo(3 * 0.1, 5);
+  });
+
+  it('applies recency decay: a 45-day-old episode is multiplied by 0.5', () => {
+    const fortyFiveDaysAgo = new Date(Date.now() - 45 * 86_400_000).toISOString();
+    const fact = makeFact({
+      content: '[episode:s]\nfiles: src/foo.ts',
+      created_at: fortyFiveDaysAgo,
+    });
+    const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
+    // Raw score = 3; decay = max(0.1, 1 - 45/90) = 0.5
+    expect(score).toBeCloseTo(3 * 0.5, 5);
+  });
+
+  it('recent episode (age ~ 0) has decay ≈ 1 and scores full raw value', () => {
+    const fact = makeFact({ content: '[episode:s]\nfiles: src/foo.ts' });
+    const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
+    // created_at defaults to now — decay should be essentially 1.0
+    expect(score).toBeCloseTo(3, 1);
+  });
+
+  it('a very old episode (>90 days) is clamped to the floor multiplier (0.1)', () => {
+    const twoYearsAgo = new Date(Date.now() - 730 * 86_400_000).toISOString();
+    const fact = makeFact({
+      content: '[episode:s]\nfiles: src/foo.ts',
+      created_at: twoYearsAgo,
+    });
+    const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
+    // decay = max(0.1, 1 - 730/90) is negative → clamped to 0.1
+    expect(score).toBeCloseTo(3 * 0.1, 5);
+  });
+
+  it('score 0 before decay skips decay multiplication and returns 0', () => {
+    const fact = makeFact({
+      content: '[episode:s]\nfiles: other.ts',
+      created_at: new Date(Date.now() - 10 * 86_400_000).toISOString(),
+    });
+    const score = scoreEpisode(fact, new Set(['unrelated.ts']), null, new Set());
+    expect(score).toBe(0);
   });
 });
 
