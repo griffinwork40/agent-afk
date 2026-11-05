@@ -66,6 +66,9 @@ export function buildEpisodeFromFacet(sessionId: string): EpisodeRecord | null {
 
     return {
       sessionId,
+      // source: read from the facet's first-class surface field (#4645).
+      // Falls back to undefined on old facets that pre-date v14.
+      ...(facet.surface !== undefined ? { source: facet.surface } : {}),
       goal,
       approach,
       pivots: [],

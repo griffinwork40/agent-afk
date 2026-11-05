@@ -294,7 +294,8 @@ export function deriveSessionFacet(
   const facet: SessionFacet = {
     facet_version: FACET_VERSION,
     session_id: sessionId,
-    source: source === 'telegram' ? 'telegram' : source === 'web' ? 'web' : source === 'daemon' ? 'daemon' : 'cli',
+    source,
+    surface: source, // first-class structural copy for daemon filtering (#4645)
     model: session.model,
     derived_at: (options.derivedAt ?? new Date()).toISOString(),
     derived_from: 'afk-session',
