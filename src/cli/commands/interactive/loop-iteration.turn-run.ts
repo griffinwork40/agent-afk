@@ -78,6 +78,22 @@ export async function runOneTurn(
   // TODO: pass session abort signal when available so a graceful abort can
   // interrupt a pause without waiting for removePauseLock() (R1.6).
   await PauseController.instance().check();
+
+  // Contract: after a user pause (afk pause / afk resume), inject a context
+  // note so the model knows how long it was paused and can correctly attribute
+  // subagent failures to the pause rather than provider throttling.
+  // Limitation: this injection runs at turn start, so a pause that occurs
+  // mid-turn (while streaming or dispatching tools) delivers the note only on
+  // the NEXT top-level turn. The mid-turn scenario requires injecting at a
+  // model-round boundary inside the provider loop — a separate follow-up.
+  const pauseMs = PauseController.instance().consumeLastPauseDuration();
+  if (pauseMs !== undefined && pauseMs > 60_000) {
+    const h = Math.floor(pauseMs / 3_600_000);
+    const m = Math.floor((pauseMs % 3_600_000) / 60_000);
+    const dur = h > 0 ? `${h}h ${m}m` : `${m}m`;
+    runText = `[Session resumed after ${dur} pause. Subagent failures during this window are from the pause, not provider throttling.]\n\n` + runText;
+  }
+
   const { verdictLedger, loopStageBar, mascotBar, healthRail } = footer;
   const capture: TerminalCapture = { kind: undefined, doneHasEvidence: undefined, doneClassification: undefined };
 
