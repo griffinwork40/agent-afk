@@ -75,9 +75,7 @@ export async function runOneTurn(
   autosaveState: [autosaveFailureLogged: boolean],
   rawUserText: string,
 ): Promise<TerminalCapture> {
-  // TODO: pass session abort signal when available so a graceful abort can
-  // interrupt a pause without waiting for removePauseLock() (R1.6).
-  await PauseController.instance().check();
+  await PauseController.instance().check(ctx.session.current.abortSignal);
 
   // Contract: after a user pause (afk pause / afk resume), inject a context
   // note so the model knows how long it was paused and can correctly attribute
