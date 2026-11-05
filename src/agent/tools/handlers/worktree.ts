@@ -257,12 +257,29 @@ export function createWorktreeHandler(
 
     // Validate the optional explicit repo parameter.
     let explicitRepo: string | undefined;
-    if (obj['repo'] !== undefined && obj['repo'] !== null && obj['repo'] !== '') {
+    if (obj['repo'] !== undefined) {
+      // null and '' are explicit model mistakes, not intentional omissions.
+      if (obj['repo'] === null || obj['repo'] === '') {
+        return {
+          content: 'Invalid input: repo must be an absolute path string or omitted entirely; null and empty string are not accepted',
+          isError: true,
+        };
+      }
       if (typeof obj['repo'] !== 'string') {
         return { content: 'Invalid input: repo must be a string (absolute path)', isError: true };
       }
       if (!isAbsolute(obj['repo'])) {
         return { content: `Invalid input: repo must be an absolute path, got: ${obj['repo']}`, isError: true };
+      }
+      // Verify the path exists before invoking git so we can distinguish
+      // "directory not found" from "directory exists but is not a git repo".
+      try {
+        await fs.stat(obj['repo']);
+      } catch {
+        return {
+          content: `Invalid input: repo path does not exist on disk: ${obj['repo']}`,
+          isError: true,
+        };
       }
       explicitRepo = obj['repo'];
     }
