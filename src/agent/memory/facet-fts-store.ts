@@ -7,7 +7,7 @@
  *   - Uses a single FTS5 virtual table `facets_fts` keyed on `session_id`.
  *   - Each row indexes `brief_summary + underlying_goal + primary_success +
  *     decisions` as a single concatenated text blob.
- *   - Write-once per session: indexed at facet-write time and never updated.
+ *   - Upsert per session: indexed at facet-write time; replaced on re-index so the final complete facet always wins.
  *   - Backfill: on first open, re-indexes all facet cache files whose session_id
  *     is not already in the store (runs when the sidecar DB mtime is older than
  *     the facet cache dir mtime).
@@ -20,7 +20,7 @@
 
 import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
-import { existsSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { configureSqliteConnection } from '../storage/sqlite.js';
 import { readJsonFileLoose } from '../../utils/json-file.js';
@@ -140,8 +140,8 @@ export class FacetFtsStore {
   }
 
   /**
-   * Index one facet by session_id. No-ops when already indexed (INSERT OR IGNORE).
-   * This is write-once: re-indexing a session that is already present is a no-op.
+   * Upserts a facet row. If the session was already indexed (e.g. a mid-session
+   * partial snapshot), the row is replaced so the final complete facet wins.
    */
   indexFacet(fields: {
     session_id: string;
@@ -153,7 +153,7 @@ export class FacetFtsStore {
     const now = new Date().toISOString();
     try {
       this.db.prepare(`
-        INSERT OR IGNORE INTO facets_index
+        INSERT OR REPLACE INTO facets_index
           (session_id, indexed_at, brief_summary, underlying_goal, primary_success, decisions)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(
@@ -264,13 +264,16 @@ export class FacetFtsStore {
 
   /**
    * Check whether the sidecar DB needs a backfill pass.
-   * Returns true when the facet cache dir mtime is newer than the sidecar DB mtime,
-   * or when the sidecar DB is brand new (empty index).
+   * Returns true when any cache file's sessionId is not yet indexed.
    */
   needsBackfill(memoryDir: string, cacheDir: string): boolean {
+    // The memoryDir parameter is kept for API compatibility but no longer used
+    // for mtime comparison — WAL checkpoints advance the DB mtime without
+    // indexing new cache files, making the old heuristic unreliable.
+    void memoryDir;
     if (!existsSync(cacheDir)) return false;
 
-    // Check whether any facets_index rows exist — fast O(1) check.
+    // Fast O(1) check: empty index always needs backfill.
     try {
       const count = this.db.prepare('SELECT COUNT(*) AS n FROM facets_index').get() as { n: number };
       if (count.n === 0) return true;
@@ -278,14 +281,17 @@ export class FacetFtsStore {
       return true;
     }
 
-    // Compare sidecar DB mtime vs. facet cache dir mtime.
+    // Check for any cache file whose session_id is not yet indexed.
+    // This is robust against WAL checkpoints advancing the DB mtime.
     try {
-      const dbPath = join(memoryDir, FACET_FTS_DB_FILE);
-      const dbMtime = statSync(dbPath).mtimeMs;
-      const cacheMtime = statSync(cacheDir).mtimeMs;
-      return cacheMtime > dbMtime;
+      const files = readdirSync(cacheDir).filter((f) => f.endsWith('.json'));
+      for (const file of files) {
+        const sessionId = file.slice(0, -5);
+        if (!this.isIndexed(sessionId)) return true;
+      }
+      return false;
     } catch {
-      return true; // conservative: backfill on any stat error
+      return true; // conservative: backfill on any error
     }
   }
 

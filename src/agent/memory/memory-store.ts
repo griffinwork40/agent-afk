@@ -494,6 +494,7 @@ export class MemoryStore {
     // Invariant: `results` aliases `factResults` (no defensive copy).
     // The array is consumed exactly once (push + slice below) and never read
     // from again. Add a spread copy here if a second reader ever appears.
+    const limit = opts?.limit ?? 10;
     const results: MemorySearchResult[] = factResults;
 
     if (!opts?.category) {
@@ -512,14 +513,12 @@ export class MemoryStore {
       // separate SQLite sidecar — failures are swallowed inside FacetFtsStore
       // and return [] so a facet-index problem never breaks fact recall.
       // FacetFtsStore.search() applies sanitizeFtsQuery internally.
-      const limit = opts?.limit ?? 10;
       const sessionResults = this.facetFts.search(query, limit);
       for (const r of sessionResults) {
         results.push(r);
       }
     }
 
-    const limit = opts?.limit ?? 10;
     return results.slice(0, limit);
   }
 
