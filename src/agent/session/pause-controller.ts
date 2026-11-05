@@ -104,7 +104,8 @@ export class PauseController {
   /**
    * One-shot getter: returns the duration (ms) of the last completed pause and
    * clears it so subsequent calls return `undefined` until a new pause cycle
-   * completes. Used by the REPL turn runner to inject a context note.
+   * completes. Used by the REPL turn runner and round-boundary hooks to inject
+   * a context note.
    */
   consumeLastPauseDuration(): number | undefined {
     const d = this._lastPauseDurationMs;
@@ -214,6 +215,30 @@ function abortError(signal: AbortSignal): Error {
   );
   err.name = 'AbortError';
   return err;
+}
+
+// ---------------------------------------------------------------------------
+// Pause-note formatter — shared between turn-start and round-boundary sites
+// ---------------------------------------------------------------------------
+
+/**
+ * Format a human-readable resume context note from a pause duration in ms.
+ *
+ * Returns `undefined` when the duration is below 60 s (noise threshold).
+ * Callers prepend this to the message text so the model can correctly
+ * attribute subagent failures to the pause rather than provider throttling.
+ *
+ * Used by:
+ *  1. `loop-iteration.turn-run.ts` — injected at the top of each top-level turn
+ *  2. `inter-round.ts` / `turn-driver.ts` — injected at every round boundary
+ *     so a mid-turn pause reaches the model at the NEXT round, not the next turn.
+ */
+export function formatPauseNote(pauseMs: number): string | undefined {
+  if (pauseMs <= 60_000) return undefined;
+  const h = Math.floor(pauseMs / 3_600_000);
+  const m = Math.floor((pauseMs % 3_600_000) / 60_000);
+  const dur = h > 0 ? `${h}h ${m}m` : `${m}m`;
+  return `[Session resumed after ${dur} pause. Subagent failures during this window are from the pause, not provider throttling.]`;
 }
 
 // ---------------------------------------------------------------------------
