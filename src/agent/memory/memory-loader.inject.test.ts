@@ -5,7 +5,7 @@
  *   1. Gate: AFK_EPISODE_RECALL !== '1' → returns config unchanged
  *   2. Gate: config.parentSessionId set  → returns config unchanged
  *   3. Empty store                        → returns config unchanged
- *   4. Appends <recent-episodes> block to existing hotMemory
+ *   4. Sets config.episodeRecall with <recent-episodes> block (not hotMemory)
  *   5. Entity-encodes < and > in episode content
  *   6. Caps at EPISODE_RECALL_CAP (3) episodes
  *   7. Trims episodes when block exceeds EPISODE_TOKEN_CAP
@@ -188,9 +188,9 @@ describe('injectEpisodeRecall', () => {
     }
   }
 
-  // ── 4. Appends <recent-episodes> block to existing hotMemory ──────────────
+  // ── 4. Sets episodeRecall field (not hotMemory) ───────────────────────────
 
-  it('appends <recent-episodes> block after existing hotMemory content', () => {
+  it('sets episodeRecall with <recent-episodes> block and does not touch hotMemory', () => {
     const branch = getCurrentBranchSync();
     if (!branch) return; // skip — cannot guarantee a scored episode
 
@@ -203,16 +203,14 @@ describe('injectEpisodeRecall', () => {
 
     // Result must be a new object.
     expect(result).not.toBe(config);
-    // The existing hotMemory must be preserved at the start.
-    expect(result.hotMemory).toMatch(/^<cross-session-memory>/);
-    // The episode block must follow.
-    expect(result.hotMemory).toContain('<recent-episodes>');
-    expect(result.hotMemory).toContain('</recent-episodes>');
-    // The separator between the two blocks.
-    expect(result.hotMemory).toContain('\n\n<recent-episodes>');
+    // hotMemory must be untouched — episode recall no longer appends to it.
+    expect(result.hotMemory).toBe(existingHot);
+    // The episode block must be in episodeRecall.
+    expect(result.episodeRecall).toMatch(/^<recent-episodes>/);
+    expect(result.episodeRecall).toContain('</recent-episodes>');
   });
 
-  it('sets hotMemory to the block when config.hotMemory was undefined', () => {
+  it('sets episodeRecall when config.hotMemory was undefined', () => {
     const branch = getCurrentBranchSync();
     if (!branch) return;
 
@@ -223,8 +221,11 @@ describe('injectEpisodeRecall', () => {
     const result = injectEpisodeRecall(config, tmpDir, process.cwd(), store);
 
     expect(result).not.toBe(config);
-    expect(result.hotMemory).toMatch(/^<recent-episodes>/);
-    expect(result.hotMemory).toContain('</recent-episodes>');
+    // hotMemory must remain unset.
+    expect(result.hotMemory).toBeUndefined();
+    // episodeRecall carries the block.
+    expect(result.episodeRecall).toMatch(/^<recent-episodes>/);
+    expect(result.episodeRecall).toContain('</recent-episodes>');
   });
 
   // ── 5. Entity-encodes < and > in episode content ──────────────────────────
@@ -250,19 +251,19 @@ describe('injectEpisodeRecall', () => {
     // If no episode scored (edge case in CI with detached HEAD), skip assertion.
     if (result === config) return;
 
-    const hot = result.hotMemory ?? '';
+    const recall = result.episodeRecall ?? '';
     // Raw < and > must NOT appear inside the episode payload section.
     // The outer <recent-episodes> tags are fine — we check that the
     // *content* between those tags has no raw angle brackets by stripping
     // the wrapper tags and checking the remainder.
-    const inner = hot
+    const inner = recall
       .replace('<recent-episodes>', '')
       .replace('</recent-episodes>', '');
     expect(inner).not.toContain('</recent-episodes>');
     expect(inner).not.toContain('<script>');
     // Entity-encoded forms must be present instead.
-    expect(hot).toContain('&lt;');
-    expect(hot).toContain('&gt;');
+    expect(recall).toContain('&lt;');
+    expect(recall).toContain('&gt;');
   });
 
   // ── 6. Caps at EPISODE_RECALL_CAP (3) episodes ────────────────────────────
@@ -284,8 +285,8 @@ describe('injectEpisodeRecall', () => {
     if (result === config) return; // no episodes scored
 
     // Count separator lines to infer episode count: N episodes → N-1 separators.
-    const hot = result.hotMemory ?? '';
-    const separatorCount = (hot.match(/\n\n---\n\n/g) ?? []).length;
+    const recall = result.episodeRecall ?? '';
+    const separatorCount = (recall.match(/\n\n---\n\n/g) ?? []).length;
     // separators = episodes - 1, so episodes = separators + 1 ≤ 3
     expect(separatorCount + 1).toBeLessThanOrEqual(3);
   });
@@ -315,10 +316,10 @@ describe('injectEpisodeRecall', () => {
 
     if (result === config) return; // no episodes scored
 
-    const hot = result.hotMemory ?? '';
+    const recall = result.episodeRecall ?? '';
     // With 3 × 10 000 chars of content, the block must have been trimmed to
     // fewer than 3 episodes to fit under EPISODE_TOKEN_CAP (~24 000 chars).
-    const separatorCount = (hot.match(/\n\n---\n\n/g) ?? []).length;
+    const separatorCount = (recall.match(/\n\n---\n\n/g) ?? []).length;
     // If 3 episodes all fit (unlikely with 30 000-char content), separators = 2.
     // After trimming we expect ≤ 1 separator (≤ 2 episodes).
     // We use a generous bound: at minimum trimming must have occurred OR
@@ -345,8 +346,9 @@ describe('injectEpisodeRecall', () => {
     // Whether or not an episode scored, the original must be untouched.
     expect(original.hotMemory).toBe(originalHotMemory);
     if (result !== original) {
-      // A new object was returned — it must differ from the original.
-      expect(result.hotMemory).not.toBe(originalHotMemory);
+      // A new object was returned — hotMemory unchanged, episodeRecall set.
+      expect(result.hotMemory).toBe(originalHotMemory);
+      expect(result.episodeRecall).toBeDefined();
     }
   });
 });

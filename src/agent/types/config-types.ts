@@ -316,6 +316,23 @@ export interface AgentConfig {
   hotMemory?: string;
 
   /**
+   * Episode-recall block (`<recent-episodes>` block) populated by
+   * {@link injectEpisodeRecall} at top-level surfaces when
+   * `AFK_EPISODE_RECALL=1`. Carried as a dedicated field — separate from
+   * {@link hotMemory} — to preserve the epistemic distinction between
+   * operator-curated context (HOT.md) and probabilistic associative recall
+   * (episodes). The provider places this in the volatile tail of the system
+   * prompt, after the `# Environment` block, so it never thrashes the
+   * stable-prefix cache (the prefix up to `# Environment` is shared across
+   * sessions; episodes vary per-session based on git context).
+   *
+   * Unset when `AFK_EPISODE_RECALL` is not `'1'` or no relevant episodes
+   * exist. Empty / whitespace is treated as absent by the provider assembler.
+   * Never set for child sessions (subagents / skills).
+   */
+  episodeRecall?: string;
+
+  /**
    * Active goal prompt fragment — injected into the system prompt between
    * hot memory and the `# Environment` block. Built by
    * `buildGoalPromptFragment()` at session construction; empty string or

@@ -8,7 +8,7 @@
  *
  * Ordering mirrors AnthropicDirectProvider.query():
  *   [toolBase, userSystem?, memoryPrompt, workspace?, hotMemory?, goalPrompt?,
- *    envFragment, manifest?]
+ *    envFragment, manifest?, agentTypeListing?, episodeRecall?]
  *
  * `envFragment` is the ONLY cwd-dependent piece — see `buildSystemPromptWiring`
  * below (#876) for why the rest are computed once and treated as stable across
@@ -104,6 +104,7 @@ export interface SystemPromptWiringResult {
     goalPrompt: string;
     manifest: string;
     agentTypeListing: string;
+    episodeRecall: string;
   };
 }
 
@@ -152,6 +153,7 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
     : '';
   const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
   const goalPrompt = typeof config.goalPrompt === 'string' ? config.goalPrompt : '';
+  const episodeRecall = typeof config.episodeRecall === 'string' ? config.episodeRecall : '';
   // Fix #3261: use the shared normalizer so a preset { append } is forwarded,
   // not silently dropped. Previously `typeof ... === 'string'` discarded the
   // `append` text of preset objects.
@@ -208,6 +210,9 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
     // Agent-type listing is placed after the manifest in the volatile tail so
     // sessions differing only in their agent sets keep a stable prefix (#4217).
     if (agentTypeListing.length > 0) parts.push(agentTypeListing);
+    // Episode recall is placed last in the volatile tail so per-session episode
+    // sets never invalidate the stable-prefix cache (#4680).
+    if (episodeRecall.length > 0) parts.push(episodeRecall);
     return parts.join('\n\n');
   };
 
@@ -222,6 +227,7 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
       goalPrompt,
       manifest,
       agentTypeListing,
+      episodeRecall,
     },
     rebuildAfterCwdChange: (): string => {
       // Contract: when systemPromptRebuildFactory was never called (`set` is

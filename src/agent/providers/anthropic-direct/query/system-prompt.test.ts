@@ -164,6 +164,50 @@ describe('assembleSystemPrompt — top-level order', () => {
     expect(iListing).toBeGreaterThan(iManifest);
   });
 
+  it('appends episodeRecall after agentTypeListing in the volatile tail (#4680)', () => {
+    const out = assembleSystemPrompt(
+      buildStableSystemPrefix({
+        ...FULL,
+        manifest: 'MANIFEST',
+        agentTypeListing: 'AGENT_LISTING',
+        episodeRecall: 'EPISODE_RECALL',
+      }),
+      '/x',
+      IDENTITY,
+    );
+    const iListing = out.indexOf('AGENT_LISTING');
+    const iEpisode = out.indexOf('EPISODE_RECALL');
+    expect(iEpisode).toBeGreaterThan(iListing);
+  });
+
+  it('places episodeRecall after the manifest and # Environment even without agentTypeListing (#4680)', () => {
+    const out = assembleSystemPrompt(
+      buildStableSystemPrefix({ ...FULL, manifest: 'MANIFEST', episodeRecall: 'EPISODE_RECALL' }),
+      '/x',
+      IDENTITY,
+    );
+    const iEnv = out.indexOf('Working directory:');
+    const iManifest = out.indexOf('MANIFEST');
+    const iEpisode = out.indexOf('EPISODE_RECALL');
+    expect(iEpisode).toBeGreaterThan(iEnv);
+    expect(iEpisode).toBeGreaterThan(iManifest);
+  });
+
+  it('omits episodeRecall when empty or absent (#4680)', () => {
+    const withEmpty = assembleSystemPrompt(
+      buildStableSystemPrefix({ ...FULL, manifest: 'MANIFEST', episodeRecall: '' }),
+      '/x',
+      IDENTITY,
+    );
+    const withAbsent = assembleSystemPrompt(
+      buildStableSystemPrefix({ ...FULL, manifest: 'MANIFEST' }),
+      '/x',
+      IDENTITY,
+    );
+    expect(withEmpty).not.toContain('EPISODE_RECALL');
+    expect(withAbsent).not.toContain('EPISODE_RECALL');
+  });
+
   it('omits agentTypeListing when it is empty or absent (#4217 absent-tool gate)', () => {
     const withEmpty = assembleSystemPrompt(
       buildStableSystemPrefix({ ...FULL, manifest: 'MANIFEST', agentTypeListing: '' }),
