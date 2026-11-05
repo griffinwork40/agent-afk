@@ -80,6 +80,12 @@ export interface BuildAgentSessionDeps {
    * default model.
    */
   explicitProvider?: string;
+  /**
+   * Per-session episode recall suppression. Set to true when the user passes
+   * `--no-recall` on the CLI. Forwarded to `injectEpisodeRecall` as
+   * `opts.noRecall` so the flag takes effect without writing to process.env.
+   */
+  noRecall?: boolean;
 }
 
 /**
@@ -134,7 +140,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps, sharedMemoryStore
     ...(deps.baseUrl !== undefined ? { baseUrl: deps.baseUrl } : {}),
     ...(deps.enableFileCheckpointing !== undefined ? { enableFileCheckpointing: deps.enableFileCheckpointing } : {}),
     providerFactory: deps.providerFactory,
-  }), undefined, undefined, sharedMemoryStore))), deps.traceWriter);
+  }), undefined, undefined, sharedMemoryStore, deps.noRecall ? { noRecall: true } : undefined))), deps.traceWriter);
 }
 
 /**
@@ -167,6 +173,8 @@ export function buildSharedDeps(a: {
   maxTurns: string;
   initialPermissionMode: PermissionMode | undefined;
   explicitProvider?: string;
+  /** Pass true when the user supplied --no-recall to suppress episode recall. */
+  noRecall?: boolean;
 }): BuildAgentSessionDeps {
   return {
     model: a.sessionModel,
@@ -200,6 +208,7 @@ export function buildSharedDeps(a: {
     enableFileCheckpointing: a.cliConfig.fileCheckpoints !== false,
     ...(a.initialPermissionMode !== undefined ? { permissionMode: a.initialPermissionMode } : {}),
     ...(a.explicitProvider !== undefined ? { explicitProvider: a.explicitProvider } : {}),
+    ...(a.noRecall === true ? { noRecall: true } : {}),
   };
 }
 

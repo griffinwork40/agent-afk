@@ -158,6 +158,8 @@ export async function bootstrapSession(
     // rows instead of vanishing (#733).
     ...managerShutdownConfig(rootManager, composeExecutor),
     ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
+    // Commander's --no-recall sets options.recall = false (negated boolean).
+    ...(options.recall === false ? { noRecall: true } : {}),
   });
 
   await activatePluginEntrypoints(hookRegistry);
