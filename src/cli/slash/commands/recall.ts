@@ -29,7 +29,7 @@ export const recallCmd: SlashCommand = {
   hint: 'When AFK_EPISODE_RECALL=1 is set and you want to see what episodes would be injected, or to debug surprising recall behaviour.',
   async handler(ctx, args) {
     const showAll = args.split(/\s+/).includes('--all');
-    const cwd = process.cwd();
+    const cwd = ctx.stats.cwd ?? process.cwd();
     const memoryDir = getMemoryDir();
 
     // Collect git context for display.

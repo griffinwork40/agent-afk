@@ -391,18 +391,7 @@ export function injectEpisodeRecall(
   const episodes = recallEpisodes(memoryDir, effectiveCwd, store);
   if (episodes.length === 0) return config;
 
-  // dry-run mode: log what would be injected to stderr and return unchanged.
-  if (isDryRun) {
-    process.stderr.write(`[episode-recall dry-run] would inject ${episodes.length} episode(s), cwd=${effectiveCwd ?? 'process.cwd()'}\n`);
-    for (const ep of episodes) {
-      const preview = formatEpisodeForRecall(ep).split('\n').slice(0, 3).join(' | ');
-      process.stderr.write(`  • id=${ep.id} created=${ep.created_at} — ${preview}\n`);
-    }
-    return config;
-  }
-
   debugLog('episode-recall', `injected ${episodes.length} episode(s), cwd=${effectiveCwd ?? 'process.cwd'}`);
-
 
   /**
    * Build the <recent-episodes> block from a subset of episodes, applying
@@ -427,6 +416,17 @@ export function injectEpisodeRecall(
   while (capped.length > 1 && estimateTokens(block) > EPISODE_TOKEN_CAP) {
     capped = capped.slice(0, -1);
     block = buildBlock(capped);
+  }
+
+  // dry-run mode: report the post-token-cap list to stderr, then return unchanged.
+  if (isDryRun) {
+    process.stderr.write(`[episode-recall dry-run] would inject ${capped.length} episode(s) (token-capped from ${episodes.length}), cwd=${effectiveCwd ?? 'process.cwd()'}\n`);
+    for (const ep of capped) {
+      const rawPreview = formatEpisodeForRecall(ep).split('\n').slice(0, 3).join(' | ');
+      const preview = rawPreview.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      process.stderr.write(`  • id=${ep.id} created=${ep.created_at} — ${preview}\n`);
+    }
+    return config;
   }
 
   const existing = config.hotMemory ?? '';
