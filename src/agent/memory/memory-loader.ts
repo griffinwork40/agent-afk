@@ -326,14 +326,16 @@ export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
 
 /**
  * Inject relevant past episodes into an AgentConfig as a `<recent-episodes>`
- * block appended to `config.hotMemory`.
+ * block stored in the dedicated `config.episodeRecall` field.
  *
  * Only fires when `AFK_EPISODE_RECALL=1` (opt-in). Skips subagent contexts
  * (`config.parentSessionId` set) — recall is only meaningful for top-level
  * sessions. Returns the config unchanged when no relevant episodes are found.
  *
- * The block is appended after the existing `hotMemory` content so it lands in
- * the cross-session-memory region of the assembled system prompt, after HOT.md.
+ * The block is stored in `config.episodeRecall` — a field separate from
+ * `config.hotMemory` — so the provider can place it in the volatile tail of
+ * the system prompt (after `# Environment`), keeping the stable prefix cache
+ * intact across sessions with different episode sets.
  *
  * Does not mutate the original config — returns a shallow copy when changed.
  *
@@ -362,7 +364,6 @@ export function injectEpisodeRecall(
 
   debugLog('episode-recall', `injected ${episodes.length} episode(s), cwd=${effectiveCwd ?? 'process.cwd'}`);
 
-
   /**
    * Build the <recent-episodes> block from a subset of episodes, applying
    * Item 2 sanitization (strip structural tags) and Item 6 token cap.
@@ -388,7 +389,8 @@ export function injectEpisodeRecall(
     block = buildBlock(capped);
   }
 
-  const existing = config.hotMemory ?? '';
-  const combined = existing.length > 0 ? `${existing}\n\n${block}` : block;
-  return { ...config, hotMemory: combined };
+  // Store in dedicated episodeRecall field — NOT appended to hotMemory.
+  // The provider assembler places this in the volatile tail (after # Environment)
+  // so the stable-prefix cache is never invalidated by per-session episode sets.
+  return { ...config, episodeRecall: block };
 }
