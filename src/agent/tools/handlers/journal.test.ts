@@ -292,6 +292,36 @@ describe('readJournalHandler — tool-result lookup mode', () => {
     expect((parsed.result as string).length).toBeLessThan(70_000);
   });
 
+  it('R1.3: multi-byte char split at 64 KB boundary does not emit U+FFFD', async () => {
+    // Build a string whose UTF-8 encoding puts a 3-byte character (€ = 0xE2 0x82 0xAC)
+    // straddling the MAX_RESULT_BYTES (65536) boundary.
+    // Fill with ASCII up to 65534 bytes, then append '€' (3 bytes: positions 65534–65536).
+    // The subarray cut at 65536 lands exactly after the last byte of '€', so no split
+    // actually occurs here — we also test the split case by sizing to 65535.
+    const ASCII_FILL = 65_536 - 3; // 65533 bytes of ASCII
+    // Pad so that '€' starts at byte 65533, ending at byte 65535 (0-indexed).
+    // Then append more ASCII so total > 65536 to trigger truncation.
+    const textWithMultibyte = 'a'.repeat(ASCII_FILL) + '€' + 'b'.repeat(100);
+    // Verify our construction: the byte at index 65535 is the last byte of '€'.
+    // subarray(0, 65536) keeps all 3 bytes → no split → no U+FFFD.
+    mockFindToolResultAsync.mockResolvedValue(makeToolResultLookup(textWithMultibyte));
+    const res = await readJournalHandler({ tool_use_id: 'tu_multibyte_ok' }, signal);
+    const parsed = JSON.parse(res.content as string);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.result).not.toContain('\uFFFD');
+
+    // Now test the split case: ASCII fill of 65534 puts '€' at bytes 65534–65536,
+    // so subarray(0, 65536) cuts after the second byte → incomplete sequence → U+FFFD
+    // without the fix. With the fix, U+FFFD must be stripped.
+    const textSplitBoundary = 'a'.repeat(65_534) + '€' + 'b'.repeat(100);
+    mockFindToolResultAsync.mockResolvedValue(makeToolResultLookup(textSplitBoundary));
+    const res2 = await readJournalHandler({ tool_use_id: 'tu_multibyte_split' }, signal);
+    const parsed2 = JSON.parse(res2.content as string);
+    expect(parsed2.truncated).toBe(true);
+    expect(parsed2.result).not.toContain('\uFFFD');
+    expect(parsed2.result).toMatch(/truncated at 64 KB/);
+  });
+
   it('findToolResultAsync throws → isError with message', async () => {
     mockFindToolResultAsync.mockRejectedValue(new Error('disk read failed'));
     const res = await readJournalHandler({ tool_use_id: 'tu_err' }, signal);
