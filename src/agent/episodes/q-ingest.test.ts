@@ -299,7 +299,7 @@ describe('ingestEpisodes', () => {
     expect(result.watermark).toBe(ts2);
   });
 
-  it('watermark filter uses created_at > ? — row at exact watermark is not re-ingested', () => {
+  it('watermark filter uses created_at >= ? — row at exact watermark is re-fetched but deduplicated', () => {
     // Insert two facts with distinct created_at values.
     const ts1 = '2026-03-01T00:00:00.000Z';
     const ts2 = '2026-04-01T00:00:00.000Z';
@@ -311,14 +311,16 @@ describe('ingestEpisodes', () => {
     const r1 = ingestEpisodes(dir, dir);
     expect(r1.upserted).toBe(2);
 
-    // Manually set watermark back to ts1 so the next run filters on created_at > ts1.
+    // Manually set watermark back to ts1 so the next run filters on created_at >= ts1.
     const store = new QEpisodesStore(dir);
     store.setWatermark(ts1);
     store.close();
 
     // Second run against the SAME memory.db (memDb is already closed, file still there).
-    // The watermark is ts1, so only the row with created_at > ts1 (i.e. ts2) should be found.
+    // With >= semantics both rows (ts1 and ts2) are found; upsertEpisode's
+    // INSERT OR REPLACE on session_id deduplicates them, so totalStored stays 2.
     const r2 = ingestEpisodes(dir, dir);
-    expect(r2.found).toBe(1);
+    expect(r2.found).toBe(2);
+    expect(r2.totalStored).toBe(2);
   });
 });
