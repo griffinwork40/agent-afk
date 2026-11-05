@@ -16,6 +16,21 @@ import type { EnvVarMeta } from './env.js';
 export const SANDBOX_ENV_REGISTRY = [
   // ── OS-level bash sandbox (issue #3845) ──────────────────────────────────
   {
+    name: 'AFK_SANDBOX_REQUIRED',
+    description:
+      'CI enforcement mode for the sandbox runtime test suite. ' +
+      'When set to "1", the bash-sandbox.runtime.test.ts suite fails (instead of ' +
+      'silently skipping) if no sandbox backend (sandbox-exec or bwrap) is available ' +
+      'on the current platform. Set this on Linux CI runners that install bubblewrap ' +
+      'so a broken or uninstalled bwrap cannot cause enforcement tests to vanish. ' +
+      'Has no effect on Windows (sandbox-exec/bwrap are POSIX-only). ' +
+      'Unset (default): runtime tests skip gracefully when no backend is present.',
+    type: 'string',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
+  {
     name: 'AFK_BASH_SANDBOX',
     description:
       'Opt-in OS-level filesystem write sandbox for foreground bash invocations. ' +

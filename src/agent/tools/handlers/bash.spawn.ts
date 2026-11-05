@@ -20,7 +20,8 @@ import type { ChildProcess } from 'child_process';
 import type { ToolHandlerContext } from '../types.js';
 import { buildChildEnv } from './bash-env-scrub.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
-import { parseSandboxPolicy, buildSandboxedCommand } from './bash-sandbox.js';
+import { parseSandboxPolicy, buildSandboxedCommand, sandboxDescription } from './bash-sandbox.js';
+import { debugLog } from '../../../utils/debug.js';
 
 /**
  * Assemble `spawn` options and launch the child process.
@@ -70,6 +71,11 @@ export function spawnBashProcess(
     const childEnv = spawnBaseOpts.env;
     const childTemp = childEnv['TMPDIR'] || childEnv['TMP'] || childEnv['TEMP'] || path.posix.join('/', 'tmp');
     const sandboxed = buildSandboxedCommand(command, sandboxPolicy, effectiveCwd, childTemp);
+    debugLog(
+      `[bash] sandbox spawn: ${sandboxDescription(sandboxPolicy)}` +
+        ` backend=${sandboxed.shell} policy=${sandboxPolicy}` +
+        ` cwd=${effectiveCwd} temp=${childTemp}`,
+    );
     // sandboxed.shell is the sandbox binary (sandbox-exec / bwrap).
     // sandboxed.args are the pre-command arguments.
     // sandboxed.command is the original shell command string, passed last.

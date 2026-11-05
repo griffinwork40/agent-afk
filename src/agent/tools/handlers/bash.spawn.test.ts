@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('child_process', () => ({ spawn: mocks.spawn }));
 vi.mock('./bash-env-scrub.js', () => ({ buildChildEnv: () => mocks.childEnv }));
-vi.mock('./bash-sandbox.js', () => ({ parseSandboxPolicy: () => 'workspace-write', buildSandboxedCommand: mocks.build }));
+vi.mock('./bash-sandbox.js', () => ({ parseSandboxPolicy: () => 'workspace-write', buildSandboxedCommand: mocks.build, sandboxDescription: () => 'sandbox: mock (workspace-write)' }));
 import { spawnBashProcess } from './bash.spawn.js';
 
 afterEach(() => { vi.clearAllMocks(); });
