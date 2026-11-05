@@ -105,6 +105,10 @@ export interface SearchOpts {
   source_surface?: SourceSurface;
 }
 
+/**
+ * @since 5.329.0 — `'session'` added to the `type` union; external exhaustive
+ * switches must add a `'session'` case or a default branch.
+ */
 export interface MemorySearchResult {
   type: 'fact' | 'procedure' | 'session';
   content: string;
