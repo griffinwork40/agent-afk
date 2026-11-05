@@ -1,6 +1,7 @@
 // Scenario 2 (#3714): explicit remote capability, durable retry identity, no network.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEffectLedgerHooks } from './hook.js';
@@ -19,7 +20,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'effect-header-'));
   store = new EffectStore(join(dir, 'ledger.jsonl'));
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmSyncRetry(dir));
 
 describe('Scenario 2 / #3714 — remote idempotency forwarding', () => {
   it('forwards and persists a key before dispatch without mutating caller headers', async () => {
@@ -70,4 +71,6 @@ describe('Scenario 2 / #3714 — remote idempotency forwarding', () => {
     expect(rows.map((row) => row.status)).toEqual(['unknown', 'executed', 'pending', 'pending']);
     expect(rows[1]?.retryOf).toBe(rows[0]?.id);
   });
+
+  it.todo('extend no-clobber test to POST/PUT/PATCH — see #3714');
 });

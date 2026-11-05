@@ -34,6 +34,7 @@ import { createTerminalFontSizeHandler, terminalFontSizeHandler } from './termin
 import { createWorktreeHandler } from './worktree.js';
 import { configGetHandler, configSetHandler } from './config-ops.js';
 import { readWitnessHandler, searchWitnessHandler } from './witness.js';
+import { readJournalHandler } from './journal.js';
 // below for trivial re-enable.
 import { askQuestionHandler } from './ask-question.js';
 // Browser-control handlers. The provider behind them lazy-loads Playwright on
@@ -125,6 +126,7 @@ export function createBuiltinHandlers(
     ['cancel_schedule', cancelScheduleHandler],
     ['read_witness', readWitnessHandler],
     ['search_witness', searchWitnessHandler],
+    ['read_journal', readJournalHandler],
     ['worktree', worktree],
     ['terminal_font_size', terminalFontSize],
     ['config_get', configGetHandler],
@@ -202,4 +204,5 @@ export {
   createClipboardReadHandler,
   listSessionsHandler,
   sendToSessionHandler,
+  readJournalHandler,
 };

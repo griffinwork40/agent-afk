@@ -5,6 +5,8 @@
  *   - returns {} when AFK_EPISODE_SYNTHESIS env flag is not '1'
  *   - returns {} when sessionId is missing
  *   - calls synthesizeAndWriteEpisode when all gates pass
+ *   - calls patchFacetDecisions with synthesized decisions on happy path
+ *   - calls patchFacetDecisions with [] when synthesis returns empty decisions (no-ops internally)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -116,7 +118,7 @@ describe('createEpisodeSessionEndHook — gating logic', () => {
       goal: 'Test goal',
       approach: 'Test approach',
       pivots: [],
-      decisions: [],
+      decisions: ['Chose approach A', 'Avoided approach B'],
       outcome: 'Test outcome',
       openQuestions: [],
       filesKey: [],
@@ -132,6 +134,30 @@ describe('createEpisodeSessionEndHook — gating logic', () => {
 
     expect(mockSynthesize).toHaveBeenCalledOnce();
     expect(mockSynthesize).toHaveBeenCalledWith('sess-abc');
+    expect(result).toEqual({});
+  });
+
+  it('synthesizeAndWriteEpisode return value is ignored (no backflow)', async () => {
+    const mockSynthesize = vi.fn().mockResolvedValue({
+      sessionId: 'sess-abc',
+      goal: 'Test goal',
+      approach: 'Test approach',
+      pivots: [],
+      decisions: [],
+      outcome: 'Test outcome',
+      openQuestions: [],
+      filesKey: [],
+      tags: [],
+      narrative: 'Test narrative',
+      synthesizedAt: '2026-01-01T00:00:00.000Z',
+    });
+    vi.doMock('./index.js', () => ({ synthesizeAndWriteEpisode: mockSynthesize }));
+
+    const { createEpisodeSessionEndHook } = await import('./session-end-hook.js');
+    const hook = createEpisodeSessionEndHook();
+    const result = await hook(sessionEndContext());
+
+    expect(mockSynthesize).toHaveBeenCalledOnce();
     expect(result).toEqual({});
   });
 

@@ -30,6 +30,13 @@ import {
   type ImportFromConfig,
 } from '../../config/import-sources.js';
 import { checkSlotEndpoints } from './doctor-slot-endpoints.js';
+import {
+  checkMemoryStore,
+  checkDaemonState,
+  checkNodeVersion,
+  checkHookConfig,
+  checkWitnessDir,
+} from './doctor-checks.subsystem.js';
 
 export interface Check {
   name: string;
@@ -350,6 +357,12 @@ export async function runDoctorChecks(): Promise<Check[]> {
   if (importCheck !== null) results.push(importCheck);
 
   results.push(...(await checkSlotEndpoints()));
+
+  results.push(await checkMemoryStore());
+  results.push(await checkDaemonState());
+  results.push(await checkNodeVersion());
+  results.push(await checkHookConfig());
+  results.push(await checkWitnessDir());
 
   return results;
 }

@@ -10,7 +10,7 @@
 
 import type { TraceSink } from '../trace/index.js';
 import type { AnthropicToolDef, ToolCall, ToolResult } from './types.js';
-import { buildAgentToolDef, buildAgentTypeListing } from '../agents/index.js';
+import { buildAgentToolDef, buildAgentTypeListing, buildComposeTool } from '../agents/index.js';
 import type { AgentExecutionMode } from './subagent/input-parse.js';
 import type { BuildChildConfigArgs } from './subagent/child-config.js';
 import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
@@ -82,7 +82,17 @@ export class SubagentExecutor implements SubagentControl {
    * fall back to the static def.
    */
   describeAgentTool(): AnthropicToolDef {
-    return buildAgentToolDef(this.ctx.agentRegistry);
+    return buildAgentToolDef(this.ctx.agentRegistry, this.ctx.parentModel);
+  }
+
+  /**
+   * The `compose` tool definition with a dynamic `model` parameter description
+   * reflecting the live slot bindings and resolved subagent default (#4509).
+   * Providers that wire a composeExecutor should call this instead of importing
+   * the static `composeTool` constant.
+   */
+  describeComposeTool(): AnthropicToolDef {
+    return buildComposeTool(this.ctx.parentModel);
   }
 
   /**

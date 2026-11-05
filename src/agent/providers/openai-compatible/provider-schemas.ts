@@ -22,7 +22,7 @@ export function buildProviderSchemas(opts: OpenAICompatibleProviderOptions): Ant
   // Nesting remains after memory/state/awareness for prefix-cache stability (#4217).
   if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
   if (opts.skillExecutor) schemas.push(skillTool);
-  if (opts.composeExecutor) schemas.push(composeTool);
+  if (opts.composeExecutor) schemas.push(opts.subagentExecutor?.describeComposeTool?.() ?? composeTool);
   // Builtins win over custom collisions; never send duplicate wire tool names.
   for (const t of opts.customTools ?? []) {
     if (!schemas.some((s) => s.name === t.schema.name)) schemas.push(t.schema);

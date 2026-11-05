@@ -200,6 +200,31 @@ describe('checkThinkingAnnotation', () => {
     vi.advanceTimersByTime(80);
     expect(checkThinkingAnnotation(ctx, Date.now())).toBe(false);
   });
+
+  it('dispose fix (5b4b436): markEnded() called at dispose time stops the elapsed counter', () => {
+    // Regression: before the fix, dispose() did not call markEnded(), so
+    // activeThinkingElapsedMs() kept returning a non-null value during the
+    // final overlay flush, causing a phantom "thinking · Xs" banner to repaint
+    // even after the turn had ended. Removing markEnded() from dispose() must
+    // make this test fail.
+    const ctx = makeCtx();
+    ctx.thinkingLane.push('some reasoning');
+    vi.advanceTimersByTime(THINKING_GRACE_MS + 1_000);
+
+    // Advance the annotation so the banner has been shown (prime lastThinkingAnnotation).
+    checkThinkingAnnotation(ctx, Date.now());
+    expect(ctx.lastThinkingAnnotation).not.toBe(''); // banner was live
+
+    // Simulate dispose: markEnded() caps the window (stream-renderer.ts:632).
+    ctx.thinkingLane.markEnded();
+
+    // After dispose-time markEnded(), activeThinkingElapsedMs() must return null.
+    expect(ctx.thinkingLane.activeThinkingElapsedMs()).toBeNull();
+    // checkThinkingAnnotation must detect the cleared state and mark dirty.
+    const result = checkThinkingAnnotation(ctx, Date.now());
+    expect(result).toBe(true); // dirty = true (clearing the stale annotation)
+    expect(ctx.lastThinkingAnnotation).toBe('');
+  });
 });
 
 // ─── classifyError unknown hint ───────────────────────────────────────────

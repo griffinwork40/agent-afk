@@ -12,6 +12,94 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.348.0] - 2026-11-05
+
+### Added
+- wire Q as read-only consumer of episode facts (#4612) (1aecfc063)
+- automatic episode retrieval at session start (#4614) (393a999f0)
+
+### Fixed
+- bracket-notation for index-signature payloads and update stale snapshot (581742f0e)
+- suspend stall watchdog during afk pause and inject resume context (#4691) (a96cb6b98)
+- correct category mismatch and wire inject into session (#4684) (ccde4a7f5)
+- add risk facet to empty-string test and document command guard asymmetry (#4671) (06d0eb75e)
+- address advisory findings for dynamic model param description (#4669) (1215899cb)
+- migrate remaining afterEach/afterAll teardown sites to rmSyncRetry (#4673) (3ecee23e3)
+- raise readLastTickTime limit to prevent window exhaustion by skipped records (#4665) (a4f6ab95c)
+- address summary-mode thinking indicator advisory findings (#4678) (fc4d02841)
+- address workspace subscription parity advisory findings (#4677) (d916a35cb)
+- harden Worth doing pipeline — drop fallback needle, add tests, document omission (#4666) (3d359c5a6)
+- address advisory findings from SubagentHandle test coupling review (#4670) (7748bddfb)
+- harden closeAll ordering test and extract required helper (#4668) (c9f39fdb5)
+
+### Changed
+- commit stale SPINE.md date bump and snapshot update (2f3232594)
+- add Sub-check C for compose-level maxToolRoundsPerNode precedence (#4639) (#4672) (f0f4333ee)
+- protect bundled reference file integrity (#4676) (df2e67b41)
+
+## [5.347.0] - 2026-11-03
+
+### Added
+- named delegation profiles via AFK_DELEGATION_PROFILE (#4313) (339f2086a)
+- add read_journal tool for structured journal access (#4658) (80722d184)
+- add model identifier to session receipts (#4657) (77c6ac4df)
+- subagent orientation context injection at fork time (212d2e8df)
+- enrich afk doctor with subsystem health checks (917f40a6a)
+
+### Fixed
+- address 4 blocking review findings on PR #4659 (5357791c9)
+- remove false read_file tail-return claim in ground-state SKILL.md (8c61607d6)
+- use correct subcommands in CLI orientation block (a841f2467)
+- handle EPERM as alive, add missing hook events, fix bundle path (e77ea8f77)
+- address advisory findings from #4503 review (#4648) (33e0051b0)
+- fix inverted log message, add remoteDetail and size===0 test coverage (#4649) (f5ac931c2)
+- fix stale comment, add @internal tag, and improve session-id test coverage (#4653) (0276d7413)
+- raise maxBuffer to 4096, emit debugLog on signal, add ENOBUFS test, fix docs, rename interface (#4656) (594272a03)
+- fix fail() usage, test description, and add closeAll ordering test (a891a38c0)
+- dynamic model param description with slot and default info (19bba464e)
+- restructure test describe block and add startup quarantine telemetry (#4632) (aac50ec4f)
+- bump episode MAX_TOKENS from 512 to 1024 (1257faf1f)
+- wire "Worth doing" bullet through terminal-state pipeline (#4643) (00a030009)
+- skip daemon sessions and add synthesis canary logging (f8c0c8b1e)
+
+### Changed
+- replace LLM synthesis with deterministic facet bridge (155457e87)
+- guide read_file offset/limit in ground-state eval-pipeline check (3e0dbd951)
+
+## [5.346.0] - 2026-11-02
+
+### Added
+- add afk pause/resume to freeze and unfreeze all sessions (#4566) (bd8a6172f)
+- populate facet decisions from episode synthesis (#4610) (3b152a75e)
+
+### Fixed
+- auto-restore files on /branches switch using on-disk turn log (#4613) (c18fb7306)
+- finite unattended session defaults (bounded partial) (#4548) (ace41b9e2)
+- use renameWithRetrySync to fix Windows EPERM on rename (c1dfc5b96)
+- increase Windows EBUSY retry budget in LSP exit-cleanup test (bb1b48dce)
+- address advisory findings from CI Windows shard PR (5ebe05de5)
+- add agentType + double-cast to fix lint:tests ratchet (+4 errors) (88b15d4be)
+- use rmSyncRetry in useTmpAfkHome to avoid ENOTEMPTY teardown race (61d8ea1fe)
+- reduce test coupling to SubagentHandle internals (880a35ff2)
+- add empty-string facet test, document dropped path, fix declaration order (22478ccbb)
+- correct precedence comment in compose node builder (af833b2a4)
+- add missing test todo and insertion-order comment (56780355e)
+
+## [5.345.0] - 2026-11-02
+
+### Added
+- add layout-jump decision table reference (#4609) (ad468b192)
+- summary-mode thinking indicator and unknown-error hint (a0d82bd1a)
+
+### Fixed
+- harden wrapping across 9 files (#4617) (9c687a5d8)
+- disambiguate Windows EPERM in daemon instance lock (#4605) (7aeba989e)
+- skip preamble-only user records in goal extraction (#4604) (09d08195a)
+- add episode backfill CLI command (10bdd60bf)
+- address advisory findings from workspace subscription parity (877cd86a7)
+- address advisory findings from command classifier facets (94f8e37d3)
+- cap thinking lane on dispose + fix stall test fixture (5b4b4361e)
+
 ## [5.344.0] - 2026-11-01
 
 ### Added

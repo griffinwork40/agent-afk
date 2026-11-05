@@ -181,7 +181,7 @@ export async function* driveStream<TEvent>(
         // terminal, no bogus error. Uses `timeouts.signal` — the user/turn
         // interrupt chained with the TTFB + stall watchdogs, the same signal handed
         // to `createStream` — so a watchdog abort also halts a parked pull promptly.
-        for await (const event of abortableStream(conn.stream, timeouts.signal)) {
+        for await (const event of abortableStream(conn.stream, timeouts.signal, timeouts.stall)) {
           if (ctx.isClosed()) return null;
           // Raw chunk received — signal TTFB seen and advance stall watchdog.
           if (!ttfbEmitted) timeouts.ttfb.firstByteSeen();

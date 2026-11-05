@@ -48,14 +48,22 @@ export interface SessionMeta {
   forkedFrom?: string;
   /**
    * Git workspace state captured once at top-level session start.
-   * Null fields indicate a non-git cwd or a git error (detached HEAD yields
-   * branch: null with headSha set). Undefined when not yet written (old
-   * sidecars) or when this is a subagent session (subagents never write this).
+   *
+   * - When present and non-null: a {@link GitHeadSnapshot} with `headSha` set
+   *   (always a valid 40-hex SHA) and `branch` set to the branch name or null
+   *   on detached HEAD.
+   * - Explicitly `null`: git was unavailable or the cwd is not inside a git
+   *   repo (non-git cwd). Note: for a non-git cwd the snapshot object is still
+   *   returned with `{ branch: null, headSha: null, capturedAt }` — it is NOT
+   *   stored as `null` in the sidecar; `null` only appears when git itself
+   *   errors out before any fields can be populated.
+   * - `undefined`: old sidecar written before this field was added, or this is
+   *   a subagent session (subagents never write this field).
    *
    * A later SessionEnd step uses headSha to run `git log <headSha>..HEAD`
    * and enumerate commits the session made.
    */
-  gitHead?: SessionStart | null;
+  gitHead?: GitHeadSnapshot | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,11 +77,14 @@ export interface SessionMeta {
  * - `headSha`: full 40-hex SHA of HEAD; null on non-git cwd.
  * - `capturedAt`: ms-epoch when the snapshot was taken.
  */
-export interface SessionStart {
+export interface GitHeadSnapshot {
   branch: string | null;
   headSha: string | null;
   capturedAt: number;
 }
+
+/** @deprecated Use {@link GitHeadSnapshot}. Kept as alias to avoid a wider rename. */
+export type SessionStart = GitHeadSnapshot;
 
 /**
  * Capture the full 40-hex HEAD SHA and branch name for `cwd` via two
@@ -84,7 +95,7 @@ export interface SessionStart {
  * Timeout: 3 000 ms per call (generous but bounded; avoids hanging session
  * startup on a network-mount repo). No shell (`shell: false`).
  */
-export function captureGitHead(cwd: string): SessionStart {
+export function captureGitHead(cwd: string): GitHeadSnapshot {
   const capturedAt = Date.now();
 
   const runGit = (args: string[]): string | null => {
@@ -92,11 +103,15 @@ export function captureGitHead(cwd: string): SessionStart {
       const r = spawnSync('git', args, {
         cwd,
         encoding: 'utf8',
-        maxBuffer: 256,
+        maxBuffer: 4096,
         shell: false,
         timeout: 3000,
       });
-      if (r.status !== 0 || r.signal !== null || r.error !== undefined) return null;
+      if (r.signal !== null) {
+        debugLog(`[session-meta] git ${args.join(' ')} killed by signal ${r.signal}`);
+        return null;
+      }
+      if (r.status !== 0 || r.error !== undefined) return null;
       const out = typeof r.stdout === 'string' ? r.stdout.trim() : null;
       return out && out.length > 0 ? out : null;
     } catch {
@@ -166,9 +181,9 @@ export function readSessionMeta(sessionId: string): SessionMeta | null {
  *   - The sidecar's `gitHead` field is explicitly null (non-git cwd).
  *
  * Signature for downstream consumers (e.g. a SessionEnd `git log` step):
- *   `readSessionStart(sessionId: string): SessionStart | null`
+ *   `readSessionStart(sessionId: string): GitHeadSnapshot | null`
  */
-export function readSessionStart(sessionId: string): SessionStart | null {
+export function readSessionStart(sessionId: string): GitHeadSnapshot | null {
   const meta = readSessionMeta(sessionId);
   if (meta === null || meta.gitHead === undefined || meta.gitHead === null) return null;
   return meta.gitHead;

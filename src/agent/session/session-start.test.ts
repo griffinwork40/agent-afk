@@ -12,16 +12,26 @@
  * Uses a temp AFK_HOME so no real ~/.afk/state is touched.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 
+// Hoist a per-test spawnSync override so individual tests can inject error
+// returns without affecting the real `execSync` calls in beforeAll.
+// The mock passes through to the real spawnSync by default (mockImplementation
+// is set to undefined; real is invoked via importOriginal).
+vi.mock('node:child_process', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:child_process')>();
+  return { ...real, spawnSync: vi.fn(real.spawnSync) };
+});
+
 // Set AFK_HOME before any module that reads paths resolves.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-session-start-test-'));
 process.env['AFK_HOME'] = tmpHome;
 
+import { spawnSync } from 'node:child_process';
 import { captureGitHead, readSessionStart, writeSessionMeta } from './session-meta.js';
 import { LedgerLifecycle, type LedgerEnsureContext } from './ledger-lifecycle.js';
 import { getSessionMetaPath } from '../../paths.journal.js';
@@ -136,6 +146,41 @@ describe('captureGitHead', () => {
     expect(snap.headSha).toMatch(/^[0-9a-f]{40}$/);
     expect(snap.branch).toBeNull();
     expect(typeof snap.capturedAt).toBe('number');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// captureGitHead — spawnSync error paths
+// ---------------------------------------------------------------------------
+
+describe('captureGitHead spawnSync error paths', () => {
+  const mockSpawnSync = vi.mocked(spawnSync);
+
+  afterEach(() => {
+    mockSpawnSync.mockRestore();
+  });
+
+  it('ENOBUFS: spawnSync error is treated as null (branch: null, headSha: null)', () => {
+    const enobufs = new Error('spawnSync git ENOBUFS');
+    (enobufs as NodeJS.ErrnoException).code = 'ENOBUFS';
+    mockSpawnSync.mockReturnValue({
+      error: enobufs, pid: 0, output: [], stdout: '', stderr: '', status: null, signal: null,
+    });
+
+    const snap = captureGitHead(gitRepo);
+    expect(snap.headSha).toBeNull();
+    expect(snap.branch).toBeNull();
+    expect(typeof snap.capturedAt).toBe('number');
+  });
+
+  it('signal: spawnSync killed by signal returns null for that call', () => {
+    mockSpawnSync.mockReturnValue({
+      pid: 0, output: [], stdout: '', stderr: '', status: null, signal: 'SIGKILL', error: undefined,
+    });
+
+    const snap = captureGitHead(gitRepo);
+    expect(snap.headSha).toBeNull();
+    expect(snap.branch).toBeNull();
   });
 });
 

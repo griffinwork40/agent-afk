@@ -18,9 +18,9 @@ import { filterBackgroundToolDefs } from './process-job-tools.js';
 import type { AnthropicToolDef } from './types.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 48 tools', () => {
-    // 23 invariant core + 25 optional tail = 48
-    expect(builtinToolSchemas).toHaveLength(48);
+  it('contains exactly 49 tools', () => {
+    // 24 invariant core + 25 optional tail = 49
+    expect(builtinToolSchemas).toHaveLength(49);
   });
 
   it('exports the expected tool names', () => {
@@ -58,10 +58,11 @@ describe('builtinToolSchemas', () => {
       'config_set',
       'read_witness',
       'search_witness',
+      'read_journal',
       'remote_agent',
       'web_scrape',
       'web_request',
-      // -- Optional tail (23..47) --
+      // -- Optional tail (24..48) --
       // registry-filtered: absent when artifact registry is not wired
       'artifact_get',
       'artifact_list',
@@ -178,6 +179,7 @@ describe('builtinToolSchemas', () => {
       'clipboard_read',
       'list_sessions',
       'model_complete',
+      'read_journal',
       'artifact_list',
     ]);
     for (const tool of builtinToolSchemas) {

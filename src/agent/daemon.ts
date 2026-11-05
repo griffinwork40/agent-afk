@@ -221,7 +221,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     // (#1416), not only pull. Off for transient instances (`--once`).
     if (options.handoffMaintenance !== false) scheduler.startHandoffMaintenance();
 
-    registerTasksWithQuarantine(scheduler, options.tasks ?? []);
+    registerTasksWithQuarantine(scheduler, options.tasks ?? [], { telemetryPath: options.telemetryPath });
 
     server = createServer((req, res) => handleRequest(req, res, scheduler));
     ({ port, address: host } = await listenWithRecovery(
@@ -262,7 +262,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     host,
     scheduler,
     registerTask(task) {
-      registerTasksWithQuarantine(scheduler, [task]);
+      registerTasksWithQuarantine(scheduler, [task], { telemetryPath: options.telemetryPath });
     },
     unregisterTask(taskId) {
       scheduler.unregister(taskId);

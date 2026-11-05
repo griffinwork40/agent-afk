@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import os from 'node:os';
 import path from 'node:path';
 import { beginCheckpointTurn, endCheckpointTurn } from './turn-lifecycle.js';
@@ -19,7 +20,7 @@ beforeEach(() => {
   stateDir = path.join(tmp, 'state');
   mkdirSync(stateDir, { recursive: true });
 });
-afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+afterEach(() => { rmSyncRetry(tmp); });
 
 const deps = () => ({ sessionId: SESSION, enableFileCheckpointing: true, _stateDir: stateDir });
 const file = (name: string) => path.join(tmp, name);
@@ -44,7 +45,7 @@ describe('turn log', () => {
     const logPath = path.join(stateDir, 'file-checkpoints', SESSION, 'turns.jsonl');
     writeFileSync(logPath, `${readFileSync(logPath, 'utf8')}{"kind":"turn","tu`);
     const log = readTurnLog(SESSION, stateDir);
-    expect(log.map((e) => e.kind)).toEqual(['turn', 'post', 'turn']);
+    expect(log.map((e) => e.kind)).toEqual(['turn', 'post', 'tip', 'turn', 'tip']);
     expect(turnsFrom(log, 't1')).toEqual(['t1', 't2']);
     expect(turnsFrom(log, 'never')).toBeUndefined();
     expect(expectedHashes(log).get(file('a'))).toBe(hashBytes(Buffer.from('v1')));

@@ -9,7 +9,7 @@
 
 import type { TraceActor } from '../session/session-identity.js';
 
-export type FactCategory = 'preference' | 'convention' | 'decision' | 'learning';
+export type FactCategory = 'preference' | 'convention' | 'decision' | 'learning' | 'episode';
 export type SessionOutcome = 'completed' | 'failed' | 'abandoned';
 export type MemoryUpdateAction = 'set' | 'supersede' | 'remove';
 export type MemoryUpdateTarget = 'hot' | 'fact';
@@ -31,7 +31,7 @@ export interface Fact {
   created_at: string;
   category: FactCategory;
   content: string;
-  source_surface: string;
+  source_surface: SourceSurface | (string & {});
   superseded_by: number | null;
   confidence: number;
   access_count: number;
@@ -49,7 +49,7 @@ export interface NewFact {
   session_id?: string;
   category: FactCategory;
   content: string;
-  source_surface: string;
+  source_surface: SourceSurface | (string & {});
   /** Optional provenance citation; see {@link Fact.evidence}. */
   evidence?: string | null;
 }
@@ -89,10 +89,20 @@ export interface Procedure {
   access_count: number;
 }
 
+/**
+ * Known source_surface values used when storing facts. The column is
+ * TEXT NOT NULL DEFAULT 'cli' in SQLite, so this union covers the
+ * values the codebase actually writes. Extend when a new surface is
+ * added (grep for `source_surface:` to find write sites).
+ */
+export type SourceSurface = 'cli' | 'telegram' | 'daemon' | 'afk' | 'episode-synthesis' | 'whatif' | 'test';
+
 export interface SearchOpts {
   category?: FactCategory;
   since?: string;
   limit?: number;
+  /** Filter by exact source_surface value; limits access-count side effects to matching rows. */
+  source_surface?: SourceSurface;
 }
 
 export interface MemorySearchResult {

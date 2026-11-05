@@ -7,9 +7,11 @@
  * ancestry. `/branches` discovers all sessions that share a forkedFrom ancestor
  * with the current one and lets the operator switch between them.
  *
- * Switching restores the sibling session by emitting a resume control result
- * that the REPL feeds to `--resume`. The operator can then run `/rewind files`
- * in the switched session to restore the file checkpoint for that branch.
+ * Switching resumes the sibling session and, when a file checkpoint exists for
+ * the branch tip, automatically offers to restore files to that branch's state.
+ * The resumed session's message objects are fresh (WeakMap links do not survive
+ * a cross-session resume), so we recover the checkpoint turnId by reading the
+ * branch's on-disk turn log directly.
  *
  * @module cli/slash/commands/branches
  */
@@ -19,6 +21,8 @@ import { loadSession, findSession, listSessions } from '../../session-store.js';
 import { resolveFromFound } from './resume.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import { isSafeLedgerSessionId } from '../../../paths.js';
+import { latestTipTurnId } from '../../../agent/file-checkpoint/turn-log.js';
+import { restoreFiles } from './core.rewind.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -100,7 +104,7 @@ function collectBranches(currentId: string): BranchEntry[] {
 
     branches.push({
       id: entry.id,
-      sessionId: entry.sessionId,
+      sessionId: entry.sessionId !== undefined && isSafeLedgerSessionId(entry.sessionId) ? entry.sessionId : undefined,
       name: entry.name,
       model: typeof entry.model === 'string' ? entry.model : String(entry.model),
       savedAt: entry.savedAt,
@@ -190,6 +194,10 @@ async function handleSwitch(
   }
 
   const resumeKey = branch.sessionId ?? branch.id;
+  if (!isSafeLedgerSessionId(resumeKey)) {
+    ctx.out.error(`Refusing to switch: unsafe session id in branch sidecar.`);
+    return 'continue';
+  }
   const command = formatResumeCommand(resumeKey, branch.model);
 
   // Use requestResume when available (REPL interactive swap).
@@ -206,11 +214,21 @@ async function handleSwitch(
         return 'continue';
       }
       const result = await ctx.requestResume(resolveFromFound(found));
-      // After a successful swap the REPL replaces the session; nothing more to emit.
+      // After a successful swap ctx.session.current points at the new session.
       if (result.ok) {
-        ctx.out.success(`Switching to branch ${shortId(branch.id)}…`);
-        ctx.out.line('');
-        ctx.out.line(palette.dim('  To restore that branch\'s files, run /rewind files after switching.'));
+        ctx.out.success(`Switched to branch ${shortId(branch.id)}.`);
+        // Attempt file restore using the branch tip's on-disk checkpoint.
+        // WeakMap links don't survive a cross-session resume, so we recover the
+        // turnId by reading the branch's turn log directly from disk.
+        const tipTurnId = latestTipTurnId(resumeKey);
+        if (tipTurnId !== undefined) {
+          await restoreFiles(ctx, ctx.session.current, tipTurnId);
+          ctx.out.line('');
+          ctx.out.line(palette.dim('  Files restored to this branch\'s state.'));
+        } else {
+          ctx.out.line('');
+          ctx.out.line(palette.dim('  No file checkpoint for this branch (checkpointing may have been off when it was created).'));
+        }
         ctx.out.line('');
         return 'continue';
       }

@@ -2,7 +2,7 @@ export { MemoryStore } from './memory-store.js';
 // Re-exported from the canonical leaf module so the barrel always reflects the
 // authoritative source; memory-store.ts itself re-exports from estimate-tokens.ts.
 export { estimateTokens } from './estimate-tokens.js';
-export { loadHotMemory, injectHotMemory } from './memory-loader.js';
+export { loadHotMemory, injectHotMemory, injectEpisodeRecall } from './memory-loader.js';
 export { injectGoalPrompt } from '../goals/inject.js';
 export { createMemorySessionEndHook, createChildMemoryHotBlockHook } from './memory-hooks.js';
 // isForkedChildSession is @internal — package-private, not public API.
