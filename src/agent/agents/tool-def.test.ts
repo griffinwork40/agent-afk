@@ -260,4 +260,17 @@ describe('buildAgentTypeListing', () => {
     expect(listingA).not.toBe(listingB);
     expect(listingB).toContain('probe-agent');
   });
+
+  // #4220 item 4: listing is wrapped in a named delimiter block so the model
+  // and any downstream parser can unambiguously identify the content as data.
+  it('wraps the listing in <available-agent-types> delimiters (#4220)', () => {
+    const listing = buildAgentTypeListing(registryOf('research-agent'));
+    expect(listing).toMatch(/^<available-agent-types>\n/);
+    expect(listing).toMatch(/\n<\/available-agent-types>$/);
+  });
+
+  it('delimiter block is absent when registry is empty (#4220)', () => {
+    expect(buildAgentTypeListing(undefined)).toBe('');
+    expect(buildAgentTypeListing(new Map())).toBe('');
+  });
 });
