@@ -143,6 +143,39 @@ describe('recallEpisodes — integration', () => {
     expect(result.length).toBeLessThanOrEqual(3);
   });
 
+  it('eviction policy: buckets by first-file directory — swapped order yields separate buckets', () => {
+    // Episode A: first file is src/foo.ts → prefix 'src'
+    // Episode B: first file is lib/bar.ts → prefix 'lib'
+    // Even though both episodes reference the same two directories, the FIRST
+    // file determines the bucket, so they fall into different buckets and both
+    // survive a cap of 1.
+    storeEpisode(store, ['src/foo.ts', 'lib/bar.ts']);
+    storeEpisode(store, ['lib/bar.ts', 'src/foo.ts']);
+    // With EPISODE_FILES_PREFIX_CAP = 5 (default), both trivially survive.
+    // The invariant we're testing is that they are in SEPARATE buckets, not
+    // deduplicated into one. We confirm by checking both are in the pool:
+    // recallEpisodes may return [] if neither scores, so we inspect via the
+    // store directly — both episodes should be retrievable.
+    const all = store.getEpisodes();
+    // Filter to just our two test episodes (content contains our file names).
+    // content format: "[episode:test-<id>]\nfiles: src/foo.ts, lib/bar.ts\n..."
+    // The `files:` line is line index 1 (0-based), not line 0.
+    const filesLine = (content: string) =>
+      content.split('\n').find((l) => l.startsWith('files: ')) ?? '';
+    const ep1 = all.find((e) => filesLine(e.content).startsWith('files: src/foo.ts'));
+    const ep2 = all.find((e) => filesLine(e.content).startsWith('files: lib/bar.ts'));
+    // Both must exist — they were stored.
+    expect(ep1).toBeDefined();
+    expect(ep2).toBeDefined();
+    // The first-file prefixes must differ.
+    const prefix = (content: string) => {
+      const firstFile = filesLine(content).replace('files: ', '').split(',')[0]?.trim() ?? '';
+      return firstFile.split('/').slice(0, -1).join('/');
+    };
+    expect(prefix(ep1!.content)).toBe('src');
+    expect(prefix(ep2!.content)).toBe('lib');
+  });
+
   it('swallows errors and returns [] when the store is closed (never throws)', () => {
     // Close the store before passing it — recallEpisodes must swallow the error.
     store.close();

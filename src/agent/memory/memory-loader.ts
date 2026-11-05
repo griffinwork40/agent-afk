@@ -308,7 +308,9 @@ export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
 
     if (allEpisodes.length === 0) return [];
 
-    // Eviction policy (Item #4682): cap candidates per unique filesKey prefix so
+    const highFreqFiles = buildHighFreqFiles(allEpisodes);
+
+    // Eviction policy (Item #4682): cap candidates per first-file directory prefix so
     // that large archives (200+ sessions) don't inflate scoring pressure.
     // getEpisodes() returns rows newest-first, so the first
     // EPISODE_FILES_PREFIX_CAP rows for each prefix are the most recent ones —
@@ -329,8 +331,6 @@ export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
     const branch = getCurrentBranch(cwd);
     const modifiedFiles = getRecentlyModifiedFiles(cwd);
     const fileBasenames = new Set(modifiedFiles.map((f) => basename(f)));
-
-    const highFreqFiles = buildHighFreqFiles(cappedEpisodes);
 
     // Score and rank all episodes.
     const scored = cappedEpisodes
