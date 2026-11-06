@@ -88,6 +88,17 @@ const EPISODE_TOKEN_CAP = 6_000;
 const HIGH_FREQ_THRESHOLD = 0.3;
 
 /**
+ * Per-filesKey-prefix eviction cap: when the archive contains more than this
+ * many episodes sharing the same leading file path prefix (the first file in
+ * the `files:` line, up to the directory component), only the most-recent N
+ * are kept as candidates. This bounds the candidate pool at query time —
+ * history is preserved in the DB for manual inspection, but scoring pressure
+ * is limited so that large archives (200+ sessions) cannot produce guaranteed
+ * high-scoring false-positive matches.
+ */
+const EPISODE_FILES_PREFIX_CAP = 5;
+
+/**
  * Retrieve the current git branch name. Returns null if git is unavailable
  * or the cwd is not a git repository.
  *
@@ -349,14 +360,32 @@ export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
 
     if (allEpisodes.length === 0) return [];
 
+    const highFreqFiles = buildHighFreqFiles(allEpisodes);
+
+    // Eviction policy (Item #4682): cap candidates per first-file directory prefix so
+    // that large archives (200+ sessions) don't inflate scoring pressure.
+    // getEpisodes() returns rows newest-first, so the first
+    // EPISODE_FILES_PREFIX_CAP rows for each prefix are the most recent ones —
+    // exactly what we want to retain. History is preserved in the DB for manual
+    // inspection via memory_search.
+    const prefixCount = new Map<string, number>();
+    const cappedEpisodes = allEpisodes.filter((ep) => {
+      // Derive the prefix from the first file in the `files:` line (directory
+      // component). Episodes with no `files:` line share a single '' bucket.
+      const files = parseEpisodeFiles(ep.content);
+      const firstFile = files[0];
+      const prefix = firstFile !== undefined ? firstFile.split('/').slice(0, -1).join('/') : '';
+      const count = (prefixCount.get(prefix) ?? 0) + 1;
+      prefixCount.set(prefix, count);
+      return count <= EPISODE_FILES_PREFIX_CAP;
+    });
+
     const branch = getCurrentBranch(cwd);
     const modifiedFiles = getRecentlyModifiedFiles(cwd);
     const filePaths = new Set(modifiedFiles);
 
-    const highFreqFiles = buildHighFreqFiles(allEpisodes);
-
     // Score and rank all episodes.
-    const scored = allEpisodes
+    const scored = cappedEpisodes
       .map((ep) => ({
         ep,
         score: scoreEpisode(ep, filePaths, branch, highFreqFiles),

@@ -22,11 +22,19 @@ const FTS5_UNSAFE = /(?<!\p{L})AND(?!\p{L})|(?<!\p{L})OR(?!\p{L})|(?<!\p{L})NOT(
 
 /**
  * Sanitize narrative text for safe FTS5 storage.
- * Strips operator tokens and caps length.
+ * Strips FTS5 operator tokens, entity-encodes XML angle-bracket characters,
+ * and caps length.
+ *
+ * The `<>` entity-encoding (not stripping) is intentional: it preserves the
+ * semantic content of angle-bracket expressions (e.g. "<component>") while
+ * preventing XML injection into contexts such as `memory_search` results that
+ * surface raw fact content.
  */
 export function sanitizeNarrative(text: string): string {
   return text
     .replace(FTS5_UNSAFE, ' ')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
     .replace(/\s{2,}/g, ' ')
     .trim()
     .slice(0, NARRATIVE_CAP);
