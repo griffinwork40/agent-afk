@@ -196,6 +196,18 @@ describe('QEpisodesStore', () => {
     expect(store.searchEpisodes('(unclosed')).toEqual([]);
   });
 
+  it('searchEpisodes returns [] for unterminated string FTS5 error', () => {
+    store.upsertEpisode(BASE_EPISODE);
+    // An unmatched quote triggers "unterminated string" from SQLite FTS5.
+    expect(store.searchEpisodes('"auth')).toEqual([]);
+  });
+
+  it('searchEpisodes returns [] for expected integer FTS5 error (invalid NEAR distance)', () => {
+    store.upsertEpisode(BASE_EPISODE);
+    // NEAR/X with a non-integer distance triggers "expected integer" from SQLite FTS5.
+    expect(store.searchEpisodes('NEAR(auth foo, bar)')).toEqual([]);
+  });
+
   // ── Finding 7: schema upgrade branch throws on version mismatch ──────────
 
   it('throws when DB user_version is newer than supported version', () => {
