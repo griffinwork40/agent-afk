@@ -98,6 +98,42 @@ describe('worktree handler — input validation', () => {
       expect(result.content).toContain('path required');
     }
   });
+
+  it('rejects repo: null with explicit error (not silent fallback)', async () => {
+    const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
+    const result = await handler({ action: 'list', repo: null }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('null and empty string are not accepted');
+  });
+
+  it('rejects repo: "" with explicit error (not silent fallback)', async () => {
+    const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
+    const result = await handler({ action: 'list', repo: '' }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('null and empty string are not accepted');
+  });
+
+  it('rejects repo pointing to a non-existent path with distinct error', async () => {
+    const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
+    const result = await handler({ action: 'list', repo: '/nonexistent/path/that/does/not/exist' }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('does not exist on disk');
+    // Must NOT say "does not appear to be inside a git repository" (the misleading ENOENT message)
+    expect(result.content).not.toContain('does not appear to be inside a git repository');
+  });
+
+  it('rejects a file path with a "not a directory" error (not a misleading git error)', async () => {
+    // Create a real file so fs.stat succeeds but isDirectory() returns false.
+    const filePath = join(repoRoot, 'not-a-dir.txt');
+    await fs.writeFile(filePath, 'hello');
+    const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
+    const result = await handler({ action: 'list', repo: filePath }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('not a directory');
+    expect(result.content).toContain(filePath);
+    // Must NOT fall through to the git layer and produce a misleading git error.
+    expect(result.content).not.toContain('does not appear to be inside a git repository');
+  });
 });
 
 describe('worktree handler — create', () => {
@@ -632,12 +668,13 @@ describe('worktree handler — explicit repo parameter (#3755)', () => {
     expect(result.content).toMatch(/repo must be a string/i);
   });
 
-  it('error when explicit repo is not a git repo names the repo path and mentions the repo param', async () => {
+  it('error when explicit repo exists but is not a git repo names the repo path and mentions the repo param', async () => {
+    // repoRoot exists on disk (created in beforeEach) but we make git reject it.
     const mock = makeMock(() => { throw new Error('fatal: not a git repository'); });
     const handler = createWorktreeHandler('/home/user', { execFile: mock });
-    const result = await handler({ action: 'list', repo: '/not/a/repo' }, SIGNAL);
+    const result = await handler({ action: 'list', repo: repoRoot }, SIGNAL);
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('Cannot resolve git repo root from /not/a/repo');
+    expect(result.content).toContain(`Cannot resolve git repo root from ${repoRoot}`);
     // Error message should mention the repo parameter so the user knows what to fix
     expect(result.content).toMatch(/\`repo\` parameter/i);
   });
