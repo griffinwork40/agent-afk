@@ -28,7 +28,7 @@ import {
 } from 'fs';
 import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { join } from 'path';
-import { getMemoryDir } from '../../paths.js';
+import { getMemoryDir, getFacetCacheDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { factsToResults, sanitizeFtsQuery } from './memory-store.fts.js';
 import { queryUnaccessed, queryAccessStats } from './memory-store.access.js';
@@ -43,6 +43,8 @@ import {
   searchProcedures as searchProceduresImpl,
   PROCEDURES_DIR,
 } from './memory-store.procedures.js';
+import { FacetFtsStore } from './facet-fts-store.js';
+import { indexFacetIntoStore } from './memory-store.facet-index.js';
 import type {
   AccessStats,
   Fact,
@@ -103,11 +105,22 @@ export interface HotUsage {
 export class MemoryStore {
   private readonly dir: string;
   private readonly db: BetterSqlite3.Database;
+  private readonly facetFts: FacetFtsStore;
 
-  constructor(memoryDir?: string) {
+  constructor(memoryDir?: string, facetCacheDir?: string) {
     this.dir = memoryDir ?? getMemoryDir();
     mkdirSync(this.dir, { recursive: true });
     mkdirSync(join(this.dir, PROCEDURES_DIR), { recursive: true });
+
+    // Open the facet FTS sidecar DB. This is a separate SQLite database that
+    // indexes session facet fields for type:'session' search results.
+    this.facetFts = new FacetFtsStore(this.dir);
+    // Backfill existing facet cache files on first open (or when the cache dir
+    // is newer than the sidecar DB) so prior sessions are searchable immediately.
+    const resolvedCacheDir = facetCacheDir ?? getFacetCacheDir();
+    if (this.facetFts.needsBackfill(this.dir, resolvedCacheDir)) {
+      this.facetFts.backfill(resolvedCacheDir);
+    }
 
     this.db = new Database(join(this.dir, DB_FILE));
     // configureSqliteConnection sets busy_timeout (5 000 ms) BEFORE the WAL
@@ -440,6 +453,22 @@ export class MemoryStore {
     return searchProceduresImpl(this.dir, query);
   }
 
+  // ── Facet FTS (session recall) ───────────────────────────────
+
+  /**
+   * Index a session facet for `type: 'session'` search results.
+   *
+   * Contract: idempotent — re-indexing an already-indexed session_id is a
+   * no-op (INSERT OR IGNORE). Callers invoke this at facet-write time so the
+   * index stays current without a backfill pass.
+   *
+   * The `raw` argument is the facet object as written to the cache dir.
+   * Extraction logic lives in memory-store.facet-index.ts (line-ceiling split).
+   */
+  indexFacet(raw: unknown): void {
+    indexFacetIntoStore(this.facetFts, raw);
+  }
+
   // ── Combined search ─────────────────────────────────────────
 
   search(query: string, opts?: SearchOpts): MemorySearchResult[] {
@@ -465,6 +494,7 @@ export class MemoryStore {
     // Invariant: `results` aliases `factResults` (no defensive copy).
     // The array is consumed exactly once (push + slice below) and never read
     // from again. Add a spread copy here if a second reader ever appears.
+    const limit = opts?.limit ?? 10;
     const results: MemorySearchResult[] = factResults;
 
     if (!opts?.category) {
@@ -478,9 +508,17 @@ export class MemoryStore {
           confidence: 1.0,
         });
       }
+
+      // Union facet FTS results as type:'session'. The facet index is a
+      // separate SQLite sidecar — failures are swallowed inside FacetFtsStore
+      // and return [] so a facet-index problem never breaks fact recall.
+      // FacetFtsStore.search() applies sanitizeFtsQuery internally.
+      const sessionResults = this.facetFts.search(query, limit);
+      for (const r of sessionResults) {
+        results.push(r);
+      }
     }
 
-    const limit = opts?.limit ?? 10;
     return results.slice(0, limit);
   }
 
@@ -491,6 +529,7 @@ export class MemoryStore {
   }
 
   close(): void {
+    this.facetFts.close();
     this.db.close();
   }
 }
