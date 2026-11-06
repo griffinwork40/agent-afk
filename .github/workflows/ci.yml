@@ -273,7 +273,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install bubblewrap (Linux sandbox runtime tests, issue #4590)
+        # bwrap is required by bash-sandbox.runtime.test.ts when AFK_SANDBOX_REQUIRED=1.
+        # Only Linux supports the bwrap backend; macOS uses sandbox-exec (pre-installed).
+        # Ubuntu runners have apt available; the step is a no-op on macOS runners.
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y bubblewrap
+
       - name: Test
+        env:
+          # Fail (not skip) the sandbox runtime tests when no bwrap backend is found.
+          # Combined with the bubblewrap install above, this ensures the enforcement
+          # tests actually exercise kernel sandboxing on Linux CI (issue #4590).
+          AFK_SANDBOX_REQUIRED: ${{ runner.os == 'Linux' && '1' || '' }}
         run: ${{ matrix.test-cmd }}
 
       - name: Upload coverage report

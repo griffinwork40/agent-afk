@@ -1123,6 +1123,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SANDBOX_REQUIRED",
+      "description": "CI enforcement mode for the sandbox runtime test suite. When set to \"1\", the bash-sandbox.runtime.test.ts suite fails (instead of silently skipping) if no sandbox backend (sandbox-exec or bwrap) is available on the current platform. Set this on Linux CI runners that install bubblewrap so a broken or uninstalled bwrap cannot cause enforcement tests to vanish. Has no effect on Windows (sandbox-exec/bwrap are POSIX-only). Unset (default): runtime tests skip gracefully when no backend is present.",
+      "type": "string",
+      "required": false,
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_SDK_SURFACE_WARN",
       "description": "Controls the one-time warning emitted when an SDK session (AgentSession / query() / queryText()) discovers skills but has no skillExecutor wired, meaning the model cannot invoke them. Set to 0 to silence the warning (useful when the reduced surface is intentional).",
       "type": "string",
