@@ -418,6 +418,23 @@ describe('scanFile — block-comment state machine', () => {
     expect(violations[0]?.rule).toContain('Rule 1');
   });
 
+  it('violation text uses effectiveLine.trim() (not rawLine.trim()) when trimmedByComment is true', () => {
+    // When a block comment closes on the same line as an import (`*/ import ...`),
+    // the violation's `text` field must contain only the import portion — not the
+    // leading `*/` — because scanFile uses effectiveLine.trim(), not rawLine.trim().
+    const lines = [
+      '/*',
+      ' * block comment',
+      `*/ import { X } from '../cli/foo.js';`,
+    ];
+    const violations = scanFile(absPath, relPath, importerLayer, lines, undefined, fakeRoot);
+    expect(violations.length).toBeGreaterThan(0);
+    // rawLine.trim() would be `*/ import { X } from '../cli/foo.js';`
+    // effectiveLine.trim() should be only the import portion
+    expect(violations[0]?.text).toBe(`import { X } from '../cli/foo.js';`);
+    expect(violations[0]?.text).not.toMatch(/^\*\//);
+  });
+
   it('does NOT report a violation for an import-looking string inside a line comment', () => {
     const lines = [
       "// import { Foo } from '../cli/types.js';",

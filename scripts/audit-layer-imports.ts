@@ -203,7 +203,7 @@ export function checkPair(
  * History: the original `specifier.includes(e.importContains)` was a plain
  * substring test which could in theory exempt an entire directory class when
  * the importContains string appeared anywhere in the path.  Using an exact
- * path-segment check (the prefix must follow a `/` or `.`) is safer.
+ * path-segment check (the prefix must follow a `./` or `/`) is safer.
  */
 export function isAllowed(relPath: string, specifier: string, pairs = ALLOWED_PAIRS): boolean {
   return pairs.some((e) => {
@@ -212,7 +212,7 @@ export function isAllowed(relPath: string, specifier: string, pairs = ALLOWED_PA
     // Accept the needle when it appears at a path-segment boundary:
     //   - immediately after a `/`  (e.g. `../cli/foo`)
     //   - at the very start        (e.g. `cli/foo` — bare relative)
-    //   - after a `.` segment      (e.g. `./cli/foo`)
+    //   - after a './' prefix      (e.g. `./cli/foo`)
     const idx = specifier.indexOf(needle);
     if (idx === -1) return false;
     if (idx === 0) return true;
