@@ -463,8 +463,7 @@ export function checkThinkingAnnotation(ctx: LifecycleContext, now: number): boo
   ) {
     return false;
   }
-  void now; // passed for API symmetry with checkTtfbAnnotation; activeThinkingElapsedMs() owns its own clock
-  const elapsedMs = ctx.thinkingLane.activeThinkingElapsedMs();
+  const elapsedMs = ctx.thinkingLane.activeThinkingElapsedMs(now);
 
   // Thinking ended or below grace — clear any stale annotation.
   if (elapsedMs === null || elapsedMs < THINKING_GRACE_MS) {
