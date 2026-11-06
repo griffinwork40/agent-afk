@@ -51,10 +51,17 @@ export function sandboxFloorAncestors(floor: readonly string[]): readonly string
 }
 
 function contains(root: string, target: string): boolean {
-  // Strip drive letters and normalize separators so POSIX kernel roots
-  // (e.g. /proc from path.posix.join) match OS-native grants (e.g. D:\proc
-  // from canonicalSandboxPath) regardless of which drive resolved them.
-  const norm = (p: string): string => p.replace(/^[a-zA-Z]:/, '').split(path.sep).join('/');
+  // Normalise to POSIX-style paths before comparing so that POSIX kernel roots
+  // (e.g. /proc from path.posix.join) match OS-native grants on any host:
+  //
+  //   • Strip a leading drive letter (C:, D:, …) — present on Windows-resolved
+  //     paths from canonicalSandboxPath, absent on POSIX literals.
+  //   • Split on BOTH separators (/ and \) so that neither the host OS path.sep
+  //     nor the separator style of the input string matters.  On a Windows host
+  //     path.sep is '\'; a POSIX literal like /proc/self contains only '/' and
+  //     would not be split at all by path.sep — using a combined regex ensures
+  //     both 'C:\proc\self' and '/proc/self' normalise to the same segments.
+  const norm = (p: string): string => p.replace(/^[a-zA-Z]:/, '').split(/[\\/]/).join('/');
   const relative = path.posix.relative(norm(root), norm(target));
   return relative === '' || (!relative.startsWith('../') && relative !== '..');
 }
