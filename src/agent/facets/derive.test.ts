@@ -2039,3 +2039,68 @@ describe('deriveSessionFacet', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Preamble stripping in firstPrompt / underlying_goal (#4586)
+// ---------------------------------------------------------------------------
+
+describe('deriveSessionFacet — preamble stripping in firstPrompt (#4586)', () => {
+  function makeSession(turns: StoredSessionInput['turns']): StoredSessionInput {
+    return {
+      sessionId: 'preamble-test',
+      model: 'claude-sonnet',
+      startedAt: 1_000_000,
+      savedAt: 1_060_000,
+      totalTurns: turns?.length ?? 0,
+      totalCostUsd: 0,
+      totalTokens: 0,
+      turns,
+    };
+  }
+
+  it('skips a pure-preamble first turn and uses the real user message as firstPrompt (#4586 F2)', () => {
+    const preamble =
+      '[placeholder-prevent] Prefer running commands yourself with your tools; ' +
+      'this note applies only to commands you must hand to the user.';
+    const facet = deriveSessionFacet(makeSession([
+      { user: preamble, assistant: 'Understood.', timestamp: 1, toolEvents: [] },
+      { user: 'Fix the auth bug in login.ts', assistant: '**Done**', timestamp: 2, toolEvents: [] },
+    ]));
+    expect(facet.underlying_goal).toBe('Fix the auth bug in login.ts');
+    expect(facet.first_prompt).toBe('Fix the auth bug in login.ts');
+    expect(facet.underlying_goal).not.toContain('placeholder-prevent');
+  });
+
+  it('extracts real user content from a preamble-prefixed first turn (#4586 F3 integration)', () => {
+    // The bridge marker strategy: preamble ends with the bridge-tail sentinel,
+    // the user's real message follows on subsequent lines.
+    const preambleWithUserContent =
+      '[agent-workflow-amplifiers: unlocked]\n' +
+      'Read any referenced file for deeper context before acting — these are pointers, not full content.\n' +
+      'Refactor the payment module';
+    const facet = deriveSessionFacet(makeSession([
+      { user: preambleWithUserContent, assistant: 'Done.', timestamp: 1, toolEvents: [] },
+    ]));
+    expect(facet.underlying_goal).toBe('Refactor the payment module');
+    expect(facet.underlying_goal).not.toContain('agent-workflow-amplifiers');
+  });
+
+  it('falls back to empty string when every user turn is pure boilerplate (#4586 F2)', () => {
+    const preamble =
+      '[placeholder-prevent] Prefer running commands yourself with your tools; ' +
+      'this note applies only to commands you must hand to the user.';
+    const facet = deriveSessionFacet(makeSession([
+      { user: preamble, assistant: 'Understood.', timestamp: 1, toolEvents: [] },
+    ]));
+    expect(facet.underlying_goal).toBe('');
+    expect(facet.first_prompt).toBe('');
+  });
+
+  it('leaves non-preamble first turn unchanged', () => {
+    const facet = deriveSessionFacet(makeSession([
+      { user: 'Deploy the auth service', assistant: 'Done.', timestamp: 1, toolEvents: [] },
+    ]));
+    expect(facet.underlying_goal).toBe('Deploy the auth service');
+    expect(facet.first_prompt).toBe('Deploy the auth service');
+  });
+});
