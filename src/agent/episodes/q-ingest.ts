@@ -7,9 +7,10 @@
  *   - Parses the structured content written by `writer.ts`.
  *   - Upserts each episode into the Q episodes store (`q-store.ts`).
  *
- * Idempotency: a watermark (highest `synthesized_at` seen so far) is stored
+ * Idempotency: a watermark (highest `created_at` seen so far) is stored
  * in the Q episodes DB. Subsequent runs only process facts with
- * `created_at` strictly after the watermark row, so cost is O(new episodes).
+ * `created_at >= watermark`, deduplicating via the session_id primary key,
+ * so cost is O(new episodes).
  *
  * The adapter is strictly read-only with respect to the AFK memory archive:
  * it opens memory.db in read-only mode and never writes to it.
@@ -40,7 +41,7 @@ export interface IngestResult {
   found: number;
   /** Number of episodes actually upserted (may be less than found on partial runs). */
   upserted: number;
-  /** The new watermark after this run (ISO timestamp), or null if nothing was ingested. */
+  /** The new watermark after this run (highest `synthesized_at` ISO timestamp seen, or null if nothing was ingested). */
   watermark: string | null;
   /** Total episodes now in the Q store. */
   totalStored: number;
@@ -159,31 +160,32 @@ export function ingestEpisodes(
   const resolvedStoreDir = storeDir ?? resolvedMemoryDir;
   mkdirSync(resolvedStoreDir, { recursive: true });
 
-  const store = new QEpisodesStore(resolvedStoreDir);
-  const watermark = store.getWatermark();
-
-  // Open AFK memory.db read-only — the adapter must never write to it.
-  // null-init so the finally guard can use optional-chaining even when
-  // the Database constructor throws before assignment completes.
+  let store: QEpisodesStore | null = null;
   let memDb: InstanceType<typeof Database> | null = null;
-  memDb = new Database(memoryDbPath, { readonly: true });
 
   let found = 0;
   let upserted = 0;
-  let newWatermark: string | null = watermark;
+  let newWatermark: string | null = null;
   let totalStored = 0;
 
   try {
+    store = new QEpisodesStore(resolvedStoreDir);
+    const watermark = store.getWatermark();
+    newWatermark = watermark;
+
+    // Open AFK memory.db read-only — the adapter must never write to it.
+    memDb = new Database(memoryDbPath, { readonly: true });
     // Query only episode facts, optionally filtered by watermark for efficiency.
-    // The watermark filters on `created_at` (the column used in ORDER BY) with
-    // strict `>` so the watermark row itself is excluded on the next run.
+    // Use `created_at >= ?` (not strict `>`) so same-millisecond rows are not
+    // silently skipped. Deduplication is handled by upsertEpisode's
+    // INSERT OR REPLACE on the session_id primary key.
     const sql = watermark
       ? `SELECT id, session_id, created_at, category, content, source_surface, evidence
            FROM facts
           WHERE category = 'episode'
             AND content LIKE '[episode:%'
             AND content LIKE '%synthesized: %'
-            AND created_at > ?
+            AND created_at >= ?
           ORDER BY created_at ASC`
       : `SELECT id, session_id, created_at, category, content, source_surface, evidence
            FROM facts
@@ -236,7 +238,7 @@ export function ingestEpisodes(
     totalStored = store.count();
   } finally {
     memDb?.close();
-    store.close();
+    store?.close();
   }
 
   return { found, upserted, watermark: newWatermark, totalStored };
