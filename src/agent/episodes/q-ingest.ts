@@ -41,7 +41,7 @@ export interface IngestResult {
   found: number;
   /** Number of episodes actually upserted (may be less than found on partial runs). */
   upserted: number;
-  /** The new watermark after this run (highest `synthesized_at` ISO timestamp seen, or null if nothing was ingested). */
+  /** The new watermark after this run (highest `created_at` ISO timestamp seen, or null if nothing was ingested). */
   watermark: string | null;
   /** Total episodes now in the Q store. */
   totalStored: number;

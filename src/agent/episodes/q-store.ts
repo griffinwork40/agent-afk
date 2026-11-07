@@ -256,7 +256,7 @@ export class QEpisodesStore {
       // else (SQLITE_BUSY, closed DB, I/O errors) so callers can distinguish
       // store failure from an empty result set.
       const msg = err instanceof Error ? err.message : String(err);
-      if (/fts5: syntax error|no such table|no such column|unterminated string|expected integer/i.test(msg)) {
+      if (/fts5: syntax error|unterminated string|expected integer/i.test(msg)) {
         return [];
       }
       throw err;
