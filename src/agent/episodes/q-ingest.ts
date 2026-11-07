@@ -88,7 +88,6 @@ const KEY_PREFIX_RE = /^(goal|approach|outcome|pivots|decisions|open|files|tags|
 
 export function parseEpisodeContent(
   content: string,
-  fallbackSessionId: string | null,
 ): ParsedEpisodeContent | null {
   const lines = content.split('\n');
 
@@ -97,7 +96,7 @@ export function parseEpisodeContent(
   const headerMatch = /^\[episode:(.+)\]$/.exec(header);
   if (!headerMatch) return null;
 
-  const sessionId = headerMatch[1] ?? fallbackSessionId;
+  const sessionId = headerMatch[1];
   if (!sessionId) return null;
 
   // Accumulate fields, appending continuation lines to the current field.
@@ -201,7 +200,7 @@ export function ingestEpisodes(
     found = rows.length;
 
     for (const row of rows) {
-      const parsed = parseEpisodeContent(row.content, row.session_id);
+      const parsed = parseEpisodeContent(row.content);
       if (!parsed) continue;
 
       store.upsertEpisode({
