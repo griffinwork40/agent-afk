@@ -350,9 +350,20 @@ export const bgsubCancelCmd: SlashCommand = {
   },
 };
 
+export const bgsubListCmd: SlashCommand = {
+  name: '/bgsub:list',
+  summary: 'List background subagent jobs',
+  usage: '/bgsub:list',
+  hint: 'Alias for /bgsub with no args — shows all background subagent jobs.',
+  async handler(ctx, _args) {
+    return bgsubCmd.handler(ctx, '');
+  },
+};
+
 export const bgsubCommands: readonly SlashCommand[] = [
   bgsubCmd,
   bgsubStatusCmd,
   bgsubJoinCmd,
   bgsubCancelCmd,
+  bgsubListCmd,
 ];
