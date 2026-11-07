@@ -16,9 +16,10 @@
  * `recursive_triggers` is enabled so the episodes_ad trigger fires during the
  * internal DELETE that INSERT OR REPLACE performs, keeping FTS5 in sync.
  *
- * Watermark: the ingest adapter stores the highest `synthesized_at` ISO timestamp
- * it processed. Subsequent runs query only facts synthesized after that mark,
- * so the ingest cost is O(new episodes) not O(all episodes).
+ * Watermark: the ingest adapter stores the highest `created_at` ISO timestamp
+ * it processed. Subsequent runs query only facts with created_at >= that mark
+ * (deduplicating via session_id primary key), so the ingest cost is
+ * O(new episodes) not O(all episodes).
  *
  * @module agent/episodes/q-store
  */
@@ -131,7 +132,7 @@ export class QEpisodesStore {
 
   // ── Watermark ────────────────────────────────────────────────────────────
 
-  /** Return the last ingested `synthesized_at` ISO timestamp, or null on first run. */
+  /** Return the last ingested `created_at` ISO timestamp, or null on first run. */
   getWatermark(): string | null {
     const row = this.db
       .prepare('SELECT value FROM q_episodes_meta WHERE key = ?')
@@ -249,8 +250,16 @@ export class QEpisodesStore {
             LIMIT ?`,
         )
         .all(query, limit) as QEpisodeRow[];
-    } catch {
-      return [];
+    } catch (err) {
+      // Swallow only FTS5 parse errors (malformed query syntax) so callers
+      // can treat [] as "no results" for bad queries. Rethrow everything
+      // else (SQLITE_BUSY, closed DB, I/O errors) so callers can distinguish
+      // store failure from an empty result set.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/fts5: syntax error|unterminated string|expected integer/i.test(msg)) {
+        return [];
+      }
+      throw err;
     }
   }
 
