@@ -157,7 +157,7 @@ export function createArtifactHandlers(opts: ArtifactHandlerOptions = {}): Map<s
       signal.throwIfAborted();
       const { id, offset, limit } = readInput.parse(input);
       const raw = artifactGet(id, opts.indexPath, MAX_INDEX_BYTES);
-      if (!raw) return { content: 'null' };
+      if (!raw) return { content: JSON.stringify(null) };
       const record = await authorizeRecord(raw, context, opts);
       signal.throwIfAborted();
       return { content: JSON.stringify(await readSlice(record, offset, limit)) };
