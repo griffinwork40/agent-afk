@@ -164,7 +164,7 @@
     "marked": "^18.1.0",
     "node-cron": "^4.2.1",
     "openai": "^7.30.0",
-    "ora": "^9.4.1",
+    "ora": "^10.0.0",
     "playwright": "^1.49.0",
     "string-width": "^8.2.0",
     "telegraf": "^4.16.3",
