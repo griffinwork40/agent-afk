@@ -72,7 +72,7 @@ export function injectHotMemory(config: AgentConfig): AgentConfig {
 // ── Episode recall ───────────────────────────────────────────────────────────
 
 /** Maximum episodes to surface at session start (context-budget guard). */
-const EPISODE_RECALL_CAP = 3;
+export const EPISODE_RECALL_CAP = 3;
 
 /**
  * Soft token cap for the <recent-episodes> block injected into the system
@@ -388,7 +388,9 @@ export function injectEpisodeRecall(
   // Item 5a: fall back to session's own cwd when caller doesn't provide one.
   const effectiveCwd = cwd ?? config.cwd;
 
-  const episodes = recallEpisodes(memoryDir, effectiveCwd, store);
+  const allScored = scoredEpisodes(memoryDir, effectiveCwd, store);
+  const positiveScored = allScored.filter(({ score }) => score > 0);
+  const episodes = positiveScored.slice(0, EPISODE_RECALL_CAP).map(({ ep }) => ep);
   if (episodes.length === 0) return config;
 
   debugLog('episode-recall', `injected ${episodes.length} episode(s), cwd=${effectiveCwd ?? 'process.cwd'}`);
@@ -420,11 +422,11 @@ export function injectEpisodeRecall(
 
   // dry-run mode: report the post-token-cap list to stderr, then return unchanged.
   if (isDryRun) {
-    process.stderr.write(`[episode-recall dry-run] would inject ${capped.length} episode(s) (token-capped from ${episodes.length}), cwd=${effectiveCwd ?? 'process.cwd()'}\n`);
+    process.stderr.write(`[episode-recall dry-run] would inject ${capped.length} episode(s) (token-capped from ${positiveScored.length}), cwd=${(effectiveCwd ?? 'process.cwd()').replace(/</g, '&lt;').replace(/>/g, '&gt;')}\n`);
     for (const ep of capped) {
       const rawPreview = formatEpisodeForRecall(ep).split('\n').slice(0, 3).join(' | ');
       const preview = rawPreview.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      process.stderr.write(`  • id=${ep.id} created=${ep.created_at} — ${preview}\n`);
+      process.stderr.write(`  • id=${ep.id} created=${ep.created_at.replace(/</g, '&lt;').replace(/>/g, '&gt;')} — ${preview}\n`);
     }
     return config;
   }

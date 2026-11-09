@@ -202,19 +202,16 @@ describe('injectEpisodeRecall — dry-run mode', () => {
 // ---------------------------------------------------------------------------
 
 describe('injectEpisodeRecall — opts.noRecall', () => {
-  {
-    const branch = getCurrentBranchSync();
-    it.skipIf(!branch)('returns config unchanged when noRecall=true even with AFK_EPISODE_RECALL=1', () => {
-      mockEnv['AFK_EPISODE_RECALL'] = '1';
-      storeEpisode(store, ['src/memory-loader.ts'], branch!);
+  it('returns config unchanged when noRecall=true even with AFK_EPISODE_RECALL=1', () => {
+    mockEnv['AFK_EPISODE_RECALL'] = '1';
+    storeEpisode(store, ['src/memory-loader.ts']);
 
-      const config = makeConfig();
-      const result = injectEpisodeRecall(config, tmpDir, process.cwd(), store, { noRecall: true });
+    const config = makeConfig();
+    const result = injectEpisodeRecall(config, tmpDir, tmpDir, store, { noRecall: true });
 
-      // noRecall suppresses injection.
-      expect(result).toBe(config);
-    });
-  }
+    // noRecall suppresses injection — fires before any scoring, so no branch needed.
+    expect(result).toBe(config);
+  });
 
   {
     const branch = getCurrentBranchSync();
@@ -240,19 +237,17 @@ describe('injectEpisodeRecall — opts.noRecall', () => {
 // ---------------------------------------------------------------------------
 
 describe('injectEpisodeRecall — AFK_NO_EPISODE_RECALL', () => {
-  {
-    const branch = getCurrentBranchSync();
-    it.skipIf(!branch)('returns config unchanged when AFK_NO_EPISODE_RECALL=1', () => {
-      mockEnv['AFK_EPISODE_RECALL'] = '1';
-      mockEnv['AFK_NO_EPISODE_RECALL'] = '1';
-      storeEpisode(store, ['src/memory-loader.ts'], branch!);
+  it('returns config unchanged when AFK_NO_EPISODE_RECALL=1', () => {
+    mockEnv['AFK_EPISODE_RECALL'] = '1';
+    mockEnv['AFK_NO_EPISODE_RECALL'] = '1';
+    storeEpisode(store, ['src/memory-loader.ts']);
 
-      const config = makeConfig();
-      const result = injectEpisodeRecall(config, tmpDir, process.cwd(), store);
+    const config = makeConfig();
+    const result = injectEpisodeRecall(config, tmpDir, tmpDir, store);
 
-      expect(result).toBe(config);
-    });
-  }
+    // AFK_NO_EPISODE_RECALL suppresses injection — fires before any scoring, so no branch needed.
+    expect(result).toBe(config);
+  });
 
   {
     const branch = getCurrentBranchSync();
@@ -265,7 +260,8 @@ describe('injectEpisodeRecall — AFK_NO_EPISODE_RECALL', () => {
       const result = injectEpisodeRecall(config, tmpDir, process.cwd(), store);
 
       // Without AFK_NO_EPISODE_RECALL, injection proceeds normally.
-      expect(result !== config || result === config).toBe(true); // no-op assertion; just confirms no crash
+      // Either injection happened (hotMemory has the block) or no episodes scored (config unchanged).
+      expect(result === config || result.hotMemory?.includes('<recent-episodes>')).toBe(true);
     });
   }
 

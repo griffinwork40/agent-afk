@@ -19,6 +19,7 @@ import {
   formatEpisodeForRecall,
   getCurrentBranch,
   getRecentlyModifiedFiles,
+  EPISODE_RECALL_CAP,
 } from '../../../agent/memory/memory-loader.js';
 import type { SlashCommand } from '../types.js';
 
@@ -76,12 +77,10 @@ export const recallCmd: SlashCommand = {
       return 'continue';
     }
 
-    // Cap marker: first 3 would be injected by AFK_EPISODE_RECALL=1.
-    const INJECT_CAP = 3;
-
+    // Cap marker: first EPISODE_RECALL_CAP would be injected by AFK_EPISODE_RECALL=1.
     for (let i = 0; i < visible.length; i++) {
       const { ep, score } = visible[i]!;
-      const wouldInject = score > 0 && i < INJECT_CAP;
+      const wouldInject = score > 0 && i < EPISODE_RECALL_CAP;
       const scoreLabel = score > 0
         ? palette.warning(`score=${score}`)
         : palette.dim(`score=${score}`);
@@ -105,7 +104,7 @@ export const recallCmd: SlashCommand = {
 
     ctx.out.line(divider(undefined, 60));
 
-    const injectCount = Math.min(visible.filter(({ score }) => score > 0).length, INJECT_CAP);
+    const injectCount = Math.min(visible.filter(({ score }) => score > 0).length, EPISODE_RECALL_CAP);
     if (injectCount > 0) {
       ctx.out.info(`${injectCount} episode(s) would be injected by AFK_EPISODE_RECALL=1`);
     } else {
