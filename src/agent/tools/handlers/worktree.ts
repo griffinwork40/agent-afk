@@ -33,6 +33,8 @@ export interface WorktreeHandlerDeps {
   execFile?: ExecFileFn;
   /** Override suffix generator for deterministic tests (#1516). */
   generateSuffix?: () => string;
+  /** Override fs.stat for tests (avoids real filesystem hits). */
+  stat?: (path: string) => Promise<import('node:fs').Stats>;
 }
 
 /** Returns undefined when no base was supplied — the caller resolves it (#760). */
@@ -195,6 +197,7 @@ export function createWorktreeHandler(
 ): ToolHandler {
   const execFile = deps?.execFile ?? defaultExecFile;
   const generateSuffix = deps?.generateSuffix ?? (() => randomBytes(2).toString('hex'));
+  const stat = deps?.stat ?? fs.stat;
 
   return async (input, signal, context) => {
     if (!input || typeof input !== 'object') {
@@ -233,7 +236,7 @@ export function createWorktreeHandler(
       // Verify the path exists and is a directory before invoking git so we can
       // distinguish "not found", "not a directory", and "not a git repo".
       try {
-        const st = await fs.stat(obj['repo']);
+        const st = await stat(obj['repo']);
         if (!st.isDirectory()) {
           return {
             content: `Invalid input: repo path is not a directory: ${obj['repo']}`,

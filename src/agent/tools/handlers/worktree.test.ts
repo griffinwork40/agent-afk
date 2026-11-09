@@ -123,10 +123,11 @@ describe('worktree handler — input validation', () => {
   });
 
   it('rejects a file path with a "not a directory" error (not a misleading git error)', async () => {
-    // Create a real file so fs.stat succeeds but isDirectory() returns false.
     const filePath = join(repoRoot, 'not-a-dir.txt');
-    await fs.writeFile(filePath, 'hello');
-    const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
+    const handler = createWorktreeHandler(repoRoot, {
+      execFile: makeMock(standardResponder('')),
+      stat: async (_p: string) => ({ isDirectory: () => false } as any),
+    });
     const result = await handler({ action: 'list', repo: filePath }, SIGNAL);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('not a directory');
@@ -703,6 +704,23 @@ describe('worktree handler — explicit repo parameter (#3755)', () => {
     expect(addCall).toBeDefined();
     // git worktree add must run with -C <repoRoot> (the explicit repo root)
     expect(addCall!.args[1]).toBe(repoRoot);
+  });
+
+  it('returns a clear error when repo exists but git throws ENOENT', async () => {
+    const enoentError = Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+    const mock = makeMock((call) => {
+      if (call.args.includes('--git-common-dir')) throw enoentError;
+      return { stdout: '', stderr: '' };
+    });
+    const handler = createWorktreeHandler('/home/user', {
+      execFile: mock,
+      stat: async (_p: string) => ({ isDirectory: () => true } as any),
+    });
+    const result = await handler({ action: 'list', repo: repoRoot }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Cannot resolve git repo root');
+    expect(result.content).toContain('repo');
+    expect(result.content).not.toContain('does not exist on disk');
   });
 
   it('omitting repo falls back to session cwd as before (backward compat)', async () => {
