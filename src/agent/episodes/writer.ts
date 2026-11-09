@@ -81,13 +81,23 @@ export function formatEpisodeContent(episode: EpisodeRecord): string {
 /**
  * Write the episode to the cross-session memory archive.
  * Uses category 'episode' on the facts table (schema v6).
+ *
+ * Contract (#4661, constraint 4 — idempotency): uses INSERT OR IGNORE so that
+ * re-derives or duplicate invocations (e.g. a backfill re-run, a session-end
+ * hook that fires more than once) silently skip the insert rather than hitting
+ * the UNIQUE index on facts(content, created_at, session_id, category) and
+ * generating WAL noise. The UNIQUE constraint still guards correctness; this
+ * guard makes duplicate writes a no-op instead of a constraint violation.
+ *
+ * To determine whether a row was actually written (vs skipped), callers can
+ * compare the returned rowId — a value of -1 indicates the row was ignored.
  */
 export async function writeEpisode(
   episode: EpisodeRecord,
   memoryDir?: string,
 ): Promise<void> {
   const store = new MemoryStore(memoryDir);
-  store.storeFact({
+  store.storeEpisodeFact({
     session_id: episode.sessionId,
     category: 'episode',
     content: formatEpisodeContent(episode),
