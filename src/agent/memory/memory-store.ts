@@ -45,6 +45,7 @@ import {
 } from './memory-store.procedures.js';
 import { FacetFtsStore } from './facet-fts-store.js';
 import { indexFacetIntoStore } from './memory-store.facet-index.js';
+import { storeEpisodeFact as storeEpisodeFactImpl } from './memory-store.episode-fact.js';
 import type {
   AccessStats,
   Fact,
@@ -107,7 +108,7 @@ export class MemoryStore {
   private readonly db: BetterSqlite3.Database;
   private readonly facetFts: FacetFtsStore;
 
-  constructor(memoryDir?: string, facetCacheDir?: string) {
+  constructor(memoryDir?: string, facetCacheDir?: string, opts?: { skipFacetBackfill?: boolean }) {
     this.dir = memoryDir ?? getMemoryDir();
     mkdirSync(this.dir, { recursive: true });
     mkdirSync(join(this.dir, PROCEDURES_DIR), { recursive: true });
@@ -117,9 +118,13 @@ export class MemoryStore {
     this.facetFts = new FacetFtsStore(this.dir);
     // Backfill existing facet cache files on first open (or when the cache dir
     // is newer than the sidecar DB) so prior sessions are searchable immediately.
-    const resolvedCacheDir = facetCacheDir ?? getFacetCacheDir();
-    if (this.facetFts.needsBackfill(this.dir, resolvedCacheDir)) {
-      this.facetFts.backfill(resolvedCacheDir);
+    // Skip when opts.skipFacetBackfill is true (e.g. session-end-hook only
+    // needs to index one fresh facet, not scan all existing cache files).
+    if (!opts?.skipFacetBackfill) {
+      const resolvedCacheDir = facetCacheDir ?? getFacetCacheDir();
+      if (this.facetFts.needsBackfill(this.dir, resolvedCacheDir)) {
+        this.facetFts.backfill(resolvedCacheDir);
+      }
     }
 
     this.db = new Database(join(this.dir, DB_FILE));
@@ -261,35 +266,12 @@ export class MemoryStore {
 
   /**
    * Write an episode fact using INSERT OR IGNORE for idempotency (#4661,
-   * constraint 4). The UNIQUE index on facts(content, created_at, session_id,
-   * category) means a re-derive or duplicate session-end hook invocation would
-   * otherwise hit a constraint violation and generate WAL noise. OR IGNORE
-   * turns duplicates into a silent no-op.
-   *
-   * Contract: unlike storeFact, this method does NOT append a WAL entry before
-   * the INSERT. Episode facts are derived on-demand from the facet cache; they
-   * are not user-authored data and do not need WAL crash-recovery — a missing
-   * episode row is simply re-synthesised on the next backfill run.
-   *
-   * Returns the rowid of the inserted row, or -1 when the row was ignored
-   * (duplicate). Callers that need to distinguish written vs skipped can inspect
-   * the return value; most callers (the session-end hook) can safely ignore it.
+   * constraint 4). Implementation lives in memory-store.episode-fact.ts
+   * (line-ceiling split). Returns the rowid of the inserted row, or -1 when
+   * the row was ignored (duplicate).
    */
   storeEpisodeFact(fact: NewFact): number {
-    const now = new Date().toISOString();
-    const stmt = this.db.prepare(`
-      INSERT OR IGNORE INTO facts (session_id, created_at, category, content, source_surface, evidence)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    const result = stmt.run(
-      fact.session_id ?? null,
-      now,
-      fact.category,
-      fact.content,
-      fact.source_surface,
-      fact.evidence ?? null,
-    );
-    return result.changes > 0 ? Number(result.lastInsertRowid) : -1;
+    return storeEpisodeFactImpl(this.db, fact);
   }
 
   supersedeFact(
@@ -546,9 +528,21 @@ export class MemoryStore {
       // separate SQLite sidecar — failures are swallowed inside FacetFtsStore
       // and return [] so a facet-index problem never breaks fact recall.
       // FacetFtsStore.search() applies sanitizeFtsQuery internally.
-      const sessionResults = this.facetFts.search(query, limit);
-      for (const r of sessionResults) {
-        results.push(r);
+      //
+      // Session results are fetched with a reserved sub-limit so they cannot
+      // be starved when facts alone fill the budget. We reserve up to
+      // Math.ceil(limit / 3) slots (capped at 3) for session results, then
+      // fill the rest with facts+procs. This guarantees that when session
+      // results exist and match the query, at least some appear in the output.
+      const sessionSlots = Math.min(3, Math.ceil(limit / 3));
+      const sessionResults = this.facetFts.search(query, sessionSlots);
+
+      if (sessionResults.length > 0) {
+        // Interleave: take up to (limit - sessionSlots) from facts+procs,
+        // then append session results, then slice to limit.
+        const nonSessionBudget = limit - sessionResults.length;
+        const trimmed = results.slice(0, nonSessionBudget);
+        return [...trimmed, ...sessionResults].slice(0, limit);
       }
     }
 

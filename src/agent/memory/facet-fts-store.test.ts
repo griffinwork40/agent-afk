@@ -88,7 +88,7 @@ describe('FacetFtsStore — indexFacet and isIndexed', () => {
     expect(store.isIndexed('sess-abc')).toBe(true);
   });
 
-  it('is idempotent — re-indexing the same session_id is a no-op', () => {
+  it('re-indexing replaces the row — last write wins', () => {
     store.indexFacet({
       session_id: 'sess-dup',
       brief_summary: 'First write',
@@ -96,17 +96,24 @@ describe('FacetFtsStore — indexFacet and isIndexed', () => {
       primary_success: '',
       decisions: '',
     });
-    // Should not throw on second call
+    // Second call should not throw, and must REPLACE the content
     expect(() => {
       store.indexFacet({
         session_id: 'sess-dup',
-        brief_summary: 'Second write — ignored',
+        brief_summary: 'Second write — replaces',
         underlying_goal: '',
         primary_success: '',
         decisions: '',
       });
     }).not.toThrow();
     expect(store.isIndexed('sess-dup')).toBe(true);
+    // The new content wins: searching 'Second' finds it
+    const second = store.search('Second');
+    expect(second.length).toBe(1);
+    expect(second[0]!.source_session).toBe('sess-dup');
+    // The old content is gone: searching 'First' finds nothing
+    const first = store.search('First');
+    expect(first.length).toBe(0);
   });
 });
 

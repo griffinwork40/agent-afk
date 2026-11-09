@@ -34,7 +34,7 @@ const FACET_FTS_DB_FILE = 'facets-fts.db';
  * Schema version for the sidecar facets FTS database.
  * Bump when the indexed fields or schema change.
  */
-const FACET_FTS_SCHEMA_VERSION = 1;
+const FACET_FTS_SCHEMA_VERSION = 2;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS facets_index (
@@ -66,6 +66,17 @@ CREATE TRIGGER IF NOT EXISTS facets_index_ad AFTER DELETE ON facets_index BEGIN
     VALUES ('delete', old.rowid, old.session_id,
             old.brief_summary || ' ' || old.underlying_goal || ' ' ||
             old.primary_success || ' ' || old.decisions);
+END;
+
+CREATE TRIGGER IF NOT EXISTS facets_index_au AFTER UPDATE ON facets_index BEGIN
+  INSERT INTO facets_fts(facets_fts, rowid, session_id, text_blob)
+    VALUES ('delete', old.rowid, old.session_id,
+            old.brief_summary || ' ' || old.underlying_goal || ' ' ||
+            old.primary_success || ' ' || old.decisions);
+  INSERT INTO facets_fts(rowid, session_id, text_blob)
+    VALUES (new.rowid, new.session_id,
+            new.brief_summary || ' ' || new.underlying_goal || ' ' ||
+            new.primary_success || ' ' || new.decisions);
 END;
 `;
 
@@ -266,11 +277,7 @@ export class FacetFtsStore {
    * Check whether the sidecar DB needs a backfill pass.
    * Returns true when any cache file's sessionId is not yet indexed.
    */
-  needsBackfill(memoryDir: string, cacheDir: string): boolean {
-    // The memoryDir parameter is kept for API compatibility but no longer used
-    // for mtime comparison — WAL checkpoints advance the DB mtime without
-    // indexing new cache files, making the old heuristic unreliable.
-    void memoryDir;
+  needsBackfill(_memoryDir: string, cacheDir: string): boolean {
     if (!existsSync(cacheDir)) return false;
 
     // Fast O(1) check: empty index always needs backfill.
@@ -281,15 +288,14 @@ export class FacetFtsStore {
       return true;
     }
 
-    // Check for any cache file whose session_id is not yet indexed.
-    // This is robust against WAL checkpoints advancing the DB mtime.
+    // Bulk O(1) SQL round-trip: load all indexed session_ids into a Set,
+    // then check against the list of cache files. Replaces the previous
+    // per-file isIndexed() loop which was O(N) SQLite queries.
     try {
       const files = readdirSync(cacheDir).filter((f) => f.endsWith('.json'));
-      for (const file of files) {
-        const sessionId = file.slice(0, -5);
-        if (!this.isIndexed(sessionId)) return true;
-      }
-      return false;
+      const rows = this.db.prepare('SELECT session_id FROM facets_index').all() as { session_id: string }[];
+      const indexed = new Set(rows.map((r) => r.session_id));
+      return files.some((f) => !indexed.has(f.slice(0, -5)));
     } catch {
       return true; // conservative: backfill on any error
     }

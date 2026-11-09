@@ -59,7 +59,7 @@ export function createFacetSessionEndHook(): HookHandler {
     // Phase 1b: index the facet into the facet FTS store for memory_search
     // type:'session' results. Best-effort — failures must never block teardown.
     try {
-      const memStore = new MemoryStore();
+      const memStore = new MemoryStore(undefined, undefined, { skipFacetBackfill: true });
       memStore.indexFacet(facet);
       memStore.close();
     } catch {
