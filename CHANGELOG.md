@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.350.0] - 2026-11-09
+
 ### Added
 - FTS union over facet cache for memory_search session results (f85b1656e)
 - bump fable alias to claude-fable-5-2 (#4746) (7b918f900)
