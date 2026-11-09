@@ -16,7 +16,16 @@ import { buildSandboxedCommand } from './bash-sandbox.js';
 const platform = process.platform;
 // Capability probes, not platform skips: Windows refusal is covered by builders.
 const sandboxExecReady = spawnSync(path.posix.join('/', 'usr', 'bin', 'sandbox-exec'), ['-p', '(version 1) (allow default)', path.posix.join('/', 'usr', 'bin', 'true')], { encoding: 'utf8' }).status === 0;
-const bwrapReady = spawnSync('bwrap', ['--ro-bind', '/', '/', '--cap-drop', 'ALL', '--unshare-pid', '--proc', '/proc', '--remount-ro', '/proc', '--', '/bin/true'], { encoding: 'utf8' }).status === 0;
+// Use --version (matches isBwrapAvailable() in bash-sandbox.ts) so this probe succeeds
+// whenever bwrap is installed, regardless of kernel namespace restrictions on the runner.
+// The full namespace invocation (`--unshare-pid` etc.) is tested by the actual test cases,
+// which will error naturally if namespaces are unavailable rather than masking as a skip.
+const bwrapReady = (() => {
+  for (const dir of [['usr', 'bin'], ['usr', 'local', 'bin'], ['usr', 'sbin']]) {
+    if (spawnSync(path.posix.join('/', ...dir, 'bwrap'), ['--version'], { encoding: 'utf8' }).status === 0) return true;
+  }
+  return false;
+})();
 const available = sandboxExecReady || bwrapReady;
 // AFK_SANDBOX_REQUIRED=1: CI mode — fail (not skip) when no backend is available.
 // Set on Linux CI runners that install bubblewrap so silent skips cannot mask a
