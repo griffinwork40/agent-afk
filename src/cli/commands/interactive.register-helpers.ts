@@ -356,7 +356,12 @@ export function resolveWorktreeSetupArg(
 
 export interface RunStartupPickerParams {
   options: { resume?: string; continue?: boolean };
-  spinner: { stop: () => void; start: (text: string) => void };
+  /**
+   * Spinner instance. Methods are optional so that non-TTY / stub objects
+   * (e.g. the ora silent-mode shim in CI) never cause a TypeError when
+   * `.stop()` or `.start()` are absent from the returned object.
+   */
+  spinner: { stop?: () => void; start?: (text: string) => void };
 }
 
 /**
@@ -370,7 +375,7 @@ export interface RunStartupPickerParams {
 export async function maybeRunStartupPicker(params: RunStartupPickerParams): Promise<void> {
   const { options, spinner } = params;
   if (options.resume || options.continue) return;
-  spinner.stop();
+  spinner.stop?.();
   const pickerResult = await runStartupSessionPicker({
     alreadyResuming: false,
     signal: new AbortController().signal,
@@ -381,7 +386,7 @@ export async function maybeRunStartupPicker(params: RunStartupPickerParams): Pro
     // between the picker rendering and the user pressing Enter).
     const spinnerShim = {
       fail: (msg: string) => {
-        spinner.stop();
+        spinner.stop?.();
         process.stderr.write(msg + '\n');
       },
     };
@@ -392,6 +397,6 @@ export async function maybeRunStartupPicker(params: RunStartupPickerParams): Pro
       return;
     }
   }
-  spinner.start('Initializing interactive session...');
+  spinner.start?.('Initializing interactive session...');
 }
 
