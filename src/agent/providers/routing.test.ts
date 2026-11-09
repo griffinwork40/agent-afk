@@ -85,6 +85,7 @@ describe('providerForModel', () => {
       'claude-haiku-4-5-20251001',
       'claude-sonnet-4',
       'claude-fable-5',
+      'claude-fable-5-2',
     ])('routes full Claude id %s to anthropic', (id) => {
       expect(providerForModel(id)).toBe('anthropic-direct');
     });
@@ -433,6 +434,7 @@ describe('createChildProviderFactory — child provider routing', () => {
     'claude-opus-4-8',
     'claude-sonnet-5',
     'claude-fable-5',
+    'claude-fable-5-2',
   ])('routes Claude id %s to AnthropicDirectProvider', (model) => {
     const factory = createChildProviderFactory();
     const provider = factory({ childExecutor, childSkillExecutor, model });
@@ -653,6 +655,7 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
     'claude-opus-4-8',
     'claude-sonnet-5',
     'claude-fable-5',
+    'claude-fable-5-2',
   ])('defaults to the "medium" tier for Claude parent %s (preserves cost-mgmt intent)', (parent) => {
     // Post-#548: the default is the rebindable `medium` TIER (resolves to Claude
     // Sonnet by default), not the fixed `'sonnet'` identity alias — so a user who
