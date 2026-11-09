@@ -15,6 +15,7 @@ import { injectCompanionPrimer } from '../companion/index.js';
 import { AgentSession } from '../session/agent-session.js';
 import { registerSurfaceSession } from '../session/register-surface-session.js';
 import { loadHooksConfig } from '../hooks/config-loader.js';
+import { resolveModelId } from '../session/model-resolution.js';
 import { StateStore } from '../state/state-store.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
@@ -211,6 +212,13 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
       // enabled:false) as 'medium'. This value comes from the scheduler, not
       // from any model-supplied input — it cannot be spoofed by the agent.
       daemonTaskId: taskId,
+      // Daemon ticks use a fixed model per tick; resolve it once at dispatch
+      // time so hook payloads reflect the actual wire id.
+      getModel: (() => {
+        const raw = options.sessionConfig?.model ?? 'sonnet';
+        const daemonModel = resolveModelId(raw) ?? String(raw);
+        return () => daemonModel;
+      })(),
     },
   );
   const stateStore = new StateStore(getStateDatabasePath());

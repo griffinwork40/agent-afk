@@ -34,6 +34,7 @@ import type { TurnState } from './interactive/repl-loop.js';
 import type { ExitReasonRef } from './interactive/interactive.signal-handlers.js';
 import { resolveResumeTarget } from '../resume-session.js';
 import { errorMessage } from '../../utils/errors.js';
+import { runStartupSessionPicker } from './interactive/startup-session-picker.js';
 
 // ---------------------------------------------------------------------------
 // Option registration
@@ -351,5 +352,55 @@ export function resolveWorktreeSetupArg(
   if (branchPrefixOverride !== undefined) opts.branchPrefix = branchPrefixOverride;
   if (worktreeBaseOverride !== undefined) opts.baseRef = worktreeBaseOverride;
   return Object.keys(opts).length > 0 ? opts : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Startup session picker invocation (#4692)
+// ---------------------------------------------------------------------------
+
+export interface RunStartupPickerParams {
+  options: { resume?: string; continue?: boolean };
+  /**
+   * Spinner instance. Methods are optional so that non-TTY / stub objects
+   * (e.g. the ora silent-mode shim in CI) never cause a TypeError when
+   * `.stop()` or `.start()` are absent from the returned object.
+   */
+  spinner: { stop?: () => void; start?: (text: string) => void };
+}
+
+/**
+ * Run the startup session picker when conditions are met, then restart the
+ * spinner. If a session is selected, mutates `options.resume` so the
+ * existing resume path in `bootstrapSession` picks it up.
+ *
+ * Extracted from `registerInteractiveCommand` to keep that function within
+ * the 200-line AST ceiling (#3478).
+ */
+export async function maybeRunStartupPicker(params: RunStartupPickerParams): Promise<void> {
+  const { options, spinner } = params;
+  if (options.resume || options.continue) return;
+  spinner.stop?.();
+  const pickerResult = await runStartupSessionPicker({
+    alreadyResuming: false,
+    signal: new AbortController().signal,
+  });
+  if (pickerResult.selectedId !== undefined) {
+    options.resume = pickerResult.selectedId;
+    // Validate the selected session still exists (it may have been deleted
+    // between the picker rendering and the user pressing Enter).
+    const spinnerShim = {
+      fail: (msg: string) => {
+        spinner.stop?.();
+        process.stderr.write(msg + '\n');
+      },
+    };
+    const validation = validateResumeOption({ resume: pickerResult.selectedId }, spinnerShim);
+    if (!validation.ok) {
+      // Session vanished between picker and resume — fall back to new session.
+      options.resume = undefined;
+      return;
+    }
+  }
+  spinner.start?.('Initializing interactive session...');
 }
 

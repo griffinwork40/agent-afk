@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(13); // v13: token_breakdown total/subagent cost (#3879)
+    expect(facet.facet_version).toBe(14); // v14: surface field for structural daemon filtering (#4645)
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -54,6 +54,45 @@ describe('deriveSessionFacet', () => {
     expect(facet.model).toBe('opus');
     expect(facet.duration_minutes).toBe(5);
     expect(facet.start_time).toBe(new Date(1_000_000).toISOString());
+  });
+
+  // --- surface field (#4645) ---
+
+  it('surface: defaults to "cli" when session.source is undefined', () => {
+    const facet = deriveSessionFacet(richSession()); // richSession has no source field
+    expect(facet.surface).toBe('cli');
+  });
+
+  it('surface: "telegram" when session.source is "telegram"', () => {
+    const facet = deriveSessionFacet({ ...richSession(), source: 'telegram' });
+    expect(facet.surface).toBe('telegram');
+    expect(facet.source).toBe('telegram');
+  });
+
+  it('surface: "daemon" when session.source is "daemon"', () => {
+    const facet = deriveSessionFacet({ ...richSession(), source: 'daemon' });
+    expect(facet.surface).toBe('daemon');
+    expect(facet.source).toBe('daemon');
+  });
+
+  it('surface: "web" when session.source is "web"', () => {
+    const facet = deriveSessionFacet({ ...richSession(), source: 'web' });
+    expect(facet.surface).toBe('web');
+    expect(facet.source).toBe('web');
+  });
+
+  it('surface: "cli" when session.source is "cli"', () => {
+    const facet = deriveSessionFacet({ ...richSession(), source: 'cli' });
+    expect(facet.surface).toBe('cli');
+    expect(facet.source).toBe('cli');
+  });
+
+  it('surface: schema-valid on derived facets', () => {
+    for (const src of ['cli', 'telegram', 'daemon', 'web'] as const) {
+      const facet = deriveSessionFacet({ ...richSession(), source: src });
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+      expect(facet.surface).toBe(src);
+    }
   });
 
   it('aggregates tool counts and errors mechanically', () => {
@@ -1998,5 +2037,70 @@ describe('deriveSessionFacet', () => {
       expect(facet.outcome).toBe('partially_achieved');
       expect(facet.outcome_downgrade_reason).toBe('no_corroborating_evidence');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Preamble stripping in firstPrompt / underlying_goal (#4586)
+// ---------------------------------------------------------------------------
+
+describe('deriveSessionFacet — preamble stripping in firstPrompt (#4586)', () => {
+  function makeSession(turns: StoredSessionInput['turns']): StoredSessionInput {
+    return {
+      sessionId: 'preamble-test',
+      model: 'claude-sonnet',
+      startedAt: 1_000_000,
+      savedAt: 1_060_000,
+      totalTurns: turns?.length ?? 0,
+      totalCostUsd: 0,
+      totalTokens: 0,
+      turns,
+    };
+  }
+
+  it('skips a pure-preamble first turn and uses the real user message as firstPrompt (#4586 F2)', () => {
+    const preamble =
+      '[placeholder-prevent] Prefer running commands yourself with your tools; ' +
+      'this note applies only to commands you must hand to the user.';
+    const facet = deriveSessionFacet(makeSession([
+      { user: preamble, assistant: 'Understood.', timestamp: 1, toolEvents: [] },
+      { user: 'Fix the auth bug in login.ts', assistant: '**Done**', timestamp: 2, toolEvents: [] },
+    ]));
+    expect(facet.underlying_goal).toBe('Fix the auth bug in login.ts');
+    expect(facet.first_prompt).toBe('Fix the auth bug in login.ts');
+    expect(facet.underlying_goal).not.toContain('placeholder-prevent');
+  });
+
+  it('extracts real user content from a preamble-prefixed first turn (#4586 F3 integration)', () => {
+    // The bridge marker strategy: preamble ends with the bridge-tail sentinel,
+    // the user's real message follows on subsequent lines.
+    const preambleWithUserContent =
+      '[agent-workflow-amplifiers: unlocked]\n' +
+      'Read any referenced file for deeper context before acting — these are pointers, not full content.\n' +
+      'Refactor the payment module';
+    const facet = deriveSessionFacet(makeSession([
+      { user: preambleWithUserContent, assistant: 'Done.', timestamp: 1, toolEvents: [] },
+    ]));
+    expect(facet.underlying_goal).toBe('Refactor the payment module');
+    expect(facet.underlying_goal).not.toContain('agent-workflow-amplifiers');
+  });
+
+  it('falls back to empty string when every user turn is pure boilerplate (#4586 F2)', () => {
+    const preamble =
+      '[placeholder-prevent] Prefer running commands yourself with your tools; ' +
+      'this note applies only to commands you must hand to the user.';
+    const facet = deriveSessionFacet(makeSession([
+      { user: preamble, assistant: 'Understood.', timestamp: 1, toolEvents: [] },
+    ]));
+    expect(facet.underlying_goal).toBe('');
+    expect(facet.first_prompt).toBe('');
+  });
+
+  it('leaves non-preamble first turn unchanged', () => {
+    const facet = deriveSessionFacet(makeSession([
+      { user: 'Deploy the auth service', assistant: 'Done.', timestamp: 1, toolEvents: [] },
+    ]));
+    expect(facet.underlying_goal).toBe('Deploy the auth service');
+    expect(facet.first_prompt).toBe('Deploy the auth service');
   });
 });

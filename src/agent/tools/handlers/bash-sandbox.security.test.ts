@@ -8,7 +8,7 @@ const fixtures = vi.hoisted(() => ({ floor: [] as string[] }));
 vi.mock('./write-denylist.js', () => ({ getUnresolvedWriteDenylist: () => fixtures.floor }));
 vi.mock('node:child_process', () => ({ execFileSync: vi.fn() }));
 import { buildSandboxedCommand, _resetBwrapCacheForTests } from './bash-sandbox.js';
-import { canonicalSandboxPath, sandboxSchemeString } from './bash-sandbox.paths.js';
+import { assertDisjointSandboxGrants, canonicalSandboxPath, sandboxSchemeString } from './bash-sandbox.paths.js';
 
 let root: string;
 let cwd: string;
@@ -165,5 +165,52 @@ describe('sandbox write-floor security builders (synthetic floor only)', () => {
   it('unsupported POSIX platforms never use bwrap as an accidental fallback', () => {
     usePlatform('freebsd');
     expect(() => buildSandboxedCommand('true', 'read-only', cwd, temp)).toThrow(/no sandbox mechanism/);
+  });
+});
+
+describe('assertDisjointSandboxGrants — Windows-prefix normalisation in norm()', () => {
+  it('detects overlap when grant uses plain drive letter and floor uses POSIX root', () => {
+    // C:\proc\self normalises to /proc/self — must collide with the POSIX floor entry
+    expect(() =>
+      assertDisjointSandboxGrants(['C:\\proc\\self'], ['/proc/self']),
+    ).toThrow(/overlaps protected/);
+  });
+
+  it('detects overlap when grant uses \\\\?\\C: extended-length prefix', () => {
+    expect(() =>
+      assertDisjointSandboxGrants(['\\\\?\\C:\\proc'], ['/proc']),
+    ).toThrow(/overlaps protected/);
+  });
+
+  it('detects overlap when grant uses \\\\?\\UNC\\server\\share extended-length UNC', () => {
+    // After stripping \\?\UNC\server\share the remainder is \proc which normalises to /proc
+    expect(() =>
+      assertDisjointSandboxGrants(['\\\\?\\UNC\\server\\share\\proc'], ['/proc']),
+    ).toThrow(/overlaps protected/);
+  });
+
+  it('detects overlap when grant uses plain UNC \\\\server\\share prefix', () => {
+    expect(() =>
+      assertDisjointSandboxGrants(['\\\\server\\share\\proc'], ['/proc']),
+    ).toThrow(/overlaps protected/);
+  });
+
+  it('preserves literal backslash in POSIX floor path — does not resolve as parent traversal', () => {
+    // With the old split(/[\\/]/) norm, /tmp/workspace/..\\protected/token was
+    // converted to /tmp/workspace/../protected/token, causing path.posix.relative
+    // to resolve the ".." and return ../protected/token (starts with "../") so
+    // contains() returned false — the overlap was NOT detected.
+    // The new norm() leaves POSIX paths unchanged, so path.posix.relative returns
+    // "..\\protected/token" which does NOT start with "../" — contains() returns
+    // true and the overlap IS correctly detected and rejected.
+    expect(() =>
+      assertDisjointSandboxGrants(['/tmp/workspace'], ['/tmp/workspace/..\\protected/token']),
+    ).toThrow(/overlaps protected/);
+  });
+
+  it('allows truly disjoint Windows paths', () => {
+    expect(() =>
+      assertDisjointSandboxGrants(['C:\\Users\\work'], ['D:\\protected']),
+    ).not.toThrow();
   });
 });

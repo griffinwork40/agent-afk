@@ -227,7 +227,7 @@ describe('injectEpisodeRecall — opts.noRecall', () => {
       // If git is unavailable and no episode scores, result === config (acceptable).
       // We only check that noRecall: false did not force a no-op when episodes exist.
       // The result is either injected (new object) or unchanged (no matching episodes).
-      expect(result === config || result.hotMemory?.includes('<recent-episodes>')).toBe(true);
+      expect(result === config || result.episodeRecall?.includes('<recent-episodes>')).toBe(true);
     });
   }
 });
@@ -260,8 +260,8 @@ describe('injectEpisodeRecall — AFK_NO_EPISODE_RECALL', () => {
       const result = injectEpisodeRecall(config, tmpDir, process.cwd(), store);
 
       // Without AFK_NO_EPISODE_RECALL, injection proceeds normally.
-      // Either injection happened (hotMemory has the block) or no episodes scored (config unchanged).
-      expect(result === config || result.hotMemory?.includes('<recent-episodes>')).toBe(true);
+      // Either injection happened (episodeRecall has the block) or no episodes scored (config unchanged).
+      expect(result === config || result.episodeRecall?.includes('<recent-episodes>')).toBe(true);
     });
   }
 

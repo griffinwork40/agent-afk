@@ -167,7 +167,7 @@ export const HookDecisionPayloadSchema = z.object({
    * per-rule block counts. Writers set it via the `ruleId` field on the hook
    * result object returned from a `PreToolUse` or `PostToolUse` handler.
    */
-  ruleId: z.string().optional(),
+  ruleId: z.string().max(128).optional(),
 });
 
 /** Mirrors `HookSummaryPayload` in ./types (see ./hook-tally.ts). */

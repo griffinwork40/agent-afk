@@ -15,7 +15,7 @@ import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
-import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { MemoryStore, injectHotMemory, injectEpisodeRecall } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
@@ -86,7 +86,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
   await ensurePluginEntrypointsLoaded();
 
   const session = new AgentSession(
-    injectHotMemory({
+    injectEpisodeRecall(injectHotMemory({
       model,
       surface: 'cli',
       apiKey,
@@ -104,7 +104,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
       ).registry,
       provider,
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-    }),
+    })),
     undefined,
   );
 

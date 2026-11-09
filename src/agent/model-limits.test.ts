@@ -69,6 +69,7 @@ describe('autoCompactLimitFor', () => {
     expect(autoCompactLimitFor('fable')).toBe(1_000_000);
     expect(autoCompactLimitFor('claude-fable-5')).toBe(1_000_000);
     expect(autoCompactLimitFor('claude-fable-5-1')).toBe(1_000_000);
+    expect(autoCompactLimitFor('claude-fable-5-2')).toBe(1_000_000);
   });
 
   it('falls back to the model window for unknown / openai-compatible models', () => {

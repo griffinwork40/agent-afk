@@ -170,6 +170,10 @@ async function lookupToolResult(
     // Truncate to byte cap, then trim to last full line.
     const buf = Buffer.from(text, 'utf-8').subarray(0, MAX_RESULT_BYTES);
     text = buf.toString('utf-8');
+    // Buffer.subarray can split a multi-byte UTF-8 sequence: Node replaces the
+    // incomplete tail with U+FFFD (\uFFFD). Strip any such replacement characters
+    // from the end before appending the truncation notice.
+    text = text.replace(/\uFFFD+$/, '');
     const lastNewline = text.lastIndexOf('\n');
     if (lastNewline > 0) text = text.slice(0, lastNewline);
     text += `\n… [truncated at ${Math.round(MAX_RESULT_BYTES / 1024)} KB]`;

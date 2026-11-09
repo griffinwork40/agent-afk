@@ -31,6 +31,7 @@ import { parseTerminalState } from '../outcomes/terminal-state.js';
 import type { TraceSignals } from './derive.trace.js';
 import { checkDowngradeSignals } from './derive.downgrade.js';
 import { aggregateToolEvents, dedupeToolEvents } from './derive.aggregate.js';
+import { isPreamble, extractUserContent } from '../session/preamble-strip.js';
 
 // Re-export dedupeToolEvents so external callers (parallel-dispatch, store) keep working.
 export { dedupeToolEvents } from './derive.aggregate.js';
@@ -186,6 +187,23 @@ function classifySessionType(firstPrompt: string, source: string): string {
   return 'task';
 }
 
+/**
+ * Scan turns for the first real user message, skipping pure-boilerplate
+ * records (e.g. `[placeholder-prevent]` harness directives). Uses
+ * `isPreamble` / `extractUserContent` so pure-preamble records yield
+ * `undefined` and the scan continues to the next turn rather than falling
+ * back to raw harness text (#4586).
+ */
+function extractFirstPrompt(turns: StoredSessionInput['turns']): string {
+  for (const t of turns ?? []) {
+    const raw = t.user ?? '';
+    if (!raw) continue;
+    const stripped = isPreamble(raw) ? extractUserContent(raw) : raw;
+    if (stripped) return stripped;
+  }
+  return '';
+}
+
 export function deriveSessionFacet(
   session: StoredSessionInput,
   options: DeriveOptions = {},
@@ -221,7 +239,7 @@ export function deriveSessionFacet(
     );
 
   // --- semantic (heuristic) ---
-  const firstPrompt = turns[0]?.user ?? '';
+  const firstPrompt = extractFirstPrompt(turns);
   const source = session.source ?? 'cli';
   const sessionType = classifySessionType(firstPrompt, source);
 
@@ -294,7 +312,8 @@ export function deriveSessionFacet(
   const facet: SessionFacet = {
     facet_version: FACET_VERSION,
     session_id: sessionId,
-    source: source === 'telegram' ? 'telegram' : source === 'web' ? 'web' : source === 'daemon' ? 'daemon' : 'cli',
+    source,
+    surface: source, // first-class structural copy for daemon filtering (#4645)
     model: session.model,
     derived_at: (options.derivedAt ?? new Date()).toISOString(),
     derived_from: 'afk-session',

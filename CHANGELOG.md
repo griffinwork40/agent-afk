@@ -12,6 +12,69 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- FTS union over facet cache for memory_search session results (f85b1656e)
+- bump fable alias to claude-fable-5-2 (#4746) (7b918f900)
+- startup session picker for REPL (467bb903a)
+
+### Fixed
+- address 6 blocking review findings on PR #4708 (95fd7570f)
+- use --version probe for bwrap availability in runtime test (951855017)
+- guard spinner method calls in maybeRunStartupPicker for non-TTY environments (9a40cbd09)
+- address 5 blocking review findings on PR #4708 (e527da888)
+- strip UNC/extended-length prefixes in norm(); gate backslash conversion on Windows detection (fb9a0511d)
+- add stat to WorktreeHandlerDeps and add TOCTOU test (4978e4f89)
+- address all 6 review findings on startup session picker (7aecac8f2)
+- add sandbox spawn diagnostics and CI runtime enforcement (#4718) (63ec0b5b1)
+- assert isDirectory() after fs.stat on explicit repo path (b2d679e10)
+- address episode system architectural constraints (hook ordering + dedupe guard) (fc183623a)
+- use path.posix for POSIX platform sandbox path checks (aea2c722a)
+- improve worktree repo parameter validation (91d766550)
+
+### Changed
+- align checkThinkingAnnotation with TTFB pattern and scope THINKING_GRACE_MS (#4704) (456c18584)
+- bump next from 16.4.3 to 16.4.5 in /website (#4732) (b390dd4e7)
+- bump the actions-minor-patch group with 4 updates (#4733) (1a1489300)
+
+## [5.349.0] - 2026-11-09
+
+### Added
+- add model to hook payloads and AFK_HOOK_MODEL env (#4730) (#4742) (d4808fdbd)
+- thread session surface into facet schema for structural daemon filtering (deb1e3d7f)
+- separate episode recall from hotMemory into dedicated config field (93826d21d)
+- show pause duration on `afk resume` (4061b62ec)
+
+### Fixed
+- resolve FAKE_CWD for Windows path compatibility (70e197799)
+- narrow FTS5 catch regex, fix watermark JSDoc (a0620a275)
+- extend FTS5 error regex, fix JSDoc, add tests (51eeb70c8)
+- build highFreqFiles from allEpisodes; document first-file-dir bucketing (898af47ed)
+- truncate skill descriptions to first sentence, fix spacing (2e400268d)
+- wrap agent-type listing in available-agent-types delimiter block (72e108870)
+- add ruleId schema constraint, fix duplicate test, restructure test blocks (7c218a58b)
+- add unconfined artifact handler test and normalize null serialization (be5ea9a81)
+- correct line references and clarify scope in outcome-keying notes (005290dc2)
+- handle pure-boilerplate fallback in episode extraction (51a539fb4)
+- wire abort signal at turn boundary during pause (d17ec7b4e)
+- update stale JSDoc and add trimmedByComment test (c895d5717)
+- add recency decay and basename collision mitigation to episode scoring (0046f8984)
+- add episode archive eviction policy and XML sanitization (32ef63381)
+- wire episode recall into afk acp surface (9c77447e7)
+- harden q-episodes watermark, resource lifecycle, and error handling (798ee496a)
+- remove decisions truncation and stale backflow (328f5eef8)
+- trim incomplete UTF-8 at journal byte truncation boundary (2ab3c48e4)
+
+### Changed
+- bump ora from 9.4.1 to 10.0.0 (593a0d879)
+- bump the dev-minor-patch group with 2 updates (86a504166)
+- bump the dashboard-dev-minor-patch group (3ffaa450e)
+- bump the prod-minor-patch group with 4 updates (491196d59)
+- bump the dashboard-prod-minor-patch group (59a03a91c)
+- bump the fumadocs group in /website with 2 updates (27068b692)
+- add getting-started guide for new users (45b988142)
+- add skill triage guide with tiered categorization (af6f5415d)
+- scope skill guide to publicly shipped skills only (e0ac3a083)
+
 ## [5.348.0] - 2026-11-05
 
 ### Added

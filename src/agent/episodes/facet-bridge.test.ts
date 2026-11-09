@@ -111,7 +111,7 @@ describe('buildEpisodeFromFacet', () => {
     expect(ep!.approach).toContain('read_file');
   });
 
-  it('maps decisions from facet (max 4)', async () => {
+  it('maps all decisions from facet without truncation', async () => {
     vi.doMock('../facets/store.js', () => ({
       getOrDeriveFacet: () => makeFacet({
         decisions: ['a', 'b', 'c', 'd', 'e'],
@@ -119,8 +119,8 @@ describe('buildEpisodeFromFacet', () => {
     }));
     const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
     const ep = buildEpisodeFromFacet('test-session-abc');
-    expect(ep!.decisions).toHaveLength(4);
-    expect(ep!.decisions).toEqual(['a', 'b', 'c', 'd']);
+    expect(ep!.decisions).toHaveLength(5);
+    expect(ep!.decisions).toEqual(['a', 'b', 'c', 'd', 'e']);
   });
 
   it('maps evidence_pointers to filesKey (max 5)', async () => {

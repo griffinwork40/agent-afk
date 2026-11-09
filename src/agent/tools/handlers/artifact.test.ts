@@ -156,6 +156,42 @@ describe('artifact read surface', () => {
     const result = await handlers.get('artifact_list')!({}, controller.signal);
     expect(result.isError).toBe(true);
   });
+
+  it('unconfined handler (no context, no cwd) still runs store-dir realpath containment', async () => {
+    // Pinning test for the advisory finding in #4584 / PR #4551:
+    // context=undefined + opts.cwd=undefined is the factory-default path.
+    // resolveAndContain falls through to store-dir realpath containment,
+    // so a valid blob is accessible but a redirected URI is still rejected.
+    const unconfinedHandlers = createArtifactHandlers({ storeDir, indexPath }); // no cwd
+    const rec = await put('pinned content');
+
+    // Valid artifact is readable with no context (unconfined path).
+    const getResult = await unconfinedHandlers.get('artifact_get')!(
+      { id: rec.id }, signal, undefined,
+    );
+    expect(getResult.isError).toBeUndefined();
+    expect(JSON.parse(getResult.content as string)).toMatchObject({ id: rec.id });
+
+    const readResult = await unconfinedHandlers.get('artifact_read')!(
+      { id: rec.id }, signal, undefined,
+    );
+    expect(readResult.isError).toBeUndefined();
+    expect(JSON.parse(readResult.content as string)).toMatchObject({ read_path: rec.uri });
+
+    const listResult = await unconfinedHandlers.get('artifact_list')!(
+      {}, signal, undefined,
+    );
+    expect(listResult.isError).toBeUndefined();
+    expect(JSON.parse(listResult.content as string).artifacts).toHaveLength(1);
+
+    // artifact_read returns JSON null (not the string 'null') for absent IDs — finding #4584 §4.
+    const missingResult = await unconfinedHandlers.get('artifact_read')!(
+      { id: `art_${'0'.repeat(32)}` }, signal, undefined,
+    );
+    expect(missingResult.isError).toBeUndefined();
+    expect(missingResult.content).toBe(JSON.stringify(null));
+    expect(JSON.parse(missingResult.content as string)).toBeNull();
+  });
 });
 
 describe('artifact authorization', () => {

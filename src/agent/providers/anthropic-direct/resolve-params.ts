@@ -28,6 +28,7 @@ const isOpus47Plus = (model: string): boolean => /opus-4-(7|[89])/.test(model);
  * regex below.
  */
 export const isFable51 = (model: string): boolean => /(claude-)?fable-5[-.]1(?:[-.@]|$)/.test(model);
+export const isFable52 = (model: string): boolean => /(claude-)?fable-5[-.]2(?:[-.@]|$)/.test(model);
 
 /**
  * Claude Haiku 5.5 (released 2026-10-07): adaptive thinking on by default,
@@ -40,7 +41,7 @@ export const isFable51 = (model: string): boolean => /(claude-)?fable-5[-.]1(?:[
 export const isHaiku55 = (model: string): boolean => /(claude-)?haiku-5[-.]5(?:[-.@]|$)/.test(model);
 
 const requiresAdaptiveThinking = (model: string): boolean =>
-  isOpus47Plus(model) || /(claude-)?(opus|sonnet)-5/.test(model) || isFable51(model) || isHaiku55(model);
+  isOpus47Plus(model) || /(claude-)?(opus|sonnet)-5/.test(model) || isFable51(model) || isFable52(model) || isHaiku55(model);
 
 // resolveAutoCompactThreshold moved to shared/auto-compact.ts (both providers
 // auto-compact now). Re-exported here so existing importers (index.ts) resolve
@@ -82,7 +83,7 @@ export function _resetWarnedTemperatureClampsForTest(): void {
  * (server default). Negative or non-finite values are treated as unset.
  */
 export function isNonDefaultSamplingForbiddenModel(model: string | undefined): boolean {
-  return typeof model === 'string' && (isFable51(model) || isHaiku55(model));
+  return typeof model === 'string' && (isFable51(model) || isFable52(model) || isHaiku55(model));
 }
 
 export function resolveAnthropicTemperature(
@@ -349,7 +350,7 @@ const OPUS5_DISABLED_FORBIDDEN_EFFORTS = new Set<string>(['xhigh', 'max']);
  * 4.7/4.8 and Sonnet 5 accept `disabled`). Claude Opus 5 rejects `disabled` only
  * at xhigh/max and is handled separately via OPUS5_DISABLED_FORBIDDEN_EFFORTS.
  */
-const isAlwaysAdaptiveModel = (model: string): boolean => /(claude-)?opus-5[-.]5/.test(model) || isFable51(model);
+const isAlwaysAdaptiveModel = (model: string): boolean => /(claude-)?opus-5[-.]5/.test(model) || isFable51(model) || isFable52(model);
 
 /**
  * Claude Sonnet 5.5 rejects `{type:'disabled'}` with HTTP 400 and replaces it
@@ -543,9 +544,9 @@ export function resolveEffort(
 ): EffortLevel | undefined {
   if (callerEffort !== undefined) return callerEffort;
   const m = model.toLowerCase();
-  // Fable 5.1 default effort is `high`; send it explicitly so every Fable 5.1
+  // Fable 5.1/5.2 default effort is `high`; send it explicitly so every Fable
   // request uses the supported adaptive-thinking effort path without `max`.
-  if (isFable51(m)) return 'high';
+  if (isFable51(m) || isFable52(m)) return 'high';
   // Opus 5.5 (released 2026-09-22): server default is `medium` (the only
   // model where the default is not `high`). We raise to `high` for agentic
   // coding depth without the excessive thinking-token accumulation that `max`
