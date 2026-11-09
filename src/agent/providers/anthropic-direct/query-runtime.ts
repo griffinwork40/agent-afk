@@ -29,7 +29,7 @@
  */
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { randomUUID } from 'node:crypto';
-import { isFable51, resolveThinkingParam, resolveEffort } from './resolve-params.js';
+import { isFable51, isFable52, resolveThinkingParam, resolveEffort } from './resolve-params.js';
 import type {
   ProviderAccountInfo,
   ProviderAgentInfo,
@@ -293,7 +293,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       },
       get temperature() { return query.temperature; },
       get thinkingBlockBinding() {
-        return isFable51(query.state.currentModel) && query.baseUrl === undefined
+        return (isFable51(query.state.currentModel) || isFable52(query.state.currentModel)) && query.baseUrl === undefined
           ? ({ prefix_mismatch_behavior: 'drop_block' as const })
           : undefined;
       },
