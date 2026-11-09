@@ -44,6 +44,7 @@ import {
   printStartupBanner,
   validateResumeOption,
   resolveWorktreeSetupArg,
+  maybeRunStartupPicker,
 } from './interactive.register-helpers.js';
 
 export { formatToolResultLine } from './interactive/tool-lane.js';
@@ -120,6 +121,11 @@ export function registerInteractiveCommand(program: Command): void {
       // Validate --resume / --continue early — before any side effects so a
       // bad resume id never leaks a partially-created worktree directory.
       if (!validateResumeOption(options, spinner).ok) return;
+
+      // Startup session picker (#4692): offer a compact list of recent sessions
+      // to resume before any heavy bootstrap work. No-op when suppressed,
+      // non-TTY, or --resume/--continue already given. See maybeRunStartupPicker.
+      await maybeRunStartupPicker({ options, spinner });
 
       const cliConfig = loadConfig();
       const worktreeExitPolicy = resolveWorktreeExitPolicy({

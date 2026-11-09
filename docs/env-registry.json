@@ -1172,6 +1172,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SESSION_PICKER",
+      "description": "Set to 0 to suppress the startup session picker. Default: enabled when more than one resumable session exists and stdin is a TTY.",
+      "type": "boolean",
+      "required": false,
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_SESSION_RETENTION_DISABLE",
       "description": "Disable the session sidecar retention sweep entirely, so no state/sessions/*.json file is ever evicted.",
       "type": "boolean",
