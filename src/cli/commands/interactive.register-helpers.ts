@@ -377,6 +377,20 @@ export async function maybeRunStartupPicker(params: RunStartupPickerParams): Pro
   });
   if (pickerResult.selectedId !== undefined) {
     options.resume = pickerResult.selectedId;
+    // Validate the selected session still exists (it may have been deleted
+    // between the picker rendering and the user pressing Enter).
+    const spinnerShim = {
+      fail: (msg: string) => {
+        spinner.stop();
+        process.stderr.write(msg + '\n');
+      },
+    };
+    const validation = validateResumeOption({ resume: pickerResult.selectedId }, spinnerShim);
+    if (!validation.ok) {
+      // Session vanished between picker and resume — fall back to new session.
+      options.resume = undefined;
+      return;
+    }
   }
   spinner.start('Initializing interactive session...');
 }

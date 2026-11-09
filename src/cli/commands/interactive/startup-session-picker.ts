@@ -27,6 +27,7 @@ import * as readline from 'node:readline';
 
 import { palette } from '../../palette.js';
 import { listSessions } from '../../session-store.js';
+import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 import { formatCost } from '../../format-utils.js';
 import { env } from '../../../config/env.js';
 import { resolveRepoRootSync } from '../../../utils/git.js';
@@ -54,10 +55,10 @@ function fmtWhen(ts: number): string {
 
 function pickLabel(e: SessionEntry): string {
   const when = fmtWhen(e.savedAt);
-  const model = e.model.padEnd(7);
+  const model = sanitizeForDisplay(e.model).padEnd(7);
   const turns = `${e.totalTurns} turn${e.totalTurns === 1 ? '' : 's'}`.padEnd(9);
   const cost = formatCost(e.totalCostUsd).padStart(8);
-  return `${when}  ${model}  ${turns}  ${cost}  ${e.name ?? e.id}`;
+  return `${when}  ${model}  ${turns}  ${cost}  ${sanitizeForDisplay(e.name ?? e.id)}`;
 }
 
 /** Deduplicate labels by appending the sidecar id when two entries collide. */
@@ -122,7 +123,7 @@ function render(state: PickerState, header: readonly string[]): void {
   // Erase previous frame (cursor is at end of last render's last line).
   if (state.renderedLines > 0) {
     // Move up to the first line, then erase each line.
-    process.stdout.write(CURSOR_UP(state.renderedLines - 1));
+    process.stdout.write(CURSOR_UP(state.renderedLines));
     for (let i = 0; i < state.renderedLines; i++) {
       process.stdout.write(ERASE_LINE);
       if (i < state.renderedLines - 1) process.stdout.write('\n');
@@ -140,7 +141,7 @@ function render(state: PickerState, header: readonly string[]): void {
 /** Erase the picker frame and restore cursor to start of first line. */
 function erase(renderedLines: number): void {
   if (renderedLines <= 0) return;
-  process.stdout.write(CURSOR_UP(renderedLines - 1));
+  process.stdout.write(CURSOR_UP(renderedLines));
   for (let i = 0; i < renderedLines; i++) {
     process.stdout.write(ERASE_LINE);
     if (i < renderedLines - 1) process.stdout.write('\n');
@@ -203,6 +204,7 @@ async function runRawPicker(
       _char: string | undefined,
       key: { name?: string; ctrl?: boolean; sequence?: string } | undefined,
     ): void => {
+      try {
       if (!key) return;
       // Ctrl+C / Ctrl+D — treat as Esc (start new).
       if (key.ctrl && (key.name === 'c' || key.name === 'd')) {
@@ -226,6 +228,10 @@ async function runRawPicker(
         state.cursor = state.cursor === allOptions.length - 1 ? 0 : state.cursor + 1;
         render(state, header);
         return;
+      }
+      } catch (err) {
+        finish(allOptions.length - 1);
+        throw err;
       }
     };
 
@@ -327,7 +333,7 @@ export async function runStartupSessionPicker(opts: {
     const selected = shown[idx];
     if (!selected) return { selectedId: undefined };
 
-    return { selectedId: selected.name ?? selected.id };
+    return { selectedId: selected.id };
   } catch {
     // Never crash bootstrap.
     return { selectedId: undefined };
