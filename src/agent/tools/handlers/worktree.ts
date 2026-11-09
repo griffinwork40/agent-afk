@@ -24,37 +24,17 @@ import {
   removeManagedWorktreeGuarded,
   resolveAnchorBaseRef,
   type RepoContext,
-  type ManagedWorktreeInfo,
 } from './worktree-managed.js';
-import { describeWorktreeSetupFailure } from '../../worktree/worktree-setup.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { buildCreateNote } from './worktree.create-note.js';
 
 /** Injectable deps for tests. */
 export interface WorktreeHandlerDeps {
   execFile?: ExecFileFn;
   /** Override suffix generator for deterministic tests (#1516). */
   generateSuffix?: () => string;
-}
-
-/**
- * Detect install command from the freshly created worktree's lockfile (#439).
- * Inspects the worktree (not main checkout) so `base` lockfile differences are
- * respected. Falls back to `pnpm install`. Best-effort: never throws.
- */
-async function detectInstallCommand(worktreePath: string): Promise<string> {
-  const lockfiles: Array<[string, string]> = [
-    ['pnpm-lock.yaml', 'pnpm install'],
-    ['package-lock.json', 'npm install'],
-    ['yarn.lock', 'yarn install'],
-    ['bun.lockb', 'bun install'],
-  ];
-  for (const [file, command] of lockfiles) {
-    try {
-      await fs.access(join(worktreePath, file));
-      return command;
-    } catch { /* not this one */ }
-  }
-  return 'pnpm install';
+  /** Override fs.stat for tests (avoids real filesystem hits). */
+  stat?: (path: string) => Promise<import('node:fs').Stats>;
 }
 
 /** Returns undefined when no base was supplied — the caller resolves it (#760). */
@@ -210,25 +190,6 @@ async function handleCreate(args: CreateArgs): Promise<ToolResult> {
   return { content: JSON.stringify({ path: info.path, branch: info.branch, base: info.baseRef, note: await buildCreateNote(info) }) };
 }
 
-/**
- * Note returned with a create. A fresh worktree does NOT share the main
- * checkout's node_modules, so a naive build/test fails opaquely. With no
- * repo-declared setup (#3601) the note is the pre-#3601 install hint, derived
- * from the just-created tree's lockfile (info.path at baseRef, not main). A
- * declared setup replaces it with the setup outcome, naming the exact failed
- * command when it did not succeed.
- */
-async function buildCreateNote(info: ManagedWorktreeInfo): Promise<string> {
-  if (info.setup?.status === 'ok') {
-    const ran = (info.setup.completed ?? []).map((c) => `\`${c}\``).join(', ');
-    return `Repo-declared worktree setup (.afk/worktree-setup.json) completed in ${info.path}${ran ? `: ${ran}` : ''}.`;
-  }
-  const failure = describeWorktreeSetupFailure(info.setup, info.path);
-  if (failure !== undefined) return failure;
-  const installCommand = await detectInstallCommand(info.path);
-  return `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${info.path} before building or testing, or the build/tests will fail opaquely.`;
-}
-
 /** Build the `worktree` tool handler bound to a session cwd fallback. */
 export function createWorktreeHandler(
   cwdFallback?: string,
@@ -236,6 +197,7 @@ export function createWorktreeHandler(
 ): ToolHandler {
   const execFile = deps?.execFile ?? defaultExecFile;
   const generateSuffix = deps?.generateSuffix ?? (() => randomBytes(2).toString('hex'));
+  const stat = deps?.stat ?? fs.stat;
 
   return async (input, signal, context) => {
     if (!input || typeof input !== 'object') {
@@ -257,12 +219,35 @@ export function createWorktreeHandler(
 
     // Validate the optional explicit repo parameter.
     let explicitRepo: string | undefined;
-    if (obj['repo'] !== undefined && obj['repo'] !== null && obj['repo'] !== '') {
+    if (obj['repo'] !== undefined) {
+      // null and '' are explicit model mistakes, not intentional omissions.
+      if (obj['repo'] === null || obj['repo'] === '') {
+        return {
+          content: 'Invalid input: repo must be an absolute path string or omitted entirely; null and empty string are not accepted',
+          isError: true,
+        };
+      }
       if (typeof obj['repo'] !== 'string') {
         return { content: 'Invalid input: repo must be a string (absolute path)', isError: true };
       }
       if (!isAbsolute(obj['repo'])) {
         return { content: `Invalid input: repo must be an absolute path, got: ${obj['repo']}`, isError: true };
+      }
+      // Verify the path exists and is a directory before invoking git so we can
+      // distinguish "not found", "not a directory", and "not a git repo".
+      try {
+        const st = await stat(obj['repo']);
+        if (!st.isDirectory()) {
+          return {
+            content: `Invalid input: repo path is not a directory: ${obj['repo']}`,
+            isError: true,
+          };
+        }
+      } catch {
+        return {
+          content: `Invalid input: repo path does not exist on disk: ${obj['repo']}`,
+          isError: true,
+        };
       }
       explicitRepo = obj['repo'];
     }
