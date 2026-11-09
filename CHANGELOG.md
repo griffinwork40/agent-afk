@@ -12,6 +12,26 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- bump fable alias to claude-fable-5-2 (#4746) (7b918f900)
+- startup session picker for REPL (467bb903a)
+
+### Fixed
+- use --version probe for bwrap availability in runtime test (951855017)
+- strip UNC/extended-length prefixes in norm(); gate backslash conversion on Windows detection (fb9a0511d)
+- add stat to WorktreeHandlerDeps and add TOCTOU test (4978e4f89)
+- address all 6 review findings on startup session picker (7aecac8f2)
+- add sandbox spawn diagnostics and CI runtime enforcement (#4718) (63ec0b5b1)
+- assert isDirectory() after fs.stat on explicit repo path (b2d679e10)
+- address episode system architectural constraints (hook ordering + dedupe guard) (fc183623a)
+- use path.posix for POSIX platform sandbox path checks (aea2c722a)
+- improve worktree repo parameter validation (91d766550)
+
+### Changed
+- align checkThinkingAnnotation with TTFB pattern and scope THINKING_GRACE_MS (#4704) (456c18584)
+- bump next from 16.4.3 to 16.4.5 in /website (#4732) (b390dd4e7)
+- bump the actions-minor-patch group with 4 updates (#4733) (1a1489300)
+
 ## [5.349.0] - 2026-11-09
 
 ### Added
