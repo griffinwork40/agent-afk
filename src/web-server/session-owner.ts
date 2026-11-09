@@ -22,6 +22,7 @@ import { AgentSession } from '../agent/session/agent-session.js';
 import { createDefaultHookRegistry } from '../agent/default-hook-registry.js';
 import { seedPersistedGrants } from '../agent/permissions-store.js';
 import { getApiKeyForModel, resolveBaseSystemPrompt } from '../cli/shared-helpers.js';
+import { resolveModelId } from '../agent/session/model-resolution.js';
 import { prewarmWebSessionMcp, wireWebSession, type WebSessionWiringInternal } from './session-owner.wiring.js';
 
 import type { AgentConfig } from '../agent/types.js';
@@ -160,7 +161,7 @@ export class SessionOwner {
     const getPermissionMode = () => session?.getSessionMetadata().permissionMode ?? (this.options.permissionMode ?? 'default');
     const { registry } = createDefaultHookRegistry(
       undefined, 'web', wiring.memoryStore, getPermissionMode, undefined,
-      { cwd, traceWriter: wiring.traceWriter },
+      { cwd, traceWriter: wiring.traceWriter, getModel: () => resolveModelId(model) ?? String(model) },
     );
 
     const config: AgentConfig = {
