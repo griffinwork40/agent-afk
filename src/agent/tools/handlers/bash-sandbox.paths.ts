@@ -51,10 +51,25 @@ export function sandboxFloorAncestors(floor: readonly string[]): readonly string
 }
 
 function contains(root: string, target: string): boolean {
-  // Strip drive letters and normalize separators so POSIX kernel roots
-  // (e.g. /proc from path.posix.join) match OS-native grants (e.g. D:\proc
-  // from canonicalSandboxPath) regardless of which drive resolved them.
-  const norm = (p: string): string => p.replace(/^[a-zA-Z]:/, '').split(path.sep).join('/');
+  // Contract: strip all Windows-style path prefixes before POSIX comparison.
+  // On POSIX hosts every path starts with '/' so this is a no-op; the stripping
+  // only activates for Windows-style strings.  Backslash→slash conversion is
+  // gated on Windows-prefix detection so a POSIX filename that contains a
+  // literal backslash is never corrupted.  Strip order: most-specific first.
+  //   1. \\?\UNC\server\share  (extended-length UNC)
+  //   2. \\?\C:               (extended-length drive)
+  //   3. \\server\share        (plain UNC)
+  //   4. C:                   (plain drive letter)
+  const norm = (p: string): string => {
+    const isWindows = /^[a-zA-Z]:|^\\\\/.test(p);
+    if (!isWindows) return p;
+    const stripped = p
+      .replace(/^\\\\\?\\UNC\\[^\\]+\\[^\\]+/, '') // \\?\UNC\server\share
+      .replace(/^\\\\\?\\[a-zA-Z]:/, '')            // \\?\C:
+      .replace(/^\\\\[^\\]+\\[^\\]+/, '')           // \\server\share
+      .replace(/^[a-zA-Z]:/, '');                   // C:
+    return stripped.split('\\').join('/');
+  };
   const relative = path.posix.relative(norm(root), norm(target));
   return relative === '' || (!relative.startsWith('../') && relative !== '..');
 }
