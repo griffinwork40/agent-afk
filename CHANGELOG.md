@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.350.0] - 2026-11-09
+
 ### Added
 - FTS union over facet cache for memory_search session results (f85b1656e)
 - bump fable alias to claude-fable-5-2 (#4746) (7b918f900)
@@ -21,6 +23,7 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 - address 6 blocking review findings on PR #4708 (95fd7570f)
 - use --version probe for bwrap availability in runtime test (951855017)
 - guard spinner method calls in maybeRunStartupPicker for non-TTY environments (9a40cbd09)
+- split bwrap probe into installed vs functional for CI (0ff3c6759)
 - address 5 blocking review findings on PR #4708 (e527da888)
 - strip UNC/extended-length prefixes in norm(); gate backslash conversion on Windows detection (fb9a0511d)
 - add stat to WorktreeHandlerDeps and add TOCTOU test (4978e4f89)

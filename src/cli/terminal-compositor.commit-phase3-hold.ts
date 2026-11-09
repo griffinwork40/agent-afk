@@ -6,6 +6,12 @@ import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { compositorBand } from './terminal-compositor.content-band.js';
 import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
+import { stripAnsi } from './display.js';
+
+/** Strip ANSI escapes then return the first visible character (or ''). */
+function firstVisibleChar(raw: string): string {
+  return stripAnsi(raw).trimStart()[0] ?? '';
+}
 
 /**
  * Band-hold Phase 3 for newTopRow > 1: track the committed run's RETAINED
@@ -38,7 +44,41 @@ export function commitPhase3Hold(
   const modelMeta = overflowRunMeta.slice(archiveCount);
   const prefix = retainedArchivedPrefix(self, route.overflowPriorContiguous, archiveCount);
   const hidden = hiddenArchivedRows(self, undefined, { length: model.length, prefix });
-  const paintedCount = Math.min(model.length - hidden, maxRun);
+  let paintedCount = Math.min(model.length - hidden, maxRun);
+  // #4747: best-effort snap — avoid splitting a table's top border (┌) from
+  // its content rows. Two cases:
+  //
+  // Case A — border is in the pending prefix above paintedCount:
+  //   The tail-slice starts at model[model.length - paintedCount]. If that row
+  //   starts with '│' and the row just above it starts with '┌', pull the
+  //   border in (increment paintedCount) — only when maxRun allows it.
+  //
+  // Case B — border is the last row of the hidden archived prefix:
+  //   model[hidden - 1] starts with '┌' and model[hidden] (first visible /
+  //   first painted row) starts with '│'. Here paintedCount already equals
+  //   model.length - hidden, so Case A's guard fails. Instead, reduce `hidden`
+  //   by 1 and increment paintedCount by 1 — effectively un-hiding just the
+  //   border row — again only when maxRun allows.
+  if (paintedCount > 0) {
+    const firstPaintedIdx = model.length - paintedCount;
+    if (
+      firstVisibleChar(model[firstPaintedIdx] ?? '') === '│' &&
+      firstVisibleChar(model[firstPaintedIdx - 1] ?? '') === '┌' &&
+      paintedCount + 1 <= maxRun
+    ) {
+      // Case A: border is a pending (non-hidden) row just above the paint window.
+      paintedCount += 1;
+    } else if (
+      hidden > 0 &&
+      paintedCount === model.length - hidden &&
+      firstVisibleChar(model[hidden] ?? '') === '│' &&
+      firstVisibleChar(model[hidden - 1] ?? '') === '┌' &&
+      paintedCount + 1 <= maxRun
+    ) {
+      // Case B: border is the last hidden archived-prefix row; un-hide it.
+      paintedCount += 1;
+    }
+  }
   const bandTop = newTopRow - paintedCount;
   // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
   // terminal width so painted rows adapt on resize. The band stores raw (unpadded)
