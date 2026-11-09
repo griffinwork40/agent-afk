@@ -929,3 +929,61 @@ describe('storeEpisodeFact — INSERT OR IGNORE idempotency (constraint 4, #4661
     expect(episodes[0]!.category).toBe('episode');
   });
 });
+
+// ---------------------------------------------------------------------------
+// search() — session results not starved by facts filling the limit budget
+// ---------------------------------------------------------------------------
+
+describe('search() — session results survive when facts fill the limit', () => {
+  let sessionDir: string;
+  let sessionStore: MemoryStore;
+
+  beforeEach(() => {
+    sessionDir = join(
+      tmpdir(),
+      `afk-memory-store-starvation-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(sessionDir, { recursive: true });
+    // Pass an empty cache dir so no backfill is attempted.
+    const emptyCacheDir = join(sessionDir, 'empty-cache');
+    mkdirSync(emptyCacheDir, { recursive: true });
+    sessionStore = new MemoryStore(sessionDir, emptyCacheDir);
+  });
+
+  afterEach(() => {
+    sessionStore.close();
+    if (existsSync(sessionDir)) {
+      rmSync(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  it('session result appears in output even when facts alone fill the limit budget', () => {
+    // Index enough facts to fill the default limit of 10.
+    // All facts share a distinctive keyword so they all match the query.
+    for (let i = 0; i < 12; i++) {
+      sessionStore.storeFact({
+        category: 'learning',
+        content: `webhook learning fact number ${i}`,
+        source_surface: 'test',
+      });
+    }
+
+    // Index a matching session facet.
+    sessionStore.indexFacet({
+      session_id: 'sess-starvation-regression',
+      brief_summary: 'Implemented the webhook dispatcher',
+      underlying_goal: 'Route webhook events',
+      primary_success: 'Webhook handler live',
+      decisions: 'Used HMAC verification',
+    });
+
+    // With limit=10, the old code would fill all 10 slots with facts and drop
+    // the session result. The fix reserves proportional slots for sessions.
+    const results = sessionStore.search('webhook', { limit: 10 });
+    const sessionResults = results.filter((r) => r.type === 'session');
+    expect(sessionResults.length).toBeGreaterThan(0);
+    expect(sessionResults[0]!.source_session).toBe('sess-starvation-regression');
+    // Total must not exceed the requested limit.
+    expect(results.length).toBeLessThanOrEqual(10);
+  });
+});
