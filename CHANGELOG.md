@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.349.0] - 2026-11-09
+
 ### Added
 - add model to hook payloads and AFK_HOOK_MODEL env (#4730) (#4742) (d4808fdbd)
 - thread session surface into facet schema for structural daemon filtering (deb1e3d7f)
