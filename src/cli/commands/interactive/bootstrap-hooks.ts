@@ -10,6 +10,7 @@ import { emitSubagentCompletion } from './progress-banner.js';
 import { createTerminalStateGate } from './terminal-state-gate.js';
 import { loadConfig } from '../../config.js';
 import type { PreviewDiffRef } from '../../../agent/tools/hooks/edit-preview-hook.js';
+import { resolveModelId } from '../../../agent/session/model-resolution.js';
 
 /**
  * Build the stable hook registry shared across sessions (including
@@ -57,7 +58,12 @@ export function createReplHookRegistry(a: {
     a.memoryStore,
     () => a.stats.permissionMode,
     loadHooksConfig({ cwd: a.effectiveCwd }),
-    { cwd: a.effectiveCwd, ...(a.traceWriter !== undefined ? { traceWriter: a.traceWriter } : {}), getTranscriptPath: () => transcriptPathRef.fn?.() ?? null },
+    {
+      cwd: a.effectiveCwd,
+      ...(a.traceWriter !== undefined ? { traceWriter: a.traceWriter } : {}),
+      getTranscriptPath: () => transcriptPathRef.fn?.() ?? null,
+      getModel: () => resolveModelId(a.stats.model) ?? String(a.stats.model),
+    },
     () => a.effectiveCwd ?? process.cwd(),
   );
   const hookRegistry = hookRegistryBundle.registry;
