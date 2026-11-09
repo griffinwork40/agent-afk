@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { join } from 'path';
+import { resolve } from 'path';
 
 // ---------------------------------------------------------------------------
 // Mock child_process BEFORE importing the module under test.
@@ -36,7 +36,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Absolute path that passes validateCwd (must be absolute). */
-const FAKE_CWD = '/fake/repo';
+const FAKE_CWD = resolve('/fake/repo');
 
 /** Make execFileSync return a Buffer-like object with toString(). */
 function mockOutput(text: string) {
