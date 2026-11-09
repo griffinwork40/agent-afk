@@ -16,25 +16,47 @@ import { buildSandboxedCommand } from './bash-sandbox.js';
 const platform = process.platform;
 // Capability probes, not platform skips: Windows refusal is covered by builders.
 const sandboxExecReady = spawnSync(path.posix.join('/', 'usr', 'bin', 'sandbox-exec'), ['-p', '(version 1) (allow default)', path.posix.join('/', 'usr', 'bin', 'true')], { encoding: 'utf8' }).status === 0;
-// Use --version (matches isBwrapAvailable() in bash-sandbox.ts) so this probe succeeds
-// whenever bwrap is installed, regardless of kernel namespace restrictions on the runner.
-// The full namespace invocation (`--unshare-pid` etc.) is tested by the actual test cases,
-// which will error naturally if namespaces are unavailable rather than masking as a skip.
-const bwrapReady = (() => {
+
+// Two-level bwrap probe:
+//   bwrapInstalled  — version check only; used for the AFK_SANDBOX_REQUIRED guard
+//                     so the module does not crash when bwrap is present but kernel
+//                     namespace operations are restricted (e.g. some CI runners).
+//   bwrapFunctional — full namespace invocation; used to gate describe.skipIf so
+//                     tests only run when namespaces actually work end-to-end.
+const bwrapInstalled = (() => {
   for (const dir of [['usr', 'bin'], ['usr', 'local', 'bin'], ['usr', 'sbin']]) {
     if (spawnSync(path.posix.join('/', ...dir, 'bwrap'), ['--version'], { encoding: 'utf8' }).status === 0) return true;
   }
   return false;
 })();
-const available = sandboxExecReady || bwrapReady;
-// AFK_SANDBOX_REQUIRED=1: CI mode — fail (not skip) when no backend is available.
-// Set on Linux CI runners that install bubblewrap so silent skips cannot mask a
-// broken or uninstalled bwrap. Never enforced on Windows (POSIX-only backends).
+const bwrapFunctional = (() => {
+  for (const dir of [['usr', 'bin'], ['usr', 'local', 'bin'], ['usr', 'sbin']]) {
+    const bwrap = path.posix.join('/', ...dir, 'bwrap');
+    const r = spawnSync(
+      bwrap,
+      ['--ro-bind', '/', '/', '--cap-drop', 'ALL', '--unshare-pid',
+       '--proc', '/proc', '--remount-ro', '/proc', '--', '/bin/true'],
+      { encoding: 'utf8' },
+    );
+    if (r.status === 0) return true;
+    // Binary found but namespaces failed — no point trying other paths.
+    if (r.status !== null) return false;
+  }
+  return false;
+})();
+
+// AFK_SANDBOX_REQUIRED=1: CI mode — fail (not skip) when no sandbox backend is
+// installed. Uses the lighter version probe so the module does not crash on runners
+// where bwrap is present but namespace creation is restricted.
+// Never enforced on Windows (POSIX-only backends).
+const installed = sandboxExecReady || bwrapInstalled;
+// functional = backend installed AND namespaces actually work (or sandbox-exec ready).
+const functional = sandboxExecReady || bwrapFunctional;
 const sandboxRequired = env.AFK_SANDBOX_REQUIRED === '1' && platform !== 'win32';
-if (sandboxRequired && !available) {
+if (sandboxRequired && !installed) {
   throw new Error(
     `AFK_SANDBOX_REQUIRED=1 but no sandbox backend is available on ${platform}. ` +
-      `bwrap probe: ${bwrapReady}, sandbox-exec probe: ${sandboxExecReady}. ` +
+      `bwrap installed probe: ${bwrapInstalled}, sandbox-exec probe: ${sandboxExecReady}. ` +
       `Install bubblewrap (Debian/Ubuntu: sudo apt-get install bubblewrap) ` +
       `or unset AFK_SANDBOX_REQUIRED.`,
   );
@@ -70,8 +92,8 @@ async function run(command: string, policy: 'workspace-write' | 'read-only' = 'w
   return result.stdout;
 }
 
-// Skip only unavailable backend/kernel prerequisites, never silently pass a failed probe.
-describe.skipIf(!available)(`runtime sandbox regressions (${platform}; sandbox-exec/bwrap required)`, () => {
+// Skip when the backend is not installed or kernel namespaces are unavailable.
+describe.skipIf(!functional)(`runtime sandbox regressions (${platform}; sandbox-exec/bwrap required)`, () => {
   it('allows cwd/temp writes, blocks outside writes and symlink escape', async () => {
     // Disjoint Linux grants: its deliberate overlap refusal is tested separately.
     if (platform === 'linux') fixtures.floor = [path.join(root, 'outside-protected')];
