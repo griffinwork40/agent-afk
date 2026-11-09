@@ -215,7 +215,8 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
       // Daemon ticks use a fixed model per tick; resolve it once at dispatch
       // time so hook payloads reflect the actual wire id.
       getModel: (() => {
-        const daemonModel = resolveModelId('sonnet') ?? 'sonnet';
+        const raw = options.sessionConfig?.model ?? 'sonnet';
+        const daemonModel = resolveModelId(raw) ?? String(raw);
         return () => daemonModel;
       })(),
     },
