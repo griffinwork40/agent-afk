@@ -198,6 +198,7 @@ describe('buildComposeTool', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildAgentTypeListing', () => {
+  // #4220: empty registry → no delimiter block injected into the system prompt.
   it('returns empty string for empty/absent registries', () => {
     expect(buildAgentTypeListing(undefined)).toBe('');
     expect(buildAgentTypeListing(new Map())).toBe('');
@@ -265,12 +266,11 @@ describe('buildAgentTypeListing', () => {
   // and any downstream parser can unambiguously identify the content as data.
   it('wraps the listing in <available-agent-types> delimiters (#4220)', () => {
     const listing = buildAgentTypeListing(registryOf('research-agent'));
-    expect(listing).toMatch(/^<available-agent-types>\n/);
-    expect(listing).toMatch(/\n<\/available-agent-types>$/);
-  });
-
-  it('delimiter block is absent when registry is empty (#4220)', () => {
-    expect(buildAgentTypeListing(undefined)).toBe('');
-    expect(buildAgentTypeListing(new Map())).toBe('');
+    // Single anchored regex: open tag at start, non-empty content, close tag at end.
+    expect(listing).toMatch(/^<available-agent-types>\n[\s\S]+\n<\/available-agent-types>$/);
+    // Footer line must appear before the closing tag.
+    expect(listing.indexOf('When `agent_type` is omitted')).toBeLessThan(
+      listing.indexOf('</available-agent-types>'),
+    );
   });
 });
