@@ -178,6 +178,8 @@ describe('assembleSystemPrompt — top-level order', () => {
     const iListing = out.indexOf('AGENT_LISTING');
     const iEpisode = out.indexOf('EPISODE_RECALL');
     expect(iEpisode).toBeGreaterThan(iListing);
+    // Verify the \n\n separator contract between adjacent volatile-tail fragments.
+    expect(out).toContain('AGENT_LISTING\n\nEPISODE_RECALL');
   });
 
   it('places episodeRecall after the manifest and # Environment even without agentTypeListing (#4680)', () => {

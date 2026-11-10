@@ -160,6 +160,54 @@ describe('buildSystemPromptWiring — agent-type gate: grantsTool=false (#4220)'
   });
 });
 
+describe('buildSystemPromptWiring — episodeRecall ordering in volatile tail (#4680/#4728)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('places episodeRecall after agentTypeListing in the volatile tail', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({
+        config: { model: 'sonnet', episodeRecall: 'EPISODE_RECALL' } as SystemPromptWiringArgs['config'],
+        agentTypeListing: 'AGENT_LISTING',
+      }),
+    );
+    const iListing = initialSystemPrompt.indexOf('AGENT_LISTING');
+    const iEpisode = initialSystemPrompt.indexOf('EPISODE_RECALL');
+    expect(iListing).toBeGreaterThan(-1);
+    expect(iEpisode).toBeGreaterThan(iListing);
+    // Verify fragments are separated by the standard \n\n join.
+    expect(initialSystemPrompt).toContain('AGENT_LISTING\n\nEPISODE_RECALL');
+  });
+
+  it('places episodeRecall after the manifest and ENV even without agentTypeListing', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({
+        config: { model: 'sonnet', episodeRecall: 'EPISODE_RECALL' } as SystemPromptWiringArgs['config'],
+      }),
+    );
+    const iEnv = initialSystemPrompt.indexOf('ENV_FRAG');
+    const iEpisode = initialSystemPrompt.indexOf('EPISODE_RECALL');
+    expect(iEpisode).toBeGreaterThan(iEnv);
+    // Verify \n\n separator between ENV and EPISODE_RECALL.
+    expect(initialSystemPrompt).toContain('ENV_FRAG\n\nEPISODE_RECALL');
+  });
+
+  it('omits episodeRecall when empty string passed', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({
+        config: { model: 'sonnet', episodeRecall: '' } as SystemPromptWiringArgs['config'],
+      }),
+    );
+    expect(initialSystemPrompt).not.toContain('EPISODE_RECALL');
+  });
+
+  it('omits episodeRecall when absent (undefined)', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(makeArgs());
+    expect(initialSystemPrompt).not.toContain('EPISODE_RECALL');
+  });
+});
+
 describe('buildSystemPromptWiring — unnamed-worker toolBase dedupe guard (#3359)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

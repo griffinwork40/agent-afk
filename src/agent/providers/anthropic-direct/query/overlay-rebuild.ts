@@ -25,6 +25,11 @@ export interface SystemPromptRebuildFactoryArgs {
   /**
    * The SAME `StableSystemParts` instance handed to `createCwdDependentsFactory`.
    * Sharing the object is load-bearing — see the Invariant in the factory body.
+   *
+   * Frozen-at-construction assumption: `episodeRecall` and `agentTypeListing`
+   * on this object are set once at `query()` entry and never refreshed mid-session.
+   * This matches the same assumption made for all other stable parts (e.g.
+   * `manifest`, `hotMemory`). An overlay hot-reload only replaces `userSystem`.
    */
   stableSystemPrefix: StableSystemParts;
   config: AgentConfig;
