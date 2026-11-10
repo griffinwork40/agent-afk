@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.351.0] - 2026-11-10
+
 ### Added
 - add episode recall operational transparency (#4703) (03735a683)
 - default AFK_SESSION_PICKER to disabled (#4751) (d6d6bed8c)
