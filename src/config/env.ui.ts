@@ -203,11 +203,11 @@ export const UI_ENV_REGISTRY = [
   {
     name: 'AFK_SESSION_PICKER',
     description:
-      'Set to 0 to suppress the startup session picker. ' +
-      'Default: enabled when more than one resumable session exists and stdin is a TTY.',
+      'Set to 1 to enable the startup session picker. ' +
+      'Default: disabled. When enabled, shows when more than one resumable session exists and stdin is a TTY.',
     type: 'boolean',
     required: false,
-    example: '0',
+    example: '1',
     category: 'misc',
   },
 ] as const satisfies readonly EnvVarMeta[];
