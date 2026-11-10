@@ -1,5 +1,6 @@
 import { env } from '../../../config/env.js';
 import type { DiffPayload, DiffLine } from '../../../utils/diff.js';
+import { currentDiffCap } from './tool-lane-diff-cap.js';
 import { palette } from '../../palette.js';
 import { stripAnsi, displayWidth } from '../../display.js';
 import { previewDiff } from '../../render/preview-diff.js';
@@ -28,32 +29,6 @@ export const MAX_OVERLAY_DIFF_LINES = 8;
  * accountability during a large refactor).
  */
 export const FLUSH_DIFF_LINES_DEFAULT = 30;
-
-/**
- * Resolve the flush-mode body-line cap from the environment.
- *
- * Reads `AFK_DIFF_LINES` at call time so tests and one-off invocations
- * can override without a config reload. Invalid values (non-numeric,
- * negative, decimal, trailing garbage) fail open to {@link
- * FLUSH_DIFF_LINES_DEFAULT}.
- *
- * Returns `0` only when the user explicitly set `AFK_DIFF_LINES=0`,
- * which the caller interprets as "no cap."
- *
- * The regex (`/^\d+$/`) is intentionally stricter than `parseInt`:
- * `parseInt('1.5xyz', 10)` silently returns `1`, which would let a typo
- * collapse the diff to a single line without warning. Whole non-negative
- * integers only — anything else is rejected.
- */
-function diffFlushMaxLines(): number {
-  const raw = env.AFK_DIFF_LINES;
-  if (raw === undefined) return FLUSH_DIFF_LINES_DEFAULT;
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) return FLUSH_DIFF_LINES_DEFAULT;
-  const n = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(n)) return FLUSH_DIFF_LINES_DEFAULT;
-  return n;
-}
 
 /**
  * Opt-out switch for the inline diff render. Reads `AFK_SHOW_DIFFS` at
@@ -194,7 +169,7 @@ export function formatDiffBlock(
   // Resolve the body-line cap. Overlay is a fixed module constant; flush
   // reads AFK_DIFF_LINES each call so tests and ad-hoc overrides work
   // without a config reload. `cap === 0` means "uncapped" (flush only).
-  const cap = mode === 'overlay' ? MAX_OVERLAY_DIFF_LINES : diffFlushMaxLines();
+  const cap = mode === 'overlay' ? MAX_OVERLAY_DIFF_LINES : currentDiffCap();
 
   // Memo key must include the cap value — same payload + same mode +
   // same indent + different cap = different rendered output.

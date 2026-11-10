@@ -188,7 +188,7 @@ const helpCmd: SlashCommand = {
     });
     if (provided === undefined || provided.has('tty')) {
       ctx.out.line(palette.dim('  Tip: Ctrl+C interrupts a running turn; a second press exits.'));
-      ctx.out.line(palette.dim('  Hidden: /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode'));
+      ctx.out.line(palette.dim('  /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode'));
       ctx.out.line();
     }
     return 'continue';
