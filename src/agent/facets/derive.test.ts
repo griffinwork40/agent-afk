@@ -69,6 +69,9 @@ describe('deriveSessionFacet', () => {
     expect(facet.source).toBe('telegram');
   });
 
+  // Regression-guard: surface assignment is a direct passthrough (no ternary
+  // guard) — these tests ensure the strict-subset invariant holds for each
+  // known-good source value and that 'unknown' never appears in surface.
   it('surface: "daemon" when session.source is "daemon"', () => {
     const facet = deriveSessionFacet({ ...richSession(), source: 'daemon' });
     expect(facet.surface).toBe('daemon');

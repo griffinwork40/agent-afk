@@ -398,9 +398,10 @@ export const SessionFacetSchema = z
      * (#4645) so daemon filtering and surface-aware logic can use a structural
      * predicate on the facet rather than a separate sidecar read.
      *
-     * Values mirror `source`: `'cli' | 'telegram' | 'daemon' | 'web'`.
-     * Absent on cached facets written before v14 — treat as `'cli'` when
-     * `facet_version < 14` and this field is missing.
+     * Values are a subset of `source`: `'cli' | 'telegram' | 'daemon' | 'web'`
+     * (`'unknown'` is excluded because surface is only set when the value is
+     * known). Absent on cached facets written before v14 — treat as `'cli'`
+     * when `facet_version < 14` and this field is missing.
      */
     surface: z.enum(['cli', 'telegram', 'daemon', 'web']).optional(),
     model: z.string(),

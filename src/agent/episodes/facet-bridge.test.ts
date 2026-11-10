@@ -179,4 +179,39 @@ describe('buildEpisodeFromFacet', () => {
     expect(() => new Date(ep!.synthesizedAt)).not.toThrow();
     expect(new Date(ep!.synthesizedAt).toISOString()).toBe(ep!.synthesizedAt);
   });
+
+  // --- surface-to-source mapping (#4645) ---
+
+  it('surface field (v14+): uses facet.surface as episode source when present', async () => {
+    // A v14 facet with surface='telegram' must set episode.source to 'telegram',
+    // not fall through to facet.source.
+    vi.doMock('../facets/store.js', () => ({
+      getOrDeriveFacet: () => makeFacet({ facet_version: 14, source: 'cli', surface: 'telegram' }),
+    }));
+    const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
+    const ep = buildEpisodeFromFacet('test-session-abc');
+    expect(ep!.source).toBe('telegram');
+  });
+
+  it('surface field (pre-v14 fallback): uses facet.source when surface is absent and source is not "unknown"', async () => {
+    // A pre-v14 cached facet has no surface field; episode.source should fall
+    // back to facet.source so old episodes still carry surface information.
+    vi.doMock('../facets/store.js', () => ({
+      getOrDeriveFacet: () => makeFacet({ facet_version: 13, source: 'daemon', surface: undefined }),
+    }));
+    const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
+    const ep = buildEpisodeFromFacet('test-session-abc');
+    expect(ep!.source).toBe('daemon');
+  });
+
+  it('surface field (pre-v14, unknown source): omits source when surface is absent and source is "unknown"', async () => {
+    // A pre-v14 cached facet with source 'unknown' and no surface yields no
+    // source field on the episode (facet-bridge.ts:72-76, third branch).
+    vi.doMock('../facets/store.js', () => ({
+      getOrDeriveFacet: () => makeFacet({ facet_version: 13, source: 'unknown', surface: undefined }),
+    }));
+    const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
+    const ep = buildEpisodeFromFacet('test-session-abc');
+    expect(ep!.source).toBeUndefined();
+  });
 });

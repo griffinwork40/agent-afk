@@ -204,6 +204,13 @@ function extractFirstPrompt(turns: StoredSessionInput['turns']): string {
   return '';
 }
 
+function buildFrictionDetail(toolErrors: number, toolErrorCategories: Record<string, number>): string {
+  if (toolErrors === 0) return '';
+  return `${toolErrors} tool error(s): ${Object.entries(toolErrorCategories)
+    .map(([k, v]) => `${k}×${v}`)
+    .join(', ')}`;
+}
+
 export function deriveSessionFacet(
   session: StoredSessionInput,
   options: DeriveOptions = {},
@@ -282,12 +289,7 @@ export function deriveSessionFacet(
     }
   }
 
-  const frictionDetail =
-    toolErrors > 0
-      ? `${toolErrors} tool error(s): ${Object.entries(toolErrorCategories)
-          .map(([k, v]) => `${k}×${v}`)
-          .join(', ')}`
-      : '';
+  const frictionDetail = buildFrictionDetail(toolErrors, toolErrorCategories);
 
   const summaryHead = session.name ? humanizeName(session.name) : oneLine(firstPrompt, 80);
   const summaryTail = oneLine(lastAssistant || firstPrompt, SUMMARY_CAP);
@@ -313,6 +315,10 @@ export function deriveSessionFacet(
     facet_version: FACET_VERSION,
     session_id: sessionId,
     source,
+    // strict-subset invariant: `surface` excludes 'unknown' (see schema.ts).
+    // Direct assignment is safe because `.parse()` guards the source value at
+    // runtime — the schema rejects any value outside the surface enum before
+    // we reach this line.
     surface: source, // first-class structural copy for daemon filtering (#4645)
     model: session.model,
     derived_at: (options.derivedAt ?? new Date()).toISOString(),
