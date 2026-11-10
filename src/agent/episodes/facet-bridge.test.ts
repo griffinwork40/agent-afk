@@ -203,4 +203,15 @@ describe('buildEpisodeFromFacet', () => {
     const ep = buildEpisodeFromFacet('test-session-abc');
     expect(ep!.source).toBe('daemon');
   });
+
+  it('surface field (pre-v14, unknown source): omits source when surface is absent and source is "unknown"', async () => {
+    // A pre-v14 cached facet with source 'unknown' and no surface yields no
+    // source field on the episode (facet-bridge.ts:72-76, third branch).
+    vi.doMock('../facets/store.js', () => ({
+      getOrDeriveFacet: () => makeFacet({ facet_version: 13, source: 'unknown', surface: undefined }),
+    }));
+    const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
+    const ep = buildEpisodeFromFacet('test-session-abc');
+    expect(ep!.source).toBeUndefined();
+  });
 });
