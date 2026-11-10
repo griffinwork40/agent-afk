@@ -12,6 +12,26 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- add episode recall operational transparency (#4703) (03735a683)
+- default AFK_SESSION_PICKER to disabled (#4751) (d6d6bed8c)
+
+### Fixed
+- inject resume context at model-round boundary for mid-turn pauses (2b6b0937c)
+- bump CLI version claim to 2.1.322 for Fable 5.2 access (#4762) (ad5d31823)
+- add UTF-8 truncation guards and 4-byte test case (316c21723)
+- pass session-scoped store to episode recall in acp (c748e51fa)
+- preserve table top border during tall overlay (#4747) (d776bae04)
+- style, type, and test gaps in resume-all (6a5d50f97)
+- remove dead patchFacetDecisions barrel export (05e75f3ec)
+- address advisory findings from facet surface threading (e098313b1)
+- address advisory findings from episode recall separation (d4da76620)
+- add branch-decay test and hoist Date.now in episode scoring (ae62cfd90)
+- address advisory findings in agent-type listing tests (78253e357)
+- cover read-only invariant and remove dead fallbackSessionId parameter (0aa767b5a)
+- use rmSyncRetry in memory test teardown for Windows EBUSY (#4750) (14bc9fb00)
+- add Case B test and fix misleading comment (#4747) (21cdf5682)
+
 ## [5.350.0] - 2026-11-09
 
 ### Added
