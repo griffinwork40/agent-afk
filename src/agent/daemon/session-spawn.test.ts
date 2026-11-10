@@ -290,52 +290,47 @@ describe('daemonDefaultCwd', () => {
 
 // ── getModel resolution in spawnDaemonSession (#4745) ─────────────────────────
 //
-// spawnDaemonSession creates the getModel closure inline:
-//   const raw = options.sessionConfig?.model ?? 'sonnet';
-//   const daemonModel = resolveModelId(raw) ?? String(raw);
-//   return () => daemonModel;
-//
-// We test the same logic unit-style by extracting the closure directly so
-// spawnDaemonSession itself (which requires MCP, DB, etc.) is not invoked.
+// buildDaemonGetModel is the production callback factory extracted from
+// spawnDaemonSession. Tests call it directly so they exercise the real
+// resolution path without duplicating its inline logic.
 
-import { resolveModelId } from '../session/model-resolution.js';
+import { buildDaemonGetModel } from './session-spawn.js';
 
 describe('daemon getModel resolution (#4745)', () => {
-  it('resolves sessionConfig.model when provided', () => {
-    // 'sonnet' is a known alias — resolveModelId should return a concrete wire id.
-    const raw = 'sonnet';
-    const daemonModel = resolveModelId(raw) ?? String(raw);
-    expect(typeof daemonModel).toBe('string');
-    expect(daemonModel.length).toBeGreaterThan(0);
-    // Must not be the bare alias — it should be a resolved id.
-    // (resolveModelId returns a non-empty string for known aliases)
-    expect(daemonModel).not.toBe('');
+  it('resolves a known alias to a non-empty concrete wire id', () => {
+    // 'sonnet' is a known slot alias — the returned getter must yield a
+    // non-empty wire id different from the bare alias string.
+    const getModel = buildDaemonGetModel('sonnet');
+    const id = getModel();
+    expect(typeof id).toBe('string');
+    expect(id.length).toBeGreaterThan(0);
+    expect(id).not.toBe('sonnet');
   });
 
-  it('falls back to "sonnet" when sessionConfig.model is absent', () => {
-    // Mirror the inline expression: options.sessionConfig?.model ?? 'sonnet'
-    const sessionConfig: Partial<{ model: string }> = {};
-    const raw = sessionConfig.model ?? 'sonnet';
-    expect(raw).toBe('sonnet');
-    const daemonModel = resolveModelId(raw) ?? String(raw);
-    expect(typeof daemonModel).toBe('string');
-    expect(daemonModel.length).toBeGreaterThan(0);
+  it('falls back to sonnet wire id when configuredModel is absent', () => {
+    // Mirrors options.sessionConfig?.model being undefined — the production
+    // default is 'sonnet'.
+    const getModel = buildDaemonGetModel(undefined);
+    const id = getModel();
+    expect(typeof id).toBe('string');
+    expect(id.length).toBeGreaterThan(0);
+    // Must resolve to the same wire id as 'sonnet' (not the bare alias).
+    const sonnetId = buildDaemonGetModel('sonnet')();
+    expect(id).toBe(sonnetId);
   });
 
-  it('falls back to "sonnet" when sessionConfig is undefined', () => {
-    const sessionConfig: Partial<{ model: string }> | undefined = undefined;
-    const raw = sessionConfig?.model ?? 'sonnet';
-    expect(raw).toBe('sonnet');
-    const daemonModel = resolveModelId(raw) ?? String(raw);
-    expect(typeof daemonModel).toBe('string');
-    expect(daemonModel.length).toBeGreaterThan(0);
+  it('returns the same wire id on repeated calls (closure is frozen per tick)', () => {
+    // The getter must be a pure constant — repeated invocations must return
+    // the same string so hook payloads are stable within a single tick.
+    const getModel = buildDaemonGetModel('sonnet');
+    expect(getModel()).toBe(getModel());
   });
 
-  it('resolveModelId falls back to String(raw) for an unknown model id', () => {
-    // An unrecognised raw value: resolveModelId returns undefined/null,
-    // so the fallback String(raw) is used — the wire id equals the raw value.
-    const raw = 'some-vendor/custom-model-xyz';
-    const daemonModel = resolveModelId(raw) ?? String(raw);
-    expect(daemonModel).toBe(raw);
+  it('passes through an unknown vendor model id unchanged', () => {
+    // resolveModelId returns undefined for unrecognised ids; the production
+    // fallback String(raw) preserves the raw value as the wire id.
+    const vendor = 'some-vendor/custom-model-xyz';
+    const getModel = buildDaemonGetModel(vendor);
+    expect(getModel()).toBe(vendor);
   });
 });
