@@ -290,8 +290,8 @@ function collectRows(state: TerminalState): Row[] {
         push('deferred', state.deferred);
       }
       push('worth doing', state.worthDoing);
-      push('Not checked', state.notChecked);
-      push('Undo', state.undoSteps);
+      push('not checked', state.notChecked);
+      push('undo', state.undoSteps);
       break;
     case 'blocked':
       push('blocks', state.whatBlocks);
