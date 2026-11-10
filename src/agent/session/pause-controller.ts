@@ -35,7 +35,7 @@ export function getPauseLockPath(): string {
 // Lock file schema — written by writePauseLock for display/debugging only
 // ---------------------------------------------------------------------------
 
-interface PauseLockData {
+export interface PauseLockData {
   pid: number;
   timestamp: string;
 }
