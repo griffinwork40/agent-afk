@@ -162,35 +162,26 @@ describe('artifact read surface', () => {
     // context=undefined + opts.cwd=undefined is the factory-default path.
     // resolveAndContain falls through to store-dir realpath containment,
     // so a valid blob is accessible but a redirected URI is still rejected.
-    const unconfinedHandlers = createArtifactHandlers({ storeDir, indexPath }); // no cwd
+    // handlers is created by beforeEach with no cwd — already the unconfined path.
     const rec = await put('pinned content');
 
     // Valid artifact is readable with no context (unconfined path).
-    const getResult = await unconfinedHandlers.get('artifact_get')!(
-      { id: rec.id }, signal, undefined,
-    );
-    expect(getResult.isError).toBeUndefined();
-    expect(JSON.parse(getResult.content as string)).toMatchObject({ id: rec.id });
+    expect(await json('artifact_get', { id: rec.id })).toMatchObject({ id: rec.id });
+    expect(await json('artifact_read', { id: rec.id })).toMatchObject({ read_path: rec.uri });
+    expect((await json('artifact_list', {})).artifacts).toHaveLength(1);
 
-    const readResult = await unconfinedHandlers.get('artifact_read')!(
-      { id: rec.id }, signal, undefined,
-    );
-    expect(readResult.isError).toBeUndefined();
-    expect(JSON.parse(readResult.content as string)).toMatchObject({ read_path: rec.uri });
-
-    const listResult = await unconfinedHandlers.get('artifact_list')!(
-      {}, signal, undefined,
-    );
-    expect(listResult.isError).toBeUndefined();
-    expect(JSON.parse(listResult.content as string).artifacts).toHaveLength(1);
-
-    // artifact_read returns JSON null (not the string 'null') for absent IDs — finding #4584 §4.
-    const missingResult = await unconfinedHandlers.get('artifact_read')!(
-      { id: `art_${'0'.repeat(32)}` }, signal, undefined,
-    );
+    // artifact_read returns JSON-serialized null ('null'), consistent with other handlers — finding #4584 §4.
+    const missingResult = await call('artifact_read', { id: `art_${'0'.repeat(32)}` });
     expect(missingResult.isError).toBeUndefined();
     expect(missingResult.content).toBe(JSON.stringify(null));
     expect(JSON.parse(missingResult.content as string)).toBeNull();
+
+    // Negative case: symlink-redirected blob is rejected even with context=undefined.
+    const outside = join(root, 'outside-unconfined.txt');
+    await writeFile(outside, 'private contents');
+    await rm(rec.uri);
+    await symlink(outside, rec.uri);
+    expect((await call('artifact_read', { id: rec.id })).isError).toBe(true);
   });
 });
 
