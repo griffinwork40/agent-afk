@@ -242,6 +242,7 @@ export function scoreEpisode(
   filePaths: Set<string>,
   branch: string | null,
   highFreqFiles: Set<string>,
+  now: number = Date.now(),
 ): number {
   let score = 0;
   const episodeFiles = parseEpisodeFiles(fact.content);
@@ -283,7 +284,7 @@ export function scoreEpisode(
 
   // Apply linear recency decay so older episodes are deprioritised.
   if (score > 0) {
-    const ageDays = (Date.now() - new Date(fact.created_at).getTime()) / 86_400_000;
+    const ageDays = (now - new Date(fact.created_at).getTime()) / 86_400_000;
     const decay = Math.max(RECENCY_DECAY_FLOOR, 1 - ageDays / RECENCY_DECAY_DAYS);
     score *= decay;
   }
@@ -376,10 +377,11 @@ export function scoredEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
       return count <= EPISODE_FILES_PREFIX_CAP;
     });
 
+    const now = Date.now();
     return cappedEpisodes
       .map((ep) => ({
         ep,
-        score: scoreEpisode(ep, filePaths, branch, highFreqFiles),
+        score: scoreEpisode(ep, filePaths, branch, highFreqFiles, now),
       }))
       .sort((a, b) => b.score - a.score || b.ep.created_at.localeCompare(a.ep.created_at));
   } catch {
