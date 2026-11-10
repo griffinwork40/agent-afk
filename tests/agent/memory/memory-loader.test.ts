@@ -368,6 +368,21 @@ describe('scoreEpisode', () => {
     expect(score).toBeCloseTo(1.5, 2);
   });
 
+  it('explicit now parameter produces deterministic score independent of wall-clock time', () => {
+    // Use a fixed epoch anchor so the test never drifts with wall-clock time.
+    // created_at = Unix epoch (0); now = exactly 45 days later.
+    // Raw score = 3 (branch match); decay = max(0.1, 1 - 45/90) = 0.5
+    // Final score = 3 × 0.5 = 1.5 — exact, not approximate.
+    const created_at = new Date(0).toISOString();
+    const fixedNow = 45 * 86_400_000;
+    const fact = makeFact({
+      content: '[episode:s]\nfiles:\nnarrative: worked on feat/my-branch branch',
+      created_at,
+    });
+    const score = scoreEpisode(fact, new Set(), 'feat/my-branch', new Set(), fixedNow);
+    expect(score).toBeCloseTo(1.5, 5);
+  });
+
   it('recent episode (age ~ 0) has decay ≈ 1 and scores full raw value', () => {
     const fact = makeFact({ content: '[episode:s]\nfiles: src/foo.ts' });
     const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
