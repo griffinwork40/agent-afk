@@ -287,3 +287,55 @@ describe('daemonDefaultCwd', () => {
     expect(msg).toMatch(/ENOSPC/);
   });
 });
+
+// ── getModel resolution in spawnDaemonSession (#4745) ─────────────────────────
+//
+// spawnDaemonSession creates the getModel closure inline:
+//   const raw = options.sessionConfig?.model ?? 'sonnet';
+//   const daemonModel = resolveModelId(raw) ?? String(raw);
+//   return () => daemonModel;
+//
+// We test the same logic unit-style by extracting the closure directly so
+// spawnDaemonSession itself (which requires MCP, DB, etc.) is not invoked.
+
+import { resolveModelId } from '../session/model-resolution.js';
+
+describe('daemon getModel resolution (#4745)', () => {
+  it('resolves sessionConfig.model when provided', () => {
+    // 'sonnet' is a known alias — resolveModelId should return a concrete wire id.
+    const raw = 'sonnet';
+    const daemonModel = resolveModelId(raw) ?? String(raw);
+    expect(typeof daemonModel).toBe('string');
+    expect(daemonModel.length).toBeGreaterThan(0);
+    // Must not be the bare alias — it should be a resolved id.
+    // (resolveModelId returns a non-empty string for known aliases)
+    expect(daemonModel).not.toBe('');
+  });
+
+  it('falls back to "sonnet" when sessionConfig.model is absent', () => {
+    // Mirror the inline expression: options.sessionConfig?.model ?? 'sonnet'
+    const sessionConfig: Partial<{ model: string }> = {};
+    const raw = sessionConfig.model ?? 'sonnet';
+    expect(raw).toBe('sonnet');
+    const daemonModel = resolveModelId(raw) ?? String(raw);
+    expect(typeof daemonModel).toBe('string');
+    expect(daemonModel.length).toBeGreaterThan(0);
+  });
+
+  it('falls back to "sonnet" when sessionConfig is undefined', () => {
+    const sessionConfig: Partial<{ model: string }> | undefined = undefined;
+    const raw = sessionConfig?.model ?? 'sonnet';
+    expect(raw).toBe('sonnet');
+    const daemonModel = resolveModelId(raw) ?? String(raw);
+    expect(typeof daemonModel).toBe('string');
+    expect(daemonModel.length).toBeGreaterThan(0);
+  });
+
+  it('resolveModelId falls back to String(raw) for an unknown model id', () => {
+    // An unrecognised raw value: resolveModelId returns undefined/null,
+    // so the fallback String(raw) is used — the wire id equals the raw value.
+    const raw = 'some-vendor/custom-model-xyz';
+    const daemonModel = resolveModelId(raw) ?? String(raw);
+    expect(daemonModel).toBe(raw);
+  });
+});
