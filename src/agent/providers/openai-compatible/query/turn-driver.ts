@@ -54,6 +54,7 @@ import type { OpenAIJournalWiring } from './journal-wiring.js';
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { OpenAIAuthResolution } from '../auth.js';
 import { emitQueuedUserMessage, emitSessionPhase } from '../../../trace/emit.js';
+import { PauseController, formatPauseNote } from '../../../session/pause-controller.js';
 import { emitTurnTerminal } from './turn-driver.emit-terminal.js';
 import { windDownFinalText } from './wind-down-final.js';
 
@@ -139,9 +140,20 @@ export function applyBeforeNextRound(
  * reference, no diff detected). Syncing here ensures the steering content is
  * persisted before the next model request — mirrors anthropic-direct's
  * inter-round sync (loop/inter-round.ts).
+ *
+ * Pause note: `consumeLastPauseDuration()` is one-shot. When a pause occurs
+ * mid-turn the note is prepended here at the first round boundary after resume
+ * so the model sees it before its next reply — rather than waiting for the next
+ * top-level turn start (issue #4693).
  */
 export function applyAndSyncSteering(ctx: TurnDriverContext): void {
-  const steeringText = ctx.beforeNextRound?.();
+  let steeringText = ctx.beforeNextRound?.();
+  // Consume any pending pause duration and prepend its note.
+  const pauseMs = PauseController.instance().consumeLastPauseDuration();
+  const pauseNote = pauseMs !== undefined ? formatPauseNote(pauseMs) : undefined;
+  if (pauseNote) {
+    steeringText = steeringText ? pauseNote + '\n\n' + steeringText : pauseNote;
+  }
   applyBeforeNextRound(ctx.priorTurns, steeringText, ctx.traceWriter, ctx.opts.config.subagentId);
   if (steeringText) ctx.journal.sync(ctx.priorTurns);
 }
