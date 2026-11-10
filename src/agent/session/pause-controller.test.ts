@@ -188,4 +188,79 @@ describe('PauseController', () => {
     await checkPromise;
     expect(settled).toBe(true);
   });
+
+  // -------------------------------------------------------------------------
+  // consumeLastPauseDuration() — one-shot behaviour
+  // -------------------------------------------------------------------------
+
+  it('consumeLastPauseDuration() is one-shot: second call returns undefined', async () => {
+    const { PauseController, writePauseLock, removePauseLock } = await getPauseMod();
+
+    fs.mkdirSync(path.join(tmpDir, 'state'), { recursive: true });
+    writePauseLock();
+
+    const ctrl = PauseController.instance();
+    try {
+      await new Promise((r) => setTimeout(r, 400));
+      expect(ctrl.isPaused()).toBe(true);
+
+      removePauseLock();
+      await new Promise((r) => setTimeout(r, 400));
+      expect(ctrl.isPaused()).toBe(false);
+
+      const first = ctrl.consumeLastPauseDuration();
+      expect(typeof first).toBe('number');
+      expect(first).toBeGreaterThan(0);
+
+      // Second call must return undefined — the slot was cleared.
+      const second = ctrl.consumeLastPauseDuration();
+      expect(second).toBeUndefined();
+    } finally {
+      ctrl.dispose();
+    }
+  });
+
+  it('consumeLastPauseDuration() returns undefined when no pause has occurred', async () => {
+    const { PauseController } = await getPauseMod();
+    const ctrl = PauseController.instance();
+    try {
+      expect(ctrl.consumeLastPauseDuration()).toBeUndefined();
+    } finally {
+      ctrl.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatPauseNote — shared note formatter
+// ---------------------------------------------------------------------------
+
+describe('formatPauseNote', () => {
+  it('returns undefined for durations at or below 60 s', async () => {
+    const { formatPauseNote } = await getPauseMod();
+    expect(formatPauseNote(0)).toBeUndefined();
+    expect(formatPauseNote(60_000)).toBeUndefined();
+    expect(formatPauseNote(59_999)).toBeUndefined();
+  });
+
+  it('formats minutes-only for durations under one hour', async () => {
+    const { formatPauseNote } = await getPauseMod();
+    const note = formatPauseNote(5 * 60_000 + 500); // 5m 0.5s → rounds to 5m
+    expect(note).toMatch(/5m/);
+    expect(note).not.toMatch(/\dh/);
+    expect(note).toContain('Session resumed');
+  });
+
+  it('formats hours and minutes for durations over one hour', async () => {
+    const { formatPauseNote } = await getPauseMod();
+    const note = formatPauseNote(21 * 3_600_000 + 15 * 60_000); // 21h 15m
+    expect(note).toMatch(/21h 15m/);
+    expect(note).toContain('Session resumed');
+  });
+
+  it('note text mentions provider throttling', async () => {
+    const { formatPauseNote } = await getPauseMod();
+    const note = formatPauseNote(2 * 60_000);
+    expect(note).toContain('provider throttling');
+  });
 });

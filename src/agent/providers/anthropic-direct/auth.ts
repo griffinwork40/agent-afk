@@ -53,9 +53,9 @@ export const THINKING_BINDING_CONTROLS_BETA_HEADER = 'thinking-binding-controls-
  * `User-Agent` value the CLI sends. The Anthropic API gates certain model
  * features (e.g. Claude Opus 5.5 on the Fast tier) behind a minimum Claude
  * Code CLI version — this value must track the current `@anthropic-ai/claude-code`
- * npm release. Updated to 2.1.280 (the version that unlocks Opus 5.5 access).
+ * npm release. Updated to 2.1.322 (the version that unlocks Fable 5.2 access).
  */
-export const CLI_USER_AGENT = 'claude-cli/2.1.280 (external, cli)';
+export const CLI_USER_AGENT = 'claude-cli/2.1.322 (external, cli)';
 
 /**
  * Billing-header text block embedded into the system prompt for OAuth mode.
@@ -64,7 +64,7 @@ export const CLI_USER_AGENT = 'claude-cli/2.1.280 (external, cli)';
  * the server tolerates any value (only gates fast-mode features).
  */
 export const BILLING_HEADER_TEXT =
-  'x-anthropic-billing-header: cc_version=2.1.280; cc_entrypoint=cli; cch=00000;';
+  'x-anthropic-billing-header: cc_version=2.1.322; cc_entrypoint=cli; cch=00000;';
 
 /** Shape-sniff a token to pick the auth mode. */
 export function detectAuthMode(token: string): AuthMode {

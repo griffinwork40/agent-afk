@@ -64,6 +64,10 @@ export function applyInteractiveOptions(cmd: Command): Command {
     .option(
       '--plain',
       'Force the session to fully behave like a non-TTY surface for rendering: append-only plain-stdout output instead of the live-overlay renderer, AND the input surface downgrades to the simple line reader — even when stdout/stdin ARE a TTY. Full opt-out escape hatch for tmux/SSH/multiplexer sessions. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default.',
+    )
+    .option(
+      '--no-recall',
+      'Suppress automatic episode recall for this session, even when AFK_EPISODE_RECALL=1 is set globally. Equivalent to AFK_NO_EPISODE_RECALL=1 for this invocation. The /recall slash command is unaffected.',
     );
 }
 

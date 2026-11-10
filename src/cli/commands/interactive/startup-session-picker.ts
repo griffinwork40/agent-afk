@@ -14,7 +14,7 @@
  *     1h ago    opus     12 turns   $0.08    another-session
  *     (N sessions — ↑/↓ navigate · enter select · esc/enter-on-empty start new)
  *
- * Respects `AFK_SESSION_PICKER=0` to suppress (CI/scripts).
+ * Disabled by default; set `AFK_SESSION_PICKER=1` to enable.
  * Only fires when stdin is a TTY and more than one non-daemon session exists.
  * Selection returns the selected session id; Esc or Enter on the "new" row
  * returns undefined (start a fresh session).
@@ -252,7 +252,7 @@ export interface StartupPickerResult {
  * Show the startup session picker if conditions are met.
  *
  * Conditions (all must hold):
- *   1. `AFK_SESSION_PICKER` is not set to `0`
+ *   1. `AFK_SESSION_PICKER` is set to `1`
  *   2. stdin is a TTY
  *   3. More than one non-daemon CLI session exists
  *   4. `--resume` / `--continue` was not already supplied (no-op if already resuming)
@@ -269,7 +269,7 @@ export async function runStartupSessionPicker(opts: {
   try {
     // Respect suppression env var.
     const pickerEnv = env.AFK_SESSION_PICKER;
-    if (pickerEnv === '0' || pickerEnv === 'false') return { selectedId: undefined };
+    if (pickerEnv !== '1' && pickerEnv !== 'true') return { selectedId: undefined };
 
     // Skip when CLI already specifies a session.
     if (opts.alreadyResuming) return { selectedId: undefined };
