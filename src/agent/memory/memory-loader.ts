@@ -370,7 +370,9 @@ export function scoredEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
     const cappedEpisodes = allEpisodes.filter((ep) => {
       const files = parseEpisodeFiles(ep.content);
       const firstFile = files[0];
-      const prefix = firstFile !== undefined ? firstFile.split('/').slice(0, -1).join('/') : '';
+      const prefix = firstFile !== undefined
+        ? (firstFile.includes('/') ? firstFile.split('/').slice(0, -1).join('/') : firstFile)
+        : '';
       const count = (prefixCount.get(prefix) ?? 0) + 1;
       prefixCount.set(prefix, count);
       return count <= EPISODE_FILES_PREFIX_CAP;

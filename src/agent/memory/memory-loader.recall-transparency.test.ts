@@ -14,7 +14,7 @@ import { mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { MemoryStore } from './memory-store.js';
-import { injectEpisodeRecall, scoredEpisodes } from './memory-loader.js';
+import { injectEpisodeRecall, scoredEpisodes, EPISODE_RECALL_CAP } from './memory-loader.js';
 import type { AgentConfig } from '../types/config-types.js';
 
 // ---------------------------------------------------------------------------
@@ -122,17 +122,49 @@ describe('scoredEpisodes', () => {
 
   {
     const branch = getCurrentBranchSync();
-    it.skipIf(!branch)('returns all episodes, not just top 3 (unlike recallEpisodes)', () => {
-      // Store 5 episodes all matching the branch.
-      for (let i = 0; i < 5; i++) {
+    it.skipIf(!branch)(`returns all episodes, not just top ${EPISODE_RECALL_CAP} (unlike recallEpisodes)`, () => {
+      // Store EPISODE_RECALL_CAP + 2 episodes all matching the branch.
+      const count = EPISODE_RECALL_CAP + 2;
+      for (let i = 0; i < count; i++) {
         storeEpisode(store, [`src/file${i}.ts`], branch!);
       }
 
       const all = scoredEpisodes(tmpDir, process.cwd(), store);
-      // scoredEpisodes must return all 5; recallEpisodes caps at 3.
-      expect(all.length).toBe(5);
+      // scoredEpisodes must return all; recallEpisodes caps at EPISODE_RECALL_CAP.
+      expect(all.length).toBe(count);
     });
   }
+
+  it('caps episodes per directory prefix at EPISODE_FILES_PREFIX_CAP', () => {
+    // EPISODE_FILES_PREFIX_CAP = 5. Store CAP + 2 = 7 episodes all sharing the
+    // same directory prefix so they collapse into one bucket. The result must
+    // contain at most 5 of them.
+    const EPISODE_FILES_PREFIX_CAP = 5;
+    const total = EPISODE_FILES_PREFIX_CAP + 2;
+    for (let i = 0; i < total; i++) {
+      storeEpisode(store, [`src/agent/memory/file${i}.ts`]);
+    }
+
+    const result = scoredEpisodes(tmpDir, tmpDir, store);
+    expect(result.length).toBeLessThanOrEqual(EPISODE_FILES_PREFIX_CAP);
+  });
+
+  it('does not collapse legacy basename-only episodes into one bucket', () => {
+    // Legacy episodes stored with basenames only (no "/") must each be bucketed
+    // by their own basename, not all collapsed into the "" bucket.
+    // Store EPISODE_FILES_PREFIX_CAP + 2 episodes each with a DIFFERENT basename
+    // — none should be evicted since each has its own bucket.
+    const EPISODE_FILES_PREFIX_CAP = 5;
+    const total = EPISODE_FILES_PREFIX_CAP + 2;
+    for (let i = 0; i < total; i++) {
+      storeEpisode(store, [`uniquefile${i}.ts`]);
+    }
+
+    const result = scoredEpisodes(tmpDir, tmpDir, store);
+    // Each basename is its own bucket so none are evicted — all total episodes
+    // should be present.
+    expect(result.length).toBe(total);
+  });
 });
 
 // ---------------------------------------------------------------------------
