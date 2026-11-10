@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, statSync, createReadStream } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, statSync, createReadStream } from 'fs';
 import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -341,6 +341,33 @@ describe('ingestEpisodes', () => {
     expect(checksumAfter).toBe(checksumBefore);
     expect(mtimeAfter).toBe(mtimeBefore);
     expect(countAfter.n).toBe(countBefore.n);
+  });
+
+  // ── constructor-failure / resource-lifecycle tests (issue #4729) ──────────
+
+  it('propagates an error thrown before constructors run without a secondary TypeError', () => {
+    // memory.db exists as a regular file (created by createMemoryDb above).
+    // Passing "memory.db/subdir" as storeDir causes mkdirSync inside
+    // ingestEpisodes to throw ENOTDIR because a path component is a regular
+    // file, not a directory.  At that point both `store` and `memDb` are still
+    // null, so the finally block's `store?.close()` and `memDb?.close()` must
+    // not produce a secondary TypeError — the original error propagates cleanly.
+    memDb.close();
+    const storeDir = join(dir, 'memory.db', 'subdir');
+    expect(() => ingestEpisodes(dir, storeDir)).toThrow(/ENOTDIR/);
+  });
+
+  it('propagates a QEpisodesStore constructor error without a secondary TypeError', () => {
+    // Place a corrupt (non-SQLite) file at the expected q-episodes.db path so
+    // that new QEpisodesStore() throws SqliteError(SQLITE_NOTADB).  At that
+    // point `store` is still null and `memDb` has not been opened yet, so the
+    // finally block's `store?.close()` and `memDb?.close()` calls must not
+    // produce a secondary TypeError — the original error propagates cleanly.
+    memDb.close();
+    const storeDir = join(dir, 'store-corrupt');
+    mkdirSync(storeDir, { recursive: true });
+    writeFileSync(join(storeDir, 'q-episodes.db'), 'this is not sqlite');
+    expect(() => ingestEpisodes(dir, storeDir)).toThrow(/SQLITE_NOTADB|not a database/i);
   });
 
   it('watermark filter uses created_at >= ? — row at exact watermark is re-fetched but deduplicated', () => {
