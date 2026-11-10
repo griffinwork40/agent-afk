@@ -140,9 +140,14 @@ export function classifyError(err: unknown): ClassifiedError {
   const lowerMsg = message.toLowerCase();
 
   // 5. HTTP 401 / AuthenticationError
+  // Architecture rule: @anthropic-ai/sdk must not be imported outside
+  // src/agent/providers/ — so we cannot use `instanceof AuthenticationError`.
+  // `.name` is set explicitly by the SDK on its error classes and is reliable;
+  // `err.constructor.name` is a belt-and-suspenders fallback for environments
+  // where `.name` may have been reassigned.
   if (
     errObj['status'] === 401 ||
-    (err instanceof Error && err.name === 'AuthenticationError')
+    (err instanceof Error && (err.name === 'AuthenticationError' || err.constructor.name === 'AuthenticationError'))
   ) {
     const isAnthropic = isAnthropicSdkError(err);
     return {
@@ -157,7 +162,9 @@ export function classifyError(err: unknown): ClassifiedError {
   }
 
   // 5a. Anthropic PermissionDeniedError (seat removed, subscription inactive)
-  if (err instanceof Error && err.name === 'PermissionDeniedError') {
+  // See comment at §5 above: .name + constructor.name used instead of instanceof
+  // to avoid an SDK import outside src/agent/providers/.
+  if (err instanceof Error && (err.name === 'PermissionDeniedError' || err.constructor.name === 'PermissionDeniedError')) {
     return {
       kind: 'auth',
       userMessage: 'Access denied (HTTP 403). Your account seat may have been removed or subscription access is inactive.',
