@@ -49,7 +49,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (existsSync(tmpHome)) rmSyncRetry(tmpHome);
+  // best-effort: SQLite file handles may linger on Windows CI
+  try { if (existsSync(tmpHome)) rmSyncRetry(tmpHome); } catch { /* EBUSY on CI */ }
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
   else delete process.env['HOME'];
   if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;

@@ -24,7 +24,8 @@ beforeEach(() => {
 
 afterEach(() => {
   store.close();
-  rmSyncRetry(tmpMemDir);
+  // best-effort: better-sqlite3 file handles may linger on Windows CI
+  try { rmSyncRetry(tmpMemDir); } catch { /* EBUSY on CI — OS reclaims tmpdir */ }
 });
 
 describe('estimateTokens', () => {
