@@ -166,6 +166,8 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
   onOpenOutputViewer?: () => void;
+  /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
+  onCycleDiffCap?: () => void;
   /**
    * Resolved prompt accessor. Always a function — strings supplied at
    * construction are wrapped in a constant-returning closure so the
@@ -709,6 +711,7 @@ export class TerminalCompositor {
     this.onTaskView = opts.onTaskView;
     this.onOpenEditor = opts.onOpenEditor;
     this.onOpenOutputViewer = opts.onOpenOutputViewer;
+    this.onCycleDiffCap = opts.onCycleDiffCap;
     // Normalize promptText to a buffer-aware function: string → constant
     // closure; function → use as-is; falsy → dim-chevron fallback.
     const promptOpt = opts.promptText;
@@ -776,10 +779,7 @@ export class TerminalCompositor {
    * Passing `undefined` disables protection (legacy behavior — frame
    * grows to row 1 without evicting).
    */
-  setAnchorRow(row: number | undefined): void {
-    this.anchorRow = row;
-    this.declaredAnchorRow = row;
-  }
+  setAnchorRow(row: number | undefined): void { this.anchorRow = row; this.declaredAnchorRow = row; }
 
   /**
    * Temporarily yield stdin raw-mode and the keypress listener so an
@@ -915,10 +915,7 @@ export class TerminalCompositor {
    * see {@link Lifecycle.arm} for the full arm-ordering invariant and
    * SIGWINCH ghost-erase rationale.
    */
-  async arm(): Promise<void> {
-    assertGeometryConsistent('arm', this);
-    return Lifecycle.arm(this);
-  }
+  async arm(): Promise<void> { assertGeometryConsistent('arm', this); return Lifecycle.arm(this); }
 
   /**
    * Stage 3 (#540 — single end-of-turn flush): commit the entire retained

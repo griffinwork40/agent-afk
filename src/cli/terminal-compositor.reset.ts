@@ -60,6 +60,7 @@ export interface ResetStateHost {
   readonly pasteRegistry: Map<string, string>;
   clipboardFailureMsg: string | null;
   modeNotice: string | null;
+  pendingChordKey: string | undefined;
   readonly autocompleteState?: AutocompleteState;
   resizeUnsub: (() => void) | null;
   resizeImmediateUnsub: (() => void) | null;
@@ -154,6 +155,9 @@ export function resetState(self: ResetStateHost): void {
   self.pasteRegistry.clear();
   self.clipboardFailureMsg = null;
   self.modeNotice = null;
+  // Clear any pending chord leader — a stale Ctrl+X arm must not survive
+  // a disarm/rearm cycle (new turn, test reset, session swap).
+  self.pendingChordKey = undefined;
   // clipboardInFlight is NOT reset — an in-flight osascript probe is
   // tied to a Promise that will resolve/reject independently. Setting
   // the flag to false here would allow a new probe to spawn while the

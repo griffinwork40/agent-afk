@@ -240,6 +240,21 @@ export function dispatchKey(self: KeyDispatchHost, char: string | undefined, key
   // ordering rationale for its own branch inline.
   if (handlePickerKey(self, char, key)) return;
 
+  // Chord cancellation: if a chord leader is pending and the incoming key is NOT
+  // the expected completion (Ctrl+X → 'x' already set, next key is not the second
+  // key of the chord), clear it here — BEFORE any early-return handler consumes
+  // the key — so Escape/Enter/Backspace/arrows always disarm a stale chord.
+  // handleChordCtrlX still runs for the actual Ctrl+X press and the second key.
+  if (self.pendingChordKey !== undefined) {
+    const isChordCompletion =
+      (self.pendingChordKey === 'x' && key?.name === 'd' && !key?.ctrl && !key?.meta) ||
+      (key?.ctrl && key?.name === 'x'); // Ctrl+X itself — re-arms or passes through
+    if (!isChordCompletion) {
+      self.pendingChordKey = undefined;
+      // fall through — the key still dispatches normally
+    }
+  }
+
   const sequence = key?.sequence ?? '';
   if (handlePasteMarkers(self, sequence)) return;
   if (handleEscape(self, key)) return;
