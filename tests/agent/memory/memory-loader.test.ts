@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -28,6 +28,7 @@ import {
   injectEpisodeRecall,
 } from '../../../src/agent/memory/memory-loader.js';
 import { useUnsetAfkHome } from '../../../src/__test-utils__/unset-afk-home.js';
+import { rmSyncRetry } from '../../../src/__test-utils__/rm-sync-retry.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
@@ -48,7 +49,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
+  if (existsSync(tmpHome)) rmSyncRetry(tmpHome);
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
   else delete process.env['HOME'];
   if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
