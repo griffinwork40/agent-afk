@@ -107,6 +107,18 @@ export class QEpisodesStore {
     mkdirSync(this.dir, { recursive: true });
 
     this.db = new Database(join(this.dir, DB_FILE));
+    // Close the handle if setup throws (e.g. SQLITE_NOTADB on a corrupt file):
+    // the caller never receives the instance, so it can never call close(), and
+    // a leaked handle keeps the file locked on Windows (EBUSY on unlink).
+    try {
+      this.initialize();
+    } catch (err) {
+      this.db.close();
+      throw err;
+    }
+  }
+
+  private initialize(): void {
     configureSqliteConnection(this.db);
     // Enable recursive triggers so episodes_ad fires during the internal DELETE
     // that INSERT OR REPLACE performs, keeping FTS5 postings in sync.
