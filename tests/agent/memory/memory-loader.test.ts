@@ -355,6 +355,19 @@ describe('scoreEpisode', () => {
     expect(score).toBeCloseTo(3 * 0.5, 5);
   });
 
+  it('applies recency decay to branch-match-only episodes: 45-day-old episode scores ≈ 1.5', () => {
+    // Branch-only match: no files overlap, only the branch name appears in content.
+    // Raw score = 3 (branch match); decay = max(0.1, 1 - 45/90) = 0.5
+    // Final score = 3 × 0.5 = 1.5
+    const fortyFiveDaysAgo = new Date(Date.now() - 45 * 86_400_000).toISOString();
+    const fact = makeFact({
+      content: '[episode:s]\nfiles:\nnarrative: worked on feat/my-branch branch',
+      created_at: fortyFiveDaysAgo,
+    });
+    const score = scoreEpisode(fact, new Set(), 'feat/my-branch', new Set());
+    expect(score).toBeCloseTo(1.5, 2);
+  });
+
   it('recent episode (age ~ 0) has decay ≈ 1 and scores full raw value', () => {
     const fact = makeFact({ content: '[episode:s]\nfiles: src/foo.ts' });
     const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
