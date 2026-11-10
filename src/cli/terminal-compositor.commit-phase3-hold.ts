@@ -56,9 +56,12 @@ export function commitPhase3Hold(
   // Case B — border is the last row of the hidden archived prefix:
   //   model[hidden - 1] starts with '┌' and model[hidden] (first visible /
   //   first painted row) starts with '│'. Here paintedCount already equals
-  //   model.length - hidden, so Case A's guard fails. Instead, reduce `hidden`
-  //   by 1 and increment paintedCount by 1 — effectively un-hiding just the
-  //   border row — again only when maxRun allows.
+  //   model.length - hidden, so Case A's guard fails. Instead, increment
+  //   paintedCount by 1 — this shifts the tail-slice start one row earlier
+  //   (to model[model.length - paintedCount + i] with the new paintedCount),
+  //   pulling the hidden border row into the painted window. `hidden` is not
+  //   modified; it is only used to compute the initial paintedCount and is not
+  //   referenced after this snap block — again only when maxRun allows.
   if (paintedCount > 0) {
     const firstPaintedIdx = model.length - paintedCount;
     if (
@@ -75,7 +78,8 @@ export function commitPhase3Hold(
       firstVisibleChar(model[hidden - 1] ?? '') === '┌' &&
       paintedCount + 1 <= maxRun
     ) {
-      // Case B: border is the last hidden archived-prefix row; un-hide it.
+      // Case B: border is the last hidden archived-prefix row; increment
+      // paintedCount to pull it into the tail-slice painted window.
       paintedCount += 1;
     }
   }

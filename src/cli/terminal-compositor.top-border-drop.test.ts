@@ -145,4 +145,73 @@ describe('top-border drop: ┌ survives commitAbove under tall overlay', () => {
 
     term.dispose(); statusLine.stop(); c.disarm();
   }, 20_000);
+
+  it('Case B: ┌ survives when border is the last row of the hidden archived prefix', async () => {
+    // Use a small terminal height + tall overlay to force hidden > 0
+    // with the ┌ row at the hidden/visible boundary.
+    const SMALL_ROWS = 15;
+    const stdout = makeStdout(COLS, SMALL_ROWS);
+    const stdin = makeStdin();
+    const all = collect(stdout);
+    const statusLine = new StatusLine({ stream: stdout, force: true, throttleMs: 0 });
+    statusLine.start();
+    statusLine.repaint({ model: 'M', cost: 0, tokens: 0, contextPct: 0 });
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), scrollRegion: statusLine, anchorRow: 1 });
+    await c.arm();
+    statusLine.setExtraRows(2);
+    c.setSpinner({ enabled: true });
+
+    // A tall table: more data rows so the committed band is taller,
+    // forcing the archived prefix to cover the ┌ row.
+    const TALL_TABLE_MD = [
+      '| PR | Description | CI | Findings |',
+      '|---|---|---|---|',
+      '| 40 | defense-in-depth comments | GREEN | 2 low |',
+      '| 41 | move json import | BLOCKED | 1 medium |',
+      '| 42 | strengthen assertions | GREEN | 2 nit |',
+      '| 43 | add retry logic | GREEN | 0 |',
+      '| 44 | fix scroll offset | YELLOW | 1 low |',
+      '| 45 | update deps | GREEN | 0 |',
+      '| 46 | refactor commit | GREEN | 3 nit |',
+      '| 47 | add e2e test | GREEN | 1 medium |',
+    ].join('\n');
+
+    const tableText = renderMarkdownToTerminal(TALL_TABLE_MD, { maxWidth: COLS - 2 });
+
+    // Overlay tall enough to push most of the band into the archived prefix,
+    // leaving hidden > 0 with ┌ at the hidden boundary.
+    const tallOverlay = Array.from({ length: 12 }, (_, i) =>
+      `thinking ${i} — dispatching review subagent`,
+    ).join('\n');
+
+    c.setOverlay(tallOverlay);
+    c.commitAbove(tableText.replace(/\n$/, '') + '\n\n');
+
+    // Overlay collapses.
+    c.setSpinner({ enabled: false });
+    c.setOverlay('');
+    const internals = c as unknown as { repaint(): void };
+    internals.repaint();
+    internals.repaint();
+
+    const term = new HeadlessTerminal({
+      cols: COLS, rows: SMALL_ROWS, scrollback: 400,
+      allowProposedApi: true, convertEol: true,
+    });
+    await termWrite(term, all());
+    const lines = allLines(term);
+    const dump = lines.map((l, i) =>
+      `[${String(i).padStart(3)}] ${JSON.stringify(l.replace(/\s+$/, ''))}`,
+    ).join('\n');
+
+    // ┌ top border must survive commit + reposition.
+    const topBorderHits = lines.filter((l) => l.includes('┌')).length;
+    expect(topBorderHits, `Case B: top border ┌ must appear at least once:\n${dump}`).toBeGreaterThanOrEqual(1);
+
+    // Header must also be present.
+    const headerHits = lines.filter((l) => l.includes('Description')).length;
+    expect(headerHits, `Case B: header row must appear at least once:\n${dump}`).toBeGreaterThanOrEqual(1);
+
+    term.dispose(); statusLine.stop(); c.disarm();
+  }, 20_000);
 });
