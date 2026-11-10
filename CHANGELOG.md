@@ -12,6 +12,9 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- Include verification limits and conditional undo instructions in Done blocks, verdict cards, and Telegram pushes.
+
 ## [5.351.0] - 2026-11-10
 
 ### Added

@@ -130,7 +130,7 @@ function deriveOutcome(
       // Only meaningful when kind is 'done'; other kinds are ignored downstream.
       parsedDeferred = parsed.deferred;
       parsedEvidence = parsed.evidence;
-      // worthDoing is intentionally not extracted — display-only, must not feed the downgrade pipeline.
+      // worthDoing, notChecked, and undoSteps are display-only, not downgrade signals.
     } else {
       outcome = 'unknown';
       outcomeSource = 'none';

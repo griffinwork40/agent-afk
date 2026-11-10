@@ -1575,6 +1575,28 @@ describe('deriveSessionFacet', () => {
       expect(facet.outcome_downgrade_reason).toBe('deferred_items');
     });
 
+    it.each([
+      ['none', 'fully_achieved', undefined],
+      ['the UI layer was skipped.', 'partially_achieved', 'deferred_items'],
+    ] as const)('keeps Not checked and Undo display-only with Deferred: %s', (deferred, outcome, reason) => {
+      const doneText = [
+        '**Done**',
+        '- Not checked: pending output changes in production were not tested.',
+        '- Undo: revert the completed change and follow-up commit.',
+        '- What was done: fixed the parser.',
+        '- Evidence: tests pass.',
+        '- What changed: parser updated.',
+        `- Deferred: ${deferred}`,
+        '- Worth doing: add a smoke test.',
+      ].join('\n');
+      const facet = deriveSessionFacet(doneSession({
+        doneText,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe(outcome);
+      expect(facet.outcome_downgrade_reason).toBe(reason);
+    });
+
     // --- null-equivalent Deferred values must NOT trigger deferred_items (#2798) ---
 
     it('no downgrade: Deferred: none is a null-equivalent marker (#2798)', () => {
