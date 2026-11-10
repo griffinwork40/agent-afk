@@ -125,11 +125,12 @@ describe('buildAcpSession — injection chain', () => {
   });
 
   it('passes the session-scoped MemoryStore instance as the 4th arg to injectEpisodeRecall', async () => {
-    await buildAcpSession({ model: 'sonnet', maxTurns: 10 });
+    const handle = await buildAcpSession({ model: 'sonnet', maxTurns: 10 });
 
-    // The 4th positional argument must be a MemoryStore instance (finding 1 fix).
+    // The 4th positional argument must be the exact same MemoryStore instance
+    // returned by the handle — reference equality, not just type check.
     const [, , , storeArg] = mockInjectEpisodeRecall.mock.calls[0] as unknown[];
-    expect(storeArg).toBeInstanceOf(MemoryStore);
+    expect(storeArg).toBe(handle.memoryStore);
   });
 
   it('calls injectHotMemory during session construction', async () => {
