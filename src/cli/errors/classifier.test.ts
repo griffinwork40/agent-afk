@@ -79,6 +79,26 @@ describe('classifyError — auth', () => {
     expect(result.userMessage).not.toContain('Permission denied');
   });
 
+  it('classifies a real-shaped Anthropic PermissionDeniedError (inherited .name) by class name', () => {
+    class PermissionDeniedError extends Error {
+      status = 403;
+      error = { type: 'error', error: { type: 'permission_error', message: 'nope' } };
+    }
+    const result = classifyError(new PermissionDeniedError('403 nope'));
+    expect(result.kind).toBe('auth');
+    expect(result.userMessage).toContain('seat');
+  });
+
+  it('does not give Anthropic seat guidance to an OpenAI-shaped PermissionDeniedError', () => {
+    class PermissionDeniedError extends Error {
+      status = 403;
+      error = { type: 'invalid_request_error', message: 'unsupported_country' };
+    }
+    const result = classifyError(new PermissionDeniedError('403 unsupported_country'));
+    expect(result.userMessage).not.toContain('seat');
+    expect(result.hint ?? '').not.toContain('console.anthropic.com');
+  });
+
   it('classifies PermissionDeniedError by name as auth', () => {
     const err = Object.assign(new Error('some sdk message'), { name: 'PermissionDeniedError' });
     const result = classifyError(err);

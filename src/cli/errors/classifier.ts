@@ -41,6 +41,16 @@ function isAnthropicSdkError(err: unknown): boolean {
     type === 'not_found_error'
   );
 }
+/**
+ * True when an error carries the Anthropic 403 body
+ * (`{ type: 'error', error: { type: 'permission_error' } }`).
+ */
+function hasAnthropicPermissionBody(err: unknown): boolean {
+  const body = (err as Record<string, unknown>)['error'];
+  if (!body || typeof body !== 'object') return false;
+  const inner = (body as Record<string, unknown>)['error'];
+  return !!inner && typeof inner === 'object' && (inner as Record<string, unknown>)['type'] === 'permission_error';
+}
 import { isRateLimitError, isNetworkError } from '../../utils/error-classifiers.js';
 import { usageLimitInfoOf } from '../../agent/usage/usage-limit-info.js';
 import { describeUsageLimit } from '../../agent/usage/usage-formatter.js';
@@ -140,9 +150,15 @@ export function classifyError(err: unknown): ClassifiedError {
   const lowerMsg = message.toLowerCase();
 
   // 5. HTTP 401 / AuthenticationError
+  // Architecture rule: @anthropic-ai/sdk must not be imported outside
+  // src/agent/providers/ — so we cannot use `instanceof AuthenticationError`.
+  // SDK error instances inherit `.name === 'Error'` (the SDKs do not set it),
+  // so `err.constructor.name` is what matches a real SDK error; the `.name`
+  // check covers errors that set it explicitly. Class names survive the build
+  // (scripts/build-dist.mjs sets `minifyIdentifiers: false`).
   if (
     errObj['status'] === 401 ||
-    (err instanceof Error && err.name === 'AuthenticationError')
+    (err instanceof Error && (err.name === 'AuthenticationError' || err.constructor.name === 'AuthenticationError'))
   ) {
     const isAnthropic = isAnthropicSdkError(err);
     return {
@@ -157,7 +173,15 @@ export function classifyError(err: unknown): ClassifiedError {
   }
 
   // 5a. Anthropic PermissionDeniedError (seat removed, subscription inactive)
-  if (err instanceof Error && err.name === 'PermissionDeniedError') {
+  // See comment at §5 above: .name + constructor.name used instead of instanceof
+  // to avoid an SDK import outside src/agent/providers/. The OpenAI SDK also
+  // has a PermissionDeniedError class, so the constructor.name match requires
+  // the Anthropic 403 body shape; an OpenAI 403 must not get seat guidance.
+  if (
+    err instanceof Error &&
+    (err.name === 'PermissionDeniedError' ||
+      (err.constructor.name === 'PermissionDeniedError' && hasAnthropicPermissionBody(err)))
+  ) {
     return {
       kind: 'auth',
       userMessage: 'Access denied (HTTP 403). Your account seat may have been removed or subscription access is inactive.',

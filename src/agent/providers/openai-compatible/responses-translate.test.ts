@@ -274,6 +274,19 @@ describe('translateResponsesEvent — usage', () => {
     });
   });
 
+  it('preserves input_tokens_details.cache_write_tokens in raw usage when present', () => {
+    const { state } = collect([
+      {
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          usage: { input_tokens: 10, output_tokens: 2, input_tokens_details: { cached_tokens: 4, cache_write_tokens: 6 } },
+        },
+      },
+    ]);
+    expect(state.usage?.prompt_tokens_details).toEqual({ cached_tokens: 4, cache_write_tokens: 6 });
+  });
+
   it('marks response.failed and response.incomplete finish reasons', () => {
     const failed = collect([{ type: 'response.failed', response: { status: 'failed' } }]);
     expect(failed.state.finishReason).toBe('failed');
