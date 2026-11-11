@@ -69,11 +69,22 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
       lines.push(`| Cost (USD, subagents) | ${r.cost.subagentCostUsd.toFixed(4)} |`);
   } else if (r.cost.finalCostUsd !== undefined)
     lines.push(`| Cost (USD) | ${r.cost.finalCostUsd.toFixed(4)} |`);
-  if (r.subagents.started > 0)
+  if (r.subagents.started > 0) {
     lines.push(
       `| Subagents | ${r.subagents.started} started · ${r.subagents.succeeded} ok · ` +
         `${r.subagents.failed} failed · ${r.subagents.cancelled} cancelled |`,
     );
+    if (r.subagents.byModel !== undefined) {
+      for (const key of Object.keys(r.subagents.byModel).sort()) {
+        const b = r.subagents.byModel[key];
+        if (b === undefined) continue;
+        lines.push(
+          `| Subagents (${key}) | ${b.started} started · ${b.succeeded} ok · ` +
+            `${b.failed} failed · ${b.cancelled} cancelled · $${b.costUsd.toFixed(4)} |`,
+        );
+      }
+    }
+  }
   if (r.closureReason !== undefined) lines.push(`| Closure | ${r.closureReason} |`);
   lines.push('');
 
