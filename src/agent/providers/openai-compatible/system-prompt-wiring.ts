@@ -104,7 +104,7 @@ export interface SystemPromptWiringResult {
     goalPrompt: string;
     manifest: string;
     agentTypeListing: string;
-    episodeRecall: string;
+    episodeRecall: string | undefined;
   };
 }
 

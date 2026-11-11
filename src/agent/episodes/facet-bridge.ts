@@ -67,8 +67,13 @@ export function buildEpisodeFromFacet(sessionId: string): EpisodeRecord | null {
     return {
       sessionId,
       // source: read from the facet's first-class surface field (#4645).
-      // Falls back to undefined on old facets that pre-date v14.
-      ...(facet.surface !== undefined ? { source: facet.surface } : {}),
+      // Pre-v14 cached facets lack surface; fall back to facet.source so
+      // episodes written from old cached facets still carry surface info.
+      ...(facet.surface !== undefined
+        ? { source: facet.surface }
+        : facet.source !== 'unknown'
+          ? { source: facet.source }
+          : {}),
       goal,
       approach,
       pivots: [],

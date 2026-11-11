@@ -234,6 +234,10 @@ export function buildComposeTool(parentModel?: AgentModelInput): AnthropicToolDe
  * reducing the risk of tag-like content in descriptions being interpreted as
  * model instructions.
  *
+ * The returned string always starts with `<available-agent-types>` (not `A`)
+ * when the registry is non-empty.  Callers that previously relied on the first
+ * character being `A` should use the XML open tag as the prefix signal instead.
+ *
  * This is the counterpart to {@link buildAgentToolDef}: the tool description
  * stays static, while this block carries the session-specific listing into the
  * already-volatile region of the system prompt (after `# Environment`).

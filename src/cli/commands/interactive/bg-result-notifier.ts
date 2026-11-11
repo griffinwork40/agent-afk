@@ -101,10 +101,11 @@ function extractOutput(job: BackgroundJob): string {
 function truncateBytes(text: string, maxBytes: number, jobId: string): string {
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
   const buf = Buffer.from(text, 'utf8').subarray(0, maxBytes);
-  // toString on a sliced buffer may end mid-codepoint; the replacement char
-  // it produces is harmless in model context.
+  // toString on a sliced buffer may end mid-codepoint, producing U+FFFD at the
+  // tail. Strip any trailing replacement characters for consistency with other
+  // truncation sites (journal.ts, witness.query.io.ts).
   return (
-    buf.toString('utf8') +
+    buf.toString('utf8').replace(/\uFFFD+$/, '') +
     `\n… [truncated at ${maxBytes} bytes — full result via /bgsub:join ${jobId}]`
   );
 }

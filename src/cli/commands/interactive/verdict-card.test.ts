@@ -61,6 +61,41 @@ describe('renderVerdictCard', () => {
     expect(out).toContain('Review:');
   });
 
+  it('done: renders Not checked and Undo as structured rows', () => {
+    const out = stripAnsi(renderVerdictCard({
+      kind: 'done', rawBody: '', whatWasDone: 'updated config',
+      notChecked: 'Production was not tested.', undoSteps: 'Restore the backup.',
+    }));
+    // Row labels are lowercase like every other row in the card.
+    expect(out).toContain('not checked');
+    expect(out).not.toContain('Not checked');
+    expect(out).toContain('Production was not tested.');
+    expect(out).toContain('undo');
+    expect(out).not.toContain('Undo');
+    expect(out).toContain('Restore the backup.');
+  });
+
+  it('done: omits Undo on read-only turns', () => {
+    const out = stripAnsi(renderVerdictCard({
+      kind: 'done', rawBody: '', whatWasDone: 'reviewed config', notChecked: 'nothing material',
+    }));
+    expect(out).toContain('nothing material');
+    expect(out).not.toContain('undo');
+  });
+
+  it('done: secondary rows are visually separated from primary rows', () => {
+    const out = stripAnsi(renderVerdictCard({
+      kind: 'done', rawBody: '', whatWasDone: 'shipped it',
+      notChecked: 'integration tests', undoSteps: 'revert abc123',
+    }));
+    const lines = out.split('\n');
+    const ncIdx = lines.findIndex(l => l.includes('not checked'));
+    expect(ncIdx).toBeGreaterThan(0);
+    const prevLine = lines[ncIdx - 1] ?? '';
+    // The separator is a blank row: box chrome with only whitespace inside.
+    expect(prevLine.trim()).toMatch(/^│\s+│$/);
+  });
+
   // Regression: models sometimes emit identical text for the "done" and
   // "deferred" fields, producing a confusing duplicate row in the card.
   it('done: suppresses a deferred row that merely echoes the done field', () => {
