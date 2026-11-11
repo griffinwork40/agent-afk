@@ -214,13 +214,15 @@ export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): str
     }
   } else {
     let inSecondary = false;
+    let primaryWritten = false;
     for (const row of rows) {
       // Insert a blank separator before the first secondary row,
       // but only if at least one primary row was already written.
       if (row.tier === 'secondary' && !inSecondary) {
         inSecondary = true;
-        if (lines.length > 2) lines.push(blankRow);
+        if (primaryWritten) lines.push(blankRow);
       }
+      if (row.tier !== 'secondary') primaryWritten = true;
       const label = palette.dim(padDisplayRight(row.label, labelW));
       const valueStyled = (s: string) =>
         row.tier === 'secondary' ? palette.dim(s) : s;
