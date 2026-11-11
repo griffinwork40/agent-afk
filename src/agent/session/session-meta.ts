@@ -47,6 +47,13 @@ export interface SessionMeta {
    */
   forkedFrom?: string;
   /**
+   * Stable credential/auth source id recorded at session start. Provider-specific:
+   *  Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' | 'claude-code-keychain' | 'claude-code-session-refresh'
+   *  OpenAI: 'chatgpt-oauth' | 'config' | 'env' | 'codex-cli' | etc.
+   *  Absent on pre-change sessions and subagent sessions.
+   */
+  credentialSource?: string;
+  /**
    * Git workspace state captured once at top-level session start.
    *
    * - When present and non-null: a {@link GitHeadSnapshot} with `headSha` set

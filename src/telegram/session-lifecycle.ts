@@ -180,6 +180,7 @@ export function finalizeTelegramSession(
     ...(sessionConfig.thinking !== undefined ? { thinking: sessionConfig.thinking } : {}),
     ...(sessionConfig.effort !== undefined ? { effort: sessionConfig.effort } : {}),
     ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+    ...(ctx.credentialSource !== undefined ? { credentialSource: ctx.credentialSource } : {}),
     // Forward the effective permission mode (plan downgraded to default above).
     permissionMode: effectivePermissionMode,
     provider,
