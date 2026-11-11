@@ -287,3 +287,50 @@ describe('daemonDefaultCwd', () => {
     expect(msg).toMatch(/ENOSPC/);
   });
 });
+
+// ── getModel resolution in spawnDaemonSession (#4745) ─────────────────────────
+//
+// buildDaemonGetModel is the production callback factory extracted from
+// spawnDaemonSession. Tests call it directly so they exercise the real
+// resolution path without duplicating its inline logic.
+
+import { buildDaemonGetModel } from './session-spawn.js';
+
+describe('daemon getModel resolution (#4745)', () => {
+  it('resolves a known alias to a non-empty concrete wire id', () => {
+    // 'sonnet' is a known slot alias — the returned getter must yield a
+    // non-empty wire id different from the bare alias string.
+    const getModel = buildDaemonGetModel('sonnet');
+    const id = getModel();
+    expect(typeof id).toBe('string');
+    expect(id.length).toBeGreaterThan(0);
+    expect(id).not.toBe('sonnet');
+  });
+
+  it('falls back to sonnet wire id when configuredModel is absent', () => {
+    // Mirrors options.sessionConfig?.model being undefined — the production
+    // default is 'sonnet'.
+    const getModel = buildDaemonGetModel(undefined);
+    const id = getModel();
+    expect(typeof id).toBe('string');
+    expect(id.length).toBeGreaterThan(0);
+    // Must resolve to the same wire id as 'sonnet' (not the bare alias).
+    const sonnetId = buildDaemonGetModel('sonnet')();
+    expect(id).toBe(sonnetId);
+  });
+
+  it('returns the same wire id on repeated calls (closure is frozen per tick)', () => {
+    // The getter must be a pure constant — repeated invocations must return
+    // the same string so hook payloads are stable within a single tick.
+    const getModel = buildDaemonGetModel('sonnet');
+    expect(getModel()).toBe(getModel());
+  });
+
+  it('passes through an unknown vendor model id unchanged', () => {
+    // resolveModelId returns undefined for unrecognised ids; the production
+    // fallback String(raw) preserves the raw value as the wire id.
+    const vendor = 'some-vendor/custom-model-xyz';
+    const getModel = buildDaemonGetModel(vendor);
+    expect(getModel()).toBe(vendor);
+  });
+});

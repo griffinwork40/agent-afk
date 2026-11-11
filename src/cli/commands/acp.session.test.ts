@@ -95,8 +95,9 @@ vi.mock('../../agent/memory/index.js', () => {
   }
   return {
     MemoryStore,
-    injectHotMemory: (...args: unknown[]) => mockInjectHotMemory(...args),
-    injectEpisodeRecall: (...args: unknown[]) => mockInjectEpisodeRecall(...args),
+    injectHotMemory: (config: unknown) => mockInjectHotMemory(config),
+    injectEpisodeRecall: (config: unknown, memoryDir?: unknown, cwd?: unknown, store?: unknown, opts?: unknown) =>
+      mockInjectEpisodeRecall(config, memoryDir, cwd, store, opts),
   };
 });
 
