@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.352.0] - 2026-11-11
+
 ### Added
 - add tier-based visual hierarchy for Done rows (#4774) (1f9bfa53a)
 - add Not checked and Undo to the Done block (#4771) (766810e98)
