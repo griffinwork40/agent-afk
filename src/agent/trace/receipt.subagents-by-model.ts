@@ -140,6 +140,25 @@ function resolveViaInitMap(name: string, initMap: Map<string, Set<string>>): str
  *
  * Returns `undefined` when no subagent was started (omit the field entirely).
  * Tolerates malformed or missing payload fields: a bad event is skipped.
+ *
+ * Counting contract — counts per event, not per map entry:
+ *
+ *   - Every `started` row increments `bucket.started` once, regardless of
+ *     whether a previous row with the same `subagentId` was already seen.
+ *     This matches how `generateReceipt` counts top-level `subagents.started`
+ *     (one increment per row), so the two tallies agree by construction.
+ *
+ *   - Every terminal row (`succeeded` / `failed` / `cancelled`) increments the
+ *     corresponding bucket counter once. When a single id receives two terminal
+ *     rows (e.g. a `succeeded` row followed by a racing `cancelled`), both are
+ *     counted — matching `generateReceipt`'s per-row increments and faithfully
+ *     reflecting the trace. The model key for a terminal row is resolved from
+ *     the `requested` map populated by the preceding `started` row(s).
+ *
+ *   - Cost attribution uses `closure` events keyed by `subagentId`. Closures
+ *     are emitted once per subagent session, not once per lifecycle row, so
+ *     there is no analogous per-event / per-map divergence there; the existing
+ *     accumulation (`costs.set(id, (costs.get(id) ?? 0) + cost)`) is correct.
  */
 export function buildSubagentsByModel(
   events: TraceEvent[],
@@ -148,16 +167,19 @@ export function buildSubagentsByModel(
   const initMap = buildInitResolvedMap(events);
   const fallbackMap = buildFallbackMap(events);
 
-  // Pass 2: collect per-subagentId state from subagent_lifecycle and closure events.
+  // Pass 2: collect per-subagentId model provenance and cost from events.
   //
   // Invariant: `started` events always precede terminal events in the trace
   // (the manager wires the abort-graph before emitting started). We therefore
   // rely only on started events for model provenance; terminal events carry
   // no model field.
-  const requested = new Map<string, string>();          // subagentId -> requested model
-  const startedResolved = new Map<string, string>();    // subagentId -> resolvedModel from started payload
-  const transitions = new Map<string, 'succeeded' | 'failed' | 'cancelled'>();
-  const costs = new Map<string, number>();              // subagentId -> closure finalCostUsd
+  //
+  // `requested` and `startedResolved` store the FIRST value seen per id so
+  // that id-collision rows (two managers minting the same id) still resolve to
+  // a consistent model key. Counts are accumulated per-event in Pass 3 below.
+  const requested = new Map<string, string>();          // subagentId -> requested model (first seen)
+  const startedResolved = new Map<string, string>();    // subagentId -> resolvedModel from started payload (first seen)
+  const costs = new Map<string, number>();              // subagentId -> closure finalCostUsd (accumulated)
 
   let anyStarted = false;
 
@@ -169,12 +191,16 @@ export function buildSubagentsByModel(
       if (id === undefined) continue;
       if (t === 'started') {
         anyStarted = true;
-        const req = str(p['model']);
-        if (req !== undefined) requested.set(id, req);
-        const res = str(p['resolvedModel']);
-        if (res !== undefined) startedResolved.set(id, res);
-      } else if (t === 'succeeded' || t === 'failed' || t === 'cancelled') {
-        transitions.set(id, t);
+        // Populate provenance maps on first occurrence only; subsequent rows
+        // with the same id (id collision) reuse the same key.
+        if (!requested.has(id)) {
+          const req = str(p['model']);
+          if (req !== undefined) requested.set(id, req);
+        }
+        if (!startedResolved.has(id)) {
+          const res = str(p['resolvedModel']);
+          if (res !== undefined) startedResolved.set(id, res);
+        }
       }
     } else if (ev.kind === 'closure') {
       const p = ev.payload as unknown as Record<string, unknown>;
@@ -187,29 +213,61 @@ export function buildSubagentsByModel(
 
   if (!anyStarted) return undefined;
 
-  // Pass 3: aggregate into per-modelKey buckets.
+  // Pass 3: aggregate into per-modelKey buckets by iterating events again.
+  //
+  // Counting per event (not per map entry) ensures byModel bucket totals agree
+  // with generateReceipt's top-level subagent counters by construction:
+  //   - Two `started` rows for the same id → started: 2 in both places.
+  //   - Two terminal rows for the same id → both terminal counters increment.
   const buckets = new Map<string, SubagentModelEntry>();
   // Track requested names per bucket for the `requested` array.
   const bucketRequested = new Map<string, Set<string>>();
 
-  for (const [id, req] of requested) {
-    const key = modelKey(req, startedResolved.get(id), initMap, fallbackMap.get(id));
+  const getOrCreateBucket = (key: string): SubagentModelEntry => {
     let bucket = buckets.get(key);
     if (bucket === undefined) {
       bucket = { started: 0, succeeded: 0, failed: 0, cancelled: 0, costUsd: 0, requested: [] };
       buckets.set(key, bucket);
       bucketRequested.set(key, new Set());
     }
-    bucket.started++;
+    return bucket;
+  };
+
+  for (const ev of events) {
+    if (ev.kind !== 'subagent_lifecycle') continue;
+    const p = ev.payload as unknown as Record<string, unknown>;
+    const t = str(p['transition']);
+    const id = str(p['subagentId']);
+    if (id === undefined) continue;
+
+    // Resolve the model key from the provenance maps populated in Pass 2.
+    // For ids with no `requested` entry (started with no model field), skip —
+    // there is no bucket to attribute to.
+    const req = requested.get(id);
+    if (req === undefined) continue;
+
+    const key = modelKey(req, startedResolved.get(id), initMap, fallbackMap.get(id));
+    const bucket = getOrCreateBucket(key);
     bucketRequested.get(key)?.add(req);
 
-    const terminal = transitions.get(id);
-    if (terminal === 'succeeded') bucket.succeeded++;
-    else if (terminal === 'failed') bucket.failed++;
-    else if (terminal === 'cancelled') bucket.cancelled++;
+    if (t === 'started') {
+      bucket.started++;
+    } else if (t === 'succeeded') {
+      bucket.succeeded++;
+    } else if (t === 'failed') {
+      bucket.failed++;
+    } else if (t === 'cancelled') {
+      bucket.cancelled++;
+    }
+  }
 
-    const cost = costs.get(id);
-    if (cost !== undefined) bucket.costUsd += cost;
+  // Add cost from closure events (keyed by id; already accumulated in Pass 2).
+  for (const [id, cost] of costs) {
+    const req = requested.get(id);
+    if (req === undefined) continue;
+    const key = modelKey(req, startedResolved.get(id), initMap, fallbackMap.get(id));
+    const bucket = buckets.get(key);
+    if (bucket !== undefined) bucket.costUsd += cost;
   }
 
   // Freeze the `requested` arrays (sorted for determinism).

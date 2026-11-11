@@ -11,6 +11,8 @@
  *   - invariant: sum of byModel[*].costUsd equals cost.subagentCostUsd
  *   - invariant: sum of byModel[*].started equals subagents.started
  *   - nested subagents rolled up flat
+ *   - regression: two terminal rows for one id — both counted (not last-write-wins)
+ *   - regression: id collision across managers — started counted per event
  */
 
 import { describe, it, expect } from 'vitest';
@@ -259,6 +261,53 @@ describe('buildSubagentsByModel', () => {
     // sa-bad had no model so it is not counted; sa1 is.
     expect(rollup!['sonnet']?.started).toBe(1);
   });
+
+  // Regression: two terminal rows for one id.
+  // A cancel that races a completed run emits both `succeeded` and `cancelled`
+  // for the same id. The last-write-wins `transitions.set` previously collapsed
+  // these into a single terminal, so the bucket showed only one terminal while
+  // generateReceipt counted two.
+  it('regression: counts both terminal rows when one id has two terminal events', () => {
+    const events: TraceEvent[] = [
+      started('sa1', 'sonnet'),
+      initPhase('sonnet', 'claude-sonnet-4-6'),
+      terminal('succeeded', 'sa1'),
+      terminal('cancelled', 'sa1'), // race: cancel arrives after success
+    ];
+    const rollup = buildSubagentsByModel(events);
+    expect(rollup).toBeDefined();
+    // Both terminal events must be counted.
+    expect(rollup!['claude-sonnet-4-6']).toMatchObject({
+      started: 1,
+      succeeded: 1,
+      cancelled: 1,
+      failed: 0,
+    });
+  });
+
+  // Regression: id collision across managers.
+  // Two managers minting the same id produce two `started` rows with the same
+  // subagentId. The previous `requested.set(id, req)` collapsed them into one
+  // map entry, so Pass 3 only counted one `started` while generateReceipt
+  // counted two.
+  it('regression: counts started per event when two rows share the same subagentId', () => {
+    const events: TraceEvent[] = [
+      started('collide-1', 'sonnet'),  // manager A
+      started('collide-1', 'sonnet'),  // manager B — same id, same model
+      initPhase('sonnet', 'claude-sonnet-4-6'),
+      terminal('succeeded', 'collide-1'),
+      terminal('succeeded', 'collide-1'),
+    ];
+    const rollup = buildSubagentsByModel(events);
+    expect(rollup).toBeDefined();
+    // Both started rows and both terminal rows must be counted.
+    expect(rollup!['claude-sonnet-4-6']).toMatchObject({
+      started: 2,
+      succeeded: 2,
+      failed: 0,
+      cancelled: 0,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -306,6 +355,46 @@ describe('generateReceipt: subagents.byModel', () => {
     const sumStarted = Object.values(byModel).reduce((n, b) => n + b.started, 0);
     expect(sumStarted).toBe(r.subagents.started);
     expect(r.subagents.started).toBe(3);
+  });
+
+  // Regression integration: two terminal rows for one id — byModel must agree
+  // with top-level subagents counters (both see succeeded:1, cancelled:1).
+  it('regression: byModel terminal counts match top-level when one id has two terminal rows', () => {
+    const events: TraceEvent[] = [
+      started('sa1', 'sonnet'),
+      initPhase('sonnet', 'claude-sonnet-4-6'),
+      terminal('succeeded', 'sa1'),
+      terminal('cancelled', 'sa1'),
+      sealed(),
+    ];
+    const r = generateReceipt(events, META);
+    // Top-level sees both rows.
+    expect(r.subagents.succeeded).toBe(1);
+    expect(r.subagents.cancelled).toBe(1);
+    // byModel bucket must agree.
+    const bucket = r.subagents.byModel!['claude-sonnet-4-6'];
+    expect(bucket).toBeDefined();
+    expect(bucket!.succeeded).toBe(r.subagents.succeeded);
+    expect(bucket!.cancelled).toBe(r.subagents.cancelled);
+  });
+
+  // Regression integration: id collision — byModel.started must equal top-level.
+  it('regression: byModel.started matches top-level when two rows share the same subagentId', () => {
+    const events: TraceEvent[] = [
+      started('collide-1', 'sonnet'),
+      started('collide-1', 'sonnet'),
+      initPhase('sonnet', 'claude-sonnet-4-6'),
+      terminal('succeeded', 'collide-1'),
+      terminal('succeeded', 'collide-1'),
+      sealed(),
+    ];
+    const r = generateReceipt(events, META);
+    expect(r.subagents.started).toBe(2);
+    expect(r.subagents.succeeded).toBe(2);
+    const bucket = r.subagents.byModel!['claude-sonnet-4-6'];
+    expect(bucket).toBeDefined();
+    expect(bucket!.started).toBe(r.subagents.started);
+    expect(bucket!.succeeded).toBe(r.subagents.succeeded);
   });
 
   it('invariant: sum of byModel[*].costUsd equals cost.subagentCostUsd', () => {
