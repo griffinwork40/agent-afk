@@ -5,15 +5,18 @@
  * 350-code-line ceiling. Owns the `SubagentsByModel` type, the
  * `SubagentModelEntry` type, and `buildSubagentsByModel`. Pure: no I/O.
  *
- * The rollup key for a subagent is chosen as follows (first match wins):
- *   1. `resolvedModel` on the `subagent_lifecycle started` payload (not
- *      present on current runtimes: reserved for a future emit-site addition).
- *   2. If every `session_phase session_init_start` event whose `actor` is
+ * Contract: the rollup key for a subagent is chosen as follows (first match wins):
+ *   1. If a `session_phase subagent_model_fallback` event names this subagentId,
+ *      derive the key from `toModel` using rules 3-5 below (the `started`
+ *      payload's `resolvedModel` is NOT used -- it describes the rejected attempt).
+ *   2. `resolvedModel` on the `subagent_lifecycle started` payload (reserved for
+ *      a future emit-site addition; not present on current runtimes).
+ *   3. If every `session_phase session_init_start` event whose `actor` is
  *      `"subagent"` and whose `model` matches the subagent's requested name maps
  *      to exactly one `resolvedModel`, use that id.
- *   3. If multiple distinct resolved ids map to the same requested name, use
+ *   4. If multiple distinct resolved ids map to the same requested name, use
  *      `"<requested> (mixed)"`.
- *   4. Otherwise use the requested name as-is (old-runtime fallback).
+ *   5. Otherwise use the requested name as-is (old-runtime fallback).
  *
  * @module agent/trace/receipt.subagents-by-model
  */
@@ -48,6 +51,28 @@ function finitePos(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined;
 }
 
+/**
+ * Collect subagentId -> toModel from subagent_model_fallback phase events.
+ * Tolerates malformed events: missing or non-object metadata, non-string or
+ * empty subagentId / toModel fields are silently skipped.
+ */
+function buildFallbackMap(events: TraceEvent[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const ev of events) {
+    if (ev.kind !== 'session_phase') continue;
+    const p = ev.payload as unknown as Record<string, unknown>;
+    if (p['phase'] !== 'subagent_model_fallback') continue;
+    const meta = p['metadata'];
+    if (meta === null || typeof meta !== 'object') continue;
+    const m = meta as Record<string, unknown>;
+    const subagentId = str(m['subagentId']);
+    const toModel = str(m['toModel']);
+    if (subagentId === undefined || toModel === undefined) continue;
+    map.set(subagentId, toModel);
+  }
+  return map;
+}
+
 /** Build a requested-name -> Set<resolvedModel> map from session_init_start events. */
 function buildInitResolvedMap(events: TraceEvent[]): Map<string, Set<string>> {
   const map = new Map<string, Set<string>>();
@@ -67,29 +92,43 @@ function buildInitResolvedMap(events: TraceEvent[]): Map<string, Set<string>> {
 }
 
 /**
- * Derive the model key for one subagent given its requested name and the
- * init-event resolution map.
+ * Derive the model key for one subagent given its requested name, optional
+ * fallback override, and the init-event resolution map.
+ *
+ * When `fallbackToModel` is set the subagent was re-run on a different model;
+ * skip the started-payload resolvedModel (it describes the rejected attempt)
+ * and derive the key from fallbackToModel using the init-map rules instead.
  */
 function modelKey(
   requested: string,
   startedResolvedModel: string | undefined,
   initMap: Map<string, Set<string>>,
+  fallbackToModel?: string,
 ): string {
-  // Priority 1: explicit resolvedModel on the started payload.
+  // Rule 1: fallback override. Attribute to toModel, not the rejected first attempt.
+  if (fallbackToModel !== undefined) {
+    return resolveViaInitMap(fallbackToModel, initMap);
+  }
+  // Rule 2: explicit resolvedModel on the started payload.
   if (startedResolvedModel !== undefined) return startedResolvedModel;
-  // Priority 2 / 3: look up from init events.
-  const resolved = initMap.get(requested);
+  // Rules 3-5: look up from init events, then requested name as-is.
+  return resolveViaInitMap(requested, initMap);
+}
+
+/**
+ * Resolve a model name through the init map (rules 3-5 in the file header).
+ * Returns the single resolved id, `"<name> (mixed)"`, or name as-is.
+ */
+function resolveViaInitMap(name: string, initMap: Map<string, Set<string>>): string {
+  const resolved = initMap.get(name);
   if (resolved !== undefined) {
     if (resolved.size === 1) {
       const id = resolved.values().next().value;
-      // values().next().value is always defined when size===1, but noUncheckedIndexedAccess
-      // means we must guard. The size check above is the real guard.
-      return id !== undefined ? id : requested;
+      return id !== undefined ? id : name;
     }
-    return `${requested} (mixed)`;
+    return `${name} (mixed)`;
   }
-  // Priority 4: requested name as-is.
-  return requested;
+  return name;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,8 +144,9 @@ function modelKey(
 export function buildSubagentsByModel(
   events: TraceEvent[],
 ): SubagentsByModel | undefined {
-  // Pass 1: build init resolution map (session_phase events).
+  // Pass 1: build init resolution map and fallback map (session_phase events).
   const initMap = buildInitResolvedMap(events);
+  const fallbackMap = buildFallbackMap(events);
 
   // Pass 2: collect per-subagentId state from subagent_lifecycle and closure events.
   //
@@ -153,7 +193,7 @@ export function buildSubagentsByModel(
   const bucketRequested = new Map<string, Set<string>>();
 
   for (const [id, req] of requested) {
-    const key = modelKey(req, startedResolved.get(id), initMap);
+    const key = modelKey(req, startedResolved.get(id), initMap, fallbackMap.get(id));
     let bucket = buckets.get(key);
     if (bucket === undefined) {
       bucket = { started: 0, succeeded: 0, failed: 0, cancelled: 0, costUsd: 0, requested: [] };

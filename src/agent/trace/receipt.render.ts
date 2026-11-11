@@ -10,6 +10,28 @@
 import type { RunReceipt } from './receipt.js';
 import type { OutcomesV1 } from '../outcomes/outcomes-v1.schema.js';
 
+/**
+ * Escape a string for safe embedding in a GFM table cell.
+ *
+ * Order matters: backslash first so added escapes are not re-escaped.
+ * Collapses all newline variants to a space to prevent row injection.
+ * Does NOT escape `-`, `(`, or `)` -- existing keys use those characters.
+ */
+function escapeCell(s: string): string {
+  return s
+    .replace(/\r\n|\r|\n/g, ' ')
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/`/g, '\\`')
+    .replace(/\*/g, '\\*')
+    .replace(/_/g, '\\_')
+    .replace(/\[/g, '\\[')
+    .replace(/]/g, '\\]')
+    .replace(/</g, '\\<')
+    .replace(/>/g, '\\>')
+    .replace(/!/g, '\\!');
+}
+
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const s = ms / 1000;
@@ -79,7 +101,7 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
         const b = r.subagents.byModel[key];
         if (b === undefined) continue;
         lines.push(
-          `| Subagents (${key}) | ${b.started} started · ${b.succeeded} ok · ` +
+          `| Subagents (${escapeCell(key)}) | ${b.started} started · ${b.succeeded} ok · ` +
             `${b.failed} failed · ${b.cancelled} cancelled · $${b.costUsd.toFixed(4)} |`,
         );
       }
