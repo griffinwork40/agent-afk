@@ -22,6 +22,8 @@ import type { TraceEvent } from './types.js';
 // Event builders
 // ---------------------------------------------------------------------------
 
+const ZERO_TOKENS = { input: 0, output: 0, cacheRead: 0 };
+
 let seq = 0;
 function ts(): string {
   return `2026-01-01T00:00:${String(seq++).padStart(2, '0')}.000Z`;
@@ -78,7 +80,7 @@ function closureEv(subagentId: string, finalCostUsd: number): TraceEvent {
     ts: ts(),
     seq: seq - 1,
     kind: 'closure',
-    payload: { reason: 'model_end_turn', finalCostUsd, subagentId, finalTurnCount: 1 },
+    payload: { reason: 'model_end_turn', finalCostUsd, subagentId, finalTurnCount: 1, finalTokens: ZERO_TOKENS },
   };
 }
 
@@ -246,9 +248,9 @@ describe('buildSubagentsByModel', () => {
   it('tolerates malformed subagent_lifecycle and closure events gracefully', () => {
     const events: TraceEvent[] = [
       // started with no model: should be skipped
-      { ts: ts(), seq: seq - 1, kind: 'subagent_lifecycle', payload: { transition: 'started', subagentId: 'sa-bad' } },
+      { ts: ts(), seq: seq - 1, kind: 'subagent_lifecycle', payload: { transition: 'started', subagentId: 'sa-bad' } } as unknown as TraceEvent,
       // closure with no subagentId: should not throw
-      { ts: ts(), seq: seq - 1, kind: 'closure', payload: { reason: 'model_end_turn', finalCostUsd: 0.01 } },
+      { ts: ts(), seq: seq - 1, kind: 'closure', payload: { reason: 'model_end_turn', finalCostUsd: 0.01 } } as unknown as TraceEvent,
       started('sa1', 'sonnet'),
       terminal('succeeded', 'sa1'),
     ];
@@ -320,7 +322,7 @@ describe('generateReceipt: subagents.byModel', () => {
       // Root closure (no subagentId) and seal.
       {
         ts: ts(), seq: seq - 1, kind: 'closure',
-        payload: { reason: 'model_end_turn', finalCostUsd: 0.01, finalTurnCount: 1 },
+        payload: { reason: 'model_end_turn', finalCostUsd: 0.01, finalTurnCount: 1, finalTokens: ZERO_TOKENS },
       },
       {
         ts: ts(), seq: seq - 1, kind: 'session_sealed',
