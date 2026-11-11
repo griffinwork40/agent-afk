@@ -73,6 +73,20 @@ describe('billing construction', () => {
     expect(b.uncachedInput).toBe(0);
     expect(b.cacheRead).toBe(100);
   });
+
+  it('openai-compatible maps cache_write_tokens to cacheWrite (#4783)', () => {
+    expect(openAICompatibleBilling(10_000, 9_000, 200, 500)).toEqual({
+      provider: 'openai-compatible',
+      uncachedInput: 1_000,
+      cacheRead: 9_000,
+      cacheWrite: 500,
+      output: 200,
+    });
+  });
+
+  it('openai-compatible defaults cacheWrite to 0 when cache_write_tokens is absent', () => {
+    expect(openAICompatibleBilling(10_000, 9_000, 200).cacheWrite).toBe(0);
+  });
 });
 
 describe('sumBillingUsage', () => {
@@ -243,6 +257,26 @@ describe('translator guardrails', () => {
 
   it('openai usageFromState with no usage reports no billing', () => {
     expect(usageFromState({ finishReason: 'stop' } as unknown as OpenAIState).billing).toBeUndefined();
+  });
+
+  it('usageFromState threads cache_write_tokens into billing.cacheWrite (#4783)', () => {
+    const state = {
+      usage: {
+        prompt_tokens: 1_000,
+        completion_tokens: 50,
+        total_tokens: 1_050,
+        prompt_tokens_details: { cached_tokens: 400, cache_write_tokens: 200 },
+      },
+      finishReason: 'stop',
+    } as unknown as OpenAIState;
+    const u = usageFromState(state);
+    expect(u.billing).toEqual({
+      provider: 'openai-compatible',
+      uncachedInput: 600,
+      cacheRead: 400,
+      cacheWrite: 200,
+      output: 50,
+    });
   });
 
   it('anthropic toProviderUsage with no usage reports no billing', () => {
