@@ -162,6 +162,33 @@ describe('parseTerminalState — bullet field mapping', () => {
     expect(v?.undoSteps).toBeUndefined();
   });
 
+  // #4773 — undo needle tightening: bare `Undo:` must still map, while
+  // incidental labels containing `undo` as a substring must not.
+  it('done: bare "Undo:" label (canonical directive form) maps to undoSteps', () => {
+    const v = parseTerminalState('**Done**\n- What was done: shipped it.\n- Undo: git revert HEAD');
+    expect(v?.undoSteps).toBe('git revert HEAD');
+  });
+
+  it('done: "Undo steps:" paraphrase maps to undoSteps', () => {
+    const v = parseTerminalState('**Done**\n- What was done: shipped it.\n- Undo steps: git revert HEAD');
+    expect(v?.undoSteps).toBe('git revert HEAD');
+  });
+
+  it('done: "How to undo:" paraphrase maps to undoSteps', () => {
+    const v = parseTerminalState('**Done**\n- What was done: shipped it.\n- How to undo: git revert HEAD');
+    expect(v?.undoSteps).toBe('git revert HEAD');
+  });
+
+  it('done: "Undone:" label does NOT map to undoSteps', () => {
+    const v = parseTerminalState('**Done**\n- What was done: shipped it.\n- Undone: the previous config');
+    expect(v?.undoSteps).toBeUndefined();
+  });
+
+  it('done: "Cannot undo:" label does NOT map to undoSteps', () => {
+    const v = parseTerminalState('**Done**\n- What was done: pushed to prod.\n- Cannot undo: the deployment is live');
+    expect(v?.undoSteps).toBeUndefined();
+  });
+
   // Regression: worthDoing was never wired into the pipeline, so the
   // "Worth doing" bullet was silently dropped from the Done block.
   it('done: "Worth doing" maps to worthDoing', () => {
