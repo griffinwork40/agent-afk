@@ -360,7 +360,7 @@ describe('ingestEpisodes', () => {
   it('propagates a QEpisodesStore constructor error without a secondary TypeError', () => {
     // Place a corrupt (non-SQLite) file at the expected q-episodes.db path so
     // that new QEpisodesStore() throws SqliteError(SQLITE_NOTADB).  At that
-    // point `store` is still null and `memDb` has not been opened yet, so the
+    // point the constructor threw before `store` could be assigned, and `memDb` has not been opened yet, so the
     // finally block's `store?.close()` and `memDb?.close()` calls must not
     // produce a secondary TypeError — the original error propagates cleanly.
     memDb.close();

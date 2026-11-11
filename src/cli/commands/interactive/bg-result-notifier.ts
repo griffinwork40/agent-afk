@@ -95,8 +95,9 @@ function extractOutput(job: BackgroundJob): string {
  * ~64KB post-escape and bypass the cap. Plain-text surfaces (e.g. Telegram push
  * via {@link formatBgResultBody}) intentionally skip escaping and call this on
  * raw output — that is correct, not an omission.
- * Truncation may cut a multi-byte codepoint or XML entity mid-sequence; harmless
- * in the respective contexts.
+ * Truncation strips any trailing U+FFFD replacement characters produced when
+ * the byte slice lands mid-codepoint; XML entities are unaffected because
+ * callers that embed in XML pass already-escaped text (see escaping note above).
  */
 function truncateBytes(text: string, maxBytes: number, jobId: string): string {
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;

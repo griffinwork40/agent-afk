@@ -211,6 +211,31 @@ function buildFrictionDetail(toolErrors: number, toolErrorCategories: Record<str
     .join(', ')}`;
 }
 
+/**
+ * Populate `facet.token_breakdown` from cost data when available.
+ *
+ * Per-direction fields (input/output/cache_read/cache_creation) are omitted:
+ * StoredSession only carries totalTokens (a scalar sum) and does not persist
+ * per-direction counts. Omitting them avoids zero-filling fields that would
+ * falsely imply actual per-direction measurements.
+ *
+ * Contract (#3879): `cost_usd` is the sidecar ROOT-only cost kept for
+ * back-compat. `total_cost_usd` (root + subagents) and `subagent_cost_usd`
+ * come from the witness trace via `traceSignals`; absent when unreadable.
+ */
+function applyTokenBreakdown(
+  facet: SessionFacet,
+  totalCostUsd: number | null | undefined,
+  traceSignals: DeriveOptions['traceSignals'],
+): void {
+  if (totalCostUsd == null) return;
+  facet.token_breakdown = {
+    cost_usd: totalCostUsd,
+    ...(traceSignals?.totalCostUsd !== undefined ? { total_cost_usd: traceSignals.totalCostUsd } : {}),
+    ...(traceSignals?.subagentCostUsd !== undefined ? { subagent_cost_usd: traceSignals.subagentCostUsd } : {}),
+  };
+}
+
 export function deriveSessionFacet(
   session: StoredSessionInput,
   options: DeriveOptions = {},
@@ -316,9 +341,11 @@ export function deriveSessionFacet(
     session_id: sessionId,
     source,
     // strict-subset invariant: `surface` excludes 'unknown' (see schema.ts).
-    // Direct assignment is safe because `.parse()` guards the source value at
-    // runtime — the schema rejects any value outside the surface enum before
-    // we reach this line.
+    // `source` is validated by SessionFacetSchema.parse() at the bottom of
+    // deriveFacet() — that call rejects any value outside the surface enum,
+    // so by the time control reaches this line `source` is already known-valid.
+    // Direct assignment is therefore safe; the parse() guard runs after, not
+    // before, this assignment.
     surface: source, // first-class structural copy for daemon filtering (#4645)
     model: session.model,
     derived_at: (options.derivedAt ?? new Date()).toISOString(),
@@ -388,24 +415,7 @@ export function deriveSessionFacet(
       : {}),
   };
 
-  // Populate token_breakdown when cost data is available.
-  // Per-direction fields (input/output/cache_read/cache_creation) are omitted:
-  // StoredSession only carries totalTokens (a scalar sum) and does not persist
-  // per-direction counts. Omitting them avoids zero-filling fields that would
-  // falsely imply actual per-direction measurements.
-  //
-  // Contract (#3879): `cost_usd` is the sidecar's ROOT-only cost, kept for
-  // back-compat. `total_cost_usd` (root + every subagent) and
-  // `subagent_cost_usd` come from the witness trace via `traceSignals`; they
-  // are absent when no trace was readable, never guessed.
-  const ts = options.traceSignals;
-  if (session.totalCostUsd != null) {
-    facet.token_breakdown = {
-      cost_usd: session.totalCostUsd,
-      ...(ts?.totalCostUsd !== undefined ? { total_cost_usd: ts.totalCostUsd } : {}),
-      ...(ts?.subagentCostUsd !== undefined ? { subagent_cost_usd: ts.subagentCostUsd } : {}),
-    };
-  }
+  applyTokenBreakdown(facet, session.totalCostUsd, options.traceSignals);
 
   // Validate on the way out so callers can rely on a well-formed facet.
   return SessionFacetSchema.parse(facet);
