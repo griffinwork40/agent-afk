@@ -126,7 +126,8 @@ describe('scoredEpisodes', () => {
       // Store EPISODE_RECALL_CAP + 2 episodes all matching the branch.
       const count = EPISODE_RECALL_CAP + 2;
       for (let i = 0; i < count; i++) {
-        storeEpisode(store, [`src/file${i}.ts`], branch!);
+        // Distinct directories so the per-prefix cap cannot evict any of them.
+        storeEpisode(store, [`src/dir${i}/file.ts`], branch!);
       }
 
       const all = scoredEpisodes(tmpDir, process.cwd(), store);
@@ -139,14 +140,14 @@ describe('scoredEpisodes', () => {
     // EPISODE_FILES_PREFIX_CAP = 5. Store CAP + 2 = 7 episodes all sharing the
     // same directory prefix so they collapse into one bucket. The result must
     // contain at most 5 of them.
-    const EPISODE_FILES_PREFIX_CAP = 5;
+    const EPISODE_FILES_PREFIX_CAP = 5; // must equal the constant in memory-loader.ts
     const total = EPISODE_FILES_PREFIX_CAP + 2;
     for (let i = 0; i < total; i++) {
       storeEpisode(store, [`src/agent/memory/file${i}.ts`]);
     }
 
     const result = scoredEpisodes(tmpDir, tmpDir, store);
-    expect(result.length).toBeLessThanOrEqual(EPISODE_FILES_PREFIX_CAP);
+    expect(result.length).toBe(EPISODE_FILES_PREFIX_CAP);
   });
 
   it('does not collapse legacy basename-only episodes into one bucket', () => {
@@ -154,7 +155,7 @@ describe('scoredEpisodes', () => {
     // by their own basename, not all collapsed into the "" bucket.
     // Store EPISODE_FILES_PREFIX_CAP + 2 episodes each with a DIFFERENT basename
     // — none should be evicted since each has its own bucket.
-    const EPISODE_FILES_PREFIX_CAP = 5;
+    const EPISODE_FILES_PREFIX_CAP = 5; // must equal the constant in memory-loader.ts
     const total = EPISODE_FILES_PREFIX_CAP + 2;
     for (let i = 0; i < total; i++) {
       storeEpisode(store, [`uniquefile${i}.ts`]);
@@ -164,6 +165,17 @@ describe('scoredEpisodes', () => {
     // Each basename is its own bucket so none are evicted — all total episodes
     // should be present.
     expect(result.length).toBe(total);
+  });
+
+  it('does not let a legacy basename share a bucket with a same-named directory prefix', () => {
+    const EPISODE_FILES_PREFIX_CAP = 5; // must equal the constant in memory-loader.ts
+    // Oldest first: getEpisodes() is newest-first, so the legacy one is evaluated last.
+    storeEpisode(store, ['src']);
+    for (let i = 0; i < EPISODE_FILES_PREFIX_CAP; i++) {
+      storeEpisode(store, [`src/file${i}.ts`]);
+    }
+    const result = scoredEpisodes(tmpDir, tmpDir, store);
+    expect(result.length).toBe(EPISODE_FILES_PREFIX_CAP + 1);
   });
 });
 
