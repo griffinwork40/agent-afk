@@ -629,6 +629,19 @@ export interface AgentConfig {
   getPendingChildBillingStreams?: () => readonly Promise<void>[];
 
   /**
+   * Stable credential/auth source id recorded at session start.
+   *
+   * Passed in from CLI/surface entry points that have already resolved which
+   * auth tier is active (e.g. via `credentialSourceId()` in
+   * `src/cli/auth-wizard.describe-source.ts` for Anthropic, or from
+   * `resolveOpenAIAuth().source` for OpenAI-compatible sessions).
+   * Absent for subagent forks (they inherit the parent's auth implicitly).
+   * Stored in the session sidecar and emitted on `session_init_start` so
+   * post-session analysis can determine which auth tier was used without
+   * consulting env vars or keychains.
+   */
+  credentialSource?: string;
+  /**
    * True when this session is a forked subagent rather than the top-level
    * session. Stamped unconditionally by `SubagentManager.forkSubagent` — the
    * single choke point every built-in fork path converges through — and never
