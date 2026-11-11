@@ -237,6 +237,18 @@ describe('assembleSystemPrompt', () => {
       expect(END_OF_TURN_DIRECTIVE).toContain('**Interrupted**');
     });
 
+    it('requires Not checked always and Undo only for changes outside the conversation', () => {
+      expect(END_OF_TURN_DIRECTIVE).toContain('- Not checked:');
+      expect(END_OF_TURN_DIRECTIVE).toContain('always include');
+      expect(END_OF_TURN_DIRECTIVE).toContain('nothing material');
+      expect(END_OF_TURN_DIRECTIVE).toContain('- Undo:');
+      expect(END_OF_TURN_DIRECTIVE).toContain('irreversible');
+      expect(END_OF_TURN_DIRECTIVE).toContain('omit this bullet otherwise');
+      for (const line of END_OF_TURN_DIRECTIVE.split('\n').filter((line) => /^- (Not checked|Undo):/.test(line))) {
+        expect(line).not.toContain('—');
+      }
+    });
+
     it('carries the uncommitted-mutation guard in the Done block', () => {
       // Regression guard for the commit-gate invariant (pattern card
       // "world_changed && commits=0 leaves work in an unrecoverable
@@ -266,7 +278,9 @@ describe('assembleSystemPrompt', () => {
         '- What was done: extracted CacheManager into its own module',
         '- Evidence that exists: 47 tests pass, no new failures',
         '- What changed in the world: src/cache/manager.ts created',
-        '- Anything still pending or deferred, with why: none',
+        '- Deferred: none',
+        '- Not checked: production traffic was not exercised.',
+        '- Undo: revert the cache extraction commit.',
       ].join('\n');
 
       const verdict = parseTerminalState(response);
@@ -275,6 +289,9 @@ describe('assembleSystemPrompt', () => {
       expect(verdict?.whatWasDone).toContain('CacheManager');
       expect(verdict?.evidence).toContain('47 tests');
       expect(verdict?.whatChanged).toContain('src/cache/manager.ts created');
+      expect(verdict?.deferred).toBe('none');
+      expect(verdict?.notChecked).toBe('production traffic was not exercised.');
+      expect(verdict?.undoSteps).toBe('revert the cache extraction commit.');
     });
 
     it('parses a Blocked response shaped like the directive prescribes', () => {

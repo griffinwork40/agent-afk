@@ -86,8 +86,8 @@ vi.mock('../../agent/tools/top-level-allowlist.js', () => ({
 // Spy on injectEpisodeRecall — must be set up before importing acp.session
 // ---------------------------------------------------------------------------
 
-const mockInjectEpisodeRecall = vi.fn((config: unknown, _memoryDir?: unknown, _cwd?: unknown, _store?: unknown, _opts?: unknown) => config);
-const mockInjectHotMemory = vi.fn((config: unknown) => config);
+const mockInjectEpisodeRecall = vi.fn((...args: unknown[]) => args[0]);
+const mockInjectHotMemory = vi.fn((...args: unknown[]) => args[0]);
 
 vi.mock('../../agent/memory/index.js', () => {
   class MemoryStore {

@@ -54,6 +54,10 @@ export interface TerminalState {
   deferred?: string;
   /** Done: "Worth doing / recommendation". */
   worthDoing?: string;
+  /** Done: "Not checked"; display-only verification limits. */
+  notChecked?: string;
+  /** Done: "Undo"; present only for changes outside the conversation. */
+  undoSteps?: string;
   /** Blocked: "What blocks". */
   whatBlocks?: string;
   /** Blocked: "What must change to unblock". */
@@ -396,6 +400,10 @@ function mapBulletsToFields(
       if (deferred !== undefined) out.deferred = deferred;
       const worthDoing = find('worth doing');
       if (worthDoing !== undefined) out.worthDoing = worthDoing;
+      const notChecked = find('not checked');
+      if (notChecked !== undefined) out.notChecked = notChecked;
+      const undoSteps = find('undo');
+      if (undoSteps !== undefined) out.undoSteps = undoSteps;
       return out;
     }
     case 'blocked': {
