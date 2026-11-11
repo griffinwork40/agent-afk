@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { ProcessJobRegistry } from '../../../agent/shell-jobs/process-jobs.js';
 import { ProcessJobNotifier, buildProcessResultInjection, escapeXmlAttr } from './process-job-notifier.js';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 
 let dir: string;
 let reg: ProcessJobRegistry;
@@ -18,7 +19,7 @@ beforeEach(() => {
 afterEach(async () => {
   notifier.dispose();
   await reg.killAll();
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmSyncRetry(dir);
 });
 
 describe('ProcessJobNotifier', () => {
