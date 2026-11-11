@@ -35,7 +35,11 @@ export interface SubagentModelEntry {
   requested: string[];
 }
 
-/** Map from resolved model key to counts. Present only when subagents were started. */
+/**
+ * Map from resolved model key to counts. Present only when subagents were started.
+ * The special key `'(unknown)'` collects subagents whose `started` payload carried
+ * no model field, so `sum(byModel[*].started)` always equals `subagents.started`.
+ */
 export type SubagentsByModel = Record<string, SubagentModelEntry>;
 
 // ---------------------------------------------------------------------------
@@ -139,7 +143,9 @@ function resolveViaInitMap(name: string, initMap: Map<string, Set<string>>): str
  * Build the `byModel` rollup from a full set of trace events.
  *
  * Returns `undefined` when no subagent was started (omit the field entirely).
- * Tolerates malformed or missing payload fields: a bad event is skipped.
+ * Subagents whose `started` payload carries no `model` field land in the
+ * explicit `'(unknown)'` bucket so `sum(byModel[*].started)` always equals
+ * `subagents.started`. Tolerates malformed or missing payload fields.
  */
 export function buildSubagentsByModel(
   events: TraceEvent[],
@@ -169,8 +175,9 @@ export function buildSubagentsByModel(
       if (id === undefined) continue;
       if (t === 'started') {
         anyStarted = true;
-        const req = str(p['model']);
-        if (req !== undefined) requested.set(id, req);
+        // A missing or empty model lands in the explicit '(unknown)' bucket so
+        // sum(byModel[*].started) always equals subagents.started.
+        requested.set(id, str(p['model']) ?? '(unknown)');
         const res = str(p['resolvedModel']);
         if (res !== undefined) startedResolved.set(id, res);
       } else if (t === 'succeeded' || t === 'failed' || t === 'cancelled') {
