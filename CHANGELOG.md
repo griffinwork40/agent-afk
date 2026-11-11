@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.353.0] - 2026-11-11
+
 ### Added
 - add subagents.byModel per-model rollup to run receipt (#4780) (a023f830c)
 - persist credential source in sidecar and trace (#4779) (3d2802003)
