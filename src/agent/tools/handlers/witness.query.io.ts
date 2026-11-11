@@ -25,6 +25,10 @@ export async function readTraceSafe(tracePath: string): Promise<ReadTraceSafeRes
   try {
     const buf = await readFile(tracePath);
     if (buf.length <= MAX_READ_BYTES) {
+      // Non-truncated path: the full buffer is returned as-is. No FFFD
+      // stripping is needed here because we convert the whole buffer; Node's
+      // Buffer.toString('utf-8') only produces U+FFFD when a sequence is split
+      // across a subarray boundary, which cannot happen on a complete file read.
       return { content: buf.toString('utf-8'), truncated: false };
     }
     // Slice from the tail then align to the next newline boundary to avoid
