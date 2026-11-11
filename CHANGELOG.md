@@ -12,6 +12,15 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- add subagents.byModel per-model rollup to run receipt (#4780) (a023f830c)
+- persist credential source in sidecar and trace (#4779) (3d2802003)
+
+### Fixed
+- address prod dep bump api-compat follow-ups (#4756) (2c869c0ac)
+- retry bubblewrap apt install on transient mirror failures (#4781) (584716488)
+- prefix-cap eviction gaps from episode recall merge (#4754) (700ef60ac)
+
 ## [5.352.0] - 2026-11-11
 
 ### Added
