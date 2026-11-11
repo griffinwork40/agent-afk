@@ -101,6 +101,15 @@ export interface RunReceipt {
      * resolved to more than one concrete id within this trace. When a subagent
      * was re-run via model fallback, its cost and outcome are attributed to the
      * model that actually ran (`toModel`), not the rejected first attempt.
+     * The special key `"(unknown)"` collects subagents whose `started` payload
+     * carried no model field; this ensures `sum(byModel[*].started)` always
+     * equals `subagents.started`.
+     *
+     * Cost invariant: `sum(byModel[*].costUsd) <= cost.subagentCostUsd`.
+     * Equality holds on single-cycle traces. On multi-cycle REPL traces,
+     * earlier root cycles lack a `subagentId` on their closure and are
+     * attributed to `subagentCostUsd` by `SessionCostAccumulator`, so
+     * `subagentCostUsd` can exceed the `byModel` sum.
      *
      * Absent when the session started no subagents.
      */

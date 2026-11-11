@@ -8,9 +8,14 @@
  *   - old-trace fallback to requested name when no init events present
  *   - failed and cancelled subagents counted under the right key
  *   - `byModel` absent when zero subagents started
- *   - invariant: sum of byModel[*].costUsd equals cost.subagentCostUsd
+ *   - model-less starts land in an explicit `(unknown)` bucket
+ *   - invariant: sum of byModel[*].costUsd <= cost.subagentCostUsd (equal on
+ *     single-cycle traces; multi-cycle REPL traces inflate subagentCostUsd
+ *     because earlier root cycles lack a subagentId and are counted there)
  *   - invariant: sum of byModel[*].started equals subagents.started
  *   - nested subagents rolled up flat
+ *   - `generateReceipt` test where the only started row has no model
+ *   - multi-root-closure trace: byModel sum <= subagentCostUsd
  */
 
 import { describe, it, expect } from 'vitest';
@@ -247,7 +252,7 @@ describe('buildSubagentsByModel', () => {
 
   it('tolerates malformed subagent_lifecycle and closure events gracefully', () => {
     const events: TraceEvent[] = [
-      // started with no model: should be skipped
+      // started with no model: lands in (unknown)
       { ts: ts(), seq: seq - 1, kind: 'subagent_lifecycle', payload: { transition: 'started', subagentId: 'sa-bad' } } as unknown as TraceEvent,
       // closure with no subagentId: should not throw
       { ts: ts(), seq: seq - 1, kind: 'closure', payload: { reason: 'model_end_turn', finalCostUsd: 0.01 } } as unknown as TraceEvent,
@@ -256,8 +261,21 @@ describe('buildSubagentsByModel', () => {
     ];
     expect(() => buildSubagentsByModel(events)).not.toThrow();
     const rollup = buildSubagentsByModel(events);
-    // sa-bad had no model so it is not counted; sa1 is.
     expect(rollup!['sonnet']?.started).toBe(1);
+    // sa-bad had no model: counted in the (unknown) bucket.
+    expect(rollup!['(unknown)']?.started).toBe(1);
+  });
+
+  it('puts model-less started rows in an (unknown) bucket', () => {
+    const events: TraceEvent[] = [
+      // started with no model field
+      { ts: ts(), seq: seq - 1, kind: 'subagent_lifecycle', payload: { transition: 'started', subagentId: 'sa-nomodel' } } as unknown as TraceEvent,
+      terminal('failed', 'sa-nomodel'),
+    ];
+    const rollup = buildSubagentsByModel(events);
+    // Must return a non-undefined rollup (not silently dropped or ??\ {}).
+    expect(rollup).toBeDefined();
+    expect(rollup!['(unknown)']).toMatchObject({ started: 1, failed: 1 });
   });
 });
 
@@ -308,9 +326,10 @@ describe('generateReceipt: subagents.byModel', () => {
     expect(r.subagents.started).toBe(3);
   });
 
-  it('invariant: sum of byModel[*].costUsd equals cost.subagentCostUsd', () => {
-    // Build a trace with a root closure and two subagent closures so
-    // SessionCostAccumulator has enough data to produce subagentCostUsd.
+  it('invariant: sum of byModel[*].costUsd equals cost.subagentCostUsd on a single-cycle trace', () => {
+    // Single-cycle: exactly one root closure. byModel sums only subagent
+    // closures (which carry a subagentId); subagentCostUsd = total - root.
+    // On a single-cycle trace the two figures are the same.
     const events: TraceEvent[] = [
       started('sa1', 'sonnet'),
       started('sa2', 'sonnet'),
@@ -323,11 +342,11 @@ describe('generateReceipt: subagents.byModel', () => {
       {
         ts: ts(), seq: seq - 1, kind: 'closure',
         payload: { reason: 'model_end_turn', finalCostUsd: 0.01, finalTurnCount: 1, finalTokens: ZERO_TOKENS },
-      },
+      } as unknown as TraceEvent,
       {
         ts: ts(), seq: seq - 1, kind: 'session_sealed',
         payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: ts() },
-      },
+      } as unknown as TraceEvent,
     ];
     const r = generateReceipt(events, META);
     const byModel = r.subagents.byModel!;
@@ -337,6 +356,63 @@ describe('generateReceipt: subagents.byModel', () => {
     // subagentCostUsd from SessionCostAccumulator should also be 0.06.
     expect(r.cost.subagentCostUsd).toBeCloseTo(0.06, 10);
     expect(sumCost).toBeCloseTo(r.cost.subagentCostUsd!, 10);
+  });
+
+  it('generateReceipt: only started row has no model — byModel has (unknown) bucket', () => {
+    // Finding 2: when every started row is model-less, byModel must not be
+    // absent (which the old `?? {}` path produced as an empty object) —
+    // it must carry an (unknown) bucket so the started invariant holds.
+    const events: TraceEvent[] = [
+      { ts: ts(), seq: seq - 1, kind: 'subagent_lifecycle',
+        payload: { transition: 'started', subagentId: 'sa-nomodel' } } as unknown as TraceEvent,
+      terminal('failed', 'sa-nomodel'),
+      sealed(),
+    ];
+    const r = generateReceipt(events, META);
+    expect(r.subagents.started).toBe(1);
+    expect(r.subagents.byModel).toBeDefined();
+    expect(r.subagents.byModel!['(unknown)']).toMatchObject({ started: 1, failed: 1 });
+    // started invariant holds.
+    const sumStarted = Object.values(r.subagents.byModel!).reduce((n, b) => n + b.started, 0);
+    expect(sumStarted).toBe(r.subagents.started);
+  });
+
+  it('multi-root-closure trace: byModel sum <= cost.subagentCostUsd', () => {
+    // Finding 3: on a multi-cycle REPL trace, earlier root cycles emit a
+    // closure with no subagentId. SessionCostAccumulator attributes them to
+    // subagentCostUsd (total - last root cost), so subagentCostUsd > byModel
+    // sum (which only counts closures that carry a subagentId).
+    const events: TraceEvent[] = [
+      // Cycle 1 root closure (no subagentId) — simulates a /clear cycle.
+      {
+        ts: ts(), seq: seq - 1, kind: 'closure',
+        payload: { reason: 'model_end_turn', finalCostUsd: 0.05, finalTurnCount: 2, finalTokens: ZERO_TOKENS },
+      } as unknown as TraceEvent,
+      // Subagent started in cycle 2.
+      started('sa1', 'sonnet'),
+      initPhase('sonnet', 'claude-sonnet-4-6'),
+      terminal('succeeded', 'sa1'),
+      closureEv('sa1', 0.03),
+      // Cycle 2 root closure.
+      {
+        ts: ts(), seq: seq - 1, kind: 'closure',
+        payload: { reason: 'model_end_turn', finalCostUsd: 0.02, finalTurnCount: 1, finalTokens: ZERO_TOKENS },
+      } as unknown as TraceEvent,
+      {
+        ts: ts(), seq: seq - 1, kind: 'session_sealed',
+        payload: { status: 'succeeded', finalCostUsd: 0.02, finalTurnCount: 1, closedAt: ts() },
+      } as unknown as TraceEvent,
+    ];
+    const r = generateReceipt(events, META);
+    const byModel = r.subagents.byModel!;
+    const sumCost = Object.values(byModel).reduce((n, b) => n + b.costUsd, 0);
+    // byModel only sees the subagent closure (0.03).
+    expect(sumCost).toBeCloseTo(0.03, 10);
+    // subagentCostUsd = total(0.10) - root(0.02) = 0.08 — includes cycle 1.
+    expect(r.cost.subagentCostUsd).toBeDefined();
+    expect(sumCost).toBeLessThanOrEqual(r.cost.subagentCostUsd!);
+    // The equality does NOT hold on this multi-cycle trace.
+    expect(sumCost).not.toBeCloseTo(r.cost.subagentCostUsd!, 10);
   });
 });
 

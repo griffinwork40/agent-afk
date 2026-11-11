@@ -320,7 +320,7 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
     subagents: {
       ...subagents,
       ...(subagents.started > 0
-        ? { byModel: buildSubagentsByModel(events) ?? {} }
+        ? { byModel: buildSubagentsByModel(events) }
         : {}),
     },
     cost,
