@@ -43,6 +43,23 @@ describe('formatTerminalStateForTelegram', () => {
     expect(msg).toContain('phase 2');
   });
 
+  it('renders Not checked and Undo in Telegram output', () => {
+    const msg = formatTerminalStateForTelegram(done({
+      whatWasDone: 'updated config', notChecked: 'Production was not tested.',
+      undoSteps: 'Restore the backup.',
+    }));
+    expect(msg).toContain('Not checked: Production was not tested.');
+    expect(msg).toContain('Undo: Restore the backup.');
+  });
+
+  it('omits Undo in read-only Telegram output', () => {
+    const msg = formatTerminalStateForTelegram(done({
+      whatWasDone: 'reviewed config', notChecked: 'nothing material',
+    }));
+    expect(msg).toContain('Not checked: nothing material');
+    expect(msg).not.toContain('Undo:');
+  });
+
   it('is an allowlist by construction — only fields for THIS kind appear', () => {
     // A done verdict that also (nonsensically) carries blocked/asking fields:
     // the formatter must ignore the off-kind fields entirely.

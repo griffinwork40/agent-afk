@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -28,6 +28,7 @@ import {
   injectEpisodeRecall,
 } from '../../../src/agent/memory/memory-loader.js';
 import { useUnsetAfkHome } from '../../../src/__test-utils__/unset-afk-home.js';
+import { rmSyncRetry } from '../../../src/__test-utils__/rm-sync-retry.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
@@ -48,7 +49,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
+  // best-effort: SQLite file handles may linger on Windows CI
+  try { if (existsSync(tmpHome)) rmSyncRetry(tmpHome); } catch { /* EBUSY on CI */ }
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
   else delete process.env['HOME'];
   if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
@@ -353,6 +355,34 @@ describe('scoreEpisode', () => {
     const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
     // Raw score = 3; decay = max(0.1, 1 - 45/90) = 0.5
     expect(score).toBeCloseTo(3 * 0.5, 5);
+  });
+
+  it('applies recency decay to branch-match-only episodes: 45-day-old episode scores ≈ 1.5', () => {
+    // Branch-only match: no files overlap, only the branch name appears in content.
+    // Raw score = 3 (branch match); decay = max(0.1, 1 - 45/90) = 0.5
+    // Final score = 3 × 0.5 = 1.5
+    const fortyFiveDaysAgo = new Date(Date.now() - 45 * 86_400_000).toISOString();
+    const fact = makeFact({
+      content: '[episode:s]\nfiles:\nnarrative: worked on feat/my-branch branch',
+      created_at: fortyFiveDaysAgo,
+    });
+    const score = scoreEpisode(fact, new Set(), 'feat/my-branch', new Set());
+    expect(score).toBeCloseTo(1.5, 2);
+  });
+
+  it('explicit now parameter produces deterministic score independent of wall-clock time', () => {
+    // Use a fixed epoch anchor so the test never drifts with wall-clock time.
+    // created_at = Unix epoch (0); now = exactly 45 days later.
+    // Raw score = 3 (branch match); decay = max(0.1, 1 - 45/90) = 0.5
+    // Final score = 3 × 0.5 = 1.5 — exact, not approximate.
+    const created_at = new Date(0).toISOString();
+    const fixedNow = 45 * 86_400_000;
+    const fact = makeFact({
+      content: '[episode:s]\nfiles:\nnarrative: worked on feat/my-branch branch',
+      created_at,
+    });
+    const score = scoreEpisode(fact, new Set(), 'feat/my-branch', new Set(), fixedNow);
+    expect(score).toBeCloseTo(1.5, 5);
   });
 
   it('recent episode (age ~ 0) has decay ≈ 1 and scores full raw value', () => {

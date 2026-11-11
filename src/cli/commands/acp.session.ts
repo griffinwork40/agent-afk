@@ -85,6 +85,16 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
 
   await ensurePluginEntrypointsLoaded();
 
+  // Fix #4725: pass the session-scoped memoryStore as the 4th arg so episode
+  // recall queries the same store that was opened for this session, rather than
+  // a cold MemoryStore.default() instantiated inside injectEpisodeRecall.
+  //
+  // Note: the full injection chain used by other surfaces is:
+  //   injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory(…))))
+  // injectGoalPrompt and injectCompanionPrimer are omitted here because they
+  // carry additional dependencies (goal/companion state) that are not relevant
+  // to the ACP server surface. Document this divergence rather than adding
+  // partial parity — see issue #4725 finding 2 for follow-up context.
   const session = new AgentSession(
     injectEpisodeRecall(injectHotMemory({
       model,
@@ -104,7 +114,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
       ).registry,
       provider,
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-    })),
+    }), undefined, undefined, memoryStore),
     undefined,
   );
 
