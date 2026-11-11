@@ -3,6 +3,12 @@
  *
  * Each test constructs a specific error input and asserts on the returned
  * ClassifiedError shape: kind, exitCode, userMessage, hint, and raw reference.
+ *
+ * SDK shapes used in fixtures (no SDK import; audit:sdk covers src/ and tests/):
+ * - Anthropic SDK stores the raw body: err.error = { type:'error', error:{type:'...'} }
+ *   Source: node_modules/@anthropic-ai/sdk/src/core/error.ts (APIError constructor)
+ * - OpenAI SDK unwraps one level: err.error = { type:'invalid_request_error', ... }
+ *   Source: node_modules/openai/src/core/error.ts (generate() line 68)
  */
 
 import { describe, it, expect } from 'vitest';
@@ -36,10 +42,12 @@ describe('classifyError — auth', () => {
     expect(result.exitCode).toBe(1);
   });
 
-  it('shows Anthropic-specific hint when error carries Anthropic SDK structure', () => {
-    const err = Object.assign(new Error('Invalid API Key'), {
+  it('shows Anthropic-specific hint when error carries real Anthropic SDK shape', () => {
+    // Real Anthropic SDK shape: err.error is the raw response body envelope.
+    // Source: node_modules/@anthropic-ai/sdk/src/core/error.ts (APIError constructor)
+    const err = Object.assign(new Error('401 {"type":"error","error":{"type":"authentication_error"}}'), {
       status: 401,
-      error: { type: 'authentication_error', message: 'Invalid API Key' },
+      error: { type: 'error', error: { type: 'authentication_error', message: 'Invalid API Key' } },
     });
     const result = classifyError(err);
     expect(result.kind).toBe('auth');
@@ -66,8 +74,44 @@ describe('classifyError — auth', () => {
     expect(result.hint).not.toContain('ANTHROPIC_API_KEY');
   });
 
+  it('real Anthropic SDK shape: 401 gets ANTHROPIC_API_KEY hint (was inverted before fix)', () => {
+    // Reproduces the pre-fix bug: a real @anthropic-ai/sdk AuthenticationError carried
+    // err.error = { type: 'error', error: { type: 'authentication_error', ... } }
+    // isAnthropicSdkError used to check err.error.type === 'authentication_error',
+    // which missed the envelope and returned false → OpenAI hint was shown instead.
+    // Source: node_modules/@anthropic-ai/sdk/src/core/error.ts (APIError constructor)
+    class AuthenticationError extends Error {
+      status = 401;
+      error = { type: 'error' as const, error: { type: 'authentication_error', message: 'Invalid API Key' } };
+    }
+    const result = classifyError(new AuthenticationError('401'));
+    expect(result.kind).toBe('auth');
+    expect(result.hint).toContain('ANTHROPIC_API_KEY');
+    expect(result.hint).not.toContain('OPENAI_API_KEY');
+  });
+
+  it('real OpenAI SDK shape: 401 gets generic provider hint (was inverted before fix)', () => {
+    // Reproduces the pre-fix bug: a real openai SDK AuthenticationError carried
+    // err.error = { type: 'invalid_request_error', ... } (flat, unwrapped by generate()).
+    // isAnthropicSdkError used to match this flat shape and return true → Anthropic hint.
+    // Source: node_modules/openai/src/core/error.ts (generate() line 68 unwraps .error)
+    class AuthenticationError extends Error {
+      status = 401;
+      error = { type: 'invalid_request_error', message: 'Incorrect API key provided', code: 'invalid_api_key' };
+    }
+    const result = classifyError(new AuthenticationError('401'));
+    expect(result.kind).toBe('auth');
+    expect(result.hint).toContain('OPENAI_API_KEY');
+    expect(result.hint).not.toContain('ANTHROPIC_API_KEY');
+  });
+
   it('classifies PermissionDeniedError (Anthropic SDK) as auth with seat-removal guidance', () => {
-    const err = Object.assign(new Error('Permission denied'), { status: 403 });
+    // Both the .name and constructor.name arms require the Anthropic body shape
+    // so that an OpenAI PermissionDeniedError never receives seat guidance.
+    const err = Object.assign(new Error('Permission denied'), {
+      status: 403,
+      error: { type: 'error', error: { type: 'permission_error', message: 'Permission denied' } },
+    });
     err.name = 'PermissionDeniedError';
     const result = classifyError(err);
     expect(result.kind).toBe('auth');
@@ -99,12 +143,25 @@ describe('classifyError — auth', () => {
     expect(result.hint ?? '').not.toContain('console.anthropic.com');
   });
 
-  it('classifies PermissionDeniedError by name as auth', () => {
-    const err = Object.assign(new Error('some sdk message'), { name: 'PermissionDeniedError' });
+  it('classifies PermissionDeniedError by name as auth when Anthropic body is present', () => {
+    // Both arms (.name and constructor.name) now require hasAnthropicPermissionBody.
+    const err = Object.assign(new Error('some sdk message'), {
+      name: 'PermissionDeniedError',
+      error: { type: 'error', error: { type: 'permission_error', message: 'nope' } },
+    });
     const result = classifyError(err);
     expect(result.kind).toBe('auth');
     expect(result.exitCode).toBe(1);
     expect(result.userMessage).toContain('403');
+  });
+
+  it('does NOT classify PermissionDeniedError by name without Anthropic body (OpenAI-like)', () => {
+    // An error that only has the name but no Anthropic permission body should
+    // not receive seat-removal guidance; it falls through to unknown.
+    const err = Object.assign(new Error('some sdk message'), { name: 'PermissionDeniedError' });
+    const result = classifyError(err);
+    expect(result.kind).not.toBe('auth');
+    expect((result.hint ?? '')).not.toContain('console.anthropic.com');
   });
 });
 
@@ -287,10 +344,12 @@ describe('classifyError — overloaded', () => {
     expect(result.userMessage).toContain('503');
   });
 
-  it('shows "Anthropic API" when error carries Anthropic SDK structure', () => {
+  it('shows "Anthropic API" when error carries real Anthropic SDK shape', () => {
+    // Real Anthropic SDK envelope: err.error = { type: 'error', error: { type: 'overloaded_error' } }
+    // Source: node_modules/@anthropic-ai/sdk/src/core/error.ts (APIError constructor)
     const err = Object.assign(new Error('Overloaded'), {
       status: 529,
-      error: { type: 'overloaded_error', message: 'Overloaded' },
+      error: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } },
     });
     const result = classifyError(err);
     expect(result.kind).toBe('overloaded');
