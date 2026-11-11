@@ -210,6 +210,7 @@ export class AgentSession implements IAgentSession {
       resolvedModel: resolveModelId(config.model) ?? configuredModel,
       origin: deriveOrigin(config.surface),
       actor: deriveActor(config.parentSessionId),
+      ...(config.credentialSource !== undefined ? { credentialSource: config.credentialSource } : {}),
     });
 
     // SDK resume rehydration: when the caller passed `resume`/`sessionId` but
