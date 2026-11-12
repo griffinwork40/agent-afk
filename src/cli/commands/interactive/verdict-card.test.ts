@@ -116,6 +116,44 @@ describe('renderVerdictCard', () => {
     expect(out2).toContain('integrate with renderer');
   });
 
+  // #4773 — echo guard for notChecked and undoSteps rows.
+  it('done: suppresses notChecked row that merely echoes whatWasDone', () => {
+    const dupeText = 'reviewed the code — no mutations';
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: dupeText,
+      notChecked: dupeText,
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    // The text appears exactly once (from the done row), not twice.
+    expect(out.split(dupeText).length - 1).toBe(1);
+    expect(out).not.toContain('not checked');
+    // A genuinely distinct notChecked is still shown.
+    const state2: TerminalState = { ...state, notChecked: 'integration tests not run' };
+    const out2 = stripAnsi(renderVerdictCard(state2));
+    expect(out2).toContain('not checked');
+    expect(out2).toContain('integration tests not run');
+  });
+
+  it('done: suppresses undoSteps row that merely echoes whatWasDone', () => {
+    const dupeText = 'shipped the feature';
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: dupeText,
+      undoSteps: dupeText,
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out.split(dupeText).length - 1).toBe(1);
+    expect(out).not.toContain('undo');
+    // A genuinely distinct undoSteps is still shown.
+    const state2: TerminalState = { ...state, undoSteps: 'git revert HEAD' };
+    const out2 = stripAnsi(renderVerdictCard(state2));
+    expect(out2).toContain('undo');
+    expect(out2).toContain('git revert HEAD');
+  });
+
   it('blocked: shows blocker, unblock condition, and a recovery affordance', () => {
     const state: TerminalState = {
       kind: 'blocked',
@@ -932,6 +970,128 @@ describe('renderVerdictCard — block-level markdown rendering', () => {
     // Raw markdown markers should not appear
     expect(plain).not.toContain('**');
     expect(plain).not.toContain('`pnpm test`');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Secondary-tier edge cases (#4777)
+//
+// Guards the four edge cases identified in the #4774 review:
+//   1. Multi-line secondary value: continuation lines also get valueStyled
+//   2. worthDoing field rendered as secondary tier
+//   3. Separator absent when only secondary fields are present (no primary rows)
+//   4. Separator test pinned with withCols for deterministic geometry
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('renderVerdictCard — secondary-tier edge cases (#4777)', () => {
+  it('multi-line secondary value: continuation lines also get valueStyled (dim)', () => {
+    // A long worthDoing value that wraps across multiple lines. All wrapped
+    // continuation lines must render within the card geometry (│...│) and carry
+    // the value text — confirming valueStyled(cont) is applied to each
+    // continuation line, not skipped or replaced with blank padding.
+    withCols(80, () => {
+      const longWorthDoing =
+        'This is a detailed justification that is intentionally long enough to wrap ' +
+        'across at least two lines inside the value column so we can assert that ' +
+        'every continuation line receives the dim secondary style, not just the first.';
+      const state: TerminalState = {
+        kind: 'done',
+        whatWasDone: 'shipped it',
+        worthDoing: longWorthDoing,
+        rawBody: '',
+      };
+      const out = stripAnsi(renderVerdictCard(state));
+      const lines = out.split('\n');
+      // Find the first line that contains 'worth doing'
+      const worthIdx = lines.findIndex((l) => l.includes('worth doing'));
+      expect(worthIdx).toBeGreaterThan(0);
+      // The continuation line (worthIdx + 1) must exist and be a framed content
+      // row (starts and ends with │), not a blank separator or affordance.
+      const contLine = lines[worthIdx + 1];
+      expect(contLine, 'expected worthDoing to wrap to a second line').toBeDefined();
+      expect(contLine!.trim()).toMatch(/^│.*│$/);
+      // The continuation line must contain non-whitespace value text — confirming
+      // valueStyled(cont) emitted the actual text rather than an empty string.
+      const contInner = contLine!.replace(/^│\s*/, '').replace(/\s*│$/, '').trim();
+      expect(contInner.length, 'continuation line inner text must be non-empty').toBeGreaterThan(0);
+      // Uniform geometry: every card line must have the same display width.
+      const widths = lines.map((l) => displayWidth(l));
+      expect(new Set(widths).size, `row widths not uniform: ${widths.join(',')}`).toBe(1);
+    });
+  });
+
+  it('worthDoing field is rendered as a secondary-tier row', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'shipped it',
+      worthDoing: 'High user impact, low risk',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('worth doing');
+    expect(out).toContain('High user impact, low risk');
+    // worth doing is secondary — it must appear after the blank separator row.
+    const lines = out.split('\n');
+    const worthIdx = lines.findIndex((l) => l.includes('worth doing'));
+    expect(worthIdx).toBeGreaterThan(0);
+    const prevLine = lines[worthIdx - 1] ?? '';
+    expect(prevLine.trim()).toMatch(/^│\s+│$/);
+  });
+
+  it('separator is absent when only secondary fields are present (no primary rows)', () => {
+    // A done state where every primary field is absent but a secondary field
+    // (worthDoing) is present. The blank separator must NOT appear because no
+    // primary row was written — primaryWritten stays false.
+    withCols(80, () => {
+      const state: TerminalState = {
+        kind: 'done',
+        // No whatWasDone, evidence, changed, or deferred — only secondary rows.
+        worthDoing: 'Worth doing for future sessions',
+        rawBody: '',
+      };
+      const out = stripAnsi(renderVerdictCard(state));
+      expect(out).toContain('worth doing');
+      const lines = out.split('\n');
+      // The blank separator between primary and secondary sections is a box row
+      // that contains only whitespace between the │ rails. The only blank rows
+      // that must exist are the structural top-blank (line index 1) and the
+      // bottom-blank before the affordance — not an extra separator.
+      const worthIdx = lines.findIndex((l) => l.includes('worth doing'));
+      expect(worthIdx).toBeGreaterThan(0);
+      const prevLine = lines[worthIdx - 1] ?? '';
+      // The row before 'worth doing' must be the top blank row (index 1) or
+      // another content row — it must NOT be a separator blank that follows a
+      // primary row (since there are no primary rows). Concretely: worthIdx
+      // must equal 2 (top + top-blank + worth-doing row), confirming no extra
+      // separator was inserted.
+      expect(worthIdx).toBe(2);
+      // Sanity: the prev line is still a box row (blank structural row).
+      expect(prevLine.trim()).toMatch(/^│\s+│$/);
+    });
+  });
+
+  it('separator present between primary and secondary rows at pinned geometry', () => {
+    // Pinned with withCols so the row geometry is deterministic: confirms the
+    // blank separator is inserted exactly once between primary and secondary.
+    withCols(80, () => {
+      const state: TerminalState = {
+        kind: 'done',
+        whatWasDone: 'shipped it',
+        notChecked: 'integration tests',
+        rawBody: '',
+      };
+      const out = stripAnsi(renderVerdictCard(state));
+      const lines = out.split('\n');
+      const ncIdx = lines.findIndex((l) => l.includes('not checked'));
+      expect(ncIdx).toBeGreaterThan(0);
+      const prevLine = lines[ncIdx - 1] ?? '';
+      // The row immediately before the first secondary row must be the blank
+      // separator (box chrome with only whitespace inside).
+      expect(prevLine.trim()).toMatch(/^│\s+│$/);
+      // The row before the separator must be a primary content row (contains 'done').
+      const beforeSep = lines[ncIdx - 2] ?? '';
+      expect(beforeSep).toContain('done');
+    });
   });
 });
 

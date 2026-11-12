@@ -235,8 +235,7 @@ export function buildComposeTool(parentModel?: AgentModelInput): AnthropicToolDe
  * model instructions.
  *
  * The returned string always starts with `<available-agent-types>` (not `A`)
- * when the registry is non-empty.  Callers that previously relied on the first
- * character being `A` should use the XML open tag as the prefix signal instead.
+ * when the registry is non-empty.  Use the XML open tag as the prefix signal.
  *
  * This is the counterpart to {@link buildAgentToolDef}: the tool description
  * stays static, while this block carries the session-specific listing into the

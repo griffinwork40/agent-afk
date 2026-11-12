@@ -18,8 +18,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ---------------------------------------------------------------------------
 
 // Hoisted spy references shared with the mock factories.
-const pauseCheckSpy = vi.hoisted(() => vi.fn<[AbortSignal | undefined], Promise<void>>().mockResolvedValue(undefined));
-const pauseConsumeLastPauseDurationSpy = vi.hoisted(() => vi.fn<[], number | undefined>().mockReturnValue(undefined));
+const pauseCheckSpy = vi.hoisted(() => vi.fn<(signal: AbortSignal | undefined) => Promise<void>>().mockResolvedValue(undefined));
+const pauseConsumeLastPauseDurationSpy = vi.hoisted(() => vi.fn<() => number | undefined>().mockReturnValue(undefined));
 
 vi.mock('../../../agent/session/pause-controller.js', () => ({
   PauseController: {

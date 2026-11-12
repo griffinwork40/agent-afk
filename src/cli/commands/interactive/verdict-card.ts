@@ -214,13 +214,15 @@ export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): str
     }
   } else {
     let inSecondary = false;
+    let primaryWritten = false;
     for (const row of rows) {
       // Insert a blank separator before the first secondary row,
       // but only if at least one primary row was already written.
       if (row.tier === 'secondary' && !inSecondary) {
         inSecondary = true;
-        if (lines.length > 2) lines.push(blankRow);
+        if (primaryWritten) lines.push(blankRow);
       }
+      if (row.tier !== 'secondary') primaryWritten = true;
       const label = palette.dim(padDisplayRight(row.label, labelW));
       const valueStyled = (s: string) =>
         row.tier === 'secondary' ? palette.dim(s) : s;
@@ -300,8 +302,15 @@ function collectRows(state: TerminalState): Row[] {
         push('deferred', state.deferred);
       }
       push('worth doing', state.worthDoing, 'secondary');
-      push('not checked', state.notChecked, 'secondary');
-      push('undo', state.undoSteps, 'secondary');
+      // Skip notChecked / undoSteps rows that merely echo whatWasDone —
+      // same guard as deferred above, preventing a confusing duplicate row
+      // when a model emits identical text for two fields.
+      if (state.notChecked?.trim() !== state.whatWasDone?.trim()) {
+        push('not checked', state.notChecked, 'secondary');
+      }
+      if (state.undoSteps?.trim() !== state.whatWasDone?.trim()) {
+        push('undo', state.undoSteps, 'secondary');
+      }
       break;
     case 'blocked':
       push('blocks', state.whatBlocks);

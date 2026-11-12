@@ -35,7 +35,11 @@ export interface SubagentModelEntry {
   requested: string[];
 }
 
-/** Map from resolved model key to counts. Present only when subagents were started. */
+/**
+ * Map from resolved model key to counts. Present only when subagents were started.
+ * The special key `'(unknown)'` collects subagents whose `started` payload carried
+ * no model field, so `sum(byModel[*].started)` always equals `subagents.started`.
+ */
 export type SubagentsByModel = Record<string, SubagentModelEntry>;
 
 // ---------------------------------------------------------------------------
@@ -139,7 +143,9 @@ function resolveViaInitMap(name: string, initMap: Map<string, Set<string>>): str
  * Build the `byModel` rollup from a full set of trace events.
  *
  * Returns `undefined` when no subagent was started (omit the field entirely).
- * Tolerates malformed or missing payload fields: a bad event is skipped.
+ * Subagents whose `started` payload carries no `model` field land in the
+ * explicit `'(unknown)'` bucket so `sum(byModel[*].started)` always equals
+ * `subagents.started`. Tolerates malformed or missing payload fields.
  *
  * Counting contract — counts per event, not per map entry:
  *
@@ -192,10 +198,11 @@ export function buildSubagentsByModel(
       if (t === 'started') {
         anyStarted = true;
         // Populate provenance maps on first occurrence only; subsequent rows
-        // with the same id (id collision) reuse the same key.
+        // with the same id (id collision) reuse the same key. A missing or
+        // empty model lands in the explicit '(unknown)' bucket so
+        // sum(byModel[*].started) always equals subagents.started.
         if (!requested.has(id)) {
-          const req = str(p['model']);
-          if (req !== undefined) requested.set(id, req);
+          requested.set(id, str(p['model']) ?? '(unknown)');
         }
         if (!startedResolved.has(id)) {
           const res = str(p['resolvedModel']);
@@ -241,17 +248,17 @@ export function buildSubagentsByModel(
     if (id === undefined) continue;
 
     // Resolve the model key from the provenance maps populated in Pass 2.
-    // For ids with no `requested` entry (started with no model field), skip —
-    // there is no bucket to attribute to.
+    // Every id with a `started` row has a `requested` entry (model-less starts
+    // map to '(unknown)'); a terminal row for an id never started is skipped.
     const req = requested.get(id);
     if (req === undefined) continue;
 
     const key = modelKey(req, startedResolved.get(id), initMap, fallbackMap.get(id));
     const bucket = getOrCreateBucket(key);
-    bucketRequested.get(key)?.add(req);
 
     if (t === 'started') {
       bucket.started++;
+      bucketRequested.get(key)?.add(req);
     } else if (t === 'succeeded') {
       bucket.succeeded++;
     } else if (t === 'failed') {

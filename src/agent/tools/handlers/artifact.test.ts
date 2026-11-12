@@ -166,8 +166,11 @@ describe('artifact read surface', () => {
     const rec = await put('pinned content');
 
     // Valid artifact is readable with no context (unconfined path).
+    // context omitted → undefined; this is the unconfined (factory-default) path under test.
     expect(await json('artifact_get', { id: rec.id })).toMatchObject({ id: rec.id });
+    // context omitted → undefined; this is the unconfined (factory-default) path under test.
     expect(await json('artifact_read', { id: rec.id })).toMatchObject({ read_path: rec.uri });
+    // context omitted → undefined; this is the unconfined (factory-default) path under test.
     expect((await json('artifact_list', {})).artifacts).toHaveLength(1);
 
     // artifact_read returns JSON-serialized null ('null'), consistent with other handlers — finding #4584 §4.
@@ -181,7 +184,10 @@ describe('artifact read surface', () => {
     await writeFile(outside, 'private contents');
     await rm(rec.uri);
     await symlink(outside, rec.uri);
-    expect((await call('artifact_read', { id: rec.id })).isError).toBe(true);
+    const symlinkResult = await call('artifact_read', { id: rec.id });
+    expect(symlinkResult.isError).toBe(true);
+    // Pin the specific guard: authorizeRecord's realpath containment check must have fired.
+    expect(symlinkResult.content).toContain('Invalid artifact blob location');
   });
 });
 
