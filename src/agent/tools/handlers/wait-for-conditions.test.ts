@@ -451,9 +451,9 @@ describe('evaluateCommand', () => {
 
   it('analyzeCommand is called once per evaluateCommand invocation', () => {
     // Note: the mock shim calls real analyzeCommand internally, so this assertion
-    // verifies that evaluateCommand invokes the shared analyzeCommand at the right
-    // call site and passes its result through to pollRefusalReason — not that the
-    // facets themselves are memoised across multiple evaluateCommand calls.
+    // verifies that evaluateCommand invokes analyzeCommand once per invocation
+    // with the command string — not that the facets themselves are memoised
+    // across multiple evaluateCommand calls.
     mockExecSync.mockReturnValue(Buffer.from(''));
     evaluateCommand({ type: 'command', command: 'echo hello', cwd: '/tmp' });
     expect(mockAnalyzeCommand).toHaveBeenCalledWith('echo hello');
