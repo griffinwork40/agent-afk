@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { SessionToolDispatcher } from './dispatcher.js';
 import { builtinToolSchemas } from './schemas.js';
 import { createBashHandler } from './handlers/bash.js';
@@ -29,7 +30,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await reg.killAll();
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmSyncRetry(dir);
 });
 
 function makeDispatcher(opts: { processJobs?: ProcessJobRegistry; readOnlyBash?: boolean; pids?: SpawnedPidRegistry } = {}) {

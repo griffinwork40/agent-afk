@@ -66,6 +66,7 @@ import { StateStore } from '../../state/state-store.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
 import { providerGrantsTool } from '../shared/tool-grant.js';
 import { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
+import { ToolCallLedgerWiring } from '../../tools/dispatcher.ledger.js';
 import { env } from '../../../config/env.js';
 import { buildProviderSchemas } from './provider-schemas.js';
 import { applyReadOnlyGitPermissions } from '../../tools/readonly-git-surface.js';
@@ -182,6 +183,13 @@ export class AnthropicDirectProvider implements ModelProvider {
    */
   private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
 
+  /**
+   * Session-scoped tool-call ledger (#4476). One per provider (= per session;
+   * forked children get their own provider, hence their own ledger), threaded
+   * into every per-query dispatcher so it survives dispatcher rebuilds.
+   */
+  private readonly _toolCallLedger = new ToolCallLedgerWiring();
+
   private get memoryStore(): MemoryStore { return (this._memoryStore ??= makeDefaultMemoryStore()); }
   private get stateStore(): StateStore { return (this._stateStore ??= makeDefaultStateStore()); }
 
@@ -281,7 +289,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       permissionMode,
       // Inject the session-scoped PID registry into every per-query dispatcher
       // so bash can register spawned PIDs and wait_for can gate on them (#1430).
-      { ...opts, spawnedPidRegistry: this._spawnedPidRegistry },
+      { ...opts, spawnedPidRegistry: this._spawnedPidRegistry, toolCallLedger: this._toolCallLedger },
     );
   }
 

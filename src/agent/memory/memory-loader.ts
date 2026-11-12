@@ -371,7 +371,11 @@ export function scoredEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
     const cappedEpisodes = allEpisodes.filter((ep) => {
       const files = parseEpisodeFiles(ep.content);
       const firstFile = files[0];
-      const prefix = firstFile !== undefined ? firstFile.split('/').slice(0, -1).join('/') : '';
+      // Legacy basename-only episodes get a namespaced per-basename key so they
+      // neither collapse into the '' bucket nor collide with a directory prefix.
+      const prefix = firstFile !== undefined
+        ? (firstFile.includes('/') ? firstFile.split('/').slice(0, -1).join('/') : `basename:${firstFile}`)
+        : '';
       const count = (prefixCount.get(prefix) ?? 0) + 1;
       prefixCount.set(prefix, count);
       return count <= EPISODE_FILES_PREFIX_CAP;

@@ -35,6 +35,8 @@ export interface LedgerEnsureContext {
   tracePath: string | undefined;
   /** Lazy metadata read — invoked only when the writer is created. */
   getMetadata: () => { model?: string; cwd?: string };
+  /** Stable credential/auth source id (see SessionMeta.credentialSource). */
+  credentialSource?: string | undefined;
 }
 
 export class LedgerLifecycle {
@@ -101,6 +103,7 @@ export class LedgerLifecycle {
       // Persist the initialization baseline, never recapture on the first turn.
       // No snapshot means initialization did not opt into git tracking.
       gitHead: this.start?.gitHead,
+      ...(ctx.credentialSource !== undefined ? { credentialSource: ctx.credentialSource } : {}),
     });
   }
 

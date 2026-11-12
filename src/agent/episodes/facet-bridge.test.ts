@@ -214,4 +214,15 @@ describe('buildEpisodeFromFacet', () => {
     const ep = buildEpisodeFromFacet('test-session-abc');
     expect(ep!.source).toBeUndefined();
   });
+
+  it('surface field: "unknown" never appears as the episode source — v14 facet with valid surface wins over unknown source', async () => {
+    // Path: v14 facet with a valid surface and source='unknown' — surface wins.
+    vi.doMock('../facets/store.js', () => ({
+      getOrDeriveFacet: () => makeFacet({ facet_version: 14, surface: 'cli', source: 'unknown' as never }),
+    }));
+    const { buildEpisodeFromFacet: buildC } = await import('./facet-bridge.js');
+    const epC = buildC('test-session-abc');
+    expect(epC?.source).toBe('cli');
+    expect(epC?.source).not.toBe('unknown');
+  });
 });

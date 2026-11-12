@@ -18,8 +18,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ---------------------------------------------------------------------------
 
 // Hoisted spy references shared with the mock factories.
-const pauseCheckSpy = vi.hoisted(() => vi.fn<[AbortSignal | undefined], Promise<void>>().mockResolvedValue(undefined));
-const pauseConsumeLastPauseDurationSpy = vi.hoisted(() => vi.fn<[], number | undefined>().mockReturnValue(undefined));
+const pauseCheckSpy = vi.hoisted(() => vi.fn<(signal: AbortSignal | undefined) => Promise<void>>().mockResolvedValue(undefined));
+const pauseConsumeLastPauseDurationSpy = vi.hoisted(() => vi.fn<() => number | undefined>().mockReturnValue(undefined));
 
 vi.mock('../../../agent/session/pause-controller.js', () => ({
   PauseController: {
@@ -72,6 +72,7 @@ vi.mock('./repl-loop-shared.js', () => ({
 // ---------------------------------------------------------------------------
 
 import { runOneTurn } from './loop-iteration.turn-run.js';
+import { runTurn } from './turn-handler.js';
 import type { InteractiveCtx } from './shared.js';
 import type { TurnState } from './repl-loop-shared.js';
 
@@ -241,5 +242,86 @@ describe('runOneTurn — PauseController.check() abort-signal forwarding (#4723)
     expect(signalPassedForA).toBe(signalA);
     expect(signalPassedForB).toBe(signalB);
     expect(signalPassedForA).not.toBe(signalPassedForB);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Call-order: check() must precede runTurn (#4770)
+// ---------------------------------------------------------------------------
+
+describe('runOneTurn — PauseController.check() fires before runTurn', () => {
+  const runTurnMock = vi.mocked(runTurn);
+
+  beforeEach(() => {
+    pauseCheckSpy.mockClear();
+    pauseConsumeLastPauseDurationSpy.mockClear();
+    runTurnMock.mockClear();
+    pauseCheckSpy.mockResolvedValue(undefined);
+    pauseConsumeLastPauseDurationSpy.mockReturnValue(undefined);
+    runTurnMock.mockResolvedValue(undefined);
+  });
+
+  it('calls check() before runTurn — strict call-order assertion', async () => {
+    const callOrder: string[] = [];
+    pauseCheckSpy.mockImplementation(async () => { callOrder.push('check'); });
+    runTurnMock.mockImplementation(async () => { callOrder.push('runTurn'); });
+
+    const abortSignal = makeAbortSignal();
+    await runOneTurn(
+      'hello',
+      [],
+      makeCtx(abortSignal),
+      makeTurnState(),
+      makeFooter() as never,
+      makeTranscript() as never,
+      makeSurface() as never,
+      vi.fn(),
+      undefined,
+      [false],
+      'hello',
+    );
+
+    expect(callOrder.indexOf('check')).toBeLessThan(callOrder.indexOf('runTurn'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Abort-rejection: when check() rejects (paused + aborted), runTurn must
+// not be called (#4770)
+// ---------------------------------------------------------------------------
+
+describe('runOneTurn — abort rejection propagation', () => {
+  const runTurnMock = vi.mocked(runTurn);
+
+  beforeEach(() => {
+    pauseCheckSpy.mockClear();
+    pauseConsumeLastPauseDurationSpy.mockClear();
+    runTurnMock.mockClear();
+    runTurnMock.mockResolvedValue(undefined);
+  });
+
+  it('propagates the rejection from check() and does not call runTurn', async () => {
+    const abortError = Object.assign(new Error('AbortError'), { name: 'AbortError' });
+    pauseCheckSpy.mockRejectedValue(abortError);
+
+    const abortSignal = makeAbortSignal();
+    await expect(
+      runOneTurn(
+        'hello',
+        [],
+        makeCtx(abortSignal),
+        makeTurnState(),
+        makeFooter() as never,
+        makeTranscript() as never,
+        makeSurface() as never,
+        vi.fn(),
+        undefined,
+        [false],
+        'hello',
+      ),
+    ).rejects.toThrow('AbortError');
+
+    // runTurn must not have been called — the abort happened before the turn started.
+    expect(runTurnMock).not.toHaveBeenCalled();
   });
 });

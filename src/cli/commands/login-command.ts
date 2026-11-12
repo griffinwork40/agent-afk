@@ -4,7 +4,7 @@ import { providerForModel } from '../../agent/providers/index.js';
 import { getModel } from '../shared-helpers.js';
 import { promptToken, runAuthWizard } from '../auth-wizard.js';
 import {
-  loadAnthropicCredential,
+  resolveAnthropicCredential,
   preloadClaudeKeychainOAuth,
 } from '../../agent/auth/credential-resolver.js';
 import { describeCredentialSource } from '../auth-wizard.describe-source.js';
@@ -68,9 +68,9 @@ export function registerLoginCommand(program: Command): void {
         // Refresh any near-expiry keychain token before checking (same as the
         // first-run detector in src/cli/index.ts).
         await preloadClaudeKeychainOAuth(provider);
-        const existing = loadAnthropicCredential();
+        const existing = resolveAnthropicCredential();
         if (existing) {
-          const source = describeCredentialSource();
+          const source = describeCredentialSource(existing.source);
           console.log(palette.success(`Already authenticated via ${source}.`));
           console.log(''); // console-ok
           console.log(palette.success('You\'re good to go -- run `afk chat "hello"` to get started.'));

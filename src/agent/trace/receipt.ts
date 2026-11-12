@@ -47,6 +47,8 @@ export { renderReceiptMarkdown };
 export { RECEIPT_SCHEMA_VERSION, type ReceiptMeta, type ReceiptToolFailure, type RunReceipt } from './receipt.types.js';
 import { RECEIPT_SCHEMA_VERSION, type ReceiptMeta, type ReceiptToolFailure, type RunReceipt } from './receipt.types.js';
 export { extractJournalSummary, type JournalSummary } from './receipt.journal.js';
+export { type SubagentModelEntry, type SubagentsByModel } from './receipt.subagents-by-model.js';
+import { buildSubagentsByModel } from './receipt.subagents-by-model.js';
 
 
 // Invariant: the subset of exempt classes that represent a GATE refusing a
@@ -315,7 +317,12 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
       byFailureClass,
     },
     events: { total: events.length, byKind },
-    subagents,
+    subagents: {
+      ...subagents,
+      ...(subagents.started > 0
+        ? { byModel: buildSubagentsByModel(events) }
+        : {}),
+    },
     cost,
     failures,
     humanReviewRequired: reasons.length > 0,

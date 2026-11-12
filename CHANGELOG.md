@@ -12,6 +12,31 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.353.0] - 2026-11-11
+
+### Added
+- add subagents.byModel per-model rollup to run receipt (#4780) (a023f830c)
+- persist credential source in sidecar and trace (#4779) (3d2802003)
+
+### Fixed
+- address prod dep bump api-compat follow-ups (#4756) (2c869c0ac)
+- retry bubblewrap apt install on transient mirror failures (#4781) (584716488)
+- prefix-cap eviction gaps from episode recall merge (#4754) (700ef60ac)
+
+## [5.352.0] - 2026-11-11
+
+### Added
+- add tier-based visual hierarchy for Done rows (#4774) (1f9bfa53a)
+- add Not checked and Undo to the Done block (#4771) (766810e98)
+
+### Fixed
+- fix TS2556 in acp.session.test mock wrappers, restore baseline to 2674 (fa180ea0d)
+- restore main green (test typecheck ratchet + Windows EBUSY) (#4772) (5d6afaa4f)
+- sync test-typecheck baseline to 2676 after rebase onto main (f091b3d83)
+- extract buildDaemonGetModel, fix TS2339, wire tests through production callback (155848946)
+- address advisory findings in git helpers test suite (c36e4a6bf)
+- address advisory findings in artifact handler tests (118896e9e)
+
 ## [5.351.0] - 2026-11-10
 
 ### Added

@@ -86,8 +86,8 @@ vi.mock('../../agent/tools/top-level-allowlist.js', () => ({
 // Spy on injectEpisodeRecall — must be set up before importing acp.session
 // ---------------------------------------------------------------------------
 
-const mockInjectEpisodeRecall = vi.fn((config: unknown) => config);
-const mockInjectHotMemory = vi.fn((config: unknown) => config);
+const mockInjectEpisodeRecall = vi.fn((...args: unknown[]) => args[0]);
+const mockInjectHotMemory = vi.fn((...args: unknown[]) => args[0]);
 
 vi.mock('../../agent/memory/index.js', () => {
   class MemoryStore {
@@ -95,8 +95,9 @@ vi.mock('../../agent/memory/index.js', () => {
   }
   return {
     MemoryStore,
-    injectHotMemory: (...args: unknown[]) => mockInjectHotMemory(...args),
-    injectEpisodeRecall: (...args: unknown[]) => mockInjectEpisodeRecall(...args),
+    injectHotMemory: (config: unknown) => mockInjectHotMemory(config),
+    injectEpisodeRecall: (config: unknown, memoryDir?: unknown, cwd?: unknown, store?: unknown, opts?: unknown) =>
+      mockInjectEpisodeRecall(config, memoryDir, cwd, store, opts),
   };
 });
 
@@ -162,6 +163,21 @@ describe('closeAcpSession', () => {
     await closeAcpSession(handle);
 
     expect(sessionCloseSpy).toHaveBeenCalledOnce();
+    expect(memoryCloseSpy).toHaveBeenCalledOnce();
+    expect(stateCloseSpy).toHaveBeenCalledOnce();
+  });
+
+  it('still closes stores when session.close() throws', async () => {
+    // The finally block in closeAcpSession must close memoryStore and stateStore
+    // even when session.close() rejects — resource-leak guard.
+    const handle = await buildAcpSession({ model: 'sonnet', maxTurns: 10 });
+    const sessionError = new Error('session close failed');
+    vi.spyOn(handle.session, 'close').mockRejectedValue(sessionError);
+    const memoryCloseSpy = vi.spyOn(handle.memoryStore, 'close');
+    const stateCloseSpy = vi.spyOn(handle.stateStore, 'close');
+
+    await expect(closeAcpSession(handle)).rejects.toThrow('session close failed');
+
     expect(memoryCloseSpy).toHaveBeenCalledOnce();
     expect(stateCloseSpy).toHaveBeenCalledOnce();
   });

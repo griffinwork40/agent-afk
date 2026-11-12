@@ -277,8 +277,17 @@ jobs:
         # bwrap is required by bash-sandbox.runtime.test.ts when AFK_SANDBOX_REQUIRED=1.
         # Only Linux supports the bwrap backend; macOS uses sandbox-exec (pre-installed).
         # Ubuntu runners have apt available; the step is a no-op on macOS runners.
+        # Retry loop: apt mirror DNS can fail transiently (observed 2026-11-11, azure.archive.ubuntu.com).
+        # We refresh the package index on each retry and fail hard if all attempts are exhausted
+        # so the AFK_SANDBOX_REQUIRED guarantee (issue #4590) is never silently bypassed.
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y bubblewrap
+        run: |
+          for attempt in 1 2 3 4 5; do
+            sudo apt-get update -y && sudo apt-get install -y bubblewrap && break
+            echo "apt attempt $attempt failed; retrying in ${attempt}s…"
+            sleep "$attempt"
+            [ "$attempt" -lt 5 ] || { echo "All apt attempts exhausted"; exit 1; }
+          done
 
       - name: Test
         env:

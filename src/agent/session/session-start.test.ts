@@ -276,4 +276,32 @@ describe('LedgerLifecycle.ensure gitHead', () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(readSidecar(id)).toBeNull();
   });
+
+  it('top-level session with credentialSource: persisted to sidecar', async () => {
+    const id = freshId();
+    const lc = new LedgerLifecycle();
+    lc.initialize({ cwd: nonGitDir });
+    lc.ensure(topCtx(id, nonGitDir, { credentialSource: 'ANTHROPIC_API_KEY' }));
+    await waitForSidecar(id);
+
+    const sidecar = readSidecar(id);
+    expect(sidecar).not.toBeNull();
+    expect(sidecar!['credentialSource']).toBe('ANTHROPIC_API_KEY');
+
+    await lc.seal('done');
+  });
+
+  it('top-level session without credentialSource: field absent from sidecar', async () => {
+    const id = freshId();
+    const lc = new LedgerLifecycle();
+    lc.initialize({ cwd: nonGitDir });
+    lc.ensure(topCtx(id, nonGitDir));
+    await waitForSidecar(id);
+
+    const sidecar = readSidecar(id);
+    expect(sidecar).not.toBeNull();
+    expect('credentialSource' in sidecar!).toBe(false);
+
+    await lc.seal('done');
+  });
 });

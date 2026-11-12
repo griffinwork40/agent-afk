@@ -127,6 +127,68 @@ describe('parseTerminalState — bullet field mapping', () => {
     expect(parseTerminalState(text)?.deferred).toBe('wire the renderer');
   });
 
+  it('done: maps Not checked and Undo without cross-capturing existing labels', () => {
+    const v = parseTerminalState([
+      '**Done**',
+      '- Not checked: output artifacts and pending changes were not verified.',
+      '- Undo: revert the completed change and follow-up commit.',
+      '- What was done: shipped it.',
+      '- Evidence: tests pass.',
+      '- What changed: parser updated.',
+      '- Deferred: none',
+      '- Worth doing: add a smoke test.',
+    ].join('\n'));
+    expect(v).toMatchObject({
+      notChecked: 'output artifacts and pending changes were not verified.',
+      undoSteps: 'revert the completed change and follow-up commit.',
+      whatWasDone: 'shipped it.',
+      evidence: 'tests pass.',
+      whatChanged: 'parser updated.',
+      deferred: 'none',
+      worthDoing: 'add a smoke test.',
+    });
+  });
+
+  it('done: new labels alone do not match any existing field needles', () => {
+    const v = parseTerminalState('**Done**\n- Not checked: pending output changes.\n- Undo: revert completed work.');
+    for (const field of ['whatWasDone', 'evidence', 'whatChanged', 'deferred', 'worthDoing'] as const) {
+      expect(v?.[field], field).toBeUndefined();
+    }
+  });
+
+  it('done: read-only turns can omit Undo and report nothing material unchecked', () => {
+    const v = parseTerminalState('**Done**\n- What was done: reviewed the code.\n- Not checked: nothing material');
+    expect(v?.notChecked).toBe('nothing material');
+    expect(v?.undoSteps).toBeUndefined();
+  });
+
+  // #4773 — undo needle tightening: bare `Undo:` must still map, while
+  // incidental labels containing `undo` as a substring must not.
+  it('done: bare "Undo:" label (canonical directive form) maps to undoSteps', () => {
+    const v = parseTerminalState('**Done**\n- What was done: shipped it.\n- Undo: git revert HEAD');
+    expect(v?.undoSteps).toBe('git revert HEAD');
+  });
+
+  it('done: "Undo steps:" paraphrase maps to undoSteps', () => {
+    const v = parseTerminalState('**Done**\n- What was done: shipped it.\n- Undo steps: git revert HEAD');
+    expect(v?.undoSteps).toBe('git revert HEAD');
+  });
+
+  it('done: "How to undo:" paraphrase maps to undoSteps', () => {
+    const v = parseTerminalState('**Done**\n- What was done: shipped it.\n- How to undo: git revert HEAD');
+    expect(v?.undoSteps).toBe('git revert HEAD');
+  });
+
+  it('done: "Undone:" label does NOT map to undoSteps', () => {
+    const v = parseTerminalState('**Done**\n- What was done: shipped it.\n- Undone: the previous config');
+    expect(v?.undoSteps).toBeUndefined();
+  });
+
+  it('done: "Cannot undo:" label does NOT map to undoSteps', () => {
+    const v = parseTerminalState('**Done**\n- What was done: pushed to prod.\n- Cannot undo: the deployment is live');
+    expect(v?.undoSteps).toBeUndefined();
+  });
+
   // Regression: worthDoing was never wired into the pipeline, so the
   // "Worth doing" bullet was silently dropped from the Done block.
   it('done: "Worth doing" maps to worthDoing', () => {
