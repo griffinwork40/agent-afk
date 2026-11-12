@@ -65,7 +65,7 @@ const BINDINGS: Array<{ group: string; rows: Array<[string, string]> }> = [
       ['ctrl+l', 'Clear screen and repaint'],
       ['ctrl+c', 'Interrupt running turn / exit (second press)'],
       ['ctrl+d', 'EOF / exit (when buffer is empty)'],
-      ['ctrl+x d', 'Cycle diff expansion: compact → expanded → full (idle mode only)'],
+      ['ctrl+x d', 'Cycle future diff output: compact → expanded → full (idle only; existing output unchanged)'],
       ['tab', 'Accept autocomplete suggestion (idle) / open live task view (mid-turn)'],
       ['enter', 'Submit prompt'],
     ],

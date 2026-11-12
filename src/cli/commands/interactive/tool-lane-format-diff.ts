@@ -134,10 +134,11 @@ const _diffBlockCache = new WeakMap<DiffPayload, Map<string, string[]>>();
  *
  * - `overlay` mode caps body lines at {@link MAX_OVERLAY_DIFF_LINES}
  *   and appends a `… +N more` footer when truncated.
- * - `flush` mode caps body lines at the value of `AFK_DIFF_LINES` (default
- *   {@link FLUSH_DIFF_LINES_DEFAULT}). When truncated, the footer names
- *   the env var to set to expand the diff — discoverability without docs.
- *   Set `AFK_DIFF_LINES=0` to disable the flush cap entirely.
+ * - `flush` mode uses {@link currentDiffCap}: compact reads `AFK_DIFF_LINES`
+ *   (default {@link FLUSH_DIFF_LINES_DEFAULT}), expanded uses 50, full is uncapped.
+ *   Ctrl+X D cycles this setting for future diff output; committed scrollback
+ *   is unchanged. The truncation footer names `AFK_DIFF_LINES=0` to disable
+ *   the compact cap for future output.
  *
  * Hunk headers (`@@ -X,Y +A,B @@`) do NOT count against either cap —
  * they're structural markers, and counting them would let a diff with
@@ -167,8 +168,8 @@ export function formatDiffBlock(
   if (diff.hunks.length === 0) return [];
 
   // Resolve the body-line cap. Overlay is a fixed module constant; flush
-  // reads AFK_DIFF_LINES each call so tests and ad-hoc overrides work
-  // without a config reload. `cap === 0` means "uncapped" (flush only).
+  // reads the selected state (and AFK_DIFF_LINES in compact mode) each call.
+  // `cap === 0` means "uncapped" (flush only).
   const cap = mode === 'overlay' ? MAX_OVERLAY_DIFF_LINES : currentDiffCap();
 
   // Memo key must include the cap value — same payload + same mode +

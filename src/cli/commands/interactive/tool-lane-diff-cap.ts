@@ -1,5 +1,6 @@
 /**
- * Per-session diff-cap state machine.
+ * In-process diff-cap state machine for future diff output.
+ * Already committed scrollback is not retained or re-rendered.
  *
  * Three states form a cycle: compact → expanded → full → compact.
  *
@@ -60,7 +61,7 @@ export function cycleDiffCap(): DiffCapState {
 
 /**
  * Reset the state to compact (the initial/default state).
- * Called on session teardown or explicit reset.
+ * Explicit reset helper (also used by tests); not wired to session teardown.
  */
 export function resetDiffCap(): void {
   _state = 'compact';
@@ -74,11 +75,9 @@ export function getDiffCapState(): DiffCapState {
 }
 
 /**
- * Short footer hint text appropriate for the current state.
- * Rendered in the status line or tool-lane footer to surface the chord.
+ * Selected-state notice emitted through the completion writer after cycling.
+ * Scope is future diff output only, never expansion of existing scrollback.
  */
 export function diffCapHint(): string {
-  if (_state === 'compact')  return 'diff: compact (Ctrl+X D to expand)';
-  if (_state === 'expanded') return 'diff: expanded (Ctrl+X D for full)';
-  return 'diff: full (Ctrl+X D to compact)';
+  return `Future diff output: ${_state} (Ctrl+X D to cycle); existing output unchanged.`;
 }

@@ -337,10 +337,10 @@ export interface TerminalCompositorOptions {
    */
   onOpenEditor?: () => void;
   /**
-   * Ctrl+X D handler — cycle the per-session diff body-line cap through
-   * compact → expanded → full → compact. Wired at REPL-arm time by
-   * `surface-setup.ts`; absent on surfaces without a tool lane.
-   * The handler owns the state mutation and any repaint; dispatch just fires it.
+   * Ctrl+X D handler — cycle the body-line cap for future diff output through
+   * compact → expanded → full → compact; existing scrollback is unchanged.
+   * Wired at REPL-arm time by `surface-setup.ts`; absent without a tool lane.
+   * The handler owns state mutation and the selected-state notice; dispatch fires it.
    * Only fired in idle mode (gated in input-dispatch).
    */
   onCycleDiffCap?: () => void;

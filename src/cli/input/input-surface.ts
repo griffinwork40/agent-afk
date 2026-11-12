@@ -182,8 +182,8 @@ export interface InputSurfaceArmOpts {
    */
   onOpenOutputViewer?: () => void;
   /**
-   * Ctrl+X D handler — cycle diff body-line cap. Forwarded to the compositor.
-   * Absent on surfaces without a tool lane.
+   * Ctrl+X D handler — cycle the cap for future diff output, not existing
+   * scrollback. Forwarded to the compositor; absent without a tool lane.
    */
   onCycleDiffCap?: () => void;
   /**

@@ -107,13 +107,13 @@ describe('resetDiffCap', () => {
 });
 
 describe('diffCapHint', () => {
-  it('returns distinct strings per state', () => {
-    const a = diffCapHint(); // compact
-    cycleDiffCap();
-    const b = diffCapHint(); // expanded
-    cycleDiffCap();
-    const c = diffCapHint(); // full
-    expect(new Set([a, b, c]).size).toBe(3);
+  it('names the selected state and future-only scope throughout the cycle', () => {
+    for (const state of ['compact', 'expanded', 'full', 'compact']) {
+      expect(diffCapHint()).toBe(
+        `Future diff output: ${state} (Ctrl+X D to cycle); existing output unchanged.`,
+      );
+      cycleDiffCap();
+    }
   });
 
   it('compact hint mentions Ctrl+X D', () => {
