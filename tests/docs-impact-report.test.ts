@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { assertSafeRef, baseSurface, changedFiles, impactMarkdown, surfaceChanges, type GitRead } from '../scripts/lib/docs-impact.js';
+import { runImpact } from '../scripts/docs-impact.js';
 import { featSinceDocs, reportMarkdown } from '../scripts/docs-report.js';
+import { repoRoot } from '../scripts/lib/docs-reference.js';
 import type { Backlog, Surface } from '../scripts/lib/public-surface.js';
 
 const current: Surface = { version: 1, symbols: [
@@ -97,5 +103,36 @@ describe('docs report', () => {
   it('reports missing history without throwing', () => {
     expect(featSinceDocs(() => { throw new Error('unavailable'); })).toEqual({ commits: [], note: 'Git history unavailable.' });
     expect(featSinceDocs(() => '')).toEqual({ commits: [], note: 'No prior docs-content commit found.' });
+  });
+});
+
+describe('docs-impact entry point', () => {
+  it('exits 0 and prints a note when no --base is provided', async () => {
+    const output = await runImpact([]);
+    expect(output).toContain('## Docs impact (advisory)');
+    expect(output).toContain('Note:');
+  });
+
+  it('exits 0 and prints a note when --base ref is invalid (rejected by assertSafeRef)', () => {
+    const result = spawnSync(process.execPath, ['--import', 'tsx/esm', join(repoRoot, 'scripts/docs-impact.ts'), '--base', 'HEAD@{1}'], {
+      cwd: repoRoot, env: { ...process.env }, encoding: 'utf8', timeout: 30_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('## Docs impact (advisory)');
+    expect(result.stdout).toContain('Note:');
+  });
+
+  it('appends markdown to GITHUB_STEP_SUMMARY when set', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'afk-impact-'));
+    const summaryPath = join(dir, 'summary.md');
+    try {
+      const result = spawnSync(process.execPath, ['--import', 'tsx/esm', join(repoRoot, 'scripts/docs-impact.ts')], {
+        cwd: repoRoot, env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath },
+        encoding: 'utf8', timeout: 30_000,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const written = readFileSync(summaryPath, 'utf8');
+      expect(written).toContain('## Docs impact (advisory)');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
