@@ -12,6 +12,16 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- compact: structured summaries, head-and-tail excerpts, input cap, honest trigger and microcompaction reporting (#4842) (ab65485e5)
+- docs: keep the docs site current with a public-surface snapshot, stale-reference check, and PR impact summary (#4107) (faa73b821)
+
+### Fixed
+- tui: gate the startup-recall timing line behind AFK_DEBUG, recall only sealed sessions, and ratchet tagged stderr writes (#4840) (fc0c200d1)
+
+### Changed
+- wait-for: align analyzeCommand test comment with its retitled assertion (#4825) (764c249be)
+
 ## [5.353.1] - 2026-11-12
 
 ### Fixed
