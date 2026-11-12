@@ -16,9 +16,10 @@ every releasable merge to `main`, has been removed.
 
 1. Make sure `main` is green in CI and your local `main` matches
    `origin/main`.
-2. Fill the `## [Unreleased]` section of `CHANGELOG.md`. In the REPL,
-   `/changelog` writes entries from conventional commits since the last
-   tag; review and edit them. `scripts/release.mjs` refuses to run on an
+2. Fill the `## [Unreleased]` section of `CHANGELOG.md`. Run
+   `node scripts/generate-changelog.mjs <version>` to auto-populate
+   entries from conventional commits since the last tag, or edit
+   `[Unreleased]` manually. `scripts/release.mjs` refuses to run on an
    empty `[Unreleased]`.
 3. If `engines.node` changed since the last tag, check whether the floor
    was raised (a raised floor is a breaking change, so the release must be

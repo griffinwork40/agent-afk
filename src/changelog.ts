@@ -5,7 +5,7 @@
  * groups them into Keep a Changelog categories, and can merge
  * into an existing [Unreleased] section.
  *
- * Used by: /changelog slash command, scripts/generate-changelog.mjs (CI).
+ * Used by: scripts/generate-changelog.mjs.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -203,7 +203,9 @@ export function updateAndStampChangelog(
  * Prepend new entries into the [Unreleased] section, skipping any commits
  * whose short hash already appears in the existing block (dedup guard).
  *
- * Kept for backward compatibility with the /changelog slash command.
+ * Used by scripts/release.mjs (via updateAndStampChangelog) and kept as a
+ * standalone helper for callers that only need to update [Unreleased] without
+ * stamping a version heading.
  */
 export function updateChangelog(repoRoot: string, newEntries: string): void {
   const changelogPath = resolve(repoRoot, 'CHANGELOG.md');
