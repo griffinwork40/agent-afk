@@ -1,10 +1,12 @@
 /**
  * UTF-8 boundary tests for readTraceSafe (witness.query.io.ts).
  *
- * The existing witness.query.test.ts uses only ASCII payloads in its
- * truncation scenarios. This file verifies that the U+FFFD replacement-
- * character guard works correctly when the byte-cap boundary lands mid-way
- * through a multi-byte UTF-8 codepoint.
+ * readTraceSafe keeps the TAIL of an over-cap file, so the cap can only split
+ * a codepoint at the START of the retained window. Those orphaned continuation
+ * bytes decode to a LEADING U+FFFD, which the newline realignment discards.
+ * A TRAILING U+FFFD can only come from the file itself ending mid-codepoint
+ * (e.g. a torn final append); that is the case the trailing-U+FFFD guard
+ * covers, and the tests below place the incomplete sequence there.
  *
  * Issue #4770 — advisory finding: truncation tests used ASCII-only payloads.
  */
@@ -41,51 +43,64 @@ async function writeTrace(name: string, content: Buffer): Promise<string> {
 // ---------------------------------------------------------------------------
 
 describe('readTraceSafe — U+FFFD guard at multi-byte boundary', () => {
-  it('strips trailing U+FFFD when slice lands mid 2-byte sequence (U+00C0–U+07FF range)', async () => {
-    // Build a buffer that is exactly MAX_READ_BYTES + 1 bytes so truncation
-    // fires, then arrange the final bytes of the tail window to be the first
-    // byte of a 2-byte UTF-8 sequence (0xC3 = start of é, â, etc.) with the
-    // continuation byte just outside the window.
-    //
-    // Layout:
-    //   [ ASCII padding × (MAX_READ_BYTES - 1) ] [ 0xC3 ] [ 0xA9 ]
-    //   ^--- fits in MAX_READ_BYTES tail window ---^        ^-- outside
-    //
-    // After slicing the tail, the buffer ends with 0xC3 alone, which
-    // Buffer.toString('utf8') converts to U+FFFD. The guard must strip it.
-
-    const totalSize = MAX_READ_BYTES + 1;
-    const buf = Buffer.alloc(totalSize, 0x61); // 'a' × totalSize
-    // Place the 2-byte sequence at the very end: last two bytes of the full buf.
-    buf[totalSize - 2] = 0xc3; // first byte of U+00E9 (é)
-    buf[totalSize - 1] = 0xa9; // second byte — will be OUTSIDE the tail window
+  it('strips trailing U+FFFD when an over-cap file ends with a torn 2-byte sequence', async () => {
+    // Layout (totalSize = MAX_READ_BYTES + 10):
+    //   [ 'a' × 20 ] [ '\n' ] [ 'a' × … ] [ 0xC3 ]
+    // The tail window starts at byte 10, realigns past the newline at byte 20,
+    // and ends with the lone lead byte 0xC3 (first byte of U+00E9 'é') whose
+    // continuation byte was never written. It decodes to a trailing U+FFFD
+    // that the guard must strip.
+    const totalSize = MAX_READ_BYTES + 10;
+    const buf = Buffer.alloc(totalSize, 0x61);
+    buf[20] = 0x0a;
+    buf[totalSize - 1] = 0xc3;
 
     const tracePath = await writeTrace('utf8-2byte', buf);
     const { content, truncated } = await readTraceSafe(tracePath);
 
     expect(truncated).toBe(true);
-    // The trailing replacement character must have been stripped.
-    expect(content).not.toMatch(/\uFFFD$/);
-    // The content must still be non-empty (the ASCII head survives).
-    expect(content.length).toBeGreaterThan(0);
+    expect(content).toBe('a'.repeat(totalSize - 1 - 21));
   });
 
-  it('strips trailing U+FFFD when slice lands mid 3-byte sequence (U+0800–U+FFFF range)', async () => {
-    // A 3-byte UTF-8 sequence: e.g. U+4E2D (中, 0xE4 0xB8 0xAD).
-    // Place all three bytes at the tail of the full buffer so the slice
-    // captures only the first byte (0xE4), producing U+FFFD.
-    const totalSize = MAX_READ_BYTES + 2;
+  it('strips trailing U+FFFD when an over-cap file ends with a torn 3-byte sequence', async () => {
+    // Same shape, but the file ends with a complete 'é' followed by the first
+    // two bytes of U+4E2D '中' (0xE4 0xB8; the third byte 0xAD is missing).
+    // Only the replacement character may be stripped: the complete 'é' stays.
+    const totalSize = MAX_READ_BYTES + 10;
     const buf = Buffer.alloc(totalSize, 0x61);
-    buf[totalSize - 3] = 0xe4; // first byte of 中
-    buf[totalSize - 2] = 0xb8; // second byte — outside tail window
-    buf[totalSize - 1] = 0xad; // third byte  — outside tail window
+    buf[20] = 0x0a;
+    buf[totalSize - 4] = 0xc3; // é (complete)
+    buf[totalSize - 3] = 0xa9;
+    buf[totalSize - 2] = 0xe4; // 中, torn after two of three bytes
+    buf[totalSize - 1] = 0xb8;
 
     const tracePath = await writeTrace('utf8-3byte', buf);
     const { content, truncated } = await readTraceSafe(tracePath);
 
     expect(truncated).toBe(true);
-    expect(content).not.toMatch(/\uFFFD$/);
-    expect(content.length).toBeGreaterThan(0);
+    expect(content).toBe('a'.repeat(totalSize - 4 - 21) + '\u00e9');
+  });
+
+  it('drops a codepoint split at the window START via newline realignment', async () => {
+    // This is the only split the tail slice itself can produce. Layout
+    // (totalSize = MAX_READ_BYTES + 1, so the window starts at byte 1):
+    //   [ 0xE4 0xB8 0xAD ] [ '\n' ] [ 'a' × … ]
+    // The window begins with the orphaned continuation bytes 0xB8 0xAD
+    // (a leading U+FFFD if decoded); realignment past the newline at byte 3
+    // must discard them so no replacement character survives anywhere.
+    const totalSize = MAX_READ_BYTES + 1;
+    const buf = Buffer.alloc(totalSize, 0x61);
+    buf[0] = 0xe4;
+    buf[1] = 0xb8;
+    buf[2] = 0xad;
+    buf[3] = 0x0a;
+
+    const tracePath = await writeTrace('utf8-window-start', buf);
+    const { content, truncated } = await readTraceSafe(tracePath);
+
+    expect(truncated).toBe(true);
+    expect(content).not.toContain('\uFFFD');
+    expect(content).toBe('a'.repeat(totalSize - 4));
   });
 
   it('does NOT strip content when no multi-byte boundary split occurs', async () => {
