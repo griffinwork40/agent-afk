@@ -124,6 +124,26 @@ describe('SessionToolDispatcher — ToolCallLedger wiring (#4476)', () => {
     expect(new ToolCallLedgerWiring().lookup(c)).toHaveLength(0);
   });
 
+  it('gate-refused call: round advances but no entry is recorded (item 2 of #4821)', async () => {
+    // canUseTool that denies every call — simulates a permission gate refusal.
+    const denying = new SessionToolDispatcher({
+      handlers: new Map<string, ToolHandler>([['ok_tool', ok]]),
+      schemas: [schema('ok_tool')],
+      hookRegistry: undefined,
+      canUseTool: async () => ({ behavior: 'deny', message: 'denied by test' }),
+    });
+    const c = call('ok_tool', { x: 1 });
+    const result = await denying.execute(c);
+    // The gate refused, so the result is a permission-denied error.
+    expect(result.isError).toBe(true);
+    // The round counter advanced (beginRound fired before the gate check).
+    // Round indices are per entry-point call, not per recorded observation.
+    expect(denying.toolCallLedger.currentRound).toBe(0);
+    // But no entry was recorded — noteSettledOutcome is never reached for
+    // gate-refused calls (documenting the behaviour chosen in item 2 of #4821).
+    expect(denying.toolCallLedger.ledger.entryCount).toBe(0);
+  });
+
   it('a throwing ledger never breaks or alters dispatch', async () => {
     class ThrowingLedger extends ToolCallLedger {
       override record(): void {

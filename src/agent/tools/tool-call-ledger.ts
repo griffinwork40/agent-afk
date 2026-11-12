@@ -25,10 +25,12 @@
  *   identified as uncaptured.
  *
  * - **Bounded by a configurable turn window.** `prune(currentTurn)` removes
- *   entries whose most-recent observation is more than `turnWindow` turns old.
- *   Callers are responsible for calling `prune` periodically (e.g. once per
- *   dispatcher batch). This keeps memory usage proportional to `turnWindow ×
- *   average distinct calls per turn`, never the session length.
+ *   whole buckets whose most-recent observation is more than `turnWindow` turns
+ *   old. `record()` additionally trims stale entries within a bucket on every
+ *   write, so a hot key (called every round) stays bounded at `turnWindow`
+ *   entries rather than growing with session length. This keeps memory usage
+ *   proportional to `turnWindow × average distinct calls per turn`, never
+ *   the session length.
  *
  * - **Append-only per key within a window.** Multiple results for the same
  *   (toolName, inputHash) pair accumulate in arrival order so `lookup` can
@@ -187,6 +189,14 @@ export class ToolCallLedger {
     bucket.entries.push({ result, turnIndex });
     if (turnIndex > bucket.latestTurn) {
       bucket.latestTurn = turnIndex;
+    }
+    // Trim stale entries within the bucket so a hot key (called every round)
+    // stays bounded at `turnWindow` entries rather than growing with session
+    // length. `prune()` removes whole buckets; this trims within live buckets.
+    const cutoff = bucket.latestTurn - this.turnWindow;
+    if (cutoff > 0) {
+      const firstLive = bucket.entries.findIndex((e) => e.turnIndex >= cutoff);
+      if (firstLive > 0) bucket.entries.splice(0, firstLive);
     }
   }
 

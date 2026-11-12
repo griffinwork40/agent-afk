@@ -224,14 +224,16 @@ describe('lookup — window boundary', () => {
     expect(history[1]?.result.content).toBe('fresh');
   });
 
-  it('outside-window entries still count in rawEntryCountFor before prune', () => {
+  it('outside-window entries are trimmed in-flight by record() for hot keys', () => {
+    // turnWindow=5: recording at turn 10 computes cutoff = 10 - 5 = 5.
+    // The earlier entry at turn 1 is below the cutoff and is trimmed by record().
     const ledger = new ToolCallLedger(5);
     ledger.record('bash', 'h1', err('old'), 1);
     ledger.record('bash', 'h1', ok('new'), 10);
-    // lookup at turn 10: window cutoff = 5; turn 1 is stale, turn 10 is live
+    // lookup at turn 10: only the live entry at turn 10 is returned
     expect(ledger.lookup('bash', 'h1', 10)).toHaveLength(1);
-    // but raw count includes the stale entry
-    expect(ledger.rawEntryCountFor('bash', 'h1')).toBe(2);
+    // rawEntryCountFor now also reflects the trimmed state (fix for #4821 item 1)
+    expect(ledger.rawEntryCountFor('bash', 'h1')).toBe(1);
   });
 });
 
@@ -392,6 +394,34 @@ describe('MAX_LEDGER_KEYS cap', () => {
     const history = ledger.lookup('bash', 'hash-0', 2);
     expect(history).toHaveLength(2);
     expect(history[1]?.result.content).toBe('updated');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-key entry trimming (item 1 of issue #4821)
+// ---------------------------------------------------------------------------
+
+describe('per-key entry trimming — hot keys stay bounded', () => {
+  it('a key called every round stays bounded at turnWindow entries', () => {
+    const turnWindow = 3;
+    const ledger = new ToolCallLedger(turnWindow);
+    // Simulate a hot key called on every turn for 10 turns
+    for (let turn = 0; turn < 10; turn++) {
+      ledger.record('bash', 'hot-hash', ok(`turn-${turn}`), turn);
+    }
+    // Raw entry count must not exceed turnWindow + 1 (the boundary can include
+    // the cutoff entry itself, but anything older is trimmed in-flight)
+    expect(ledger.rawEntryCountFor('bash', 'hot-hash')).toBeLessThanOrEqual(turnWindow + 1);
+    // Lookup at current turn still returns the most recent entries in order
+    const history = ledger.lookup('bash', 'hot-hash', 9);
+    expect(history.length).toBeGreaterThan(0);
+    expect(history[history.length - 1]!.turnIndex).toBe(9);
+  });
+
+  it('trimming within record() does not affect keys called only once', () => {
+    const ledger = new ToolCallLedger(3);
+    ledger.record('bash', 'one-shot', ok('only'), 0);
+    expect(ledger.rawEntryCountFor('bash', 'one-shot')).toBe(1);
   });
 });
 
