@@ -28,10 +28,11 @@ import type { MessageParam } from '@anthropic-ai/sdk/resources';
 const emitSessionPhaseMock = vi.hoisted(() => vi.fn());
 const syncClientWithStoreMock = vi.hoisted(() => vi.fn());
 const runCompactionCoreMock = vi.hoisted(() => vi.fn());
+const emitCompactionMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../../trace/emit.js', () => ({
   emitSessionPhase: emitSessionPhaseMock,
-  emitCompaction: vi.fn().mockResolvedValue(undefined),
+  emitCompaction: emitCompactionMock,
 }));
 
 vi.mock('../../shared/compaction.js', () => ({
@@ -40,6 +41,8 @@ vi.mock('../../shared/compaction.js', () => ({
   readShrinkFraction: () => 0.5,
   resolveMicrocompactOptions: () => ({ thresholdBytes: 10_000, keepLast: 1, delegationThresholdBytes: 5_000 }),
   wrapTranscriptForSummary: (t: string) => t,
+  summarizerInputCharBudget: () => 300_000,
+  COMPACT_SUMMARY_MAX_TOKENS: 2_000,
 }));
 
 vi.mock('../../shared/compact-summarizer.js', () => ({
@@ -163,6 +166,31 @@ beforeEach(() => {
   emitSessionPhaseMock.mockResolvedValue(undefined);
   runCompactionCoreMock.mockReset();
   syncClientWithStoreMock.mockReset();
+  emitCompactionMock.mockReset();
+  emitCompactionMock.mockResolvedValue(undefined);
+});
+
+describe('compactHistory: compaction trace trigger', () => {
+  it('records the trigger the caller passed (automatic path uses token_threshold)', async () => {
+    wireRunCompactionCore();
+    await compactHistory({
+      state: makeState(), abort: new AbortCoordinator(), retry: makeRetry(null),
+      initSessionId: 's1', trigger: 'token_threshold',
+    });
+    expect(emitCompactionMock).toHaveBeenCalledWith(undefined, expect.objectContaining({ trigger: 'token_threshold' }));
+  });
+
+  it('defaults to manual when no trigger is passed', async () => {
+    wireRunCompactionCore();
+    await compactHistory({ state: makeState(), abort: new AbortCoordinator(), retry: makeRetry(null), initSessionId: 's1' });
+    expect(emitCompactionMock).toHaveBeenCalledWith(undefined, expect.objectContaining({ trigger: 'manual' }));
+  });
+
+  it('caps the summarizer transcript by the resolved summarizer model budget', async () => {
+    wireRunCompactionCore();
+    await compactHistory({ state: makeState(), abort: new AbortCoordinator(), retry: makeRetry(null), initSessionId: 's1' });
+    expect(runCompactionCoreMock.mock.calls[0]?.[0]).toMatchObject({ summarizerInputMaxChars: 300_000 });
+  });
 });
 
 afterEach(() => {

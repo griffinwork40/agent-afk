@@ -167,6 +167,37 @@ describe('runCompactionCore', () => {
     expect(onSuccess).toHaveBeenCalledTimes(1);
   });
 
+  it('caps the summarizer transcript but hands onSuccess the full older slice', async () => {
+    const messages: FakeMsg[] = [
+      { role: 'user', text: 'OLDEST-' + 'o'.repeat(2_000) },
+      { role: 'assistant', text: 'NEWEST-OLDER-REPLY' },
+      ...history(),
+    ];
+    const olderBefore = messages.slice(0, 4).map((m) => ({ ...m }));
+    let seen = '';
+    const onSuccess = vi.fn();
+    const result = await runCompactionCore({
+      messages, ops: fakeOps, keepLastN: 2, isAborted: () => false,
+      summarizerInputMaxChars: 200,
+      summarize: async (t) => { seen = t; return 'S'; },
+      onSuccess,
+    });
+    expect(result.compacted).toBe(true);
+    expect(seen).toContain('[Earlier transcript omitted');
+    expect(seen).not.toContain('OLDEST-');
+    expect(seen).toContain('a1');
+    expect(onSuccess.mock.calls[0]?.[0].olderSlice).toEqual(olderBefore);
+  });
+
+  it('sends the transcript unchanged when it is under the cap', async () => {
+    let seen = '';
+    await runCompactionCore({
+      ...baseDeps(), summarizerInputMaxChars: 10_000,
+      summarize: async (t) => { seen = t; return 'S'; },
+    });
+    expect(seen).toBe(renderTranscript(history().slice(0, 2), fakeOps));
+  });
+
   it('refuses an empty summary and leaves history untouched', async () => {
     const deps = baseDeps();
     const before = [...deps.messages];

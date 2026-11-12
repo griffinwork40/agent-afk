@@ -728,7 +728,9 @@ export interface ProviderCompactResult {
   tokensSavedEstimate?: number;
   /**
    * Present only when a deterministic tool-result microcompaction pass ran and
-   * reclaimed context (paired with `reason: 'microcompacted'`). No message was
+   * reclaimed context: paired with `reason: 'microcompacted'` on a no-op, or
+   * attached to a `compacted: true` result when the post-summary pass also
+   * cleared blocks. No message was
    * removed — only large `tool_result` block CONTENT was replaced by a
    * placeholder — so this carries the win the message-count delta cannot.
    */

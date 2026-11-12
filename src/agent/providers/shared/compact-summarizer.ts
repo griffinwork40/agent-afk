@@ -37,12 +37,12 @@ import {
   type OneShotBinding,
   type OneShotLabel,
 } from './one-shot-router.js';
-import { COMPACT_SYSTEM_PROMPT, wrapTranscriptForSummary } from './compaction.js';
+import {
+  COMPACT_SUMMARY_MAX_TOKENS,
+  COMPACT_SYSTEM_PROMPT,
+  wrapTranscriptForSummary,
+} from './compaction.summarizer-input.js';
 import type { BundledProviderName } from '../index.js';
-
-// Contract: maxTokens for the summarize call. Matches the default in
-// anthropic-direct/query/compact-handler.ts and openai-compatible/query.ts.
-const COMPACT_MAX_TOKENS = 1024;
 
 /** Summarize closure shape used by both compact-handler and openai-compatible query. */
 export type SummarizeFn = (transcript: string, signal?: AbortSignal) => Promise<string>;
@@ -172,7 +172,7 @@ function buildForeignSummarize(
         binding,
         system: COMPACT_SYSTEM_PROMPT,
         user: wrapTranscriptForSummary(transcript),
-        maxTokens: COMPACT_MAX_TOKENS,
+        maxTokens: COMPACT_SUMMARY_MAX_TOKENS,
         label: COMPACT_LABEL,
         ...(signal ? { signal } : {}),
       });

@@ -38,61 +38,26 @@ import { env } from '../../../config/env.js';
 import type { ProviderCompactResult } from '../../provider.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { withTransientRetry, type RetryInfo } from './transient-retry.js';
+import { capTranscriptForSummarizer } from './compaction.summarizer-input.js';
 
-/**
- * System instruction for the summarization call. Crafted to preserve what a
- * future turn actually needs: user intent and corrections, tool decisions and
- * outcomes, current state and next action, open questions, and key facts.
- *
- * Provider-neutral — the summarizer only ever sees a plain-text transcript, so
- * this prompt makes no assumption about the underlying message representation.
- */
-export const COMPACT_SYSTEM_PROMPT = [
-  'You are a conversation-summarization assistant. The user will paste a',
-  'prior conversation between a user and an AI assistant that includes tool',
-  'calls and tool results. Produce a concise but complete summary that lets',
-  'the AI continue the conversation without losing track.',
-  '',
-  'Preserve, in this priority order:',
-  "1. The user's original intent, explicit asks, constraints, corrections,",
-  '   and preferences stated during the conversation.',
-  '2. Tool decisions and their outcomes — file paths read or written, shell',
-  '   commands run, search queries, URLs fetched, code edits made, tests',
-  '   run, errors observed, and whether each action succeeded or failed.',
-  '3. Current state: what has been completed, what remains unresolved, and',
-  '   the safest next action.',
-  '4. Open questions, pending decisions, blockers, and assumptions.',
-  '5. Key facts the assistant discovered (function locations, schemas,',
-  '   observed behaviors, important external findings).',
-  '',
-  'Drop prose narration, conversational filler, and exploratory dead-ends.',
-  'Drop verbatim tool output unless an exact snippet, error, path, command,',
-  'or result is needed for continuation.',
-  'Do not invent details. If something is uncertain, mark it explicitly.',
-  'Output plain text, no markdown headers. Aim for ~250 words; use up to',
-  '~400 only when needed to preserve tool state or unresolved tasks.',
-].join('\n');
+// The summarizer prompt, wrapper, output budget, excerpt helper, and input cap
+// live in a sibling module; re-exported so existing importers resolve unchanged.
+export {
+  COMPACT_SUMMARY_MAX_TOKENS,
+  COMPACT_SYSTEM_PROMPT,
+  TOOL_ARGS_EXCERPT_CHARS,
+  TOOL_RESULT_EXCERPT_CHARS,
+  capTranscriptForSummarizer,
+  excerptHeadTail,
+  summarizerInputCharBudget,
+  wrapTranscriptForSummary,
+} from './compaction.summarizer-input.js';
 
 /** Default header the summary message uses to flag itself in history. */
 export const COMPACT_SUMMARY_HEADER = '[Compacted summary of earlier conversation]';
 
 /** Default acknowledgement the synthetic assistant turn returns. */
 export const COMPACT_ACK_TEXT = 'Acknowledged. Continuing from the summary above.';
-
-/**
- * Wrap a rendered transcript in the single user instruction the summarizer
- * sees. Shared by every provider so the summarization prompt stays identical
- * regardless of which model/endpoint produces the summary.
- */
-export function wrapTranscriptForSummary(transcript: string): string {
-  return (
-    'Summarize the following conversation transcript. Follow the ' +
-    'system instructions exactly.\n\n' +
-    '<transcript>\n' +
-    transcript +
-    '\n</transcript>'
-  );
-}
 
 /** Wall-clock ceiling for a single summarization call (guardrail). */
 export const DEFAULT_COMPACT_TIMEOUT_MS = 60_000;
@@ -603,6 +568,13 @@ export interface CompactionCoreDeps<M> {
   abortInFlight?(): void;
   /** Guardrail ceiling for the summarize call. Defaults to {@link DEFAULT_COMPACT_TIMEOUT_MS}. */
   timeoutMs?: number;
+  /**
+   * Character cap on the transcript string sent to `summarize`, normally
+   * {@link summarizerInputCharBudget} of the resolved summarizer model. Over
+   * the cap the oldest text is dropped (with a marker). Never affects the
+   * `olderSlice` handed to `onSuccess`. Omitted means no cap.
+   */
+  summarizerInputMaxChars?: number;
   /** Fired after a successful in-place splice, for witness-layer emit. */
   onSuccess?(info: CompactionSuccess<M>): void;
   /**
@@ -682,7 +654,9 @@ export async function runCompactionCore<M>(
   }
 
   const olderSlice = messages.slice(0, boundary);
-  const transcript = renderTranscript(olderSlice, ops);
+  // The cap bounds only the summarizer input; olderSlice stays whole for the
+  // witness archive in onSuccess.
+  const transcript = capTranscriptForSummarizer(renderTranscript(olderSlice, ops), deps.summarizerInputMaxChars);
 
   // `timedOut` is set when the timeout fires (before `abortInFlight()`) and
   // feeds the retry loop's `shouldStop`, so a retry waiting in backoff never

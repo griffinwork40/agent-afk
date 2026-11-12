@@ -18,6 +18,7 @@
  */
 import type OpenAI from 'openai';
 import {
+  COMPACT_SUMMARY_MAX_TOKENS,
   COMPACT_SYSTEM_PROMPT,
   wrapTranscriptForSummary,
 } from '../../shared/compaction.js';
@@ -47,7 +48,7 @@ export function buildCompactSummarize(params: BuildCompactSummarizeParams): Summ
           model: compactModel,
           system: COMPACT_SYSTEM_PROMPT,
           user: wrapTranscriptForSummary(transcript),
-          maxTokens: 1024,
+          maxTokens: COMPACT_SUMMARY_MAX_TOKENS,
           signal,
         });
   return resolveCrossProviderSummarize('openai-compatible', sessionSummarize, compactModelRaw, sessionKey);
