@@ -47,6 +47,7 @@ import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import type { TraceSink } from '../../../trace/index.js';
 import { env } from '../../../../config/env.js';
 import { resolveOpenAICompactModel } from './compact-model-resolver.js';
+import { resolveSummarizerWindow } from '../../shared/compact-summarizer.js';
 
 /** Live accessors the compaction handler needs from the owning query instance. */
 export interface CompactHandlerContext {
@@ -175,12 +176,10 @@ export async function runCompactHistory(
     priorTurns: ctx.priorTurns,
     usedFraction,
     shrinkAtFraction: readShrinkFraction(),
-    // Budget follows the resolved summarizer model. The subscription catalog
-    // applies only when the session's own ChatGPT-OAuth wire writes it.
-    summarizerInputMaxChars: summarizerInputCharBudget(
-      compactModel,
-      ctx.opts.auth.source === 'chatgpt-oauth' && !env.AFK_COMPACT_MODEL,
-    ),
+    // Budget follows the window of the connection that sends the summary:
+    // the session's own (subscription catalog on chatgpt-oauth) unless
+    // AFK_COMPACT_MODEL routes to a foreign provider.
+    summarizerInputMaxChars: summarizerInputBudgetFor(ctx, compactModel),
     summarize,
     isClosed: ctx.closed, // boolean snapshot — inherited from pre-split behaviour; compactOpenAIHistory accepts boolean, not a function
     isIdle: ctx.abort.isIdle(),
@@ -199,4 +198,17 @@ export async function runCompactHistory(
   });
   ctx.journal.afterCompact(ctx.priorTurns, compactResult);
   return compactResult;
+}
+
+/**
+ * Summarizer input cap for this session. The route decision lives in
+ * `resolveSummarizerWindow`; this only states what the session's own closure
+ * would use: `compactModel` over the session's connection.
+ */
+function summarizerInputBudgetFor(ctx: CompactHandlerContext, compactModel: string): number {
+  const window = resolveSummarizerWindow('openai-compatible', env.AFK_COMPACT_MODEL, {
+    model: compactModel,
+    subscriptionPath: ctx.opts.auth.source === 'chatgpt-oauth',
+  });
+  return summarizerInputCharBudget(window.model, window.subscriptionPath);
 }

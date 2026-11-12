@@ -88,9 +88,40 @@ export function excerptHeadTail(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   const headLen = Math.floor(maxChars * EXCERPT_HEAD_SHARE);
   const tailLen = Math.max(0, maxChars - headLen);
-  const elided = text.length - headLen - tailLen;
-  const tail = tailLen > 0 ? text.slice(text.length - tailLen) : '';
-  return `${text.slice(0, headLen)} [... ${elided} chars elided ...] ${tail}`;
+  const headEnd = pairSafeHeadEnd(text, headLen);
+  const tailStart = pairSafeTailStart(text, text.length - tailLen);
+  const elided = tailStart - headEnd;
+  return `${text.slice(0, headEnd)} [... ${elided} chars elided ...] ${text.slice(tailStart)}`;
+}
+
+/** True when `code` is a UTF-16 high (leading) surrogate. */
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+/** True when `code` is a UTF-16 low (trailing) surrogate. */
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/**
+ * Contract: end index for a kept head `text.slice(0, end)` that never splits a
+ * surrogate pair. When the cut falls inside a pair it backs off one unit, so
+ * less text is kept, never more. Other cuts are returned unchanged.
+ */
+function pairSafeHeadEnd(text: string, end: number): number {
+  if (end <= 0 || end >= text.length) return end;
+  return isHighSurrogate(text.charCodeAt(end - 1)) && isLowSurrogate(text.charCodeAt(end)) ? end - 1 : end;
+}
+
+/**
+ * Contract: start index for a kept tail `text.slice(start)` that never splits a
+ * surrogate pair. When the cut falls inside a pair it moves forward one unit,
+ * so less text is kept, never more. Other cuts are returned unchanged.
+ */
+function pairSafeTailStart(text: string, start: number): number {
+  if (start <= 0 || start >= text.length) return start;
+  return isLowSurrogate(text.charCodeAt(start)) && isHighSurrogate(text.charCodeAt(start - 1)) ? start + 1 : start;
 }
 
 /** Fraction of the summarizer model's context window the transcript may use. */
@@ -129,11 +160,13 @@ export function capTranscriptForSummarizer(transcript: string, maxChars: number 
   if (maxChars === undefined || transcript.length <= maxChars) return transcript;
   const openingLen = Math.floor(maxChars * CAP_OPENING_SHARE);
   const newestLen = maxChars - openingLen;
-  const dropped = transcript.length - openingLen - newestLen;
+  const openingEnd = pairSafeHeadEnd(transcript, openingLen);
+  const newestStart = pairSafeTailStart(transcript, transcript.length - newestLen);
+  const dropped = newestStart - openingEnd;
   return (
-    transcript.slice(0, openingLen) +
+    transcript.slice(0, openingEnd) +
     `\n\n[Transcript middle omitted: ${dropped} characters dropped to fit the ` +
     'summarizer context budget. The opening above and the newest content below are kept.]\n\n' +
-    transcript.slice(transcript.length - newestLen)
+    transcript.slice(newestStart)
   );
 }
