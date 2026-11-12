@@ -73,7 +73,7 @@ export function buildEpisodeFromFacet(sessionId: string): EpisodeRecord | null {
       // (the episode schema's surface enum does not include it), so we omit
       // the field rather than writing a value that would fail schema validation
       // on the reader side.
-      ...(facet.surface !== undefined
+      ...((facet.surface !== undefined && (facet.surface as string) !== 'unknown')
         ? { source: facet.surface }
         : facet.source !== 'unknown'
           ? { source: facet.source }

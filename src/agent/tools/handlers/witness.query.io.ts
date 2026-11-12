@@ -33,8 +33,10 @@ export async function readTraceSafe(tracePath: string): Promise<ReadTraceSafeRes
     }
     // Slice from the tail then align to the next newline boundary to avoid
     // splitting a multi-byte UTF-8 sequence or a partial JSON object.
-    // The newline realignment reduces (but does not eliminate) mid-codepoint
-    // cuts, so strip any trailing U+FFFD replacement characters for consistency
+    // Newline realignment eliminates mid-codepoint splits introduced by the
+    // tail slice itself (orphaned continuation bytes at the window start are
+    // discarded). A trailing U+FFFD can still appear when the file itself ends
+    // mid-codepoint (e.g. an interrupted final write); strip it for consistency
     // with other truncation sites (journal.ts, bg-result-notifier.ts).
     let capped = buf.subarray(buf.length - MAX_READ_BYTES);
     const firstNewline = capped.indexOf(0x0a);
