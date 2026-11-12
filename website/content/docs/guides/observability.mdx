@@ -59,6 +59,7 @@ Subagent events share the root session's trace. Their `subagentId` identifies th
 
 For MCP startup timing, inspect `afk trace show --all`. `mcp_connect_start` and `mcp_connect_done` bracket connection, including daemon sessions. Where a trace writer is attached to the MCP manager, `mcp_server_start` and `mcp_server_done` help isolate slow servers. The `done` phase also fires if connection throws; it is not a success verdict. See [MCP and plugins](/guides/mcp-plugins).
 
+{/* docs-refs-ignore-next-line */}
 Skill-forked subagent tool calls and permission denials are attributed to that child in the shared trace. Filter failed `tool_call` rows by `subagentId` and inspect `failureClass` (for example, `permission-denied`); a trace receipt's `toolCalls.refused` tallies permission denials, hook blocks, and policy refusals without treating expected refusals as ordinary bugs. Subagent start rows carry `agentType` and at most the first 80 characters of `promptHead`. There is **no** `AFK_CAPTURE_SUBAGENT_PROMPTS` switch in the current code: full dispatch prompts live in the child journal, not the witness row.
 
 ## Retrieve full messages and tool results

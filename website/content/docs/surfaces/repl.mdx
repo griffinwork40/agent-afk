@@ -153,6 +153,8 @@ Use arrows and Enter to choose. There is no dedicated C-key action in the curren
 
 For Claude subscription sessions, the notice also explains that signing in to another account with `claude login` in another terminal can let the waiting turn resume automatically on that account. Other providers do not get that Claude-specific instruction. With `autoResumeOnUsageLimit: false`, or without a live TUI, AFK shows a passive usage notice instead of the interactive waiting picker.
 
+If the failed request is still the last user message, `/retry` resubmits that message without retyping it; review any effects that already completed before retrying.
+
 ## Compose better prompts
 
 ### Files, completion, and images
@@ -260,6 +262,7 @@ Other slash-command highlights, grouped by task:
 
 `/goal` stores a project-scoped objective across sessions; changes are saved immediately but enter the model's standing context at the next session start. `/todo` manages this session's durable checklist. `/spine` manages the git-tracked `SPINE.md` architecture manifest, including its invariants and rejected patterns. See [Goal tracking](/guides/goal-tracking), [State store](/guides/state-store), and [Spine](/guides/spine).
 
+{/* docs-refs-ignore-next-line */}
 Use `/allow-dir` to authorize another directory, or revoke a grant with its `--revoke` option. There is no `/bypass` command, use the permission cycle when you deliberately want bypass mode.
 
 Use `/help` and the [slash-command reference](/reference/slash-commands) for the full list and arguments. See [Skills](/skills/overview) for skill workflows.

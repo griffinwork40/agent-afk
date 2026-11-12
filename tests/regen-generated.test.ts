@@ -90,7 +90,10 @@ describe('baseline union', () => {
       baselineName, '.funcsize-baseline.json', '.posix-guard-baseline.json',
       '.test-typecheck-baseline.json', 'docs/env-registry.json', 'docs/env-registry.md',
       'website/content/docs/reference/environment-variables.mdx',
+      'website/content/docs/reference/cli.mdx', 'website/content/docs/reference/slash-commands.mdx',
+      'website/content/docs/reference/config-keys.mdx', 'docs/public-surface.json',
     ]));
+    expect(GENERATED_PATHS.size).toBe(11);
     expect(GENERATED_PATHS.has('.sdk-dependency.lock.json')).toBe(false);
   });
 });
@@ -125,7 +128,7 @@ describe('regen-generated CLI', () => {
     write('src/code.ts', 'export const value = 0;\n');
     // Fixture generators intentionally substitute ONLY downstream work. The CLI,
     // git refusal, stage reads, union, argument forwarding and staging are real.
-    for (const name of ['check-file-size', 'check-function-size', 'render-env-registry', 'check-posix-guard', 'check-test-typecheck']) {
+    for (const name of ['check-file-size', 'check-function-size', 'render-env-registry', 'lib/isolated-reference', 'check-posix-guard', 'check-test-typecheck']) {
       write(`scripts/${name}.ts`, `import { appendFileSync } from 'node:fs';\nappendFileSync('calls.log', JSON.stringify(process.argv.slice(2)) + '\\n');\n`);
     }
     commit('initial');
@@ -140,7 +143,20 @@ describe('regen-generated CLI', () => {
     expect(JSON.parse(git('show', `:${baselineName}`))).toEqual(baseline(380, 'ours', true));
     expect(git('diff', '--name-only', '--diff-filter=U')).toBe('');
     expect(git('diff', '--cached', '--name-only')).toContain(baselineName);
-    expect(fs.readFileSync(path.join(root, 'calls.log'), 'utf8').trim().split('\n')).toHaveLength(5);
+    expect(fs.readFileSync(path.join(root, 'calls.log'), 'utf8').trim().split('\n')).toHaveLength(9);
+  });
+
+  it('re-renders a conflicted public-surface snapshot instead of refusing it as code', () => {
+    const file = 'docs/public-surface.json';
+    write(file, '{"version":1,"symbols":[]}\n'); commit('base surface');
+    conflict(file, '{"version":1,"symbols":[{"kind":"tool","name":"a"}]}\n', '{"version":1,"symbols":[{"kind":"tool","name":"b"}]}\n');
+    expect(fs.readFileSync(path.join(root, file), 'utf8')).toContain('<<<<<<<');
+    write('scripts/lib/isolated-reference.ts', `import { appendFileSync, writeFileSync } from 'node:fs';\nappendFileSync('calls.log', JSON.stringify(process.argv.slice(2)) + '\\n');\nif (process.argv[2] === 'surface') writeFileSync('${file}', 'rendered\\n');\n`);
+    const result = run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain('Resolve code conflicts first');
+    expect(git('show', `:${file}`)).toBe('rendered');
+    expect(git('diff', '--name-only', '--diff-filter=U')).toBe('');
   });
 
   it('handles a modify/delete baseline conflict with a missing stage', () => {
@@ -264,6 +280,7 @@ describe('regen-generated CLI', () => {
     expect(calls).toEqual([
       ['--update-baseline', '--allow-growth', '--reason', reason],
       ['--update-baseline', '--allow-growth', '--reason', reason], [],
+      ['cli'], ['slash'], ['config'], ['surface'],
       ['--update-baseline', '--allow-growth', '--reason', reason],
       ['--update', '--allow-growth', '--reason', reason],
     ]);
