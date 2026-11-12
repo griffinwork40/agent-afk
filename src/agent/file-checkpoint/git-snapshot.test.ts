@@ -318,7 +318,7 @@ describe('review hardening (real git)', () => {
     const d = await diff(before.tree, after.tree);
     expect(d.changes.map((c) => rel(c.absPath))).toEqual(['mod.txt']);
     expect(d.changes[0]?.prior?.bytes.toString()).toBe('before\n');
-    expect(d.skipped).toEqual([{ absPath: path.join(realRepo(), 'big.bin'), reason: expect.stringContaining('larger than 1024') }]);
+    expect(d.skipped).toEqual([{ absPath: path.join(realRepo(), 'big.bin'), reason: expect.stringContaining('larger than 1 KiB') }]);
   });
 
   it('works when the repo path contains the alternates separator (where creatable)', async () => {
@@ -470,6 +470,6 @@ describe('aggregate blob-bytes cap (real git, finding #11)', () => {
     expect(d.changes[0]?.prior?.bytes.length).toBe(100);
     // The other two are in skipped with the aggregate-limit reason.
     expect(d.skipped).toHaveLength(2);
-    expect(d.skipped.every((s) => s.reason.includes('aggregate blob limit'))).toBe(true);
+    expect(d.skipped.every((s) => s.reason.includes('aggregate blob limit of 150 B reached'))).toBe(true);
   });
 });

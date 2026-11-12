@@ -60,7 +60,7 @@ export interface GitCtx { args: readonly string[]; env: GitEnv; deadline: number
  * and DATABASE_URL ends in _URL which is not a credential suffix).
  */
 const CREDENTIAL_SUFFIX_RE = /_(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)$/i;
-const CREDENTIAL_EXACT: readonly string[] = [
+const CREDENTIAL_EXACT_UPPER: ReadonlySet<string> = new Set([
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
   'GITHUB_TOKEN',
@@ -77,14 +77,14 @@ const CREDENTIAL_EXACT: readonly string[] = [
   'MONGODB_URI',
   'MONGODB_URL',
   'SENTRY_DSN',
-];
+]);
 
 /** Inherited env (sanctioned builder) minus every `GIT_*` override and minus
  * every credential env var, so no secret leaks into a git subprocess. */
 export function buildSnapshotEnv(): GitEnv {
   const base = buildChildEnv(undefined);
   for (const key of Object.keys(base)) {
-    if (key.startsWith('GIT_') || CREDENTIAL_SUFFIX_RE.test(key) || CREDENTIAL_EXACT.includes(key)) {
+    if (key.startsWith('GIT_') || CREDENTIAL_SUFFIX_RE.test(key) || CREDENTIAL_EXACT_UPPER.has(key.toUpperCase())) {
       delete base[key];
     }
   }

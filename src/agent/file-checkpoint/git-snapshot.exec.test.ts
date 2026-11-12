@@ -12,7 +12,12 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildSnapshotEnv } from './git-snapshot.exec.js';
-import { _setMaxAggregateBlobBytesForTests, _setMaxBlobBytesForTests } from './git-snapshot.diff.js';
+import {
+  _setMaxAggregateBlobBytesForTests,
+  _setMaxBlobBytesForTests,
+  formatBlobBytes,
+  parseBatchCheck,
+} from './git-snapshot.diff.js';
 
 // --- #2: credential scrubbing ---
 
@@ -92,5 +97,67 @@ describe('_setMaxAggregateBlobBytesForTests seam', () => {
     _setMaxAggregateBlobBytesForTests(1024);
     _setMaxAggregateBlobBytesForTests(undefined);
     // No throw means the seam works; behavioural coverage is in git-snapshot.test.ts.
+  });
+});
+
+// --- #4818 fix 2: aggregate-skip filter unit test with controlled sizes ---
+
+describe('aggregate blob-bytes cap filter (unit, no git)', () => {
+  afterEach(() => {
+    _setMaxBlobBytesForTests(undefined);
+    _setMaxAggregateBlobBytesForTests(undefined);
+  });
+
+  it('parseBatchCheck parses blob sizes correctly', () => {
+    const buf = Buffer.from('abc123 blob 100\ndef456 blob 200\n');
+    expect(parseBatchCheck(buf, 2)).toEqual([100, 200]);
+  });
+
+  it('parseBatchCheck returns null for missing entries', () => {
+    const buf = Buffer.from('abc123 blob 100\n');
+    expect(parseBatchCheck(buf, 2)).toBeNull();
+  });
+});
+
+// --- #4818 fix 1: case-insensitive CREDENTIAL_EXACT scrubbing ---
+
+describe('buildSnapshotEnv case-insensitive credential scrubbing', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('strips database_url (lowercase)', () => {
+    vi.stubEnv('database_url', 'postgres://user:secret@host/db');
+    expect(buildSnapshotEnv()['database_url']).toBeUndefined();
+  });
+
+  it('strips Database_Url (mixed case)', () => {
+    vi.stubEnv('Database_Url', 'postgres://user:secret@host/db');
+    expect(buildSnapshotEnv()['Database_Url']).toBeUndefined();
+  });
+
+  it('strips MONGODB_URI in any case variant', () => {
+    vi.stubEnv('mongodb_uri', 'mongodb+srv://user:pass@cluster/db');
+    expect(buildSnapshotEnv()['mongodb_uri']).toBeUndefined();
+  });
+});
+
+// --- #4818 fix 3: formatBlobBytes helper ---
+
+describe('formatBlobBytes', () => {
+  it('formats bytes below 1 KiB as B', () => {
+    expect(formatBlobBytes(150)).toBe('150 B');
+    expect(formatBlobBytes(0)).toBe('0 B');
+  });
+
+  it('formats bytes in KiB range', () => {
+    expect(formatBlobBytes(2048)).toBe('2 KiB');
+  });
+
+  it('formats bytes in MiB range', () => {
+    expect(formatBlobBytes(64 * 1024 * 1024)).toBe('64 MiB');
+    expect(formatBlobBytes(512 * 1024 * 1024)).toBe('512 MiB');
+  });
+
+  it('formats bytes in GiB range', () => {
+    expect(formatBlobBytes(2 * 1024 * 1024 * 1024)).toBe('2 GiB');
   });
 });
