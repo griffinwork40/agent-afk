@@ -7,7 +7,7 @@ export interface LineFinding extends RefFinding { line: number }
 
 /** Fences whose every line is a command. Any other fence (including unlabeled)
  * is checked only on lines whose leading command is `afk`. */
-const SHELL_FENCES = /^(?:bash|sh|shell|zsh|fish|ksh|powershell|ps1|pwsh|console|terminal|shellsession|shell-session|cmd|bat|batch|text)$/i;
+export const SHELL_FENCES = /^(?:bash|sh|shell|zsh|fish|ksh|powershell|ps1|pwsh|console|terminal|shellsession|shell-session|cmd|bat|batch|text)$/i;
 /** HTTP path segments that read like slash commands (`/v1`, `GET .../models`). */
 const HTTP_PATH = /^\/(?:v\d+|models|completions|health)$/;
 /** Prose fences: an explicit language that is still text, not data or code. */

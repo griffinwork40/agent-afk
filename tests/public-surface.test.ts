@@ -123,6 +123,18 @@ describe('handwritten naming rules', () => {
     expect(named('command', 'afk chat', '```bash\necho afk chat\n```')).toBe(false);
     expect(named('command', 'afk chat', '~~~~sh\nafk chat\n~~~~')).toBe(true);
   });
+  it('counts commands in console, shell, terminal, and other SHELL_FENCES aliases as named', () => {
+    for (const lang of ['console', 'shell', 'terminal', 'Bash', 'ksh', 'cmd', 'bat']) {
+      expect(named('command', 'afk chat', `\`\`\`${lang}\nafk chat\n\`\`\``)).toBe(true);
+    }
+  });
+  it('surface check passes when a command appears only in a console fence', () => {
+    const sym: Surface = { version: 1, symbols: [{ kind: 'command', name: 'afk chat' }] };
+    expect(checkDocsSurface(sym, empty, [{ path: 'guide.mdx', text: '```console\nafk chat --model gpt\n```' }])).toEqual([]);
+  });
+  it('surface check failure message names the remedy', () => {
+    expect(checkDocsSurface(surface, empty, [])[0]).toMatch(/website\/content\/docs\/.*website\/docs-backlog\.json/);
+  });
   it('does not turn fenced backticks into inline mentions, even with longer closing fences', () => {
     expect(namingContexts('````json\n`read_file`\n`````\n`real`').inline).toEqual(['real']);
   });

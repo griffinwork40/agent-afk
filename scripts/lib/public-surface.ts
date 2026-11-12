@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { repoRoot } from './docs-reference.js';
+import { SHELL_FENCES } from './docs-refs-rules.js';
 
 export const SYMBOL_KINDS = ['command', 'flag', 'slash', 'tool', 'config', 'env', 'hook'] as const;
 export type SymbolKind = typeof SYMBOL_KINDS[number];
@@ -86,7 +87,7 @@ export function namingContexts(text: string): { inline: string[]; shell: string[
       continue;
     }
     if (opening) {
-      fence = { marker: opening[1]!, shell: /^(?:bash|sh|zsh|fish|powershell|text)$/.test(opening[2]!) };
+      fence = { marker: opening[1]!, shell: SHELL_FENCES.test(opening[2]!) };
       continue;
     }
     prose.push(line);

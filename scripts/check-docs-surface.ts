@@ -29,7 +29,7 @@ export function checkDocsSurface(surface: Surface, backlog: Backlog, pages: read
   if (backlog.entries.some((entry, index) => symbolKey(entry) !== sorted[index])) errors.push('Backlog entries must be sorted by kind/name');
   for (const symbol of surface.symbols) {
     if (!RATCHET_KINDS.includes(symbol.kind)) continue;
-    if (!named.has(symbolKey(symbol)) && !entries.has(symbolKey(symbol))) errors.push(`Missing handwritten documentation or backlog: ${symbolKey(symbol)}`);
+    if (!named.has(symbolKey(symbol)) && !entries.has(symbolKey(symbol))) errors.push(`Missing handwritten documentation or backlog: ${symbolKey(symbol)} — name it on a page under website/content/docs/, or add a sorted, dated entry with a reason to website/docs-backlog.json`);
   }
   return errors;
 }
