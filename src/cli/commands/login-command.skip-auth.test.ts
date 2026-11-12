@@ -2,7 +2,7 @@
  * Integration tests for the skip-auth branch of `registerLoginCommand`.
  *
  * Covers:
- *   1. Early-exit when `loadAnthropicCredential` returns a credential
+ *   1. Early-exit when `resolveAnthropicCredential` returns a credential
  *      (no --force, no token).
  *   2. No credential found -- falls through to `runAuthWizard` (first-time user).
  *   3. `--force` flag bypasses the credential check and calls `runAuthWizard`.
@@ -19,7 +19,7 @@ vi.mock('../../agent/providers/index.js', () => ({
 }));
 
 vi.mock('../../agent/auth/credential-resolver.js', () => ({
-  loadAnthropicCredential: vi.fn(() => undefined as string | undefined),
+  resolveAnthropicCredential: vi.fn(() => undefined as { token: string; source: 'claude-code-keychain' } | undefined),
   preloadClaudeKeychainOAuth: vi.fn(async () => undefined as string | undefined),
 }));
 
@@ -47,8 +47,9 @@ vi.mock('../palette.js', () => ({
 }));
 
 import { registerLoginCommand } from './login-command.js';
-import { loadAnthropicCredential, preloadClaudeKeychainOAuth } from '../../agent/auth/credential-resolver.js';
+import { resolveAnthropicCredential, preloadClaudeKeychainOAuth } from '../../agent/auth/credential-resolver.js';
 import { runAuthWizard } from '../auth-wizard.js';
+import { describeCredentialSource } from '../auth-wizard.describe-source.js';
 
 // Helper: build a fresh Commander program with the login command registered.
 function makeProgram(): Command {
@@ -64,7 +65,7 @@ describe('registerLoginCommand skip-auth branch', () => {
   });
 
   it('exits early when an existing credential is found (no --force, no token)', async () => {
-    vi.mocked(loadAnthropicCredential).mockReturnValue('sk-ant-oat01-existing');
+    vi.mocked(resolveAnthropicCredential).mockReturnValue({ token: 'sk-ant-oat01-existing', source: 'claude-code-keychain' });
 
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
@@ -79,13 +80,15 @@ describe('registerLoginCommand skip-auth branch', () => {
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('Already authenticated'),
     );
+    // The label comes from the loader's own provenance, not a second walk (#4778).
+    expect(describeCredentialSource).toHaveBeenCalledWith('claude-code-keychain');
 
     consoleSpy.mockRestore();
   });
 
   it('calls runAuthWizard when no credential is found (first-time user)', async () => {
     // Default mock returns undefined -- no existing credential.
-    vi.mocked(loadAnthropicCredential).mockReturnValue(undefined);
+    vi.mocked(resolveAnthropicCredential).mockReturnValue(undefined);
 
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
@@ -106,7 +109,7 @@ describe('registerLoginCommand skip-auth branch', () => {
 
   it('bypasses credential check and calls runAuthWizard when --force is set', async () => {
     // Even with a credential present, --force should skip the early exit.
-    vi.mocked(loadAnthropicCredential).mockReturnValue('sk-ant-oat01-existing');
+    vi.mocked(resolveAnthropicCredential).mockReturnValue({ token: 'sk-ant-oat01-existing', source: 'claude-code-keychain' });
 
     const program = makeProgram();
     await program.parseAsync(['node', 'afk', 'login', '--force']);
@@ -119,7 +122,7 @@ describe('registerLoginCommand skip-auth branch', () => {
 
   it('bypasses credential check and calls runAuthWizard when a token argument is provided', async () => {
     // Even with a credential present, an explicit token bypasses the guard.
-    vi.mocked(loadAnthropicCredential).mockReturnValue('sk-ant-oat01-existing');
+    vi.mocked(resolveAnthropicCredential).mockReturnValue({ token: 'sk-ant-oat01-existing', source: 'claude-code-keychain' });
 
     const program = makeProgram();
     await program.parseAsync(['node', 'afk', 'login', 'sk-ant-api03-new']);

@@ -51,9 +51,9 @@ export const THINKING_BINDING_CONTROLS_BETA_HEADER = 'thinking-binding-controls-
 
 /**
  * `User-Agent` value the CLI sends. The Anthropic API gates certain model
- * features (e.g. Claude Opus 5.5 on the Fast tier) behind a minimum Claude
- * Code CLI version — this value must track the current `@anthropic-ai/claude-code`
- * npm release. Updated to 2.1.322 (the version that unlocks Fable 5.2 access).
+ * features behind a minimum Claude Code CLI version — this value must track
+ * the current `@anthropic-ai/claude-code` npm release. Currently set to
+ * 2.1.322 (the version that unlocks Fable 5.2 access).
  */
 export const CLI_USER_AGENT = 'claude-cli/2.1.322 (external, cli)';
 

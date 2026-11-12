@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   loadXaiApiKey,
   loadAnthropicCredential,
+  resolveAnthropicCredential,
   resolveCredentialForModel,
   preloadClaudeKeychainOAuth,
   _resetRefreshedClaudeCodeOauthToken,
@@ -241,5 +242,23 @@ describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
     // was called in beforeEach). The keychain value must be returned.
     expect(loadAnthropicCredential()).toBe('sk-ant-oat01-keychain-direct');
     expect(resolveCredentialForModel('claude-sonnet-4-6')).toBe('sk-ant-oat01-keychain-direct');
+  });
+
+  it('resolveAnthropicCredential returns the selected token with its provenance (#4778)', () => {
+    expect(resolveAnthropicCredential()).toBeUndefined();
+
+    setRefreshedClaudeCodeOauthToken('sk-ant-oat01-cached');
+    expect(resolveAnthropicCredential()).toEqual({
+      token: 'sk-ant-oat01-cached',
+      source: 'claude-code-session-refresh',
+    });
+
+    // Live store outranks the process-local cache (#2469); source follows the token.
+    vi.mocked(loadClaudeCodeOauthToken).mockReturnValue('sk-ant-oat01-keychain-direct');
+    expect(resolveAnthropicCredential()).toEqual({
+      token: 'sk-ant-oat01-keychain-direct',
+      source: 'claude-code-keychain',
+    });
+    expect(loadAnthropicCredential()).toBe(resolveAnthropicCredential()?.token);
   });
 });

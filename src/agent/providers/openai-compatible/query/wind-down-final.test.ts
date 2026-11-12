@@ -146,7 +146,11 @@ describe('openai-compatible wind-down round keeps tools and never dispatches', (
     expect(JSON.stringify(windDown['tools'])).toBe(JSON.stringify(normal['tools']));
     expect('tool_choice' in windDown).toBe(false);
     const msgs = windDown['messages'] as Array<{ content: unknown }>;
-    expect(msgs.at(-1)?.content).toBe(WIND_DOWN_NOTE);
+    // Assert the note is the LAST message and that the array is non-empty —
+    // a pure .at(-1) check would silently pass on an empty array.
+    // (#4358: positional assertion must also confirm the array has content.)
+    expect(msgs.length).toBeGreaterThan(0);
+    expect(msgs[msgs.length - 1]?.content).toBe(WIND_DOWN_NOTE);
     expect(finalAnswer(events)).toBe('Final answer.');
   });
 

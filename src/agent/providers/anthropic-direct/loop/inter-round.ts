@@ -57,6 +57,13 @@ export function applyBeforeNextRound(
   };
   input.messages.push(steeringTurn);
 
+  // Sync the journal so the steering/pause note survives a crash before the
+  // next model request. Without this, the new turn is unsynced until runToolRound
+  // calls sync() — a window where a crash would silently lose the note.
+  // Mirrors the OpenAI provider's applyAndSyncSteering() (turn-driver.ts).
+  // Pre-existing gap for plain steeringText is closed here consistently.
+  input.journalSync?.sync(input.messages);
+
   // Fire-and-forget trace event.
   void emitQueuedUserMessage(input.traceWriter, {
     jobId: input.subagentId ?? '',

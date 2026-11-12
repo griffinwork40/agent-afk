@@ -19,6 +19,7 @@ import * as path from 'node:path';
 import { AdmissionQueue } from '../../../agent/peer/admission-queue.js';
 import { ProcessJobRegistry } from '../../../agent/shell-jobs/process-jobs.js';
 import { applyBeforeNextRound } from '../../../agent/providers/anthropic-direct/loop/inter-round.js';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 import { ProcessJobNotifier } from './process-job-notifier.js';
 import { installPeerBoundary, setupPeerBoundary } from './loop-iteration.boundary.js';
 
@@ -35,7 +36,7 @@ beforeEach(() => {
 afterEach(async () => {
   notifier.dispose();
   await reg.killAll();
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmSyncRetry(dir);
 });
 
 function makeSession() {

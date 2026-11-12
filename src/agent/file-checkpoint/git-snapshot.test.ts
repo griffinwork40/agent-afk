@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { captureWorkspaceTree, diffTrees, type CaptureResult } from './git-snapshot.js';
 import { _setAttrSourceSupportForTests, hasConvertingAttribute } from './git-snapshot.attrs.js';
-import { _setMaxBlobBytesForTests, parseBatchCheck, parseCatFileBatch, parseRawDiff, toAbsPath } from './git-snapshot.diff.js';
+import { _setMaxAggregateBlobBytesForTests, _setMaxBlobBytesForTests, parseBatchCheck, parseCatFileBatch, parseRawDiff, toAbsPath } from './git-snapshot.diff.js';
 import { quoteAlternate } from './git-snapshot.exec.js';
 import { hasFlaggedEntries } from './git-snapshot.index.js';
 
@@ -36,6 +36,7 @@ beforeEach(() => {
 afterEach(async () => {
   _setAttrSourceSupportForTests(undefined);
   _setMaxBlobBytesForTests(undefined);
+  _setMaxAggregateBlobBytesForTests(undefined);
   await fs.chmod(tmp, 0o700).catch(() => undefined);
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -439,5 +440,36 @@ describe('parsers', () => {
     expect(hasFlaggedEntries(Buffer.from('H a\0H b\0'))).toBe(false);
     expect(hasFlaggedEntries(Buffer.from('H a\0S b\0'))).toBe(true);
     expect(hasFlaggedEntries(Buffer.from('h a\0'))).toBe(true);
+  });
+});
+
+describe('aggregate blob-bytes cap (real git, finding #11)', () => {
+  it('moves blobs to skipped once the aggregate limit is reached', async () => {
+    // Three files, each 100 bytes of prior content. Set the aggregate cap to 150
+    // bytes so the first blob is fetched, the second pushes past the cap and is
+    // skipped, and the third is also skipped (cap already exhausted).
+    await initRepo();
+    await fs.writeFile(path.join(repo, 'a.bin'), Buffer.alloc(100, 1));
+    await fs.writeFile(path.join(repo, 'b.bin'), Buffer.alloc(100, 2));
+    await fs.writeFile(path.join(repo, 'c.bin'), Buffer.alloc(100, 3));
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'blobs');
+    const before = await captureWorkspaceTree({ cwd: repo, ...priv, timeoutMs: 20_000 });
+    if (!before.ok) throw new Error(`capture failed: ${before.reason}`);
+    // Overwrite all three so each is a modified (prior-bearing) entry in the diff.
+    await fs.writeFile(path.join(repo, 'a.bin'), 'a');
+    await fs.writeFile(path.join(repo, 'b.bin'), 'b');
+    await fs.writeFile(path.join(repo, 'c.bin'), 'c');
+    const after = await captureWorkspaceTree({ cwd: repo, ...priv, timeoutMs: 20_000 });
+    if (!after.ok) throw new Error(`capture after failed: ${after.reason}`);
+    _setMaxAggregateBlobBytesForTests(150);
+    const d = await diffTrees({ repoRoot: git(repo, 'rev-parse', '--show-toplevel').trim(), objectDir: priv.objectDir, before: before.tree, after: after.tree, maxFiles: 100, timeoutMs: 20_000 });
+    if (!d.ok) throw new Error(`diff failed: ${d.reason}`);
+    // Exactly one blob (100 bytes) is within the 150-byte aggregate cap.
+    expect(d.changes).toHaveLength(1);
+    expect(d.changes[0]?.prior?.bytes.length).toBe(100);
+    // The other two are in skipped with the aggregate-limit reason.
+    expect(d.skipped).toHaveLength(2);
+    expect(d.skipped.every((s) => s.reason.includes('aggregate blob limit'))).toBe(true);
   });
 });
