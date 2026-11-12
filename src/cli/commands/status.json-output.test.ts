@@ -56,6 +56,7 @@ import { registerStatusCommand } from './status.js';
 import { loadXaiApiKey, resolveAnthropicCredential } from '../../agent/auth/credential-resolver.js';
 import { providerForModel } from '../../agent/providers/index.js';
 import { getModel, getApiKeyForModel, getCodexApiKey } from '../shared-helpers.js';
+import { describeCredentialSource } from '../auth-wizard.describe-source.js';
 
 // Capture JSON written to stdout via console.log.
 function captureJsonOutput(fn: () => unknown): Promise<Record<string, unknown>> {
@@ -134,6 +135,26 @@ describe('afk status --format json provider credential mapping', () => {
     expect(providers['anthropic']?.source).toBe('ANTHROPIC_API_KEY');
     expect(providers['xai']?.ok).toBe(false);
     expect(providers['xai']?.source).toBeNull();
+  });
+
+  it('text format: describeCredentialSource receives the resolved source from the single loader call (#4817)', async () => {
+    vi.mocked(providerForModel).mockReturnValue('anthropic-direct');
+    vi.mocked(getModel).mockReturnValue('claude-sonnet-4-5');
+    vi.mocked(getApiKeyForModel).mockReturnValue('sk-ant-test');
+    vi.mocked(resolveAnthropicCredential).mockReturnValue({ token: 'sk-ant-test', source: 'ANTHROPIC_API_KEY' });
+    vi.mocked(loadXaiApiKey).mockReturnValue(undefined);
+    vi.mocked(getCodexApiKey).mockReturnValue(undefined);
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const program = makeProgram();
+    await program.parseAsync(['node', 'afk', 'status']);
+
+    // describeCredentialSource must be called with the loader's own source output,
+    // not via a second credentialSourceId() call (#4817).
+    expect(describeCredentialSource).toHaveBeenCalledWith('ANTHROPIC_API_KEY');
+
+    consoleSpy.mockRestore();
   });
 
   it('xAI model + both XAI_API_KEY and ANTHROPIC_API_KEY: both providers ok', async () => {
