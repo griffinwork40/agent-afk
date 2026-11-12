@@ -34,7 +34,8 @@ describe('docs impact', () => {
 
   it('validates the base ref before any git call', () => {
     expect(() => assertSafeRef('origin/main')).not.toThrow();
-    for (const bad of ['--foo', 'origin/main --output=x', '', 'main..HEAD']) expect(() => assertSafeRef(bad)).toThrow(/Invalid --base ref/);
+    for (const ok of ['HEAD~3', 'HEAD^', 'v5.352.0', 'refs/remotes/origin/main']) expect(() => assertSafeRef(ok)).not.toThrow();
+    for (const bad of ['--foo', 'origin/main --output=x', '', 'main..HEAD', 'origin/main^{/evil}', 'HEAD@{1}']) expect(() => assertSafeRef(bad)).toThrow(/Invalid --base ref/);
     const git: GitRead = () => { throw new Error('git must not run'); };
     expect(() => impactMarkdown('--output=/tmp/x', current, pages, git)).toThrow(/Invalid --base ref/);
   });

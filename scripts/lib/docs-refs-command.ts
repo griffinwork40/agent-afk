@@ -83,8 +83,9 @@ export function checkCommand(tokens: readonly ShellToken[], known: KnownRefs): R
     const near = text.length >= 3 ? nearest(text, [...command.children].filter((c) => c.length >= 3), 2) : undefined;
     if (removed) findings.push({ kind: 'command', token: `${command.path} ${text}`, suggestion: removed });
     else if (near && command.children.size) findings.push({ kind: 'command', token: `${command.path} ${text}`, suggestion: `${command.path} ${near}` });
-    // Subcommand-only parents: any other word is an unknown command. The root takes prompts.
-    else if (command.children.size && !command.positional && command.path !== 'afk') findings.push({ kind: 'command', token: `${command.path} ${text}` });
+    // Subcommand-only parents: any other word is an unknown command. The root takes prompts,
+    // and commander's implicit `help` subcommand is absent from the generated reference.
+    else if (command.children.size && !command.positional && command.path !== 'afk' && text !== 'help') findings.push({ kind: 'command', token: `${command.path} ${text}` });
   }
   return findings;
 }

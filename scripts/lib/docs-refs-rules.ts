@@ -14,7 +14,7 @@ const HTTP_PATH = /^\/(?:v\d+|models|completions|health)$/;
 const PROSE_FENCES = /^(?:md|markdown|mdx)$/i;
 /** Prompts a fenced REPL example may show before a slash command. */
 const SLASH_PROMPT = /^\s*(?:afk>|>|\$)\s+/;
-const FS_ROOTS = new Set(['/tmp', '/usr', '/etc', '/var', '/bin', '/opt', '/dev', '/home', '/Users', '/proc', '/mnt', '/sbin', '/lib', '/private', '/Volumes']);
+const FS_ROOTS = new Set(['/tmp', '/usr', '/etc', '/var', '/bin', '/opt', '/dev', '/home', '/Users', '/proc', '/mnt', '/sbin', '/lib', '/private', '/Volumes', '/data', '/app', '/workspace', '/root', '/srv', '/sys', '/run', '/nix']);
 
 /** Line numbers (1-based) excluded by docs-refs-ignore markers, read from raw text.
  * When `docs-refs-ignore-start` and `docs-refs-ignore-end` share a line, only that line is suppressed. */

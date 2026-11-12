@@ -53,6 +53,12 @@ describe('docs refs: afk command lines', () => {
     expect(check('`afk schedule frobnicate`')).toEqual(['guides/x.mdx:1: command afk schedule frobnicate not found']);
     expect(check('```bash\nafk schedule "frobnicate"\nafk schedule <subcommand>\nafk schedule add\nafk fix the tests\n```')).toEqual([]);
     expect(check('`afk schedule …` and `afk schedule ...`')).toEqual([]);
+    // Commander's implicit `help` subcommand is not listed in the generated reference.
+    expect(check('`afk schedule help` and `afk schedule help add`')).toEqual([]);
+    // A parent that also takes a positional argument is never strict.
+    const positional = buildKnown(surface, repoRoot);
+    positional.commands.get('afk schedule')!.positional = true;
+    expect(checkDocsRefs([{ path: 'guides/x.mdx', text: '`afk schedule frobnicate`' }], positional)).toEqual([]);
   });
   it('tokenizes quotes, separators, and env prefixes', () => {
     expect(tokenize(`afk "a b" 'c'|x`).map((t) => t.text)).toEqual(['afk', 'a b', 'c', '|', 'x']);
@@ -102,6 +108,7 @@ describe('docs refs: slash, config, tools, hooks', () => {
     expect(check('```\n/modle sonnet\n```')).toEqual(['guides/x.mdx:2: slash /modle not found (did you mean /model?)']);
     expect(check('```text\nafk> /modle\n```')).toEqual(['guides/x.mdx:2: slash /modle not found (did you mean /model?)']);
     expect(check('```\n/usr/bin/node script.js\n/v1/messages\n/tmp\n```')).toEqual([]);
+    expect(check('```bash\n/data\n/workspace\n$ /app\n```')).toEqual([]);
     expect(check('```json\n/modle\n```')).toEqual([]);
   });
   it('checks dotted config tokens under known roots, allowing map children and prefixes', () => {

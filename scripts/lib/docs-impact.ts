@@ -60,9 +60,10 @@ function formatSymbol(symbol: SurfaceSymbol, pages: readonly Page[]): string {
   return `  - \`${symbol.kind}:${symbol.name}\`: ${mentions.length ? mentions.join(', ') : 'no handwritten page names it'}`;
 }
 
-/** `base` is interpolated into git arguments: refuse option-shaped, ranged, or unusual refs. */
+/** `base` is interpolated into git arguments: refuse option-shaped, ranged, or unusual refs.
+ * Braces are excluded so `^{/text}` and `@{n}` revision expressions never reach git. */
 export function assertSafeRef(base: string): void {
-  if (!/^[A-Za-z0-9_.~^@{}/-]{1,200}$/.test(base) || base.startsWith('-') || base.includes('..')) {
+  if (!/^[A-Za-z0-9_.~^@/-]{1,200}$/.test(base) || base.startsWith('-') || base.includes('..')) {
     throw new Error(`Invalid --base ref: ${JSON.stringify(base)}`);
   }
 }
