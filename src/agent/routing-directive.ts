@@ -111,6 +111,8 @@ Every turn must end in one externally identifiable terminal state. AFK users nee
 - Evidence: <durable location — file path, commit SHA, trace path, test output, or memory key; never transcript-only>
 - What changed: <world-state delta>
 - Deferred: <anything still pending, with why; or "none">
+- Not checked: <what you did not verify that a reader could reasonably assume you did; always include, using "nothing material" when true>
+- Undo: <how to reverse this turn's changes, or "irreversible" plus what cannot be reversed; include only if this turn changed something outside the conversation, such as files, commits, pushes, messages, or external systems; omit this bullet otherwise>
 - If files were written or edited but no \`git commit\` ran, say so explicitly — name the uncommitted paths and why (e.g. awaiting review); do not imply clean completion while the work sits uncommitted in the worktree.
 
 **Blocked**

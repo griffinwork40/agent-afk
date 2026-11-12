@@ -39,6 +39,7 @@
  */
 
 import { env } from '../../config/env.js';
+import { normalizeSlotProvider, parseStringField } from './model-slots.utils.js';
 
 /**
  * The fixed capability-tier positions plus the `subagent` routing slot.
@@ -168,8 +169,10 @@ export const CLAUDE_OPUS_ID = 'claude-opus-5-5';
 export const CLAUDE_OPUS_55_ID = 'claude-opus-5-5';
 /** Claude Fable 5 wire id — preserved for explicit raw-id back-compat. */
 export const CLAUDE_FABLE_5_ID = 'claude-fable-5';
-/** Claude Fable 5.1 wire id — current target for the stable `fable` alias. */
+/** Claude Fable 5.1 wire id — preserved for explicit raw-id back-compat. */
 export const CLAUDE_FABLE_5_1_ID = 'claude-fable-5-1';
+/** Claude Fable 5.2 wire id — current target for the stable `fable` alias. */
+export const CLAUDE_FABLE_5_2_ID = 'claude-fable-5-2';
 /**
  * Current xAI Grok flagship wire id — the concrete target for the `grok`
  * short alias. Update this constant when a new flagship ships; the alias
@@ -234,7 +237,7 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   sonnet: CLAUDE_SONNET_ID,
   sonnet_1m: CLAUDE_SONNET_ID,
   haiku: CLAUDE_HAIKU_ID,
-  fable: CLAUDE_FABLE_5_1_ID,
+  fable: CLAUDE_FABLE_5_2_ID,
   // xAI Grok flagship alias — a stable short handle that tracks
   // GROK_FLAGSHIP_ID so upgrading the default Grok model is a one-line
   // change. Not a capability tier: `grok` always resolves to one pinned id.
@@ -498,8 +501,7 @@ export function parseModelsConfig(raw: unknown): Partial<Record<SlotName, ModelS
 
 // Re-exported from sibling (350-line ceiling — see model-slots.coerce.ts).
 export { coerceSlotBindingInput } from './model-slots.coerce.js';
-// Shared low-level helpers (moved from inline copies — see #4120).
-import { normalizeSlotProvider, parseStringField } from './model-slots.utils.js';
+// Shared low-level helpers (moved from inline copies — see #4120); imported at top of file.
 
 /** Max accepted contextWindow override (10M tokens). Values above are ignored at load / rejected at write. */
 export const MAX_CONTEXT_WINDOW_OVERRIDE = 10_000_000;

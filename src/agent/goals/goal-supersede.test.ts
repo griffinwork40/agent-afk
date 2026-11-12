@@ -306,6 +306,9 @@ describe('Scenario 3 (#3714): goal change while worker runs', () => {
     expect(envelope).toContain('superseded="true"');
   });
 
+});
+
+describe('Scenario 4 (#4053): pause→resume→same-text', () => {
   /**
    * Pause→resume→same-text path (#4053): when a goal was active at dispatch,
    * paused mid-flight, then resumed with the same text before delivery, the
@@ -349,5 +352,4 @@ describe('Scenario 3 (#3714): goal change while worker runs', () => {
     expect(envelope).toContain('status="completed"');
     expect(envelope).not.toContain('superseded');
   });
-
 });

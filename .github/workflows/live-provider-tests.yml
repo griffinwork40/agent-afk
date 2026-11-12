@@ -8,9 +8,13 @@ name: Live Provider Tests
 # Anthropic usage (claude-sonnet-5, one call, maxOutputTokens=20). Nightly
 # cadence keeps monthly spend well under $0.01.
 #
-# Required repository secrets (Settings → Secrets → Actions):
+# Repository secrets (Settings → Secrets → Actions):
 #   CLAUDE_CODE_OAUTH_TOKEN   – Anthropic Claude OAuth token
 #   OPENAI_API_KEY            – OpenAI API key (sk-...)
+#
+# Both must be set for the tests to run. If either is missing, the `gate` job
+# reports which one and the `live-tests` job is skipped, so the run does not
+# fail and does not claim to have tested anything.
 
 on:
   schedule:
@@ -35,8 +39,47 @@ permissions:
   contents: read
 
 jobs:
+  # Without credentials the Anthropic test throws on its first line, which
+  # made this workflow fail every night while testing nothing. The gate turns
+  # that into an explicit skip. Secret values are only tested for emptiness
+  # and are never printed.
+  gate:
+    name: Check provider secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      has_secrets: ${{ steps.check.outputs.has_secrets }}
+    steps:
+      - name: Check that both provider secrets are set
+        id: check
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          MISSING=""
+          [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || MISSING="$MISSING CLAUDE_CODE_OAUTH_TOKEN"
+          [ -n "$OPENAI_API_KEY" ] || MISSING="$MISSING OPENAI_API_KEY"
+
+          if [ -z "$MISSING" ]; then
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Live provider tests skipped::Missing repository secrets:$MISSING. Nothing was tested."
+          {
+            echo "### Live provider tests skipped"
+            echo ""
+            echo "Missing repository secrets:$MISSING"
+            echo ""
+            echo "No provider API was called. Add the secrets under Settings → Secrets → Actions to turn the nightly tests on."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   live-tests:
     name: Live provider smoke tests
+    needs: gate
+    if: needs.gate.outputs.has_secrets == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -48,7 +91,7 @@ jobs:
         # No `version:` here: package.json#packageManager pins pnpm exactly.
         # Setting both makes pnpm/action-setup v6 fail with "Multiple versions
         # of pnpm specified" (same convention as ci.yml / validate-action.yml).
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
@@ -82,6 +125,13 @@ jobs:
           LABEL="live-test-failure"
           TITLE="ci: live provider tests failing (nightly)"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # The label has to exist before `gh issue create --label` can use
+          # it. --force makes this a no-op when it is already there.
+          gh label create "$LABEL" \
+            --description "Nightly live provider tests are failing" \
+            --color B60205 \
+            --force
 
           # Find an existing open issue with the label.
           EXISTING=$(gh issue list \

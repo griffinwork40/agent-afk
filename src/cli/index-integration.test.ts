@@ -136,18 +136,24 @@ describe('preAction hook — deferred AFK.md size warning flush', () => {
 
   it('flushes deferred warnings for non-interactive commands', () => {
     // Simulate the preAction hook logic from index.ts for a non-interactive command.
+    // Note: actionName is a hardcoded literal here, so the branch is always taken
+    // and this test only exercises the flush path, not the conditional. The real
+    // end-to-end coverage of the conditional (both branches) is in the Commander
+    // round-trip test below ('preAction hook wired on a real Commander program').
     deferAfkMdSizeWarnings();
     const actionName: string = 'chat';
     if (actionName !== 'interactive') flushDeferredAfkMdSizeWarnings();
     // No messages were buffered, so warn is not called — but deferral was ended
     // (subsequent direct calls emit immediately).
     expect(warnSpy).not.toHaveBeenCalled();
-    // Confirm deferral is now off: a direct console.warn call from the flush
-    // path would fire if anything had been buffered.
   });
 
   it('does NOT flush when the action command is "interactive"', () => {
     // Simulate the preAction hook logic from index.ts for the interactive command.
+    // Note: actionName is a hardcoded literal here, so the branch is never taken
+    // and this test only verifies that deferral stays active when flush is not
+    // called. The real end-to-end conditional coverage is in the Commander
+    // round-trip test below ('preAction hook wired on a real Commander program').
     deferAfkMdSizeWarnings();
     const actionName = 'interactive';
     if (actionName !== 'interactive') flushDeferredAfkMdSizeWarnings();

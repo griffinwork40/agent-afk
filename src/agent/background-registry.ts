@@ -137,7 +137,25 @@ export interface RegisterArgs {
   handle: SubagentHandle;
   prompt: string;
   model: string;
-  /** Creator of this job. Defaults to user so ambiguous callers fail safe. */
+  /**
+   * Creator of this job. Omit to accept the fail-safe default (`'user'`).
+   *
+   * Three values are in play:
+   *   - `'model'`            — dispatched by the model via the `agent` tool;
+   *                            the model may steer and cancel it.
+   *   - `'user-backgrounded'`— a foreground job the user promoted to background
+   *                            (Ctrl+B); model cancellation is restricted, but
+   *                            model steering is still permitted since the model
+   *                            originated the job. Distinguished in telemetry.
+   *   - `'user'`             — initiated directly by the user (or unspecified).
+   *
+   * **Fail-safe default:** when `provenance` is omitted the registry falls back
+   * to `'user'`, which is the *most restrictive* value: a `'user'` job cannot
+   * be steered or cancelled by the model (see `cancelModelJob()`). Callers that
+   * do not know or care about provenance therefore land in the safe state where
+   * the model has no authority over the job, preventing silent model-driven
+   * cancellations on ambiguously-owned work.
+   */
   provenance?: BackgroundJobProvenance;
   /**
    * Optional parent session id. Forwarded to routing-telemetry events
@@ -223,6 +241,14 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
    * reading the trace sees the start record before any child events
    * the SDK might emit via `subagent_lifecycle`.
    *
+   * **Provenance fail-safe**: if `args.provenance` is omitted, the job is
+   * recorded as `'user'` — the most restrictive provenance value. A `'user'`
+   * job cannot be steered or cancelled by the model (only `'model'` jobs are
+   * eligible for `cancelModelJob()`). This means an unspecified-provenance job
+   * is always model-proof: the model cannot silently cancel work it did not
+   * explicitly own. Pass `provenance: 'model'` explicitly when the `agent`
+   * tool is the true initiator.
+   *
    * @throws {BackgroundJobCapError} when the number of running jobs is at
    *   or above `maxConcurrentJobs`. The caller must tear down the handle.
    */
@@ -286,6 +312,12 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
    * rolling transcript (used by the optional Haiku summarizer) is empty for
    * promoted jobs. New jobs that need full progress capture use
    * {@link register}.
+   *
+   * **Provenance fail-safe**: identical to {@link register} — omitting
+   * `args.provenance` defaults to `'user'`, which prevents the model from
+   * steering or cancelling the adopted job. For Ctrl+B promotions the caller
+   * passes `'user-backgrounded'` to distinguish telemetry; this prevents model
+   * cancellation but permits model steering.
    *
    * @throws {BackgroundJobCapError} when the running-job cap is reached. The
    *   caller (executor) should fall back to awaiting the foreground run rather

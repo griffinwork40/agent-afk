@@ -41,9 +41,9 @@ function aborted(): AbortSignal {
   return ac.signal;
 }
 
-// Suppress Telegram push calls — we are testing the store, not the transport.
-vi.mock('../../telegram/push.js', () => ({
-  pushIfConfigured: vi.fn().mockResolvedValue(undefined),
+// Suppress operator notifications — we are testing the store, not the transport.
+vi.mock('../operator-notify.js', () => ({
+  operatorNotify: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ---------------------------------------------------------------------------
@@ -125,8 +125,8 @@ describe('makeDaemonElicitationHandler', () => {
   });
 
   it('sends confirm question with inline keyboard via pushIfConfigured', async () => {
-    const { pushIfConfigured } = await import('../../telegram/push.js');
-    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    const { operatorNotify } = await import('../operator-notify.js');
+    const mockPush = operatorNotify as ReturnType<typeof vi.fn>;
     mockPush.mockClear();
 
     const handler = makeDaemonElicitationHandler({
@@ -151,8 +151,8 @@ describe('makeDaemonElicitationHandler', () => {
   });
 
   it('sends choice question with per-option buttons via pushIfConfigured', async () => {
-    const { pushIfConfigured } = await import('../../telegram/push.js');
-    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    const { operatorNotify } = await import('../operator-notify.js');
+    const mockPush = operatorNotify as ReturnType<typeof vi.fn>;
     mockPush.mockClear();
 
     const handler = makeDaemonElicitationHandler({
@@ -175,8 +175,8 @@ describe('makeDaemonElicitationHandler', () => {
   });
 
   it('sends text question without inline keyboard', async () => {
-    const { pushIfConfigured } = await import('../../telegram/push.js');
-    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    const { operatorNotify } = await import('../operator-notify.js');
+    const mockPush = operatorNotify as ReturnType<typeof vi.fn>;
     mockPush.mockClear();
 
     const handler = makeDaemonElicitationHandler({
@@ -274,8 +274,8 @@ describe('recoverPendingHandoffs', () => {
   });
 
   it('re-sends confirm reminder with inline keyboard (no bot)', async () => {
-    const { pushIfConfigured } = await import('../../telegram/push.js');
-    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    const { operatorNotify } = await import('../operator-notify.js');
+    const mockPush = operatorNotify as ReturnType<typeof vi.fn>;
     mockPush.mockClear();
 
     const record: HandoffRecord = {
@@ -303,8 +303,8 @@ describe('recoverPendingHandoffs', () => {
   });
 
   it('re-sends choice reminder with per-option buttons (no bot)', async () => {
-    const { pushIfConfigured } = await import('../../telegram/push.js');
-    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    const { operatorNotify } = await import('../operator-notify.js');
+    const mockPush = operatorNotify as ReturnType<typeof vi.fn>;
     mockPush.mockClear();
 
     const record: HandoffRecord = {
@@ -332,8 +332,8 @@ describe('recoverPendingHandoffs', () => {
   });
 
   it('re-sends text reminder without inline keyboard (no bot)', async () => {
-    const { pushIfConfigured } = await import('../../telegram/push.js');
-    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    const { operatorNotify } = await import('../operator-notify.js');
+    const mockPush = operatorNotify as ReturnType<typeof vi.fn>;
     mockPush.mockClear();
 
     const record: HandoffRecord = {

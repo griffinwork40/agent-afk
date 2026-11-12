@@ -23,9 +23,13 @@ export type CwdDependentsFactory = (newCwd: string) => {
   dispatcher: ToolDispatcher;
 };
 
+/** @internal */
 export interface CwdDependentsFactoryArgs {
   stableSystemPrefix: StableSystemParts;
   config: AgentConfig;
+  /** The resolved (minted or resumed) session id — use instead of
+   * `config.sessionId` which is only populated on `--resume` paths. */
+  resolvedSessionId: string | undefined;
   surface: string;
   runtimeStateSource: RuntimeStateSource;
   getCurrentCwd: () => string | undefined;
@@ -90,9 +94,8 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
 
     // 2. Rebuild the system prompt with the new `# Environment` line via the
     //    SAME assembler the first-turn path uses (query/system-prompt.ts), so
-    //    the two can never drift. Identity fields (sessionId/surface/depth/
-    //    maxDepth) are stable across cwd swaps, so we reuse the config
-    //    snapshot.
+    //    the two can never drift. Identity fields (surface/depth/maxDepth) are
+    //    stable across cwd swaps, so we reuse the config snapshot.
     //
     //    Invariant: `workspace` is NOT stable across a cwd swap — a different
     //    worktree is a different branch and HEAD — so it MUST be re-read from
@@ -103,7 +106,7 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
     //    line to the launch directory for the rest of the session.
     const newUserSystem = assembleSystemPrompt(args.stableSystemPrefix, newCwd, {
       surface: args.surface,
-      sessionId: args.config.sessionId,
+      sessionId: args.resolvedSessionId,
       depth: args.config.depth,
       maxDepth: args.config.maxDepth,
       workspace: args.runtimeStateSource.getWorkspace(),
@@ -129,7 +132,7 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
       readRoots: args.sharedReadRoots,
       writeRoots: args.sharedWriteRoots,
       ...(args.config.env !== undefined ? { env: args.config.env } : {}),
-      sessionId: args.config.sessionId,
+      sessionId: args.resolvedSessionId,
       parentSessionId: args.config.parentSessionId,
       // #2442: keep root attribution across a cwd re-anchor (parity with
       // dispatcher-wiring.ts), else a depth-2 child's artifacts are lost.

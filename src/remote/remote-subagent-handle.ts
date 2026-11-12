@@ -185,7 +185,9 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
       }
       if (outcome.kind === 'error' || outcome.kind === 'lost') {
         this._status = 'failed';
-        throw new Error(outcome.reason);
+        // Include remoteDetail in the error message (mirrors runToResult() and remote-agent.ts handler)
+        const detail = outcome.remoteDetail ? `: ${outcome.remoteDetail}` : '';
+        throw new Error(`${outcome.reason}${detail}`);
       }
       // kind === 'done'
       this._status = 'succeeded';

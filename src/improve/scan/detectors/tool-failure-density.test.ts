@@ -643,6 +643,16 @@ describe('normalizeErrorHead — duration normalization', () => {
     const b = normalizeErrorHead('Tool timed out after 60000ms');
     expect(a).toBe(b);
   });
+
+  it('collapses compound duration with decimal on last segment (1m30.5s)', () => {
+    // The regex inner group allows a decimal on ANY segment, so `1m30.5s` is
+    // matched as a single compound token and collapses to `<dur>`. This is
+    // non-standard (SI durations don't mix compound and decimal forms) but
+    // harmless for clustering purposes — two such strings still land in the
+    // same cluster. Documenting the chosen behavior so future maintainers can
+    // change it intentionally rather than by accident.
+    expect(normalizeErrorHead('timed out after 1m30.5s')).toBe('timed out after <dur>');
+  });
 });
 
 describe('normalizeErrorHead — quoted value normalization', () => {
@@ -706,6 +716,12 @@ describe('normalizeErrorHead — over-collapse fixes (issue #4401)', () => {
     );
   });
 
+  it('collapses file:// URLs', () => {
+    expect(normalizeErrorHead('cannot read file:///var/log/output.log permission denied')).toBe(
+      'cannot read <url> permission denied',
+    );
+  });
+
   it('still collapses a leading absolute path', () => {
     expect(normalizeErrorHead('ENOENT: /Users/alice/foo.ts not found')).toBe(
       'ENOENT: <path> not found',
@@ -742,6 +758,20 @@ describe('normalizeErrorHead — over-collapse fixes (issue #4401)', () => {
 
   it('collapses single-quoted values preceded by colon (error:\'value\' pattern)', () => {
     expect(normalizeErrorHead("error:'some-dynamic-value'")).toBe('error:<val>');
+  });
+
+  it('does not collapse =-prefixed single-quoted values (not a known prefix)', () => {
+    // A literal like `key='val'` does not match the single-quote guard because
+    // `=` is not in the allowed prefix set (whitespace / `(` `[` `{` `,` `;` `:`).
+    const result = normalizeErrorHead("key='some-value'");
+    expect(result).not.toContain('<val>');
+    expect(result).toBe("key='some-value'");
+  });
+
+  it('does not collapse <-prefixed single-quoted values (not a known prefix)', () => {
+    // `<` is not in the allowed prefix set either.
+    const result = normalizeErrorHead("arg <'value'");
+    expect(result).not.toContain('<val>');
   });
 });
 

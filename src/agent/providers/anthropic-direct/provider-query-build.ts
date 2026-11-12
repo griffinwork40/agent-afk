@@ -76,6 +76,7 @@ export function buildProviderQuery(
     : createCwdDependentsFactory({
         stableSystemPrefix,
         config,
+        resolvedSessionId,
         surface: ctx.surface,
         runtimeStateSource,
         getCurrentCwd: () => ctx.getCurrentCwd(),

@@ -8,6 +8,29 @@
  */
 
 import type { RunReceipt } from './receipt.js';
+import type { OutcomesV1 } from '../outcomes/outcomes-v1.schema.js';
+
+/**
+ * Escape a string for safe embedding in a GFM table cell.
+ *
+ * Order matters: backslash first so added escapes are not re-escaped.
+ * Collapses all newline variants to a space to prevent row injection.
+ * Does NOT escape `-`, `(`, or `)` -- existing keys use those characters.
+ */
+function escapeCell(s: string): string {
+  return s
+    .replace(/\r\n|\r|\n/g, ' ')
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/`/g, '\\`')
+    .replace(/\*/g, '\\*')
+    .replace(/_/g, '\\_')
+    .replace(/\[/g, '\\[')
+    .replace(/]/g, '\\]')
+    .replace(/</g, '\\<')
+    .replace(/>/g, '\\>')
+    .replace(/!/g, '\\!');
+}
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -28,6 +51,7 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
   );
   const metaParts: string[] = [];
   if (r.sessionId !== undefined) metaParts.push(`**Session:** ${r.sessionId}`);
+  if (r.cwd !== undefined) metaParts.push(`**Cwd:** ${r.cwd}`);
   if (r.endedAt !== undefined) metaParts.push(`**Ended:** ${r.endedAt}`);
   if (r.durationMs !== undefined) metaParts.push(`**Duration:** ${formatDuration(r.durationMs)}`);
   if (metaParts.length > 0) lines.push(metaParts.join(' · '));
@@ -67,11 +91,22 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
       lines.push(`| Cost (USD, subagents) | ${r.cost.subagentCostUsd.toFixed(4)} |`);
   } else if (r.cost.finalCostUsd !== undefined)
     lines.push(`| Cost (USD) | ${r.cost.finalCostUsd.toFixed(4)} |`);
-  if (r.subagents.started > 0)
+  if (r.subagents.started > 0) {
     lines.push(
       `| Subagents | ${r.subagents.started} started · ${r.subagents.succeeded} ok · ` +
         `${r.subagents.failed} failed · ${r.subagents.cancelled} cancelled |`,
     );
+    if (r.subagents.byModel !== undefined) {
+      for (const key of Object.keys(r.subagents.byModel).sort()) {
+        const b = r.subagents.byModel[key];
+        if (b === undefined) continue;
+        lines.push(
+          `| Subagents (${escapeCell(key)}) | ${b.started} started · ${b.succeeded} ok · ` +
+            `${b.failed} failed · ${b.cancelled} cancelled · $${b.costUsd.toFixed(4)} |`,
+        );
+      }
+    }
+  }
   if (r.closureReason !== undefined) lines.push(`| Closure | ${r.closureReason} |`);
   lines.push('');
 
@@ -134,6 +169,8 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
     lines.push('');
   }
 
+  if (r.outcomes) renderOutcomes(r.outcomes, lines);
+
   lines.push('## Limitations');
   lines.push('');
   for (const lim of r.limitations) lines.push(`- ${lim}`);
@@ -145,4 +182,26 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
   );
   lines.push('');
   return lines.join('\n');
+}
+
+/** Short "what changed in the world" section (receipt v3). */
+function renderOutcomes(o: OutcomesV1, lines: string[]): void {
+  lines.push('## Outcomes');
+  lines.push('');
+  if (o.commits.length > 0) {
+    lines.push(`**Commits (${o.commits.length}):**`);
+    for (const c of o.commits) lines.push(`- \`${c.sha.slice(0, 7)}\` ${c.subject}`);
+    lines.push('');
+  }
+  if (o.prs.length > 0) {
+    lines.push(`**PRs (${o.prs.length}):**`);
+    for (const p of o.prs) lines.push(`- ${p.url} (${p.action})`);
+    lines.push('');
+  }
+  const files = `${o.filesChanged.length}${o.filesChangedTruncated ? '+' : ''}`;
+  lines.push(
+    `**Files changed:** ${files} · **Schedules:** ${o.schedules.length} · ` +
+      `**Services:** ${o.services.length} · **Terminal state:** ${o.terminalState ?? 'none'}`,
+  );
+  lines.push('');
 }

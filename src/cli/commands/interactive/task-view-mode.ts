@@ -82,7 +82,7 @@ export function renderTaskViewHeader(
     ...(agentType ? [palette.dim(`type: ${stripEscapeSequences(agentType).slice(0, 30)}`)] : []),
     `status: ${statusBadge(taskStatusToBadge(status))}`,
   ];
-  return [divider(undefined, 80), parts.join('  '), divider(undefined, 80)].join('\n');
+  return [divider(), parts.join('  '), divider()].join('\n');
 }
 
 /** Build the footer line shown under the conversation body. */

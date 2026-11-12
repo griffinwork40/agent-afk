@@ -1,7 +1,6 @@
 import type { AgentSession } from '../session.js';
 import type { SessionStats } from '../../cli/slash/types.js';
 import { contextLimitFor } from '../model-limits.js';
-import { fetchSubscriptionUsage } from '../subscription-usage.js';
 
 export type ContextUsage = Awaited<ReturnType<AgentSession['getContextUsage']>>;
 export interface LocalTokenUsage {
@@ -16,10 +15,6 @@ export interface LocalTokenUsage {
   model: SessionStats['model'];
 }
 export type TokenUsage = { kind: 'sdk'; usage: ContextUsage } | LocalTokenUsage;
-
-export function readSubscriptionUsage(): ReturnType<typeof fetchSubscriptionUsage> {
-  return fetchSubscriptionUsage();
-}
 
 export function readContextUsage(session: Pick<AgentSession, 'getContextUsage'>): Promise<ContextUsage> {
   return session.getContextUsage();

@@ -21,7 +21,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const dir of cacheDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
-import { getCurrentBranch, queryPrState, queryPrStateByUrl, writeFacetYield, patchYieldFields } from './yield-probe.js';
+import { getCurrentBranch, queryPrState, queryPrStateByUrl, writeFacetYield, patchYieldFields, patchFacetDecisions } from './yield-probe.js';
 import type { ExecFnYield } from './yield-probe.js';
 
 // ---------------------------------------------------------------------------
@@ -356,6 +356,71 @@ describe('writeFacetYield — cached yield integration (#2796)', () => {
       require('node:fs').readFileSync(join(cacheDir, `${sessionId}.json`), 'utf8'),
     ) as { yield_tracking: { produced_pr: unknown } };
     expect(still.yield_tracking.produced_pr).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// patchFacetDecisions — unit tests for all four exit paths (#4636)
+// ---------------------------------------------------------------------------
+
+describe('patchFacetDecisions', () => {
+  it('is a no-op when the cache file is absent', () => {
+    // cacheDir has no file for this session — must not throw
+    expect(() =>
+      patchFacetDecisions('sess-absent', ['decision A'], isolatedCacheDir),
+    ).not.toThrow();
+  });
+
+  it('is a no-op when decisions array is empty', () => {
+    const sessionId = 'sess-empty-decisions';
+    const file = join(isolatedCacheDir, `${sessionId}.json`);
+    writeFileSync(file, buildCachedFacet(sessionId, {
+      is_scheduled_session: false, produced_pr: null, pr_merged: null, pr_url: null,
+    }));
+    const before = readFileSync(file, 'utf8');
+
+    patchFacetDecisions(sessionId, [], isolatedCacheDir);
+
+    // File must be unchanged — empty array triggers early return
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('patches decisions into a valid cached facet', () => {
+    const sessionId = 'sess-patch-decisions';
+    const file = join(isolatedCacheDir, `${sessionId}.json`);
+    writeFileSync(file, buildCachedFacet(sessionId, {
+      is_scheduled_session: false, produced_pr: null, pr_merged: null, pr_url: null,
+    }));
+
+    patchFacetDecisions(sessionId, ['Used approach A', 'Chose X over Y'], isolatedCacheDir);
+
+    const written = JSON.parse(readFileSync(file, 'utf8')) as { decisions: unknown };
+    expect(written.decisions).toEqual(['Used approach A', 'Chose X over Y']);
+  });
+
+  it('is a no-op when the cache file contains corrupt JSON', () => {
+    const sessionId = 'sess-corrupt-decisions';
+    const file = join(isolatedCacheDir, `${sessionId}.json`);
+    writeFileSync(file, 'not valid json {{{{');
+
+    // Must not throw and must leave the file untouched
+    expect(() =>
+      patchFacetDecisions(sessionId, ['some decision'], isolatedCacheDir),
+    ).not.toThrow();
+    expect(readFileSync(file, 'utf8')).toBe('not valid json {{{{');
+  });
+
+  it('is a no-op when the cache file fails schema validation', () => {
+    const sessionId = 'sess-schema-invalid-decisions';
+    const file = join(isolatedCacheDir, `${sessionId}.json`);
+    // Valid JSON but missing required facet fields → safeParse fails
+    writeFileSync(file, JSON.stringify({ session_id: sessionId, facet_version: 7 }));
+    const before = readFileSync(file, 'utf8');
+
+    expect(() =>
+      patchFacetDecisions(sessionId, ['a decision'], isolatedCacheDir),
+    ).not.toThrow();
+    expect(readFileSync(file, 'utf8')).toBe(before);
   });
 });
 

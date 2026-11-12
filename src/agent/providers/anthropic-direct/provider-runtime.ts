@@ -66,6 +66,7 @@ import { StateStore } from '../../state/state-store.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
 import { providerGrantsTool } from '../shared/tool-grant.js';
 import { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
+import { ToolCallLedgerWiring } from '../../tools/dispatcher.ledger.js';
 import { env } from '../../../config/env.js';
 import { buildProviderSchemas } from './provider-schemas.js';
 import { applyReadOnlyGitPermissions } from '../../tools/readonly-git-surface.js';
@@ -108,7 +109,8 @@ export class AnthropicDirectProvider implements ModelProvider {
   private readonly providerFactory?: AnthropicClientFactory;
   private readonly skillExecutor?: SkillExecutor;
   // Fields retained for per-query dispatcher construction (fixes C2 env race).
-  private readonly schemas: readonly import('../../tools/types.js').AnthropicToolDef[];
+  // Mutable: rebuilt post-construction when setSubscribeHandler is called.
+  private schemas: readonly import('../../tools/types.js').AnthropicToolDef[];
   private readonly hookRegistry: import('../../hooks.js').HookRegistry | undefined;
   private readonly permissions: ToolPermissionConfig | undefined;
   private readonly canUseTool: CanUseTool | undefined;
@@ -180,6 +182,13 @@ export class AnthropicDirectProvider implements ModelProvider {
    * probing to session-owned PIDs (#1430).
    */
   private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
+
+  /**
+   * Session-scoped tool-call ledger (#4476). One per provider (= per session;
+   * forked children get their own provider, hence their own ledger), threaded
+   * into every per-query dispatcher so it survives dispatcher rebuilds.
+   */
+  private readonly _toolCallLedger = new ToolCallLedgerWiring();
 
   private get memoryStore(): MemoryStore { return (this._memoryStore ??= makeDefaultMemoryStore()); }
   private get stateStore(): StateStore { return (this._stateStore ??= makeDefaultStateStore()); }
@@ -280,7 +289,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       permissionMode,
       // Inject the session-scoped PID registry into every per-query dispatcher
       // so bash can register spawned PIDs and wait_for can gate on them (#1430).
-      { ...opts, spawnedPidRegistry: this._spawnedPidRegistry },
+      { ...opts, spawnedPidRegistry: this._spawnedPidRegistry, toolCallLedger: this._toolCallLedger },
     );
   }
 
@@ -289,9 +298,28 @@ export class AnthropicDirectProvider implements ModelProvider {
    * Called by forkSubagent after wireWorkspaceSubscriptions() produces the
    * handler and the pre-built child provider is already in childConfig.
    * Must be called before the first query fires (before AgentSession starts).
+   * Rebuilds `schemas` so the tool appears in the schema array passed to each
+   * per-query dispatcher (mirrors the OAI-side mutable-schemas + rebuild pattern).
    */
   setSubscribeHandler(handler: import('../../tools/types.js').ToolHandler): void {
     this.subscribeHandler = handler;
+    // Intentionally omitted from this rebuild (zero matches in provider-schemas.ts today;
+    // adding them here would be safe but introduces unnecessary coupling):
+    //   readOnlyBash  — controls bash/git_read swap, not schema presence
+    //   hookRegistry  — not consumed by buildProviderSchemas
+    //   permissions   — tool filtering applied by dispatcher, not schema builder
+    //   canUseTool    — same as permissions: dispatcher-layer, not schema-layer
+    //   mcpManager    — MCP tools are served from cache in buildDispatcher, not schemas
+    this.schemas = buildProviderSchemas({
+      readOnlyMemory: this.readOnlyMemory,
+      readOnlyState: this.readOnlyState,
+      workspaceStore: this.workspaceStore,
+      subscribeHandler: handler,
+      subagentExecutor: this.subagentExecutor,
+      skillExecutor: this.skillExecutor,
+      composeExecutor: this.composeExecutor,
+      customTools: this.customTools,
+    });
   }
 
   /** See {@link ModelProvider.grantsTool}. Same permissions + store the dispatcher uses. */

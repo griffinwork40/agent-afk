@@ -6,10 +6,414 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries in the [Unreleased] section may include a short commit hash suffix
-(e.g. `- add thing (abc1234)`). The hash is used by `/changelog` and
+(e.g. `- add thing (abc1234)`). The hash is used by
 `scripts/generate-changelog.mjs` to deduplicate commits across successive runs.
+The `/changelog` slash command omits the hash (entries are formatted without it).
 
 ## [Unreleased]
+
+## [5.353.1] - 2026-11-12
+
+### Fixed
+- retitle command classifier call-site wiring test (#4675) (0963f9abe)
+- address remaining test-gap and hygiene findings (#4809) (188805c88)
+- add Lighthouse CI gate for docs site perf observability (#4810) (19ff72e74)
+- restore test-typecheck ratchet on main after #4813 baseline drop (#4815) (cdce7ca9c)
+- add missing tests and fix positional assertion fragility (#4813) (0f75365e1)
+- wire ToolCallLedger at the dispatch boundary ("Wired at the dispatch boundary") (#4814) (5dd1d30c3)
+- sync journal after inter-round steering/pause injection in anthropic-direct (#4807) (229ae6a30)
+- make Anthropic credential provenance a loader output (#4808) (baccf0033)
+- credential scrub gaps (DATABASE_URL etc.) + aggregate blob-bytes cap (#4811) (697105da0)
+- add regression tests for stall-watchdog suspend/resume during pause (#4812) (bd5c8fdbb)
+- raise vi.waitFor timeout for /help flake on loaded macOS CI (#4806) (d2dfca54b)
+- clean up CLI_USER_AGENT JSDoc and add version-equality test (#4805) (7260c6d36)
+- count byModel bucket entries per event, not per map entry (#4797) (8dff7de46)
+- map cache_write_tokens to BillingUsage.cacheWrite for openai-compatible (#4794) (8c6c5427a)
+- add table-driven escapeCell tests and byModel edge-case tests (#4795) (ff3ce11e1)
+- correct inverted Anthropic/OpenAI provider detection in classifier (#4798) (fae9138d8)
+- tighten undo needle and add verdict-card echo guards (#4801) (571683fd0)
+- replace lines.length>2 proxy with explicit primaryWritten boolean and add secondary-tier edge-case tests (#4800) (51d18c15c)
+- add (unknown) bucket for model-less starts, restate cost invariant (#4796) (836749c55)
+- address stale comments, type nit, and style items from advisory batch (#4803) (ffcfa2d29)
+- tighten git-helpers test assertions per advisory review (#4802) (8819fac03)
+- pin symlink error message and add unconfined-path comments in artifact.test.ts (#4799) (436947a3d)
+
+### Changed
+- skip the nightly live provider tests when secrets are absent (#4824) (d45e00c96)
+- poll for the verified abort instead of a fixed 200ms sleep (#4789) (#4792) (d9850fe52)
+- retry temp dir teardown to stop Windows EBUSY flake (#4788) (#4791) (347b1a5fa)
+- prime the xcrun cache so sandboxed git cannot time out (#4790) (#4793) (46cb85110)
+
+## [5.353.0] - 2026-11-11
+
+### Added
+- add subagents.byModel per-model rollup to run receipt (#4780) (a023f830c)
+- persist credential source in sidecar and trace (#4779) (3d2802003)
+
+### Fixed
+- address prod dep bump api-compat follow-ups (#4756) (2c869c0ac)
+- retry bubblewrap apt install on transient mirror failures (#4781) (584716488)
+- prefix-cap eviction gaps from episode recall merge (#4754) (700ef60ac)
+
+## [5.352.0] - 2026-11-11
+
+### Added
+- add tier-based visual hierarchy for Done rows (#4774) (1f9bfa53a)
+- add Not checked and Undo to the Done block (#4771) (766810e98)
+
+### Fixed
+- fix TS2556 in acp.session.test mock wrappers, restore baseline to 2674 (fa180ea0d)
+- restore main green (test typecheck ratchet + Windows EBUSY) (#4772) (5d6afaa4f)
+- sync test-typecheck baseline to 2676 after rebase onto main (f091b3d83)
+- extract buildDaemonGetModel, fix TS2339, wire tests through production callback (155848946)
+- address advisory findings in git helpers test suite (c36e4a6bf)
+- address advisory findings in artifact handler tests (118896e9e)
+
+## [5.351.0] - 2026-11-10
+
+### Added
+- add episode recall operational transparency (#4703) (03735a683)
+- default AFK_SESSION_PICKER to disabled (#4751) (d6d6bed8c)
+
+### Fixed
+- inject resume context at model-round boundary for mid-turn pauses (2b6b0937c)
+- bump CLI version claim to 2.1.322 for Fable 5.2 access (#4762) (ad5d31823)
+- add UTF-8 truncation guards and 4-byte test case (316c21723)
+- pass session-scoped store to episode recall in acp (c748e51fa)
+- preserve table top border during tall overlay (#4747) (d776bae04)
+- style, type, and test gaps in resume-all (6a5d50f97)
+- remove dead patchFacetDecisions barrel export (05e75f3ec)
+- address advisory findings from facet surface threading (e098313b1)
+- address advisory findings from episode recall separation (d4da76620)
+- add branch-decay test and hoist Date.now in episode scoring (ae62cfd90)
+- address advisory findings in agent-type listing tests (78253e357)
+- cover read-only invariant and remove dead fallbackSessionId parameter (0aa767b5a)
+- use rmSyncRetry in memory test teardown for Windows EBUSY (#4750) (14bc9fb00)
+- add Case B test and fix misleading comment (#4747) (21cdf5682)
+
+## [5.350.0] - 2026-11-09
+
+### Added
+- FTS union over facet cache for memory_search session results (f85b1656e)
+- bump fable alias to claude-fable-5-2 (#4746) (7b918f900)
+- startup session picker for REPL (467bb903a)
+
+### Fixed
+- address 6 blocking review findings on PR #4708 (95fd7570f)
+- use --version probe for bwrap availability in runtime test (951855017)
+- guard spinner method calls in maybeRunStartupPicker for non-TTY environments (9a40cbd09)
+- split bwrap probe into installed vs functional for CI (0ff3c6759)
+- address 5 blocking review findings on PR #4708 (e527da888)
+- strip UNC/extended-length prefixes in norm(); gate backslash conversion on Windows detection (fb9a0511d)
+- add stat to WorktreeHandlerDeps and add TOCTOU test (4978e4f89)
+- address all 6 review findings on startup session picker (7aecac8f2)
+- add sandbox spawn diagnostics and CI runtime enforcement (#4718) (63ec0b5b1)
+- assert isDirectory() after fs.stat on explicit repo path (b2d679e10)
+- address episode system architectural constraints (hook ordering + dedupe guard) (fc183623a)
+- use path.posix for POSIX platform sandbox path checks (aea2c722a)
+- improve worktree repo parameter validation (91d766550)
+
+### Changed
+- align checkThinkingAnnotation with TTFB pattern and scope THINKING_GRACE_MS (#4704) (456c18584)
+- bump next from 16.4.3 to 16.4.5 in /website (#4732) (b390dd4e7)
+- bump the actions-minor-patch group with 4 updates (#4733) (1a1489300)
+
+## [5.349.0] - 2026-11-09
+
+### Added
+- add model to hook payloads and AFK_HOOK_MODEL env (#4730) (#4742) (d4808fdbd)
+- thread session surface into facet schema for structural daemon filtering (deb1e3d7f)
+- separate episode recall from hotMemory into dedicated config field (93826d21d)
+- show pause duration on `afk resume` (4061b62ec)
+
+### Fixed
+- resolve FAKE_CWD for Windows path compatibility (70e197799)
+- narrow FTS5 catch regex, fix watermark JSDoc (a0620a275)
+- extend FTS5 error regex, fix JSDoc, add tests (51eeb70c8)
+- build highFreqFiles from allEpisodes; document first-file-dir bucketing (898af47ed)
+- truncate skill descriptions to first sentence, fix spacing (2e400268d)
+- wrap agent-type listing in available-agent-types delimiter block (72e108870)
+- add ruleId schema constraint, fix duplicate test, restructure test blocks (7c218a58b)
+- add unconfined artifact handler test and normalize null serialization (be5ea9a81)
+- correct line references and clarify scope in outcome-keying notes (005290dc2)
+- handle pure-boilerplate fallback in episode extraction (51a539fb4)
+- wire abort signal at turn boundary during pause (d17ec7b4e)
+- update stale JSDoc and add trimmedByComment test (c895d5717)
+- add recency decay and basename collision mitigation to episode scoring (0046f8984)
+- add episode archive eviction policy and XML sanitization (32ef63381)
+- wire episode recall into afk acp surface (9c77447e7)
+- harden q-episodes watermark, resource lifecycle, and error handling (798ee496a)
+- remove decisions truncation and stale backflow (328f5eef8)
+- trim incomplete UTF-8 at journal byte truncation boundary (2ab3c48e4)
+
+### Changed
+- bump ora from 9.4.1 to 10.0.0 (593a0d879)
+- bump the dev-minor-patch group with 2 updates (86a504166)
+- bump the dashboard-dev-minor-patch group (3ffaa450e)
+- bump the prod-minor-patch group with 4 updates (491196d59)
+- bump the dashboard-prod-minor-patch group (59a03a91c)
+- bump the fumadocs group in /website with 2 updates (27068b692)
+- add getting-started guide for new users (45b988142)
+- add skill triage guide with tiered categorization (af6f5415d)
+- scope skill guide to publicly shipped skills only (e0ac3a083)
+
+## [5.348.0] - 2026-11-05
+
+### Added
+- wire Q as read-only consumer of episode facts (#4612) (1aecfc063)
+- automatic episode retrieval at session start (#4614) (393a999f0)
+
+### Fixed
+- bracket-notation for index-signature payloads and update stale snapshot (581742f0e)
+- suspend stall watchdog during afk pause and inject resume context (#4691) (a96cb6b98)
+- correct category mismatch and wire inject into session (#4684) (ccde4a7f5)
+- add risk facet to empty-string test and document command guard asymmetry (#4671) (06d0eb75e)
+- address advisory findings for dynamic model param description (#4669) (1215899cb)
+- migrate remaining afterEach/afterAll teardown sites to rmSyncRetry (#4673) (3ecee23e3)
+- raise readLastTickTime limit to prevent window exhaustion by skipped records (#4665) (a4f6ab95c)
+- address summary-mode thinking indicator advisory findings (#4678) (fc4d02841)
+- address workspace subscription parity advisory findings (#4677) (d916a35cb)
+- harden Worth doing pipeline — drop fallback needle, add tests, document omission (#4666) (3d359c5a6)
+- address advisory findings from SubagentHandle test coupling review (#4670) (7748bddfb)
+- harden closeAll ordering test and extract required helper (#4668) (c9f39fdb5)
+
+### Changed
+- commit stale SPINE.md date bump and snapshot update (2f3232594)
+- add Sub-check C for compose-level maxToolRoundsPerNode precedence (#4639) (#4672) (f0f4333ee)
+- protect bundled reference file integrity (#4676) (df2e67b41)
+
+## [5.347.0] - 2026-11-03
+
+### Added
+- named delegation profiles via AFK_DELEGATION_PROFILE (#4313) (339f2086a)
+- add read_journal tool for structured journal access (#4658) (80722d184)
+- add model identifier to session receipts (#4657) (77c6ac4df)
+- subagent orientation context injection at fork time (212d2e8df)
+- enrich afk doctor with subsystem health checks (917f40a6a)
+
+### Fixed
+- address 4 blocking review findings on PR #4659 (5357791c9)
+- remove false read_file tail-return claim in ground-state SKILL.md (8c61607d6)
+- use correct subcommands in CLI orientation block (a841f2467)
+- handle EPERM as alive, add missing hook events, fix bundle path (e77ea8f77)
+- address advisory findings from #4503 review (#4648) (33e0051b0)
+- fix inverted log message, add remoteDetail and size===0 test coverage (#4649) (f5ac931c2)
+- fix stale comment, add @internal tag, and improve session-id test coverage (#4653) (0276d7413)
+- raise maxBuffer to 4096, emit debugLog on signal, add ENOBUFS test, fix docs, rename interface (#4656) (594272a03)
+- fix fail() usage, test description, and add closeAll ordering test (a891a38c0)
+- dynamic model param description with slot and default info (19bba464e)
+- restructure test describe block and add startup quarantine telemetry (#4632) (aac50ec4f)
+- bump episode MAX_TOKENS from 512 to 1024 (1257faf1f)
+- wire "Worth doing" bullet through terminal-state pipeline (#4643) (00a030009)
+- skip daemon sessions and add synthesis canary logging (f8c0c8b1e)
+
+### Changed
+- replace LLM synthesis with deterministic facet bridge (155457e87)
+- guide read_file offset/limit in ground-state eval-pipeline check (3e0dbd951)
+
+## [5.346.0] - 2026-11-02
+
+### Added
+- add afk pause/resume to freeze and unfreeze all sessions (#4566) (bd8a6172f)
+- populate facet decisions from episode synthesis (#4610) (3b152a75e)
+
+### Fixed
+- auto-restore files on /branches switch using on-disk turn log (#4613) (c18fb7306)
+- finite unattended session defaults (bounded partial) (#4548) (ace41b9e2)
+- use renameWithRetrySync to fix Windows EPERM on rename (c1dfc5b96)
+- increase Windows EBUSY retry budget in LSP exit-cleanup test (bb1b48dce)
+- address advisory findings from CI Windows shard PR (5ebe05de5)
+- add agentType + double-cast to fix lint:tests ratchet (+4 errors) (88b15d4be)
+- use rmSyncRetry in useTmpAfkHome to avoid ENOTEMPTY teardown race (61d8ea1fe)
+- reduce test coupling to SubagentHandle internals (880a35ff2)
+- add empty-string facet test, document dropped path, fix declaration order (22478ccbb)
+- correct precedence comment in compose node builder (af833b2a4)
+- add missing test todo and insertion-order comment (56780355e)
+
+## [5.345.0] - 2026-11-02
+
+### Added
+- add layout-jump decision table reference (#4609) (ad468b192)
+- summary-mode thinking indicator and unknown-error hint (a0d82bd1a)
+
+### Fixed
+- harden wrapping across 9 files (#4617) (9c687a5d8)
+- disambiguate Windows EPERM in daemon instance lock (#4605) (7aeba989e)
+- skip preamble-only user records in goal extraction (#4604) (09d08195a)
+- add episode backfill CLI command (10bdd60bf)
+- address advisory findings from workspace subscription parity (877cd86a7)
+- address advisory findings from command classifier facets (94f8e37d3)
+- cap thinking lane on dispose + fix stall test fixture (5b4b4361e)
+
+## [5.344.0] - 2026-11-01
+
+### Added
+- LSP repo map summary for system prompt (#3904, phase 3) (3b5c1d603)
+- console output discipline CI gate (`audit:console:check`) (af289de75)
+- fit-and-finish quality sweep + POSIX guard CI gate (#4594) (8ef8f1b45)
+- worktree tool accepts explicit repo parameter (#4430) (341862851)
+- stamp session cwd on run receipt (#4582) (d4aea92d7)
+
+### Fixed
+- single-instance guard to prevent concurrent daemon execution (#4434) (9e629b249)
+- opt-in OS-level bash sandbox (`sandbox-exec` / `bwrap`) (#4554) (9229778aa)
+- per-rule instrumentation, denial-breaker blindspot, and insights panel (#3849) (8e257ec0c)
+- expose bounded read-only artifact registry tools (#1415) (687024cca)
+- forward opt-in idempotency keys and reconcile uncertain effects (#3714) (f344834e6)
+- prepare canonical workspace experiment storage (#1539) (ac3538cd3)
+- ESLint `import/no-restricted-paths` CI rule for layer contract (#4464) (f27b95dbe)
+- audit-layer non-blocking findings from #4464 review (#4588) (d9df6666e)
+- test runner wrapper for vitest jsdom hang (#4595) (9ecb26831)
+- strip harness preamble from episode goal extraction (#4585) (6868a7e08)
+- Windows test failures in repo-map and bash-sandbox tests (#4593) (ab3704482)
+- bound every bash output viewer row to available width (#4510) (3b623548b)
+- name sanctioned alternatives in restricted-path block reasons (#3850) (4b316bbad)
+- readLedgerHead entry-guard asymmetry and test gaps (#4524) (4014fac71)
+- exercise resume repository filtering and daemon fallback (#4504) (612f7cee2)
+- pin explicit read-root replacement in query setup tests (#4505) (87106cf11)
+- cover newline-only alternate paths (#4511) (8b7a99902)
+
+### Changed
+- route console output through palette across cli, telegram, and improve surfaces (d804b67b9, f6ad97936, bb58b7249)
+
+## [5.343.0] - 2026-10-30
+
+### Added
+- compute outcomes once at SessionEnd for receipt v3 and outcome store (99ee9bb2d)
+- pure computeOutcomes and OutcomesV1 schema with git-range adapter (39e2d5124)
+
+### Fixed
+- receipt schemaVersion v3 + Windows path normalization in outcomes (#4581) (21ea68311)
+- address 4 blocking review findings on PR #4535 (a3f3c98d3)
+- bound git command matching to avoid backtracking (13450fa3c)
+- preserve attributed outcomes and bound teardown input (be3eb5f27)
+- use u flag instead of v flag for FTS5 regex (ES2022 compat) (0ebce56a5)
+- use Unicode-aware boundaries in FTS5 sanitization regex (f59b0e2f5)
+- use Unknown goal sentinel instead of unreachable empty-field guard (a225af857)
+- episode synthesis quality — compaction, promise tracking, tests (69dbf3263)
+- use word boundaries in FTS5 sanitization regex (d490928ca)
+
+## [5.342.0] - 2026-10-30
+
+### Added
+- agent episode synthesis — opt-in, journal-based, deferred (#4565) (c32e1ac4f)
+- consumer-surface annotation + unified skill (#4564) (3d7c0ada4)
+
+### Fixed
+- allowlist gaps causing ground-state errors (#4560) (cb4b700e0)
+
+### Changed
+- remove /reauth slash command and dead-code chain (#4575) (1bb7a2600)
+
+## [5.341.0] - 2026-10-30
+
+### Added
+- keep abandoned conversations as branches and switch with /branches (#4294) (8d4adf1e3)
+- add PTY integration test for type-during-tool-round steering (6e63f85e0)
+- add docs/acp.md — editor integration guide for afk acp (42d68c80f)
+- add /where slash command and enrich AFK.md introspection surface (8fd77f752)
+
+### Fixed
+- canonical paths in credential denials, drop matched from roots variant (72fc000f3)
+- unify daemon allowedTools and wire web backgroundAutoDeliver (#4539) (7d3a5b428)
+- share command analysis facets across security consumers (331530078)
+- share write-floor and actor-root path decisions (637a357fe)
+- share model-intent and credential dispatch preparation (2a25323b4)
+- pill positioning and transcript tab-stop (#4435) (d97a3747d)
+- delete .git-commit-msg.txt and add CLAUDE_CODE_OAUTH_TOKEN test (#4528) (d48726eeb)
+- /where slash command — tests, security, null guard (#4527) (b6a45ad7a)
+- whatif provider cleanup — unused exports, import migration, test (#4531) (564077b6e)
+- add afk receipt regenerate to rebuild v1 receipts as v2 (#4463) (26ea1b44b)
+- prevent ghost branches on failed rewind; add isSafeLedgerSessionId guard and fork tests (#4495) (2e1385a37)
+- add isSameSession guard in handleSwitch; eliminate newId! assertion in forkBeforeRewind (802e509a7)
+- check forkJournal return value; memoize loadSession in collectBranches (c0256be7e)
+- export resolveFromFound; split forkBeforeRewind try/catch with orphan cleanup (e4297d8a9)
+- address 6 review findings — security, correctness, tests (79ca958ee)
+- narrow RegisteredAgent cast to BudgetHint; add maxTurns parity probe (68e3f7edf)
+- correct acp.md — done response shape, AbortController cancel, remove Cursor MCP section (88387da8d)
+- three P0 tool reliability improvements from 30-day audit (#4475) (bfd0affb3)
+- session-meta follow-up cleanups from #4453 sidecar migration (#4460) (5ddb756e1)
+- gate claude login hint on anthropic provider; preserve codex detail (9c45397ae)
+- replace ! non-null assertions with ?? fail() for noUncheckedIndexedAccess (45d7825a6)
+- drop /orient alias collision and guard non-git directories (1ca34fedd)
+- restore claude login hint and stale status tag in formatUsage (d6f4adf31)
+- compose-level max_tool_rounds_per_node wins over named-agent frontmatter budget (4e0fd3d51)
+- surface whatif/ provider imports through stable agent/ public API (33ae3b079)
+- address advisory findings from #4259 auth account switch review (349e51e94)
+
+### Changed
+- shard Windows tests and preserve aggregate check (53a2ccff9)
+- consolidate usage formatter with shared pipeline (2e43da5de)
+- stage 3 — named-agent budget parity in buildComposeDagNode (8ec4ecc49)
+- add introspection reference docs and glossary (f8ee1faca)
+
+## [5.340.0] - 2026-10-29
+
+### Added
+- implement ToolCallLedger class with bounded turn-window map (427b33a7d)
+- inline terminal image rendering via Kitty graphics protocol (99d58b7f7)
+
+### Fixed
+- cap bash-output-viewer lines to terminal width in buildRows (79ed7ff7e)
+- consolidate picker row truncation and add skipBandTruncation flag (c264b0651)
+- reject non-integer turnIndex; bump test-typecheck baseline (35600553a)
+- add RangeError guard in record() and fix import path (1ed585c8d)
+- add missing defaultSubagentModel to makeReadScopeExecutor in subagent-executor.test.ts (d724493d2)
+- merge duplicate JSDoc blocks on createTranscriber into one (eac20ef78)
+- remaining advisory findings — TOCTOU doc, JSDoc, CHANGELOG preamble, import order, synthetic-completedAt comment, utils tests (11880132f)
+- stat catch returns early; realpathSync.native for tmpdir prefix (e9de65b99)
+- derive worktree slug from agent_type when id_prefix is omitted (#4474) (1e5b9fd30)
+- address 4 blocking review findings in inline-image-render (703bae2ef)
+- address review findings #5 and #6 in bash-checkpoint tests (c5e0c3865)
+- address review feedback on inline-image-render (a0614c853)
+- tighten formatter test anchors and fix stale comment (330dc7c2c)
+- extend operator-notify port to cover remaining agent/ → telegram/ imports (3c1ff62d0)
+- address remaining advisory findings from triage batch (750203c07)
+- apply fail-closed grantsToolStrict to workspace prompt gate (9ec00cc22)
+- move pause→resume test to its own describe block (8e3092dfa)
+- address plugin-api state store advisory findings (2937125d9)
+- read raw journal records for receipt firstUserMessage to survive compaction (8099e684d)
+- fix bg process count accuracy and add display tests (49fa60ddc)
+- add executor-level parentCwd fallback test and document unwired-manager collapse (14f4516de)
+- add riskCategory forwarding integration test (e901a2035)
+- address bash side-effect capture advisory findings (92130fcf3)
+- fix misleading comments and add write_file test in artifact-modified (3fbd5f2e4)
+- add agent↔compose cross-references and budget mapping note (1a902c6a6)
+- wire /usage slash command to multi-provider pipeline (8eefe8b52)
+
+### Changed
+- suppress advisory bash path-containment console.warn (#4516) (8522f2ac8)
+- correct user-backgrounded steering/cancel semantics (c3a960351)
+- regenerate env-registry docs after #2143 env vars (54671c6bd)
+- document provenance fail-safe default in background-registry (533fd31b5)
+
+## [5.339.0] - 2026-10-28
+
+### Added
+- capture bash side effects so /rewind can undo them (#4271 stage 2) (c08d69130)
+
+### Fixed
+- skip band-width truncation for editable text-input overlays (f5c9f9258)
+- replace console.error with debugLog in session-meta to fix flaky teardown (#4459) (9e78cd651)
+- add per-fragment token-count logging at prompt assembly time (05c65bdbd)
+- restore parentCwd fallback for grandchild read roots (cf9b511fb)
+- forward riskCategory through HookBlockedError on BLOCK path (312f5d323)
+- harden git snapshot capture per review (#4271 stage 2) (40075cff5)
+- strip credential env vars from snapshot git subprocesses (ec60aca6b)
+- split diff-tree buffer on NUL bytes before UTF-8 decode (5820ed665)
+- migrate remaining consumers to session-meta.json sidecar (#4453) (26f3128dd)
+- wire release-boundary-detect into shared RiskCategory enum (8caa47f0d)
+- address remaining advisory findings from Oct 14 triage (43e6b1633)
+- shared deadline in finish(), guard standing warning (c948daba2)
+
+### Changed
+- unify fork read-scope computation (83cc8c4aa)
+- git-snapshot contract for bash capture (#4271 stage 2) (3c8e2e916)
+
+## [5.338.1] - 2026-10-26
+
+### Fixed
+- add missing mock exports for chat.mcp and chat.trace-identity tests (f1b06cc0b)
 
 ## [5.338.0] - 2026-10-26
 

@@ -53,8 +53,8 @@ function makeMockStore(): StateStore & { _calls: Record<string, number> } {
     _calls: counts,
     get: vi.fn(async () => { counts['get']!++; return undefined; }),
     put: vi.fn(async () => { counts['put']!++; return { version: 1 }; }),
-    cas: vi.fn(async () => { counts['cas']!++; return { ok: true, version: 2 }; }),
-    del: vi.fn(async () => { counts['del']!++; return true; }),
+    cas: vi.fn(async () => { counts['cas']!++; return { matched: true, newVersion: 2 }; }),
+    del: vi.fn(async () => { counts['del']!++; return { deleted: true }; }),
     insertIfAbsent: vi.fn(async () => { counts['insertIfAbsent']!++; return { inserted: true, version: 1 }; }),
     query: vi.fn(async () => { counts['query']!++; return []; }),
   } as unknown as StateStore & { _calls: Record<string, number> };

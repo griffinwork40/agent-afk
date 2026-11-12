@@ -9,6 +9,7 @@
  */
 
 import { env } from '../../config/env.js';
+import { resolveDelegationProfile } from '../../config/delegation-profiles.js';
 import type { IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput, CanUseTool } from '../types.js';
@@ -65,14 +66,35 @@ export const MAX_NESTING_DEPTH_CEILING = 6;
  */
 export function resolveMaxNestingDepth(): number {
   const raw = env.AFK_MAX_NESTING_DEPTH;
-  if (raw === undefined) return DEFAULT_MAX_NESTING_DEPTH;
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) return DEFAULT_MAX_NESTING_DEPTH;
-  const n = Number(trimmed);
-  if (!Number.isInteger(n) || n < 0 || n > MAX_NESTING_DEPTH_CEILING) {
+  // Individual env var wins over any profile value.
+  if (raw !== undefined) {
+    const trimmed = raw.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const n = Number(trimmed);
+      if (Number.isInteger(n) && n >= 0 && n <= MAX_NESTING_DEPTH_CEILING) {
+        return n;
+      }
+      // Parseable but out-of-range (e.g. "7" above the ceiling of 6): the env
+      // var was explicitly set to an invalid value, so the profile must NOT win.
+      // Return the default immediately rather than falling through.
+      return DEFAULT_MAX_NESTING_DEPTH;
+    }
+    // Unparseable (non-decimal, NaN, etc.): the env var was explicitly set but
+    // is not a valid value. Return the default immediately — do NOT fall through
+    // to the profile, because "individual env vars always override profile values".
+    // A set-but-broken var must win over any profile, same as the out-of-range path above.
     return DEFAULT_MAX_NESTING_DEPTH;
   }
-  return n;
+  // Consult the delegation profile when no explicit depth var is set.
+  const profile = resolveDelegationProfile(env.AFK_DELEGATION_PROFILE);
+  if (profile !== undefined) {
+    const profileDepth = profile.maxNestingDepth;
+    // Profile values are internally validated at definition time; clamp anyway.
+    if (profileDepth >= 0 && profileDepth <= MAX_NESTING_DEPTH_CEILING) {
+      return profileDepth;
+    }
+  }
+  return DEFAULT_MAX_NESTING_DEPTH;
 }
 
 export interface ChildProviderFactoryArgs {
@@ -203,6 +225,7 @@ export const RECON_ALLOWED_TOOLS: readonly string[] = [
   ...AWARENESS_TOOL_NAMES,
   'memory_search',
   // Ephemeral per-session workspace publish + query — see this block's header note.
+  // workspace_subscribe excluded: recon children have no SubagentHandle delivery buffer.
   'workspace_publish',
   'workspace_query',
   'agent',
@@ -210,6 +233,7 @@ export const RECON_ALLOWED_TOOLS: readonly string[] = [
   // State store reads — read-only by construction, no repo mutation.
   // Same rationale as memory_search inclusion above.
   'state_get', 'state_query',
+  'artifact_get', 'artifact_list', 'artifact_read',
 ];
 
 // Skills treated as read-only by NAME, independent of their SKILL.md
@@ -279,6 +303,7 @@ export function createChildProviderFactory(
       // never write to the state store (state_put/cas/delete). Independent of
       // readOnlyMemory so fact writes remain open while state writes stay closed.
       readOnlyState: true as const,
+      ...(subscribeHandler !== undefined ? { subscribeHandler } : {}),
       // Custom tools injected at fork time (e.g. emit_progress). The provider
       // constructor is the only read point — config.customTools is not consulted
       // at query time when a pre-built provider is set.
@@ -299,7 +324,6 @@ export function createChildProviderFactory(
     return new AnthropicDirectProvider({
       ...providerOpts,
       ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
-      ...(subscribeHandler !== undefined ? { subscribeHandler } : {}),
     });
   };
 }

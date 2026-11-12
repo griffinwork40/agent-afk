@@ -28,7 +28,7 @@
 
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { oneShotCompletion } from '../../../agent/providers/anthropic-direct/oneshot.js';
+import { oneShotCompletion } from '../../../agent/providers/whatif-api.js';
 import { resolveBranchPrefix, type DeferredWorktree } from './worktree.js';
 import type { AgentSession } from '../../../agent/session/agent-session.js';
 import { errorMessage } from '../../../utils/errors.js';

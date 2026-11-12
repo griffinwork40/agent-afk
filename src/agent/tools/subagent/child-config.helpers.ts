@@ -6,11 +6,7 @@
  * @module agent/tools/subagent/child-config.helpers
  */
 
-import { providerForModel } from '../../providers/index.js';
 import type { ModelProvider } from '../../provider.js';
-import { resolveChildModel, type ChildModelSource } from '../../subagent/resolve-child-model.js';
-import { applyParentCredentialFallback } from '../child-credential.js';
-import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
 import { CHILD_ALLOWED_TOOLS, buildSkillRestrictedProvider, createStubParentSession } from '../nesting.js';
 import { resolveAgentToolAccess } from '../../agents/index.js';
 import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
@@ -18,52 +14,13 @@ import { isChildReplaySafe } from './retry-safety.js';
 import { isChildWriteCapable } from './write-capability.js';
 import { SubagentManager } from '../../subagent.js';
 import type { RegisteredAgent, AgentRegistry } from '../../agents/index.js';
-import type { AgentModelInput, IAgentSession } from '../../types.js';
+import type { AgentDefinition } from '../../types/sdk-types.js';
+import type { IAgentSession } from '../../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
 import type { AgentInput } from './input-parse.js';
 import type { BuildChildConfigArgs, ChildParentSession } from './child-config.js';
-
-// ─── Model / Provider ────────────────────────────────────────────────────────
-
-export interface ResolvedChildModel {
-  childModel: string;
-  childIsOpenAI: boolean;
-  /** Provenance tier that chose childModel — used by the default-tier fallback. */
-  childModelSource: ChildModelSource;
-}
-
-/**
- * Resolve the child's effective model string and the provider family it routes
- * to. Must run before credential resolution so cross-provider anti-leak guards
- * (Anthropic key ↛ OpenAI child) are correct.
- *
- * Precedence: callSiteModel > namedAgentModel > defaultSubagentModel > 'sonnet'.
- * `model: 'inherit'` resolves to `parentModel` (or falls through when absent).
- */
-export function resolveChildModelAndProvider(
-  parsed: Pick<AgentInput, 'model'>,
-  namedAgent: RegisteredAgent | undefined,
-  defaultSubagentModel: AgentModelInput,
-  parentModel: AgentModelInput | undefined,
-): ResolvedChildModel {
-  let namedDefaultModel: string | undefined;
-  if (namedAgent !== undefined) {
-    const defModel = namedAgent.definition.model;
-    namedDefaultModel = defModel === 'inherit' ? parentModel : defModel;
-  }
-  const { model: childModel, source: childModelSource } = resolveChildModel(
-    {
-      callSiteModel: parsed.model,
-      namedAgentModel: namedDefaultModel,
-      defaultSubagentModel,
-    },
-    { withSource: true },
-  );
-  const childIsOpenAI = providerForModel(childModel) === 'openai-compatible';
-  return { childModel, childIsOpenAI, childModelSource };
-}
 
 // ─── Tool access ─────────────────────────────────────────────────────────────
 
@@ -142,12 +99,20 @@ export interface ResolvedChildBudgets {
 }
 
 /**
+ * Minimal structural type covering the two fields `resolveChildBudgets` reads
+ * from a named-agent definition. Wider callers that pass a full `RegisteredAgent`
+ * are structurally compatible because `RegisteredAgent.definition` satisfies
+ * `Pick<AgentDefinition, 'maxTurns' | 'maxToolUseIterations'>`.
+ */
+export type BudgetHint = { definition: Pick<AgentDefinition, 'maxTurns' | 'maxToolUseIterations'> };
+
+/**
  * Resolve turn and tool-use-round budgets.
  * Precedence: explicit call-site > named-agent frontmatter > parse default (0 = unlimited).
  */
 export function resolveChildBudgets(
   parsed: Pick<AgentInput, 'max_turns' | 'max_turns_explicit' | 'max_tool_use_iterations' | 'max_tool_use_iterations_explicit'>,
-  namedAgent: RegisteredAgent | undefined,
+  namedAgent: BudgetHint | undefined,
 ): ResolvedChildBudgets {
   const effectiveMaxTurns: number =
     !parsed.max_turns_explicit && namedAgent?.definition.maxTurns !== undefined
@@ -161,26 +126,6 @@ export function resolveChildBudgets(
       : (parsed.max_tool_use_iterations ?? 0);
 
   return { effectiveMaxTurns, effectiveMaxToolUseIterations };
-}
-
-// ─── Credential resolution ───────────────────────────────────────────────────
-
-/**
- * Resolve the child's API key, applying a parent-credential fallback for
- * Anthropic children whose per-model resolution comes up empty.
- */
-export function resolveChildCredential(
-  childModel: string,
-  resolveApiKeyForModel: ((model: string) => string | undefined) | undefined,
-  parentApiKey: string | undefined,
-): string | undefined {
-  return applyParentCredentialFallback({
-    childModel,
-    resolved: resolveApiKeyForModel
-      ? resolveApiKeyForModel(childModel)
-      : resolveCredentialForModel(childModel),
-    parentApiKey,
-  });
 }
 
 // ─── Base config object ───────────────────────────────────────────────────────

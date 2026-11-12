@@ -83,6 +83,18 @@ export interface HookDecision {
   decision?: 'block' | 'approve';
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
+  /** Stable guard identifier forwarded verbatim to hook_decision traces. Optional for legacy hooks. */
+  ruleId?: string;
+  /**
+   * Named risk category for the gate verdict — the stable "why" dimension
+   * recorded in `hook_decision` trace events alongside `reason`. When set by
+   * a hook handler (e.g. `release-boundary-detect`), the emission helpers in
+   * `subagent-hooks.ts` and `session/hooks-dispatch.ts` forward it verbatim
+   * so `afk trace show` can display the `[category]` bracket. Matches the
+   * `RiskCategory` type from `risk-classifier.ts`; optional for backward
+   * compatibility with handlers that predate #3900.
+   */
+  riskCategory?: import('./risk-classifier.js').RiskCategory;
   /**
    * (PreToolUse, SessionStart, SubagentStop, UserPromptSubmit, Stop) Framework-generated context to inject. For **PreToolUse**: appended to the final tool_result, including non-blocking decisions and later gate denials. Non-blocking context is appended after output capping and counted in a separate delivery hook_decision event only then; abandoned calls are not counted.
    *
@@ -152,6 +164,15 @@ export interface SessionStartContext {
    * subagent starts, mirroring the {@link SessionEndContext} convention.
    */
   parentSessionId?: string;
+  /**
+   * The resolved model identifier for this session — the concrete wire id sent
+   * to the provider (e.g. `"claude-sonnet-4-6"`), after alias/slot expansion.
+   * Absent when the model is not yet known at SessionStart time (rare).
+   *
+   * Shell hooks receive this as `model` in the stdin JSON payload and as
+   * `AFK_HOOK_MODEL` in the subprocess environment.
+   */
+  model?: string;
 }
 
 export interface SessionEndContext {
@@ -458,6 +479,17 @@ export interface UserPromptSubmitContext {
    * Optional because early turns may not yet have one.
    */
   sessionId?: string;
+  /**
+   * The resolved model identifier active for this turn — the concrete wire id
+   * sent to the provider (e.g. `"claude-sonnet-4-6"`), after alias/slot
+   * expansion. Reflects mid-session `/model` switches: each
+   * `UserPromptSubmit` carries the model that will actually serve that turn.
+   * Absent when the model is not yet known at dispatch time (rare).
+   *
+   * Shell hooks receive this as `model` in the stdin JSON payload and as
+   * `AFK_HOOK_MODEL` in the subprocess environment.
+   */
+  model?: string;
 }
 
 /** Discriminated union — narrow via `switch (context.event)`. */

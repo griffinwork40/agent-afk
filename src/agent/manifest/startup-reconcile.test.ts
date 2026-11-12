@@ -15,12 +15,12 @@ import { tmpdir } from 'node:os';
 import { runReplReconcile, runTelegramReconcile, runNonInteractiveReconcile, runDaemonReconcile } from './startup-reconcile.js';
 import { createManifest, buildWaveUnit, readManifest } from './write.js';
 
-vi.mock('../../telegram/push.js', () => ({
-  pushIfConfigured: vi.fn(),
+vi.mock('../operator-notify.js', () => ({
+  operatorNotify: vi.fn(),
 }));
 
-import { pushIfConfigured } from '../../telegram/push.js';
-const mockPushIfConfigured = vi.mocked(pushIfConfigured);
+import { operatorNotify } from '../operator-notify.js';
+const mockPushIfConfigured = vi.mocked(operatorNotify);
 
 let stateDir: string;
 
@@ -264,8 +264,8 @@ describe('runDaemonReconcile', () => {
 
   it('falls back to stderr and stamps when Telegram is not configured (null result)', async () => {
     process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
-    // pushIfConfigured returns null when no token/targets are configured.
-    mockPushIfConfigured.mockResolvedValue(null as unknown as ReturnType<typeof pushIfConfigured> extends Promise<infer R> ? R : never);
+    // operatorNotify returns null when no token/targets are configured.
+    mockPushIfConfigured.mockResolvedValue(null as unknown as ReturnType<typeof operatorNotify> extends Promise<infer R> ? R : never);
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const waveId = seedManifest('dr-fallback');
 

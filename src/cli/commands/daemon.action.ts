@@ -276,28 +276,16 @@ export async function runDaemonAction(options: DaemonActionOptions): Promise<voi
 
     console.log(palette.success(`✔ Daemon listening on http://${handle.host}:${handle.port}`));
     if (!isLoopbackHost(handle.host)) {
-      console.log(
-        palette.warning(
-          `⚠ Control surface bound to ${handle.host} (non-loopback) and is UNAUTHENTICATED — ` +
-            `anyone who can reach this port can schedule commands the daemon will run. ` +
-            `Ensure the port is firewalled / on a trusted network.`,
-        ),
-      );
+      console.log(palette.warning(`⚠ Control surface bound to ${handle.host} (non-loopback) and is UNAUTHENTICATED — anyone who can reach this port can schedule commands the daemon will run. Ensure the port is firewalled / on a trusted network.`));
     }
     if (trigger === 'pull') {
       console.log(palette.success(`✔ Daemon in pull mode`));
       console.log(palette.dim(`  polling queue: ${getQueueDir()} every 30s`));
     } else {
-      console.log(
-        palette.dim(
-          `  task='${taskId}' command='${command}' trigger='${trigger}'${options.cron ? ` cron='${options.cron}'` : ''}`,
-        ),
-      );
+      console.log(palette.dim(`  task='${taskId}' command='${command}' trigger='${trigger}'${options.cron ? ` cron='${options.cron}'` : ''}`));
     }
     if (builtinInfo.worktreePruneEnabled) {
-      console.log(
-        palette.meta(`  + built-in: worktree-prune (cron: ${builtinInfo.worktreePruneCron})`),
-      );
+      console.log(palette.meta(`  + built-in: worktree-prune (cron: ${builtinInfo.worktreePruneCron})`));
     }
     if (builtinInfo.toolHealthEnabled) {
       console.log(palette.meta(`  + built-in: tool-health (cron: ${builtinInfo.toolHealthCron})`));

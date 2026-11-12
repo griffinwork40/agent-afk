@@ -14,6 +14,12 @@ import { _setConfinementRootForTest } from './bash-output-viewer-model.js';
 import { runBashOutputViewer } from './bash-output-viewer.js';
 import type { PickerHost } from '../../render/picker.js';
 import type { PickerController } from '../../terminal-compositor.types.js';
+import { displayWidth, stripAnsi } from '../../display.js';
+import { contentBand } from '../../render/measure.js';
+import { palette } from '../../palette.js';
+import * as terminalSize from '../../terminal-size.js';
+import { Terminal } from '@xterm/headless';
+import { buildPickerFrameLines } from '../../terminal-compositor.frame.lines.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -83,6 +89,115 @@ beforeEach(() => {
 afterEach(() => {
   _setConfinementRootForTest(null);
   rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe('preformatted viewer row widths (#4510)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  function expectBounded(h: ReturnType<typeof makePickerHost>, columns: number): void {
+    expect(h.getController()?.skipBandTruncation).toBe(true);
+    const { marginCols } = contentBand(columns);
+    for (const row of h.lastRows()) {
+      expect(displayWidth(row) + marginCols, stripAnsi(row)).toBeLessThanOrEqual(columns);
+    }
+  }
+
+  it.each([1, 8, 20, 39, 80])('bounds ALL rows at %i columns, including search and empty output', async (columns) => {
+    vi.spyOn(terminalSize, 'getTerminalWidth').mockReturnValue(columns);
+    vi.spyOn(palette, 'dim').mockImplementation((text) => `\x1b[2m${text}\x1b[22m`);
+    writeFileSync(captureFile, '界🙂e\u0301'.repeat(80));
+    const h = makePickerHost();
+    const done = runBashOutputViewer(h.host, captureFile);
+    expectBounded(h, columns);
+    expect(stripAnsi(h.lastRows()[1]!)).toBe('─'.repeat(Math.min(40, columns)));
+    expect(h.lastRows()[2]).toContain('\x1b[2m');
+    expect(stripAnsi(h.lastRows()[2]!)).toBe('界🙂e\u0301'.repeat(80).slice(0, stripAnsi(h.lastRows()[2]!).length));
+    pressKey(h, '/', {});
+    for (const char of '界'.repeat(50)) pressKey(h, char, {});
+    expectBounded(h, columns);
+    pressKey(h, undefined, { name: 'return' });
+    expectBounded(h, columns);
+    pressKey(h, 'q', {});
+    await done;
+
+    writeFileSync(captureFile, '');
+    const emptyDone = runBashOutputViewer(h.host, captureFile);
+    expectBounded(h, columns);
+    pressKey(h, 'q', {});
+    await emptyDone;
+  });
+
+  it('keeps scroll positions and fits centered rows after a width-only resize', async () => {
+    const width = vi.spyOn(terminalSize, 'getTerminalWidth').mockReturnValue(200);
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    vi.stubEnv('AFK_TEXT_MEASURE', '100');
+    writeFileSync(captureFile, Array.from({ length: 50 }, (_, i) => `${i}: ${'界'.repeat(120)}`).join('\n'));
+    const h = makePickerHost();
+    const done = runBashOutputViewer(h.host, captureFile);
+    expectBounded(h, 200);
+    expect(stripAnsi(h.lastRows()[2]!)).toMatch(/^29: /);
+    pressKey(h, 'g', {});
+    expect(stripAnsi(h.lastRows()[2]!)).toMatch(/^0: /);
+    width.mockReturnValue(20);
+    h.host.repaintPicker();
+    expectBounded(h, 20);
+    pressKey(h, 'G', {});
+    expect(stripAnsi(h.lastRows()[2]!)).toMatch(/^29: /);
+    expectBounded(h, 20);
+    pressKey(h, 'q', {});
+    await done;
+  });
+
+  it.each([20, 200])('does not create extra physical terminal rows at %i columns', async (columns) => {
+    vi.spyOn(terminalSize, 'getTerminalWidth').mockReturnValue(columns);
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    vi.stubEnv('AFK_TEXT_MEASURE', '100');
+    writeFileSync(captureFile, '界🙂e\u0301'.repeat(100));
+    const { margin, width } = contentBand(columns);
+    for (const path of [captureFile, undefined]) {
+      const h = makePickerHost();
+      const done = runBashOutputViewer(h.host, path);
+      expect(h.getController()?.skipBandTruncation).toBe(true);
+      // Match repaintPickerFrame's bypass: no band-width fallback can mask an
+      // oversized viewer row. Include the compositor-owned centering margin.
+      const frame = buildPickerFrameLines(
+        { overlayLines: [], spinnerRow: null, tipRow: null, attachmentRow: null },
+        [], false, [...h.lastRows()], margin,
+        h.getController()?.skipBandTruncation ? undefined : width,
+      );
+      const term = new Terminal({ cols: columns, rows: 30, allowProposedApi: true });
+      try {
+        await new Promise<void>((resolve) => term.write(frame.join('\r\n'), resolve));
+        expect(term.buffer.active.cursorY).toBe(frame.length - 1);
+        for (let i = 0; i < frame.length; i++) {
+          expect(term.buffer.active.getLine(i)?.isWrapped).toBe(false);
+        }
+      } finally {
+        term.dispose();
+        pressKey(h, 'q', {});
+        await done;
+      }
+    }
+  });
+
+  it.each(['missing', 'expired', 'read_error'])('bounds %s error rows on render and resize', async (error) => {
+    const width = vi.spyOn(terminalSize, 'getTerminalWidth').mockReturnValue(80);
+    const path = error === 'missing' ? undefined : error === 'expired' ? join(tmpDir, 'gone.txt') : tmpDir;
+    const h = makePickerHost();
+    const done = runBashOutputViewer(h.host, path);
+    expectBounded(h, 80);
+    for (const columns of [20, 1]) {
+      width.mockReturnValue(columns);
+      h.host.repaintPicker();
+      expectBounded(h, columns);
+    }
+    pressKey(h, 'x', {});
+    await done;
+    expect(h.exitCount()).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

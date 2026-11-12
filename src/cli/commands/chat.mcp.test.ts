@@ -83,8 +83,10 @@ vi.mock('../../agent/default-hook-registry.js', () => ({
 vi.mock('../../agent/memory/index.js', () => ({
   MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
   injectHotMemory: (c: unknown) => c,
+  injectEpisodeRecall: (c: unknown) => c,
   injectGoalPrompt: (config: unknown) => config,
   MEMORY_TOOL_NAMES: [],
+  memoryToolSchemas: [],
 }));
 
 vi.mock('../../agent/subagent.js', () => {
@@ -132,6 +134,7 @@ vi.mock('../../agent/providers/anthropic-direct/index.js', () => ({
 
 vi.mock('../../agent/tools/schemas.js', () => ({
   BUILTIN_TOOL_NAMES: [],
+  builtinToolSchemas: [],
 }));
 
 vi.mock('../../agent/trace/factory.js', () => ({

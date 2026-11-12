@@ -1353,24 +1353,26 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
 });
 
 // ---------------------------------------------------------------------------
-// forceClientRefresh + reauth tests
+// forceClientRefresh tests
+// ---------------------------------------------------------------------------
 //
-// The Anthropic SDK caches `authToken` at construction time and uses it
-// per-request via `Authorization: Bearer ${authToken}` — there is no in-place
-// rotation hook. So when the user runs `claude /login` in another terminal
-// (writing a new token into the keychain), the running session's SDK client
-// must be reconstructed; rebuilding only request headers is not enough.
+// Contract: the Anthropic SDK caches `authToken` at construction time and uses
+// it per-request via `Authorization: Bearer ${authToken}` — there is no
+// in-place rotation hook. So when the user runs `claude /login` in another
+// terminal (writing a new token into the keychain), the running session's SDK
+// client must be reconstructed; rebuilding only request headers is not enough.
 //
-// These tests pin down that contract:
-//  1. `query.reauth()` invokes `tokenRefresher` and swaps `retry._client`.
-//  2. Concurrent `reauth()` calls dedup via the shared `refreshPromise`.
-//  3. `reauth()` returns `null` when no `tokenRefresher` is wired (api-key
-//     mode or local-server mode).
-//  4. `reauth()` returns `swapped: false` when the refresher succeeds but
-//     the underlying keychain token did not change.
+// These tests pin down that contract for forceClientRefresh(), which is called
+// by the automatic turn-start credential catch-up path:
+//  1. `forceClientRefresh()` invokes `tokenRefresher` and swaps `retry._client`.
+//  2. Concurrent calls dedup via the shared `refreshPromise`.
+//  3. Returns `null` when no `tokenRefresher` is wired (api-key mode or
+//     local-server mode).
+//  4. Returns `swapped: false` when the refresher succeeds but the underlying
+//     keychain token did not change.
 // ---------------------------------------------------------------------------
 
-describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
+describe('AnthropicDirectQuery — forceClientRefresh', () => {
   beforeEach(() => {
     messagesCreateMock.mockReset();
     anthropicCtorMock.mockReset();
@@ -1392,7 +1394,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     q.retry.tokenRefresher = refresher;
   }
 
-  it('reauth() with tokenRefresher → invokes refresher and swaps retry._client', async () => {
+  it('forceClientRefresh() with tokenRefresher → invokes refresher and swaps retry._client', async () => {
     const newClient = new MockAnthropic({ authToken: 'sk-ant-oat01-new' });
     const refresher = vi.fn(async (): Promise<Anthropic | null> => {
       return newClient as unknown as Anthropic;
@@ -1409,7 +1411,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     const initialClient = (query as unknown as { retry: { client: unknown } }).retry.client;
     expect(initialClient).not.toBe(newClient);
 
-    const result = await query.reauth!();
+    const result = await (query as unknown as { retry: { forceClientRefresh(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> } }).retry.forceClientRefresh();
 
     expect(refresher).toHaveBeenCalledOnce();
     expect(result).not.toBeNull();
@@ -1427,7 +1429,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     expect(swappedClient).not.toBe(initialClient);
   });
 
-  it('reauth() with no tokenRefresher (api-key mode) → returns null', async () => {
+  it('forceClientRefresh() with no tokenRefresher (api-key mode) → returns null', async () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
@@ -1439,11 +1441,11 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     const q = query as unknown as { retry: { tokenRefresher?: unknown } };
     expect(q.retry.tokenRefresher).toBeUndefined();
 
-    const result = await query.reauth!();
+    const result = await (query as unknown as { retry: { forceClientRefresh(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> } }).retry.forceClientRefresh();
     expect(result).toBeNull();
   });
 
-  it('reauth() when refresher returns null → returns null, client unchanged', async () => {
+  it('forceClientRefresh() when refresher returns null → returns null, client unchanged', async () => {
     const refresher = vi.fn(async (): Promise<Anthropic | null> => null);
 
     const provider = new AnthropicDirectProvider();
@@ -1455,7 +1457,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     injectRefresher(query, refresher);
     const initialClient = (query as unknown as { retry: { client: unknown } }).retry.client;
 
-    const result = await query.reauth!();
+    const result = await (query as unknown as { retry: { forceClientRefresh(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> } }).retry.forceClientRefresh();
 
     expect(refresher).toHaveBeenCalledOnce();
     expect(result).toBeNull();
@@ -1464,7 +1466,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     expect(afterClient).toBe(initialClient);
   });
 
-  it('reauth() when refresher throws → returns null, no unhandled rejection', async () => {
+  it('forceClientRefresh() when refresher throws → returns null, no unhandled rejection', async () => {
     const refresher = vi.fn(async (): Promise<Anthropic | null> => {
       throw new Error('network down');
     });
@@ -1479,7 +1481,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     const initialClient = (query as unknown as { retry: { client: unknown } }).retry.client;
 
     // Must not throw — the helper catches and returns null.
-    const result = await query.reauth!();
+    const result = await (query as unknown as { retry: { forceClientRefresh(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> } }).retry.forceClientRefresh();
     expect(result).toBeNull();
     expect(refresher).toHaveBeenCalledOnce();
 
@@ -1487,7 +1489,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     expect(afterClient).toBe(initialClient);
   });
 
-  it('concurrent reauth() calls dedup via refreshPromise (single upstream call)', async () => {
+  it('concurrent forceClientRefresh() calls dedup via refreshPromise (single upstream call)', async () => {
     let refresherCallCount = 0;
     let resolveRefresh: ((c: Anthropic | null) => void) | null = null;
     const refresher = vi.fn(async (): Promise<Anthropic | null> => {
@@ -1505,9 +1507,10 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
 
     injectRefresher(query, refresher);
 
-    // Fire two concurrent reauth() calls.
-    const p1 = query.reauth!();
-    const p2 = query.reauth!();
+    // Fire two concurrent forceClientRefresh() calls.
+    type RetryHandle = { retry: { forceClientRefresh(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> } };
+    const p1 = (query as unknown as RetryHandle).retry.forceClientRefresh();
+    const p2 = (query as unknown as RetryHandle).retry.forceClientRefresh();
 
     // Both should now be parked on the same in-flight refreshPromise.
     expect(refresherCallCount).toBe(1);

@@ -111,6 +111,34 @@ describe('session_phase payload schema — acceptance', () => {
     expect(parsed.actor).toBeUndefined();
   });
 
+  it('accepts credentialSource on session_init_start (credential attribution anchor)', () => {
+    for (const src of [
+      'ANTHROPIC_API_KEY',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'claude-code-keychain',
+      'claude-code-session-refresh',
+      'chatgpt-oauth',
+      'config',
+      'env',
+    ]) {
+      const parsed = SessionPhasePayloadSchema.parse({
+        phase: 'session_init_start',
+        credentialSource: src,
+      });
+      expect(parsed.credentialSource).toBe(src);
+    }
+  });
+
+  it('back-compat: a legacy payload without credentialSource parses, leaving it undefined', () => {
+    const parsed = SessionPhasePayloadSchema.parse({
+      phase: 'session_init_start',
+      model: 'sonnet',
+      origin: 'cli',
+      actor: 'main',
+    });
+    expect(parsed.credentialSource).toBeUndefined();
+  });
+
   it('accepts resolvedModel alone on model_ttfb', () => {
     expect(() =>
       SessionPhasePayloadSchema.parse({
@@ -364,6 +392,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     subagent_model_fallback: true,
     round_cap_notice_dropped: true,
     continuation_settle_degraded: true,
+    prompt_fragment_sizes: true,
   };
 
   it('the Zod enum contains exactly the union members (no drift either way)', () => {

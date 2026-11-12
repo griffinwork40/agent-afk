@@ -12,6 +12,7 @@ import {
 } from '../../../improve/propose/writer.js';
 import { formatAgeDays } from './triage-helpers.js';
 import type { ProposalStatus } from '../../../improve/schemas.js';
+import { palette } from '../../palette.js';
 
 const VALID_PROPOSAL_STATUSES: readonly ProposalStatus[] = [
   'draft',
@@ -49,7 +50,7 @@ export function registerProposeSubcommand(improve: Command): void {
         try {
           const card = getCard(slug);
           if (!card) {
-            console.error(`Card not found: ${slug}`);
+            console.error(palette.error(`Card not found: ${slug}`));
             process.exit(1);
           }
 
@@ -61,12 +62,10 @@ export function registerProposeSubcommand(improve: Command): void {
             const existing = getProposalsForCard(slug);
             if (existing.length > 0) {
               const ids = existing.map((p) => p.proposalId);
-              console.error(
-                `Card '${slug}' already has ${existing.length} proposal(s):\n` +
+              console.error(palette.error(`Card '${slug}' already has ${existing.length} proposal(s):\n` +
                   ids.map((id) => `  ${id}`).join('\n') +
                   `\nRe-run with --force to add another, --no-write to preview, ` +
-                  `or inspect with 'afk improve proposals show ${ids[0]}'.`,
-              );
+                  `or inspect with 'afk improve proposals show ${ids[0]}'.`));
               process.exit(1);
             }
           }
@@ -79,9 +78,9 @@ export function registerProposeSubcommand(improve: Command): void {
             if (opts.json) {
               console.log(JSON.stringify(proposal, null, 2));
             } else {
-              console.log('(preview — not persisted; remove --no-write to save)');
-              console.log('');
-              console.log(renderProposalMarkdown(proposal));
+              console.log(palette.dim('(preview — not persisted; remove --no-write to save)'));
+              console.log(''); // console-ok
+              console.log(renderProposalMarkdown(proposal)); // console-ok
             }
             return;
           }
@@ -93,12 +92,10 @@ export function registerProposeSubcommand(improve: Command): void {
             return;
           }
 
-          console.log(`Wrote proposal: ${outcome.proposalId}`);
-          console.log(`  json: ${outcome.jsonPath}`);
-          console.log(`  md:   ${outcome.markdownPath}`);
-          console.log(
-            `  risk: ${proposal.riskLevel} · root cause: ${proposal.rootCauseClass} · approval required: ${proposal.scopeFreeze.requiresExplicitApproval ? 'yes' : 'no'}`,
-          );
+          console.log(palette.success(`Wrote proposal: ${outcome.proposalId}`));
+          console.log(palette.dim(`  json: ${outcome.jsonPath}`));
+          console.log(palette.dim(`  md:   ${outcome.markdownPath}`));
+          console.log(palette.dim(`  risk: ${proposal.riskLevel} · root cause: ${proposal.rootCauseClass} · approval required: ${proposal.scopeFreeze.requiresExplicitApproval ? 'yes' : 'no'}`));
         } catch (err) {
           handleCommandError(err);
         }
@@ -130,13 +127,11 @@ export function registerProposalsSubcommand(improve: Command): void {
     .action((opts: { card?: string; risk?: string; status?: string; triage: boolean; json: boolean }) => {
       try {
         if (opts.status && !VALID_PROPOSAL_STATUSES.includes(opts.status as ProposalStatus)) {
-          console.error(
-            `Invalid --status: '${opts.status}'. Must be one of: ${VALID_PROPOSAL_STATUSES.join(', ')}`,
-          );
+          console.error(palette.error(`Invalid --status: '${opts.status}'. Must be one of: ${VALID_PROPOSAL_STATUSES.join(', ')}`));
           process.exit(2);
         }
         if (opts.triage && opts.status) {
-          console.warn(`Warning: --status is ignored when --triage is set (--triage always filters to 'draft').`);
+          console.warn(palette.warning(`Warning: --status is ignored when --triage is set (--triage always filters to 'draft').`));
         }
         let entries = listProposals();
         if (opts.card) entries = entries.filter((e) => e.cardSlug === opts.card);
@@ -157,20 +152,18 @@ export function registerProposalsSubcommand(improve: Command): void {
 
         if (entries.length === 0) {
           if (opts.triage) {
-            console.log('No draft proposals need review. All proposals are approved, rejected, or superseded.');
+            console.log(palette.dim('No draft proposals need review. All proposals are approved, rejected, or superseded.'));
           } else {
-            console.log('No proposals found.');
+            console.log(palette.dim('No proposals found.'));
           }
           return;
         }
 
         if (opts.triage) {
           const draftCount = entries.length;
-          console.log(
-            `${draftCount} draft proposal(s) awaiting review (oldest first). ` +
-              `Approve with: afk improve approve <proposal-id>`,
-          );
-          console.log('');
+          console.log(palette.info(`${draftCount} draft proposal(s) awaiting review (oldest first). ` +
+              `Approve with: afk improve approve <proposal-id>`));
+          console.log(''); // console-ok
         }
 
         const showAge = opts.triage;
@@ -178,11 +171,11 @@ export function registerProposalsSubcommand(improve: Command): void {
           ? 'AGE   | PROPOSAL ID                                                     | CARD                                       | RISK   | CREATED'
           : 'PROPOSAL ID                                                     | CARD                                       | RISK   | STATUS    | CREATED';
         const sep = '-'.repeat(header.length);
-        console.log(header);
-        console.log(sep);
+        console.log(palette.heading(header));
+        console.log(palette.dim(sep));
         for (const e of entries) {
           if (showAge) {
-            console.log(
+            console.log( // console-ok
               [
                 formatAgeDays(e.createdAt).padEnd(5),
                 e.proposalId.padEnd(64).slice(0, 64),
@@ -192,7 +185,7 @@ export function registerProposalsSubcommand(improve: Command): void {
               ].join(' | '),
             );
           } else {
-            console.log(
+            console.log( // console-ok
               [
                 e.proposalId.padEnd(64).slice(0, 64),
                 e.cardSlug.padEnd(44).slice(0, 44),
@@ -216,14 +209,14 @@ export function registerProposalsSubcommand(improve: Command): void {
       try {
         const p = getProposal(id);
         if (!p) {
-          console.error(`Proposal not found: ${id}`);
+          console.error(palette.error(`Proposal not found: ${id}`));
           process.exit(1);
         }
         if (opts.json) {
           console.log(JSON.stringify(p, null, 2));
           return;
         }
-        console.log(renderProposalMarkdown(p));
+        console.log(renderProposalMarkdown(p)); // console-ok
       } catch (err) {
         handleCommandError(err);
       }

@@ -101,8 +101,8 @@ export const MAX_ERROR_CLUSTERS = 5;
  *      such as `it's` are not collapsed.
  *   4. Duration patterns, including compound forms (`2m30s`, `1h05m`) → `<dur>`.
  *   5. Quoted values — double-quoted (≤120 chars) → `<val>`; single-quoted
- *      only when the quote is preceded by whitespace, `(`, `[`, `{`, `,`,
- *      `;`, or `:` (not a contraction apostrophe) → `<val>`.
+ *      only when the quote is preceded by `^` (start of string), whitespace,
+ *      `(`, `[`, `{`, `,`, `;`, or `:` (not a contraction apostrophe) → `<val>`.
  *   6. Remaining digit runs (≥2 digits) → `#`.
  *   7. Collapse runs of whitespace to a single space and trim.
  *

@@ -338,7 +338,15 @@ export type SessionPhaseName =
   // continuation is refused fail-closed), or an unexpected error forced the
   // fallback record. In-flight still clears. `metadata`: `chainId`, `childId`,
   // `reason` ('flush_timeout' | 'checkpoint_unavailable' | 'error').
-  | 'continuation_settle_degraded';
+  | 'continuation_settle_degraded'
+  // Per-fragment token-count snapshot emitted once per session at prompt
+  // assembly time (#4449). `metadata` carries one key per named fragment
+  // (e.g. `toolBase`, `userSystem`, `memoryPrompt`, `workspacePrompt`,
+  // `hotMemory`, `goalPrompt`, `environment`, `manifest`, `agentTypeListing`)
+  // whose value is `Math.ceil(chars / 4)` — a cheap chars-per-token proxy.
+  // Absent fragments (empty strings) are omitted so the record is sparse.
+  // Read-path only: the prompt itself is never mutated.
+  | 'prompt_fragment_sizes';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
@@ -403,4 +411,14 @@ export interface SessionPhasePayload {
    * other phase kinds. (#3808)
    */
   afkVersion?: string;
+  /**
+   * Stable credential/auth source id. Set ONLY on `session_init_start` —
+   * the always-emitted attribution anchor — so a trace names its auth tier
+   * even without consulting the sidecar. Absent on older traces, subagent
+   * sessions, and all other phase kinds.
+   * Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' |
+   *   'claude-code-keychain' | 'claude-code-session-refresh'
+   * OpenAI: 'chatgpt-oauth' | 'config' | 'env' | 'codex-cli' | etc.
+   */
+  credentialSource?: string;
 }

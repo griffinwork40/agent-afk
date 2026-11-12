@@ -25,7 +25,7 @@
 import type { UsageResult, UsageSnapshot, UsageWindow } from '../subscription-usage.js';
 import { resolveOpenAIAuth, type OpenAIAuthResolution } from '../providers/openai-compatible/auth.js';
 import { buildChatGptOAuthHeaders } from '../providers/openai-compatible/responses-config.js';
-import { fetchUsageJson, type UsageHttpOptions } from './usage-http.js';
+import { fetchUsageJson, MAX_REASONABLE_EPOCH_SECONDS, clampFraction, type UsageHttpOptions } from './usage-http.js';
 
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 
@@ -34,7 +34,6 @@ export const CODEX_SUBSCRIPTION = { provider: 'codex', account: 'chatgpt-subscri
 
 const HOUR_S = 3_600;
 const DAY_S = 86_400;
-const MAX_REASONABLE_EPOCH_SECONDS = 4_102_444_800; // 2100-01-01T00:00:00Z
 
 export interface FetchCodexUsageOptions extends UsageHttpOptions {
   /** Injectable for tests. Defaults to the forced ChatGPT-subscription resolution. */
@@ -88,7 +87,7 @@ function parseCodexWindow(raw: unknown): { slot: WindowSlot; window: UsageWindow
   const slot = slotFor(length);
   if (slot === undefined) return undefined;
   const resetAt = num(w['reset_at']);
-  const utilization = Math.min(1, Math.max(0, used / 100));
+  const utilization = clampFraction(used / 100);
   const resetsAt =
     resetAt !== undefined && resetAt > 0 && resetAt <= MAX_REASONABLE_EPOCH_SECONDS ? new Date(resetAt * 1000) : undefined;
   return { slot, window: { utilization, ...(resetsAt ? { resetsAt } : {}) } };

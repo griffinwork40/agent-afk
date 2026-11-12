@@ -59,15 +59,6 @@ configureColor();
 // the config `theme` key and the `--theme` flag. Default is dark, so an
 // unset AFK_THEME leaves every existing user's colors unchanged.
 applyTheme(resolveTheme(parseThemeMode(env.AFK_THEME)));
-// Wire operator notification port before any command registers sessions.
-// Surfaces register the concrete push implementation so agent core never
-// imports telegram/ directly. Covers all CLI modes (chat, interactive, daemon).
-import { registerOperatorNotifier } from '../agent/operator-notify.js';
-import { pushIfConfigured } from '../telegram/push.js';
-registerOperatorNotifier((message: string) => {
-  void pushIfConfigured(message).catch(() => undefined);
-});
-
 import { registerChatCommand } from './commands/chat.js';
 import { registerInteractiveCommand } from './commands/interactive.js';
 import { registerStatusCommand } from './commands/status.js';
@@ -92,6 +83,7 @@ import { registerUpdateCommand } from './commands/update.js';
 import { registerScheduleCommand } from './commands/schedule.js';
 import { registerBgCommand } from './commands/bg.js';
 import { registerTraceCommand } from './commands/trace.js';
+import { registerEpisodeCommand } from './commands/episode.js';
 import { registerWhatifCommand } from './commands/whatif.js';
 import { registerWitnessCommand } from './commands/witness.js';
 import { registerServiceCommand } from './commands/service.js';
@@ -103,7 +95,10 @@ import { registerTranscriptCommand } from './commands/transcript.js';
 import { registerInsightsCommand } from './commands/insights.js';
 import { registerCapturesCommand } from './commands/captures.js';
 import { registerDefectsCommand } from './commands/defects.js';
+import { registerReceiptCommand } from './commands/receipt.js';
 import { registerAcpCommand } from './commands/acp.js';
+import { registerPauseCommand } from './commands/pause.js';
+import { registerResumeAllCommand } from './commands/resume-all.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
 import { loadConfig } from './config.js';
 import { deferAfkMdSizeWarnings, flushDeferredAfkMdSizeWarnings } from './config/afk-md-tier.js';
@@ -162,6 +157,7 @@ registerUpdateCommand(program);
 registerScheduleCommand(program);
 registerBgCommand(program);
 registerTraceCommand(program);
+registerEpisodeCommand(program);
 registerWhatifCommand(program);
 registerWitnessCommand(program);
 registerServiceCommand(program);
@@ -173,7 +169,10 @@ registerTranscriptCommand(program);
 registerInsightsCommand(program);
 registerCapturesCommand(program);
 registerDefectsCommand(program);
+registerReceiptCommand(program);
 registerAcpCommand(program);
+registerPauseCommand(program);
+registerResumeAllCommand(program);
 
 // Add aliases
 program.commands.find((c) => c.name() === 'chat')?.alias('c');

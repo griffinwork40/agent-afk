@@ -97,16 +97,21 @@ export async function sendToSessionHandler(
   }
 
   // Determine hop count: if reply_to is provided, look up the source envelope
-  // hop in our delivered/ dir and add 1; otherwise default to 0.
+  // hop in our delivered/ dir and add 1; otherwise default to 0. Also capture
+  // the envelope's `from` so we can warn (never auto-correct) when the
+  // resolved target is somewhere other than the sender of the replied-to
+  // message.
   let hop = 0;
+  let replySender: string | undefined;
   if (replyTo !== undefined) {
     try {
       const originalEnv = await findDeliveredEnvelope(callerSessionId, replyTo);
       if (originalEnv !== null) {
         hop = originalEnv.hop + 1;
+        replySender = originalEnv.from.id;
       }
     } catch {
-      // Best-effort — use hop 0.
+      // Best-effort — use hop 0 and skip the sender-mismatch warning.
     }
   }
 
@@ -139,19 +144,37 @@ export async function sendToSessionHandler(
     };
   }
 
+  // Additive-only advisory: if reply_to resolved to an envelope from session X
+  // but the send targeted a different session Y, the reply is probably
+  // misrouted. Compared against the RESOLVED target id, not the raw `to`
+  // input — `to` may legitimately be a session name or unique prefix that
+  // resolves to the sender. We do NOT auto-resolve or override `to`.
+  const resolvedTarget = result.resolvedTo ?? to;
+  let senderMismatchWarning: string | undefined;
+  if (replySender !== undefined && replySender !== resolvedTarget) {
+    senderMismatchWarning =
+      `Warning: reply_to references a message from session ${replySender} ` +
+      `but to targets session ${resolvedTarget}. If replying, set to to the from attribute ` +
+      'of the peer message.';
+  }
+
   await emitPeerMessage(traceWriter, {
     action: 'sent',
     messageId: result.messageId,
-    peer: result.resolvedTo ?? to,
+    peer: resolvedTarget,
     bytes: bodyBytes,
   });
 
-  return {
-    content: JSON.stringify({
-      status: 'queued',
-      messageId: result.messageId,
-      resolvedTo: result.resolvedTo,
-      targetState: result.targetState,
-    }),
+  const successBody: Record<string, unknown> = {
+    status: 'queued',
+    messageId: result.messageId,
+    resolvedTo: result.resolvedTo,
+    targetState: result.targetState,
   };
+  if (senderMismatchWarning !== undefined) {
+    // Additive only — schema contract unchanged (status/messageId/etc. remain).
+    successBody['warning'] = senderMismatchWarning;
+  }
+
+  return { content: JSON.stringify(successBody) };
 }

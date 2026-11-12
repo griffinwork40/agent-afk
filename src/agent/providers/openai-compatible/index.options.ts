@@ -44,6 +44,8 @@ export interface OpenAICompatibleProviderOptions extends ChildSessionOptions {
   /** Shared memory store (avoids dual SQLite handles when CLI builds it once). */
   memoryStore?: MemoryStore;
   workspaceStore?: WorkspaceStore;
+  /** Fork-scoped handler bound to the child's workspace delivery buffer. */
+  subscribeHandler?: import('../../tools/types.js').ToolHandler;
   stateStore?: StateStore;
   /** UI surface tag forwarded to memory handlers ('cli' | 'telegram' | etc.). */
   surface?: string;

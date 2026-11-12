@@ -153,4 +153,13 @@ describe('formatHealthRail', () => {
     expect(result).toContain('ctx');
     expect(result).not.toContain('procs');
   });
+
+  it('shows 0/total procs when all processes have finished (activeProcs=0, totalProcs>0)', () => {
+    // Issue #4395 finding #3: display case where all procs completed.
+    const result = stripAnsi(formatHealthRail(
+      { totalTurns: 1, elapsedMs: 0, toolCalls: 0, activeSubs: 0, totalSubs: 0, activeProcs: 0, totalProcs: 3, contextRatio: 0 },
+      120,
+    ));
+    expect(result).toContain('0/3 procs');
+  });
 });

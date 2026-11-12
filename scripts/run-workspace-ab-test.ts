@@ -20,8 +20,10 @@
  * @module scripts/run-workspace-ab-test
  */
 
-import { existsSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { getWorkspaceExperimentDir } from '../src/paths.js';
+import { resolve, join, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { errorMessage } from '../src/utils/errors.js';
 import { providerForModel } from '../src/agent/providers/index.js';
@@ -86,7 +88,7 @@ function parseCliArgs(): {
       '  --max-budget <$>  Max cost per arm in USD (default 3)',
       '  --budget <$>      Deprecated alias for --max-budget',
       '  --dry-run         Print plan and exit without spawning agents',
-      '  --output-dir <d>  Results directory (default: scripts/ab-results/<ts>)',
+      '  --output-dir <d>  Override results directory (default: <AFK state>/experiments/workspace-ab/<run-id>)',
       '  --afk-bin <p>     Path to afk CLI entry (default: dist/cli/index.js)',
       '  --help            Show this help',
     ].join('\n'));
@@ -111,7 +113,7 @@ function parseCliArgs(): {
     dryRun: Boolean(values['dry-run']),
     outputDir: values['output-dir']
       ? resolve(String(values['output-dir']))
-      : join(repoRoot, 'scripts', 'ab-results', new Date().toISOString().replace(/[:.]/g, '-')),
+      : getWorkspaceExperimentDir(`${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`),
     afkBin: values['afk-bin'] ? resolve(String(values['afk-bin'])) : defaultAfkBin,
   };
 }
@@ -219,6 +221,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Reserve a fresh run directory before any arm can overwrite raw captures.
+  // Existing overrides are refused, even when empty; mkdir is exclusive.
+  mkdirSync(dirname(outputDir), { recursive: true });
+  mkdirSync(outputDir);
+
   const trialResults: TrialResult[] = [];
   let failureCount = 0;
 
@@ -302,8 +309,8 @@ async function main(): Promise<void> {
   console.log(`  Summary:  ${markdownPath}`);
   console.log();
 
-  if (failureCount > 0) {
-    console.error(`Error: ${failureCount} of ${trials} trials failed. Experiment result is incomplete.`);
+  if (failureCount > 0 || s.validTrials !== trials) {
+    console.error(`Error: only ${s.validTrials} of ${trials} trials are valid. Experiment result is incomplete.`);
     process.exitCode = 1;
   }
 }

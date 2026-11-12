@@ -1,9 +1,9 @@
 /**
  * Fix #2471: assembleChildConfig reads parentApiKey via a getter at fork time
- * so a mid-session /reauth or usage-limit hot-swap is visible to every child
- * forked after it, rather than using a boot-time snapshot.
+ * so a mid-session credential hot-swap is visible to every child forked after
+ * it, rather than using a boot-time snapshot.
  *
- * Run with: pnpm test src/agent/subagent/fork-child-config.reauth.test.ts
+ * Run with: pnpm test src/agent/subagent/fork-child-config.credential-swap.test.ts
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -54,20 +54,20 @@ describe('assembleChildConfig — parentApiKey getter (fix #2471)', () => {
     expect(config.apiKey).toBe(bootToken);
   });
 
-  it('reflects a hot-swapped token: getter returns new account after /reauth', () => {
+  it('reflects a hot-swapped token: getter returns new account after credential swap', () => {
     let liveToken = 'sk-ant-oat01-account-A';
     // A getter that always reads `liveToken` — simulates what a closure over
     // the live credential store (or loadAnthropicCredential()) does.
     const getter = (): string => liveToken;
 
-    // Fork #1 before reauth — child gets boot token.
+    // Fork #1 before account switch — child gets boot token.
     const args1 = makeArgs({ parentApiKey: getter });
     expect(assembleChildConfig(args1).apiKey).toBe('sk-ant-oat01-account-A');
 
-    // Operator runs /reauth — token swaps.
+    // Operator switches accounts (turn-start credential catch-up swaps the client).
     liveToken = 'sk-ant-oat01-account-B';
 
-    // Fork #2 after reauth — child must get the NEW token, not the boot one.
+    // Fork #2 after account switch — child must get the NEW token, not the boot one.
     const args2 = makeArgs({ parentApiKey: getter });
     expect(assembleChildConfig(args2).apiKey).toBe('sk-ant-oat01-account-B');
   });

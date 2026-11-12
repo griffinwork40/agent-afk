@@ -206,6 +206,31 @@ describe('createReleaseBoundaryDetect (two-tier hook)', () => {
     expect(hook(noInput)).toEqual({});
     expect(hook(preCtx(''))).toEqual({});
   });
+
+  // ── riskCategory (#3900) ──────────────────────────────────────────────────
+  it('sets riskCategory: release-boundary on a BLOCK-tier decision', () => {
+    const decision: HookDecision = hook(preCtx('npm publish --provenance'));
+    expect(decision.decision).toBe('block');
+    expect(decision.riskCategory).toBe('release-boundary');
+  });
+
+  it('sets riskCategory: release-boundary on an OBSERVE-tier decision', () => {
+    const decision: HookDecision = hook(preCtx('git push origin --tags'));
+    expect(decision.decision).toBe('approve');
+    expect(decision.riskCategory).toBe('release-boundary');
+  });
+
+  it('sets riskCategory: release-boundary on a dry-run exemption', () => {
+    const decision: HookDecision = hook(preCtx('npm publish --dry-run'));
+    expect(decision.decision).toBe('approve');
+    expect(decision.riskCategory).toBe('release-boundary');
+  });
+
+  it('does not set riskCategory on a pass-through (non-boundary) decision', () => {
+    const decision: HookDecision = hook(preCtx('git push origin main'));
+    expect(decision).toEqual({});
+    expect(decision.riskCategory).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -240,6 +265,7 @@ describe('release-boundary-detect wiring in the default registry', () => {
     const decision = await registry.dispatch(ctx);
     expect(decision.decision).toBe('approve');
     expect(decision.reason).toContain(RELEASE_BOUNDARY_DETECT_REASON_PREFIX);
+    expect(decision.riskCategory).toBe('release-boundary');
   });
 
   it('leaves non-boundary bash calls untouched through the default registry', async () => {

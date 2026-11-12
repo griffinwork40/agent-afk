@@ -16,8 +16,9 @@ import {
   type JournalSummary,
   type RunReceipt,
 } from './receipt.js';
-import type { JournalMessage } from '../journal/types.js';
+import type { JournalMessage, JournalRecord } from '../journal/types.js';
 import type { ClosureReason, ToolFailureClass, TraceEvent } from './types.js';
+import type { OutcomesV1 } from '../outcomes/outcomes-v1.schema.js';
 
 // ---------------------------------------------------------------------------
 // Event builders — keep the on-disk envelope ({ ts, seq, kind, payload }).
@@ -405,7 +406,40 @@ describe('writeRunReceipt + runReceiptSessionEndHook (filesystem)', () => {
     expect(parsed.sessionId).toBe('sess-logical');
     expect(parsed.endReason).toBe('close');
     expect(parsed.toolCalls.errored).toBe(1);
-    expect(parsed.schemaVersion).toBe(2);
+    expect(parsed.schemaVersion).toBe(3);
+  });
+
+  it('writes outcomes: null when the outcomes computation has no cwd', async () => {
+    const tracePath = await writeTrace('run-o', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-no-meta' });
+    const parsed = JSON.parse(await readFile(join(getReceiptsDir(), 'run-o.json'), 'utf8')) as RunReceipt;
+    expect(parsed.schemaVersion).toBe(3);
+    expect(parsed.outcomes).toBeNull();
+  });
+
+  it('writes outcomes from the session cwd when no sidecar exists (non-git cwd)', async () => {
+    const tracePath = await writeTrace('run-c', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-cwd', cwd: home });
+    const parsed = JSON.parse(await readFile(join(getReceiptsDir(), 'run-c.json'), 'utf8')) as RunReceipt;
+    expect(parsed.outcomes).toMatchObject({ schemaVersion: 1, cwd: home, startHead: null, commits: [] });
+  });
+
+  it('stamps the top-level cwd when writeRunReceipt is given one', async () => {
+    const tracePath = await writeTrace('run-cwd-top', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-cwd-top', cwd: home });
+    const parsed = JSON.parse(
+      await readFile(join(getReceiptsDir(), 'run-cwd-top.json'), 'utf8'),
+    ) as RunReceipt;
+    expect(parsed.cwd).toBe(home);
+  });
+
+  it('omits the top-level cwd when writeRunReceipt is given none', async () => {
+    const tracePath = await writeTrace('run-nocwd-top', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-nocwd-top' });
+    const parsed = JSON.parse(
+      await readFile(join(getReceiptsDir(), 'run-nocwd-top.json'), 'utf8'),
+    ) as RunReceipt;
+    expect('cwd' in parsed).toBe(false);
   });
 
   it('returns null when the trace file is absent', async () => {
@@ -642,6 +676,69 @@ describe('extractJournalSummary (#4427)', () => {
     const summary = extractJournalSummary(messages, false)!;
     expect(summary.firstUserMessage).toBe('spilled content preview');
   });
+
+  // ---------------------------------------------------------------------------
+  // Compaction survival (#4432)
+  // ---------------------------------------------------------------------------
+
+  it('reads original first user message from raw records after mid-session compaction', () => {
+    // Simulate a journal that underwent mid-session compaction:
+    //   - records 0-2: original conversation (user "real first message", assistant with tools, user follow-up)
+    //   - truncate(0, 'compact'): compaction discards the original prefix
+    //   - records 3+: compaction summary + new messages re-appended from index 0
+    // foldJournal produces: [compaction-summary-user, assistant-reply]
+    // rawRecords still contains the original index=0 append with the real user message.
+
+    const V = 1 as const;
+
+    const rawRecords: JournalRecord[] = [
+      { v: V, ts: 1, kind: 'append', index: 0, message: { role: 'user', content: [{ type: 'text', text: 'real first message' }] } },
+      { v: V, ts: 2, kind: 'append', index: 1, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'bash', input: {} }, { type: 'text', text: 'running bash' }] } },
+      { v: V, ts: 3, kind: 'append', index: 2, message: { role: 'user', content: [{ type: 'text', text: 'follow-up' }] } },
+      { v: V, ts: 4, kind: 'truncate', length: 0, reason: 'compact' },
+      // After compaction: synthetic summary as first message, then new assistant reply
+      { v: V, ts: 5, kind: 'append', index: 0, message: { role: 'user', content: [{ type: 'text', text: '[Summary of prior conversation]' }] } },
+      { v: V, ts: 6, kind: 'append', index: 1, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu2', name: 'read_file', input: {} }, { type: 'text', text: 'final answer' }] } },
+    ];
+
+    // The folded view (what loadJournalMessages returns after compaction)
+    const foldedMessages: JournalMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: '[Summary of prior conversation]' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'tu2', name: 'read_file', input: {} }, { type: 'text', text: 'final answer' }] },
+    ];
+
+    const summary = extractJournalSummary(foldedMessages, false, rawRecords)!;
+
+    // firstUserMessage must come from raw records — NOT the compaction summary
+    expect(summary.firstUserMessage).toBe('real first message');
+    // lastAssistantMessage still comes from the folded view
+    expect(summary.lastAssistantMessage).toBe('final answer');
+    // toolUseCount covers ALL tool_use blocks across raw records (bash + read_file)
+    expect(summary.toolUseCount).toBe(2);
+    expect(summary.toolNames).toContain('bash');
+    expect(summary.toolNames).toContain('read_file');
+    // messageCount reflects the folded (live context) count
+    expect(summary.messageCount).toBe(2);
+  });
+
+  it('falls back to folded view when rawRecords is empty', () => {
+    const messages: JournalMessage[] = [
+      userMsg('folded first'),
+      assistantMsg('folded reply'),
+    ];
+    const summary = extractJournalSummary(messages, false, [])!;
+    expect(summary.firstUserMessage).toBe('folded first');
+    expect(summary.toolUseCount).toBe(0);
+  });
+
+  it('falls back to folded view when rawRecords is omitted', () => {
+    const messages: JournalMessage[] = [
+      userMsg('folded first'),
+      assistantMsg('folded reply'),
+    ];
+    const summary = extractJournalSummary(messages, false)!;
+    expect(summary.firstUserMessage).toBe('folded first');
+  });
 });
 
 describe('generateReceipt with journalSummary (#4427)', () => {
@@ -671,8 +768,8 @@ describe('generateReceipt with journalSummary (#4427)', () => {
     expect(receipt.limitations.some((l) => l.includes('No message journal'))).toBe(true);
   });
 
-  it('schemaVersion is 2', () => {
-    expect(RECEIPT_SCHEMA_VERSION).toBe(2);
+  it('schemaVersion is 3', () => {
+    expect(RECEIPT_SCHEMA_VERSION).toBe(3);
   });
 });
 
@@ -715,5 +812,87 @@ describe('renderReceiptMarkdown with journalSummary (#4427)', () => {
   it('omits conversation summary when journalSummary absent', () => {
     const md = renderReceiptMarkdown(RECEIPT_BASE);
     expect(md).not.toContain('Conversation summary');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v3: outcomes
+// ---------------------------------------------------------------------------
+
+const OUTCOMES: OutcomesV1 = {
+  schemaVersion: 1,
+  cwd: '/repo',
+  startHead: 'a'.repeat(40),
+  endHead: 'b'.repeat(40),
+  commits: [{ sha: 'b'.repeat(40), repo: '/repo', subject: 'feat: thing', source: 'git_log' }],
+  prs: [{ url: 'https://github.com/o/r/pull/7', action: 'create' }],
+  filesChanged: ['/repo/x.ts'],
+  filesChangedTruncated: false,
+  schedules: [],
+  services: [],
+  terminalState: 'done',
+};
+
+describe('generateReceipt with outcomes (v3)', () => {
+  it('includes outcomes when provided', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: OUTCOMES });
+    expect(r.schemaVersion).toBe(3);
+    expect(r.outcomes).toEqual(OUTCOMES);
+  });
+
+  it('records null when the computation failed', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: null });
+    expect(r.outcomes).toBeNull();
+  });
+
+  it('omits outcomes when not provided', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l' });
+    expect('outcomes' in r).toBe(false);
+  });
+
+  it('renders an Outcomes section with short sha, PR url and counts', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: OUTCOMES });
+    const md = renderReceiptMarkdown(r);
+    expect(md).toContain('## Outcomes');
+    expect(md).toContain('`bbbbbbb` feat: thing');
+    expect(md).toContain('https://github.com/o/r/pull/7 (create)');
+    expect(md).toContain('**Files changed:** 1');
+    expect(md).toContain('**Terminal state:** done');
+  });
+
+  it('renders no Outcomes section when outcomes is null', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: null });
+    expect(renderReceiptMarkdown(r)).not.toContain('## Outcomes');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Top-level cwd field (additive, schemaVersion stays 3)
+// ---------------------------------------------------------------------------
+
+describe('RunReceipt cwd field', () => {
+  it('includes cwd in the receipt when meta provides it', () => {
+    const r = generateReceipt([sealed('succeeded')], {
+      tracePath: '/t',
+      witnessLabel: 'l',
+      cwd: '/repo/project',
+    });
+    expect(r.cwd).toBe('/repo/project');
+  });
+
+  it('omits cwd when meta does not provide it', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l' });
+    expect('cwd' in r).toBe(false);
+  });
+
+  it('renders the cwd in the Markdown meta line when present', () => {
+    const withCwd = generateReceipt([sealed('succeeded')], {
+      tracePath: '/t',
+      witnessLabel: 'l',
+      cwd: '/repo/project',
+    });
+    expect(renderReceiptMarkdown(withCwd)).toContain('**Cwd:** /repo/project');
+    const withoutCwd = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l' });
+    expect(renderReceiptMarkdown(withoutCwd)).not.toContain('**Cwd:**');
   });
 });

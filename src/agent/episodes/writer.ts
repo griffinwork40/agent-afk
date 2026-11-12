@@ -1,0 +1,107 @@
+/**
+ * Episode writer — stores an EpisodeRecord in the memory archive.
+ *
+ * Uses the facts table with category: 'episode' (schema v6). The narrative
+ * is FTS5-sanitized before storage and capped at 2000 chars. Content
+ * includes a [episode:<sessionId>] prefix for searchability.
+ *
+ * @module agent/episodes/writer
+ */
+
+import { MemoryStore } from '../memory/memory-store.js';
+import type { EpisodeRecord } from './types.js';
+
+const NARRATIVE_CAP = 2_000;
+
+// FTS5 operator characters that break tokenization when they appear in
+// stored content and are later used in FTS queries.
+// Strip: AND OR NOT " : * ( ) ^
+// Uses Unicode-aware lookbehind/lookahead (u flag, ES2018+) so that
+// operator tokens embedded in non-ASCII words (e.g. "stANDard") are NOT stripped.
+const FTS5_UNSAFE = /(?<!\p{L})AND(?!\p{L})|(?<!\p{L})OR(?!\p{L})|(?<!\p{L})NOT(?!\p{L})|[":*()\^]/gu;
+
+/**
+ * Sanitize narrative text for safe FTS5 storage.
+ * Strips FTS5 operator tokens, entity-encodes XML angle-bracket characters,
+ * and caps length.
+ *
+ * The `<>` entity-encoding (not stripping) is intentional: it preserves the
+ * semantic content of angle-bracket expressions (e.g. "<component>") while
+ * preventing XML injection into contexts such as `memory_search` results that
+ * surface raw fact content.
+ */
+export function sanitizeNarrative(text: string): string {
+  return text
+    .replace(FTS5_UNSAFE, ' ')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, NARRATIVE_CAP);
+}
+
+/**
+ * Format the structured content stored in the facts table.
+ * Prefixed with [episode:<sessionId>] for searchability.
+ */
+export function formatEpisodeContent(episode: EpisodeRecord): string {
+  const lines: string[] = [
+    `[episode:${episode.sessionId}]`,
+    `goal: ${episode.goal}`,
+    `approach: ${episode.approach}`,
+    `outcome: ${episode.outcome}`,
+  ];
+
+  if (episode.pivots.length > 0) {
+    lines.push(`pivots: ${episode.pivots.join('; ')}`);
+  }
+  if (episode.decisions.length > 0) {
+    lines.push(`decisions: ${episode.decisions.join('; ')}`);
+  }
+  if (episode.openQuestions.length > 0) {
+    lines.push(`open: ${episode.openQuestions.join('; ')}`);
+  }
+  if (episode.filesKey.length > 0) {
+    lines.push(`files: ${episode.filesKey.join(', ')}`);
+  }
+  if (episode.tags.length > 0) {
+    lines.push(`tags: ${episode.tags.join(', ')}`);
+  }
+
+  const safeNarrative = sanitizeNarrative(episode.narrative);
+  if (safeNarrative) {
+    lines.push(`narrative: ${safeNarrative}`);
+  }
+
+  lines.push(`synthesized: ${episode.synthesizedAt}`);
+
+  return lines.join('\n');
+}
+
+/**
+ * Write the episode to the cross-session memory archive.
+ * Uses category 'episode' on the facts table (schema v6).
+ *
+ * Contract (#4661, constraint 4 — idempotency): uses INSERT OR IGNORE so that
+ * re-derives or duplicate invocations (e.g. a backfill re-run, a session-end
+ * hook that fires more than once) silently skip the insert rather than hitting
+ * the UNIQUE index on facts(content, created_at, session_id, category) and
+ * generating WAL noise. The UNIQUE constraint still guards correctness; this
+ * guard makes duplicate writes a no-op instead of a constraint violation.
+ *
+ * To determine whether a row was actually written (vs skipped), callers can
+ * compare the returned rowId — a value of -1 indicates the row was ignored.
+ */
+export async function writeEpisode(
+  episode: EpisodeRecord,
+  memoryDir?: string,
+): Promise<void> {
+  const store = new MemoryStore(memoryDir);
+  store.storeEpisodeFact({
+    session_id: episode.sessionId,
+    category: 'episode',
+    content: formatEpisodeContent(episode),
+    source_surface: 'episode-synthesis',
+    evidence: episode.sessionId,
+  });
+}

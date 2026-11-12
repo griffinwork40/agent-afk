@@ -25,7 +25,8 @@ export const gitReadTool: AnthropicToolDef = {
     // git-read.policy.ts rewrites them to `--max-count=<N>` before validation),
     // but this is not advertised here to keep usage consistent.
     'Only an allowlisted set of options is accepted per subcommand (e.g. log: --oneline, --stat, ' +
-    '--max-count=N, --since=…, --author=…, --format=…; diff: --cached, --stat, --name-only). ' +
+    '--max-count=N, --since=…, --author=…, --format=…; diff: --cached, --stat, --name-only; ' +
+    'branch: --show-current, -a, --remotes; rev-list: --count, --left-right). ' +
     'Revisions (HEAD~3, main..HEAD, a SHA, v1.2.0) go in `args`; file paths go in `paths` and must stay ' +
     'inside the working directory. Options that write files or run programs (-c, --output, --ext-diff, ' +
     '--textconv, --exec, pagers, editors) are rejected. Output is capped by `max_bytes`.',

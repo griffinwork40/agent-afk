@@ -30,10 +30,11 @@ import { getReceiptsDir } from '../../paths.js';
 import { env } from '../../config/env.js';
 import type { HookHandler } from '../hooks.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
-import { SessionCostAccumulator, type CostTokens, type SessionCostSource } from './cost.js';
+import { SessionCostAccumulator } from './cost.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
-import { loadJournalMessages } from '../journal/reader.js';
-import { extractJournalSummary, type JournalSummary } from './receipt.journal.js';
+import { loadJournalMessages, readJournalRecords } from '../journal/reader.js';
+import { extractJournalSummary } from './receipt.journal.js';
+import { getSessionOutcomes } from '../outcomes/session-outcomes.js';
 import {
   BENIGN_FAILURE_CLASSES,
   type ClosureReason,
@@ -43,9 +44,12 @@ import {
 } from './types.js';
 
 export { renderReceiptMarkdown };
+export { RECEIPT_SCHEMA_VERSION, type ReceiptMeta, type ReceiptToolFailure, type RunReceipt } from './receipt.types.js';
+import { RECEIPT_SCHEMA_VERSION, type ReceiptMeta, type ReceiptToolFailure, type RunReceipt } from './receipt.types.js';
 export { extractJournalSummary, type JournalSummary } from './receipt.journal.js';
+export { type SubagentModelEntry, type SubagentsByModel } from './receipt.subagents-by-model.js';
+import { buildSubagentsByModel } from './receipt.subagents-by-model.js';
 
-export const RECEIPT_SCHEMA_VERSION = 2 as const;
 
 // Invariant: the subset of exempt classes that represent a GATE refusing a
 // tool call — an allowlist/`canUseTool` deny (`permission-denied`), a
@@ -60,103 +64,6 @@ const GATE_REFUSAL_FAILURE_CLASSES: readonly ToolFailureClass[] = [
   'hook-block',
   'policy-refusal',
 ];
-
-/** A single failed tool call, summarized from trace metadata (no raw output). */
-export interface ReceiptToolFailure {
-  toolUseId: string;
-  name: string;
-  failureClass?: ToolFailureClass;
-  durationMs: number;
-  ts: string;
-  truncated: boolean;
-  /** True when `failureClass` is a benign outcome that does not warrant review. */
-  exempt: boolean;
-  subagentId?: string;
-}
-
-/** The machine-readable run receipt. Written to `<receipts>/<label>.json`. */
-export interface RunReceipt {
-  schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
-  generatedAt: string;
-  /** Witness-trace directory name — the stable correlation key for this run. */
-  witnessLabel: string;
-  /** Absolute path to the sealed `trace.jsonl` this receipt summarizes. */
-  tracePath: string;
-  /** Logical session id, when the session exposed one (may be absent). */
-  sessionId?: string;
-  /** SessionEnd reason that triggered this receipt ('close' | 'reset' | 'error'). */
-  endReason?: string;
-  status: 'succeeded' | 'failed' | 'cancelled' | 'unknown';
-  closureReason?: ClosureReason;
-  lastStopReason?: string;
-  guidance?: string;
-  /** True when the trace was sealed by the synchronous process-exit backstop. */
-  incomplete: boolean;
-  startedAt?: string;
-  endedAt?: string;
-  durationMs?: number;
-  toolCalls: {
-    total: number;
-    succeeded: number;
-    errored: number;
-    /** `errored` minus the expected-refusal (exempt) classes. */
-    erroredNotable: number;
-    /**
-     * Count of tool calls a gate denylisted: `permission-denied` (allowlist /
-     * `canUseTool` deny) + `hook-block` (PreToolUse hook) + `policy-refusal`.
-     * A subset of `errored`; per-class detail is in `byFailureClass`. Divide by
-     * `total` for the refusal rate. Surfaces denials that `erroredNotable`
-     * deliberately excludes — the per-session "how often was a call denied" tally.
-     */
-    refused: number;
-    circuitBreakerHits: number;
-    byTool: Record<string, { total: number; errored: number }>;
-    byFailureClass: Record<string, number>;
-  };
-  events: {
-    total: number;
-    byKind: Partial<Record<TraceEventKind, number>>;
-  };
-  subagents: {
-    started: number;
-    succeeded: number;
-    failed: number;
-    cancelled: number;
-  };
-  // Contract (#3879): `finalCostUsd` and `tokens` are ROOT-scoped and kept
-  // for back-compat: `finalCostUsd` is the seal's root cost (last lifecycle
-  // cycle) and `tokens` is the last closure's (normally the root's). Whole-
-  // session spend including every subagent is `totalCostUsd` / `totalTokens`,
-  // computed by `computeSessionCost` in `./cost.ts`.
-  cost: {
-    finalCostUsd?: number;
-    turnCount?: number;
-    tokens?: CostTokens;
-    rootCostUsd?: number;
-    subagentCostUsd?: number;
-    totalCostUsd?: number;
-    totalTokens?: CostTokens;
-    costSource?: SessionCostSource;
-  };
-  failures: ReceiptToolFailure[];
-  humanReviewRequired: boolean;
-  humanReviewReasons: string[];
-  limitations: string[];
-  /** Journal-derived summary (v2). Absent when the journal is missing or disabled. */
-  journalSummary?: JournalSummary;
-}
-
-/** Inputs to {@link generateReceipt} that are not derivable from the events. */
-export interface ReceiptMeta {
-  tracePath: string;
-  witnessLabel: string;
-  sessionId?: string;
-  endReason?: string;
-  /** Override "now" for deterministic tests. */
-  now?: Date;
-  /** Journal-derived summary; threaded in from {@link writeRunReceipt}. */
-  journalSummary?: JournalSummary;
-}
 
 /**
  * Parse NDJSON trace content into events, tolerantly: blank lines and lines
@@ -194,6 +101,39 @@ export function receiptPathsFor(tracePath: string): {
   };
 }
 
+/**
+ * Derive the human-review reasons list from the session's terminal state.
+ * Extracted from {@link generateReceipt} to keep that function under the
+ * 200-line ceiling.
+ */
+function buildHumanReviewReasons(
+  status: RunReceipt['status'],
+  incomplete: boolean,
+  closureReason: ClosureReason | undefined,
+  erroredNotable: number,
+  circuitBreakerHits: number,
+  subagentsFailed: number,
+): string[] {
+  const reasons: string[] = [];
+  if (status === 'failed') reasons.push('Session sealed with status "failed".');
+  else if (status === 'cancelled') reasons.push('Session was cancelled.');
+  else if (status === 'unknown')
+    reasons.push(
+      'No terminal session_sealed record found — the trace may be truncated or was read before the session sealed.',
+    );
+  if (incomplete)
+    reasons.push(
+      'Trace was sealed by the process-exit backstop, indicating an abnormal exit (crash, early EOF, or process.exit()).',
+    );
+  if (closureReason !== undefined && closureReason !== 'model_end_turn')
+    reasons.push(`Closure reason "${closureReason}" is not a clean completion.`);
+  if (erroredNotable > 0) reasons.push(`${erroredNotable} tool call(s) returned an error (excluding benign outcomes).`);
+  if (circuitBreakerHits > 0)
+    reasons.push(`Repeat-loop circuit breaker fired ${circuitBreakerHits} time(s).`);
+  if (subagentsFailed > 0) reasons.push(`${subagentsFailed} subagent(s) failed.`);
+  return reasons;
+}
+
 /** Build a {@link RunReceipt} from parsed trace events. Pure — no I/O. */
 export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunReceipt {
   const byKind: Partial<Record<TraceEventKind, number>> = {};
@@ -219,6 +159,8 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
   let sealedTurnCount: number | undefined;
   let sealedClosedAt: string | undefined;
   let incomplete = false;
+  let sessionModel: string | undefined;
+  let sessionResolvedModel: string | undefined;
   const costAcc = new SessionCostAccumulator();
 
   for (const ev of events) {
@@ -286,6 +228,15 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
         if (p.incomplete === true) incomplete = true;
         break;
       }
+      case 'session_phase': {
+        // `session_init_start` carries the session's model provenance anchor.
+        // Only capture once (first occurrence wins — root session's init).
+        if (ev.payload.phase === 'session_init_start' && sessionModel === undefined) {
+          if (ev.payload.model !== undefined) sessionModel = ev.payload.model;
+          if (ev.payload.resolvedModel !== undefined) sessionResolvedModel = ev.payload.resolvedModel;
+        }
+        break;
+      }
       default:
         break;
     }
@@ -309,23 +260,9 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
   const finalCostUsd = sealedCostUsd ?? closureCostUsd;
   const turnCount = sealedTurnCount ?? closureTurnCount;
 
-  const reasons: string[] = [];
-  if (status === 'failed') reasons.push('Session sealed with status "failed".');
-  else if (status === 'cancelled') reasons.push('Session was cancelled.');
-  else if (status === 'unknown')
-    reasons.push(
-      'No terminal session_sealed record found — the trace may be truncated or was read before the session sealed.',
-    );
-  if (incomplete)
-    reasons.push(
-      'Trace was sealed by the process-exit backstop, indicating an abnormal exit (crash, early EOF, or process.exit()).',
-    );
-  if (closureReason !== undefined && closureReason !== 'model_end_turn')
-    reasons.push(`Closure reason "${closureReason}" is not a clean completion.`);
-  if (erroredNotable > 0) reasons.push(`${erroredNotable} tool call(s) returned an error (excluding benign outcomes).`);
-  if (circuitBreakerHits > 0)
-    reasons.push(`Repeat-loop circuit breaker fired ${circuitBreakerHits} time(s).`);
-  if (subagents.failed > 0) reasons.push(`${subagents.failed} subagent(s) failed.`);
+  const reasons = buildHumanReviewReasons(
+    status, incomplete, closureReason, erroredNotable, circuitBreakerHits, subagents.failed,
+  );
 
   const limitations = [
     'Sourced from witness-trace metadata only: raw tool output (stdout/stderr, file contents, error messages) is NOT recorded in the trace and is therefore absent here.',
@@ -348,13 +285,19 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
     costSource: sc.source,
   };
 
+  const model = meta.model ?? sessionModel;
+  const resolvedModel = meta.resolvedModel ?? sessionResolvedModel;
+
   return {
     schemaVersion: RECEIPT_SCHEMA_VERSION,
     generatedAt: (meta.now ?? new Date()).toISOString(),
     witnessLabel: meta.witnessLabel,
     tracePath: meta.tracePath,
     ...(meta.sessionId !== undefined ? { sessionId: meta.sessionId } : {}),
+    ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
     ...(meta.endReason !== undefined ? { endReason: meta.endReason } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(resolvedModel !== undefined ? { resolvedModel } : {}),
     status,
     ...(closureReason !== undefined ? { closureReason } : {}),
     ...(lastStopReason !== undefined ? { lastStopReason } : {}),
@@ -374,13 +317,19 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
       byFailureClass,
     },
     events: { total: events.length, byKind },
-    subagents,
+    subagents: {
+      ...subagents,
+      ...(subagents.started > 0
+        ? { byModel: buildSubagentsByModel(events) }
+        : {}),
+    },
     cost,
     failures,
     humanReviewRequired: reasons.length > 0,
     humanReviewReasons: reasons,
     limitations,
     ...(meta.journalSummary !== undefined ? { journalSummary: meta.journalSummary } : {}),
+    ...(meta.outcomes !== undefined ? { outcomes: meta.outcomes } : {}),
   };
 }
 
@@ -391,6 +340,8 @@ export interface WriteRunReceiptOptions {
   sessionId?: string;
   reason?: string;
   now?: Date;
+  /** Session cwd; fallback for outcomes when the session-meta sidecar has none. */
+  cwd?: string;
 }
 
 /**
@@ -416,15 +367,21 @@ export async function writeRunReceipt(
     ? extractJournalSummary(
         loadJournalMessages(opts.sessionId),
         env.AFK_RUN_RECEIPT_TEXT_DISABLED === '1',
+        readJournalRecords(opts.sessionId),
       )
+    : undefined;
+  const outcomes = opts.sessionId !== undefined
+    ? await getSessionOutcomes(opts.sessionId, opts.cwd !== undefined ? { cwd: opts.cwd } : {})
     : undefined;
   const receipt = generateReceipt(events, {
     tracePath: opts.tracePath,
     witnessLabel: paths.label,
     ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
+    ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
     ...(opts.reason !== undefined ? { endReason: opts.reason } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     ...(journalSummary !== undefined ? { journalSummary } : {}),
+    ...(outcomes !== undefined ? { outcomes } : {}),
   });
 
   // Both writes use atomic-write primitives (tmp+rename, mkdirp built in).
@@ -453,6 +410,7 @@ export const runReceiptSessionEndHook: HookHandler = async (context) => {
       tracePath: context.tracePath,
       ...(context.sessionId !== undefined ? { sessionId: context.sessionId } : {}),
       ...(context.reason !== undefined ? { reason: context.reason } : {}),
+      ...(context.cwd !== undefined ? { cwd: context.cwd } : {}),
     });
   } catch {
     // Best-effort: a receipt-write failure must never break teardown.

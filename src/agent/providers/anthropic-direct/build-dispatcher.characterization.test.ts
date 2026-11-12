@@ -359,3 +359,59 @@ describe('buildDispatcher characterization (#824) — MCP merge', () => {
     expect(seen).toBe('srv-x');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Nesting-tool schema ordering (#4217 / #4354)
+// ---------------------------------------------------------------------------
+
+describe('buildDispatcher characterization (#4354) — nesting tools appear AFTER get_runtime_state', () => {
+  /**
+   * PR #4217 moved `agent` / `skill` / `compose` to AFTER `get_runtime_state`
+   * in the wire tool list so that schema variation in the nesting tools
+   * (e.g. `agent_type` enumeration when a registry is wired) invalidates the
+   * fewest cached prefix tokens. This test pins that ordering so a future
+   * schema refactor cannot silently undo the cache-stability fix.
+   */
+  it('agent schema appears after get_runtime_state in the schema list', () => {
+    // subagentExecutor is a constructor option — merged into buildDispatcher
+    // by the provider's private field, not by the test-helper opts parameter.
+    const stubExecutor = {
+      describeAgentTool: () => ({ name: 'agent', description: 'stub', input_schema: { type: 'object' as const } }),
+    };
+    const d = build(new AnthropicDirectProvider({ subagentExecutor: stubExecutor as never }));
+    const names = schemaNames(d);
+    const grsIdx = names.indexOf('get_runtime_state');
+    const agentIdx = names.indexOf('agent');
+    expect(grsIdx).toBeGreaterThanOrEqual(0);
+    expect(agentIdx).toBeGreaterThan(grsIdx);
+  });
+
+  it('skill schema appears after get_runtime_state in the schema list', () => {
+    // skillExecutor is a constructor option — stored as a private field and
+    // merged into buildDispatcher by the provider, not by the test helper.
+    const d = build(new AnthropicDirectProvider({ skillExecutor: {} as never }));
+    const names = schemaNames(d);
+    const grsIdx = names.indexOf('get_runtime_state');
+    const skillIdx = names.indexOf('skill');
+    expect(grsIdx).toBeGreaterThanOrEqual(0);
+    expect(skillIdx).toBeGreaterThan(grsIdx);
+  });
+
+  it('compose schema appears after get_runtime_state in the schema list', () => {
+    // Both subagentExecutor and composeExecutor are constructor options.
+    const stubSubagentExecutor = {
+      describeComposeTool: () => ({ name: 'compose', description: 'stub', input_schema: { type: 'object' as const } }),
+    };
+    const d = build(
+      new AnthropicDirectProvider({
+        subagentExecutor: stubSubagentExecutor as never,
+        composeExecutor: {} as never,
+      }),
+    );
+    const names = schemaNames(d);
+    const grsIdx = names.indexOf('get_runtime_state');
+    const composeIdx = names.indexOf('compose');
+    expect(grsIdx).toBeGreaterThanOrEqual(0);
+    expect(composeIdx).toBeGreaterThan(grsIdx);
+  });
+});

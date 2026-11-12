@@ -1,64 +1,75 @@
 /**
- * Operator notification port.
+ * Operator notification port for the `agent/` layer.
  *
- * Agent core sometimes needs to push a best-effort message to the human
- * operator (e.g. when an elicitation arrives on an unattended surface, or
- * ask_question is gated). The concrete delivery channel (Telegram, email,
- * webhook, ...) is a SURFACE concern — agent core must not import any surface
- * module directly.
+ * This module is the single import point for all `agent/` code that needs to
+ * send out-of-band Telegram notifications. It exists to eliminate the
+ * `agent/ → telegram/` layer violation that arises when `agent/` files import
+ * `pushIfConfigured` directly from `telegram/push.ts`.
  *
- * This module provides a register/notify indirection:
- *   - Surfaces call `registerOperatorNotifier` at startup to wire their
- *     push implementation.
- *   - Agent core calls `notifyOperator` — a fire-and-forget function that
- *     silently no-ops when no notifier is registered.
- *
- * Contract:
- *   - `notifyOperator` never throws. Callers rely on this.
- *   - Multiple registrations are fine; last-write wins.
- *   - No return value — callers fire and forget.
+ * The port re-exports a thin wrapper that forwards every call to the real
+ * implementation. Keeping the wrapper in `agent/` means:
+ *   - `agent/` code only depends on `agent/operator-notify.ts` (same layer).
+ *   - Tests can swap the implementation by re-assigning `operatorNotify`
+ *     without touching the `telegram/` package at all.
+ *   - The full `PushOptions` option bag (replyMarkup, target, messageThreadId,
+ *     markdown, …) and the `PushResult[] | null` return value are preserved,
+ *     so callers that inspect delivery success are not broken.
  *
  * @module agent/operator-notify
  */
 
-export type OperatorNotifyFn = (message: string) => void;
-
-let _notifier: OperatorNotifyFn | null = null;
+import type { PushResult } from '../telegram/push.js';
+export type { PushResult } from '../telegram/push.js';
 
 /**
- * Register the process-wide operator notification function. Surfaces call
- * this at startup — e.g. the Telegram adapter wraps `pushIfConfigured` and
- * registers it here. Last-write wins; multiple registrations are safe.
+ * Options accepted by `operatorNotify`. This is an exact structural match of
+ * the second argument accepted by `pushIfConfigured` in `telegram/push.ts`,
+ * so existing call-sites can be migrated without changing any option objects.
  */
-export function registerOperatorNotifier(fn: OperatorNotifyFn): void {
-  _notifier = fn;
+export interface OperatorNotifyOptions {
+  parseMode?: 'MarkdownV2' | 'HTML' | 'Markdown';
+  markdown?: boolean;
+  replyMarkup?: import('telegraf/types').InlineKeyboardMarkup;
+  fetchImpl?: typeof fetch;
+  /**
+   * Explicit delivery target(s) that OVERRIDE the configured notify routing.
+   * Forwarded verbatim to `pushIfConfigured`. Callers are responsible for
+   * having already resolved aliases and enforced the allowlist (fail-closed).
+   */
+  target?: number | readonly number[];
+  /**
+   * Optional Telegram `message_thread_id` for sending to a specific topic
+   * thread in a supergroup. Omit for non-topic chats.
+   */
+  messageThreadId?: number;
 }
 
 /**
- * Best-effort fire-and-forget notification to the operator.
+ * Type of the notify function exposed by this port.
  *
- * Silent no-op when no notifier is registered (the common case for surfaces
- * that have an interactive handler installed, where this code path is never
- * reached anyway).
- *
- * Invariant: never throws. Both the elicitation router and ask-question gate
- * rely on this — a thrown error would break the must-always-resolve contract
- * on the elicitation path.
+ * Matches the full `pushIfConfigured` signature so callers that need to check
+ * `PushResult[] | null` (startup-reconcile, oauth) are fully supported.
  */
-export function notifyOperator(message: string): void {
-  if (!_notifier) return;
-  try {
-    const result = _notifier(message) as unknown;
-    if (result instanceof Promise) result.catch(() => undefined);
-  } catch {
-    // Fire-and-forget — never throw into the calling path.
-  }
-}
+export type OperatorNotifyFn = (
+  text: string,
+  opts?: OperatorNotifyOptions,
+) => Promise<PushResult[] | null>;
 
 /**
- * Reset the notifier to null. Exported for tests only.
- * @internal
+ * Send a notification to the configured Telegram operator chat(s).
+ *
+ * Drop-in replacement for `pushIfConfigured` inside the `agent/` layer.
+ * Returns `null` when Telegram is not configured; returns `PushResult[]`
+ * (possibly empty) otherwise.  Never throws — callers may still `.catch()`
+ * for belt-and-suspenders safety, but errors from the underlying transport are
+ * caught and returned as a failed `PushResult` entry.
  */
-export function _resetOperatorNotifierForTest(): void {
-  _notifier = null;
-}
+export const operatorNotify: OperatorNotifyFn = async (
+  text: string,
+  opts: OperatorNotifyOptions = {},
+): Promise<PushResult[] | null> => {
+  // Lazy import keeps the telegram package out of agent/ load paths that
+  // don't end up calling this function (matches the pattern used in oauth.ts).
+  const { pushIfConfigured } = await import('../telegram/push.js');
+  return pushIfConfigured(text, opts);
+};

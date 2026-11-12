@@ -5,6 +5,7 @@
  */
 
 import * as fs from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -158,7 +159,7 @@ describe('grant store', () => {
   let tmpDir: string;
 
   beforeEach(() => { tmpDir = makeTmpDir(); });
-  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  afterEach(() => { rmSyncRetry(tmpDir); });
 
   it('hasGrant returns false when no file exists', async () => {
     const store = createGrantStore(path.join(tmpDir, 'grants.json'));
@@ -555,7 +556,7 @@ describe('getLspInstallFootprint', () => {
   let tmpDir: string;
 
   beforeEach(() => { tmpDir = makeTmpDir(); });
-  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  afterEach(() => { rmSyncRetry(tmpDir); });
 
   it('returns empty array when servers dir absent', async () => {
     const result = await getLspInstallFootprint(path.join(tmpDir, 'nonexistent'));

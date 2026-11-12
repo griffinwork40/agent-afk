@@ -47,7 +47,9 @@ export const agentTool: AnthropicToolDef = {
     'about in the same turn.\n\n' +
     'Do not use this tool for: trivial one-file edits, conversational answers, ' +
     'direct tool calls the user explicitly requested, or tasks where dispatch ' +
-    'overhead exceeds the work.',
+    'overhead exceeds the work.\n\n' +
+    'For tasks with explicit dependencies between steps (A→B→C pipelines) or ' +
+    'structured fan-out with automatic upstream-to-downstream data flow, prefer `compose`.',
   input_schema: {
     type: 'object',
     properties: {
@@ -85,6 +87,7 @@ export const agentTool: AnthropicToolDef = {
         description:
           "Maximum tool-use rounds within the subagent's single turn — the anti-hang ceiling on a tool-call loop. " +
           'Default 0 = unlimited. Set a positive integer to bound a runaway loop. On cap, the subagent gets one final tools-stripped round to summarize (no silent mid-loop stop). ' +
+          'Same unit as compose\'s `max_tool_rounds_per_node` (top-level) and `max_tool_rounds` (per-node). ' +
           'A named agent may set its own default via `maxToolUseIterations` frontmatter (explicit value here wins). Honored uniformly by both providers.\n\n' +
           'Budget guidance: unnamed subagents are uncapped by default; `general-purpose` defaults to 150; read-only types default to 50. A round with N parallel tool calls costs 1, not N. Sizing:\n' +
           '- Narrow lookup/research: 15-30.\n- Multi-dimension review of a large diff (>300 lines): ~80.\n- Implementation (multi-file edits + test + PR): 80-120 — a 50-round cap is too tight.\n' +
@@ -235,6 +238,8 @@ export const composeTool: AnthropicToolDef = {
     'Edges declare "from must finish before to starts." Omit edges entirely ' +
     'for pure parallel fan-out.\n\n' +
     'Maximum 20 nodes per call. Split larger workloads across multiple compose calls.\n\n' +
+    'For a single independent task, prefer the `agent` tool — it supports background mode, ' +
+    'continuation chains, and remote dispatch that compose nodes do not.\n\n' +
     'Results are returned per-node with status, output, and any errors. ' +
     'On failure, downstream nodes are skipped (fail-fast by default).\n\n' +
     'SECURITY NOTE: upstream node output injected into downstream prompts is ' +

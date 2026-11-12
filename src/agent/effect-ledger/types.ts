@@ -7,7 +7,7 @@
  *
  *   prepare   → write "pending" record (write-ahead, before execution)
  *   execute   → update to "executed" / "failed" / "unknown"
- *   reconcile → (future) update to "confirmed" after out-of-band verification
+ *   reconcile → update to "confirmed" after an explicit matching remote read
  *
  * @module agent/effect-ledger/types
  */
@@ -74,6 +74,8 @@ export interface EffectRecord {
   timestamp: number;
   /** Previous uncertain attempt from which this retry proceeds. */
   retryOf?: string;
+  /** Remote key reused only for retries of this uncertain logical attempt. */
+  remoteIdempotencyKey?: string;
   /** First blocked retry acknowledged the need for remote verification. */
   retryAcknowledgedAt?: number;
   /** Redacted summary of the tool output (set on execute). */
@@ -107,7 +109,16 @@ export interface PendingEffectInput {
   sessionId?: string;
   taskId?: string;
   retryOf?: string;
+  /** Remote key reused only for retries of this uncertain logical attempt. */
+  remoteIdempotencyKey?: string;
 }
+
+/** A caller-owned, read-only remote probe must match this exact effect, not just any resource. */
+export type EffectRemoteRead = (record: Readonly<EffectRecord>) => Promise<{
+  matched: boolean;
+  /** Bounded evidence identifying the remote resource; redacted before persistence. */
+  evidence: unknown;
+}>;
 
 /** Payload for transitioning a pending record after execution completes. */
 export interface ExecuteEffectInput {

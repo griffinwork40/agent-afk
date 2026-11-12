@@ -43,22 +43,53 @@ let refreshedClaudeCodeOauthToken: string | undefined;
  * current access token even when no network refresh was needed (token not yet
  * near-expiry) — so ranking it above the store pinned every later read to the
  * boot-time account: after the operator ran `claude login` to switch accounts
- * and `/reauth`, the parent swapped to the new account (its refresher reads the
- * store directly) while every forked subagent resolved the stale boot token here
- * and died on the old account's 429. The cache is only a fallback for when the
+ * and the turn-start credential catch-up swapped the parent to the new account
+ * (its refresher reads the store directly) while every forked subagent resolved
+ * the stale boot token here and died on the old account's 429. The cache is only a fallback for when the
  * store yields no valid token (write-back failed and the stored one is expired).
  *
- * Returns `undefined` when no credential is available. Mirrors the body of
- * `loadCredential()` in `src/cli/config.ts`, which becomes a thin delegate
- * to this function.
+ * Returns `undefined` when no credential is available. Token-only projection of
+ * {@link resolveAnthropicCredential}, which owns the precedence walk; callers
+ * that also need provenance should call that directly. `loadCredential()` in
+ * `src/cli/config.ts` is a thin delegate to this function.
  */
 export function loadAnthropicCredential(): string | undefined {
-  return (
-    env.ANTHROPIC_API_KEY ||
-    env.CLAUDE_CODE_OAUTH_TOKEN ||
-    loadClaudeCodeOauthToken() ||
-    refreshedClaudeCodeOauthToken
-  );
+  return resolveAnthropicCredential()?.token;
+}
+
+/** Stable machine-readable id for the Anthropic credential tier that won. */
+export type CredentialSourceId =
+  | 'ANTHROPIC_API_KEY'
+  | 'CLAUDE_CODE_OAUTH_TOKEN'
+  | 'claude-code-keychain'
+  | 'claude-code-session-refresh';
+
+/** An Anthropic credential paired with the tier that produced it. */
+export interface AnthropicCredential {
+  token: string;
+  source: CredentialSourceId;
+}
+
+/**
+ * The single Anthropic precedence walk (see {@link loadAnthropicCredential}
+ * for the order and the store-outranks-cache invariant, #2469). Returns the
+ * selected token TOGETHER with its provenance, so callers that need both never
+ * re-walk the chain and can never disagree with the loader (#4778). Mirrors the
+ * `{ apiKey, source }` shape of `resolveOpenAIAuth()`.
+ *
+ * Returns `undefined` when no tier yields a credential. Never logs the token.
+ */
+export function resolveAnthropicCredential(): AnthropicCredential | undefined {
+  if (env.ANTHROPIC_API_KEY) return { token: env.ANTHROPIC_API_KEY, source: 'ANTHROPIC_API_KEY' };
+  if (env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return { token: env.CLAUDE_CODE_OAUTH_TOKEN, source: 'CLAUDE_CODE_OAUTH_TOKEN' };
+  }
+  const stored = loadClaudeCodeOauthToken();
+  if (stored) return { token: stored, source: 'claude-code-keychain' };
+  if (refreshedClaudeCodeOauthToken) {
+    return { token: refreshedClaudeCodeOauthToken, source: 'claude-code-session-refresh' };
+  }
+  return undefined;
 }
 
 /**
@@ -100,8 +131,8 @@ export function _resetRefreshedClaudeCodeOauthToken(): void {
 /**
  * Update the process-local refresh fallback with a freshly-obtained token.
  *
- * Called by `forceClientRefresh()` (via the `/reauth` handler or the
- * usage-limit hot-swap path) after it successfully builds a new SDK client.
+ * Called by `forceClientRefresh()` (via the turn-start credential catch-up or
+ * the usage-limit hot-swap path) after it successfully builds a new SDK client.
  * Keeps the resolver cache in sync so that when the live credential store
  * yields nothing (expired token, write-back failed, locked keychain),
  * `loadAnthropicCredential()` returns the freshly-refreshed token —
@@ -112,15 +143,6 @@ export function _resetRefreshedClaudeCodeOauthToken(): void {
  */
 export function setRefreshedClaudeCodeOauthToken(token: string): void {
   refreshedClaudeCodeOauthToken = token;
-}
-
-/**
- * Returns true when a token was refreshed during this process but its
- * write-back to the persistent credential store failed.  Used by
- * `describeCredentialSource` to give tier-3 a distinct label.
- */
-export function hasProcessLocalRefreshedToken(): boolean {
-  return refreshedClaudeCodeOauthToken !== undefined;
 }
 
 /**

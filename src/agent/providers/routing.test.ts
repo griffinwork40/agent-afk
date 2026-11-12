@@ -85,6 +85,7 @@ describe('providerForModel', () => {
       'claude-haiku-4-5-20251001',
       'claude-sonnet-4',
       'claude-fable-5',
+      'claude-fable-5-2',
     ])('routes full Claude id %s to anthropic', (id) => {
       expect(providerForModel(id)).toBe('anthropic-direct');
     });
@@ -433,6 +434,7 @@ describe('createChildProviderFactory — child provider routing', () => {
     'claude-opus-4-8',
     'claude-sonnet-5',
     'claude-fable-5',
+    'claude-fable-5-2',
   ])('routes Claude id %s to AnthropicDirectProvider', (model) => {
     const factory = createChildProviderFactory();
     const provider = factory({ childExecutor, childSkillExecutor, model });
@@ -653,6 +655,7 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
     'claude-opus-4-8',
     'claude-sonnet-5',
     'claude-fable-5',
+    'claude-fable-5-2',
   ])('defaults to the "medium" tier for Claude parent %s (preserves cost-mgmt intent)', (parent) => {
     // Post-#548: the default is the rebindable `medium` TIER (resolves to Claude
     // Sonnet by default), not the fixed `'sonnet'` identity alias — so a user who
@@ -717,6 +720,11 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
  *     → setSlotBindings(bindings)
  *     → getDefaultSubagentModel()  returns 'subagent' (the slot name)
  *     → resolveBinding('subagent', bindings)  returns { id, provider, baseUrl, apiKey }
+ *
+ * Env-var activation path (AFK_MODEL_SUBAGENT → computeSlotBindings):
+ * not exercised here — tests use the object-override path so the dispatch-chain
+ * logic is tested independently of env-parsing. The env-var path through
+ * computeSlotBindings() is unit-tested in model-slots.test.ts.
  */
 describe('subagent slot dispatch path resolution — integration (#4337)', () => {
   let _savedSubagentEnv: string | undefined;
@@ -767,6 +775,12 @@ describe('subagent slot dispatch path resolution — integration (#4337)', () =>
   });
 
   it('subagent slot configured via object override resolves end-to-end for any parent model', () => {
+    // Note: tests 1–2 go through computeSlotBindings (the normal config path,
+    // which layers env + file overrides) then setSlotBindings. Test 3 below
+    // calls setSlotBindings directly with a hand-built table to exercise the
+    // unconfigured-slot fall-through without touching computeSlotBindings —
+    // the asymmetry is intentional: we want to test the resolution logic in
+    // isolation from the env-overlay logic.
     const bindings = computeSlotBindings({
       subagent: {
         id: 'mistralai/Mixtral-8x7B-Instruct-v0.1',

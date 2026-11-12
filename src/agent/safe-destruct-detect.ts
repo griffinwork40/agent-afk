@@ -54,8 +54,7 @@
  */
 
 import type { HookContext, HookDecision } from './hooks.js';
-import { maskHookCommandData } from './hook-command-data.js';
-import { DESTRUCTIVE_PATTERNS } from './safe-destruct-patterns.js';
+import { analyzeCommand } from './command-classifier.js';
 import { isWorktreeCwd } from './manifest/worktree.js';
 
 /**
@@ -104,13 +103,7 @@ export const WORKTREE_SCOPED_BLOCK_IDS: ReadonlySet<string> = new Set(['git-stas
  * Exported for tests and for a future block/nudge slice.
  */
 export function detectDestructiveCommands(command: string): string[] {
-  if (!command) return [];
-  const executable = maskHookCommandData(command);
-  const hits: string[] = [];
-  for (const { id, re } of DESTRUCTIVE_PATTERNS) {
-    if (re.test(executable)) hits.push(id);
-  }
-  return hits;
+  return analyzeCommand(command).destructive.map(({ id }) => id);
 }
 
 /**
@@ -145,8 +138,9 @@ export function createSafeDestructDetect(sessionCwd?: string): (context: HookCon
       (context as { cwd?: string }).cwd ?? sessionCwd;
     const inWorktree = effectiveCwd !== undefined && isWorktreeCwd(effectiveCwd);
 
-    const matchedIds = detectDestructiveCommands(command);
-    if (matchedIds.length === 0) return {};
+    const matched = analyzeCommand(command).destructive;
+    const matchedIds = matched.map(({ id }) => id);
+    if (matched.length === 0) return {};
 
     // Precedence: if ANY matched pattern is BLOCK-tier, the entire command is
     // blocked. A compound command containing even one unrecoverable sub-operation
@@ -160,10 +154,9 @@ export function createSafeDestructDetect(sessionCwd?: string): (context: HookCon
     //
     // Worktree-scoped patterns: BLOCK_IDS in WORKTREE_SCOPED_BLOCK_IDS are
     // treated as OBSERVE when the session is not inside a linked worktree.
-    const patternMap = new Map(DESTRUCTIVE_PATTERNS.map((p) => [p.id, p]));
-    for (const id of matchedIds) {
-      const pattern = patternMap.get(id);
-      if (pattern?.tier === 'block') {
+    for (const pattern of matched) {
+      const { id } = pattern;
+      if (pattern.tier === 'block') {
         // Downgrade to OBSERVE when the pattern is worktree-scoped and we are
         // not inside a linked worktree — fall through to the OBSERVE branch.
         if (WORKTREE_SCOPED_BLOCK_IDS.has(id) && !inWorktree) continue;

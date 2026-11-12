@@ -322,6 +322,113 @@ describe('sendToSessionHandler', () => {
     const sentEnv = await claimPending(PEER_ID, sentFiles[0]!);
     expect(sentEnv!.hop).toBe(4); // 3 + 1
   });
+
+  // --- reply_to sender-mismatch warning (#4558) --------------------------
+
+  /** Move an envelope from SELF's pending/ into delivered/ so findDeliveredEnvelope can see it. */
+  async function seedDeliveredEnvelope(env: {
+    messageId: string;
+    from: { id: string };
+    body: string;
+  }): Promise<void> {
+    const { writeEnvelope, listPending, claimPending } = await getInboxStore();
+    await writeEnvelope({ v: 1, ...env, to: SELF_ID, hop: 0, ts: new Date().toISOString() });
+    const files = await listPending(SELF_ID);
+    await claimPending(SELF_ID, files[0]!);
+  }
+
+  it('no warning when reply_to resolves and to matches the sender', async () => {
+    await writeSession(SELF_ID);
+    await writeSession(PEER_ID, { peerInbox: true });
+    await seedDeliveredEnvelope({ messageId: 'reply-ok-1', from: { id: PEER_ID }, body: 'original' });
+
+    const { sendToSessionHandler } = await getHandlers();
+    const result = await sendToSessionHandler(
+      { to: PEER_ID, message: 'reply', reply_to: 'reply-ok-1' },
+      undefined,
+      { sessionId: SELF_ID },
+    );
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(result.content) as { status: string; warning?: string };
+    expect(body.status).toBe('queued');
+    expect(body.warning).toBeUndefined();
+    expect(result.content).not.toContain('Warning:');
+  });
+
+  it('no warning when `to` is a name/prefix that resolves to the sender', async () => {
+    // The false positive: `to` may be a session name or unique prefix rather
+    // than a full session id. When it resolves to the envelope sender, the
+    // reply is correctly routed and must NOT warn.
+    const PEER_NAME = 'peer-bot';
+    const PEER2_ID = 'other-session-dddd';
+    const PEER2_NAME = 'peer2-bot';
+    await writeSession(SELF_ID);
+    // Second live session whose id shares the "peer-session-" prefix with
+    // PEER_ID (and a name sharing its "peer" prefix), so the name- and
+    // prefix-resolution cases are both unambiguous.
+    await writeSession(PEER2_ID, { peerInbox: true, name: PEER2_NAME });
+    await writeSession(PEER_ID, { peerInbox: true, name: PEER_NAME });
+    await seedDeliveredEnvelope({ messageId: 'reply-ok-2', from: { id: PEER_ID }, body: 'original' });
+
+    const { sendToSessionHandler } = await getHandlers();
+    // Resolve by exact name first, then by unique ≥6-char prefix. Different
+    // bodies per pass — the send guards refuse duplicate message bodies.
+    for (const [to, msg] of [[PEER_NAME, 'reply one'], [PEER_ID.slice(0, 13), 'reply two']] as const) {
+      const result = await sendToSessionHandler(
+        { to, message: msg, reply_to: 'reply-ok-2' },
+        undefined,
+        { sessionId: SELF_ID },
+      );
+      expect(result.isError).toBeFalsy();
+      const body = JSON.parse(result.content) as { status: string; warning?: string };
+      expect(body.status).toBe('queued');
+      expect(body.warning).toBeUndefined();
+      expect(result.content).not.toContain('Warning:');
+    }
+  });
+
+  it('adds a warning when reply_to resolves but to differs from the sender', async () => {
+    const THIRD_ID = 'third-session-cccc';
+    await writeSession(SELF_ID);
+    await writeSession(PEER_ID, { peerInbox: true });
+    await writeSession(THIRD_ID, { peerInbox: true });
+    // The replied-to envelope came from PEER_ID, but we target THIRD_ID.
+    await seedDeliveredEnvelope({ messageId: 'reply-mismatch-1', from: { id: PEER_ID }, body: 'original' });
+
+    const { sendToSessionHandler } = await getHandlers();
+    const result = await sendToSessionHandler(
+      { to: THIRD_ID, message: 'misrouted reply', reply_to: 'reply-mismatch-1' },
+      undefined,
+      { sessionId: SELF_ID },
+    );
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(result.content) as { status: string; warning?: string };
+    expect(body.status).toBe('queued');
+    expect(body.warning).toContain(
+      `Warning: reply_to references a message from session ${PEER_ID} but to targets session ${THIRD_ID}.`,
+    );
+    expect(body.warning).toContain('set to to the from attribute');
+    // Additive only — the core keys are unchanged.
+    expect(body.warning).not.toBeUndefined();
+    expect(result.content).toContain('messageId');
+  });
+
+  it('stays silent (no warning) when reply_to references an unknown envelope', async () => {
+    await writeSession(SELF_ID);
+    await writeSession(PEER_ID, { peerInbox: true });
+
+    const { sendToSessionHandler } = await getHandlers();
+    const result = await sendToSessionHandler(
+      { to: PEER_ID, message: 'reply to nothing', reply_to: 'no-such-envelope' },
+      undefined,
+      { sessionId: SELF_ID },
+    );
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(result.content) as { status: string; warning?: string };
+    expect(body.status).toBe('queued');
+    expect(body.warning).toBeUndefined();
+    expect(result.content).not.toContain('Warning:');
+  });
 });
 
 // ---------------------------------------------------------------------------

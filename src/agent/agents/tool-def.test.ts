@@ -1,12 +1,14 @@
 /**
  * Tests for the `agent` tool definition builder and agent-type listing
  * formatter (#4217: description is now static; listing moves to system prompt).
+ * (#4509: model param description is now dynamic, reflecting live slot bindings.)
  */
 
-import { describe, expect, it } from 'vitest';
-import { buildAgentToolDef, buildAgentTypeListing } from './tool-def.js';
+import { describe, expect, it, afterEach, vi } from 'vitest';
+import { buildAgentToolDef, buildAgentTypeListing, buildComposeTool, buildAgentModelParamDescription } from './tool-def.js';
 import { builtinAgents } from './builtins.js';
 import { agentTool } from '../tools/schemas.js';
+import { setSlotBindings, resetSlotBindings } from '../session/model-slots.js';
 import type { AgentRegistry, RegisteredAgent } from './types.js';
 
 function registryOf(...names: string[]): AgentRegistry {
@@ -27,9 +29,17 @@ function registryOf(...names: string[]): AgentRegistry {
 // ---------------------------------------------------------------------------
 
 describe('buildAgentToolDef', () => {
-  it('returns the static agentTool unchanged for empty/absent registries', () => {
-    expect(buildAgentToolDef(undefined)).toBe(agentTool);
-    expect(buildAgentToolDef(new Map())).toBe(agentTool);
+  it('returns a copy (not the static agentTool) even for empty/absent registries (#4509)', () => {
+    // #4509: model param description is now always patched, so a copy is always
+    // returned. The returned schema is still functionally equivalent for empty
+    // registries — no agent_type property, no AGENT_TYPE_STATIC_SUFFIX in the
+    // top-level description — but the object reference will differ.
+    const def = buildAgentToolDef(undefined);
+    expect(def.name).toBe('agent');
+    expect(def.input_schema.properties).not.toHaveProperty('agent_type');
+    const modelProp = (def.input_schema.properties as Record<string, { description?: string }>)['model'];
+    // Dynamic description must mention slot name options.
+    expect(modelProp?.description).toContain('slot name');
   });
 
   it('adds the agent_type property when registry is non-empty', () => {
@@ -77,10 +87,118 @@ describe('buildAgentToolDef', () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildAgentModelParamDescription — dynamic model param description (#4509)
+// ---------------------------------------------------------------------------
+
+describe('buildAgentModelParamDescription', () => {
+  afterEach(() => {
+    resetSlotBindings();
+    vi.unstubAllEnvs();
+  });
+
+  it('mentions slot name options in the default (unconfigured) state', () => {
+    const desc = buildAgentModelParamDescription();
+    expect(desc).toContain('slot name');
+    expect(desc).toContain('small');
+    expect(desc).toContain('medium');
+    expect(desc).toContain('large');
+  });
+
+  it('lists a configured local slot as a bound target', () => {
+    setSlotBindings({
+      local: { id: 'llama-3.1-8b' },
+      small: { id: 'claude-haiku-5-5' },
+      medium: { id: 'claude-sonnet-4-6' },
+      large: { id: 'claude-opus-5-5' },
+      subagent: { id: '' },
+    });
+    const desc = buildAgentModelParamDescription();
+    expect(desc).toContain('`local`');
+    expect(desc).toContain('llama-3.1-8b');
+  });
+
+  it('names AFK_DEFAULT_SUBAGENT_MODEL as the default when set', () => {
+    vi.stubEnv('AFK_DEFAULT_SUBAGENT_MODEL', 'local');
+    const desc = buildAgentModelParamDescription();
+    expect(desc).toContain('AFK_DEFAULT_SUBAGENT_MODEL');
+    expect(desc).toContain('`local`');
+    vi.unstubAllEnvs();
+  });
+
+  it('names subagent slot default when subagent slot is configured', () => {
+    setSlotBindings({
+      local: { id: '' },
+      small: { id: 'claude-haiku-5-5' },
+      medium: { id: 'claude-sonnet-4-6' },
+      large: { id: 'claude-opus-5-5' },
+      subagent: { id: 'gpt-4o-mini' },
+    });
+    const desc = buildAgentModelParamDescription();
+    expect(desc).toContain('subagent');
+    expect(desc).toContain('gpt-4o-mini');
+  });
+
+  it('falls back to medium as default with no special config', () => {
+    const desc = buildAgentModelParamDescription();
+    expect(desc).toMatch(/Default:.*`medium`/);
+  });
+
+  it('inherits a non-default parentModel when it resolves to openai-compatible (#4663)', () => {
+    // The OpenAI-compatible parent-inherit path: when no env var or subagent
+    // slot overrides the default, a GPT/o-series parent should be inherited
+    // so local/OpenAI-only setups don't silently dispatch Anthropic subagents.
+    const desc = buildAgentModelParamDescription('gpt-4o');
+    expect(desc).toMatch(/Default: `gpt-4o`/);
+    // Must NOT fall back to medium for an OpenAI-compatible parent.
+    expect(desc).not.toMatch(/Default: `medium`/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildComposeTool — compose node model description is also dynamic (#4509)
+// ---------------------------------------------------------------------------
+
+describe('buildComposeTool', () => {
+  afterEach(() => {
+    resetSlotBindings();
+  });
+
+  it('patches the node model description with slot info', () => {
+    setSlotBindings({
+      local: { id: 'llama-3.1-8b' },
+      small: { id: 'claude-haiku-5-5' },
+      medium: { id: 'claude-sonnet-4-6' },
+      large: { id: 'claude-opus-5-5' },
+      subagent: { id: '' },
+    });
+    const def = buildComposeTool();
+    const nodesItems = (def.input_schema.properties as Record<string, {
+      items?: { properties?: Record<string, { description?: string }> };
+    }>)['nodes']?.items;
+    const modelDesc = nodesItems?.properties?.['model']?.description ?? '';
+    expect(modelDesc).toContain('`local`');
+    expect(modelDesc).toContain('llama-3.1-8b');
+    expect(modelDesc).toContain('slot name');
+  });
+
+  it('does not mutate the static composeTool', async () => {
+    const { composeTool } = await import('../tools/schemas.js');
+    type NodesProp = { items?: { properties?: Record<string, { description?: string }> } };
+    const nodeModelDesc = (props: Record<string, NodesProp>) =>
+      props['nodes']?.items?.properties?.['model']?.description;
+    const beforeDesc = nodeModelDesc(composeTool.input_schema.properties as Record<string, NodesProp>);
+    buildComposeTool();
+    const afterDesc = nodeModelDesc(composeTool.input_schema.properties as Record<string, NodesProp>);
+    expect(afterDesc).toBe(beforeDesc);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildAgentTypeListing — dynamic listing for the system prompt
 // ---------------------------------------------------------------------------
 
 describe('buildAgentTypeListing', () => {
+  // #4220: empty registry → no delimiter block injected into the system prompt.
   it('returns empty string for empty/absent registries', () => {
     expect(buildAgentTypeListing(undefined)).toBe('');
     expect(buildAgentTypeListing(new Map())).toBe('');
@@ -142,5 +260,17 @@ describe('buildAgentTypeListing', () => {
     const listingB = buildAgentTypeListing(registryOf('research-agent', 'probe-agent'));
     expect(listingA).not.toBe(listingB);
     expect(listingB).toContain('probe-agent');
+  });
+
+  // #4220 item 4: listing is wrapped in a named delimiter block so the model
+  // and any downstream parser can unambiguously identify the content as data.
+  it('wraps the listing in <available-agent-types> delimiters (#4220)', () => {
+    const listing = buildAgentTypeListing(registryOf('research-agent'));
+    // Single anchored regex: open tag at start, non-empty content, close tag at end.
+    expect(listing).toMatch(/^<available-agent-types>\n[\s\S]+\n<\/available-agent-types>$/);
+    // Footer line must appear before the closing tag.
+    expect(listing.indexOf('When `agent_type` is omitted')).toBeLessThan(
+      listing.indexOf('</available-agent-types>'),
+    );
   });
 });

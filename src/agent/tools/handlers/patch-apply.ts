@@ -210,12 +210,26 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
     const validation = await validatePatchChanges(changes, resolveBase, context);
 
     if (!validation.valid) {
-      const result = {
+      // Contract: surface a _reread_warning on validation_failed so the model
+      // re-reads stale files before retrying. The audit (2026-10-26) found 75%
+      // of patch_apply errors are instant rejections from stale context, and
+      // agents retry identical patches without re-reading the file first.
+      const stalePaths = validation.errors
+        .filter((e) => e.error === 'hash_mismatch' || e.error === 'edit_not_found')
+        .map((e) => callerPaths.get(e.path ?? '') ?? e.path ?? '')
+        .filter(Boolean);
+      const result: Record<string, unknown> = {
         status: 'validation_failed' as const,
         diff: '',
         files_changed: [],
         errors: validation.errors,
       };
+      if (stalePaths.length > 0) {
+        result['_reread_warning'] =
+          `Your in-context copy of ${stalePaths.length === 1 ? 'this file is' : 'these files are'} stale. ` +
+          `You MUST call read_file on each path before retrying this patch — do not retry with the same content. ` +
+          `Stale paths: ${stalePaths.join(', ')}`;
+      }
       return {
         content: JSON.stringify(result, null, 2),
         isError: true,

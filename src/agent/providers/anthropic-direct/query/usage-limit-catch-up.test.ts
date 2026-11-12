@@ -1,7 +1,7 @@
 /**
  * Stale-credential catch-up: an account switch that landed BEFORE the 429
- * must be picked up without `/reauth` (operator report 2026-10-08: "when I
- * switch accounts I have to run /reauth and send a message").
+ * must be picked up automatically by the turn-start credential catch-up
+ * (operator report 2026-10-08: account switches required a manual command).
  *
  * Coverage:
  *  - catchUpStaleCredential unit contract (each `false` branch + the swap)
@@ -208,7 +208,7 @@ describe('catchUpStaleCredential', () => {
 });
 
 describe('turnWithUsageLimitRetry — account switched before the 429', () => {
-  it('replays on the new account without parking (no /reauth needed)', async () => {
+  it('replays on the new account without parking (automatic catch-up)', async () => {
     loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b');
     const ctx = makeCtx({ clientToken: 'tok-a' });
     const seenClients: unknown[] = [];

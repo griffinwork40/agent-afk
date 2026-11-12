@@ -41,6 +41,7 @@ import { escapeHtml } from './formatter.js';
 import { escapeRegExp } from '../utils/regexp.js';
 import { errorMessage } from '../utils/errors.js';
 import { truncateTelegramLabel } from '../utils/truncate-telegram-label.js';
+import { palette } from '../cli/palette.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -193,10 +194,7 @@ export async function sendHandoffQuestion(opts: SendHandoffOpts): Promise<SendHa
     await persistRouteAndMessageId(record, chatId, threadId, sent.message_id, handoffsDir);
     return { ok: true, messageId: sent.message_id };
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error(
-      `[handoff-answer] failed to send question for task ${record.taskId}:`,
-      errorMessage(err),
+    console.error(palette.error(`[handoff-answer] failed to send question for task ${record.taskId}: ${errorMessage(err)}`),
     );
     return { ok: false };
   }

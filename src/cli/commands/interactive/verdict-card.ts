@@ -213,8 +213,19 @@ export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): str
       lines.push(pipe + '  ' + padDisplayRight(wl, innerW) + '  ' + pipe);
     }
   } else {
+    let inSecondary = false;
+    let primaryWritten = false;
     for (const row of rows) {
+      // Insert a blank separator before the first secondary row,
+      // but only if at least one primary row was already written.
+      if (row.tier === 'secondary' && !inSecondary) {
+        inSecondary = true;
+        if (primaryWritten) lines.push(blankRow);
+      }
+      if (row.tier !== 'secondary') primaryWritten = true;
       const label = palette.dim(padDisplayRight(row.label, labelW));
+      const valueStyled = (s: string) =>
+        row.tier === 'secondary' ? palette.dim(s) : s;
       const rendered = renderMarkdownToTerminal(row.value, { maxWidth: valueW });
       const wrapped = wrapToWidth(rendered, valueW, { breakLongWords: true }).split('\n');
       // Filter trailing empty lines from block-level markdown terminators
@@ -224,11 +235,11 @@ export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): str
       while (wrapped.length > 0 && wrapped[wrapped.length - 1] === '') wrapped.pop();
       const first = wrapped[0] ?? '';
       lines.push(
-        pipe + '  ' + label + '  ' + padDisplayRight(first, valueW) + '  ' + pipe,
+        pipe + '  ' + label + '  ' + padDisplayRight(valueStyled(first), valueW) + '  ' + pipe,
       );
       for (const cont of wrapped.slice(1)) {
         lines.push(
-          pipe + '  ' + ' '.repeat(labelW) + '  ' + padDisplayRight(cont, valueW) + '  ' + pipe,
+          pipe + '  ' + ' '.repeat(labelW) + '  ' + padDisplayRight(valueStyled(cont), valueW) + '  ' + pipe,
         );
       }
     }
@@ -259,6 +270,7 @@ export function renderVerdictCard(state: TerminalState, meta?: VerdictMeta): str
 interface Row {
   label: string;
   value: string;
+  tier?: 'primary' | 'secondary';
 }
 
 /**
@@ -268,7 +280,7 @@ interface Row {
  */
 function collectRows(state: TerminalState): Row[] {
   const rows: Row[] = [];
-  const push = (label: string, value: string | undefined) => {
+  const push = (label: string, value: string | undefined, tier: Row['tier'] = 'primary') => {
     if (!value) return;
     const trimmed = value.trim();
     // Skip values that are purely residual markup noise — orphaned bold/
@@ -276,7 +288,7 @@ function collectRows(state: TerminalState): Row[] {
     // parser's strip pass. They carry no semantic content and would render
     // as literal asterisks in the card.
     if (trimmed.length === 0 || /^(?:\*{2,4}|_{2,4})$/.test(trimmed)) return;
-    rows.push({ label, value: trimmed });
+    rows.push({ label, value: trimmed, tier });
   };
   switch (state.kind) {
     case 'done':
@@ -288,6 +300,16 @@ function collectRows(state: TerminalState): Row[] {
       // duplicate row in the card.
       if (state.deferred?.trim() !== state.whatWasDone?.trim()) {
         push('deferred', state.deferred);
+      }
+      push('worth doing', state.worthDoing, 'secondary');
+      // Skip notChecked / undoSteps rows that merely echo whatWasDone —
+      // same guard as deferred above, preventing a confusing duplicate row
+      // when a model emits identical text for two fields.
+      if (state.notChecked?.trim() !== state.whatWasDone?.trim()) {
+        push('not checked', state.notChecked, 'secondary');
+      }
+      if (state.undoSteps?.trim() !== state.whatWasDone?.trim()) {
+        push('undo', state.undoSteps, 'secondary');
       }
       break;
     case 'blocked':
