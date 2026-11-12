@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.353.1] - 2026-11-12
+
 ### Fixed
 - retitle command classifier call-site wiring test (#4675) (0963f9abe)
 - address remaining test-gap and hygiene findings (#4809) (188805c88)
