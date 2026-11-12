@@ -9,9 +9,10 @@ import ts from 'typescript';
 import { loadPublicSurface, type Surface } from './public-surface.js';
 
 export type OptionArity = 'required' | 'optional';
-/** `args` holds value-taking options only, derived from the generated CLI reference. */
-export interface CommandInfo { path: string; flags: Set<string>; children: Set<string>; args: Map<string, OptionArity> }
-export interface CliRefEntry { aliases: string[]; flags: string[]; args: Record<string, OptionArity> }
+/** `args` holds value-taking options only, derived from the generated CLI reference.
+ * `positional`: the `Usage:` line names an argument other than `[options]`/`[command]`. */
+export interface CommandInfo { path: string; flags: Set<string>; children: Set<string>; args: Map<string, OptionArity>; positional: boolean }
+export interface CliRefEntry { aliases: string[]; flags: string[]; args: Record<string, OptionArity>; positional: boolean }
 export interface KnownRefs {
   env: Set<string>;
   /** Canonical command path keyed by every spelling (aliases included). */
@@ -39,8 +40,10 @@ export function parseCliReference(text: string): Map<string, CliRefEntry> {
   let current: CliRefEntry | undefined;
   for (const line of text.split(/\r?\n/)) {
     const heading = /^## `(afk(?: [^`]+)?)`$/.exec(line);
-    if (heading) { current = { aliases: [], flags: [], args: {} }; out.set(heading[1]!, current); continue; }
+    if (heading) { current = { aliases: [], flags: [], args: {}, positional: false }; out.set(heading[1]!, current); continue; }
     if (!current) continue;
+    const usage = /^Usage: `([^`]*)`$/.exec(line);
+    if (usage) current.positional = /[<[]/.test(usage[1]!.replace(/&lt;/g, '<').replace(/\[(?:options|command)\]/g, ''));
     const alias = /^Aliases: (.*)$/.exec(line);
     if (alias) current.aliases.push(...[...alias[1]!.matchAll(/`([^`]+)`/g)].map((m) => m[1]!));
     const flag = /^\| `(-[^`]+)` \|/.exec(line);
@@ -109,7 +112,7 @@ export function buildKnown(surface: Surface, root: string): KnownRefs {
   const cliRef = parseCliReference(readFileSync(join(root, 'website/content/docs/reference/cli.mdx'), 'utf8'));
   const commands = new Map<string, CommandInfo>();
   const info = new Map<string, CommandInfo>();
-  for (const path of names('command')) info.set(path, { path, flags: new Set(cliRef.get(path)?.flags ?? []), children: new Set(), args: new Map(Object.entries(cliRef.get(path)?.args ?? {})) });
+  for (const path of names('command')) info.set(path, { path, flags: new Set(cliRef.get(path)?.flags ?? []), children: new Set(), args: new Map(Object.entries(cliRef.get(path)?.args ?? {})), positional: cliRef.get(path)?.positional ?? false });
   for (const flag of names('flag')) {
     const at = flag.lastIndexOf(' ');
     info.get(flag.slice(0, at))?.flags.add(flag.slice(at + 1));

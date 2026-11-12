@@ -25,6 +25,13 @@ describe('docs refs: environment variables', () => {
     expect(check('Use AFK_MODLE.')).toEqual(['guides/x.mdx:1: env AFK_MODLE not found (did you mean AFK_MODEL?)']);
     expect(check('Use `AFK_GONE_*`.')).toEqual(['guides/x.mdx:1: env-pattern AFK_GONE_* not found']);
   });
+  it('skips env names only inside explicit data/code fences', () => {
+    expect(check('```json\n{"AFK_ZZQQXXYY": 1}\n```')).toEqual([]);
+    expect(check('```yaml\nenv: AFK_ZZQQXXYY\n```')).toEqual([]);
+    for (const open of ['```bash', '```', '```text']) {
+      expect(check(`${open}\nAFK_ZZQQXXYY=1 afk\n\`\`\``)).toEqual(['guides/x.mdx:2: env AFK_ZZQQXXYY not found']);
+    }
+  });
 });
 
 describe('docs refs: afk command lines', () => {
@@ -40,6 +47,12 @@ describe('docs refs: afk command lines', () => {
     expect(check('`afk shedule add`')).toEqual(['guides/x.mdx:1: command afk shedule not found (did you mean afk schedule?)']);
     expect(check('`afk grok login`')).toEqual(['guides/x.mdx:1: command afk grok not found (did you mean afk provider auth xai?)']);
     expect(check('```json\n{"cmd": "afk --nope"}\n```')).toEqual([]);
+  });
+  it('rejects unknown subcommands under command-only parents, never under the root', () => {
+    expect(check('```bash\nafk schedule frobnicate\n```')).toEqual(['guides/x.mdx:2: command afk schedule frobnicate not found']);
+    expect(check('`afk schedule frobnicate`')).toEqual(['guides/x.mdx:1: command afk schedule frobnicate not found']);
+    expect(check('```bash\nafk schedule "frobnicate"\nafk schedule <subcommand>\nafk schedule add\nafk fix the tests\n```')).toEqual([]);
+    expect(check('`afk schedule …` and `afk schedule ...`')).toEqual([]);
   });
   it('tokenizes quotes, separators, and env prefixes', () => {
     expect(tokenize(`afk "a b" 'c'|x`).map((t) => t.text)).toEqual(['afk', 'a b', 'c', '|', 'x']);
@@ -84,6 +97,13 @@ describe('docs refs: slash, config, tools, hooks', () => {
     expect(check('Use `/model sonnet`, `/tmp`, `/usr/bin`, `/v1`, `~/x/y`, `/a.txt`, and [x](/guides/y).')).toEqual([]);
     expect(check('Use `/modle`.')).toEqual(['guides/x.mdx:1: slash /modle not found (did you mean /model?)']);
   });
+  it('checks a leading slash command in prose fences, not paths or data fences', () => {
+    expect(check('```\n/model sonnet\n> /model sonnet\n```')).toEqual([]);
+    expect(check('```\n/modle sonnet\n```')).toEqual(['guides/x.mdx:2: slash /modle not found (did you mean /model?)']);
+    expect(check('```text\nafk> /modle\n```')).toEqual(['guides/x.mdx:2: slash /modle not found (did you mean /model?)']);
+    expect(check('```\n/usr/bin/node script.js\n/v1/messages\n/tmp\n```')).toEqual([]);
+    expect(check('```json\n/modle\n```')).toEqual([]);
+  });
   it('checks dotted config tokens under known roots, allowing map children and prefixes', () => {
     expect(check('`models.large`, `models.large.contextWindow`, `telegram.notify`, `telegram.notify.*`, `telegram.chatAliases.ops`')).toEqual([]);
     expect(check('`telegram.notify.mood`')[0]).toMatch(/config telegram\.notify\.mood not found/);
@@ -104,13 +124,17 @@ describe('docs refs: comments and opt-outs', () => {
     expect(check('{/* docs-refs-ignore-next-line */}\nThe old `/bypass` command.\n`/bypass`')).toEqual(['guides/x.mdx:3: slash /bypass not found']);
     expect(check('{/* docs-refs-ignore-start */}\n`/a1`\n`/b2`\n{/* docs-refs-ignore-end */}\n`/zq9x`')).toEqual(['guides/x.mdx:5: slash /zq9x not found']);
   });
+  it('suppresses only the marker line when ignore-start and ignore-end share it', () => {
+    expect(check('`/zq8x` {/* docs-refs-ignore-start */}{/* docs-refs-ignore-end */}\n`/zq9x`')).toEqual(['guides/x.mdx:2: slash /zq9x not found']);
+  });
 });
 
 describe('docs refs: known-symbol sources', () => {
   it('reads aliases/short flags from the generated CLI reference and file-only config keys', () => {
-    const cli = parseCliReference('## `afk chat`\n\nAliases: `c`\n\n| `-m, --model <model>` | x |  |\n| `-w, --worktree [branch]` | x |  |\n| `--json` | x |  |');
+    const cli = parseCliReference('## `afk chat`\n\nUsage: `afk chat [options] [message]`\n\nAliases: `c`\n\n| `-m, --model <model>` | x |  |\n| `-w, --worktree [branch]` | x |  |\n| `--json` | x |  |');
     expect(cli.get('afk chat')).toEqual({ aliases: ['c'], flags: ['-m', '--model', '-w', '--worktree', '--json'],
-      args: { '-m': 'required', '--model': 'required', '-w': 'optional', '--worktree': 'optional' } });
+      args: { '-m': 'required', '--model': 'required', '-w': 'optional', '--worktree': 'optional' }, positional: true });
+    expect(parseCliReference('## `afk schedule`\n\nUsage: `afk schedule [options] [command]`').get('afk schedule')?.positional).toBe(false);
     const paths = configSchemaPaths('interface ConfigFileSchema { a?: { b?: string; m?: Record<string, number> }; c?: number[] }');
     expect(paths).toEqual(['a', 'a.b', 'a.m', 'a.m.*', 'c']);
   });

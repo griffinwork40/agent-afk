@@ -10,9 +10,14 @@ export interface LineFinding extends RefFinding { line: number }
 const SHELL_FENCES = /^(?:bash|sh|shell|zsh|fish|ksh|powershell|ps1|pwsh|console|terminal|shellsession|shell-session|cmd|bat|batch|text)$/i;
 /** HTTP path segments that read like slash commands (`/v1`, `GET .../models`). */
 const HTTP_PATH = /^\/(?:v\d+|models|completions|health)$/;
+/** Prose fences: an explicit language that is still text, not data or code. */
+const PROSE_FENCES = /^(?:md|markdown|mdx)$/i;
+/** Prompts a fenced REPL example may show before a slash command. */
+const SLASH_PROMPT = /^\s*(?:afk>|>|\$)\s+/;
 const FS_ROOTS = new Set(['/tmp', '/usr', '/etc', '/var', '/bin', '/opt', '/dev', '/home', '/Users', '/proc', '/mnt', '/sbin', '/lib', '/private', '/Volumes']);
 
-/** Line numbers (1-based) excluded by docs-refs-ignore markers, read from raw text. */
+/** Line numbers (1-based) excluded by docs-refs-ignore markers, read from raw text.
+ * When `docs-refs-ignore-start` and `docs-refs-ignore-end` share a line, only that line is suppressed. */
 export function ignoredLines(raw: string): Set<number> {
   const out = new Set<number>();
   let block = false;
@@ -106,7 +111,8 @@ function inlineSpans(line: string): string[] {
 export function pageFindings(page: string, text: string, ignored: ReadonlySet<number>, known: KnownRefs): LineFinding[] {
   const out: LineFinding[] = [];
   const lines = text.split(/\r?\n/);
-  let fence: { marker: string; shell: boolean } | undefined;
+  // `code`: an explicit data/code language (json, yaml, ts...): no env or slash checks in its body.
+  let fence: { close: RegExp; shell: boolean; code: boolean } | undefined;
   let continued = '';
   let continuedAt = 0;
   lines.forEach((line, index) => {
@@ -114,9 +120,10 @@ export function pageFindings(page: string, text: string, ignored: ReadonlySet<nu
     const add = (items: (RefFinding | undefined)[], at = n): void => {
       for (const item of items) if (item && !ignored.has(at)) out.push({ ...item, line: at });
     };
-    add(envFindings(line, known));
+    if (!fence?.code) add(envFindings(line, known));
     if (fence) {
-      if (new RegExp(`^\\s*${fence.marker[0] === '`' ? '`' : '~'}{${fence.marker.length},}\\s*$`).test(line)) { fence = undefined; return; }
+      if (fence.close.test(line)) { fence = undefined; return; }
+      if (!fence.code && !continued) add([slashFinding(line.replace(SLASH_PROMPT, ''), known)]);
       if (!continued) continuedAt = n;
       continued += line.replace(/\\\s*$/, ' ');
       if (/\\\s*$/.test(line)) return;
@@ -125,7 +132,14 @@ export function pageFindings(page: string, text: string, ignored: ReadonlySet<nu
       return;
     }
     const opening = /^\s*(`{3,}|~{3,})\s*([^\s`{]*)/.exec(line);
-    if (opening) { fence = { marker: opening[1]!, shell: SHELL_FENCES.test(opening[2]!) }; continued = ''; return; }
+    if (opening) {
+      const marker = opening[1]!;
+      const lang = opening[2]!;
+      const shell = SHELL_FENCES.test(lang);
+      fence = { close: new RegExp(`^\\s*${marker[0] === '`' ? '`' : '~'}{${marker.length},}\\s*$`), shell, code: !shell && lang !== '' && !PROSE_FENCES.test(lang) };
+      continued = '';
+      return;
+    }
     add([headingFinding(page, line, known), ...phraseFindings(line, known)]);
     for (const span of inlineSpans(line)) {
       if (/\bafk\b/.test(span)) for (const segment of afkSegments(span)) add(checkCommand(segment, known));

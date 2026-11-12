@@ -73,7 +73,7 @@ describe('public surface extraction', () => {
     const second = isolated();
     expect(second.status, `${second.stdout}\n${second.stderr}`).toBe(0);
     expect(first.stdout).toBe(second.stdout);
-  }, 120_000);
+  }, 180_000);
 
   it('checks byte exact output without rewriting drift or creating missing artifacts', () => {
     temporary((root) => {

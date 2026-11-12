@@ -81,6 +81,8 @@ export function unionTypecheck(
  * here. POSIX counts (audit:posix:update) and test error counts (lint:tests:update)
  * qualify. The SDK lock does not: new symbols need human-authored reasons.
  * Env registries deliberately retain normal git merging; do not add -merge.
+ * The isolated-reference renders (scan:cli, scan:slash, scan:config, scan:surface)
+ * qualify too: a conflict on them is resolved by re-rendering, also without -merge.
  */
 export const GENERATED_PATHS = new Set([
   '.filesize-baseline.json',
@@ -88,6 +90,10 @@ export const GENERATED_PATHS = new Set([
   'docs/env-registry.json',
   'docs/env-registry.md',
   'website/content/docs/reference/environment-variables.mdx',
+  'website/content/docs/reference/cli.mdx',
+  'website/content/docs/reference/slash-commands.mdx',
+  'website/content/docs/reference/config-keys.mdx',
+  'docs/public-surface.json',
   '.posix-guard-baseline.json',
   '.test-typecheck-baseline.json',
 ]);

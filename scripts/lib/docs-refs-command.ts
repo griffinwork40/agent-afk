@@ -33,7 +33,7 @@ export function nearest(token: string, candidates: Iterable<string>, max = Infin
 
 export { afkSegments, startsWithAfk, tokenize, type ShellToken } from './docs-refs-shell.js';
 
-const PLACEHOLDER = /[<>[\]{}]|^\.\.\.|\$/;
+const PLACEHOLDER = /[<>[\]{}]|^(?:\.\.\.|…)|\$/;
 /** Option-shaped words only: `--x`, `-x`, `--x=v`. Prose like `--x?` or `-->` is a value. */
 const OPTION = /^--?[A-Za-z0-9][\w-]*(?:=|$)/;
 
@@ -83,6 +83,8 @@ export function checkCommand(tokens: readonly ShellToken[], known: KnownRefs): R
     const near = text.length >= 3 ? nearest(text, [...command.children].filter((c) => c.length >= 3), 2) : undefined;
     if (removed) findings.push({ kind: 'command', token: `${command.path} ${text}`, suggestion: removed });
     else if (near && command.children.size) findings.push({ kind: 'command', token: `${command.path} ${text}`, suggestion: `${command.path} ${near}` });
+    // Subcommand-only parents: any other word is an unknown command. The root takes prompts.
+    else if (command.children.size && !command.positional && command.path !== 'afk') findings.push({ kind: 'command', token: `${command.path} ${text}` });
   }
   return findings;
 }

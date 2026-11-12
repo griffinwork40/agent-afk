@@ -95,12 +95,17 @@ export function namingContexts(text: string): { inline: string[]; shell: string[
   return { inline, shell };
 }
 
+// Bounded by the handwritten page count: one entry per distinct page text.
+const contextCache = new Map<string, ReturnType<typeof namingContexts>>();
+
 /** Commands are code-span or shell-line prefixes with a whitespace/end boundary.
  * Other kinds require an entire inline-code token (no prose or fenced matches).
  * Slash invocations with arguments must separately name the canonical /token.
  */
 export function namesSymbol(symbol: Pick<SurfaceSymbol, 'kind' | 'name'>, text: string): boolean {
-  const { inline, shell } = namingContexts(text);
+  let contexts = contextCache.get(text);
+  if (!contexts) { contexts = namingContexts(text); contextCache.set(text, contexts); }
+  const { inline, shell } = contexts;
   if (symbol.kind !== 'command') return inline.includes(symbol.name);
   return [...inline, ...shell].some((token) => token === symbol.name
     || (token.startsWith(symbol.name) && /^\s/.test(token.slice(symbol.name.length))));

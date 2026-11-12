@@ -604,7 +604,7 @@ jobs:
       - name: Docs impact summary (advisory)
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        run: pnpm docs:impact --base origin/${{ github.base_ref }}
+        run: pnpm docs:impact --base origin/${{ github.base_ref || 'main' }}
 
       - name: Install dependencies
         run: cd website && npm ci

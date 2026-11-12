@@ -8,6 +8,11 @@
     },
     {
       "kind": "command",
+      "name": "afk acp",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "command",
       "name": "afk bg",
       "source": "src/cli/commands/bg.ts"
     },
@@ -135,6 +140,36 @@
       "kind": "command",
       "name": "afk doctor",
       "source": "src/cli/commands/doctor.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk episode",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk episode backfill",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk episode ingest",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk episode synthesize",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk events",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk events github",
+      "source": "src/cli/commands/events.ts"
     },
     {
       "kind": "command",
@@ -278,6 +313,11 @@
     },
     {
       "kind": "command",
+      "name": "afk pause",
+      "source": "src/cli/commands/pause.ts"
+    },
+    {
+      "kind": "command",
       "name": "afk plugin",
       "source": "src/cli/commands/plugin.ts"
     },
@@ -373,8 +413,23 @@
     },
     {
       "kind": "command",
+      "name": "afk receipt",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk receipt regenerate",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "command",
       "name": "afk restart",
       "source": "src/cli/commands/restart.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk resume",
+      "source": "src/cli/commands/resume-all.ts"
     },
     {
       "kind": "command",
@@ -509,6 +564,11 @@
     {
       "kind": "command",
       "name": "afk trace",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "command",
+      "name": "afk trace export-otlp",
       "source": "src/cli/commands/trace.ts"
     },
     {
@@ -648,6 +708,11 @@
     },
     {
       "kind": "config",
+      "name": "fileCheckpoints",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
       "name": "interactive.suggestGhost",
       "source": "src/config/settable-keys.ts"
     },
@@ -713,6 +778,11 @@
     },
     {
       "kind": "config",
+      "name": "models.subagent",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
       "name": "permissionMode",
       "source": "src/config/settable-keys.ts"
     },
@@ -768,6 +838,11 @@
     },
     {
       "kind": "config",
+      "name": "tools.usageAwareness",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
       "name": "updatePolicy",
       "source": "src/config/settable-keys.ts"
     },
@@ -795,6 +870,11 @@
       "kind": "env",
       "name": "AFK_BASH_PREVIEW_TAIL_LINES",
       "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_BASH_SANDBOX",
+      "source": "src/config/env.sandbox.ts"
     },
     {
       "kind": "env",
@@ -933,6 +1013,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_DELEGATION_PROFILE",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_DEMO_CLEAN",
       "source": "src/config/env.misc.ts"
     },
@@ -973,8 +1058,53 @@
     },
     {
       "kind": "env",
+      "name": "AFK_EPISODE_RECALL",
+      "source": "src/config/env.episode.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_EPISODE_SYNTHESIS",
+      "source": "src/config/env.episode.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_EVAL_STALENESS_DAYS",
       "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_EVENTS_GITHUB_POLL_MS",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_FILE_CHECKPOINT_BASH_DISABLE",
+      "source": "src/config/env.file-checkpoint.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_FILE_CHECKPOINT_BASH_MAX_FILES",
+      "source": "src/config/env.file-checkpoint.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_FILE_CHECKPOINT_BASH_TIMEOUT_MS",
+      "source": "src/config/env.file-checkpoint.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_FILE_CHECKPOINT_MAX_AGE_DAYS",
+      "source": "src/config/env.file-checkpoint.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_FILE_CHECKPOINT_MAX_BYTES",
+      "source": "src/config/env.file-checkpoint.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_FILE_CHECKPOINT_RETENTION_DISABLE",
+      "source": "src/config/env.file-checkpoint.ts"
     },
     {
       "kind": "env",
@@ -1023,6 +1153,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_INLINE_IMAGES",
+      "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_INTERNAL",
       "source": "src/config/env.daemon.ts"
     },
@@ -1040,6 +1175,31 @@
       "kind": "env",
       "name": "AFK_LOCAL_BASE_URL",
       "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LSP_DIAGNOSTICS",
+      "source": "src/config/env.tools.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LSP_DIAGNOSTICS_TIMEOUT_MS",
+      "source": "src/config/env.tools.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LSP_IDLE_SHUTDOWN_MS",
+      "source": "src/config/env.tools.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LSP_REPO_MAP_TIMEOUT_MS",
+      "source": "src/config/env.tools.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_LSP_SYMBOLS_TIMEOUT_MS",
+      "source": "src/config/env.tools.ts"
     },
     {
       "kind": "env",
@@ -1069,6 +1229,16 @@
     {
       "kind": "env",
       "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS_ANTHROPIC",
+      "source": "src/config/env.model.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MAX_CONCURRENT_SUBAGENT_CALLS_OPENAI",
       "source": "src/config/env.model.ts"
     },
     {
@@ -1158,6 +1328,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_MODEL_LARGE_MAX_CONCURRENCY",
+      "source": "src/config/env.model-slot-concurrency.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_MODEL_LOCAL",
       "source": "src/config/env.model-tiers.ts"
     },
@@ -1170,6 +1345,11 @@
       "kind": "env",
       "name": "AFK_MODEL_LOCAL_BASE_URL",
       "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_LOCAL_MAX_CONCURRENCY",
+      "source": "src/config/env.model-slot-concurrency.ts"
     },
     {
       "kind": "env",
@@ -1188,6 +1368,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_MODEL_MEDIUM_MAX_CONCURRENCY",
+      "source": "src/config/env.model-slot-concurrency.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_MODEL_SMALL",
       "source": "src/config/env.model-tiers.ts"
     },
@@ -1203,7 +1388,27 @@
     },
     {
       "kind": "env",
+      "name": "AFK_MODEL_SMALL_MAX_CONCURRENCY",
+      "source": "src/config/env.model-slot-concurrency.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_MODEL_STALL_TIMEOUT_MS",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_SUBAGENT",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_SUBAGENT_API_KEY",
+      "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_MODEL_SUBAGENT_BASE_URL",
       "source": "src/config/env.model-tiers.ts"
     },
     {
@@ -1218,6 +1423,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_NO_EPISODE_RECALL",
+      "source": "src/config/env.episode.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_OPENAI_BASE_URL",
       "source": "src/config/env.auth.ts"
     },
@@ -1225,6 +1435,16 @@
       "kind": "env",
       "name": "AFK_OPENAI_USE_RESPONSES",
       "source": "src/config/env.auth.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_OTLP_ENDPOINT",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_OTLP_HEADERS",
+      "source": "src/config/env.misc.ts"
     },
     {
       "kind": "env",
@@ -1298,6 +1518,16 @@
     },
     {
       "kind": "env",
+      "name": "AFK_RUN_RECEIPT_TEXT_DISABLED",
+      "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SANDBOX_REQUIRED",
+      "source": "src/config/env.sandbox.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_SDK_SURFACE_WARN",
       "source": "src/config/env.misc.ts"
     },
@@ -1325,6 +1555,11 @@
       "kind": "env",
       "name": "AFK_SESSION_MAX_COUNT",
       "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SESSION_PICKER",
+      "source": "src/config/env.ui.ts"
     },
     {
       "kind": "env",
@@ -1373,6 +1608,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_STEER_MODE",
+      "source": "src/config/env.misc.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_STOP_HOOK_MAX_CONTINUATIONS",
       "source": "src/config/env.misc.ts"
     },
@@ -1385,6 +1625,16 @@
       "kind": "env",
       "name": "AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT",
       "source": "src/config/env.model-tiers.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUBAGENT_CONTINUATION_MAX_CONTINUATIONS",
+      "source": "src/config/env.continuation.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_SUBAGENT_CONTINUATION_MAX_ROUNDS",
+      "source": "src/config/env.continuation.ts"
     },
     {
       "kind": "env",
@@ -1409,22 +1659,22 @@
     {
       "kind": "env",
       "name": "AFK_SUGGEST_ENABLED",
-      "source": "src/config/env.model-tiers.ts"
+      "source": "src/config/env.model-tiers.suggest.ts"
     },
     {
       "kind": "env",
       "name": "AFK_SUGGEST_GHOST",
-      "source": "src/config/env.model-tiers.ts"
+      "source": "src/config/env.model-tiers.suggest.ts"
     },
     {
       "kind": "env",
       "name": "AFK_SUGGEST_MODEL",
-      "source": "src/config/env.model-tiers.ts"
+      "source": "src/config/env.model-tiers.suggest.ts"
     },
     {
       "kind": "env",
       "name": "AFK_SUGGEST_PROMPT",
-      "source": "src/config/env.model-tiers.ts"
+      "source": "src/config/env.model-tiers.suggest.ts"
     },
     {
       "kind": "env",
@@ -1520,6 +1770,26 @@
       "kind": "env",
       "name": "AFK_TRACE_DISABLED",
       "source": "src/config/env.debug.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_API_KEY",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_API_URL",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_MODEL",
+      "source": "src/config/env.telegram.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_TRANSCRIBE_TIMEOUT_MS",
+      "source": "src/config/env.telegram.ts"
     },
     {
       "kind": "env",
@@ -1723,6 +1993,11 @@
     },
     {
       "kind": "env",
+      "name": "CHROME_CONFIG_HOME",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
       "name": "CI",
       "source": "src/config/env.debug.ts"
     },
@@ -1858,6 +2133,21 @@
     },
     {
       "kind": "env",
+      "name": "TERM",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "TERM_PROGRAM",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
+      "name": "TERM_PROGRAM_VERSION",
+      "source": "src/config/env.ui.ts"
+    },
+    {
+      "kind": "env",
       "name": "TMUX",
       "source": "src/config/env.peer.ts"
     },
@@ -1898,6 +2188,11 @@
     },
     {
       "kind": "env",
+      "name": "XDG_CONFIG_HOME",
+      "source": "src/config/env.paths.ts"
+    },
+    {
+      "kind": "env",
       "name": "__CFBundleIdentifier",
       "source": "src/config/env.paths.ts"
     },
@@ -1915,6 +2210,26 @@
       "kind": "flag",
       "name": "afk --version",
       "source": "src/cli/index.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --dangerously-skip-permissions",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --help",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --max-turns",
+      "source": "src/cli/commands/acp.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk acp --model",
+      "source": "src/cli/commands/acp.ts"
     },
     {
       "kind": "flag",
@@ -2345,6 +2660,81 @@
       "kind": "flag",
       "name": "afk doctor --help",
       "source": "src/cli/commands/doctor.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk episode --help",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk episode backfill --dry-run",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk episode backfill --help",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk episode backfill --limit",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk episode backfill --since",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk episode ingest --help",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk episode synthesize --help",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk episode synthesize --latest",
+      "source": "src/cli/commands/episode.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events --help",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --command",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --help",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --interval",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --on",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --once",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events github --repo",
+      "source": "src/cli/commands/events.ts"
     },
     {
       "kind": "flag",
@@ -2793,6 +3183,11 @@
     },
     {
       "kind": "flag",
+      "name": "afk interactive --no-recall",
+      "source": "src/cli/commands/interactive.register-helpers.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk interactive --no-shell-passthrough",
       "source": "src/cli/commands/interactive.register-helpers.ts"
     },
@@ -2963,6 +3358,11 @@
     },
     {
       "kind": "flag",
+      "name": "afk pause --help",
+      "source": "src/cli/commands/pause.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk plugin --help",
       "source": "src/cli/commands/plugin.ts"
     },
@@ -3123,8 +3523,48 @@
     },
     {
       "kind": "flag",
+      "name": "afk receipt --help",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk receipt regenerate --all",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk receipt regenerate --dry-run",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk receipt regenerate --help",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk receipt regenerate --json",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk receipt regenerate --only-v1",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk receipt regenerate --session",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk restart --help",
       "source": "src/cli/commands/restart.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk resume --help",
+      "source": "src/cli/commands/resume-all.ts"
     },
     {
       "kind": "flag",
@@ -3339,6 +3779,21 @@
     {
       "kind": "flag",
       "name": "afk trace --help",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace export-otlp --endpoint",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace export-otlp --help",
+      "source": "src/cli/commands/trace.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk trace export-otlp --out",
       "source": "src/cli/commands/trace.ts"
     },
     {
@@ -3838,6 +4293,11 @@
     },
     {
       "kind": "slash",
+      "name": "/branches",
+      "source": "src/cli/slash/commands/branches.ts"
+    },
+    {
+      "kind": "slash",
       "name": "/bug",
       "source": "src/cli/slash/commands/bug.ts"
     },
@@ -3898,6 +4358,11 @@
     },
     {
       "kind": "slash",
+      "name": "/export",
+      "source": "src/cli/slash/commands/export.ts"
+    },
+    {
+      "kind": "slash",
       "name": "/fast",
       "source": "src/cli/slash/commands/fast.ts"
     },
@@ -3933,6 +4398,16 @@
     },
     {
       "kind": "slash",
+      "name": "/handoffs",
+      "source": "src/cli/slash/commands/handoffs.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/handoffs:answer",
+      "source": "src/cli/slash/commands/handoffs.ts"
+    },
+    {
+      "kind": "slash",
       "name": "/help",
       "source": "src/cli/slash/commands/core.ts"
     },
@@ -3945,6 +4420,11 @@
       "kind": "slash",
       "name": "/inbox",
       "source": "src/cli/slash/commands/inbox.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/info",
+      "source": "src/cli/slash/commands/info.session.ts"
     },
     {
       "kind": "slash",
@@ -4003,8 +4483,8 @@
     },
     {
       "kind": "slash",
-      "name": "/reauth",
-      "source": "src/cli/slash/commands/reauth.ts"
+      "name": "/recall",
+      "source": "src/cli/slash/commands/recall.ts"
     },
     {
       "kind": "slash",
@@ -4024,7 +4504,7 @@
     {
       "kind": "slash",
       "name": "/rewind",
-      "source": "src/cli/slash/commands/core.ts"
+      "source": "src/cli/slash/commands/core.rewind.ts"
     },
     {
       "kind": "slash",
@@ -4099,7 +4579,7 @@
     {
       "kind": "slash",
       "name": "/tokens",
-      "source": "src/cli/slash/commands/info.ts"
+      "source": "src/cli/slash/commands/info.tokens.ts"
     },
     {
       "kind": "slash",
@@ -4114,12 +4594,22 @@
     {
       "kind": "slash",
       "name": "/usage",
-      "source": "src/cli/slash/commands/info.ts"
+      "source": "src/cli/slash/commands/info.usage.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/usage-awareness",
+      "source": "src/cli/slash/commands/usage-awareness.ts"
     },
     {
       "kind": "slash",
       "name": "/whatif",
       "source": "src/cli/slash/commands/whatif.ts"
+    },
+    {
+      "kind": "slash",
+      "name": "/where",
+      "source": "src/cli/slash/commands/where.ts"
     },
     {
       "kind": "slash",
@@ -4130,6 +4620,21 @@
       "kind": "tool",
       "name": "agent",
       "source": "src/agent/tools/schemas.agent-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "artifact_get",
+      "source": "src/agent/tools/schemas.artifact.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "artifact_list",
+      "source": "src/agent/tools/schemas.artifact.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "artifact_read",
+      "source": "src/agent/tools/schemas.artifact.ts"
     },
     {
       "kind": "tool",
@@ -4185,6 +4690,11 @@
       "kind": "tool",
       "name": "clipboard_write",
       "source": "src/agent/tools/schemas.interaction-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "code_symbols",
+      "source": "src/agent/tools/schemas.lsp-symbols.ts"
     },
     {
       "kind": "tool",
@@ -4315,6 +4825,11 @@
       "kind": "tool",
       "name": "read_file",
       "source": "src/agent/tools/schemas.file-tools.ts"
+    },
+    {
+      "kind": "tool",
+      "name": "read_journal",
+      "source": "src/agent/tools/schemas.journal.ts"
     },
     {
       "kind": "tool",

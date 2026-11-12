@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { baseSurface, changedFiles, impactMarkdown, surfaceChanges, type GitRead } from '../scripts/lib/docs-impact.js';
+import { assertSafeRef, baseSurface, changedFiles, impactMarkdown, surfaceChanges, type GitRead } from '../scripts/lib/docs-impact.js';
 import { featSinceDocs, reportMarkdown } from '../scripts/docs-report.js';
 import type { Backlog, Surface } from '../scripts/lib/public-surface.js';
 
@@ -30,6 +30,13 @@ describe('docs impact', () => {
     expect(summary).toContain('Added public symbols (1)\n- `slash:/new`');
     expect(summary).toContain('Removed public symbols (1)\n- `hook:OldHook`');
     expect(surfaceChanges(current, old).added).toEqual([current.symbols[1]]);
+  });
+
+  it('validates the base ref before any git call', () => {
+    expect(() => assertSafeRef('origin/main')).not.toThrow();
+    for (const bad of ['--foo', 'origin/main --output=x', '', 'main..HEAD']) expect(() => assertSafeRef(bad)).toThrow(/Invalid --base ref/);
+    const git: GitRead = () => { throw new Error('git must not run'); };
+    expect(() => impactMarkdown('--output=/tmp/x', current, pages, git)).toThrow(/Invalid --base ref/);
   });
 
   it('falls back from three-dot to two-dot then to empty on missing ref', () => {
