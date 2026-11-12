@@ -68,6 +68,24 @@ describe('billing construction', () => {
     });
   });
 
+  it('maps cache_write_tokens to cacheWrite and partitions prompt exactly', () => {
+    const b = openAICompatibleBilling(10_000, 9_000, 200, 500);
+    expect(b.uncachedInput).toBe(500);
+    expect(b.cacheRead).toBe(9_000);
+    expect(b.cacheWrite).toBe(500);
+    expect(b.output).toBe(200);
+    // The three input buckets must partition prompt_tokens exactly.
+    expect(b.uncachedInput + b.cacheRead + b.cacheWrite).toBe(10_000);
+  });
+
+  it('clamps cacheWrite when it would exceed prompt - cached', () => {
+    // cacheWrite=800 but only 100 tokens remain after cached=900 of prompt=1000
+    const b = openAICompatibleBilling(1_000, 900, 0, 800);
+    expect(b.cacheWrite).toBe(100);
+    expect(b.uncachedInput).toBe(0);
+    expect(b.uncachedInput + b.cacheRead + b.cacheWrite).toBe(1_000);
+  });
+
   it('openai-compatible clamps a backend reporting cached > prompt', () => {
     const b = openAICompatibleBilling(100, 150, 0);
     expect(b.uncachedInput).toBe(0);
@@ -77,7 +95,7 @@ describe('billing construction', () => {
   it('openai-compatible maps cache_write_tokens to cacheWrite (#4783)', () => {
     expect(openAICompatibleBilling(10_000, 9_000, 200, 500)).toEqual({
       provider: 'openai-compatible',
-      uncachedInput: 1_000,
+      uncachedInput: 500,
       cacheRead: 9_000,
       cacheWrite: 500,
       output: 200,
@@ -272,7 +290,7 @@ describe('translator guardrails', () => {
     const u = usageFromState(state);
     expect(u.billing).toEqual({
       provider: 'openai-compatible',
-      uncachedInput: 600,
+      uncachedInput: 400,
       cacheRead: 400,
       cacheWrite: 200,
       output: 50,

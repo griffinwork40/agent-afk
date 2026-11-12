@@ -47,16 +47,18 @@ export function anthropicBilling(u: {
 }
 
 /**
- * OpenAI semantics: `prompt_tokens` INCLUDES `cached_tokens` (a subset), so the
- * uncached share is the difference — subtracted exactly once, here. Clamped at
- * zero against a backend that reports `cached > prompt`.
+ * OpenAI semantics: `prompt_tokens` INCLUDES `cached_tokens` (a subset) and
+ * `cache_write_tokens` (a subset), so both are subtracted exactly once here so
+ * that `uncachedInput + cacheRead + cacheWrite === prompt`. Clamped at zero
+ * against a backend that reports `cached > prompt` or `cacheWrite > remaining`.
  *
  * `cacheWriteTokens` maps `input_tokens_details.cache_write_tokens` from the
  * OpenAI Responses API (confirmed in openai SDK ≥ v7.50.0:
- * `ResponseUsage.InputTokensDetails.cache_write_tokens`). It is counted here for
- * token-accuracy but intentionally left unpriced: no public OpenAI cache-write
- * rate is defined and no entry exists in `pricing.ts` for this provider, so
- * applying a rate would silently use the wrong (Anthropic) multipliers (#4783).
+ * `ResponseUsage.InputTokensDetails.cache_write_tokens`). It is subtracted from
+ * `uncachedInput` for token-accuracy but intentionally left unpriced: no public
+ * OpenAI cache-write rate is defined and no entry exists in `pricing.ts` for
+ * this provider, so applying a rate would silently use the wrong (Anthropic)
+ * multipliers (#4783).
  */
 export function openAICompatibleBilling(
   promptTokens: number,
@@ -66,11 +68,12 @@ export function openAICompatibleBilling(
 ): BillingUsage {
   const prompt = nonNeg(promptTokens);
   const cached = Math.min(nonNeg(cachedTokens), prompt);
+  const cacheWrite = Math.min(nonNeg(cacheWriteTokens), prompt - cached);
   return {
     provider: 'openai-compatible',
-    uncachedInput: prompt - cached,
+    uncachedInput: prompt - cached - cacheWrite,
     cacheRead: cached,
-    cacheWrite: nonNeg(cacheWriteTokens),
+    cacheWrite,
     output: nonNeg(completionTokens),
   };
 }
