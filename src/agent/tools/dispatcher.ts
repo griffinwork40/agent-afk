@@ -220,12 +220,24 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly strategyNudger = new StrategyNudger();
 
   /**
-   * Session-scoped tool-call ledger (#4476). Read accessor for consumers:
-   * `toolCallLedger.lookup(call)` / `toolCallLedger.ledger`. Observe-only —
-   * recorded after every executed call, never consulted to alter dispatch.
-   * Shared across per-query rebuilds when the provider supplies one.
+   * Session-scoped tool-call ledger (#4476). Observe-only — recorded after
+   * every executed call, never consulted to alter dispatch. Shared across
+   * per-query rebuilds when the provider supplies one.
+   *
+   * Private to prevent external callers from reading unscrubbed
+   * `ToolResult.content` via the full wiring. Consumers should use
+   * {@link toolCallLedger} (the narrowed read accessor) instead.
    */
-  readonly toolCallLedger: ToolCallLedgerWiring;
+  private readonly _toolCallLedger: ToolCallLedgerWiring;
+
+  /**
+   * Narrowed read accessor for the session-scoped tool-call ledger.
+   * Returns the {@link ToolCallLedgerWiring} for lookup and diagnostics;
+   * does not expose the raw `record` / `beginRound` mutation surface.
+   */
+  get toolCallLedger(): ToolCallLedgerWiring {
+    return this._toolCallLedger;
+  }
   private readonly _getMcpServerStates: GetMcpServerStates;
 
 
@@ -255,7 +267,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       opts.maxConcurrentSafeCalls >= 1
         ? Math.floor(opts.maxConcurrentSafeCalls)
         : resolveMaxConcurrentSafeToolCalls();
-    this.toolCallLedger = opts.toolCallLedger ?? new ToolCallLedgerWiring();
+    this._toolCallLedger = opts.toolCallLedger ?? new ToolCallLedgerWiring();
     this.resolveBase = opts.cwd;
     this._env = opts.env;
     this.sessionId = opts.sessionId;
@@ -630,7 +642,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
     }
 
     // One provider-loop entry = one tool round for the ledger (#4476).
-    this.toolCallLedger.beginRound();
+    // Note: beginRound() advances the round counter before the gate check, so
+    // round indices are per entry-point call, not per recorded observation.
+    // A gate refusal (permission denial, circuit breaker) will produce a round
+    // with zero entries — this is intentional and documented rather than moving
+    // beginRound() after the gate, which would break the session-scope monotonic
+    // guarantee when both execute() and executeBatch() share the same wiring.
+    this._toolCallLedger.beginRound();
     const gateResult = await this.runPreDispatchGates(call);
     if (gateResult) return this.preToolContext.deliver(call, gateResult, this.traceWriter);
 
@@ -641,7 +659,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // gateDeps()/executeCore() sequence per tool, which is correct for batches.
     const cDeps = this.coreExecDeps();
     const coreResult = await _executeCore(call, cDeps);
-    noteSettledOutcome(this.repeatFailureGuard, this.toolCallLedger, call, coreResult);
+    noteSettledOutcome(this.repeatFailureGuard, this._toolCallLedger, call, coreResult);
     // Reset-on-success: a completed (non-error) tool call is progress, so the
     // denial breaker's consecutive-denial count restarts. See recordForkReadDenial.
     if (coreResult.isError !== true) this.resetDenialBreaker();
@@ -667,7 +685,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       runPreDispatchGates: (call, opts) => this.runPreDispatchGates(call, opts),
       resetDenialBreaker: () => this.resetDenialBreaker(),
       repeatFailureGuard: this.repeatFailureGuard,
-      toolCallLedger: this.toolCallLedger,
+      toolCallLedger: this._toolCallLedger,
       repeatBreakerExemptTools: REPEAT_BREAKER_EXEMPT_TOOLS,
       executeCore: (call) => this.executeCore(call),
       subagentExecutor: this.subagentExecutor,
