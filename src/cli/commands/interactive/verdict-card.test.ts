@@ -116,6 +116,44 @@ describe('renderVerdictCard', () => {
     expect(out2).toContain('integrate with renderer');
   });
 
+  // #4773 — echo guard for notChecked and undoSteps rows.
+  it('done: suppresses notChecked row that merely echoes whatWasDone', () => {
+    const dupeText = 'reviewed the code — no mutations';
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: dupeText,
+      notChecked: dupeText,
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    // The text appears exactly once (from the done row), not twice.
+    expect(out.split(dupeText).length - 1).toBe(1);
+    expect(out).not.toContain('not checked');
+    // A genuinely distinct notChecked is still shown.
+    const state2: TerminalState = { ...state, notChecked: 'integration tests not run' };
+    const out2 = stripAnsi(renderVerdictCard(state2));
+    expect(out2).toContain('not checked');
+    expect(out2).toContain('integration tests not run');
+  });
+
+  it('done: suppresses undoSteps row that merely echoes whatWasDone', () => {
+    const dupeText = 'shipped the feature';
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: dupeText,
+      undoSteps: dupeText,
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out.split(dupeText).length - 1).toBe(1);
+    expect(out).not.toContain('undo');
+    // A genuinely distinct undoSteps is still shown.
+    const state2: TerminalState = { ...state, undoSteps: 'git revert HEAD' };
+    const out2 = stripAnsi(renderVerdictCard(state2));
+    expect(out2).toContain('undo');
+    expect(out2).toContain('git revert HEAD');
+  });
+
   it('blocked: shows blocker, unblock condition, and a recovery affordance', () => {
     const state: TerminalState = {
       kind: 'blocked',

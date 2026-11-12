@@ -402,7 +402,17 @@ function mapBulletsToFields(
       if (worthDoing !== undefined) out.worthDoing = worthDoing;
       const notChecked = find('not checked');
       if (notChecked !== undefined) out.notChecked = notChecked;
-      const undoSteps = find('undo');
+      // The canonical directive bullet is the bare `Undo:` label (routing-
+      // directive.ts line 115). `find('undo')` would also match incidental
+      // labels such as `undone` or `cannot undo` because `String.includes`
+      // has no word-boundary awareness. Instead, accept the bare label via an
+      // exact-equality check (covers `Undo:` → lowercased `"undo"`) and then
+      // fall through to `find` with longer, unambiguous needles for
+      // paraphrased model output (`Undo steps:`, `How to undo:`).
+      const undoSteps =
+        bullets.find((b) => b.label === 'undo')?.value ||
+        find('undo steps', 'how to undo') ||
+        undefined;
       if (undoSteps !== undefined) out.undoSteps = undoSteps;
       return out;
     }
