@@ -121,6 +121,8 @@ function makeContext(overrides?: Partial<ComposeExecutorContext>): ComposeExecut
     },
     apiKey: 'test-key',
     systemPrompt: 'You are a helpful assistant.',
+    defaultSubagentModel: 'claude-sonnet-4-5',
+    defaultModel: 'claude-sonnet-4-5',
     ...overrides,
   };
 }
@@ -1775,6 +1777,7 @@ describe('ComposeExecutor', () => {
 
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
       const executor = new ComposeExecutor(makeContext({
+        defaultSubagentModel: 'sonnet',
         defaultModel: 'sonnet',
         apiKey: 'session-anthropic-token',
         resolveApiKeyForModel,

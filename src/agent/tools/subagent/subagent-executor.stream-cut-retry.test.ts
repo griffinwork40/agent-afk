@@ -109,6 +109,7 @@ describe('SubagentExecutor — zero-output stream-cut re-dispatch', () => {
       subagentManager: mockSubagentMgr as never,
       parentSession: mockParentSession as never,
       defaultConfig: { apiKey: 'test-key', systemPrompt: 'test system prompt' },
+      defaultSubagentModel: 'claude-sonnet-4-5',
       depth: 0,
       ...(opts?.allowedTools !== undefined
         ? { allowedTools: opts.allowedTools as never }

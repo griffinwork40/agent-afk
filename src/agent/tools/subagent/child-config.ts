@@ -208,6 +208,8 @@ export function buildChildConfigWithoutNesting(args: BuildChildConfigArgs) {
       namedAgentModel: namedModel === 'inherit' ? args.parentModel : namedModel,
       defaultSubagentModel: args.defaultSubagentModel,
       // Unlike compose, parent inheritance here is opt-in via model: 'inherit'.
+      // defaultModel is intentionally omitted: the agent path does not inherit
+      // the parent model as a silent fallback — only explicit 'inherit' opts in.
     },
     credentialPolicy: 'resolve-then-omit-openai',
     resolveApiKeyForModel: args.resolveApiKeyForModel,

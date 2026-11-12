@@ -118,6 +118,7 @@ describe('SubagentExecutor', () => {
       subagentManager: mockSubagentMgr as any,
       parentSession: mockParentSession as any,
       defaultConfig: mockConfig,
+      defaultSubagentModel: 'claude-sonnet-4-5',
       depth: 0,
     };
 
@@ -212,7 +213,7 @@ describe('SubagentExecutor', () => {
           config: expect.objectContaining({
             maxTurns: 0,
             maxToolUseIterations: 0,
-            model: 'sonnet',
+            model: 'claude-sonnet-4-5',
             apiKey: 'resolved-test-credential',
             systemPrompt: UNNAMED_SUBAGENT_WORKER_PROMPT,
           }),
@@ -287,6 +288,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         inboundAttachmentRegistry: registry,
         depth: 0,
       });
@@ -308,6 +310,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         inboundAttachmentRegistry: registry,
         depth: 0,
       });
@@ -330,6 +333,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         inboundAttachmentRegistry: registry,
         depth: 0,
       });
@@ -588,7 +592,7 @@ describe('SubagentExecutor', () => {
       // The Anthropic-routed 'sonnet' child must NOT inherit it — it must get
       // the Anthropic credential the resolver returns for its own model.
       const resolveApiKeyForModel = vi.fn((model: string) =>
-        model === 'sonnet' ? 'anthropic-keychain-token' : 'openai-key',
+        model === 'claude-sonnet-4-5' ? 'anthropic-keychain-token' : 'openai-key',
       );
       const handle = mockHandle();
       const manager = mockManager(handle);
@@ -596,13 +600,14 @@ describe('SubagentExecutor', () => {
         subagentManager: manager as any,
         parentSession: mockParentSession as any,
         defaultConfig: { apiKey: 'openai-key', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         resolveApiKeyForModel,
         depth: 0,
       });
 
       await exec.execute(makeCall({ input: { prompt: 'test' } }));
 
-      expect(resolveApiKeyForModel).toHaveBeenCalledWith('sonnet');
+      expect(resolveApiKeyForModel).toHaveBeenCalledWith('claude-sonnet-4-5');
       expect(manager.forkSubagent).toHaveBeenCalledWith(
         expect.objectContaining({
           config: expect.objectContaining({ apiKey: 'anthropic-keychain-token' }),
@@ -618,6 +623,7 @@ describe('SubagentExecutor', () => {
         subagentManager: manager as any,
         parentSession: mockParentSession as any,
         defaultConfig: { apiKey: 'parent-key', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         resolveApiKeyForModel,
         depth: 0,
       });
@@ -644,6 +650,7 @@ describe('SubagentExecutor', () => {
         subagentManager: manager as any,
         parentSession: mockParentSession as any,
         defaultConfig: { apiKey: 'parent-key', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         depth: 0,
       });
 
@@ -673,13 +680,14 @@ describe('SubagentExecutor', () => {
         subagentManager: manager as any,
         parentSession: mockParentSession as any,
         defaultConfig: { apiKey: 'sk-ant-oat01-PARENT', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         resolveApiKeyForModel,
         depth: 0,
       });
 
       await exec.execute(makeCall({ input: { prompt: 'test' } }));
 
-      expect(resolveApiKeyForModel).toHaveBeenCalledWith('sonnet');
+      expect(resolveApiKeyForModel).toHaveBeenCalledWith('claude-sonnet-4-5');
       expect(manager.forkSubagent).toHaveBeenCalledWith(
         expect.objectContaining({
           config: expect.objectContaining({ apiKey: 'sk-ant-oat01-PARENT' }),
@@ -697,6 +705,7 @@ describe('SubagentExecutor', () => {
         subagentManager: manager as any,
         parentSession: mockParentSession as any,
         defaultConfig: { apiKey: 'sk-proj-OPENAI', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         resolveApiKeyForModel,
         depth: 0,
       });
@@ -795,6 +804,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         depth: 0,
         parentModel: 'opus',
       });
@@ -806,7 +816,7 @@ describe('SubagentExecutor', () => {
       const result = await exec.execute(makeCall());
 
       expect(result.isError).toBeUndefined();
-      expect(result.content).toBe('[subagent result · model=sonnet (parent: opus)]\n\nchild finding');
+      expect(result.content).toBe('[subagent result · model=claude-sonnet-4-5 (parent: opus)]\n\nchild finding');
     });
 
     it('omits the provenance header when the child model equals the parent model', async () => {
@@ -815,8 +825,9 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         depth: 0,
-        parentModel: 'sonnet',
+        parentModel: 'claude-sonnet-4-5',
       });
       const handle = mockHandle({
         message: { role: 'assistant', content: 'same-model finding', timestamp: new Date() },
@@ -1118,6 +1129,7 @@ describe('SubagentExecutor', () => {
           apiKey: 'test-key',
           systemPrompt: 'test system prompt',
         },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         childProviderFactory: factory,
         depth: 0,
         maxDepth: DEFAULT_MAX_NESTING_DEPTH,
@@ -1235,6 +1247,7 @@ describe('SubagentExecutor', () => {
           abortSignal: new AbortController().signal,
         },
         defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         childProviderFactory: factory,
         depth: 0,
       });
@@ -1258,6 +1271,7 @@ describe('SubagentExecutor', () => {
           abortSignal: new AbortController().signal,
         },
         defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         childProviderFactory: factory,
         depth: DEFAULT_MAX_NESTING_DEPTH,
         // maxDepth omitted — should default to DEFAULT_MAX_NESTING_DEPTH
@@ -1353,6 +1367,7 @@ describe('SubagentExecutor', () => {
           abortSignal: new AbortController().signal,
         },
         defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         childProviderFactory: factory,
         depth: 0,
         maxDepth: DEFAULT_MAX_NESTING_DEPTH,
@@ -1394,6 +1409,7 @@ describe('SubagentExecutor', () => {
           abortSignal: new AbortController().signal,
         },
         defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         childProviderFactory: vi.fn().mockReturnValue({ name: 'p', query: vi.fn() }),
         depth: 0,
         maxDepth: DEFAULT_MAX_NESTING_DEPTH,
@@ -1447,6 +1463,7 @@ describe('SubagentExecutor', () => {
           abortSignal: new AbortController().signal,
         },
         defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         childProviderFactory: factory,
         depth: 0,
         maxDepth: DEFAULT_MAX_NESTING_DEPTH,
@@ -1498,6 +1515,7 @@ describe('SubagentExecutor', () => {
           abortSignal: new AbortController().signal,
         },
         defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         childProviderFactory: factory,
         depth: 0,
         maxDepth: DEFAULT_MAX_NESTING_DEPTH,
@@ -1548,6 +1566,7 @@ describe('SubagentExecutor', () => {
           abortSignal: new AbortController().signal,
         },
         defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         childProviderFactory: factory,
         depth: 0,
         maxDepth: DEFAULT_MAX_NESTING_DEPTH,
@@ -1592,6 +1611,7 @@ describe('SubagentExecutor', () => {
           abortSignal: new AbortController().signal,
         },
         defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        defaultSubagentModel: 'claude-sonnet-4-5',
         childProviderFactory: factory,
         depth: 0,
         maxDepth: DEFAULT_MAX_NESTING_DEPTH,
@@ -1808,6 +1828,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       };
@@ -1853,6 +1874,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       };
@@ -1913,6 +1935,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -1950,6 +1973,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -1991,6 +2015,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2028,6 +2053,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2065,6 +2091,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2093,6 +2120,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2123,6 +2151,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2151,6 +2180,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2181,6 +2211,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2214,6 +2245,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2257,6 +2289,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2278,6 +2311,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: undefined,
         depth: 0,
       });
@@ -2315,6 +2349,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2379,6 +2414,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         depth: 0,
       });
@@ -2486,6 +2522,7 @@ describe('SubagentExecutor', () => {
         subagentManager: mockSubagentMgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         backgroundRegistry: registry,
         ...(traceWriter !== undefined ? { traceWriter: traceWriter as never } : {}),
         depth: 0,
@@ -2740,6 +2777,7 @@ describe('SubagentExecutor', () => {
           abortSignal: new AbortController().signal,
         } as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         depth: 0,
       });
 
@@ -2838,6 +2876,7 @@ describe('SubagentExecutor', () => {
           abortSignal: new AbortController().signal,
         } as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         depth: 0,
       });
 
@@ -2950,8 +2989,8 @@ describe('SubagentExecutor', () => {
         subagentManager: mgr as any,
         parentSession: mockParentSession as any,
         defaultConfig: mockConfig,
+        defaultSubagentModel: 'claude-sonnet-4-5',
         childProviderFactory: factory,
-        defaultSubagentModel: 'sonnet',
         depth: 0,
         maxDepth: DEFAULT_MAX_NESTING_DEPTH,
       });
