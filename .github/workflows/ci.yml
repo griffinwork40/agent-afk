@@ -142,7 +142,9 @@ jobs:
         # currently inert — only the full-scan checks enforce. Activating
         # TOUCHED needs a deeper fetch — a separate policy call.
         # See docs/file-size-ceiling.md.
-        run: pnpm audit:filesize:check --changed-vs origin/${{ github.base_ref || 'main' }}
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: pnpm audit:filesize:check --changed-vs "origin/$BASE_REF"
 
       - name: Audit the 200-line function ceiling (CI-blocking)
         # CI-blocking — fails on any violation not in the grandfathered baseline.
@@ -153,7 +155,9 @@ jobs:
         run: pnpm audit:funcsize:check
 
       - name: Audit the 200-line function ceiling on functions this PR touches
-        run: pnpm audit:funcsize:check --changed-vs origin/${{ github.base_ref || 'main' }}
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: pnpm audit:funcsize:check --changed-vs "origin/$BASE_REF"
 
       - name: Audit --no-optional-locks discipline (git read commands must not take index.lock)
         # Enforces that every git read-command call site (status, diff, log, show,
@@ -205,9 +209,11 @@ jobs:
         # Intentional duplication: wrap it in `// jscpd:ignore-start` /
         # `// jscpd:ignore-end` with a reason comment. List all clones with
         # `pnpm audit:clones`.
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
         run: |
-          git fetch --no-tags --depth=1 origin +${{ github.base_ref || 'main' }}:refs/remotes/origin/${{ github.base_ref || 'main' }}
-          CLONE_GATE_BASE_REF=origin/${{ github.base_ref || 'main' }} pnpm audit:clones:check
+          git fetch --no-tags --depth=1 origin "+$BASE_REF:refs/remotes/origin/$BASE_REF"
+          CLONE_GATE_BASE_REF="origin/$BASE_REF" pnpm audit:clones:check
 
       - name: Audit vendored/bundled hash pins are unstale (#775)
         # `fix:pins:check` (scripts/update-hash-pins.ts --check) re-hashes the
@@ -606,7 +612,9 @@ jobs:
       - name: Docs impact summary (advisory)
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        run: pnpm docs:impact --base origin/${{ github.base_ref || 'main' }}
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: pnpm docs:impact --base "origin/$BASE_REF"
 
       - name: Install dependencies
         run: cd website && npm ci
