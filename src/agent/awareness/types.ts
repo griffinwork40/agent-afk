@@ -28,7 +28,7 @@
  */
 
 import type { CompactUsageEntry } from '../usage/usage-formatter.js';
-import type { SubagentOutcomeSummaryEntry } from '../../insights/aggregators/subagent-outcomes.js';
+
 
 /**
  * Coarse-grained execution surface. Distinct from `PromptSurface`
@@ -207,8 +207,26 @@ export interface RuntimeSnapshot {
   subagentOutcomeSummary?: SubagentOutcomeSummaryEntry[];
 }
 
-/** Re-export so callers can reference the type without importing from insights. */
-export type { SubagentOutcomeSummaryEntry } from '../../insights/aggregators/subagent-outcomes.js';
+/**
+ * One row of the compact subagent outcome summary emitted by
+ * `get_runtime_state`. Defined here (agent/awareness) rather than in
+ * insights/ because it is an agent-awareness concept — the format the
+ * runtime snapshot exposes to the model. The insights aggregator imports
+ * this type and produces values conforming to it.
+ */
+export interface SubagentOutcomeSummaryEntry {
+  model: string;
+  agentType: string;
+  depth: number;
+  count: number;
+  successRate: number;
+  capHitRate: number;
+  /** Fraction of outcomes whose stop_reason contains `timeout` (0–1). */
+  timeoutRate: number;
+  p50Ms: number;
+  /** p95 latency in ms across outcomes in this bucket. 0 when no data. */
+  p95Ms: number;
+}
 
 /** Discriminator for `get_runtime_state.input.view`. */
 export type RuntimeView = 'self' | 'tools' | 'subagents' | 'workspace' | 'hooks' | 'all';
