@@ -202,12 +202,10 @@ export const UI_ENV_REGISTRY = [
   // ── Startup session picker (#4692) ───────────────────────────────────────
   {
     name: 'AFK_SESSION_PICKER',
-    description:
-      'Set to 1 to enable the startup session picker. ' +
-      'Default: disabled. When enabled, shows when more than one resumable session exists and stdin is a TTY.',
+    description: 'Set to 0 to suppress the startup session picker (useful for CI/scripts). Default: enabled when more than one session exists and stdin is a TTY.',
     type: 'boolean',
     required: false,
-    example: '1',
+    example: '0',
     category: 'misc',
   },
 ] as const satisfies readonly EnvVarMeta[];

@@ -142,7 +142,7 @@ export function isAutonameEnabled(options: CliOptions, config: CliConfig): boole
  * Pure + exported so the content is unit-testable without booting a session.
  */
 export function startupHintLine(): string {
-  return '/help · /model · @ for files · Shift+Tab mode · Esc to interrupt · /exit to quit';
+  return '/help · /model · @ for files · Shift+Tab mode · Esc to interrupt · /exit to quit · /keys for shortcuts';
 }
 
 // ---------------------------------------------------------------------------

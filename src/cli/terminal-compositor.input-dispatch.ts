@@ -161,6 +161,7 @@ export interface KeyDispatchHost {
   readonly onTaskView?: () => boolean;
   readonly onOpenEditor?: () => void;
   readonly onOpenOutputViewer?: () => void;
+  readonly onCycleDiffCap?: () => void;
   readonly onSubmit?: (payload: SubmissionPayload) => void;
   /**
    * True while a CPR reply is in-flight (tmux EXPAND delta correction).
@@ -170,6 +171,8 @@ export interface KeyDispatchHost {
    * them too late.
    */
   readonly cprPending: boolean;
+  /** Chord leader state: 'x' when Ctrl+X was pressed and we await the second key. */
+  pendingChordKey: string | undefined;
 }
 
 /**
@@ -237,6 +240,21 @@ export function dispatchKey(self: KeyDispatchHost, char: string | undefined, key
   // ordering rationale for its own branch inline.
   if (handlePickerKey(self, char, key)) return;
 
+  // Chord cancellation: if a chord leader is pending and the incoming key is NOT
+  // the expected completion (Ctrl+X → 'x' already set, next key is not the second
+  // key of the chord), clear it here — BEFORE any early-return handler consumes
+  // the key — so Escape/Enter/Backspace/arrows always disarm a stale chord.
+  // handleChordCtrlX still runs for the actual Ctrl+X press and the second key.
+  if (self.pendingChordKey !== undefined) {
+    const isChordCompletion =
+      (self.pendingChordKey === 'x' && key?.name === 'd' && !key?.ctrl && !key?.meta) ||
+      (key?.ctrl && key?.name === 'x'); // Ctrl+X itself — re-arms or passes through
+    if (!isChordCompletion) {
+      self.pendingChordKey = undefined;
+      // fall through — the key still dispatches normally
+    }
+  }
+
   const sequence = key?.sequence ?? '';
   if (handlePasteMarkers(self, sequence)) return;
   if (handleEscape(self, key)) return;
@@ -249,6 +267,7 @@ export function dispatchKey(self: KeyDispatchHost, char: string | undefined, key
   if (handleBackground(self, key)) return;
   if (handleOpenEditor(self, key)) return;
   if (handleOpenOutputViewer(self, key)) return;
+  if (handleChordCtrlX(self, key)) return;
   if (handleTab(self, key)) return;
   handlePrintable(self, char, key);
 }
@@ -636,6 +655,34 @@ function handleTab(self: KeyDispatchHost, key: KeyInfo): boolean {
       }
     }
     return true;
+  }
+  return false;
+}
+
+function handleChordCtrlX(self: KeyDispatchHost, key: KeyInfo): boolean {
+  // ── Ctrl+X chord leader ──────────────────────────────────────────
+  //
+  // Ctrl+X acts as a chord leader: press Ctrl+X, then D in idle mode
+  // to cycle the diff body-line cap (compact → expanded → full → compact).
+  //
+  // If Ctrl+X was already pressed and the next key is not D, the pending
+  // chord is cleared and the key falls through to normal dispatch.
+  // This matches GNU readline's chord semantics for Ctrl+X combos.
+  //
+  // Guard: Ctrl+X D fires ONLY in idle mode — the readline line-end binding
+  // (Ctrl+E) is unaffected since we use Ctrl+X as leader, not Ctrl+E.
+  if (key?.ctrl && key?.name === 'x') {
+    self.pendingChordKey = 'x';
+    return true; // consumed — awaiting second key
+  }
+  if (self.pendingChordKey === 'x') {
+    self.pendingChordKey = undefined;
+    if (key?.name === 'd' && self.inputMode !== 'streaming') {
+      self.onCycleDiffCap?.();
+      return true;
+    }
+    // Any other key after Ctrl+X: clear chord, fall through to normal dispatch.
+    return false;
   }
   return false;
 }
