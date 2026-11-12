@@ -164,6 +164,15 @@ export interface SessionStartContext {
    * subagent starts, mirroring the {@link SessionEndContext} convention.
    */
   parentSessionId?: string;
+  /**
+   * The resolved model identifier for this session — the concrete wire id sent
+   * to the provider (e.g. `"claude-sonnet-4-6"`), after alias/slot expansion.
+   * Absent when the model is not yet known at SessionStart time (rare).
+   *
+   * Shell hooks receive this as `model` in the stdin JSON payload and as
+   * `AFK_HOOK_MODEL` in the subprocess environment.
+   */
+  model?: string;
 }
 
 export interface SessionEndContext {
@@ -470,6 +479,17 @@ export interface UserPromptSubmitContext {
    * Optional because early turns may not yet have one.
    */
   sessionId?: string;
+  /**
+   * The resolved model identifier active for this turn — the concrete wire id
+   * sent to the provider (e.g. `"claude-sonnet-4-6"`), after alias/slot
+   * expansion. Reflects mid-session `/model` switches: each
+   * `UserPromptSubmit` carries the model that will actually serve that turn.
+   * Absent when the model is not yet known at dispatch time (rare).
+   *
+   * Shell hooks receive this as `model` in the stdin JSON payload and as
+   * `AFK_HOOK_MODEL` in the subprocess environment.
+   */
+  model?: string;
 }
 
 /** Discriminated union — narrow via `switch (context.event)`. */

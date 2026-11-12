@@ -33,20 +33,23 @@ export function formatMemorySearchDisplay(rawContent: string): string | null {
     if (total === 0) return 'no results';
     let facts = 0;
     let procs = 0;
+    let sessions = 0;
     for (const r of arr) {
       if (r && typeof r === 'object') {
         const t = (r as { type?: unknown }).type;
         if (t === 'fact') facts++;
         else if (t === 'procedure') procs++;
+        else if (t === 'session') sessions++;
       }
     }
     const totalStr = `${total} result${total === 1 ? '' : 's'}`;
     // Forward-compat: if a future result type appears, don't mislabel —
     // fall back to total-only.
-    if (facts + procs !== total) return totalStr;
+    if (facts + procs + sessions !== total) return totalStr;
     const parts: string[] = [];
     if (facts > 0) parts.push(`${facts} fact${facts === 1 ? '' : 's'}`);
     if (procs > 0) parts.push(`${procs} procedure${procs === 1 ? '' : 's'}`);
+    if (sessions > 0) parts.push(`${sessions} session${sessions === 1 ? '' : 's'}`);
     if (parts.length === 0) return totalStr;
     return `${totalStr} (${parts.join(', ')})`;
   } catch {

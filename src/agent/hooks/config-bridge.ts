@@ -45,6 +45,19 @@ export interface AgentConfigForBridge {
    * possible follow-up.
    */
   getTranscriptPath?: () => string | null;
+  /**
+   * Live getter for the resolved model identifier active for the current turn.
+   *
+   * Called at hook-dispatch time (not registration time) so mid-session
+   * `/model` switches are reflected on every `UserPromptSubmit` (and other)
+   * events. Returns the concrete wire id sent to the provider (e.g.
+   * `"claude-sonnet-4-6"`), after alias/slot expansion. Returns `undefined`
+   * when no model is known yet.
+   *
+   * The resolved value is forwarded as `model` in the stdin JSON payload and
+   * as `AFK_HOOK_MODEL` in the hook subprocess environment.
+   */
+  getModel?: () => string | undefined;
 }
 
 /**
@@ -96,6 +109,7 @@ export function loadAndRegisterConfigHooks(
   const agentCwd = agentConfig.cwd ?? process.cwd();
   const sessionId = agentConfig.sessionId;
   const getTranscriptPath = agentConfig.getTranscriptPath;
+  const getModel = agentConfig.getModel;
   const userGlobalEnabled = hookConfig.userGlobalEnabled;
 
   // Episode mode: disable the context-injecting events (SessionStart and
@@ -235,6 +249,10 @@ export function loadAndRegisterConfigHooks(
           // time) so rotations from /clear are captured automatically.
           const transcriptPath = getTranscriptPath?.() ?? null;
 
+          // Resolve the live model at dispatch time so mid-session /model
+          // switches are reflected on every hook event.
+          const model = getModel?.();
+
           // Resolve plugin options and key from the index for user-scope
           // plugins so CLAUDE_PLUGIN_OPTION_* and CLAUDE_PLUGIN_DATA are
           // available in the hook subprocess.
@@ -260,6 +278,7 @@ export function loadAndRegisterConfigHooks(
             sessionId: effectiveSessionId,
             timeoutMs: hookTimeoutMs,
             transcriptPath,
+            model,
             ...(hookPluginRoot !== undefined ? { pluginRoot: hookPluginRoot } : {}),
             ...(hookPluginName !== undefined ? { pluginName: hookPluginName } : {}),
             ...(hookPluginName !== undefined ? { pluginHookEnv: hookConfig.pluginHookEnv } : {}),

@@ -54,6 +54,10 @@ export interface TerminalState {
   deferred?: string;
   /** Done: "Worth doing / recommendation". */
   worthDoing?: string;
+  /** Done: "Not checked"; display-only verification limits. */
+  notChecked?: string;
+  /** Done: "Undo"; present only for changes outside the conversation. */
+  undoSteps?: string;
   /** Blocked: "What blocks". */
   whatBlocks?: string;
   /** Blocked: "What must change to unblock". */
@@ -396,6 +400,20 @@ function mapBulletsToFields(
       if (deferred !== undefined) out.deferred = deferred;
       const worthDoing = find('worth doing');
       if (worthDoing !== undefined) out.worthDoing = worthDoing;
+      const notChecked = find('not checked');
+      if (notChecked !== undefined) out.notChecked = notChecked;
+      // The canonical directive bullet is the bare `Undo:` label (routing-
+      // directive.ts line 115). `find('undo')` would also match incidental
+      // labels such as `undone` or `cannot undo` because `String.includes`
+      // has no word-boundary awareness. Instead, accept the bare label via an
+      // exact-equality check (covers `Undo:` → lowercased `"undo"`) and then
+      // fall through to `find` with longer, unambiguous needles for
+      // paraphrased model output (`Undo steps:`, `How to undo:`).
+      const undoSteps =
+        bullets.find((b) => b.label === 'undo')?.value ||
+        find('undo steps', 'how to undo') ||
+        undefined;
+      if (undoSteps !== undefined) out.undoSteps = undoSteps;
       return out;
     }
     case 'blocked': {

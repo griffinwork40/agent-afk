@@ -21,14 +21,27 @@ import { BudgetExceededError, HookBlockedError, TimeoutError, UnsupportedProvide
 
 /**
  * Check if the error carries Anthropic SDK error structure.
- * Anthropic API errors nest an `error` object with a `type` field from a known
- * set (authentication_error, overloaded_error, etc.). Neither the OpenAI SDK
- * nor xAI errors use this shape, so it is a reliable provider signal without
- * importing any SDK.
+ *
+ * Real `@anthropic-ai/sdk` errors (source: node_modules/@anthropic-ai/sdk/src/core/error.ts)
+ * store the raw response body in `.error`, giving the envelope shape:
+ *   `err.error = { type: 'error', error: { type: 'authentication_error', ... } }`
+ * Real OpenAI SDK errors (source: node_modules/openai/src/core/error.ts) unwrap one
+ * level in `generate()` before storing, so `.error` is flat:
+ *   `err.error = { type: 'invalid_request_error', ... }`
+ *
+ * We gate on `err.error.type === 'error'` (the Anthropic envelope sentinel) and read
+ * the discriminating type from `err.error.error.type`. Flat shapes are excluded,
+ * so OpenAI errors can never match even when their type string is in the Anthropic set.
  */
 function isAnthropicSdkError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
-  const inner = (err as Record<string, unknown>)['error'];
+  const outer = (err as Record<string, unknown>)['error'];
+  if (!outer || typeof outer !== 'object') return false;
+  // The Anthropic SDK wraps the response body: outer.type === 'error' and
+  // the real type is nested one level deeper in outer.error.type.
+  const outerType = (outer as Record<string, unknown>)['type'];
+  if (outerType !== 'error') return false; // Not the Anthropic envelope shape
+  const inner = (outer as Record<string, unknown>)['error'];
   if (!inner || typeof inner !== 'object') return false;
   const type = (inner as Record<string, unknown>)['type'];
   return typeof type === 'string' && (
@@ -40,6 +53,16 @@ function isAnthropicSdkError(err: unknown): boolean {
     type === 'invalid_request_error' ||
     type === 'not_found_error'
   );
+}
+/**
+ * True when an error carries the Anthropic 403 body
+ * (`{ type: 'error', error: { type: 'permission_error' } }`).
+ */
+function hasAnthropicPermissionBody(err: unknown): boolean {
+  const body = (err as Record<string, unknown>)['error'];
+  if (!body || typeof body !== 'object') return false;
+  const inner = (body as Record<string, unknown>)['error'];
+  return !!inner && typeof inner === 'object' && (inner as Record<string, unknown>)['type'] === 'permission_error';
 }
 import { isRateLimitError, isNetworkError } from '../../utils/error-classifiers.js';
 import { usageLimitInfoOf } from '../../agent/usage/usage-limit-info.js';
@@ -140,9 +163,15 @@ export function classifyError(err: unknown): ClassifiedError {
   const lowerMsg = message.toLowerCase();
 
   // 5. HTTP 401 / AuthenticationError
+  // Architecture rule: @anthropic-ai/sdk must not be imported outside
+  // src/agent/providers/ — so we cannot use `instanceof AuthenticationError`.
+  // SDK error instances inherit `.name === 'Error'` (the SDKs do not set it),
+  // so `err.constructor.name` is what matches a real SDK error; the `.name`
+  // check covers errors that set it explicitly. Class names survive the build
+  // (scripts/build-dist.mjs sets `minifyIdentifiers: false`).
   if (
     errObj['status'] === 401 ||
-    (err instanceof Error && err.name === 'AuthenticationError')
+    (err instanceof Error && (err.name === 'AuthenticationError' || err.constructor.name === 'AuthenticationError'))
   ) {
     const isAnthropic = isAnthropicSdkError(err);
     return {
@@ -157,7 +186,16 @@ export function classifyError(err: unknown): ClassifiedError {
   }
 
   // 5a. Anthropic PermissionDeniedError (seat removed, subscription inactive)
-  if (err instanceof Error && err.name === 'PermissionDeniedError') {
+  // See comment at §5 above: .name + constructor.name used instead of instanceof
+  // to avoid an SDK import outside src/agent/providers/. The OpenAI SDK also
+  // has a PermissionDeniedError class, so both arms require the Anthropic 403
+  // body shape (`{ type: 'error', error: { type: 'permission_error' } }`);
+  // an OpenAI 403 must not receive seat-removal guidance.
+  if (
+    err instanceof Error &&
+    (err.name === 'PermissionDeniedError' || err.constructor.name === 'PermissionDeniedError') &&
+    hasAnthropicPermissionBody(err)
+  ) {
     return {
       kind: 'auth',
       userMessage: 'Access denied (HTTP 403). Your account seat may have been removed or subscription access is inactive.',

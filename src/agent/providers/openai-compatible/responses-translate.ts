@@ -64,7 +64,7 @@ export interface ResponsesStreamEvent {
       input_tokens?: number;
       output_tokens?: number;
       total_tokens?: number;
-      input_tokens_details?: { cached_tokens?: number };
+      input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
     };
     incomplete_details?: { reason?: string };
     /** Carried by `response.failed`; contains the server's error code + message. */
@@ -258,6 +258,7 @@ export function* translateResponsesEvent(
       // Unhandled event types (audio, web_search, mcp, content_part framing,
       // text *.done duplicates, etc.) are intentionally ignored — they carry no
       // information the harness needs beyond what the deltas already conveyed.
+      // Last validated against openai SDK v7.51.0 (2026-11-10).
       return;
   }
 }
@@ -327,6 +328,14 @@ function applyResponsesUsage(state: StreamState, event: ResponsesStreamEvent): v
     prompt_tokens: inputTokens,
     completion_tokens: outputTokens,
     total_tokens: u.total_tokens ?? inputTokens + outputTokens,
-    prompt_tokens_details: { cached_tokens: u.input_tokens_details?.cached_tokens ?? 0 },
+    prompt_tokens_details: {
+      cached_tokens: u.input_tokens_details?.cached_tokens ?? 0,
+      // cache_write_tokens: tokens written to the cache this turn (OpenAI Responses
+      // API v7.50.0+). Stored in state.usage so it is preserved in `raw`; mapped
+      // to BillingUsage.cacheWrite via usageFromState but intentionally unpriced (#4783).
+      ...(u.input_tokens_details?.cache_write_tokens !== undefined
+        ? { cache_write_tokens: u.input_tokens_details.cache_write_tokens }
+        : {}),
+    },
   };
 }

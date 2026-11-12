@@ -18,6 +18,7 @@ import { OpenAICompatibleProvider } from '../../agent/providers/openai-compatibl
 import { XaiProvider } from '../../agent/providers/xai/index.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
+import { resolveModelId } from '../../agent/session/model-resolution.js';
 import { MemoryStore, injectHotMemory, injectEpisodeRecall, injectGoalPrompt } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
@@ -27,6 +28,7 @@ import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { parseProvider, getApiKeyForModel, getModel, getDefaultSubagentModel } from '../shared-helpers.js';
+import { credentialSourceId } from '../auth-wizard.describe-source.js';
 import { cliProviderFamily } from '../provider-selection.js';
 import type { TraceWriter } from '../../agent/trace/writer.js';
 import { formatSubagentCompletion } from './interactive/progress-banner.js';
@@ -215,6 +217,7 @@ export async function buildChatSession(
   const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory({
     model: sessionModel,
     surface: 'cli',
+    credentialSource: credentialSourceId() ?? undefined,
     apiKey: getApiKeyForModel(sessionModel, providerHints),
     ...managerShutdownConfig(rootManager, composeExecutor),
     maxTurns,
@@ -230,7 +233,11 @@ export async function buildChatSession(
       sharedMemoryStore,
       getChatPermissionMode,
       loadHooksConfig({ cwd: worktreeCwd }),
-      { cwd: worktreeCwd, ...(traceWriter !== undefined ? { traceWriter } : {}) },
+      {
+        cwd: worktreeCwd,
+        ...(traceWriter !== undefined ? { traceWriter } : {}),
+        getModel: () => resolveModelId(sessionModel) ?? String(sessionModel),
+      },
     ).registry,
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),

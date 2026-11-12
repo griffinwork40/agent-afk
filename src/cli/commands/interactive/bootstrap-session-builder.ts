@@ -8,6 +8,7 @@ import type { ModelProvider } from '../../../agent/provider.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import { explicitProviderHints, getApiKeyForModel } from '../../shared-helpers.js';
+import { credentialSourceId } from '../../auth-wizard.describe-source.js';
 import type { CliConfig } from '../../config.js';
 import { MemoryStore } from '../../../agent/memory/index.js';
 import { StateStore } from '../../../agent/state/state-store.js';
@@ -80,6 +81,12 @@ export interface BuildAgentSessionDeps {
    * default model.
    */
   explicitProvider?: string;
+  /**
+   * Per-session episode recall suppression. Set to true when the user passes
+   * `--no-recall` on the CLI. Forwarded to `injectEpisodeRecall` as
+   * `opts.noRecall` so the flag takes effect without writing to process.env.
+   */
+  noRecall?: boolean;
 }
 
 /**
@@ -93,6 +100,10 @@ export function buildAgentSession(deps: BuildAgentSessionDeps, sharedMemoryStore
     // User-facing surface for trace `origin` attribution. The REPL is a CLI
     // entrypoint → 'cli'. (Mid-session swap reuses this helper, also 'cli'.)
     surface: 'cli',
+    // Credential source for post-session attribution. Computed once at
+    // session construction so the sidecar and trace reflect the tier active
+    // at startup, not at an arbitrary later read.
+    credentialSource: credentialSourceId() ?? undefined,
     // Resolve the credential for the ACTUAL session model + explicit
     // `--provider` (if any), not the env-derived default alone. Without
     // explicit hints, `afk i --provider xai` with a Claude model would inject
@@ -134,7 +145,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps, sharedMemoryStore
     ...(deps.baseUrl !== undefined ? { baseUrl: deps.baseUrl } : {}),
     ...(deps.enableFileCheckpointing !== undefined ? { enableFileCheckpointing: deps.enableFileCheckpointing } : {}),
     providerFactory: deps.providerFactory,
-  }), undefined, undefined, sharedMemoryStore))), deps.traceWriter);
+  }), undefined, undefined, sharedMemoryStore, deps.noRecall ? { noRecall: true } : undefined))), deps.traceWriter);
 }
 
 /**
@@ -167,6 +178,8 @@ export function buildSharedDeps(a: {
   maxTurns: string;
   initialPermissionMode: PermissionMode | undefined;
   explicitProvider?: string;
+  /** Pass true when the user supplied --no-recall to suppress episode recall. */
+  noRecall?: boolean;
 }): BuildAgentSessionDeps {
   return {
     model: a.sessionModel,
@@ -200,6 +213,7 @@ export function buildSharedDeps(a: {
     enableFileCheckpointing: a.cliConfig.fileCheckpoints !== false,
     ...(a.initialPermissionMode !== undefined ? { permissionMode: a.initialPermissionMode } : {}),
     ...(a.explicitProvider !== undefined ? { explicitProvider: a.explicitProvider } : {}),
+    ...(a.noRecall === true ? { noRecall: true } : {}),
   };
 }
 

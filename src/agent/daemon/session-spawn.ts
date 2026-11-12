@@ -15,6 +15,7 @@ import { injectCompanionPrimer } from '../companion/index.js';
 import { AgentSession } from '../session/agent-session.js';
 import { registerSurfaceSession } from '../session/register-surface-session.js';
 import { loadHooksConfig } from '../hooks/config-loader.js';
+import { resolveModelId } from '../session/model-resolution.js';
 import { StateStore } from '../state/state-store.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
@@ -134,6 +135,22 @@ export function daemonDefaultCwd(): string {
  * rounds preserve the unlimited escape hatch; dollar zero remains a stop
  * sentinel. See resolveUnattendedLimits for the shared surface policy.
  */
+/**
+ * Build the `getModel` callback wired into the hook registry for a daemon tick.
+ *
+ * Extracted from the inline IIFE in {@link spawnDaemonSession} so the resolution
+ * logic can be unit-tested without invoking the full spawn path (MCP, DB, etc.).
+ *
+ * @param configuredModel - The raw model value from `sessionConfig.model`.
+ *   Undefined when `sessionConfig` is absent or when `model` is not set.
+ * @returns A zero-argument function that returns the resolved wire id for this tick.
+ */
+export function buildDaemonGetModel(configuredModel: string | undefined): () => string {
+  const raw = configuredModel ?? 'sonnet';
+  const daemonModel = resolveModelId(raw) ?? String(raw);
+  return () => daemonModel;
+}
+
 export function parseDaemonEnvLimits(
   rawMaxToolIters: string | undefined,
   rawMaxBudget: string | undefined,
@@ -211,6 +228,9 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
       // enabled:false) as 'medium'. This value comes from the scheduler, not
       // from any model-supplied input — it cannot be spoofed by the agent.
       daemonTaskId: taskId,
+      // Daemon ticks use a fixed model per tick; resolve it once at dispatch
+      // time so hook payloads reflect the actual wire id.
+      getModel: buildDaemonGetModel(options.sessionConfig?.model),
     },
   );
   const stateStore = new StateStore(getStateDatabasePath());

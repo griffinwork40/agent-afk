@@ -12,6 +12,144 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.353.0] - 2026-11-11
+
+### Added
+- add subagents.byModel per-model rollup to run receipt (#4780) (a023f830c)
+- persist credential source in sidecar and trace (#4779) (3d2802003)
+
+### Fixed
+- address prod dep bump api-compat follow-ups (#4756) (2c869c0ac)
+- retry bubblewrap apt install on transient mirror failures (#4781) (584716488)
+- prefix-cap eviction gaps from episode recall merge (#4754) (700ef60ac)
+
+## [5.352.0] - 2026-11-11
+
+### Added
+- add tier-based visual hierarchy for Done rows (#4774) (1f9bfa53a)
+- add Not checked and Undo to the Done block (#4771) (766810e98)
+
+### Fixed
+- fix TS2556 in acp.session.test mock wrappers, restore baseline to 2674 (fa180ea0d)
+- restore main green (test typecheck ratchet + Windows EBUSY) (#4772) (5d6afaa4f)
+- sync test-typecheck baseline to 2676 after rebase onto main (f091b3d83)
+- extract buildDaemonGetModel, fix TS2339, wire tests through production callback (155848946)
+- address advisory findings in git helpers test suite (c36e4a6bf)
+- address advisory findings in artifact handler tests (118896e9e)
+
+## [5.351.0] - 2026-11-10
+
+### Added
+- add episode recall operational transparency (#4703) (03735a683)
+- default AFK_SESSION_PICKER to disabled (#4751) (d6d6bed8c)
+
+### Fixed
+- inject resume context at model-round boundary for mid-turn pauses (2b6b0937c)
+- bump CLI version claim to 2.1.322 for Fable 5.2 access (#4762) (ad5d31823)
+- add UTF-8 truncation guards and 4-byte test case (316c21723)
+- pass session-scoped store to episode recall in acp (c748e51fa)
+- preserve table top border during tall overlay (#4747) (d776bae04)
+- style, type, and test gaps in resume-all (6a5d50f97)
+- remove dead patchFacetDecisions barrel export (05e75f3ec)
+- address advisory findings from facet surface threading (e098313b1)
+- address advisory findings from episode recall separation (d4da76620)
+- add branch-decay test and hoist Date.now in episode scoring (ae62cfd90)
+- address advisory findings in agent-type listing tests (78253e357)
+- cover read-only invariant and remove dead fallbackSessionId parameter (0aa767b5a)
+- use rmSyncRetry in memory test teardown for Windows EBUSY (#4750) (14bc9fb00)
+- add Case B test and fix misleading comment (#4747) (21cdf5682)
+
+## [5.350.0] - 2026-11-09
+
+### Added
+- FTS union over facet cache for memory_search session results (f85b1656e)
+- bump fable alias to claude-fable-5-2 (#4746) (7b918f900)
+- startup session picker for REPL (467bb903a)
+
+### Fixed
+- address 6 blocking review findings on PR #4708 (95fd7570f)
+- use --version probe for bwrap availability in runtime test (951855017)
+- guard spinner method calls in maybeRunStartupPicker for non-TTY environments (9a40cbd09)
+- split bwrap probe into installed vs functional for CI (0ff3c6759)
+- address 5 blocking review findings on PR #4708 (e527da888)
+- strip UNC/extended-length prefixes in norm(); gate backslash conversion on Windows detection (fb9a0511d)
+- add stat to WorktreeHandlerDeps and add TOCTOU test (4978e4f89)
+- address all 6 review findings on startup session picker (7aecac8f2)
+- add sandbox spawn diagnostics and CI runtime enforcement (#4718) (63ec0b5b1)
+- assert isDirectory() after fs.stat on explicit repo path (b2d679e10)
+- address episode system architectural constraints (hook ordering + dedupe guard) (fc183623a)
+- use path.posix for POSIX platform sandbox path checks (aea2c722a)
+- improve worktree repo parameter validation (91d766550)
+
+### Changed
+- align checkThinkingAnnotation with TTFB pattern and scope THINKING_GRACE_MS (#4704) (456c18584)
+- bump next from 16.4.3 to 16.4.5 in /website (#4732) (b390dd4e7)
+- bump the actions-minor-patch group with 4 updates (#4733) (1a1489300)
+
+## [5.349.0] - 2026-11-09
+
+### Added
+- add model to hook payloads and AFK_HOOK_MODEL env (#4730) (#4742) (d4808fdbd)
+- thread session surface into facet schema for structural daemon filtering (deb1e3d7f)
+- separate episode recall from hotMemory into dedicated config field (93826d21d)
+- show pause duration on `afk resume` (4061b62ec)
+
+### Fixed
+- resolve FAKE_CWD for Windows path compatibility (70e197799)
+- narrow FTS5 catch regex, fix watermark JSDoc (a0620a275)
+- extend FTS5 error regex, fix JSDoc, add tests (51eeb70c8)
+- build highFreqFiles from allEpisodes; document first-file-dir bucketing (898af47ed)
+- truncate skill descriptions to first sentence, fix spacing (2e400268d)
+- wrap agent-type listing in available-agent-types delimiter block (72e108870)
+- add ruleId schema constraint, fix duplicate test, restructure test blocks (7c218a58b)
+- add unconfined artifact handler test and normalize null serialization (be5ea9a81)
+- correct line references and clarify scope in outcome-keying notes (005290dc2)
+- handle pure-boilerplate fallback in episode extraction (51a539fb4)
+- wire abort signal at turn boundary during pause (d17ec7b4e)
+- update stale JSDoc and add trimmedByComment test (c895d5717)
+- add recency decay and basename collision mitigation to episode scoring (0046f8984)
+- add episode archive eviction policy and XML sanitization (32ef63381)
+- wire episode recall into afk acp surface (9c77447e7)
+- harden q-episodes watermark, resource lifecycle, and error handling (798ee496a)
+- remove decisions truncation and stale backflow (328f5eef8)
+- trim incomplete UTF-8 at journal byte truncation boundary (2ab3c48e4)
+
+### Changed
+- bump ora from 9.4.1 to 10.0.0 (593a0d879)
+- bump the dev-minor-patch group with 2 updates (86a504166)
+- bump the dashboard-dev-minor-patch group (3ffaa450e)
+- bump the prod-minor-patch group with 4 updates (491196d59)
+- bump the dashboard-prod-minor-patch group (59a03a91c)
+- bump the fumadocs group in /website with 2 updates (27068b692)
+- add getting-started guide for new users (45b988142)
+- add skill triage guide with tiered categorization (af6f5415d)
+- scope skill guide to publicly shipped skills only (e0ac3a083)
+
+## [5.348.0] - 2026-11-05
+
+### Added
+- wire Q as read-only consumer of episode facts (#4612) (1aecfc063)
+- automatic episode retrieval at session start (#4614) (393a999f0)
+
+### Fixed
+- bracket-notation for index-signature payloads and update stale snapshot (581742f0e)
+- suspend stall watchdog during afk pause and inject resume context (#4691) (a96cb6b98)
+- correct category mismatch and wire inject into session (#4684) (ccde4a7f5)
+- add risk facet to empty-string test and document command guard asymmetry (#4671) (06d0eb75e)
+- address advisory findings for dynamic model param description (#4669) (1215899cb)
+- migrate remaining afterEach/afterAll teardown sites to rmSyncRetry (#4673) (3ecee23e3)
+- raise readLastTickTime limit to prevent window exhaustion by skipped records (#4665) (a4f6ab95c)
+- address summary-mode thinking indicator advisory findings (#4678) (fc4d02841)
+- address workspace subscription parity advisory findings (#4677) (d916a35cb)
+- harden Worth doing pipeline — drop fallback needle, add tests, document omission (#4666) (3d359c5a6)
+- address advisory findings from SubagentHandle test coupling review (#4670) (7748bddfb)
+- harden closeAll ordering test and extract required helper (#4668) (c9f39fdb5)
+
+### Changed
+- commit stale SPINE.md date bump and snapshot update (2f3232594)
+- add Sub-check C for compose-level maxToolRoundsPerNode precedence (#4639) (#4672) (f0f4333ee)
+- protect bundled reference file integrity (#4676) (df2e67b41)
+
 ## [5.347.0] - 2026-11-03
 
 ### Added

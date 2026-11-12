@@ -28,21 +28,27 @@ import { getVersion } from '../../cli/version.js';
  * not await). `emitSessionPhase` already swallows writer errors — this
  * wrapper exists solely to name the intent at the call site.
  *
- * @param writer     - The active trace sink, or `undefined` when tracing
- *                     is disabled. No-op when absent.
- * @param sessionId  - The newly assigned provider-issued session id.
- * @param priorSessionId - The id that was set before this call, or
- *                     `undefined` on first assignment.
+ * @param writer          - The active trace sink, or `undefined` when tracing
+ *                          is disabled. No-op when absent.
+ * @param sessionId       - The newly assigned provider-issued session id.
+ * @param priorSessionId  - The id that was set before this call, or
+ *                          `undefined` on first assignment.
+ * @param credentialSource - Optional credential/auth source id to surface on
+ *                          this event (OpenAI path: `auth.source` from
+ *                          `resolveOpenAIAuth`). Absent on the Anthropic path
+ *                          (emitted on `session_init_start` there instead).
  */
 export function emitSessionIdAssigned(
   writer: TraceSink | undefined,
   sessionId: string,
   priorSessionId: string | undefined,
+  credentialSource?: string | undefined,
 ): Promise<void> {
   return emitSessionPhase(writer, {
     phase: 'session_id_assigned',
     sessionId,
     ...(priorSessionId !== undefined ? { priorSessionId } : {}),
     afkVersion: getVersion(),
+    ...(credentialSource !== undefined ? { credentialSource } : {}),
   });
 }

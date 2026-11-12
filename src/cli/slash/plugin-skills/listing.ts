@@ -126,6 +126,21 @@ function byBareName(a: ListingGroup, b: ListingGroup): number {
   return an.localeCompare(bn);
 }
 
+/** Extract a one-sentence brief for the listing. Full text via `/skills <name>`. */
+function listingBrief(text: string): string {
+  // Scan for the first '. ' boundary at or past 40 chars. Skips abbreviation
+  // periods (e.g., i.e.) that appear early in the description.
+  let pos = 0;
+  while (pos < text.length) {
+    const dot = text.indexOf('. ', pos);
+    if (dot < 0 || dot > 150) break;
+    if (dot >= 40) return text.slice(0, dot + 1);
+    pos = dot + 2;
+  }
+  if (text.length <= 100) return text;
+  return text.slice(0, 100).replace(/\s+\S*$/, '') + '…';
+}
+
 /**
  * Render one skill as a wrapped two-column row: padded name on the left, the
  * word-wrapped description on the right (continuation lines hang under the
@@ -140,7 +155,7 @@ function renderGroupRows(
   descW: number,
 ): void {
   const { main, alts } = group;
-  const wrapped = wrapToWidth(main.description, descW).split('\n');
+  const wrapped = wrapToWidth(listingBrief(main.description), descW).split('\n');
 
   if (displayWidth(main.display) > nameW - 1) {
     // Name too wide for the gutter — give it its own line, hang the description.
@@ -162,6 +177,9 @@ function renderGroupRows(
       ctx.out.line('  ' + ' '.repeat(nameW) + palette.dim(altLine));
     }
   }
+
+  // Blank line between entries for visual separation.
+  ctx.out.line();
 }
 
 function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], internalUnlocked: boolean): void {
@@ -207,7 +225,9 @@ function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], int
       for (const g of builtinGroups) renderGroupRows(ctx, g, nameW, descW);
     }
     if (otherGroups.length > 0) {
-      ctx.out.line();
+      // Blank before divider only when no builtins rendered (otherwise the
+      // trailing blank from the last builtin entry provides the gap).
+      if (builtinGroups.length === 0) ctx.out.line();
       ctx.out.line(builtinGroups.length > 0 ? divider('Plugins & user skills') : divider());
       for (const g of otherGroups) renderGroupRows(ctx, g, nameW, descW);
     }
@@ -233,16 +253,19 @@ function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], int
       ...(byCategory.has(UNCATEGORIZED_LABEL) ? [UNCATEGORIZED_LABEL] : []),
     ];
 
+    let isFirstCat = true;
     for (const cat of renderOrder) {
       const catGroups = (byCategory.get(cat) ?? []).sort(byBareName);
       if (catGroups.length === 0) continue;
-      ctx.out.line();
+      // Blank before the first category header (after legend); subsequent
+      // headers rely on the trailing blank from the last entry above.
+      if (isFirstCat) { ctx.out.line(); isFirstCat = false; }
       ctx.out.line(divider(sanitizeForDisplay(cat)));
       for (const g of catGroups) renderGroupRows(ctx, g, nameW, descW);
     }
   }
 
-  ctx.out.line();
+  // No extra blank — the trailing blank from the last entry provides the gap.
   ctx.out.line(
     palette.dim(
       altCount > 0

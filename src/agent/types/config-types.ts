@@ -316,6 +316,23 @@ export interface AgentConfig {
   hotMemory?: string;
 
   /**
+   * Episode-recall block (`<recent-episodes>` block) populated by
+   * {@link injectEpisodeRecall} at top-level surfaces when
+   * `AFK_EPISODE_RECALL=1`. Carried as a dedicated field — separate from
+   * {@link hotMemory} — to preserve the epistemic distinction between
+   * operator-curated context (HOT.md) and probabilistic associative recall
+   * (episodes). The provider places this in the volatile tail of the system
+   * prompt, after the `# Environment` block, so it never thrashes the
+   * stable-prefix cache (the prefix up to `# Environment` is shared across
+   * sessions; episodes vary per-session based on git context).
+   *
+   * Unset when `AFK_EPISODE_RECALL` is not `'1'` or no relevant episodes
+   * exist. Empty / whitespace is treated as absent by the provider assembler.
+   * Never set for child sessions (subagents / skills).
+   */
+  episodeRecall?: string;
+
+  /**
    * Active goal prompt fragment — injected into the system prompt between
    * hot memory and the `# Environment` block. Built by
    * `buildGoalPromptFragment()` at session construction; empty string or
@@ -611,6 +628,19 @@ export interface AgentConfig {
   /** Pending abandoned child streams; shutdown bounds settlement before its accounting snapshot. */
   getPendingChildBillingStreams?: () => readonly Promise<void>[];
 
+  /**
+   * Stable credential/auth source id recorded at session start.
+   *
+   * Passed in from CLI/surface entry points that have already resolved which
+   * auth tier is active (e.g. via `credentialSourceId()` in
+   * `src/cli/auth-wizard.describe-source.ts` for Anthropic, or from
+   * `resolveOpenAIAuth().source` for OpenAI-compatible sessions).
+   * Absent for subagent forks (they inherit the parent's auth implicitly).
+   * Stored in the session sidecar and emitted on `session_init_start` so
+   * post-session analysis can determine which auth tier was used without
+   * consulting env vars or keychains.
+   */
+  credentialSource?: string;
   /**
    * True when this session is a forked subagent rather than the top-level
    * session. Stamped unconditionally by `SubagentManager.forkSubagent` — the

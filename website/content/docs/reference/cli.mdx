@@ -501,6 +501,7 @@ Guide: [repl](/surfaces/repl)
 | `--no-worktree-autoname` | Disable mid-session rename of auto-named worktrees from the first user message via haiku. Default on. Also: AFK_WORKTREE_AUTONAME=0, or interactive.worktreeAutoname:false in afk.config.json. |  |
 | `--no-shell-passthrough` | Disable the ! shell-passthrough feature. When set, inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Also: AFK_SHELL_PASSTHROUGH set to 0, false, off, or no. |  |
 | `--plain` | Force the session to fully behave like a non-TTY surface for rendering: append-only plain-stdout output instead of the live-overlay renderer, AND the input surface downgrades to the simple line reader — even when stdout/stdin ARE a TTY. Full opt-out escape hatch for tmux/SSH/multiplexer sessions. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default. |  |
+| `--no-recall` | Suppress automatic episode recall for this session, even when AFK_EPISODE_RECALL=1 is set globally. Equivalent to AFK_NO_EPISODE_RECALL=1 for this invocation. The /recall slash command is unaffected. |  |
 | `-h, --help` | display help for command |  |
 
 ## `afk login`
@@ -1669,8 +1670,21 @@ Usage: `afk episode [options] [command]`
 
 | Command | Description |
 | --- | --- |
+| `ingest` | Ingest episode facts from the AFK memory archive into the Q episodes store. Reads memory.db (category: episode, prefix: [episode:]) and upserts each episode into a local Q episodes SQLite store for SQL-based recall. Idempotent — a watermark ensures only new episodes are processed on subsequent runs. |
 | `synthesize` | Synthesize a compressed episode narrative from a sealed session journal and store it in the cross-session memory archive (facts, category: episode). Defaults to the most recent session when no session-id is given. |
 | `backfill` | Retroactively synthesize episodes for existing sessions that have journals on disk. Idempotent: sessions that already have an episode in memory are skipped. Use --dry-run to preview which sessions would be processed. |
+
+## `afk episode ingest`
+
+Ingest episode facts from the AFK memory archive into the Q episodes store. Reads memory.db (category: episode, prefix: [episode:]) and upserts each episode into a local Q episodes SQLite store for SQL-based recall. Idempotent — a watermark ensures only new episodes are processed on subsequent runs.
+
+Usage: `afk episode ingest [options]`
+
+### Options
+
+| Flags | Description | Default |
+| --- | --- | --- |
+| `-h, --help` | display help for command |  |
 
 ## `afk episode synthesize`
 

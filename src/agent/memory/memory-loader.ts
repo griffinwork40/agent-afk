@@ -72,7 +72,7 @@ export function injectHotMemory(config: AgentConfig): AgentConfig {
 // ── Episode recall ───────────────────────────────────────────────────────────
 
 /** Maximum episodes to surface at session start (context-budget guard). */
-const EPISODE_RECALL_CAP = 3;
+export const EPISODE_RECALL_CAP = 3;
 
 /**
  * Soft token cap for the <recent-episodes> block injected into the system
@@ -86,6 +86,17 @@ const EPISODE_TOKEN_CAP = 6_000;
  * fraction of all episodes (too common to be a useful signal).
  */
 const HIGH_FREQ_THRESHOLD = 0.3;
+
+/**
+ * Per-filesKey-prefix eviction cap: when the archive contains more than this
+ * many episodes sharing the same leading file path prefix (the first file in
+ * the `files:` line, up to the directory component), only the most-recent N
+ * are kept as candidates. This bounds the candidate pool at query time —
+ * history is preserved in the DB for manual inspection, but scoring pressure
+ * is limited so that large archives (200+ sessions) cannot produce guaranteed
+ * high-scoring false-positive matches.
+ */
+const EPISODE_FILES_PREFIX_CAP = 5;
 
 /**
  * Retrieve the current git branch name. Returns null if git is unavailable
@@ -191,30 +202,75 @@ export function parseEpisodeFiles(content: string): string[] {
 }
 
 /**
- * Score an episode fact against a set of candidate file basenames and an
- * optional branch name. Higher = more relevant.
+ * Recency decay window in days. Episodes older than this floor out at
+ * RECENCY_DECAY_FLOOR rather than reaching zero, so very old but highly
+ * relevant episodes can still surface.
+ */
+const RECENCY_DECAY_DAYS = 90;
+
+/**
+ * Minimum recency multiplier (floor). Keeps ancient episodes scoreable but
+ * heavily discounted vs. recent ones.
+ */
+const RECENCY_DECAY_FLOOR = 0.1;
+
+/**
+ * Score an episode fact against a set of candidate file paths, an optional
+ * branch name, and the episode's age. Higher = more relevant.
  *
- * Scoring:
- *   - +2 per matching file basename (after high-frequency filter)
+ * Scoring (before recency decay):
+ *   - +3 per matching full relative path (after high-frequency filter)
+ *   - +1 per matching file basename that did NOT already match by full path
+ *     (after high-frequency filter); handles episodes that stored abbreviated
+ *     paths that don't align with the caller's working-tree paths
  *   - +3 for branch name match (branch episodes are highly contextual)
+ *
+ * Full-path matches (+3) outweigh basename-only matches (+1) so that
+ * `src/utils.ts` and `lib/utils.ts` are disambiguated rather than treated
+ * as identical signals. Basename-only matching is kept as a fallback for
+ * episodes that stored relative paths that differ from the caller's tree root.
+ *
+ * The raw score is then multiplied by a linear recency decay over
+ * RECENCY_DECAY_DAYS days, floored at RECENCY_DECAY_FLOOR, so stale episodes
+ * are deprioritised relative to recent ones without being fully suppressed.
  *
  * Item 4: branch match uses a word-boundary regex so short names like `fix`,
  * `dev`, or `add` do not spuriously match arbitrary episode text.
  */
 export function scoreEpisode(
   fact: Fact,
-  fileBasenames: Set<string>,
+  filePaths: Set<string>,
   branch: string | null,
   highFreqFiles: Set<string>,
+  now: number = Date.now(),
 ): number {
   let score = 0;
   const episodeFiles = parseEpisodeFiles(fact.content);
+
+  // Build a set of basenames derived from the caller's file paths so we can
+  // detect basename-only overlaps without double-counting files that already
+  // matched by full path.
+  const callerBasenames = new Map<string, string[]>();
+  for (const p of filePaths) {
+    const base = basename(p);
+    const list = callerBasenames.get(base) ?? [];
+    list.push(p);
+    callerBasenames.set(base, list);
+  }
+
   for (const f of episodeFiles) {
     const base = basename(f);
-    if (!highFreqFiles.has(base) && fileBasenames.has(base)) {
-      score += 2;
+    if (highFreqFiles.has(base)) continue;
+
+    if (filePaths.has(f)) {
+      // Full relative-path match — strong signal.
+      score += 3;
+    } else if (callerBasenames.has(base)) {
+      // Basename-only match — weaker signal (possible collision).
+      score += 1;
     }
   }
+
   if (branch) {
     // Require whole-word match: branch name must not be preceded or followed
     // by word characters or path separators ([\w/-]). This prevents short
@@ -225,6 +281,14 @@ export function scoreEpisode(
     );
     if (branchRe.test(fact.content)) score += 3;
   }
+
+  // Apply linear recency decay so older episodes are deprioritised.
+  if (score > 0) {
+    const ageDays = (now - new Date(fact.created_at).getTime()) / 86_400_000;
+    const decay = Math.max(RECENCY_DECAY_FLOOR, 1 - ageDays / RECENCY_DECAY_DAYS);
+    score *= decay;
+  }
+
   return score;
 }
 
@@ -271,6 +335,69 @@ export function formatEpisodeForRecall(fact: Fact): string {
 }
 
 /**
+ * A scored episode candidate — the episode fact plus its numeric relevance score.
+ * Returned by `scoredEpisodes` for inspection (e.g. the `/recall` slash command).
+ */
+export interface ScoredEpisode {
+  ep: Fact;
+  score: number;
+}
+
+/**
+ * Score all episodes against the current git context and return them sorted
+ * by descending score. Includes ALL candidates regardless of score (callers
+ * decide how to filter).  Useful for the `/recall` inspection command.
+ *
+ * Errors are swallowed — episode scoring is additive, never critical.
+ */
+export function scoredEpisodes(memoryDir?: string, cwd?: string, store?: MemoryStore): ScoredEpisode[] {
+  const ownsStore = !store;
+  const s = store ?? new MemoryStore(memoryDir);
+  try {
+    const allEpisodes = s.getEpisodes();
+    if (allEpisodes.length === 0) return [];
+
+    const branch = getCurrentBranch(cwd);
+    const modifiedFiles = getRecentlyModifiedFiles(cwd);
+    const filePaths = new Set(modifiedFiles);
+    const highFreqFiles = buildHighFreqFiles(allEpisodes);
+
+    // Eviction policy (Item #4682): cap candidates per first-file directory prefix so
+    // that large archives (200+ sessions) don't inflate scoring pressure.
+    // getEpisodes() returns rows newest-first, so the first
+    // EPISODE_FILES_PREFIX_CAP rows for each prefix are the most recent ones —
+    // exactly what we want to retain.
+    const prefixCount = new Map<string, number>();
+    const cappedEpisodes = allEpisodes.filter((ep) => {
+      const files = parseEpisodeFiles(ep.content);
+      const firstFile = files[0];
+      // Legacy basename-only episodes get a namespaced per-basename key so they
+      // neither collapse into the '' bucket nor collide with a directory prefix.
+      const prefix = firstFile !== undefined
+        ? (firstFile.includes('/') ? firstFile.split('/').slice(0, -1).join('/') : `basename:${firstFile}`)
+        : '';
+      const count = (prefixCount.get(prefix) ?? 0) + 1;
+      prefixCount.set(prefix, count);
+      return count <= EPISODE_FILES_PREFIX_CAP;
+    });
+
+    const now = Date.now();
+    return cappedEpisodes
+      .map((ep) => ({
+        ep,
+        score: scoreEpisode(ep, filePaths, branch, highFreqFiles, now),
+      }))
+      .sort((a, b) => b.score - a.score || b.ep.created_at.localeCompare(a.ep.created_at));
+  } catch {
+    return [];
+  } finally {
+    if (ownsStore) {
+      try { s.close(); } catch { /* best-effort */ }
+    }
+  }
+}
+
+/**
  * Query the memory store for episodes relevant to the current git context
  * (recently-modified files + branch name). Returns up to `EPISODE_RECALL_CAP`
  * scored episodes, or an empty array when none are relevant.
@@ -285,55 +412,25 @@ export function formatEpisodeForRecall(fact: Fact): string {
  *   second SQLite handle on the shared DB when the caller already owns one.
  */
 export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryStore): Fact[] {
-  // Track whether we created the store locally so we can close it in finally.
-  const ownsStore = !store;
-  const s = store ?? new MemoryStore(memoryDir);
-  try {
-    // Retrieve all episode-synthesis rows via a direct SQL query — episodes
-    // are a known partition, not an FTS search topic. The dedicated method
-    // avoids the searchFacts default-limit footgun and the unused FTS rank
-    // computation. Scoring happens after retrieval in scoreEpisode().
-    const allEpisodes = s.getEpisodes();
-
-    if (allEpisodes.length === 0) return [];
-
-    const branch = getCurrentBranch(cwd);
-    const modifiedFiles = getRecentlyModifiedFiles(cwd);
-    const fileBasenames = new Set(modifiedFiles.map((f) => basename(f)));
-
-    const highFreqFiles = buildHighFreqFiles(allEpisodes);
-
-    // Score and rank all episodes.
-    const scored = allEpisodes
-      .map((ep) => ({
-        ep,
-        score: scoreEpisode(ep, fileBasenames, branch, highFreqFiles),
-      }))
-      .filter(({ score }) => score > 0)
-      .sort((a, b) => b.score - a.score || b.ep.created_at.localeCompare(a.ep.created_at));
-
-    return scored.slice(0, EPISODE_RECALL_CAP).map(({ ep }) => ep);
-  } catch {
-    // Swallow all errors — recall is additive, never critical
-    return [];
-  } finally {
-    // Close only if we created the store locally to avoid leaking SQLite handles.
-    if (ownsStore) {
-      try { s.close(); } catch { /* best-effort */ }
-    }
-  }
+  const all = scoredEpisodes(memoryDir, cwd, store);
+  return all
+    .filter(({ score }) => score > 0)
+    .slice(0, EPISODE_RECALL_CAP)
+    .map(({ ep }) => ep);
 }
 
 /**
  * Inject relevant past episodes into an AgentConfig as a `<recent-episodes>`
- * block appended to `config.hotMemory`.
+ * block stored in the dedicated `config.episodeRecall` field.
  *
  * Only fires when `AFK_EPISODE_RECALL=1` (opt-in). Skips subagent contexts
  * (`config.parentSessionId` set) — recall is only meaningful for top-level
  * sessions. Returns the config unchanged when no relevant episodes are found.
  *
- * The block is appended after the existing `hotMemory` content so it lands in
- * the cross-session-memory region of the assembled system prompt, after HOT.md.
+ * The block is stored in `config.episodeRecall` — a field separate from
+ * `config.hotMemory` — so the provider can place it in the volatile tail of
+ * the system prompt (after `# Environment`), keeping the stable prefix cache
+ * intact across sessions with different episode sets.
  *
  * Does not mutate the original config — returns a shallow copy when changed.
  *
@@ -344,24 +441,45 @@ export function recallEpisodes(memoryDir?: string, cwd?: string, store?: MemoryS
  * Item 6: the assembled block is checked against EPISODE_TOKEN_CAP (~6K
  *   tokens); episodes are trimmed from the end until it fits.
  */
+/**
+ * Options for {@link injectEpisodeRecall}.
+ */
+export interface InjectEpisodeRecallOptions {
+  /**
+   * Per-call suppression override — equivalent to AFK_NO_EPISODE_RECALL=1 for
+   * this invocation. Useful for the `--no-recall` CLI flag, which cannot safely
+   * write process.env after the env module has been imported. When true the
+   * function returns config unchanged regardless of AFK_EPISODE_RECALL.
+   */
+  noRecall?: boolean;
+}
+
 export function injectEpisodeRecall(
   config: AgentConfig,
   memoryDir?: string,
   cwd?: string,
   store?: MemoryStore,
+  opts?: InjectEpisodeRecallOptions,
 ): AgentConfig {
-  // Gate: opt-in only, and skip subagent forks
-  if (env.AFK_EPISODE_RECALL !== '1') return config;
+  // Gate: opt-in only (AFK_EPISODE_RECALL=1 or AFK_EPISODE_RECALL=dry-run),
+  // and skip subagent forks.
+  const recallMode = env.AFK_EPISODE_RECALL;
+  const isDryRun = recallMode === 'dry-run';
+  if (recallMode !== '1' && !isDryRun) return config;
   if (config.parentSessionId) return config;
+
+  // Per-session suppression: AFK_NO_EPISODE_RECALL=1 or opts.noRecall=true.
+  if (env.AFK_NO_EPISODE_RECALL === '1' || opts?.noRecall === true) return config;
 
   // Item 5a: fall back to session's own cwd when caller doesn't provide one.
   const effectiveCwd = cwd ?? config.cwd;
 
-  const episodes = recallEpisodes(memoryDir, effectiveCwd, store);
+  const allScored = scoredEpisodes(memoryDir, effectiveCwd, store);
+  const positiveScored = allScored.filter(({ score }) => score > 0);
+  const episodes = positiveScored.slice(0, EPISODE_RECALL_CAP).map(({ ep }) => ep);
   if (episodes.length === 0) return config;
 
   debugLog('episode-recall', `injected ${episodes.length} episode(s), cwd=${effectiveCwd ?? 'process.cwd'}`);
-
 
   /**
    * Build the <recent-episodes> block from a subset of episodes, applying
@@ -388,7 +506,19 @@ export function injectEpisodeRecall(
     block = buildBlock(capped);
   }
 
-  const existing = config.hotMemory ?? '';
-  const combined = existing.length > 0 ? `${existing}\n\n${block}` : block;
-  return { ...config, hotMemory: combined };
+  // dry-run mode: report the post-token-cap list to stderr, then return unchanged.
+  if (isDryRun) {
+    process.stderr.write(`[episode-recall dry-run] would inject ${capped.length} episode(s) (token-capped from ${positiveScored.length}), cwd=${(effectiveCwd ?? 'process.cwd()').replace(/</g, '&lt;').replace(/>/g, '&gt;')}\n`);
+    for (const ep of capped) {
+      const rawPreview = formatEpisodeForRecall(ep).split('\n').slice(0, 3).join(' | ');
+      const preview = rawPreview.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      process.stderr.write(`  • id=${ep.id} created=${ep.created_at.replace(/</g, '&lt;').replace(/>/g, '&gt;')} — ${preview}\n`);
+    }
+    return config;
+  }
+
+  // Store in dedicated episodeRecall field — NOT appended to hotMemory.
+  // The provider assembler places this in the volatile tail (after # Environment)
+  // so the stable-prefix cache is never invalidated by per-session episode sets.
+  return { ...config, episodeRecall: block };
 }

@@ -355,8 +355,8 @@
     },
     {
       "name": "AFK_EPISODE_RECALL",
-      "description": "Enable automatic episode recall at session start. When set to 1, stored episodes whose filesKey or branch overlaps with the current git context are surfaced as a <recent-episodes> block in the system prompt (up to 3 episodes, capped at ~6K tokens). Off by default — opt in once the episode archive is large enough to make associative recall useful (≥50 episodes). Requires AFK_EPISODE_SYNTHESIS to have been running long enough to accumulate episodes.",
-      "type": "boolean",
+      "description": "Enable automatic episode recall at session start. When set to 1, stored episodes whose filesKey or branch overlaps with the current git context are surfaced as a <recent-episodes> block in the system prompt (up to 3 episodes, capped at ~6K tokens). Set to \"dry-run\" to log what would be injected to stderr without modifying the system prompt. Off by default — opt in once the episode archive is large enough to make associative recall useful (≥50 episodes). Requires AFK_EPISODE_SYNTHESIS to have been running long enough to accumulate episodes.",
+      "type": "string",
       "required": false,
       "default": "0",
       "example": "1",
@@ -956,6 +956,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_NO_EPISODE_RECALL",
+      "description": "Per-session override to suppress episode recall even when AFK_EPISODE_RECALL=1 or AFK_EPISODE_RECALL=dry-run is set globally. Set to 1 for sessions where injecting episode context is unwanted (e.g. a fresh-start session, CI, or a session in an unrelated directory). The /recall slash command is unaffected — it always shows scored candidates regardless of this flag.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_NOTIFY",
       "description": "Emit a desktop completion notification (OSC 9) on turn completion, for terminals that map OSC 9 to system notifications (iTerm2, kitty, WezTerm). Opt-in and off by default (intrusive). 1 = on. TTY-only.",
       "type": "boolean",
@@ -1123,6 +1132,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SANDBOX_REQUIRED",
+      "description": "CI enforcement mode for the sandbox runtime test suite. When set to \"1\", the bash-sandbox.runtime.test.ts suite fails (instead of silently skipping) if no sandbox backend (sandbox-exec or bwrap) is available on the current platform. Set this on Linux CI runners that install bubblewrap so a broken or uninstalled bwrap cannot cause enforcement tests to vanish. Has no effect on Windows (sandbox-exec/bwrap are POSIX-only). Unset (default): runtime tests skip gracefully when no backend is present.",
+      "type": "string",
+      "required": false,
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_SDK_SURFACE_WARN",
       "description": "Controls the one-time warning emitted when an SDK session (AgentSession / query() / queryText()) discovers skills but has no skillExecutor wired, meaning the model cannot invoke them. Set to 0 to silence the warning (useful when the reduced surface is intentional).",
       "type": "string",
@@ -1162,6 +1179,14 @@
       "required": false,
       "default": "1000",
       "category": "debug"
+    },
+    {
+      "name": "AFK_SESSION_PICKER",
+      "description": "Set to 1 to enable the startup session picker. Default: disabled. When enabled, shows when more than one resumable session exists and stdin is a TTY.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "misc"
     },
     {
       "name": "AFK_SESSION_RETENTION_DISABLE",

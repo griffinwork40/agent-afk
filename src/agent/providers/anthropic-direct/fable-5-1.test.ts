@@ -45,8 +45,9 @@ describe('Fable 5.1 model-slot constant', () => {
     expect(CLAUDE_FABLE_5_1_ID).toBe(ID);
   });
 
-  it('DIRECT_MODEL_ALIASES fable → claude-fable-5-1', () => {
-    expect(DIRECT_MODEL_ALIASES['fable']).toBe(ID);
+  it('DIRECT_MODEL_ALIASES fable → claude-fable-5-2 (alias bumped to 5.2)', () => {
+    // The `fable` alias now tracks claude-fable-5-2; 5.1 is reachable by raw wire id.
+    expect(DIRECT_MODEL_ALIASES['fable']).toBe('claude-fable-5-2');
   });
 
   it('DIRECT_MODEL_ALIASES does NOT include a fable-5-1 key (raw id passes through)', () => {

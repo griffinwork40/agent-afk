@@ -35,7 +35,7 @@ export function getPauseLockPath(): string {
 // Lock file schema — written by writePauseLock for display/debugging only
 // ---------------------------------------------------------------------------
 
-interface PauseLockData {
+export interface PauseLockData {
   pid: number;
   timestamp: string;
 }
@@ -66,6 +66,10 @@ export class PauseController {
   private _paused = false;
   private _pollInterval: ReturnType<typeof setInterval> | null = null;
   private _watchPath: string;
+  /** Monotonic timestamp when the current pause started (set in _handlePause). */
+  private _pauseStartedAt: number | undefined;
+  /** Duration (ms) of the last completed pause, consumed once by {@link consumeLastPauseDuration}. */
+  private _lastPauseDurationMs: number | undefined;
 
   // -------------------------------------------------------------------------
   // Constructor / dispose
@@ -95,6 +99,18 @@ export class PauseController {
   /** Synchronous paused-state check. */
   isPaused(): boolean {
     return this._paused;
+  }
+
+  /**
+   * One-shot getter: returns the duration (ms) of the last completed pause and
+   * clears it so subsequent calls return `undefined` until a new pause cycle
+   * completes. Used by the REPL turn runner and round-boundary hooks to inject
+   * a context note.
+   */
+  consumeLastPauseDuration(): number | undefined {
+    const d = this._lastPauseDurationMs;
+    this._lastPauseDurationMs = undefined;
+    return d;
   }
 
   /**
@@ -133,6 +149,7 @@ export class PauseController {
   private _handlePause(): void {
     if (this._paused) return;
     this._paused = true;
+    this._pauseStartedAt = Date.now();
     // _resumeResolve is populated lazily in check() via the resumeListeners set;
     // nothing to arm here — callers register themselves when they call check().
   }
@@ -140,6 +157,11 @@ export class PauseController {
   private _handleResume(): void {
     if (!this._paused) return;
     this._paused = false;
+    // Record the pause duration so the REPL can inject a context note.
+    if (this._pauseStartedAt !== undefined) {
+      this._lastPauseDurationMs = Date.now() - this._pauseStartedAt;
+      this._pauseStartedAt = undefined;
+    }
     // Drain the listener set so all pending check() callers unblock.
     for (const fn of resumeListeners) fn();
     resumeListeners.clear();
@@ -193,6 +215,30 @@ function abortError(signal: AbortSignal): Error {
   );
   err.name = 'AbortError';
   return err;
+}
+
+// ---------------------------------------------------------------------------
+// Pause-note formatter — shared between turn-start and round-boundary sites
+// ---------------------------------------------------------------------------
+
+/**
+ * Format a human-readable resume context note from a pause duration in ms.
+ *
+ * Returns `undefined` when the duration is below 60 s (noise threshold).
+ * Callers prepend this to the message text so the model can correctly
+ * attribute subagent failures to the pause rather than provider throttling.
+ *
+ * Used by:
+ *  1. `loop-iteration.turn-run.ts` — injected at the top of each top-level turn
+ *  2. `inter-round.ts` / `turn-driver.ts` — injected at every round boundary
+ *     so a mid-turn pause reaches the model at the NEXT round, not the next turn.
+ */
+export function formatPauseNote(pauseMs: number): string | undefined {
+  if (pauseMs <= 60_000) return undefined;
+  const h = Math.floor(pauseMs / 3_600_000);
+  const m = Math.floor((pauseMs % 3_600_000) / 60_000);
+  const dur = h > 0 ? `${h}h ${m}m` : `${m}m`;
+  return `[Session resumed after ${dur} pause. Subagent failures during this window are from the pause, not provider throttling.]`;
 }
 
 // ---------------------------------------------------------------------------

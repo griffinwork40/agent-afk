@@ -179,8 +179,8 @@ export class ThinkingLane {
    * conflated with thinking time. Used by the summary-mode progress
    * banner to show a live `◦ thinking · Xs` indicator.
    */
-  activeThinkingElapsedMs(): number | null {
+  activeThinkingElapsedMs(now: number = Date.now()): number | null {
     if (!this.startedAt || this.endedAt !== null || this.hasEmitted) return null;
-    return Math.max(0, Date.now() - this.startedAt);
+    return Math.max(0, now - this.startedAt);
   }
 }

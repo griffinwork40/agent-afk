@@ -112,6 +112,8 @@ export const MODEL_PRICING: ReadonlyMap<string, ModelPricing> = new Map<string, 
   // base and write rates as Fable 5 but drops cache reads to 0.025x ($0.25/MTok).
   ['claude-fable-5', { inputPerMTok: 10.0, outputPerMTok: 50.0, cacheWrite5mPerMTok: 12.50, cacheWrite1hPerMTok: 20.0, cacheReadPerMTok: 1.0 }],
   ['claude-fable-5-1', { inputPerMTok: 10.0, outputPerMTok: 50.0, cacheWrite5mPerMTok: 12.50, cacheWrite1hPerMTok: 20.0, cacheReadPerMTok: 0.25 }],
+  // Claude Fable 5.2: $8 input / $40 output per MTok; pricing dropped from 5.1.
+  ['claude-fable-5-2', { inputPerMTok: 8.0, outputPerMTok: 40.0, cacheWrite5mPerMTok: 10.0, cacheWrite1hPerMTok: 16.0, cacheReadPerMTok: 0.20 }],
   // Opus 4.6/4.7/4.8 share Opus 5's $5 / $25 rates.
   ['claude-opus-4-8', { inputPerMTok: 5.0, outputPerMTok: 25.0, cacheWrite5mPerMTok: 6.25, cacheWrite1hPerMTok: 10.0, cacheReadPerMTok: 0.50 }],
   ['claude-opus-4-7', { inputPerMTok: 5.0, outputPerMTok: 25.0, cacheWrite5mPerMTok: 6.25, cacheWrite1hPerMTok: 10.0, cacheReadPerMTok: 0.50 }],

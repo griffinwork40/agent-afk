@@ -225,8 +225,17 @@ export function buildComposeTool(parentModel?: AgentModelInput): AnthropicToolDe
  *
  * Returns an empty string when the registry is absent or empty (no block is
  * injected).  Otherwise returns a multi-line string listing every registered
- * agent with its budget / model metadata and a one-line description, suitable
- * for appending to (or including in) the system-prompt manifest section.
+ * agent with its budget / model metadata and a one-line description, wrapped
+ * in `<available-agent-types>` XML delimiters so the model (and any downstream
+ * parser) can unambiguously identify the block as data rather than narrative
+ * text (#4220 item 4).  Agent descriptions come from repo-controlled files and
+ * plugins; `oneLine()` collapses whitespace and caps at 160 chars, but
+ * wrapping in a named tag additionally marks the content as structured data,
+ * reducing the risk of tag-like content in descriptions being interpreted as
+ * model instructions.
+ *
+ * The returned string always starts with `<available-agent-types>` (not `A`)
+ * when the registry is non-empty.  Use the XML open tag as the prefix signal.
  *
  * This is the counterpart to {@link buildAgentToolDef}: the tool description
  * stays static, while this block carries the session-specific listing into the
@@ -245,8 +254,10 @@ export function buildAgentTypeListing(registry: AgentRegistry | undefined): stri
   });
 
   return (
+    '<available-agent-types>\n' +
     'Available agent types (pass via `agent_type`):\n' +
     lines.join('\n') +
-    '\nWhen `agent_type` is omitted, a general child agent with the default tool surface is dispatched.'
+    '\nWhen `agent_type` is omitted, a general child agent with the default tool surface is dispatched.' +
+    '\n</available-agent-types>'
   );
 }

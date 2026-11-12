@@ -1,6 +1,7 @@
 import { env } from '../../config/env.js';
 import { resolveUnattendedLimits } from '../../agent/unattended-limits.js';
 import { getApiKeyForModel, getDefaultSubagentModel, parseProvider } from '../shared-helpers.js';
+import { credentialSourceId } from '../auth-wizard.describe-source.js';
 import type { AgentConfig, AgentModelInput } from '../../agent/types.js';
 import { AgentSession } from '../../agent/session.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
@@ -181,6 +182,7 @@ export function buildDaemonSessionFactory(
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.
       surface: 'daemon',
+      credentialSource: credentialSourceId() ?? undefined,
       ...unattendedLimits,
     }), undefined, undefined, memoryStore))), ownedTraceWriter);
     bound = session;

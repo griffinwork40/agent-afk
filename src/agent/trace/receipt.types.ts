@@ -12,6 +12,7 @@ import type { CostTokens, SessionCostSource } from './cost.js';
 import type { JournalSummary } from './receipt.journal.js';
 import type { OutcomesV1 } from '../outcomes/outcomes-v1.schema.js';
 import type { ClosureReason, ToolFailureClass, TraceEventKind } from './types.js';
+import type { SubagentsByModel } from './receipt.subagents-by-model.js';
 
 export const RECEIPT_SCHEMA_VERSION = 3 as const;
 
@@ -91,6 +92,28 @@ export interface RunReceipt {
     succeeded: number;
     failed: number;
     cancelled: number;
+    /**
+     * Per-model rollup of subagent lifecycle transitions and cost.
+     *
+     * Keys are resolved wire model ids (e.g. `"claude-sonnet-4-6"`) when the
+     * trace carries `session_init_start` provenance events, the requested name
+     * when it does not, or `"<requested> (mixed)"` when one requested name
+     * resolved to more than one concrete id within this trace. When a subagent
+     * was re-run via model fallback, its cost and outcome are attributed to the
+     * model that actually ran (`toModel`), not the rejected first attempt.
+     * The special key `"(unknown)"` collects subagents whose `started` payload
+     * carried no model field; this ensures `sum(byModel[*].started)` always
+     * equals `subagents.started`.
+     *
+     * Cost invariant: `sum(byModel[*].costUsd) <= cost.subagentCostUsd`.
+     * Equality holds on single-cycle traces. On multi-cycle REPL traces,
+     * earlier root cycles lack a `subagentId` on their closure and are
+     * attributed to `subagentCostUsd` by `SessionCostAccumulator`, so
+     * `subagentCostUsd` can exceed the `byModel` sum.
+     *
+     * Absent when the session started no subagents.
+     */
+    byModel?: SubagentsByModel;
   };
   // Contract (#3879): `finalCostUsd` and `tokens` are ROOT-scoped and kept
   // for back-compat: `finalCostUsd` is the seal's root cost (last lifecycle

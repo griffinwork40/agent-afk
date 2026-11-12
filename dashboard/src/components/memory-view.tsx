@@ -14,14 +14,16 @@ const CATEGORY_LABELS: Record<string, string> = {
   learning: 'Learning',
 };
 
-function TypeBadge({ type }: { type: 'fact' | 'procedure' }) {
+function TypeBadge({ type }: { type: 'fact' | 'procedure' | 'session' }) {
   return (
     <span
       className={cn(
         'inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium',
         type === 'fact'
           ? 'bg-blue-500/15 text-blue-400'
-          : 'bg-violet-500/15 text-violet-400',
+          : type === 'session'
+            ? 'bg-emerald-500/15 text-emerald-400'
+            : 'bg-violet-500/15 text-violet-400',
       )}
     >
       {type}

@@ -99,24 +99,6 @@ describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', 
       expect(result.decision).toEqual({ decision: 'approve' });
     });
 
-    it('forwards a real command-hook ruleId through registry and session trace', async () => {
-      const registry = createHookRegistry();
-      registry.register('SessionStart', async context => {
-        const result = await executeCommand(makeOpts('echo \'{"decision":"block","ruleId":"command.e2e"}\'', context));
-        return result.decision;
-      });
-      const writer = new InMemoryTraceWriter();
-      await expect(dispatchSessionStart(registry, { event: 'SessionStart' }, { traceWriter: writer }))
-        .rejects.toMatchObject({ ruleId: 'command.e2e' });
-      expect(writer.events).toHaveLength(1);
-      expect(writer.events[0]).toMatchObject({ kind: 'hook_decision', payload: { decision: 'block', ruleId: 'command.e2e' } });
-    });
-
-    it('preserves ruleId on exit 2 without changing stderr block semantics', async () => {
-      const result = await executeCommand(makeOpts('echo \'{"decision":"approve","ruleId":"command.exit-block"}\'; echo denied >&2; exit 2'));
-      expect(result.decision).toEqual({ decision: 'block', reason: 'denied', ruleId: 'command.exit-block' });
-    });
-
     it('hookSpecificOutput.additionalContext → injectContext', async () => {
       const result = await executeCommand(
         makeOpts(
@@ -216,6 +198,30 @@ describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', 
       );
       expect(result.decision.decision).toBe('block');
       expect((result.decision.reason?.length ?? 0) <= 500).toBe(true);
+    });
+
+    it('preserves ruleId on exit 2 without changing stderr block semantics', async () => {
+      const result = await executeCommand(makeOpts('echo \'{"decision":"approve","ruleId":"command.exit-block"}\'; echo denied >&2; exit 2'));
+      expect(result.decision).toEqual({ decision: 'block', reason: 'denied', ruleId: 'command.exit-block' });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // E2E — registry wiring
+  // ---------------------------------------------------------------------------
+
+  describe('e2e — registry wiring', () => {
+    it('forwards a real command-hook ruleId through registry and session trace', async () => {
+      const registry = createHookRegistry();
+      registry.register('SessionStart', async context => {
+        const result = await executeCommand(makeOpts('echo \'{"decision":"block","ruleId":"command.e2e"}\'', context));
+        return result.decision;
+      });
+      const writer = new InMemoryTraceWriter();
+      await expect(dispatchSessionStart(registry, { event: 'SessionStart' }, { traceWriter: writer }))
+        .rejects.toMatchObject({ ruleId: 'command.e2e' });
+      expect(writer.events).toHaveLength(1);
+      expect(writer.events[0]).toMatchObject({ kind: 'hook_decision', payload: { decision: 'block', ruleId: 'command.e2e' } });
     });
   });
 
@@ -1224,6 +1230,180 @@ fi
       // CLAUDE_PLUGIN_DATA IS still injected (pluginKey alone is sufficient for data dir).
       // The shell guard above only checks PROVIDER is absent — that is the correct assertion.
       expect(result.decision).toBeTruthy();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // model field in stdin payload (issue #4745)
+  // ---------------------------------------------------------------------------
+
+  describe('model field in stdin payload (#4745)', () => {
+    it('model appears in stdin JSON when opts.model is set', async () => {
+      const scriptPath = join(tmp, 'check-model.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"model":"claude-sonnet-4-6"'*) echo '{"decision":"approve"}' ;;
+  *) echo "missing or wrong model in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        ...makeOpts(scriptPath, { event: 'PreToolUse', toolName: 'bash', input: {} }),
+        model: 'claude-sonnet-4-6',
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('model key is omitted from stdin when opts.model is undefined', async () => {
+      const scriptPath = join(tmp, 'check-no-model.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"model"'*) echo "unexpected model key in: $payload" >&2; exit 2 ;;
+  *) echo '{"decision":"approve"}' ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand(
+        makeOpts(scriptPath, { event: 'PreToolUse', toolName: 'bash', input: {} }),
+      );
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('per-event context model on UserPromptSubmit takes precedence over opts.model', async () => {
+      const scriptPath = join(tmp, 'check-ctx-model.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"model":"claude-haiku-5-5"'*) echo '{"decision":"approve"}' ;;
+  *) echo "wrong model in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const ctx: HookContext = {
+        event: 'UserPromptSubmit',
+        prompt: 'hello',
+        model: 'claude-haiku-5-5',
+      };
+      const result = await executeCommand({
+        ...makeOpts(scriptPath, ctx),
+        model: 'claude-sonnet-4-6',
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('per-event context model on SessionStart takes precedence over opts.model', async () => {
+      const scriptPath = join(tmp, 'check-ctx-model-ss.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"model":"claude-opus-5-5"'*) echo '{"decision":"approve"}' ;;
+  *) echo "wrong model in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const ctx: HookContext = {
+        event: 'SessionStart',
+        model: 'claude-opus-5-5',
+      };
+      const result = await executeCommand({
+        ...makeOpts(scriptPath, ctx),
+        model: 'claude-sonnet-4-6',
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // AFK_HOOK_MODEL env var (issue #4745)
+  // ---------------------------------------------------------------------------
+
+  describe('AFK_HOOK_MODEL env var (#4745)', () => {
+    it('AFK_HOOK_MODEL is set to opts.model for a non-context-model event', async () => {
+      const scriptPath = join(tmp, 'check-hook-model.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+if [ "$AFK_HOOK_MODEL" = "claude-sonnet-4-6" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "wrong AFK_HOOK_MODEL: $AFK_HOOK_MODEL" >&2
+  exit 2
+fi
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        ...makeOpts(scriptPath, { event: 'PreToolUse', toolName: 'bash', input: {} }),
+        model: 'claude-sonnet-4-6',
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('AFK_HOOK_MODEL is empty string when model is unknown', async () => {
+      const scriptPath = join(tmp, 'check-hook-model-empty.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+if [ -z "$AFK_HOOK_MODEL" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "expected empty AFK_HOOK_MODEL, got: $AFK_HOOK_MODEL" >&2
+  exit 2
+fi
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand(
+        makeOpts(scriptPath, { event: 'PreToolUse', toolName: 'bash', input: {} }),
+      );
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('per-event context model on UserPromptSubmit takes precedence over opts.model in AFK_HOOK_MODEL', async () => {
+      const scriptPath = join(tmp, 'check-hook-model-ctx.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+if [ "$AFK_HOOK_MODEL" = "claude-haiku-5-5" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "wrong AFK_HOOK_MODEL: $AFK_HOOK_MODEL" >&2
+  exit 2
+fi
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const ctx: HookContext = {
+        event: 'UserPromptSubmit',
+        prompt: 'hello',
+        model: 'claude-haiku-5-5',
+      };
+      const result = await executeCommand({
+        ...makeOpts(scriptPath, ctx),
+        model: 'claude-sonnet-4-6',
+      });
+      expect(result.decision.decision).toBe('approve');
     });
   });
 }); // end describe.skipIf(win32)

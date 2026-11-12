@@ -66,10 +66,22 @@ export function buildEpisodeFromFacet(sessionId: string): EpisodeRecord | null {
 
     return {
       sessionId,
+      // source: read from the facet's first-class surface field (#4645).
+      // Pre-v14 cached facets lack surface; fall back to facet.source so
+      // episodes written from old cached facets still carry surface info.
+      // 'unknown' is excluded because it is not a valid EpisodeSource value
+      // (the episode schema's surface enum does not include it), so we omit
+      // the field rather than writing a value that would fail schema validation
+      // on the reader side.
+      ...(facet.surface !== undefined
+        ? { source: facet.surface }
+        : facet.source !== 'unknown'
+          ? { source: facet.source }
+          : {}),
       goal,
       approach,
       pivots: [],
-      decisions: facet.decisions.slice(0, 4),
+      decisions: facet.decisions,
       outcome,
       openQuestions: [],
       filesKey: facet.evidence_pointers.slice(0, 5),

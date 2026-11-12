@@ -35,6 +35,7 @@ import type { TraceSink } from '../trace/index.js';
 import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.js';
 import type { ToolActivityReporter } from '../providers/shared/tool-activity.js';
 import type { RepeatFailureGuard } from './repeat-failure-guard.js';
+import type { ToolCallLedgerWiring } from './dispatcher.ledger.js';
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { ConcurrencyClassifier } from './types.js';
 import type { ToolHealthMonitor } from './tool-health-monitor.js';
@@ -65,6 +66,8 @@ export interface ExecuteBatchDeps {
   resetDenialBreaker: () => void;
   /** Repeat-failure guard threaded into batch deps. */
   repeatFailureGuard: RepeatFailureGuard;
+  /** Session-scoped tool-call ledger (#4476); observe-only. */
+  toolCallLedger: ToolCallLedgerWiring;
   /** Repeat-breaker exempt tools set. */
   repeatBreakerExemptTools: ReadonlySet<string>;
   /** Core execution path per tool. */
@@ -135,6 +138,9 @@ export async function executeBatchImpl(
 ): Promise<ToolResult[]> {
   if (calls.length === 0) return [];
   if (calls.length === 1) return [await deps.execute(calls[0]!)];
+  // Multi-call round: advance the ledger's tool round once for the whole batch
+  // (the length-1 path above advances it inside execute()) (#4476).
+  deps.toolCallLedger.beginRound();
 
   const results: ToolResult[] = new Array(calls.length);
   const blocked = new Set<number>();
@@ -271,6 +277,7 @@ export async function executeBatchImpl(
   // call[0] is fresh. Both helpers perform per-call abort checks.
   const batchDeps: BatchExecDeps = {
     repeatFailureGuard: deps.repeatFailureGuard,
+    toolCallLedger: deps.toolCallLedger,
     repeatBreakerExemptTools: deps.repeatBreakerExemptTools,
     executeCore: (call) => deps.executeCore(call),
     subagentExecutor: deps.subagentExecutor,

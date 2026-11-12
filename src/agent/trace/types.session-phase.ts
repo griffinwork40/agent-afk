@@ -411,4 +411,14 @@ export interface SessionPhasePayload {
    * other phase kinds. (#3808)
    */
   afkVersion?: string;
+  /**
+   * Stable credential/auth source id. Set ONLY on `session_init_start` —
+   * the always-emitted attribution anchor — so a trace names its auth tier
+   * even without consulting the sidecar. Absent on older traces, subagent
+   * sessions, and all other phase kinds.
+   * Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' |
+   *   'claude-code-keychain' | 'claude-code-session-refresh'
+   * OpenAI: 'chatgpt-oauth' | 'config' | 'env' | 'codex-cli' | etc.
+   */
+  credentialSource?: string;
 }
