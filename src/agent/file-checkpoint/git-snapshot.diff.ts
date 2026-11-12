@@ -12,6 +12,14 @@ import type { DiffOptions, DiffResult, SkippedChange, TreeChange } from './git-s
 
 export interface RawEntry { oldMode: string; newMode: string; oldSha: string; status: string; gitPath: string }
 
+/** Format a byte count as a human-readable size string (e.g. `512 MiB`, `64 MiB`, `1 KiB`). */
+export function formatBlobBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${Math.round(bytes / (1024 * 1024 * 1024))} GiB`;
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MiB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
+  return `${bytes} B`;
+}
+
 const REGULAR = new Set(['100644', '100755']);
 const ABSENT = '000000';
 
@@ -167,12 +175,12 @@ async function fetchPriors(
     const size = sizes[i] ?? 0;
     const target = changes[w.index];
     if (size > maxBlobBytes) {
-      if (target) skipped.push({ absPath: target.absPath, reason: `prior content larger than ${maxBlobBytes} bytes` });
+      if (target) skipped.push({ absPath: target.absPath, reason: `prior content larger than ${formatBlobBytes(maxBlobBytes)}` });
       changes[w.index] = null;
       return false;
     }
     if (aggregateBytes + size > maxAggregateBlobBytes) {
-      if (target) skipped.push({ absPath: target.absPath, reason: `prior content skipped: aggregate blob limit of ${maxAggregateBlobBytes} bytes reached` });
+      if (target) skipped.push({ absPath: target.absPath, reason: `prior content skipped: aggregate blob limit of ${formatBlobBytes(maxAggregateBlobBytes)} reached` });
       changes[w.index] = null;
       return false;
     }
