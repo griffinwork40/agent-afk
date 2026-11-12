@@ -367,7 +367,7 @@ describe('scoreEpisode', () => {
       created_at: fortyFiveDaysAgo,
     });
     const score = scoreEpisode(fact, new Set(), 'feat/my-branch', new Set());
-    expect(score).toBeCloseTo(1.5, 2);
+    expect(score).toBeCloseTo(1.5, 5);
   });
 
   it('explicit now parameter produces deterministic score independent of wall-clock time', () => {

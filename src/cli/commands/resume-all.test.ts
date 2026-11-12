@@ -65,14 +65,14 @@ describe('registerResumeAllCommand', () => {
   });
 
   it('calls removePauseLock', () => {
-    vi.mocked(readFileSync).mockImplementation(() => { throw new Error('ENOENT'); });
+    vi.mocked(readFileSync).mockImplementation(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); });
     const program = makeProgram();
     runResume(program);
     expect(removePauseLock).toHaveBeenCalledOnce();
   });
 
   it('outputs the resumed message', () => {
-    vi.mocked(readFileSync).mockImplementation(() => { throw new Error('ENOENT'); });
+    vi.mocked(readFileSync).mockImplementation(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); });
     const program = makeProgram();
     runResume(program);
     const output = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
@@ -104,5 +104,29 @@ describe('registerResumeAllCommand', () => {
     runResume(program);
     const output = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
     expect(output).not.toContain('paused for');
+  });
+
+  it('omits pause duration when timestamp is in the future (elapsed <= 0 branch)', () => {
+    // A clock-skew or malformed timestamp that is in the future produces
+    // elapsed <= 0, so the production code skips the pause-duration suffix.
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour from now
+    vi.mocked(readFileSync).mockReturnValue(JSON.stringify({ pid: 1234, timestamp: future }));
+    const program = makeProgram();
+    runResume(program);
+    const output = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(output).not.toContain('paused for');
+    expect(output).toContain('AFK resumed.');
+  });
+
+  it('omits pause duration when lock file contains unparseable JSON', () => {
+    // The catch branch in resume-all.ts swallows JSON.parse errors; the command
+    // must still succeed and not expose the parse failure to the user.
+    vi.mocked(readFileSync).mockReturnValue('{ not valid json }');
+    const program = makeProgram();
+    runResume(program);
+    const output = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(output).not.toContain('paused for');
+    expect(output).toContain('AFK resumed.');
+    expect(removePauseLock).toHaveBeenCalledOnce();
   });
 });

@@ -370,6 +370,18 @@ describe('ingestEpisodes', () => {
     expect(() => ingestEpisodes(dir, storeDir)).toThrow(/SQLITE_NOTADB|not a database/i);
   });
 
+  it('propagates a readonly Database constructor error without a secondary TypeError', () => {
+    // Place a corrupt (non-SQLite) file at memory.db so that
+    // `new Database(memoryDbPath, { readonly: true })` throws SqliteError(SQLITE_NOTADB).
+    // At that point `store` (QEpisodesStore) is already constructed and open,
+    // while `memDb` has not been assigned. The finally block must call
+    // `store?.close()` without producing a secondary TypeError.
+    memDb.close();
+    // Write corrupt content to the memory.db so the readonly open fails.
+    writeFileSync(join(dir, 'memory.db'), 'this is not sqlite');
+    expect(() => ingestEpisodes(dir, dir)).toThrow(/SQLITE_NOTADB|not a database/i);
+  });
+
   it('watermark filter uses created_at >= ? — row at exact watermark is re-fetched but deduplicated', () => {
     // Insert two facts with distinct created_at values.
     const ts1 = '2026-03-01T00:00:00.000Z';
