@@ -225,4 +225,16 @@ describe('buildEpisodeFromFacet', () => {
     expect(epC?.source).toBe('cli');
     expect(epC?.source).not.toBe('unknown');
   });
+
+  it('surface field: omits source when surface is "unknown" (defensive guard)', async () => {
+    // The schema prevents surface='unknown' at parse time, but guard it
+    // defensively so a corrupt/hand-crafted facet cannot forward 'unknown' as
+    // the episode source (facet-bridge.ts:76 guard added in #4823).
+    vi.doMock('../facets/store.js', () => ({
+      getOrDeriveFacet: () => makeFacet({ facet_version: 14, surface: 'unknown' as never, source: 'cli' }),
+    }));
+    const { buildEpisodeFromFacet } = await import('./facet-bridge.js');
+    const ep = buildEpisodeFromFacet('test-session-abc');
+    expect(ep?.source).not.toBe('unknown');
+  });
 });

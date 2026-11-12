@@ -75,7 +75,7 @@ describe('registerResumeAllCommand', () => {
     vi.mocked(readFileSync).mockImplementation(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); });
     const program = makeProgram();
     runResume(program);
-    const output = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    const output = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
     expect(output).toContain('AFK resumed.');
   });
 
@@ -86,7 +86,7 @@ describe('registerResumeAllCommand', () => {
     );
     const program = makeProgram();
     runResume(program);
-    const output = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    const output = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
     expect(output).toMatch(/paused for/);
   });
 
@@ -94,7 +94,7 @@ describe('registerResumeAllCommand', () => {
     vi.mocked(readFileSync).mockImplementation(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); });
     const program = makeProgram();
     runResume(program);
-    const output = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    const output = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
     expect(output).not.toContain('paused for');
   });
 
@@ -102,7 +102,7 @@ describe('registerResumeAllCommand', () => {
     vi.mocked(readFileSync).mockReturnValue(JSON.stringify({ pid: 1234 }));
     const program = makeProgram();
     runResume(program);
-    const output = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    const output = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
     expect(output).not.toContain('paused for');
   });
 

@@ -58,8 +58,10 @@ describe('readTraceSafe — U+FFFD guard at multi-byte boundary', () => {
     const tracePath = await writeTrace('utf8-2byte', buf);
     const { content, truncated } = await readTraceSafe(tracePath);
 
+    // 21 = bytes consumed by the prefix up to and including the realignment newline
+    const PREFIX_BYTES = 21;
     expect(truncated).toBe(true);
-    expect(content).toBe('a'.repeat(totalSize - 1 - 21));
+    expect(content).toBe('a'.repeat(totalSize - 1 - PREFIX_BYTES));
   });
 
   it('strips trailing U+FFFD when an over-cap file ends with a torn 3-byte sequence', async () => {
@@ -77,8 +79,10 @@ describe('readTraceSafe — U+FFFD guard at multi-byte boundary', () => {
     const tracePath = await writeTrace('utf8-3byte', buf);
     const { content, truncated } = await readTraceSafe(tracePath);
 
+    // 21 = bytes consumed by the prefix up to and including the realignment newline
+    const PREFIX_BYTES = 21;
     expect(truncated).toBe(true);
-    expect(content).toBe('a'.repeat(totalSize - 4 - 21) + '\u00e9');
+    expect(content).toBe('a'.repeat(totalSize - 4 - PREFIX_BYTES) + '\u00e9');
   });
 
   it('drops a codepoint split at the window START via newline realignment', async () => {
