@@ -15,6 +15,7 @@ class Registry extends EventEmitter {
     return [{
       jobId: 'job', subagentId: 'sub', label: 'BACKGROUND', model: 'test',
       status: 'running', startedAt: Date.now(), result: undefined, endedAt: undefined,
+      provenance: 'model',
     }];
   }
 }
