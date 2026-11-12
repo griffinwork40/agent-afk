@@ -622,6 +622,20 @@ describe('session-registry bridge — storedToHandle / bindingsForStored', () =>
       expect(raw['endedAt'] as number).toBeLessThanOrEqual(after);
     });
 
+    it('saveSession writes endedAt ahead of turns, inside a 1 KiB head read', () => {
+      // The REPL startup recall decides sealed-ness from the first 1024 bytes
+      // of the sidecar (interactive/startup-recall.ts). A long first turn must
+      // not be able to push `endedAt` out of that window.
+      const stats = createSessionStats('sonnet');
+      recordTurn(stats, 'x'.repeat(5000), 'y'.repeat(5000), { sessionId: 'end-head' });
+      const p = saveSession(stats, 'end-head-test', { closeTime: true });
+      const text = readFileSync(p, 'utf-8');
+      const endedAtOffset = Buffer.byteLength(text.slice(0, text.indexOf('"endedAt"')));
+      expect(text.indexOf('"endedAt"')).toBeGreaterThan(-1);
+      expect(text.indexOf('"endedAt"')).toBeLessThan(text.indexOf('"turns"'));
+      expect(endedAtOffset + '"endedAt": 1793645244179'.length).toBeLessThan(1024);
+    });
+
     it('saveSession writes exitReason alongside endedAt when provided', () => {
       const stats = createSessionStats('sonnet');
       recordTurn(stats, 'a', 'b', { sessionId: 'exit-reason' });
