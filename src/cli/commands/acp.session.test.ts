@@ -166,4 +166,19 @@ describe('closeAcpSession', () => {
     expect(memoryCloseSpy).toHaveBeenCalledOnce();
     expect(stateCloseSpy).toHaveBeenCalledOnce();
   });
+
+  it('still closes stores when session.close() throws', async () => {
+    // The finally block in closeAcpSession must close memoryStore and stateStore
+    // even when session.close() rejects — resource-leak guard.
+    const handle = await buildAcpSession({ model: 'sonnet', maxTurns: 10 });
+    const sessionError = new Error('session close failed');
+    vi.spyOn(handle.session, 'close').mockRejectedValue(sessionError);
+    const memoryCloseSpy = vi.spyOn(handle.memoryStore, 'close');
+    const stateCloseSpy = vi.spyOn(handle.stateStore, 'close');
+
+    await expect(closeAcpSession(handle)).rejects.toThrow('session close failed');
+
+    expect(memoryCloseSpy).toHaveBeenCalledOnce();
+    expect(stateCloseSpy).toHaveBeenCalledOnce();
+  });
 });
