@@ -83,8 +83,8 @@ export function parseCommits(repoRoot: string): CommitEntry[] {
  *   slash-command output for human-facing changelogs.
  *
  *   CI (scripts/generate-changelog.mjs) sets this to true so repeated runs
- *   skip already-written commits. The /changelog slash command leaves it
- *   false to preserve historical bullet format.
+ *   skip already-written commits. Plain bullets (includeHash: false) are the
+ *   default for human-facing changelogs.
  */
 export function formatEntries(
   commits: CommitEntry[],
@@ -133,8 +133,7 @@ function parseExistingHashes(unreleasedBlock: string): Set<string> {
  * Merge `newEntries` into `existing` [Unreleased] content, deduplicating by
  * trailing commit hash.
  *
- * Shared by `updateChangelog` and `updateAndStampChangelog` — both functions
- * previously contained an identical copy of this logic. All behaviour (regex,
+ * Used exclusively by `updateAndStampChangelog`. All behaviour (regex,
  * join, trim, combined fallback) is preserved exactly.
  *
  * @returns The merged block string (may be empty when both inputs are empty).
@@ -157,7 +156,7 @@ function assembleUnreleasedBlock(existing: string, newEntries: string): string {
 }
 
 /**
- * Apply updateChangelog and stampRelease transformations in memory,
+ * Apply update and stampRelease transformations in memory,
  * then perform a single write.
  *
  * Use this in CI (generate-changelog.mjs) to avoid the partial-state window
@@ -175,7 +174,7 @@ export function updateAndStampChangelog(
   const changelogPath = resolve(repoRoot, 'CHANGELOG.md');
   const changelog = readFileSync(changelogPath, 'utf8');
 
-  // Step 1: apply updateChangelog logic in memory
+  // Step 1: merge new entries into existing [Unreleased] block
   const existing = getExistingUnreleased(changelog);
   const combined = assembleUnreleasedBlock(existing, newEntries);
 
@@ -194,34 +193,8 @@ export function updateAndStampChangelog(
     `## [Unreleased]\n\n## [${version}] - ${date}`,
   );
 
-  // Single write — combines updateChangelog + stampRelease into one I/O call
+  // Single write — combines the update + stamp steps into one I/O call
   // to shrink the interruption window. Not POSIX-atomic; see JSDoc above.
-  writeFileSync(changelogPath, updated);
-}
-
-/**
- * Prepend new entries into the [Unreleased] section, skipping any commits
- * whose short hash already appears in the existing block (dedup guard).
- *
- * No production callers since the /changelog slash command was removed;
- * scripts/generate-changelog.mjs uses updateAndStampChangelog instead.
- * Retained (and covered by src/changelog.test.ts) as the update-only variant.
- */
-export function updateChangelog(repoRoot: string, newEntries: string): void {
-  const changelogPath = resolve(repoRoot, 'CHANGELOG.md');
-  const changelog = readFileSync(changelogPath, 'utf8');
-  const existing = getExistingUnreleased(changelog);
-  const combined = assembleUnreleasedBlock(existing, newEntries);
-
-  const updated = changelog.replace(
-    /## \[Unreleased\][^\n]*\n[\s\S]*?(?=\n## \[|$)/,
-    `## [Unreleased]\n\n${combined}\n`,
-  );
-
-  if (updated === changelog) {
-    throw new Error('No ## [Unreleased] section found');
-  }
-
   writeFileSync(changelogPath, updated);
 }
 

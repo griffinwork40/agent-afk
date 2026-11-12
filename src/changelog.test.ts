@@ -9,7 +9,6 @@ import {
   getExistingUnreleased,
   parseCommits,
   stampRelease,
-  updateChangelog,
   updateAndStampChangelog,
   type CommitEntry,
 } from './changelog.js';
@@ -89,48 +88,6 @@ describe('formatEntries', () => {
   it('returns empty string for empty commit list', () => {
     expect(formatEntries([])).toBe('');
     expect(formatEntries([], { includeHash: true })).toBe('');
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Slash-command write path — end-to-end regression guard (PR #145, H-1/H-3)
-// ─────────────────────────────────────────────────────────────────────────────
-describe('slash-command write path (formatEntries → updateChangelog)', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'slash-write-'));
-  });
-
-  afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('writes plain bullets (no hash suffix) into CHANGELOG.md — matches pre-refactor behavior', () => {
-    // This is the integration test the H-3 review finding asked for: it
-    // exercises the exact composition the /changelog command performs and
-    // pins the on-disk bullet format. Catches future refactors that flip
-    // the default of formatEntries back to includeHash: true.
-    writeFileSync(join(tmpDir, 'CHANGELOG.md'), INITIAL_CHANGELOG);
-
-    const commits: CommitEntry[] = [
-      { hash: 'abc1234', subject: 'add new feature', category: 'Added' },
-      { hash: 'def5678', subject: 'resolve crash', category: 'Fixed' },
-    ];
-
-    // Reproduce the slash command's exact call shape.
-    const formatted = formatEntries(commits);
-    updateChangelog(tmpDir, formatted);
-
-    const onDisk = readFileSync(join(tmpDir, 'CHANGELOG.md'), 'utf8');
-    expect(onDisk).toContain('- add new feature');
-    expect(onDisk).toContain('- resolve crash');
-
-    // The on-disk [Unreleased] block must not contain any parenthesized
-    // 7+ hex-digit hashes — those are reserved for the CI write path.
-    const unrelMatch = onDisk.match(/## \[Unreleased\][^\n]*\n([\s\S]*?)\n## \[/);
-    const unrelBlock = unrelMatch?.[1] ?? '';
-    expect(unrelBlock).not.toMatch(/\([0-9a-f]{7,}\)/);
   });
 });
 
@@ -219,76 +176,6 @@ describe('stampRelease', () => {
     expect(result).toContain('Initial release');
     expect(result).toContain('[Unreleased]: https://github.com');
     expect(result).toContain('## [2.0.0] - 2026-07-04');
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// updateChangelog — dedup guard (item #2)
-// ─────────────────────────────────────────────────────────────────────────────
-describe('updateChangelog — dedup', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'dedup-test-'));
-  });
-
-  afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('skips entries whose hash already appears in [Unreleased]', () => {
-    // Simulate a state where a previous /changelog run already wrote abc1234
-    const existing = [
-      '# Changelog',
-      '',
-      '## [Unreleased]',
-      '',
-      '### Added',
-      '- add new feature (abc1234)',
-      '',
-      '## [0.1.0] - 2026-01-01',
-      '',
-    ].join('\n');
-    writeFileSync(join(tmpDir, 'CHANGELOG.md'), existing);
-
-    // CI runs parseCommits and gets the same commit back plus a new one
-    const newEntries = [
-      '### Added',
-      '- add new feature (abc1234)',
-      '',
-      '### Fixed',
-      '- fix regression (def5678)',
-      '',
-    ].join('\n');
-
-    updateChangelog(tmpDir, newEntries);
-
-    const result = readFileSync(join(tmpDir, 'CHANGELOG.md'), 'utf8');
-
-    // abc1234 must appear exactly once
-    const matches = [...result.matchAll(/abc1234/g)];
-    expect(matches.length).toBe(1);
-
-    // The new commit must be present
-    expect(result).toContain('fix regression (def5678)');
-  });
-
-  it('writes all entries when [Unreleased] is empty', () => {
-    writeFileSync(join(tmpDir, 'CHANGELOG.md'), INITIAL_CHANGELOG);
-
-    const entries = '### Added\n- first thing (aaa0001)\n\n### Fixed\n- fix thing (bbb0002)\n';
-    updateChangelog(tmpDir, entries);
-
-    const result = readFileSync(join(tmpDir, 'CHANGELOG.md'), 'utf8');
-    expect(result).toContain('first thing (aaa0001)');
-    expect(result).toContain('fix thing (bbb0002)');
-  });
-
-  it('throws when CHANGELOG.md has no [Unreleased] section', () => {
-    writeFileSync(join(tmpDir, 'CHANGELOG.md'), '# Changelog\n\n## [1.0.0] - 2026-01-01\n');
-    expect(() => updateChangelog(tmpDir, '### Added\n- thing (abc0001)\n')).toThrow(
-      'No ## [Unreleased] section found',
-    );
   });
 });
 
