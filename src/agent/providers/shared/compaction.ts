@@ -571,7 +571,8 @@ export interface CompactionCoreDeps<M> {
   /**
    * Character cap on the transcript string sent to `summarize`, normally
    * {@link summarizerInputCharBudget} of the resolved summarizer model. Over
-   * the cap the oldest text is dropped (with a marker). Never affects the
+   * the cap the middle is dropped (with a marker); the opening and the newest
+   * text are kept. Never affects the
    * `olderSlice` handed to `onSuccess`. Omitted means no cap.
    */
   summarizerInputMaxChars?: number;

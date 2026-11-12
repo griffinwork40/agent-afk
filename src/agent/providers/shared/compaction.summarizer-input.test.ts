@@ -39,13 +39,20 @@ describe('capTranscriptForSummarizer', () => {
     expect(capTranscriptForSummarizer('abc', undefined)).toBe('abc');
   });
 
-  it('drops the oldest text, keeps the newest, and marks the omission', () => {
-    const transcript = 'OLDEST ' + 'o'.repeat(500) + ' NEWEST';
+  it('drops the middle, keeps the opening and the newest, and marks the omission', () => {
+    const transcript = 'OPENING ' + 'o'.repeat(500) + ' MIDDLE ' + 'o'.repeat(500) + ' NEWEST';
     const out = capTranscriptForSummarizer(transcript, 100);
-    expect(out).toContain('[Earlier transcript omitted');
-    expect(out).not.toContain('OLDEST');
+    expect(out).toContain('[Transcript middle omitted');
+    expect(out.startsWith(transcript.slice(0, 20))).toBe(true);
+    expect(out.startsWith('OPENING')).toBe(true);
+    expect(out).not.toContain('MIDDLE');
+    expect(out.endsWith(transcript.slice(-80))).toBe(true);
     expect(out.endsWith('NEWEST')).toBe(true);
-    expect(out.endsWith(transcript.slice(-100))).toBe(true);
+  });
+
+  it('reports the exact number of dropped characters', () => {
+    const out = capTranscriptForSummarizer('x'.repeat(1_000), 100);
+    expect(out).toContain('900 characters dropped');
   });
 });
 

@@ -114,19 +114,26 @@ export function summarizerInputCharBudget(model: string, subscriptionPath = fals
   return Math.max(1, Math.floor(window * SUMMARIZER_INPUT_WINDOW_SHARE * CHARS_PER_TOKEN));
 }
 
+/** Share of the transcript cap reserved for the opening of the transcript. */
+const CAP_OPENING_SHARE = 0.2;
+
 /**
  * Bound the transcript string sent to the summarizer. Under the cap it is
- * returned unchanged. Over the cap the OLDEST text is dropped and the newest
- * kept, prefixed by a marker stating that earlier content was omitted. Only
+ * returned unchanged. Over the cap the MIDDLE is dropped: the opening is kept
+ * because it holds the user's original request and, on a repeat compaction,
+ * the previous compacted summary (message 0), and the newest text is kept
+ * because it holds the current state. A marker states what was omitted. Only
  * affects the summarizer input; the archived older slice is untouched.
  */
 export function capTranscriptForSummarizer(transcript: string, maxChars: number | undefined): string {
   if (maxChars === undefined || transcript.length <= maxChars) return transcript;
-  const kept = transcript.slice(transcript.length - maxChars);
-  const dropped = transcript.length - kept.length;
+  const openingLen = Math.floor(maxChars * CAP_OPENING_SHARE);
+  const newestLen = maxChars - openingLen;
+  const dropped = transcript.length - openingLen - newestLen;
   return (
-    `[Earlier transcript omitted: ${dropped} characters dropped to fit the ` +
-    'summarizer context budget. The newest content follows.]\n\n' +
-    kept
+    transcript.slice(0, openingLen) +
+    `\n\n[Transcript middle omitted: ${dropped} characters dropped to fit the ` +
+    'summarizer context budget. The opening above and the newest content below are kept.]\n\n' +
+    transcript.slice(transcript.length - newestLen)
   );
 }

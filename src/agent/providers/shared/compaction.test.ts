@@ -183,9 +183,11 @@ describe('runCompactionCore', () => {
       onSuccess,
     });
     expect(result.compacted).toBe(true);
-    expect(seen).toContain('[Earlier transcript omitted');
-    expect(seen).not.toContain('OLDEST-');
+    expect(seen).toContain('[Transcript middle omitted');
+    // The opening (original request) and the newest older text both survive.
+    expect(seen).toContain('OLDEST-');
     expect(seen).toContain('a1');
+    expect(seen.length).toBeLessThan(2_000);
     expect(onSuccess.mock.calls[0]?.[0].olderSlice).toEqual(olderBefore);
   });
 
