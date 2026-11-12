@@ -123,7 +123,7 @@ describe('stampRelease', () => {
   });
 
   it('(b) idempotency — does not double-stamp when version already exists', () => {
-    // If the caller only invokes stampRelease (not updateChangelog first), and
+    // If the caller only invokes stampRelease (no [Unreleased] update first), and
     // the version heading is already present, no second replacement should occur.
     const cl = `# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-06-15\n\n### Added\n- cool thing\n`;
     writeFileSync(join(tmpDir, 'CHANGELOG.md'), cl);
