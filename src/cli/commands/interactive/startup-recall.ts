@@ -11,6 +11,10 @@
  *
  * Invariant: returns undefined (suppressed) when the banner would be
  * redundant (resume, first-run, non-TTY) or when no matching session exists.
+ *
+ * Invariant: nothing here writes to the terminal in normal use. The only
+ * output is a slow-scan diagnostic, and it goes through `debugLog`, so it
+ * appears only under AFK_DEBUG=1 / DEBUG=1.
  */
 
 import { openSync, readSync, closeSync, readdirSync, statSync } from 'node:fs';
@@ -20,14 +24,18 @@ import { join } from 'node:path';
 import { palette } from '../../palette.js';
 import { stripAnsi } from '../../display.js';
 import { getSessionsDir } from '../../../paths.js';
+import { debugLog } from '../../../utils/debug.js';
 import { getOrDeriveFacet } from '../../../agent/facets/store.js';
 import type { SessionFacet } from '../../../agent/facets/schema.js';
 
 // How many recent sidecar files to inspect before giving up.
 const MAX_SCAN = 30;
 
-// How many bytes to read from the sidecar head for the cwd check.
+// How many bytes to read from the sidecar head for the cwd and sealed checks.
 const HEAD_BYTES = 1024;
+
+// A scan slower than this is reported, to developers only (see reportSlowScan).
+const SLOW_SCAN_MS = 50;
 
 // Max characters of brief_summary to display.
 const SUMMARY_MAX = 50;
@@ -50,21 +58,67 @@ function readFileHead(filePath: string): string {
   }
 }
 
+/** What the scan needs from a sidecar, read from its first HEAD_BYTES. */
+interface SidecarHead {
+  /** Decoded `cwd`, or undefined when the head carries none. */
+  cwd: string | undefined;
+  /** True when the head carries `endedAt`, i.e. the session was closed. */
+  sealed: boolean;
+}
+
 /**
- * Extract the cwd field from the first HEAD_BYTES of a sidecar JSON file.
- * Returns undefined when the field is absent or the file cannot be read.
+ * Read a sidecar's cwd and sealed-ness from its head. Returns undefined when
+ * the file cannot be read.
+ *
+ * Contract: `sealed` is the sidecar's own `endedAt`, which `saveSession`
+ * writes only at close time and always ahead of `turns`, so it falls inside
+ * the head. It must not be inferred from the facet: `deriveSessionFacet` fills
+ * `end_time` from `savedAt` on every save, so a session that is still running
+ * has one too. Surfaces that never close their sidecar (daemon, Telegram) are
+ * therefore never recalled, which suits a line about where the user left off.
+ * A quoted `"endedAt"` inside turn text cannot match: JSON escapes its quotes.
  */
-function extractCwdFromHead(filePath: string): string | undefined {
+function readSidecarHead(filePath: string): SidecarHead | undefined {
+  let head: string;
   try {
-    const head = readFileHead(filePath);
-    const match = head.match(/"cwd"\s*:\s*"([^"]*)"/);
-    // Decode JSON escape sequences (backslash paths on Windows, Unicode escapes)
-    // so the comparison against opts.cwd uses the real path, not raw JSON bytes.
-    if (!match) return undefined;
-    try { return JSON.parse('"' + match[1] + '"'); } catch { return match[1]; }
+    head = readFileHead(filePath);
   } catch {
     return undefined;
   }
+  const raw = head.match(/"cwd"\s*:\s*"([^"]*)"/)?.[1];
+  let cwd: string | undefined;
+  if (raw !== undefined) {
+    // Decode JSON escape sequences (backslash paths on Windows, Unicode escapes)
+    // so the comparison against opts.cwd uses the real path, not raw JSON bytes.
+    try { cwd = JSON.parse('"' + raw + '"') as string; } catch { cwd = raw; }
+  }
+  return { cwd, sealed: /"endedAt"\s*:\s*\d/.test(head) };
+}
+
+/**
+ * Report a slow scan to developers. Silent unless AFK_DEBUG=1 / DEBUG=1:
+ * `debugLog` owns the gate, so an ordinary boot never shows this line. Dim and
+ * indented to sit with the rest of the startup banner when it does appear.
+ */
+function reportSlowScan(elapsedMs: number, matched: boolean): void {
+  if (elapsedMs <= SLOW_SCAN_MS) return;
+  const suffix = matched ? '' : ' (no match)';
+  debugLog(palette.dim(`  [startup-recall] findLatestCwdSession took ${elapsedMs.toFixed(0)}ms${suffix}`));
+}
+
+/**
+ * Time {@link scanForLatestCwdSession} and hand the result to
+ * {@link reportSlowScan}.
+ */
+function findLatestCwdSession(
+  cwd: string,
+  excludeId: string | undefined,
+  sessionsDir: string,
+): SessionFacet | undefined {
+  const t0 = performance.now();
+  const facet = scanForLatestCwdSession(cwd, excludeId, sessionsDir);
+  reportSlowScan(performance.now() - t0, facet !== undefined);
+  return facet;
 }
 
 /**
@@ -73,12 +127,11 @@ function extractCwdFromHead(filePath: string): string | undefined {
  *
  * Excludes the current live session by id.
  */
-function findLatestCwdSession(
+function scanForLatestCwdSession(
   cwd: string,
   excludeId: string | undefined,
   sessionsDir: string,
 ): SessionFacet | undefined {
-  const t0 = performance.now();
   let entries: Array<{ name: string; mtimeMs: number }>;
   try {
     entries = readdirSync(sessionsDir)
@@ -99,26 +152,17 @@ function findLatestCwdSession(
     const id = entry.name.replace(/\.json$/, '');
     if (id === excludeId) continue;
 
-    const fileCwd = extractCwdFromHead(join(sessionsDir, entry.name));
-    if (fileCwd !== cwd) continue;
+    const head = readSidecarHead(join(sessionsDir, entry.name));
+    if (head === undefined || head.cwd !== cwd) continue;
+    // Still running, or never closed: skip before paying for a facet lookup.
+    if (!head.sealed) continue;
 
     try {
       const facet = getOrDeriveFacet(id);
-      // Skip unsealed (live) sessions — end_time is set only on session seal.
-      if (facet && facet.end_time) {
-        const elapsed = performance.now() - t0;
-        if (elapsed > 50) {
-          process.stderr.write(`[startup-recall] findLatestCwdSession took ${elapsed.toFixed(0)}ms\n`);
-        }
-        return facet;
-      }
+      if (facet) return facet;
     } catch {
       // Corrupt or derivation failure — skip.
     }
-  }
-  const elapsed = performance.now() - t0;
-  if (elapsed > 50) {
-    process.stderr.write(`[startup-recall] findLatestCwdSession took ${elapsed.toFixed(0)}ms (no match)\n`);
   }
   return undefined;
 }
