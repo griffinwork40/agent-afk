@@ -47,6 +47,8 @@ export { renderReceiptMarkdown };
 export { RECEIPT_SCHEMA_VERSION, type ReceiptMeta, type ReceiptToolFailure, type RunReceipt } from './receipt.types.js';
 import { RECEIPT_SCHEMA_VERSION, type ReceiptMeta, type ReceiptToolFailure, type RunReceipt } from './receipt.types.js';
 export { extractJournalSummary, type JournalSummary } from './receipt.journal.js';
+export { type SubagentModelEntry, type SubagentsByModel } from './receipt.subagents-by-model.js';
+import { buildSubagentsByModel } from './receipt.subagents-by-model.js';
 
 
 // Invariant: the subset of exempt classes that represent a GATE refusing a
@@ -99,6 +101,39 @@ export function receiptPathsFor(tracePath: string): {
   };
 }
 
+/**
+ * Derive the human-review reasons list from the session's terminal state.
+ * Extracted from {@link generateReceipt} to keep that function under the
+ * 200-line ceiling.
+ */
+function buildHumanReviewReasons(
+  status: RunReceipt['status'],
+  incomplete: boolean,
+  closureReason: ClosureReason | undefined,
+  erroredNotable: number,
+  circuitBreakerHits: number,
+  subagentsFailed: number,
+): string[] {
+  const reasons: string[] = [];
+  if (status === 'failed') reasons.push('Session sealed with status "failed".');
+  else if (status === 'cancelled') reasons.push('Session was cancelled.');
+  else if (status === 'unknown')
+    reasons.push(
+      'No terminal session_sealed record found — the trace may be truncated or was read before the session sealed.',
+    );
+  if (incomplete)
+    reasons.push(
+      'Trace was sealed by the process-exit backstop, indicating an abnormal exit (crash, early EOF, or process.exit()).',
+    );
+  if (closureReason !== undefined && closureReason !== 'model_end_turn')
+    reasons.push(`Closure reason "${closureReason}" is not a clean completion.`);
+  if (erroredNotable > 0) reasons.push(`${erroredNotable} tool call(s) returned an error (excluding benign outcomes).`);
+  if (circuitBreakerHits > 0)
+    reasons.push(`Repeat-loop circuit breaker fired ${circuitBreakerHits} time(s).`);
+  if (subagentsFailed > 0) reasons.push(`${subagentsFailed} subagent(s) failed.`);
+  return reasons;
+}
+
 /** Build a {@link RunReceipt} from parsed trace events. Pure — no I/O. */
 export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunReceipt {
   const byKind: Partial<Record<TraceEventKind, number>> = {};
@@ -124,6 +159,8 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
   let sealedTurnCount: number | undefined;
   let sealedClosedAt: string | undefined;
   let incomplete = false;
+  let sessionModel: string | undefined;
+  let sessionResolvedModel: string | undefined;
   const costAcc = new SessionCostAccumulator();
 
   for (const ev of events) {
@@ -191,6 +228,15 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
         if (p.incomplete === true) incomplete = true;
         break;
       }
+      case 'session_phase': {
+        // `session_init_start` carries the session's model provenance anchor.
+        // Only capture once (first occurrence wins — root session's init).
+        if (ev.payload.phase === 'session_init_start' && sessionModel === undefined) {
+          if (ev.payload.model !== undefined) sessionModel = ev.payload.model;
+          if (ev.payload.resolvedModel !== undefined) sessionResolvedModel = ev.payload.resolvedModel;
+        }
+        break;
+      }
       default:
         break;
     }
@@ -214,23 +260,9 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
   const finalCostUsd = sealedCostUsd ?? closureCostUsd;
   const turnCount = sealedTurnCount ?? closureTurnCount;
 
-  const reasons: string[] = [];
-  if (status === 'failed') reasons.push('Session sealed with status "failed".');
-  else if (status === 'cancelled') reasons.push('Session was cancelled.');
-  else if (status === 'unknown')
-    reasons.push(
-      'No terminal session_sealed record found — the trace may be truncated or was read before the session sealed.',
-    );
-  if (incomplete)
-    reasons.push(
-      'Trace was sealed by the process-exit backstop, indicating an abnormal exit (crash, early EOF, or process.exit()).',
-    );
-  if (closureReason !== undefined && closureReason !== 'model_end_turn')
-    reasons.push(`Closure reason "${closureReason}" is not a clean completion.`);
-  if (erroredNotable > 0) reasons.push(`${erroredNotable} tool call(s) returned an error (excluding benign outcomes).`);
-  if (circuitBreakerHits > 0)
-    reasons.push(`Repeat-loop circuit breaker fired ${circuitBreakerHits} time(s).`);
-  if (subagents.failed > 0) reasons.push(`${subagents.failed} subagent(s) failed.`);
+  const reasons = buildHumanReviewReasons(
+    status, incomplete, closureReason, erroredNotable, circuitBreakerHits, subagents.failed,
+  );
 
   const limitations = [
     'Sourced from witness-trace metadata only: raw tool output (stdout/stderr, file contents, error messages) is NOT recorded in the trace and is therefore absent here.',
@@ -253,6 +285,9 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
     costSource: sc.source,
   };
 
+  const model = meta.model ?? sessionModel;
+  const resolvedModel = meta.resolvedModel ?? sessionResolvedModel;
+
   return {
     schemaVersion: RECEIPT_SCHEMA_VERSION,
     generatedAt: (meta.now ?? new Date()).toISOString(),
@@ -261,6 +296,8 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
     ...(meta.sessionId !== undefined ? { sessionId: meta.sessionId } : {}),
     ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
     ...(meta.endReason !== undefined ? { endReason: meta.endReason } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(resolvedModel !== undefined ? { resolvedModel } : {}),
     status,
     ...(closureReason !== undefined ? { closureReason } : {}),
     ...(lastStopReason !== undefined ? { lastStopReason } : {}),
@@ -280,7 +317,12 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
       byFailureClass,
     },
     events: { total: events.length, byKind },
-    subagents,
+    subagents: {
+      ...subagents,
+      ...(subagents.started > 0
+        ? { byModel: buildSubagentsByModel(events) }
+        : {}),
+    },
     cost,
     failures,
     humanReviewRequired: reasons.length > 0,

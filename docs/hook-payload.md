@@ -49,6 +49,7 @@ for now; file a feature request if your use case needs it.
 | `hook_event_name` | `string` | The event that triggered the hook: `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `PreCompact`, `SessionStart`, `SessionEnd`, etc. |
 | `cwd` | `string` | The agent's working directory at hook-dispatch time. |
 | `transcript_path` | `string \| null` | Absolute path to the session's autosaved markdown transcript. See [below](#transcript_path). |
+| `model` | `string \| undefined` | The resolved model identifier active for this dispatch — the concrete wire id sent to the provider (e.g. `"claude-sonnet-4-6"`), after alias/slot expansion. Present on `SessionStart` and `UserPromptSubmit` (where it reflects mid-session `/model` switches), and on other events when a session model is known. Absent (key omitted) when the model is not yet determined. See [below](#model). |
 
 ---
 
@@ -213,6 +214,70 @@ to obtain an empty string when the path is null, and skip the file read.
 A Claude-Code-compatible JSONL export (one JSON object per turn) was deliberately
 excluded from this PR to keep the change minimal. See issue #2372 for the
 follow-up tracking item.
+
+---
+
+## `model`
+
+**Introduced in:** #4730
+
+### What it is
+
+`model` is the resolved model identifier active for this hook dispatch — the
+concrete wire id sent to the provider (e.g. `"claude-sonnet-4-6"`), after
+alias/slot expansion. It is present on `SessionStart` and `UserPromptSubmit`
+events (where it reflects mid-session `/model` switches), and on other events
+when a session model is known. The key is **omitted** (not set to `null`) when
+the model is not yet determined.
+
+### Why it matters
+
+A hook that injects context (e.g. a private profile section) can now gate the
+injection on `model_is_local` or on a prefix match of `model`, keeping sensitive
+data away from cloud models without keeping its own list of model names.
+
+### Shell hook usage
+
+```sh
+#!/bin/sh
+# Example: only inject private context when running on a local model.
+payload=$(cat)
+model=$(printf '%s' "$payload" | jq -r '.model // empty')
+
+# AFK_HOOK_MODEL mirrors the JSON field in the subprocess environment.
+if [ -z "$model" ]; then
+  # model unknown — skip injection to be safe
+  exit 0
+fi
+
+case "$model" in
+  qwen*|llama*|mistral*)
+    echo '{"hookSpecificOutput":{"additionalContext":"[private profile injected]"}}'
+    ;;
+esac
+```
+
+### When `model` is absent
+
+The `model` key is omitted when:
+
+| Situation | Reason |
+|---|---|
+| Event fires before model is resolved | Rare; possible only in exotic programmatic embedder setups. |
+| `SessionEnd`, `SubagentStart`, `SubagentStop` | These events do not carry a per-turn model; the session model may differ. |
+
+### `AFK_HOOK_MODEL`
+
+The `model` value is also mirrored as `AFK_HOOK_MODEL` in the hook subprocess
+environment. It is always set (to the empty string when the model is unknown) so
+shell scripts can branch on `[ -n "$AFK_HOOK_MODEL" ]` reliably.
+
+```sh
+# POSIX-portable model check via env var (no jq required):
+if [ -n "$AFK_HOOK_MODEL" ]; then
+  echo "Running on model: $AFK_HOOK_MODEL"
+fi
+```
 
 ---
 

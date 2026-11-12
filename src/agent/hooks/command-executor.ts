@@ -68,6 +68,16 @@ export interface ExecuteCommandOptions {
   context: HookContext;
   agentCwd: string;
   sessionId?: string;
+  /**
+   * The resolved model identifier active for this hook dispatch — the concrete
+   * wire id sent to the provider (e.g. `"claude-sonnet-4-6"`), after
+   * alias/slot expansion. When set, forwarded as `model` in the stdin JSON
+   * payload and as `AFK_HOOK_MODEL` in the subprocess environment.
+   *
+   * Absent for events where the model is not meaningful (e.g. `SessionEnd`,
+   * `SubagentStart`, `SubagentStop`) or not yet known.
+   */
+  model?: string;
   timeoutMs: number;
   /**
    * Absolute plugin root for a plugin-contributed hook (Claude Code compat).
@@ -137,6 +147,7 @@ function buildStdinPayload(
   sessionId: string | undefined,
   agentCwd: string,
   transcriptPath: string | null | undefined,
+  model: string | undefined,
 ): string {
   const payload: Record<string, unknown> = {
     session_id: sessionId,
@@ -180,6 +191,20 @@ function buildStdinPayload(
     typeof transcriptPath === 'string' && transcriptPath.length > 0
       ? transcriptPath
       : null;
+
+  // model: resolved wire model id for this dispatch. Prefer the value carried
+  // on the context (SessionStart / UserPromptSubmit carry it directly so
+  // mid-session /model switches are reflected per-turn); fall back to the
+  // caller-supplied option (populated at registration time from AgentConfig).
+  // Emit the key only when a value is known — absent beats a confusing null.
+  const resolvedModel =
+    (context.event === 'SessionStart' || context.event === 'UserPromptSubmit')
+      ? (context.model ?? model)
+      : model;
+  if (resolvedModel !== undefined) {
+    payload['model'] = resolvedModel;
+  }
+
   return JSON.stringify(payload);
 }
 
@@ -199,7 +224,7 @@ export async function executeCommand(
   // Tilde-expand the command path before spawning.
   const command = opts.command.replace(/^~\//, homedir() + '/');
 
-  const stdinPayload = buildStdinPayload(context, sessionId, agentCwd, opts.transcriptPath);
+  const stdinPayload = buildStdinPayload(context, sessionId, agentCwd, opts.transcriptPath, opts.model);
 
   const childEnv = buildChildEnv(opts, agentCwd, sessionId, context);
   // Deliberate omission: no AFK_TOOL_ERROR env var for PostToolUseFailure.
@@ -509,6 +534,19 @@ function buildChildEnv(
   childEnv['AFK_SESSION_ID'] = sessionId ?? '';
   childEnv['AFK_HOOK_EVENT'] = context.event;
   childEnv['AFK_TOOL_NAME'] = toolName;
+  // AFK_HOOK_MODEL: resolved model wire id for this dispatch, mirroring the
+  // `model` field in the stdin JSON payload. Prefer the per-event model (from
+  // SessionStart / UserPromptSubmit context) over the registration-time value
+  // so mid-session /model switches are reflected on every UserPromptSubmit.
+  // Set to empty string when unknown (never unset) so hook scripts can branch
+  // on `[ -n "$AFK_HOOK_MODEL" ]` reliably.
+  {
+    const ctxModel =
+      (context.event === 'SessionStart' || context.event === 'UserPromptSubmit')
+        ? context.model
+        : undefined;
+    childEnv['AFK_HOOK_MODEL'] = ctxModel ?? opts.model ?? '';
+  }
   // Plugin path vars (non-secret); only for plugin-sourced hooks.
   if (opts.pluginRoot !== undefined) {
     childEnv['CLAUDE_PLUGIN_ROOT'] = opts.pluginRoot;

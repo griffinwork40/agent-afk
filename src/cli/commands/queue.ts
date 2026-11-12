@@ -86,7 +86,7 @@ export function registerQueueCommand(program: Command): void {
           const seq = String(task.sequence).padStart(4, '0');
           const id = task.id.padEnd(26).slice(0, 26);
           const enqueued = task.enqueuedAt.padEnd(24).slice(0, 24);
-          console.log(`${seq}  ${id}  ${enqueued}  ${task.command}`);
+          console.log(palette.dim(`${seq}  ${id}  ${enqueued}  ${task.command}`));
         }
 
         const plural = tasks.length === 1 ? 'task' : 'tasks';
@@ -141,11 +141,7 @@ export function registerQueueCommand(program: Command): void {
         // Confirmation gate. Interactive TTY → prompt; otherwise require --yes.
         if (opts.yes !== true) {
           if (!process.stdin.isTTY) {
-            console.log(
-              palette.warning(
-                `Non-interactive shell: re-run with --yes to clear ${pending.length} pending task(s).`,
-              ),
-            );
+            console.log(palette.warning(`Non-interactive shell: re-run with --yes to clear ${pending.length} pending task(s).`));
             process.exit(0);
           }
           const rl = createInterface({ input: process.stdin, output: process.stdout });

@@ -32,6 +32,7 @@ import { PathGrantManager } from '../../tools/grant-manager.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
 import { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
+import { ToolCallLedgerWiring } from '../../tools/dispatcher.ledger.js';
 import {
   exitPlanModeTool,
   createExitPlanModeHandler,
@@ -119,6 +120,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
    * PIDs (#1430).
    */
   private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
+  /** Session-scoped tool-call ledger (#4476) — parity with AnthropicDirectProvider._toolCallLedger. */
+  private readonly _toolCallLedger = new ToolCallLedgerWiring();
 
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
     // #3754: with AFK_READONLY_GIT_TOOL on, a read-only-bash surface swaps `bash` for `git_read`.
@@ -150,7 +153,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
   }
 
-  /** Fork wiring injects this before the first query; refresh schema and handler together. */
+  /**
+   * Inject a workspace_subscribe handler post-construction.
+   * Called by forkSubagent after wireWorkspaceSubscriptions() produces the
+   * handler and the pre-built child provider is already in childConfig.
+   * Must be called before the first query fires (before AgentSession starts).
+   * Rebuilds `schemas` so the tool appears in the schema array passed to each
+   * per-query dispatcher.
+   */
   setSubscribeHandler(handler: import('../../tools/types.js').ToolHandler): void {
     this.providerOpts.subscribeHandler = handler;
     this.schemas = buildProviderSchemas(this.providerOpts);
@@ -467,6 +477,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
     // Parity with AnthropicDirectProvider.buildDispatcher.
     dispatcherOpts.spawnedPidRegistry = this._spawnedPidRegistry;
+    dispatcherOpts.toolCallLedger = this._toolCallLedger;
     // Yield contract: queued-message probe, late-bound off planExitControls (top-level only).
     if (planExitControls) dispatcherOpts.userAttention = userAttentionFrom(planExitControls);
     // #2542/#2735 detach registry + background process registry — parity with

@@ -9,6 +9,7 @@
  * parameters are explicit — no closures over caller locals.
  */
 
+import { palette } from '../../palette.js';
 import { env } from '../../../config/env.js';
 import { probeNonRebuildableIgnoredFiles } from '../../../agent/worktree/worktree-ignored-probe.js';
 import { recordCdIntent, shellWrapperActive } from '../../../utils/cd-on-exit.js';
@@ -56,24 +57,21 @@ export async function runWorktreeCleanup(params: WorktreeCleanupParams): Promise
     // AND the ignored-state probe below — nothing can have been written in
     // a session that took zero turns, so there is nothing to preserve.
     // and remove unconditionally.
-    // eslint-disable-next-line no-console
-    console.log(`Worktree removed (zero turns — no work done): ${currentPath}`);
+    console.log(palette.dim(`Worktree removed (zero turns — no work done): ${currentPath}`));
     try {
       await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', currentPath]);
     } catch (err) {
       const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-      // eslint-disable-next-line no-console
-      console.warn(
+      console.warn(palette.warning(
         `Worktree cleanup: 'git worktree remove --force ${currentPath}' failed (${message}). Manual removal may be needed.`,
-      );
+      ));
       return;
     }
     try {
       await execFile('git', ['-C', repoRoot, 'branch', '-d', currentBranch]);
     } catch (err) {
       const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-      // eslint-disable-next-line no-console
-      console.warn(`Could not delete branch '${currentBranch}': ${message}`);
+      console.warn(palette.warning(`Could not delete branch '${currentBranch}': ${message}`));
     }
     return;
   }
@@ -87,18 +85,16 @@ export async function runWorktreeCleanup(params: WorktreeCleanupParams): Promise
     ]);
   } catch (err) {
     const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-    // eslint-disable-next-line no-console
-    console.warn(
+    console.warn(palette.warning(
       `Worktree cleanup: could not check status at ${currentPath} (${message}). Skipping removal — manual cleanup may be needed.`,
-    );
+    ));
     return;
   }
 
   const preserveWorktree = (reason: string): void => {
-    // eslint-disable-next-line no-console
-    console.log(
+    console.log(palette.dim(
       `Worktree preserved at ${currentPath} (branch: ${currentBranch}) — ${reason}.`,
-    );
+    ));
     // Record the worktree as the parent shell's desired cwd. The
     // optional `afk` shell wrapper (installed via `afk shell-init`)
     // reads this marker after the binary exits and cd's the user
@@ -114,8 +110,7 @@ export async function runWorktreeCleanup(params: WorktreeCleanupParams): Promise
         userShell === 'fish'
           ? `afk shell-init fish | source   (add to ~/.config/fish/config.fish)`
           : `eval "$(afk shell-init)"   (add to ~/.zshrc or ~/.bashrc)`;
-      // eslint-disable-next-line no-console
-      console.log(`  → cd ${currentPath}\n  → Or install one-time:  ${installHint}`);
+      console.log(palette.dim(`  → cd ${currentPath}\n  → Or install one-time:  ${installHint}`));
     }
   };
 
@@ -164,10 +159,9 @@ export async function runWorktreeCleanup(params: WorktreeCleanupParams): Promise
       ]);
     } catch (err) {
       const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-      // eslint-disable-next-line no-console
-      console.warn(
+      console.warn(palette.warning(
         `Worktree cleanup: could not lock ${currentPath} (${message}). It is preserved now, but a later sweep may reclaim it.`,
-      );
+      ));
     }
     preserveWorktree('kept on exit');
     return;
@@ -185,10 +179,9 @@ export async function runWorktreeCleanup(params: WorktreeCleanupParams): Promise
     await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', currentPath]);
   } catch (err) {
     const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-    // eslint-disable-next-line no-console
-    console.warn(
+    console.warn(palette.warning(
       `Worktree cleanup: 'git worktree remove --force ${currentPath}' failed (${message}). Manual removal may be needed.`,
-    );
+    ));
     return;
   }
 
@@ -196,7 +189,6 @@ export async function runWorktreeCleanup(params: WorktreeCleanupParams): Promise
     await execFile('git', ['-C', repoRoot, 'branch', '-d', currentBranch]);
   } catch (err) {
     const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-    // eslint-disable-next-line no-console
-    console.warn(`Could not delete branch '${currentBranch}': ${message}`);
+    console.warn(palette.warning(`Could not delete branch '${currentBranch}': ${message}`));
   }
 }

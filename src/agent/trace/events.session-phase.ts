@@ -181,4 +181,9 @@ export const SessionPhasePayloadSchema = z.object({
   // Running afk version, set ONLY on `session_id_assigned`. Absent on older
   // traces and all other phase kinds. (#3808)
   afkVersion: z.string().optional(),
+  // Credential/auth source id, set ONLY on `session_init_start`. Absent on
+  // older traces, subagent sessions, and all other phase kinds.
+  // Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' | 'claude-code-keychain' | 'claude-code-session-refresh'
+  // OpenAI: 'chatgpt-oauth' | 'config' | 'env' | 'codex-cli' | etc.
+  credentialSource: z.string().optional(),
 });

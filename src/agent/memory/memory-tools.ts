@@ -50,7 +50,7 @@ export const memorySearchTool: AnthropicToolDef = {
       },
       category: {
         type: 'string',
-        enum: ['preference', 'convention', 'decision', 'learning'],
+        enum: ['preference', 'convention', 'decision', 'learning', 'episode'],
         description: 'Optional: filter by fact category',
       },
       since: {
@@ -98,7 +98,7 @@ export const memoryUpdateTool: AnthropicToolDef = {
       },
       category: {
         type: 'string',
-        enum: ['preference', 'convention', 'decision', 'learning'],
+        enum: ['preference', 'convention', 'decision', 'learning', 'episode'],
         description: 'Required for fact target',
       },
       evidence: {

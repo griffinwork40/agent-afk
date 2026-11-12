@@ -31,13 +31,13 @@ export { cleanupComposeSpills };
 import { errorMessage } from '../../utils/errors.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
 import { raceComposeDetach } from './detach-compose.js';
-import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { createComposeManager } from './compose-executor.manager.js';
 import type { SubagentManager } from '../subagent.js';
 import { buildComposeDagNode, type ComposeNodeBuildResult } from './compose-executor.node-build.js';
 import { preflightComposeCall, startComposeDag, recordComposeCompleted } from './compose-executor.preflight.js';
 import type { ComposeInput } from './compose-input-parse.js';
 import { updateComposeWaveUnits, buildComposeResultContent, filterComposeEdges } from './compose-executor.settle.js';
+import { evaluateDispatchUsageForModel } from './usage-notice.js';
 
 /**
  * Emit a `compose_leaf_tools_stripped` session-phase trace event for every
@@ -275,10 +275,17 @@ export class ComposeExecutor {
         }),
       ));
 
-      // Split build results into runnable DAG nodes and pre-failed attachment errors.
-      // Nodes with attachment errors are injected into result.failed so they appear
-      // in the formatted output alongside runtime failures — siblings still run.
-      const { dagNodes, attachmentErrors } = splitComposeNodeResults(nodeBuildResults);
+      // Split build results into runnable DAG nodes, pre-failed attachment errors,
+      // and per-node usage blocks. Usage-blocked nodes are surfaced as pre-failed
+      // entries alongside attachment errors — siblings on a different model still run.
+      const { dagNodes, attachmentErrors, usageBlocks } = splitComposeNodeResults(nodeBuildResults);
+
+      // Surface per-node usage blocks as pre-failed nodes so formatDAGResult
+      // reports them alongside attachment errors. Mirroring the attachment-error
+      // pattern: convert notice string into an Error for uniform downstream handling.
+      for (const block of usageBlocks) {
+        attachmentErrors.push({ id: block.id, error: new Error(`Node dispatch refused: usage limit exceeded for this model. ${block.notice}`) });
+      }
 
       // Wave manifest: create before the DAG starts so a crash mid-run leaves
       // a recoverable record. Only for ≥2 nodes (no manifest for solo dispatch).

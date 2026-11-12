@@ -84,33 +84,20 @@ export function registerEventsCommand(program: Command): void {
             (t) => !SUPPORTED_EVENT_TYPES.includes(t as GithubEventType),
           );
           if (invalidTypes.length > 0) {
-            console.error(
-              palette.error(
-                `Unknown event type(s): ${invalidTypes.join(', ')}. ` +
-                `Supported: ${SUPPORTED_EVENT_TYPES.join(', ')}`,
-              ),
-            );
+            console.error(palette.error(`Unknown event type(s): ${invalidTypes.join(', ')}. Supported: ${SUPPORTED_EVENT_TYPES.join(', ')}`));
             process.exit(1);
           }
           const events = requestedTypes as GithubEventType[];
 
           // Validate repo format
           if (!/^[^/]+\/[^/]+$/.test(opts.repo)) {
-            console.error(
-              palette.error(
-                `Invalid --repo format. Expected owner/repo, got: ${opts.repo}`,
-              ),
-            );
+            console.error(palette.error(`Invalid --repo format. Expected owner/repo, got: ${opts.repo}`));
             process.exit(1);
           }
 
           const intervalMs = parseInt(opts.interval, 10);
           if (!Number.isFinite(intervalMs) || intervalMs < 5_000) {
-            console.error(
-              palette.error(
-                `--interval must be a number >= 5000 ms, got: ${opts.interval}`,
-              ),
-            );
+            console.error(palette.error(`--interval must be a number >= 5000 ms, got: ${opts.interval}`));
             process.exit(1);
           }
 
@@ -120,11 +107,7 @@ export function registerEventsCommand(program: Command): void {
           if (envInterval !== undefined) {
             const parsed = parseInt(envInterval, 10);
             if (!Number.isFinite(parsed) || parsed < 5_000) {
-              console.error(
-                palette.error(
-                  `AFK_EVENTS_GITHUB_POLL_MS must be >= 5000 ms, got: ${envInterval}`,
-                ),
-              );
+              console.error(palette.error(`AFK_EVENTS_GITHUB_POLL_MS must be >= 5000 ms, got: ${envInterval}`));
               process.exit(1);
             }
             resolvedInterval = parsed;
@@ -137,23 +120,10 @@ export function registerEventsCommand(program: Command): void {
             pollIntervalMs: resolvedInterval,
           });
 
-          console.log(
-            palette.success(
-              `✔ Starting GitHub event poller for ${opts.repo}`,
-            ),
-          );
+          console.log(palette.success(`✔ Starting GitHub event poller for ${opts.repo}`));
           console.log(palette.dim(`  events   : ${events.join(', ')}`));
-          console.log(
-            palette.dim(
-              `  interval : ${opts.once ? 'once' : `${resolvedInterval}ms`}`,
-            ),
-          );
-          console.log(
-            palette.dim(
-              '  queue    : tasks will be written to the pull queue ' +
-              '(run `afk daemon --trigger pull` to execute them)',
-            ),
-          );
+          console.log(palette.dim(`  interval : ${opts.once ? 'once' : `${resolvedInterval}ms`}`));
+          console.log(palette.dim('  queue    : tasks will be written to the pull queue (run `afk daemon --trigger pull` to execute them)'));
 
           if (opts.once) {
             await poller.tick();

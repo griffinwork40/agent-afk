@@ -8,14 +8,22 @@
 import type { RunTurnInput } from '../request-types.js';
 import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import { emitQueuedUserMessage } from '../../../trace/emit.js';
+import { PauseController, formatPauseNote } from '../../../session/pause-controller.js';
 
 /**
- * If `steeringText` is non-empty, push it as a NEW user turn after the
- * tool_result batch committed by runToolRound. A fresh message object is used
- * rather than mutating the tool_result turn in place; JournalSync compares by
- * object reference (docs/message-journal.md invariant), so an in-place
- * mutation of an already-synced object is invisible to the journal. A new
- * push is always detected and journaled before the next model request.
+ * If `steeringText` is non-empty OR a pending pause duration exists, push a
+ * NEW user turn after the tool_result batch committed by runToolRound.
+ *
+ * A fresh message object is used rather than mutating the tool_result turn in
+ * place; JournalSync compares by object reference (docs/message-journal.md
+ * invariant), so an in-place mutation of an already-synced object is invisible
+ * to the journal. A new push is always detected and journaled before the next
+ * model request.
+ *
+ * Pause note: `consumeLastPauseDuration()` is one-shot. When a pause occurs
+ * mid-turn the note is injected here at the first round boundary after resume,
+ * so the model sees it before it processes the next batch of tool results —
+ * rather than waiting for the next top-level turn start (issue #4693).
  *
  * Also fires a fire-and-forget `queued_user_message` trace event.
  */
@@ -23,6 +31,13 @@ export function applyBeforeNextRound(
   input: RunTurnInput,
   steeringText: string | undefined,
 ): void {
+  // Consume any pending pause duration and prepend its note to steeringText.
+  const pauseMs = PauseController.instance().consumeLastPauseDuration();
+  const pauseNote = pauseMs !== undefined ? formatPauseNote(pauseMs) : undefined;
+  if (pauseNote) {
+    steeringText = steeringText ? pauseNote + '\n\n' + steeringText : pauseNote;
+  }
+
   if (!steeringText) return;
 
   // Guard: we must be after a tool round, so the last message should be a
@@ -41,6 +56,13 @@ export function applyBeforeNextRound(
     content: [{ type: 'text', text: steeringText }],
   };
   input.messages.push(steeringTurn);
+
+  // Sync the journal so the steering/pause note survives a crash before the
+  // next model request. Without this, the new turn is unsynced until runToolRound
+  // calls sync() — a window where a crash would silently lose the note.
+  // Mirrors the OpenAI provider's applyAndSyncSteering() (turn-driver.ts).
+  // Pre-existing gap for plain steeringText is closed here consistently.
+  input.journalSync?.sync(input.messages);
 
   // Fire-and-forget trace event.
   void emitQueuedUserMessage(input.traceWriter, {

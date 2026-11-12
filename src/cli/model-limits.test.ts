@@ -20,15 +20,16 @@ describe('model-limits', () => {
   });
 
   it('declares the 1M context window for Claude Fable 5 (alias + wire id)', () => {
-    // Fable 5 ships 1M natively (no `_1m` opt-in). Both the `fable` alias and
-    // the `claude-fable-5` wire id must report the full window, not the 200k
-    // Anthropic fallback.
+    // Fable 5/5.1/5.2 ships 1M natively (no `_1m` opt-in). Both the `fable` alias and
+    // all fable wire ids must report the full window, not the 200k Anthropic fallback.
     expect(MODEL_CONTEXT_LIMITS['fable']).toBe(1_000_000);
     expect(MODEL_CONTEXT_LIMITS['claude-fable-5']).toBe(1_000_000);
     expect(MODEL_CONTEXT_LIMITS['claude-fable-5-1']).toBe(1_000_000);
+    expect(MODEL_CONTEXT_LIMITS['claude-fable-5-2']).toBe(1_000_000);
     expect(contextLimitFor('fable')).toBe(1_000_000);
     expect(contextLimitFor('claude-fable-5')).toBe(1_000_000);
     expect(contextLimitFor('claude-fable-5-1')).toBe(1_000_000);
+    expect(contextLimitFor('claude-fable-5-2')).toBe(1_000_000);
   });
 
   it('declares the 1M context window for Claude Sonnet 5 (alias + wire id)', () => {

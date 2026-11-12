@@ -100,6 +100,7 @@ Every notification has the envelope
 `params.sessionId` is always the ACP session ID returned by `session/new`; it is
 outside `params.update`. The table describes fields inside `params.update`:
 
+
 | `update.type` | Extra fields | Description |
 |---|---|---|
 | `text_delta` | `delta: string` | Incremental assistant text |

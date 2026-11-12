@@ -117,7 +117,7 @@ export function registerTelegramCommand(program: Command): void {
       if (result.kind === 'exited-immediately') {
         console.error(palette.error(`✗ ${result.message}`));
         if (result.logTail && result.logTail.length > 0) {
-          console.error('');
+          console.error(''); // console-ok
           console.error(palette.heading('Last log entries:'));
           for (const line of result.logTail) console.error(palette.meta(`  ${line}`));
         }
@@ -189,29 +189,29 @@ export function registerTelegramCommand(program: Command): void {
         return;
       }
       const contents = readFileSync(logFile, 'utf-8').split('\n').slice(-lines - 1);
-      console.log(contents.join('\n'));
+      console.log(palette.info(contents.join('\n')));
     });
 }
 
 /** Render a BotStatus snapshot to stdout. */
 function printStatus(s: BotStatus): void {
   console.log(palette.heading('📊 Telegram Bot Status'));
-  console.log('');
+  console.log(''); // console-ok
   if (s.running) {
     console.log(`  ${palette.success('●')} Running  (PID ${s.pid})`);
     if (s.uptimeSec !== undefined) {
-      console.log(`  Uptime:  ${formatUptime(s.uptimeSec)}`);
+      console.log(palette.dim(`  Uptime:  ${formatUptime(s.uptimeSec)}`));
     }
     if (s.memoryMb !== undefined) {
-      console.log(`  Memory:  ${s.memoryMb} MB`);
+      console.log(palette.dim(`  Memory:  ${s.memoryMb} MB`));
     }
   } else {
     console.log(`  ${palette.error('●')} Stopped`);
   }
-  console.log(`  PID:     ${s.pidFile}`);
-  console.log(`  Logs:    ${s.logFile}`);
+  console.log(palette.dim(`  PID:     ${s.pidFile}`));
+  console.log(palette.dim(`  Logs:    ${s.logFile}`));
   if (s.logTail && s.logTail.length > 0) {
-    console.log('');
+    console.log(''); // console-ok
     console.log(palette.heading('Recent log entries:'));
     for (const line of s.logTail) console.log(palette.meta(`  ${line}`));
   }

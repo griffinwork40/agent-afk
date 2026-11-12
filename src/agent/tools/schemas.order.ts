@@ -109,7 +109,8 @@ import type { AnthropicToolDef } from './types.js';
 // fix2 reverts that decision: artifact tools are registry-filtered when the
 // artifact store is not wired, so they belong in the optional tail (26→23).
 // This 26→23 revert restores the original prefix cache baseline.
-export const INVARIANT_CORE_COUNT = 23;
+// 23→24: read_journal added as a core peer of read_witness/search_witness.
+export const INVARIANT_CORE_COUNT = 24;
 
 /**
  * Sort a copy of the MCP schema array by tool name using a locale-independent

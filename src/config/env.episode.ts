@@ -17,13 +17,46 @@ export const EPISODE_ENV_REGISTRY = [
     name: 'AFK_EPISODE_SYNTHESIS',
     description:
       'Enable automatic episode synthesis at session end. When set to 1, a ' +
-      'compressed narrative of each top-level session is synthesized from its ' +
-      'sealed journal and stored in cross-session memory (facts table, ' +
-      'category: learning). Off by default — opt in once the memory archive ' +
-      'is large enough that episodic recall adds value. Requires a valid ' +
-      'Anthropic credential; falls back to a deterministic record if the ' +
-      'LLM call fails. Use `afk episode synthesize <session-id>` to ' +
-      'synthesize a specific session on demand regardless of this flag.',
+      'deterministic summary of each top-level session is built from its ' +
+      'facet and stored in cross-session memory (facts table, ' +
+      'category: episode). Off by default — opt in once the memory archive ' +
+      'is large enough that episodic recall adds value. No LLM call is ' +
+      'required; episodes are derived from existing facet data. Use ' +
+      '`afk episode synthesize <session-id>` to synthesize a specific ' +
+      'session on demand regardless of this flag.',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_EPISODE_RECALL',
+    description:
+      'Enable automatic episode recall at session start. When set to 1, ' +
+      'stored episodes whose filesKey or branch overlaps with the current ' +
+      'git context are surfaced as a <recent-episodes> block in the system ' +
+      'prompt (up to 3 episodes, capped at ~6K tokens). Set to "dry-run" to ' +
+      'log what would be injected to stderr without modifying the system ' +
+      'prompt. Off by default — opt in once the episode archive is large ' +
+      'enough to make associative recall useful (≥50 episodes). Requires ' +
+      'AFK_EPISODE_SYNTHESIS to have been running long enough to accumulate ' +
+      'episodes.',
+    type: 'string',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_NO_EPISODE_RECALL',
+    description:
+      'Per-session override to suppress episode recall even when ' +
+      'AFK_EPISODE_RECALL=1 or AFK_EPISODE_RECALL=dry-run is set globally. ' +
+      'Set to 1 for sessions where injecting episode context is unwanted ' +
+      '(e.g. a fresh-start session, CI, or a session in an unrelated ' +
+      'directory). The /recall slash command is unaffected — it always shows ' +
+      'scored candidates regardless of this flag.',
     type: 'boolean',
     required: false,
     default: '0',

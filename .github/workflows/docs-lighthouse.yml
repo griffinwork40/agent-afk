@@ -1,0 +1,49 @@
+name: Docs Lighthouse CI
+
+# Only runs when the docs site itself changes — adds no time to core PRs.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "website/**"
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+  workflow_dispatch:
+
+# Opt JS-based actions into Node.js 24 ahead of the June 2026 default flip.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  lighthouse:
+    name: Lighthouse CI (docs site)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: cd website && npm ci
+
+      - name: Build docs site
+        run: cd website && npm run build
+
+      - name: Run Lighthouse CI
+        uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # v12
+        with:
+          # lighthouserc.json lives in website/ alongside the Next.js config.
+          configPath: ./website/lighthouserc.json
+          # Upload results to temporary public storage for PR inspection.
+          # No token or paid service required — results expire after 7 days.
+          uploadArtifacts: true
+          temporaryPublicStorage: true

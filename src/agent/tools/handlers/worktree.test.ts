@@ -98,6 +98,43 @@ describe('worktree handler — input validation', () => {
       expect(result.content).toContain('path required');
     }
   });
+
+  it('rejects repo: null with explicit error (not silent fallback)', async () => {
+    const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
+    const result = await handler({ action: 'list', repo: null }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('null and empty string are not accepted');
+  });
+
+  it('rejects repo: "" with explicit error (not silent fallback)', async () => {
+    const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
+    const result = await handler({ action: 'list', repo: '' }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('null and empty string are not accepted');
+  });
+
+  it('rejects repo pointing to a non-existent path with distinct error', async () => {
+    const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
+    const result = await handler({ action: 'list', repo: '/nonexistent/path/that/does/not/exist' }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('does not exist on disk');
+    // Must NOT say "does not appear to be inside a git repository" (the misleading ENOENT message)
+    expect(result.content).not.toContain('does not appear to be inside a git repository');
+  });
+
+  it('rejects a file path with a "not a directory" error (not a misleading git error)', async () => {
+    const filePath = join(repoRoot, 'not-a-dir.txt');
+    const handler = createWorktreeHandler(repoRoot, {
+      execFile: makeMock(standardResponder('')),
+      stat: async (_p: string) => ({ isDirectory: () => false } as any),
+    });
+    const result = await handler({ action: 'list', repo: filePath }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('not a directory');
+    expect(result.content).toContain(filePath);
+    // Must NOT fall through to the git layer and produce a misleading git error.
+    expect(result.content).not.toContain('does not appear to be inside a git repository');
+  });
 });
 
 describe('worktree handler — create', () => {
@@ -593,5 +630,107 @@ describe('worktree handler — errors surface as isError', () => {
     expect(result.content).toMatch(/pass.*cwd.*project root|cwd.*set.*project root|cwd.*pointing.*git/i);
     // Mentions .afk-worktrees/ so the caller understands what the tool needs
     expect(result.content).toContain('.afk-worktrees/');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3755: explicit `repo` parameter — resolve from a path other than session cwd
+// ---------------------------------------------------------------------------
+
+describe('worktree handler — explicit repo parameter (#3755)', () => {
+  it('uses the repo parameter as the git anchor instead of session cwd', async () => {
+    // Session cwd is not a git repo; repo points at the real repo.
+    const mock = makeMock(standardResponder(''));
+    // standardResponder answers --git-common-dir with repoRoot regardless of -C,
+    // so we verify the -C argument is the explicit repo, not the (non-git) cwd.
+    const handler = createWorktreeHandler('/home/user', { execFile: mock });
+    const result = await handler({ action: 'list', repo: repoRoot }, SIGNAL);
+    expect(result.isError).toBeFalsy();
+    const gitCommonDirCall = mock.calls.find((c) => c.args.includes('--git-common-dir'));
+    expect(gitCommonDirCall).toBeDefined();
+    // -C <anchor> must be the explicit repo, not the handler's cwd
+    const cIdx = gitCommonDirCall!.args.indexOf('-C');
+    expect(gitCommonDirCall!.args[cIdx + 1]).toBe(repoRoot);
+  });
+
+  it('rejects a non-absolute repo path', async () => {
+    const mock = makeMock(standardResponder(''));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'list', repo: 'relative/path' }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/absolute path/i);
+  });
+
+  it('rejects a non-string repo value', async () => {
+    const mock = makeMock(standardResponder(''));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'list', repo: 42 }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/repo must be a string/i);
+  });
+
+  it('error when explicit repo exists but is not a git repo names the repo path and mentions the repo param', async () => {
+    // repoRoot exists on disk (created in beforeEach) but we make git reject it.
+    const mock = makeMock(() => { throw new Error('fatal: not a git repository'); });
+    const handler = createWorktreeHandler('/home/user', { execFile: mock });
+    const result = await handler({ action: 'list', repo: repoRoot }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain(`Cannot resolve git repo root from ${repoRoot}`);
+    // Error message should mention the repo parameter so the user knows what to fix
+    expect(result.content).toMatch(/\`repo\` parameter/i);
+  });
+
+  it('passes explicit repo through to create action (git -C uses explicit repo root)', async () => {
+    const wtPath = join(afkRoot, 'feat-explicit');
+    const mock = makeMock((call) => {
+      if (call.args.includes('--git-common-dir')) return { stdout: `${repoRoot}/.git\n`, stderr: '' };
+      if (call.args.includes('list') && call.args.includes('--porcelain')) {
+        // No existing worktrees (collision check returns nothing)
+        return { stdout: block(repoRoot), stderr: '' };
+      }
+      if (call.args.includes('add')) {
+        return fs.mkdir(wtPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+      }
+      if (call.args.includes('symbolic-ref')) throw new Error('not set');
+      if (call.args.includes('--verify')) return { stdout: '', stderr: '' };
+      if (call.args.includes('rev-parse')) return { stdout: 'deadbeef\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    // Session cwd is something non-git; explicit repo supplied
+    const handler = createWorktreeHandler('/home/user', { execFile: mock, generateSuffix: () => '1234' });
+    const result = await handler({ action: 'create', name: 'feat-explicit', repo: repoRoot }, SIGNAL);
+    expect(result.isError).toBeFalsy();
+    const addCall = mock.calls.find((c) => c.args.includes('add'));
+    expect(addCall).toBeDefined();
+    // git worktree add must run with -C <repoRoot> (the explicit repo root)
+    expect(addCall!.args[1]).toBe(repoRoot);
+  });
+
+  it('returns a clear error when repo exists but git throws ENOENT', async () => {
+    const enoentError = Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+    const mock = makeMock((call) => {
+      if (call.args.includes('--git-common-dir')) throw enoentError;
+      return { stdout: '', stderr: '' };
+    });
+    const handler = createWorktreeHandler('/home/user', {
+      execFile: mock,
+      stat: async (_p: string) => ({ isDirectory: () => true } as any),
+    });
+    const result = await handler({ action: 'list', repo: repoRoot }, SIGNAL);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Cannot resolve git repo root');
+    expect(result.content).toContain('repo');
+    expect(result.content).not.toContain('does not exist on disk');
+  });
+
+  it('omitting repo falls back to session cwd as before (backward compat)', async () => {
+    const mock = makeMock(standardResponder(''));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'list' }, SIGNAL);
+    expect(result.isError).toBeFalsy();
+    const gitCommonDirCall = mock.calls.find((c) => c.args.includes('--git-common-dir'));
+    expect(gitCommonDirCall).toBeDefined();
+    const cIdx = gitCommonDirCall!.args.indexOf('-C');
+    expect(gitCommonDirCall!.args[cIdx + 1]).toBe(repoRoot);
   });
 });

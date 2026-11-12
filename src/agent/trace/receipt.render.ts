@@ -10,6 +10,28 @@
 import type { RunReceipt } from './receipt.js';
 import type { OutcomesV1 } from '../outcomes/outcomes-v1.schema.js';
 
+/**
+ * Escape a string for safe embedding in a GFM table cell.
+ *
+ * Order matters: backslash first so added escapes are not re-escaped.
+ * Collapses all newline variants to a space to prevent row injection.
+ * Does NOT escape `-`, `(`, or `)` -- existing keys use those characters.
+ */
+function escapeCell(s: string): string {
+  return s
+    .replace(/\r\n|\r|\n/g, ' ')
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/`/g, '\\`')
+    .replace(/\*/g, '\\*')
+    .replace(/_/g, '\\_')
+    .replace(/\[/g, '\\[')
+    .replace(/]/g, '\\]')
+    .replace(/</g, '\\<')
+    .replace(/>/g, '\\>')
+    .replace(/!/g, '\\!');
+}
+
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const s = ms / 1000;
@@ -69,11 +91,22 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
       lines.push(`| Cost (USD, subagents) | ${r.cost.subagentCostUsd.toFixed(4)} |`);
   } else if (r.cost.finalCostUsd !== undefined)
     lines.push(`| Cost (USD) | ${r.cost.finalCostUsd.toFixed(4)} |`);
-  if (r.subagents.started > 0)
+  if (r.subagents.started > 0) {
     lines.push(
       `| Subagents | ${r.subagents.started} started · ${r.subagents.succeeded} ok · ` +
         `${r.subagents.failed} failed · ${r.subagents.cancelled} cancelled |`,
     );
+    if (r.subagents.byModel !== undefined) {
+      for (const key of Object.keys(r.subagents.byModel).sort()) {
+        const b = r.subagents.byModel[key];
+        if (b === undefined) continue;
+        lines.push(
+          `| Subagents (${escapeCell(key)}) | ${b.started} started · ${b.succeeded} ok · ` +
+            `${b.failed} failed · ${b.cancelled} cancelled · $${b.costUsd.toFixed(4)} |`,
+        );
+      }
+    }
+  }
   if (r.closureReason !== undefined) lines.push(`| Closure | ${r.closureReason} |`);
   lines.push('');
 

@@ -217,6 +217,13 @@ type AgentOptions = {
   traceWriter?: TraceSink;
   afkPromptForApproval?: boolean;
   getTranscriptPath?: () => string | null;
+  /**
+   * Live getter for the resolved model identifier active for the current turn.
+   * Called at hook-dispatch time (not registration time) so mid-session
+   * `/model` switches are reflected on every hook event. Forwarded as `model`
+   * in the stdin JSON payload and as `AFK_HOOK_MODEL` in the subprocess env.
+   */
+  getModel?: () => string | undefined;
   daemonTaskId?: string;
 };
 
@@ -368,7 +375,10 @@ function registerConfigHooks(
     console.warn(`[hooks] ${warning}`);
   }
   loadAndRegisterConfigHooks(registry, hookConfig, {
-    cwd: agentOptions?.cwd, sessionId: agentOptions?.sessionId, getTranscriptPath: agentOptions?.getTranscriptPath,
+    cwd: agentOptions?.cwd,
+    sessionId: agentOptions?.sessionId,
+    getTranscriptPath: agentOptions?.getTranscriptPath,
+    getModel: agentOptions?.getModel,
   });
 }
 

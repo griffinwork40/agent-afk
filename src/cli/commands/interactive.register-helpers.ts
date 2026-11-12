@@ -34,6 +34,7 @@ import type { TurnState } from './interactive/repl-loop.js';
 import type { ExitReasonRef } from './interactive/interactive.signal-handlers.js';
 import { resolveResumeTarget } from '../resume-session.js';
 import { errorMessage } from '../../utils/errors.js';
+import { runStartupSessionPicker } from './interactive/startup-session-picker.js';
 
 // ---------------------------------------------------------------------------
 // Option registration
@@ -63,6 +64,10 @@ export function applyInteractiveOptions(cmd: Command): Command {
     .option(
       '--plain',
       'Force the session to fully behave like a non-TTY surface for rendering: append-only plain-stdout output instead of the live-overlay renderer, AND the input surface downgrades to the simple line reader — even when stdout/stdin ARE a TTY. Full opt-out escape hatch for tmux/SSH/multiplexer sessions. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default.',
+    )
+    .option(
+      '--no-recall',
+      'Suppress automatic episode recall for this session, even when AFK_EPISODE_RECALL=1 is set globally. Equivalent to AFK_NO_EPISODE_RECALL=1 for this invocation. The /recall slash command is unaffected.',
     );
 }
 
@@ -105,15 +110,9 @@ export function buildFirstTurnHook(
         ? formatAutonameSkipReason(outcome.reason, outcome.detail)
         : undefined;
       const note = reasonText !== undefined ? palette.dim(` — ${reasonText}`) : '';
-      console.log(
-        palette.dim('  ↪ worktree: ') + `${rel} ` +
-        palette.dim(`(branch: ${outcome.branch})`) + note,
-      );
+      console.log(palette.dim('  ↪ worktree: ') + `${rel} ` + palette.dim(`(branch: ${outcome.branch})`) + note);
     } else {
-      console.warn(
-        palette.warning('⚠ ') + `Worktree creation failed: ${outcome.reason}. ` +
-        palette.dim(`Continuing in ${formatCwd(process.cwd(), { maxWidth: 60 })} (no isolation).`),
-      );
+      console.warn(palette.warning('⚠ ') + `Worktree creation failed: ${outcome.reason}. ` + palette.dim(`Continuing in ${formatCwd(process.cwd(), { maxWidth: 60 })} (no isolation).`));
     }
   };
 }
@@ -261,7 +260,7 @@ export async function printStartupBanner(params: StartupBannerParams): Promise<v
   const resumeMeta = ctx.resumeTarget
     ? `Resuming ${ctx.resumeTarget.id} · ${ctx.stats.totalTurns} prior turn${ctx.stats.totalTurns === 1 ? '' : 's'}`
     : undefined;
-  console.log(welcomeBanner({
+  console.log(welcomeBanner({ // console-ok
     mode: 'Interactive Mode',
     model: ctx.stats.model,
     version: getVersion(),
@@ -281,17 +280,17 @@ export async function printStartupBanner(params: StartupBannerParams): Promise<v
     isResume, isTTY: tty, isFirstRun: firstRun,
     currentSessionId: ctx.session.current.sessionId,
   });
-  if (recallLine) console.log(recallLine);
+  if (recallLine) console.log(recallLine); // console-ok
   const dashboardLines = await renderStartupDashboard({
     isTTY: tty, isFirstRun: firstRun,
     bootPruneStaleCount: bootPruneRemovedCount,
   });
-  for (const line of dashboardLines) console.log(line);
+  for (const line of dashboardLines) console.log(line); // console-ok
 
   if (ctx.resumeTarget) await printResumeBanner(ctx.stats, ctx.completionWriter);
   printFirstRunBanner({ isTTY: tty, isResume });
   drainBootWarnings(ctx.bootWarnings);
-  console.log();
+  console.log(); // console-ok
 }
 
 // ---------------------------------------------------------------------------
@@ -353,5 +352,55 @@ export function resolveWorktreeSetupArg(
   if (branchPrefixOverride !== undefined) opts.branchPrefix = branchPrefixOverride;
   if (worktreeBaseOverride !== undefined) opts.baseRef = worktreeBaseOverride;
   return Object.keys(opts).length > 0 ? opts : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Startup session picker invocation (#4692)
+// ---------------------------------------------------------------------------
+
+export interface RunStartupPickerParams {
+  options: { resume?: string; continue?: boolean };
+  /**
+   * Spinner instance. Methods are optional so that non-TTY / stub objects
+   * (e.g. the ora silent-mode shim in CI) never cause a TypeError when
+   * `.stop()` or `.start()` are absent from the returned object.
+   */
+  spinner: { stop?: () => void; start?: (text: string) => void };
+}
+
+/**
+ * Run the startup session picker when conditions are met, then restart the
+ * spinner. If a session is selected, mutates `options.resume` so the
+ * existing resume path in `bootstrapSession` picks it up.
+ *
+ * Extracted from `registerInteractiveCommand` to keep that function within
+ * the 200-line AST ceiling (#3478).
+ */
+export async function maybeRunStartupPicker(params: RunStartupPickerParams): Promise<void> {
+  const { options, spinner } = params;
+  if (options.resume || options.continue) return;
+  spinner.stop?.();
+  const pickerResult = await runStartupSessionPicker({
+    alreadyResuming: false,
+    signal: new AbortController().signal,
+  });
+  if (pickerResult.selectedId !== undefined) {
+    options.resume = pickerResult.selectedId;
+    // Validate the selected session still exists (it may have been deleted
+    // between the picker rendering and the user pressing Enter).
+    const spinnerShim = {
+      fail: (msg: string) => {
+        spinner.stop?.();
+        process.stderr.write(msg + '\n');
+      },
+    };
+    const validation = validateResumeOption({ resume: pickerResult.selectedId }, spinnerShim);
+    if (!validation.ok) {
+      // Session vanished between picker and resume — fall back to new session.
+      options.resume = undefined;
+      return;
+    }
+  }
+  spinner.start?.('Initializing interactive session...');
 }
 

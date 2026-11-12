@@ -20,6 +20,7 @@
  */
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { palette } from '../cli/palette.js';
 
 /** Minimal notifier surface the registry needs (avoids an import cycle). */
 export interface BgInjectionSource {
@@ -35,7 +36,7 @@ export function registerBgInjectionSource(key: string, source: BgInjectionSource
     // without calling unregisterBgInjectionSource (e.g. it crashed). The new
     // registration is safe — overwrite-on-collision prevents cross-session
     // contamination — but we log so operators can spot persistent leaks.
-    console.warn(`[bg-injection] replacing stale source for route '${key}' — prior session may have exited without dispose()`);
+    console.warn(palette.warning(`[bg-injection] replacing stale source for route '${key}' — prior session may have exited without dispose()`));
   }
   sources.set(key, source);
 }

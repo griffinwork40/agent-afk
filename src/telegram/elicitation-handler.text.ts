@@ -18,6 +18,7 @@
 
 import { escapeHtml } from './formatter.js';
 import { validateTextAnswer, validateNumberAnswer } from '../agent/elicitation/answer-validation.js';
+import { palette } from '../cli/palette.js';
 import type { ElicitationCtx, ResolveGuard, Resolve } from './elicitation-handler.types.js';
 import { splitLongPrompt } from './elicitation-handler.send.js';
 
@@ -243,9 +244,7 @@ export function handleTextElicitation(
       // M6: log abandoned-entry cleanup so diagnostic traces surface if the
       // re-prompt race (H1) or an unanticipated path leaves a stale entry.
       if (ctx.messageHandler.pendingElicitations.has(ctx.key)) {
-        console.warn(
-          '[elicitation-handler] abort: cleaning up stale pendingElicitation for route',
-          ctx.key,
+        console.warn(palette.warning(`[elicitation-handler] abort: cleaning up stale pendingElicitation for route ${ctx.key}`),
         );
       }
       ctx.deletePending();
@@ -295,9 +294,7 @@ export function handleTextElicitation(
             ctx.signal.removeEventListener('abort', onAbort);
             // M6: log sendMessage failure so callers can diagnose silent declines
             // without a visible error (e.g., MarkdownV2 parse failure, network error).
-            console.warn(
-              '[elicitation-handler] sendMessage failed; declining elicitation for route',
-              ctx.key,
+            console.warn(palette.warning(`[elicitation-handler] sendMessage failed; declining elicitation for route ${ctx.key}`),
             );
             ctx.deletePending();
             resolve({ action: 'decline' });
@@ -321,10 +318,7 @@ export function handleTextElicitation(
         if (!guard.resolved) {
           guard.resolved = true;
           ctx.signal.removeEventListener('abort', onAbort);
-          console.warn(
-            '[elicitation-handler] pre-message sendMessage failed; declining elicitation for route',
-            ctx.key,
-            err,
+          console.warn(palette.warning(`[elicitation-handler] pre-message sendMessage failed; declining elicitation for route ${ctx.key}: ${err instanceof Error ? err.message : String(err)}`),
           );
           ctx.deletePending();
           resolve({ action: 'decline' });

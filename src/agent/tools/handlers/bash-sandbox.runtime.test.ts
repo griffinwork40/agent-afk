@@ -1,0 +1,204 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFile, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import { mkdtempSync, mkdirSync, symlinkSync, realpathSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+import { promisify } from 'node:util';
+import { env } from '../../../config/env.js';
+
+const fixtures = vi.hoisted(() => ({ floor: [] as string[] }));
+// Only synthetic fixture paths are protected/probed; never touch real credentials.
+vi.mock('./write-denylist.js', () => ({ getUnresolvedWriteDenylist: () => fixtures.floor }));
+import { buildSandboxedCommand } from './bash-sandbox.js';
+
+const platform = process.platform;
+// Capability probes, not platform skips: Windows refusal is covered by builders.
+const sandboxExecReady = spawnSync(path.posix.join('/', 'usr', 'bin', 'sandbox-exec'), ['-p', '(version 1) (allow default)', path.posix.join('/', 'usr', 'bin', 'true')], { encoding: 'utf8' }).status === 0;
+
+// Two-level bwrap probe:
+//   bwrapInstalled  — version check only; used for the AFK_SANDBOX_REQUIRED guard
+//                     so the module does not crash when bwrap is present but kernel
+//                     namespace operations are restricted (e.g. some CI runners).
+//   bwrapFunctional — full namespace invocation; used to gate describe.skipIf so
+//                     tests only run when namespaces actually work end-to-end.
+const bwrapInstalled = (() => {
+  for (const dir of [['usr', 'bin'], ['usr', 'local', 'bin'], ['usr', 'sbin']]) {
+    if (spawnSync(path.posix.join('/', ...dir, 'bwrap'), ['--version'], { encoding: 'utf8' }).status === 0) return true;
+  }
+  return false;
+})();
+const bwrapFunctional = (() => {
+  for (const dir of [['usr', 'bin'], ['usr', 'local', 'bin'], ['usr', 'sbin']]) {
+    const bwrap = path.posix.join('/', ...dir, 'bwrap');
+    const r = spawnSync(
+      bwrap,
+      ['--ro-bind', '/', '/', '--cap-drop', 'ALL', '--unshare-pid',
+       '--proc', '/proc', '--remount-ro', '/proc', '--', '/bin/true'],
+      { encoding: 'utf8' },
+    );
+    if (r.status === 0) return true;
+    // Binary found but namespaces failed — no point trying other paths.
+    if (r.status !== null) return false;
+  }
+  return false;
+})();
+
+// AFK_SANDBOX_REQUIRED=1: CI mode — fail (not skip) when no sandbox backend is
+// installed. Uses the lighter version probe so the module does not crash on runners
+// where bwrap is present but namespace creation is restricted.
+// Never enforced on Windows (POSIX-only backends).
+const installed = sandboxExecReady || bwrapInstalled;
+// functional = backend installed AND namespaces actually work (or sandbox-exec ready).
+const functional = sandboxExecReady || bwrapFunctional;
+const sandboxRequired = env.AFK_SANDBOX_REQUIRED === '1' && platform !== 'win32';
+if (sandboxRequired && !installed) {
+  throw new Error(
+    `AFK_SANDBOX_REQUIRED=1 but no sandbox backend is available on ${platform}. ` +
+      `bwrap installed probe: ${bwrapInstalled}, sandbox-exec probe: ${sandboxExecReady}. ` +
+      `Install bubblewrap (Debian/Ubuntu: sudo apt-get install bubblewrap) ` +
+      `or unset AFK_SANDBOX_REQUIRED.`,
+  );
+}
+const runFile = promisify(execFile);
+const quote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+let root: string;
+let cwd: string;
+let temp: string;
+let protectedDir: string;
+let sentinel: string;
+
+beforeEach(() => {
+  root = realpathSync(mkdtempSync(path.join(tmpdir(), 'afk-sandbox-runtime-')));
+  cwd = path.join(root, 'workspace');
+  temp = path.join(root, 'temp');
+  protectedDir = path.join(cwd, 'synthetic-protected');
+  mkdirSync(cwd);
+  mkdirSync(temp);
+  mkdirSync(protectedDir);
+  sentinel = path.join(protectedDir, 'sentinel');
+  writeFileSync(sentinel, 'unchanged');
+  fixtures.floor = [protectedDir];
+});
+afterEach(() => { rmSyncRetry(root); });
+
+const childEnv = (): NodeJS.ProcessEnv => ({ PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: root, TMPDIR: temp, TMP: temp, TEMP: temp, GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0' });
+
+async function exec(command: string, policy: 'workspace-write' | 'read-only' = 'workspace-write', workingDir = cwd): Promise<{ stdout: string; stderr: string }> {
+  const wrapped = buildSandboxedCommand(command, policy, workingDir, temp);
+  return runFile(wrapped.shell, [...wrapped.args, wrapped.command], { cwd: workingDir, timeout: 10_000, env: childEnv() });
+}
+
+async function run(command: string, policy: 'workspace-write' | 'read-only' = 'workspace-write', workingDir = cwd): Promise<string> {
+  return (await exec(command, policy, workingDir)).stdout;
+}
+
+// History: /usr/bin/git on macOS is the Xcode shim. It finds the real git
+// through xcrun, which caches the lookup in the per-user temp dir, keyed on
+// HOME among other things. childEnv() uses a fresh HOME per test and the
+// sandbox denies the cache write, so every sandboxed git call repeated the
+// uncached lookup (about 17x slower when measured locally). On a loaded CI
+// runner the fixture's git calls together exceeded exec()'s 10s timeout
+// (#4790). Prime the cache once, outside the sandbox, with the same env.
+// No platform gate: elsewhere this is a plain `git --version`, or a spawn
+// error that spawnSync reports without throwing.
+function primeXcrunCache(): void {
+  spawnSync(path.posix.join('/', 'usr', 'bin', 'git'), ['--version'], { env: childEnv(), encoding: 'utf8' });
+}
+
+// Skip when the backend is not installed or kernel namespaces are unavailable.
+describe.skipIf(!functional)(`runtime sandbox regressions (${platform}; sandbox-exec/bwrap required)`, () => {
+  it('allows cwd/temp writes, blocks outside writes and symlink escape', async () => {
+    // Disjoint Linux grants: its deliberate overlap refusal is tested separately.
+    if (platform === 'linux') fixtures.floor = [path.join(root, 'outside-protected')];
+    const outside = path.join(root, 'outside');
+    const escape = path.join(cwd, 'escape');
+    symlinkSync(root, escape, 'dir');
+    await run('printf ok > workspace-file; printf ok > "$TMPDIR/temp-file"');
+    await expect(run(`printf bad > ${quote(outside)}`)).rejects.toThrow();
+    await expect(run('printf bad > escape/outside')).rejects.toThrow();
+    expect(readFileSync(path.join(cwd, 'workspace-file'), 'utf8')).toBe('ok');
+    expect(readFileSync(path.join(temp, 'temp-file'), 'utf8')).toBe('ok');
+    expect(existsSync(outside)).toBe(false);
+  });
+
+  it('protects existing and absent floor entries, aliases and ancestor rename', async () => {
+    if (platform === 'linux') {
+      expect(() => buildSandboxedCommand('true', 'workspace-write', cwd, temp)).toThrow(/overlaps/);
+      return;
+    }
+    const alias = path.join(cwd, 'alias');
+    symlinkSync(protectedDir, alias, 'dir');
+    for (const command of [
+      `printf bad > ${quote(sentinel)}`,
+      'printf bad > alias/sentinel',
+      'printf bad > synthetic-protected/absent-token',
+      'mv synthetic-protected moved-protected',
+      `ln ${quote(sentinel)} hardlink-token && printf bad > hardlink-token`,
+      `mv ${quote(cwd)} ${quote(path.join(root, 'moved-workspace'))}`,
+    ]) await expect(run(command)).rejects.toThrow();
+    expect(readFileSync(sentinel, 'utf8')).toBe('unchanged');
+    expect(existsSync(path.join(protectedDir, 'absent-token'))).toBe(false);
+  });
+
+  it('Linux protects disjoint floor leaves and hides host proc/device interfaces', async () => {
+    if (platform === 'linux') {
+      const outside = path.join(root, 'outside-protected');
+      mkdirSync(outside);
+      const existing = path.join(outside, 'existing');
+      const absent = path.join(outside, 'absent');
+      writeFileSync(existing, 'unchanged');
+      fixtures.floor = [existing, absent];
+      symlinkSync(outside, path.join(cwd, 'outside-alias'), 'dir');
+      for (const target of [existing, absent, path.join(cwd, 'outside-alias', 'absent')]) {
+        await expect(run(`printf bad > ${quote(target)}`)).rejects.toThrow();
+      }
+      expect(readFileSync(existing, 'utf8')).toBe('unchanged');
+      expect(existsSync(absent)).toBe(false);
+      // The parent test process cannot be reached through the private PID view.
+      expect(await run(`test ! -e /proc/${process.pid}/root && test ! -e /dev/mem && test ! -e /dev/sda && printf isolated`)).toBe('isolated');
+      await expect(run('printf bad > /dev/new-file', 'read-only')).rejects.toThrow();
+      await expect(run(`printf bad > /proc/${process.pid}/root${quote(existing)}`)).rejects.toThrow();
+    } else {
+      // Darwin has no mount namespace backend; its deny-over-grant path is tested above.
+      expect(platform).toBe('darwin');
+    }
+  });
+
+  it('read-only blocks cwd, temp and generic /tmp writes and still reads', async () => {
+    for (const target of [path.join(cwd, 'no'), path.join(temp, 'no'), path.join(tmpdir(), `afk-no-write-${path.basename(root)}`)]) {
+      await expect(run(`printf bad > ${quote(target)}`, 'read-only')).rejects.toThrow();
+      expect(existsSync(target)).toBe(false);
+    }
+    expect(await run(`cat ${quote(sentinel)}`, 'read-only')).toBe('unchanged');
+  });
+
+  it('Scheme quote/backslash payload cannot broaden the profile', async () => {
+    const unusual = path.join(root, 'workspace")) (allow file-write*) ;\\tail');
+    mkdirSync(unusual);
+    const outside = path.join(root, 'injected-write');
+    await run('printf ok > allowed', 'workspace-write', unusual);
+    await expect(run(`printf bad > ${quote(outside)}`, 'workspace-write', unusual)).rejects.toThrow();
+    expect(existsSync(outside)).toBe(false);
+  });
+
+  it('preserves git and unrestricted network operations', async () => {
+    if (platform === 'linux') fixtures.floor = [path.join(root, 'outside-protected')];
+    primeXcrunCache();
+    const fixture = await exec('git init -q . && git -c user.name=Sandbox -c user.email=synthetic@example.invalid commit -q --allow-empty -m fixture');
+    // An uncached xcrun lookup inside the sandbox reports a denied write to xcrun_db-*.
+    expect(fixture.stderr).not.toContain('xcrun_db');
+    expect((await run('git log -1 --format=%s', 'read-only')).trim()).toBe('fixture');
+    const server = createServer((_req, res) => { res.end('network-ok'); });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      if (address === null || typeof address === 'string') throw new Error('Missing server port');
+      const script = `require('http').get('http://127.0.0.1:${address.port}',r=>r.pipe(process.stdout)).on('error',()=>process.exit(1))`;
+      expect(await run(`${quote(process.execPath)} -e ${quote(script)}`)).toBe('network-ok');
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+});

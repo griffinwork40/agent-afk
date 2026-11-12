@@ -49,11 +49,7 @@ export function registerMigrateCommand(program: Command): void {
     .action(async (binaryArg: string | undefined, opts: MigrateOptions) => {
       const requested = normalizeBinary(binaryArg ?? opts.from);
       if ((binaryArg ?? opts.from) !== undefined && requested === null) {
-        console.error(
-          palette.error(
-            `Unknown source binary "${binaryArg ?? opts.from}". Known: ${KNOWN_IMPORT_BINARIES.join(', ')}`,
-          ),
-        );
+        console.error(palette.error(`Unknown source binary "${binaryArg ?? opts.from}". Known: ${KNOWN_IMPORT_BINARIES.join(', ')}`));
         process.exit(1);
       }
 
@@ -62,15 +58,9 @@ export function registerMigrateCommand(program: Command): void {
 
       if (targets.length === 0) {
         if (requested) {
-          console.log(
-            palette.dim(
-              `${labelFor(requested)} not detected on this machine (looked for its plugins/skills/MCP config).`,
-            ),
-          );
+          console.log(palette.dim(`${labelFor(requested)} not detected on this machine (looked for its plugins/skills/MCP config).`));
         } else {
-          console.log(
-            palette.dim('No supported source tools detected (looked for Claude Code and Codex).'),
-          );
+          console.log(palette.dim('No supported source tools detected (looked for Claude Code and Codex).'));
         }
         process.exit(0);
       }
@@ -80,10 +70,10 @@ export function registerMigrateCommand(program: Command): void {
       const importBlock = buildImportBlock(targets, opts.mcp === true);
 
       if (opts.dryRun === true) {
-        console.log('');
+        console.log(''); // console-ok
         console.log(palette.bold('Dry run — would write to afk.config.json:'));
         console.log(palette.dim(JSON.stringify({ importFrom: importBlock }, null, 2)));
-        console.log('');
+        console.log(''); // console-ok
         console.log(palette.dim('Re-run without --dry-run to apply.'));
         process.exit(0);
       }
@@ -91,10 +81,8 @@ export function registerMigrateCommand(program: Command): void {
       // Confirmation gate. Interactive TTY → prompt; otherwise require --yes.
       if (opts.yes !== true) {
         if (!process.stdin.isTTY) {
-          console.log('');
-          console.log(
-            palette.warning('Non-interactive shell: re-run with --yes to apply, or --dry-run to preview.'),
-          );
+          console.log(''); // console-ok
+          console.log(palette.warning('Non-interactive shell: re-run with --yes to apply, or --dry-run to preview.'));
           process.exit(0);
         }
         const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -121,14 +109,12 @@ export function registerMigrateCommand(program: Command): void {
         process.exit(1);
       }
 
-      console.log('');
+      console.log(''); // console-ok
       console.log(palette.success(`✓ Recorded import trust in ${configPath}`));
       console.log(palette.dim('  Your imported plugins and skills are now live on the next `afk` session.'));
       console.log(palette.dim('  Run `afk doctor` to verify, or `afk migrate --dry-run` to review.'));
       if (opts.mcp !== true && targets.some((t) => t.mcpServers.length > 0)) {
-        console.log(
-          palette.dim('  MCP servers were NOT imported (they auto-run commands). Re-run with --mcp to include them.'),
-        );
+        console.log(palette.dim('  MCP servers were NOT imported (they auto-run commands). Re-run with --mcp to include them.'));
       }
       process.exit(0);
     });
@@ -145,9 +131,9 @@ function labelFor(binary: ImportSourceBinary): string {
 }
 
 function printSourceSummary(src: DetectedSource, includeMcp: boolean): void {
-  console.log('');
+  console.log(''); // console-ok
   console.log(palette.bold(`${src.label}`));
-  console.log(`  ${src.plugins.length} plugin(s), ${src.skills.length} skill(s)`);
+  console.log(palette.dim(`  ${src.plugins.length} plugin(s), ${src.skills.length} skill(s)`));
   if (src.plugins.length > 0) {
     console.log(palette.dim(`    plugins: ${src.plugins.map((p) => p.name).join(', ')}`));
   }
@@ -162,9 +148,7 @@ function printSourceSummary(src: DetectedSource, includeMcp: boolean): void {
         console.log(palette.dim(`    ${s.name}: ${s.command}`));
       }
       if (src.mcpFormat === 'toml') {
-        console.log(
-          palette.warning('    (Codex MCP loading is not yet supported — detection only. mcp will be recorded false.)'),
-        );
+        console.log(palette.warning('    (Codex MCP loading is not yet supported — detection only. mcp will be recorded false.)'));
       }
     } else {
       console.log(palette.dim(`  ${src.mcpServers.length} MCP server(s) available (use --mcp to import)`));

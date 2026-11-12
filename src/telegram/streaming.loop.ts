@@ -275,7 +275,7 @@ export async function runStreamLoop(params: {
 
     if (!watchdog.receivedAny) {
       watchdog.receivedAny = true;
-      console.log('📡 First stream event received:', event.type);
+      if (traceEnabled) console.log('[trace] first stream event received:', event.type);
       logger?.('First stream event received:', event.type);
     }
 

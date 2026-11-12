@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createFileCheckpointRegistry, listTurnSnapshots } from './file-checkpoint.js';
@@ -9,7 +10,7 @@ import { readTurnLog, hashBytes } from './turn-log.js';
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'afk-prior-state-')); });
-afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { rmSyncRetry(root); });
 
 for (const order of ['tool-first', 'bash-first', 'concurrent'] as const) {
   it(`first touch wins across bash and file tools (${order})`, async () => {

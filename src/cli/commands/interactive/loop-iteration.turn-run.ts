@@ -23,6 +23,7 @@ import type { TurnState } from './repl-loop-shared.js';
 import type { TranscriptHandle } from './transcript.js';
 import type { InputSurface } from '../../input/input-surface.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
+import { PauseController, formatPauseNote } from '../../../agent/session/pause-controller.js';
 
 /**
  * Mutable per-turn verdict capture. Reset before every `runOneTurn` so a
@@ -74,6 +75,21 @@ export async function runOneTurn(
   autosaveState: [autosaveFailureLogged: boolean],
   rawUserText: string,
 ): Promise<TerminalCapture> {
+  await PauseController.instance().check(ctx.session.current.abortSignal);
+
+  // Contract: after a user pause (afk pause / afk resume), inject a context
+  // note so the model knows how long it was paused and can correctly attribute
+  // subagent failures to the pause rather than provider throttling.
+  // Mid-turn scenario: a pause that occurs while streaming or dispatching tools
+  // is handled at the model-round boundary inside each provider loop via the
+  // beforeNextRound hook (inter-round.ts / turn-driver.ts), which also calls
+  // consumeLastPauseDuration(). This site fires for the top-level turn start.
+  const pauseMs = PauseController.instance().consumeLastPauseDuration();
+  const pauseNote = pauseMs !== undefined ? formatPauseNote(pauseMs) : undefined;
+  if (pauseNote) {
+    runText = pauseNote + '\n\n' + runText;
+  }
+
   const { verdictLedger, loopStageBar, mascotBar, healthRail } = footer;
   const capture: TerminalCapture = { kind: undefined, doneHasEvidence: undefined, doneClassification: undefined };
 

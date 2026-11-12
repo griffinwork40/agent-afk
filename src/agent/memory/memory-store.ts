@@ -28,7 +28,7 @@ import {
 } from 'fs';
 import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { join } from 'path';
-import { getMemoryDir } from '../../paths.js';
+import { getMemoryDir, getFacetCacheDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { factsToResults, sanitizeFtsQuery } from './memory-store.fts.js';
 import { queryUnaccessed, queryAccessStats } from './memory-store.access.js';
@@ -43,6 +43,9 @@ import {
   searchProcedures as searchProceduresImpl,
   PROCEDURES_DIR,
 } from './memory-store.procedures.js';
+import { FacetFtsStore } from './facet-fts-store.js';
+import { indexFacetIntoStore } from './memory-store.facet-index.js';
+import { storeEpisodeFact as storeEpisodeFactImpl } from './memory-store.episode-fact.js';
 import type {
   AccessStats,
   Fact,
@@ -103,11 +106,26 @@ export interface HotUsage {
 export class MemoryStore {
   private readonly dir: string;
   private readonly db: BetterSqlite3.Database;
+  private readonly facetFts: FacetFtsStore;
 
-  constructor(memoryDir?: string) {
+  constructor(memoryDir?: string, facetCacheDir?: string, opts?: { skipFacetBackfill?: boolean }) {
     this.dir = memoryDir ?? getMemoryDir();
     mkdirSync(this.dir, { recursive: true });
     mkdirSync(join(this.dir, PROCEDURES_DIR), { recursive: true });
+
+    // Open the facet FTS sidecar DB. This is a separate SQLite database that
+    // indexes session facet fields for type:'session' search results.
+    this.facetFts = new FacetFtsStore(this.dir);
+    // Backfill existing facet cache files on first open (or when the cache dir
+    // is newer than the sidecar DB) so prior sessions are searchable immediately.
+    // Skip when opts.skipFacetBackfill is true (e.g. session-end-hook only
+    // needs to index one fresh facet, not scan all existing cache files).
+    if (!opts?.skipFacetBackfill) {
+      const resolvedCacheDir = facetCacheDir ?? getFacetCacheDir();
+      if (this.facetFts.needsBackfill(this.dir, resolvedCacheDir)) {
+        this.facetFts.backfill(resolvedCacheDir);
+      }
+    }
 
     this.db = new Database(join(this.dir, DB_FILE));
     // configureSqliteConnection sets busy_timeout (5 000 ms) BEFORE the WAL
@@ -246,6 +264,16 @@ export class MemoryStore {
     return Number(result.lastInsertRowid);
   }
 
+  /**
+   * Write an episode fact using INSERT OR IGNORE for idempotency (#4661,
+   * constraint 4). Implementation lives in memory-store.episode-fact.ts
+   * (line-ceiling split). Returns the rowid of the inserted row, or -1 when
+   * the row was ignored (duplicate).
+   */
+  storeEpisodeFact(fact: NewFact): number {
+    return storeEpisodeFactImpl(this.db, fact);
+  }
+
   supersedeFact(
     factId: number,
     newContent: string,
@@ -282,6 +310,26 @@ export class MemoryStore {
     return queryAccessStats(this.db);
   }
 
+  /**
+   * Return all episode-synthesis facts, newest first.
+   *
+   * Unlike {@link searchFacts}, this bypasses FTS entirely — episodes are a
+   * known partition of the facts table, not a full-text search topic. The
+   * caller (recallEpisodes) applies its own git-context scoring, so FTS
+   * relevance ranking would be discarded anyway.
+   */
+  getEpisodes(limit = 200): Fact[] {
+    const sql = `
+      SELECT * FROM facts
+      WHERE category = 'episode'
+        AND source_surface = 'episode-synthesis'
+        AND superseded_by IS NULL
+      ORDER BY created_at DESC
+      LIMIT ?
+    `;
+    return this.db.prepare(sql).all(limit) as Fact[];
+  }
+
   searchFacts(query: string, opts?: SearchOpts): Fact[] {
     const limit = opts?.limit ?? 10;
     const conditions: string[] = ['facts_fts MATCH ?'];
@@ -294,6 +342,10 @@ export class MemoryStore {
     if (opts?.since) {
       conditions.push('f.created_at >= ?');
       params.push(opts.since);
+    }
+    if (opts?.source_surface) {
+      conditions.push('f.source_surface = ?');
+      params.push(opts.source_surface);
     }
     conditions.push('f.superseded_by IS NULL');
 
@@ -416,6 +468,22 @@ export class MemoryStore {
     return searchProceduresImpl(this.dir, query);
   }
 
+  // ── Facet FTS (session recall) ───────────────────────────────
+
+  /**
+   * Index a session facet for `type: 'session'` search results.
+   *
+   * Contract: idempotent — re-indexing an already-indexed session_id is a
+   * no-op (INSERT OR IGNORE). Callers invoke this at facet-write time so the
+   * index stays current without a backfill pass.
+   *
+   * The `raw` argument is the facet object as written to the cache dir.
+   * Extraction logic lives in memory-store.facet-index.ts (line-ceiling split).
+   */
+  indexFacet(raw: unknown): void {
+    indexFacetIntoStore(this.facetFts, raw);
+  }
+
   // ── Combined search ─────────────────────────────────────────
 
   search(query: string, opts?: SearchOpts): MemorySearchResult[] {
@@ -441,6 +509,7 @@ export class MemoryStore {
     // Invariant: `results` aliases `factResults` (no defensive copy).
     // The array is consumed exactly once (push + slice below) and never read
     // from again. Add a spread copy here if a second reader ever appears.
+    const limit = opts?.limit ?? 10;
     const results: MemorySearchResult[] = factResults;
 
     if (!opts?.category) {
@@ -454,9 +523,29 @@ export class MemoryStore {
           confidence: 1.0,
         });
       }
+
+      // Union facet FTS results as type:'session'. The facet index is a
+      // separate SQLite sidecar — failures are swallowed inside FacetFtsStore
+      // and return [] so a facet-index problem never breaks fact recall.
+      // FacetFtsStore.search() applies sanitizeFtsQuery internally.
+      //
+      // Session results are fetched with a reserved sub-limit so they cannot
+      // be starved when facts alone fill the budget. We reserve up to
+      // Math.ceil(limit / 3) slots (capped at 3) for session results, then
+      // fill the rest with facts+procs. This guarantees that when session
+      // results exist and match the query, at least some appear in the output.
+      const sessionSlots = Math.min(3, Math.ceil(limit / 3));
+      const sessionResults = this.facetFts.search(query, sessionSlots);
+
+      if (sessionResults.length > 0) {
+        // Interleave: take up to (limit - sessionSlots) from facts+procs,
+        // then append session results, then slice to limit.
+        const nonSessionBudget = limit - sessionResults.length;
+        const trimmed = results.slice(0, nonSessionBudget);
+        return [...trimmed, ...sessionResults].slice(0, limit);
+      }
     }
 
-    const limit = opts?.limit ?? 10;
     return results.slice(0, limit);
   }
 
@@ -467,6 +556,7 @@ export class MemoryStore {
   }
 
   close(): void {
+    this.facetFts.close();
     this.db.close();
   }
 }

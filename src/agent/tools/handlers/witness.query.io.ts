@@ -25,16 +25,23 @@ export async function readTraceSafe(tracePath: string): Promise<ReadTraceSafeRes
   try {
     const buf = await readFile(tracePath);
     if (buf.length <= MAX_READ_BYTES) {
+      // Non-truncated path: the full buffer is returned as-is. No FFFD
+      // stripping is needed here because we convert the whole buffer; Node's
+      // Buffer.toString('utf-8') only produces U+FFFD when a sequence is split
+      // across a subarray boundary, which cannot happen on a complete file read.
       return { content: buf.toString('utf-8'), truncated: false };
     }
     // Slice from the tail then align to the next newline boundary to avoid
     // splitting a multi-byte UTF-8 sequence or a partial JSON object.
+    // The newline realignment reduces (but does not eliminate) mid-codepoint
+    // cuts, so strip any trailing U+FFFD replacement characters for consistency
+    // with other truncation sites (journal.ts, bg-result-notifier.ts).
     let capped = buf.subarray(buf.length - MAX_READ_BYTES);
     const firstNewline = capped.indexOf(0x0a);
     if (firstNewline !== -1) {
       capped = capped.subarray(firstNewline + 1);
     }
-    return { content: capped.toString('utf-8'), truncated: true };
+    return { content: capped.toString('utf-8').replace(/\uFFFD+$/, ''), truncated: true };
   } catch {
     return { content: '', truncated: false };
   }

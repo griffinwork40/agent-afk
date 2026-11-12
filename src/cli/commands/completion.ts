@@ -172,6 +172,6 @@ export function registerCompletionCommand(program: Command): void {
           break;
       }
 
-      console.log(script);
+      console.log(script); // console-ok
     });
 }

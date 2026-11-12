@@ -157,7 +157,7 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
     // session id first becomes known or changes (e.g. resumed/forked session).
     // Fire-and-forget: the callback must never propagate errors into
     // updateSessionIdentity — see SessionStateManager for the try/catch.
-    (sid, prior) => void emitSessionIdAssigned(config.traceWriter, sid, prior),
+    (sid, prior) => void emitSessionIdAssigned(config.traceWriter, sid, prior, config.credentialSource),
   );
   const inputStream = new QueryInputStream(() => stateManager.getSessionId());
 

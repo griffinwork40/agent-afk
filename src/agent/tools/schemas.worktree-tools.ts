@@ -93,6 +93,14 @@ export const worktreeTool: AnthropicToolDef = {
           'remove only: also remove when dirty or with commits ahead of base. Default false. ' +
           'The branch ref is preserved either way.',
       },
+      repo: {
+        type: 'string',
+        description:
+          'Optional absolute path to the git repository root. When provided, the repo root is ' +
+          'resolved from this path instead of the session cwd. Use when the session cwd is not ' +
+          'inside a git repository (e.g. daemon tasks with cwd $HOME, research sessions, scratch ' +
+          'dirs). Applies to create, keep, release, list, and remove.',
+      },
     },
     required: ['action'],
   },
