@@ -12,6 +12,38 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.353.1] - 2026-11-12
+
+### Fixed
+- retitle command classifier call-site wiring test (#4675) (0963f9abe)
+- address remaining test-gap and hygiene findings (#4809) (188805c88)
+- add Lighthouse CI gate for docs site perf observability (#4810) (19ff72e74)
+- restore test-typecheck ratchet on main after #4813 baseline drop (#4815) (cdce7ca9c)
+- add missing tests and fix positional assertion fragility (#4813) (0f75365e1)
+- wire ToolCallLedger at the dispatch boundary ("Wired at the dispatch boundary") (#4814) (5dd1d30c3)
+- sync journal after inter-round steering/pause injection in anthropic-direct (#4807) (229ae6a30)
+- make Anthropic credential provenance a loader output (#4808) (baccf0033)
+- credential scrub gaps (DATABASE_URL etc.) + aggregate blob-bytes cap (#4811) (697105da0)
+- add regression tests for stall-watchdog suspend/resume during pause (#4812) (bd5c8fdbb)
+- raise vi.waitFor timeout for /help flake on loaded macOS CI (#4806) (d2dfca54b)
+- clean up CLI_USER_AGENT JSDoc and add version-equality test (#4805) (7260c6d36)
+- count byModel bucket entries per event, not per map entry (#4797) (8dff7de46)
+- map cache_write_tokens to BillingUsage.cacheWrite for openai-compatible (#4794) (8c6c5427a)
+- add table-driven escapeCell tests and byModel edge-case tests (#4795) (ff3ce11e1)
+- correct inverted Anthropic/OpenAI provider detection in classifier (#4798) (fae9138d8)
+- tighten undo needle and add verdict-card echo guards (#4801) (571683fd0)
+- replace lines.length>2 proxy with explicit primaryWritten boolean and add secondary-tier edge-case tests (#4800) (51d18c15c)
+- add (unknown) bucket for model-less starts, restate cost invariant (#4796) (836749c55)
+- address stale comments, type nit, and style items from advisory batch (#4803) (ffcfa2d29)
+- tighten git-helpers test assertions per advisory review (#4802) (8819fac03)
+- pin symlink error message and add unconfined-path comments in artifact.test.ts (#4799) (436947a3d)
+
+### Changed
+- skip the nightly live provider tests when secrets are absent (#4824) (d45e00c96)
+- poll for the verified abort instead of a fixed 200ms sleep (#4789) (#4792) (d9850fe52)
+- retry temp dir teardown to stop Windows EBUSY flake (#4788) (#4791) (347b1a5fa)
+- prime the xcrun cache so sandboxed git cannot time out (#4790) (#4793) (46cb85110)
+
 ## [5.353.0] - 2026-11-11
 
 ### Added
