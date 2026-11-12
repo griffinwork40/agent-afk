@@ -8,8 +8,8 @@ import { providerForModel } from '../../agent/providers/index.js';
 import { statusPanel } from '../render.js';
 import { getApiKeyForModel, getModel, getCodexApiKey } from '../shared-helpers.js';
 import { resolveCliPermissionMode } from '../config.js';
-import { describeCredentialSource, credentialSourceId } from '../auth-wizard.describe-source.js';
-import { loadXaiApiKey, loadAnthropicCredential } from '../../agent/auth/credential-resolver.js';
+import { describeCredentialSource } from '../auth-wizard.describe-source.js';
+import { loadXaiApiKey, resolveAnthropicCredential } from '../../agent/auth/credential-resolver.js';
 
 export function registerStatusCommand(program: Command): void {
   program
@@ -52,15 +52,14 @@ export function registerStatusCommand(program: Command): void {
           // Use the Anthropic-only loader so an xAI user with only XAI_API_KEY
           // does not get anthropic.ok: true (getApiKey() is model-routed and
           // would return the xAI key when the active model is xai/xai-oauth).
-          const anthropicApiKey = loadAnthropicCredential();
+          // Token and provenance come from ONE loader call (#4778), so the
+          // reported source is always the tier that produced the token.
+          const anthropic = resolveAnthropicCredential();
+          const anthropicApiKey = anthropic?.token;
           const codexApiKey = getCodexApiKey();
           const xaiApiKey = loadXaiApiKey();
 
-          // Stable enum from the same precedence walk as the text Auth row
-          // (describeCredentialSource), so text and JSON never disagree.
-          const anthropicSource: string | null = anthropicApiKey
-            ? credentialSourceId()
-            : null;
+          const anthropicSource: string | null = anthropic?.source ?? null;
 
           const codexSource = codexApiKey
             ? env.OPENAI_API_KEY
