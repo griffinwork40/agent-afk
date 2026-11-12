@@ -203,9 +203,9 @@ export function updateAndStampChangelog(
  * Prepend new entries into the [Unreleased] section, skipping any commits
  * whose short hash already appears in the existing block (dedup guard).
  *
- * Used by scripts/release.mjs (via updateAndStampChangelog) and kept as a
- * standalone helper for callers that only need to update [Unreleased] without
- * stamping a version heading.
+ * No production callers since the /changelog slash command was removed;
+ * scripts/generate-changelog.mjs uses updateAndStampChangelog instead.
+ * Retained (and covered by src/changelog.test.ts) as the update-only variant.
  */
 export function updateChangelog(repoRoot: string, newEntries: string): void {
   const changelogPath = resolve(repoRoot, 'CHANGELOG.md');
