@@ -993,6 +993,7 @@ describe('Bug #2 dispatch-site invariant: agentType propagates from SubagentExec
       subagentManager: mockManager as any,
       parentSession: mockParentSession as any,
       defaultConfig: { apiKey: 'test-key', systemPrompt: 'test' },
+      defaultSubagentModel: 'claude-sonnet-4-5',
       depth: 0,
     });
 
