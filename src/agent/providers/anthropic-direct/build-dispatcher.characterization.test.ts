@@ -399,6 +399,13 @@ describe('buildDispatcher characterization (#4354) — nesting tools appear AFTE
 
   it('compose schema appears after get_runtime_state in the schema list', () => {
     // Both subagentExecutor and composeExecutor are constructor options.
+    // NOTE: describeComposeTool is intentionally stubbed on subagentExecutor, not
+    // composeExecutor. provider-schemas.ts gates compose on composeExecutor being set
+    // but reads the schema via subagentExecutor.describeComposeTool() — by design,
+    // because that method needs parentModel from the subagent executor's context
+    // (src/agent/tools/subagent-executor.ts:91-95). If this test breaks, check
+    // whether the gate-on-one/read-from-the-other wiring at provider-schemas.ts:88
+    // has changed.
     const stubSubagentExecutor = {
       describeComposeTool: () => ({ name: 'compose', description: 'stub', input_schema: { type: 'object' as const } }),
     };

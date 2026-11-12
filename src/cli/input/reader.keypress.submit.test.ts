@@ -13,7 +13,7 @@
  * no real TTY is needed.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { handleReturnKey } from './reader.keypress.submit.js';
 import { InputCore } from '../input-core.js';
 import type { ReaderState } from './reader.state.js';
