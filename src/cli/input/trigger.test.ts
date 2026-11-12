@@ -549,3 +549,27 @@ describe('filterFileCandidates — sync path warms the shared cache', () => {
     expect(vals).toContain('@beta.ts');
   });
 });
+
+// ---------------------------------------------------------------------------
+// filterFileCandidatesCached — cache-hit symlink (#4322)
+// ---------------------------------------------------------------------------
+
+describe('filterFileCandidatesCached — symlink entries preserved on cache hit', () => {
+  it('a symlinked directory stored in the cache surfaces with trailing slash on a cache hit', async () => {
+    // Prime the cache via the async path, which resolves symlink targets.
+    // The tmpRoot fixture already contains a 'link-dir' symlink → 'real-dir'
+    // created in the top-level beforeEach.
+    await filterFileCandidatesAsync('link', tmpRoot);
+
+    // filterFileCandidatesCached must find the entry without hitting the FS again.
+    const spy = vi.spyOn(fsp, 'readdir');
+    const cached = filterFileCandidatesCached('link', tmpRoot);
+    expect(spy).not.toHaveBeenCalled();
+
+    expect(cached).not.toBeNull();
+    // The symlink-to-directory entry must carry a trailing '/' so the user
+    // sees directory navigation behaviour, matching the async resolve result.
+    const vals = cached!.map((c) => c.value);
+    expect(vals).toContain('@link-dir/');
+  });
+});
