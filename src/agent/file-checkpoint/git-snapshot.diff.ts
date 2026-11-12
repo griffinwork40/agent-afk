@@ -121,6 +121,22 @@ export function _setMaxBlobBytesForTests(value: number | undefined): void {
 }
 
 /**
+ * Largest total bytes read across all prior blobs in one diff. Invariant:
+ * `cat-file --batch` buffers all fetched blobs in memory before parsing, so
+ * without an aggregate cap a diff with many large-but-under-per-blob-cap files
+ * could hold gigabytes. Blobs that would push the running total past this limit
+ * are moved to `skipped` exactly like oversized individual blobs.
+ * Default: 512 MiB (8× a single oversized blob; realistic diffs stay well under).
+ */
+export const MAX_AGGREGATE_BLOB_BYTES = 512 * 1024 * 1024;
+let maxAggregateBlobBytes = MAX_AGGREGATE_BLOB_BYTES;
+
+/** Test seam: override the aggregate cap (`undefined` restores MAX_AGGREGATE_BLOB_BYTES). */
+export function _setMaxAggregateBlobBytesForTests(value: number | undefined): void {
+  maxAggregateBlobBytes = value ?? MAX_AGGREGATE_BLOB_BYTES;
+}
+
+/**
  * Parse `cat-file --batch-check` output into sizes by request order.
  * Contract: one `<sha> <type> <size>` line per request; anything that is not a
  * blob (or missing) returns null so the diff fails closed.
@@ -146,12 +162,22 @@ async function fetchPriors(
   if (!isOk(check)) return classifyFailure(check, 'git cat-file --batch-check');
   const sizes = parseBatchCheck(check.stdout, wanted.length);
   if (sizes === null) return { ok: false, reason: 'error', detail: 'git cat-file: missing or malformed blob' };
+  let aggregateBytes = 0;
   const small = wanted.filter((w, i) => {
-    if ((sizes[i] ?? 0) <= maxBlobBytes) return true;
+    const size = sizes[i] ?? 0;
     const target = changes[w.index];
-    if (target) skipped.push({ absPath: target.absPath, reason: `prior content larger than ${maxBlobBytes} bytes` });
-    changes[w.index] = null;
-    return false;
+    if (size > maxBlobBytes) {
+      if (target) skipped.push({ absPath: target.absPath, reason: `prior content larger than ${maxBlobBytes} bytes` });
+      changes[w.index] = null;
+      return false;
+    }
+    if (aggregateBytes + size > maxAggregateBlobBytes) {
+      if (target) skipped.push({ absPath: target.absPath, reason: `prior content skipped: aggregate blob limit of ${maxAggregateBlobBytes} bytes reached` });
+      changes[w.index] = null;
+      return false;
+    }
+    aggregateBytes += size;
+    return true;
   });
   if (small.length === 0) return null;
   const cat = await runIn(ctx, cwd, ['cat-file', '--batch'], small.map((w) => `${w.sha}\n`).join(''));

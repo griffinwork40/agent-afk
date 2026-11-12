@@ -113,7 +113,7 @@ describe('registerResumeAllCommand', () => {
     vi.mocked(readFileSync).mockReturnValue(JSON.stringify({ pid: 1234, timestamp: future }));
     const program = makeProgram();
     runResume(program);
-    const output = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    const output = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
     expect(output).not.toContain('paused for');
     expect(output).toContain('AFK resumed.');
   });
@@ -124,7 +124,7 @@ describe('registerResumeAllCommand', () => {
     vi.mocked(readFileSync).mockReturnValue('{ not valid json }');
     const program = makeProgram();
     runResume(program);
-    const output = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    const output = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
     expect(output).not.toContain('paused for');
     expect(output).toContain('AFK resumed.');
     expect(removePauseLock).toHaveBeenCalledOnce();

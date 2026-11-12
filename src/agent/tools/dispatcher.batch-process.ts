@@ -25,6 +25,7 @@ import {
   repeatFailureFingerprint,
 } from './repeat-failure-guard.js';
 import type { RepeatFailureGuard } from './repeat-failure-guard.js';
+import { noteSettledOutcome, type ToolCallLedgerWiring } from './dispatcher.ledger.js';
 import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.js';
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { Batch } from './dispatch-batching.js';
@@ -59,6 +60,8 @@ export interface IndexedCall {
 export interface BatchExecDeps {
   /** Guard that refuses a call after N identical consecutive failures. */
   repeatFailureGuard: RepeatFailureGuard;
+  /** Session-scoped tool-call ledger (#4476); recorded alongside the guard. */
+  toolCallLedger: ToolCallLedgerWiring;
   /** Tool names exempt from repeat-failure/circuit-breaker short-circuits. */
   repeatBreakerExemptTools: ReadonlySet<string>;
   /** Core execution: agent routing + handler dispatch + PostToolUse hook. */
@@ -375,7 +378,7 @@ export async function runConcurrentBatch(
       const { call, originalIndex } = executableCalls[batchIdx]!;
       let result = results[originalIndex];
       if (result !== undefined && result.failureClass !== 'abort') {
-        deps.repeatFailureGuard.note(call, result);
+        noteSettledOutcome(deps.repeatFailureGuard, deps.toolCallLedger, call, result);
         // Tool-health monitor: observe and potentially append notice.
         // applyToolHealth is a no-op for non-error results and when not degraded.
         result = applyToolHealth(deps.toolHealthMonitor, deps.traceWriter, call, result);
@@ -432,7 +435,7 @@ export async function runSequentialBatch(
     // Stamp per-call completion time before batch-wide emit so the trace
     // event carries THIS call's elapsed duration, not the batch's. See #2249.
     const stamped = { ...coreResult, completedAt: Date.now() };
-    deps.repeatFailureGuard.note(call, stamped);
+    noteSettledOutcome(deps.repeatFailureGuard, deps.toolCallLedger, call, stamped);
     // Tool-health monitor: observe and potentially append notice.
     // applyToolHealth is a no-op for non-error results and when not degraded.
     const healthChecked = applyToolHealth(deps.toolHealthMonitor, deps.traceWriter, call, stamped);

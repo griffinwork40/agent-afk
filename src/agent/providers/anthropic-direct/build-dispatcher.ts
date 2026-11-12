@@ -36,6 +36,7 @@ import type { CustomToolDef } from '../../tools/custom-tool.js';
 import type { GrantManager } from '../../tools/grant-manager.js';
 import type { RuntimeStateSource } from '../../awareness/index.js';
 import type { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
+import type { ToolCallLedgerWiring } from '../../tools/dispatcher.ledger.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
 import {
@@ -119,6 +120,13 @@ export interface BuildDispatcherOptions {
    * restrictions via their own dispatcher and do not share the registry.
    */
   spawnedPidRegistry?: SpawnedPidRegistry;
+  /**
+   * Session-scoped tool-call ledger wiring (#4476). Created once per provider
+   * (i.e. per session) and handed to every per-query dispatcher so the ledger
+   * and its tool-round counter survive dispatcher rebuilds. Forked children
+   * build their own provider and therefore their own ledger.
+   */
+  toolCallLedger?: ToolCallLedgerWiring;
   /**
    * Live bash output tail reporter factory (issue #1506). Forwarded from the
    * REPL orchestrator when the session is running on a TTY REPL surface. The
@@ -373,6 +381,7 @@ export function buildDispatcher(
     readOnlyBash: deps.readOnlyBash,
     // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
     ...(opts?.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: opts.spawnedPidRegistry } : {}),
+    ...(opts?.toolCallLedger !== undefined ? { toolCallLedger: opts.toolCallLedger } : {}),
     // Yield contract: the queued-message probe rides on planExitControls (the
     // REPL installs it post-construction; top-level sessions only). Late-bound.
     ...(planExitControls ? { userAttention: userAttentionFrom(planExitControls) } : {}),

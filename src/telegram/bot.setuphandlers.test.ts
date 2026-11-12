@@ -212,10 +212,17 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
   describe('shared slash commands via the text listener', () => {
     test('/help replies through the shared registry', async () => {
       const api = await fireCommand(bot, '/help');
+      // The /help path goes through runDetached (fire-and-forget) → handle() →
+      // `await import('./slash.js')` (a dynamic import loaded cold on first
+      // call) → classifyTelegramSlash → replyHtml → callApi.  The vi.waitFor
+      // default of 1000ms is tight enough that a loaded macOS CI runner
+      // exhausts the budget before the reply lands (#4787).  5000ms matches
+      // the ceiling used for the same class of flake in the sibling fixes
+      // (#4789 / #4792).
       await vi.waitFor(() => expect(api).toHaveBeenCalledWith(
         'sendMessage',
         expect.objectContaining({ chat_id: 12345, parse_mode: 'HTML', text: expect.stringContaining('/clear') }),
-      ));
+      ), { timeout: 5000 });
     });
 
     test('/clear while the route is busy is queued, not run', async () => {

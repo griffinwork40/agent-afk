@@ -331,8 +331,8 @@ function applyResponsesUsage(state: StreamState, event: ResponsesStreamEvent): v
     prompt_tokens_details: {
       cached_tokens: u.input_tokens_details?.cached_tokens ?? 0,
       // cache_write_tokens: tokens written to the cache this turn (OpenAI Responses
-      // API v7.50.0+). Stored in state.usage so it is preserved in `raw`; not yet
-      // mapped to BillingUsage.cacheWrite or priced for openai-compatible.
+      // API v7.50.0+). Stored in state.usage so it is preserved in `raw`; mapped
+      // to BillingUsage.cacheWrite via usageFromState but intentionally unpriced (#4783).
       ...(u.input_tokens_details?.cache_write_tokens !== undefined
         ? { cache_write_tokens: u.input_tokens_details.cache_write_tokens }
         : {}),
