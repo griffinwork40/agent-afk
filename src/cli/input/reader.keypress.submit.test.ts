@@ -87,7 +87,7 @@ describe('handleReturnKey — selectedIndex=-1: no candidate selected, dropdown 
     // (selectedIndex=-1 is a valid UI state for "none highlighted").
     const st = makeState({
       dropdownOpen: true,
-      candidates: [{ value: '/ship', display: '/ship', kind: 'slash' }],
+      candidates: [{ value: '/ship' }],
       selectedIndex: -1,
       trigger: { kind: 'slash', query: 'sh' },
     });
@@ -121,7 +121,7 @@ describe('handleReturnKey — selectedIndex=-1: no candidate selected, dropdown 
   it('DOES call onSubmit when selectedIndex=0 and applySelection returns true (baseline)', () => {
     const st = makeState({
       dropdownOpen: true,
-      candidates: [{ value: '/ship', display: '/ship', kind: 'slash' }],
+      candidates: [{ value: '/ship' }],
       selectedIndex: 0,
       trigger: { kind: 'slash', query: 'sh' },
     });
@@ -159,7 +159,7 @@ describe('handleReturnKey — kind=file: file pick submits, directory pick does 
     const fileValue = '@src/main.ts';
     const st = makeState({
       dropdownOpen: true,
-      candidates: [{ value: fileValue, display: fileValue, kind: 'file' }],
+      candidates: [{ value: fileValue }],
       selectedIndex: 0,
       trigger: { kind: 'file', query: 'src/m' },
     });
@@ -193,7 +193,7 @@ describe('handleReturnKey — kind=file: file pick submits, directory pick does 
     const dirValue = '@src/';
     const st = makeState({
       dropdownOpen: true,
-      candidates: [{ value: dirValue, display: dirValue, kind: 'file' }],
+      candidates: [{ value: dirValue }],
       selectedIndex: 0,
       trigger: { kind: 'file', query: 'src' },
     });
