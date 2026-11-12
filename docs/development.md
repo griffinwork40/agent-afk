@@ -94,9 +94,13 @@ The nightly `.github/workflows/live-provider-tests.yml` CI job runs both files
 automatically using repository secrets. On failure it opens (or comments on) a
 GitHub issue labelled `live-test-failure`; it does **not** block PR checks.
 
-Required repository secrets for the nightly workflow:
+Repository secrets for the nightly workflow:
 - `CLAUDE_CODE_OAUTH_TOKEN` — Anthropic Claude OAuth token
 - `OPENAI_API_KEY` — OpenAI API key
+
+Both must be set for the tests to run. If either is missing, the workflow's
+`gate` job names the missing secret in the run summary and the `live-tests`
+job is skipped. A skipped run means nothing was tested; it is not a pass.
 
 **What to test:**
 - New provider events and stream transitions
