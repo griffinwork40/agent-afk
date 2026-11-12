@@ -330,7 +330,7 @@ is the bulk of the cost, not the code.
    so `/debug` structurally cannot show it without new plumbing.
 
 **Real integration point (grepped, not invented).** `src/cli/slash/commands/`
-holds `afk`, `allow-dir`, `bgsub`, `changelog`, `config-doctor`, `editor`,
+holds `afk`, `allow-dir`, `bgsub`, `config-doctor`, `editor`,
 `fork`, `info` (owns `/cost /tokens /history /model /tools /mcp /debug
 /usage /limits`), `init`, `keys`, `name`, `plan`, `reauth`, `resume`, `retry`,
 `search`, `sh`, `stats`, `theme`, `thinking`, `todo`, `transcript`,

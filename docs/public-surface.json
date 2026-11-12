@@ -4303,11 +4303,6 @@
     },
     {
       "kind": "slash",
-      "name": "/changelog",
-      "source": "src/cli/slash/commands/changelog.ts"
-    },
-    {
-      "kind": "slash",
       "name": "/clear",
       "source": "src/cli/slash/commands/core.ts"
     },
