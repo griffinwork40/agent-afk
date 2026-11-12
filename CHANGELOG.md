@@ -37,6 +37,7 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 - pin symlink error message and add unconfined-path comments in artifact.test.ts (#4799) (436947a3d)
 
 ### Changed
+- skip the nightly live provider tests when secrets are absent (#4824) (d45e00c96)
 - poll for the verified abort instead of a fixed 200ms sleep (#4789) (#4792) (d9850fe52)
 - retry temp dir teardown to stop Windows EBUSY flake (#4788) (#4791) (347b1a5fa)
 - prime the xcrun cache so sandboxed git cannot time out (#4790) (#4793) (46cb85110)
