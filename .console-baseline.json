@@ -1,3 +1,16 @@
 {
-  "entries": {}
+  "entries": {
+    "src/cli/commands/interactive/bg-result-notifier.ts": {
+      "count": 1,
+      "reason": "grandfathered: predates bracket-tag stderr gate"
+    },
+    "src/cli/commands/interactive/detached-tool-notifier.ts": {
+      "count": 2,
+      "reason": "grandfathered: predates bracket-tag stderr gate"
+    },
+    "src/cli/commands/interactive/loop-iteration.boundary.ts": {
+      "count": 1,
+      "reason": "grandfathered: predates bracket-tag stderr gate"
+    }
+  }
 }

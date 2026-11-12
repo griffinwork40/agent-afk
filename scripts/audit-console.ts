@@ -11,6 +11,12 @@
  * gate is a one-way ratchet preventing regression — new raw console calls fail CI
  * immediately, while grandfathered counts can only decrease, never increase.
  *
+ * Second rule, REPL subtree only (`src/cli/commands/interactive/`): a
+ * `process.stderr.write` whose first argument is a bracket-tagged literal
+ * (`[startup-recall] ...`). The REPL's warning handling hangs off `console.*`,
+ * so such a write reaches the terminal raw. See `audit-console-stderr-tags.ts`.
+ * Both rules share the baseline, the ratchet and the `// console-ok` hatch.
+ *
  * Excluded from scanning (legitimate raw console usage):
  *   - `src/cli/commands/interactive/console-bridge.ts` — the bridge itself
  *   - `src/telegram/streaming.loop.ts` — already guarded behind traceEnabled
@@ -34,6 +40,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import {
+  STDERR_TAG_METHOD,
+  STDERR_TAG_REASON,
+  inStderrTagScope,
+  isBracketTagStderrWrite,
+} from './audit-console-stderr-tags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -112,6 +125,7 @@ function scanFile(absPath: string): Violation[] {
   const source = fs.readFileSync(absPath, 'utf8');
   const lines = source.split('\n');
   const violations: Violation[] = [];
+  const stderrTagScope = inStderrTagScope(rel);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -120,16 +134,25 @@ function scanFile(absPath: string): Violation[] {
     // Skip lines with the escape-hatch comment.
     if (line.includes('// console-ok')) continue;
 
+    // Skip full-comment lines (commented-out code included).
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue;
+
+    // Bracket-tagged stderr write (REPL subtree only). Checked ahead of the
+    // JSON/palette skips below: those describe styled console calls, and a tag
+    // literal is unstyled whatever else the line mentions.
+    if (stderrTagScope && isBracketTagStderrWrite(line, lines[i + 1])) {
+      const wrapped = line.trimEnd().endsWith('(') ? ` ${(lines[i + 1] ?? '').trim()}` : '';
+      violations.push({ file: rel, line: i + 1, text: line.trim() + wrapped, method: STDERR_TAG_METHOD });
+      continue;
+    }
+
     // Skip lines with JSON.stringify — machine-readable JSON output is legitimate.
     if (line.includes('JSON.stringify')) continue;
 
     // Skip lines already routed through palette — this IS the correct pattern.
     // e.g. console.log(palette.info('...')) or console.error(palette.error('...'))
     if (line.includes('palette.')) continue;
-
-    // Skip full-comment lines.
-    const trimmed = line.trimStart();
-    if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue;
 
     // Match console.log/error/warn calls (not function references).
     // `console.warn)` (reference without `(`) is excluded by requiring `\s*\(` in regex.
@@ -192,7 +215,7 @@ function modeList(): void {
     }
   }
   const fileCount = byFile.size;
-  console.log(`\n(${total} raw console call(s) in ${fileCount} file(s))`);
+  console.log(`\n(${total} raw output call(s) in ${fileCount} file(s))`);
 }
 
 function modeUpdate(): void {
@@ -202,7 +225,9 @@ function modeUpdate(): void {
   for (const [file, violations] of byFile) {
     baseline.entries[file] = {
       count: violations.length,
-      reason: 'grandfathered: predates console-palette sweep gate',
+      reason: violations.every((v) => v.method === STDERR_TAG_METHOD)
+        ? STDERR_TAG_REASON
+        : 'grandfathered: predates console-palette sweep gate',
     };
   }
 
@@ -211,7 +236,7 @@ function modeUpdate(): void {
   const totalViolations = [...byFile.values()].reduce((s, v) => s + v.length, 0);
   const fileCount = byFile.size;
   console.log(
-    `✓ ${BASELINE_REL}: ${fileCount} file(s) grandfathered, ${totalViolations} raw console call(s) recorded.`,
+    `✓ ${BASELINE_REL}: ${fileCount} file(s) grandfathered, ${totalViolations} raw output call(s) recorded.`,
   );
 }
 
@@ -249,12 +274,12 @@ function modeCheck(): void {
     const grandfathered = [...byFile.values()].reduce((s, v) => s + v.length, 0);
     const fileCount = byFile.size;
     console.log(
-      `✓ audit:console: no new raw console calls bypassing palette (${grandfathered} grandfathered in ${fileCount} files)`,
+      `✓ audit:console: no new raw console calls or tagged stderr writes (${grandfathered} grandfathered in ${fileCount} files)`,
     );
     return;
   }
 
-  console.error(`\n✗ audit:console: raw console calls bypassing palette detected:\n`);
+  console.error(`\n✗ audit:console: raw console calls or tagged stderr writes detected:\n`);
 
   if (newFiles.length > 0) {
     console.error(`  NEW files (not in baseline):`);
@@ -282,6 +307,11 @@ function modeCheck(): void {
   console.error("    import { palette } from '<path>/palette.js';");
   console.error('    process.stdout.write(palette.success(msg) + "\\n");  // ← was: console.log(msg)');
   console.error('    process.stderr.write(palette.error(msg) + "\\n");   // ← was: console.error(msg)');
+  console.error('  For a `process.stderr.write` of a bracket-tagged literal under');
+  console.error('  src/cli/commands/interactive/ (the REPL owns the terminal there):');
+  console.error('    developer diagnostic  -> debugLog(...) from src/utils/debug.ts (AFK_DEBUG=1 only)');
+  console.error('    user-facing warning   -> console.warn(palette.warning(...)), or recordBootWarning');
+  console.error('                             during bootstrap, so the console bridge can place it');
   console.error('  Or add `// console-ok` to the line if this is intentional raw output.\n');
 
   process.exit(1);
