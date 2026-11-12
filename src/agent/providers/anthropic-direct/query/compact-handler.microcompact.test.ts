@@ -238,5 +238,8 @@ describe('compactHistory — microcompaction runs after successful compaction', 
     const block = (toolResultMsg!.content as Array<{ type?: string; content?: unknown }>)[0];
     expect(typeof block.content).toBe('string');
     expect(isMicrocompactPlaceholder(block.content as string)).toBe(true);
+    // The cleared counts are reported on the success result, not dropped.
+    expect(result.microcompaction?.blocksCleared).toBe(1);
+    expect(result.microcompaction?.bytesReclaimed).toBeGreaterThan(0);
   });
 });

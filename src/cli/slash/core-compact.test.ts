@@ -165,6 +165,38 @@ describe('/compact slash handler', () => {
     expect(success).toContain('200');
   });
 
+  it('adds one line for tool results cleared alongside a successful compaction', async () => {
+    const session = fakeSession();
+    session.compact.mockResolvedValue({
+      compacted: true,
+      messagesBefore: 12,
+      messagesAfter: 5,
+      microcompaction: { blocksCleared: 3, bytesReclaimed: 48_000 },
+    });
+    const { ctx, lines } = makeCtx(session);
+
+    await getCompactCmd().handler(ctx, '');
+
+    expect(lines.filter((l) => l.startsWith('SUCCESS:'))).toHaveLength(1);
+    const extra = lines.filter((l) => l.includes('Also cleared'));
+    expect(extra).toEqual(['INFO:Also cleared 3 large tool results (~48KB reclaimed).']);
+  });
+
+  it('adds no extra line when a successful compaction cleared nothing', async () => {
+    const session = fakeSession();
+    session.compact.mockResolvedValue({
+      compacted: true,
+      messagesBefore: 12,
+      messagesAfter: 5,
+      microcompaction: { blocksCleared: 0, bytesReclaimed: 0 },
+    });
+    const { ctx, lines } = makeCtx(session);
+
+    await getCompactCmd().handler(ctx, '');
+
+    expect(lines.some((l) => l.includes('Also cleared'))).toBe(false);
+  });
+
   it('renders no-op reason as info', async () => {
     const session = fakeSession();
     session.compact.mockResolvedValue({

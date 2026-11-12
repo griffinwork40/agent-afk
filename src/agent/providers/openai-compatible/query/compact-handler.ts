@@ -30,7 +30,9 @@ import {
 import { emitSessionPhase } from '../../../trace/emit.js';
 import { errorMessage } from '../../../../utils/errors.js';
 import {
+  COMPACT_SUMMARY_MAX_TOKENS,
   COMPACT_SYSTEM_PROMPT,
+  summarizerInputCharBudget,
   wrapTranscriptForSummary,
 } from '../../shared/compaction.js';
 import { compactOpenAIHistory, readShrinkFraction } from '../compact.js';
@@ -93,7 +95,7 @@ export async function runSummarizeViaResponses(
       system: COMPACT_SYSTEM_PROMPT,
       user: wrapTranscriptForSummary(transcript),
       isChatGptBackend: ctx.opts.auth.source === 'chatgpt-oauth',
-      maxTokens: 1024,
+      maxTokens: COMPACT_SUMMARY_MAX_TOKENS,
       signal,
     });
   } catch (err) {
@@ -173,6 +175,12 @@ export async function runCompactHistory(
     priorTurns: ctx.priorTurns,
     usedFraction,
     shrinkAtFraction: readShrinkFraction(),
+    // Budget follows the resolved summarizer model. The subscription catalog
+    // applies only when the session's own ChatGPT-OAuth wire writes it.
+    summarizerInputMaxChars: summarizerInputCharBudget(
+      compactModel,
+      ctx.opts.auth.source === 'chatgpt-oauth' && !env.AFK_COMPACT_MODEL,
+    ),
     summarize,
     isClosed: ctx.closed, // boolean snapshot — inherited from pre-split behaviour; compactOpenAIHistory accepts boolean, not a function
     isIdle: ctx.abort.isIdle(),

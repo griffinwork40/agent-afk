@@ -29,6 +29,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveCrossProviderSummarize, __resetCrossProviderWarnState } from './compact-summarizer.js';
+import { COMPACT_SUMMARY_MAX_TOKENS } from './compaction.summarizer-input.js';
 import * as anthropicOneshot from '../anthropic-direct/oneshot.js';
 import * as openaiOneshot from '../openai-compatible/oneshot.js';
 import * as openaiAuth from '../openai-compatible/auth.js';
@@ -154,7 +155,7 @@ describe('T3: Claude session + gpt id + api key', () => {
         apiKey: 'sk-test-key',
         system: expect.any(String),
         user: expect.any(String),
-        maxTokens: 1024,
+        maxTokens: COMPACT_SUMMARY_MAX_TOKENS,
       }),
     );
     expect(result).toBe(FOREIGN_RESULT);
@@ -196,7 +197,7 @@ describe('T4: Claude session + gpt id + ChatGPT-OAuth', () => {
         isChatGptBackend: true,
         system: expect.any(String),
         user: expect.any(String),
-        maxTokens: 1024,
+        maxTokens: COMPACT_SUMMARY_MAX_TOKENS,
       }),
     );
     // The client passed to oneShotResponses must have the ChatGPT backend URL
@@ -233,7 +234,7 @@ describe('T5: OpenAI session + claude id', () => {
       expect.objectContaining({
         token: 'sk-ant-test',
         model: 'claude-haiku-4-5-20251001',
-        maxTokens: 1024,
+        maxTokens: COMPACT_SUMMARY_MAX_TOKENS,
       }),
     );
     expect(result).toBe(FOREIGN_RESULT);
@@ -393,7 +394,7 @@ describe('T9: xAI cross-provider', () => {
       expect.objectContaining({
         model: 'grok-3-beta',
         baseURL: 'https://api.x.ai/v1',
-        maxTokens: 1024,
+        maxTokens: COMPACT_SUMMARY_MAX_TOKENS,
       }),
     );
     expect(result).toBe(FOREIGN_RESULT);

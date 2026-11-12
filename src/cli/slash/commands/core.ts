@@ -145,6 +145,12 @@ const compactCmd: SlashCommand = {
         ctx.out.success(
           `Compacted ${promptsBefore} → ${promptsAfter} prompts${saved}.`,
         );
+        const mc = result.microcompaction;
+        if (mc && mc.blocksCleared > 0) {
+          ctx.out.info(
+            `Also cleared ${mc.blocksCleared} large tool result${mc.blocksCleared === 1 ? '' : 's'} (~${formatBytes(mc.bytesReclaimed)} reclaimed).`,
+          );
+        }
       }
     } catch (err) {
       stopSpinner();

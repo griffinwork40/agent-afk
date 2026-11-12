@@ -34,7 +34,10 @@ import type { CompactionTrigger } from '../../trace/types.js';
 import {
   COMPACT_ACK_TEXT,
   COMPACT_SUMMARY_HEADER,
+  TOOL_ARGS_EXCERPT_CHARS,
+  TOOL_RESULT_EXCERPT_CHARS,
   byteLengthOf,
+  excerptHeadTail,
   isMicrocompactPlaceholder,
   microcompactToolResults as sharedMicrocompactToolResults,
   readKeepLastN,
@@ -57,9 +60,6 @@ function toolCallsOf(msg: OpenAIMessage): OpenAIMessage['tool_calls'] {
   return Array.isArray(msg.tool_calls) ? msg.tool_calls : undefined;
 }
 
-function truncateArgs(args: string): string {
-  return args.length > 240 ? args.slice(0, 237) + '...' : args;
-}
 
 /** True for real user input. Tool results are `role:'tool'`, not `'user'`. */
 export function isFreshUserTurn(msg: OpenAIMessage): boolean {
@@ -78,11 +78,15 @@ function renderMessage(msg: OpenAIMessage): string {
           : 'System';
   const lines: string[] = [speaker + ':'];
 
+  // Tool-result content is excerpted head-and-tail (errors and final results
+  // sit at the end); user/assistant prose is rendered whole.
+  const fit = (text: string): string =>
+    msg.role === 'tool' ? excerptHeadTail(text, TOOL_RESULT_EXCERPT_CHARS) : text;
   if (typeof msg.content === 'string') {
-    if (msg.content.length > 0) lines.push(msg.content);
+    if (msg.content.length > 0) lines.push(fit(msg.content));
   } else if (Array.isArray(msg.content)) {
     for (const part of msg.content) {
-      if (part.type === 'text') lines.push(part.text);
+      if (part.type === 'text') lines.push(fit(part.text));
       else if (part.type === 'image_url') lines.push('[image]');
     }
   }
@@ -91,7 +95,7 @@ function renderMessage(msg: OpenAIMessage): string {
   if (toolCalls) {
     for (const tc of toolCalls) {
       const name = tc.function.name;
-      const args = truncateArgs(tc.function.arguments);
+      const args = excerptHeadTail(tc.function.arguments, TOOL_ARGS_EXCERPT_CHARS);
       lines.push(`[tool call: ${name} ${args}]`);
     }
   }
@@ -246,6 +250,8 @@ export interface CompactOpenAIHistoryDeps {
   usedFraction?: number;
   /** Fullness fraction at/above which the keep-window may shrink. */
   shrinkAtFraction?: number;
+  /** Character cap on the summarizer transcript (see runCompactionCore). */
+  summarizerInputMaxChars?: number;
 }
 
 /**
@@ -275,6 +281,7 @@ export async function compactOpenAIHistory(
       keepLastN: readKeepLastN(),
       usedFraction: deps.usedFraction,
       shrinkAtFraction: deps.shrinkAtFraction,
+      ...(deps.summarizerInputMaxChars !== undefined ? { summarizerInputMaxChars: deps.summarizerInputMaxChars } : {}),
       summarize: (transcript) => deps.summarize(transcript, controller.signal),
       isAborted: () => controller.signal.aborted,
       abortInFlight: () => controller.abort(),
@@ -310,15 +317,15 @@ export async function compactOpenAIHistory(
     env.AFK_MICROCOMPACT_DELEGATION_BYTES,
   );
   const { blocksCleared, bytesReclaimed, firstClearedIndex } = microcompactToolResults(deps.priorTurns, opts);
-  if (blocksCleared > 0 && !result.compacted) {
-    return {
-      compacted: false,
-      reason: 'microcompacted',
-      messagesBefore,
-      messagesAfter: deps.priorTurns.length,
-      microcompaction: { blocksCleared, bytesReclaimed, ...(firstClearedIndex !== undefined ? { firstClearedIndex } : {}) },
-    };
-  }
-
-  return result;
+  if (blocksCleared === 0) return result;
+  const microcompaction = { blocksCleared, bytesReclaimed, ...(firstClearedIndex !== undefined ? { firstClearedIndex } : {}) };
+  // A successful summary keeps its own result; the cleared counts ride along.
+  if (result.compacted) return { ...result, microcompaction };
+  return {
+    compacted: false,
+    reason: 'microcompacted',
+    messagesBefore,
+    messagesAfter: deps.priorTurns.length,
+    microcompaction,
+  };
 }
