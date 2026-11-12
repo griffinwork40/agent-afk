@@ -83,13 +83,28 @@ beforeEach(() => {
 });
 afterEach(() => { rmSyncRetry(root); });
 
-async function run(command: string, policy: 'workspace-write' | 'read-only' = 'workspace-write', workingDir = cwd): Promise<string> {
+const childEnv = (): NodeJS.ProcessEnv => ({ PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: root, TMPDIR: temp, TMP: temp, TEMP: temp, GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0' });
+
+async function exec(command: string, policy: 'workspace-write' | 'read-only' = 'workspace-write', workingDir = cwd): Promise<{ stdout: string; stderr: string }> {
   const wrapped = buildSandboxedCommand(command, policy, workingDir, temp);
-  const result = await runFile(wrapped.shell, [...wrapped.args, wrapped.command], {
-    cwd: workingDir, timeout: 10_000,
-    env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: root, TMPDIR: temp, TMP: temp, TEMP: temp, GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0' },
-  });
-  return result.stdout;
+  return runFile(wrapped.shell, [...wrapped.args, wrapped.command], { cwd: workingDir, timeout: 10_000, env: childEnv() });
+}
+
+async function run(command: string, policy: 'workspace-write' | 'read-only' = 'workspace-write', workingDir = cwd): Promise<string> {
+  return (await exec(command, policy, workingDir)).stdout;
+}
+
+// History: /usr/bin/git on macOS is the Xcode shim. It finds the real git
+// through xcrun, which caches the lookup in the per-user temp dir, keyed on
+// HOME among other things. childEnv() uses a fresh HOME per test and the
+// sandbox denies the cache write, so every sandboxed git call repeated the
+// uncached lookup (about 17x slower when measured locally). On a loaded CI
+// runner the fixture's git calls together exceeded exec()'s 10s timeout
+// (#4790). Prime the cache once, outside the sandbox, with the same env.
+// No platform gate: elsewhere this is a plain `git --version`, or a spawn
+// error that spawnSync reports without throwing.
+function primeXcrunCache(): void {
+  spawnSync(path.posix.join('/', 'usr', 'bin', 'git'), ['--version'], { env: childEnv(), encoding: 'utf8' });
 }
 
 // Skip when the backend is not installed or kernel namespaces are unavailable.
@@ -170,7 +185,10 @@ describe.skipIf(!functional)(`runtime sandbox regressions (${platform}; sandbox-
 
   it('preserves git and unrestricted network operations', async () => {
     if (platform === 'linux') fixtures.floor = [path.join(root, 'outside-protected')];
-    await run('git init -q . && git -c user.name=Sandbox -c user.email=synthetic@example.invalid commit -q --allow-empty -m fixture');
+    primeXcrunCache();
+    const fixture = await exec('git init -q . && git -c user.name=Sandbox -c user.email=synthetic@example.invalid commit -q --allow-empty -m fixture');
+    // An uncached xcrun lookup inside the sandbox reports a denied write to xcrun_db-*.
+    expect(fixture.stderr).not.toContain('xcrun_db');
     expect((await run('git log -1 --format=%s', 'read-only')).trim()).toBe('fixture');
     const server = createServer((_req, res) => { res.end('network-ok'); });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

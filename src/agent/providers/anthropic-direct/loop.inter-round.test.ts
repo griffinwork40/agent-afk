@@ -17,6 +17,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { RawMessageStreamEvent, MessageParam } from '@anthropic-ai/sdk/resources';
 import { runTurn } from './loop.js';
+import { JournalSync } from '../../journal/sync.js';
+import { anthropicJournalAdapter } from './journal-adapter.js';
 import {
   fromArray,
   collect,
@@ -31,8 +33,14 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * A real JournalSync with no journal wired (sync is a no-op) and a spy on
+ * `sync` so tests can inspect the messages arrays it was called with.
+ */
 function makeJournalSync() {
-  return { sync: vi.fn() };
+  const journalSync = new JournalSync<MessageParam>(undefined, anthropicJournalAdapter);
+  const sync = vi.spyOn(journalSync, 'sync');
+  return { journalSync, sync };
 }
 
 /** Two-round session: round 1 = tool_use, round 2 = end_turn text. */
@@ -64,7 +72,7 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
     const client = makeTwoRoundClient();
     const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'tool ok' }));
     const messages: MessageParam[] = [{ role: 'user', content: 'do work' }];
-    const journalSync = makeJournalSync();
+    const { journalSync } = makeJournalSync();
 
     let capturedMessages: MessageParam[] | undefined;
     // Capture what messages look like when the client is called the second time
@@ -112,7 +120,7 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
   it('calls journalSync.sync() after pushing the steering turn (Finding 1: crash-safety)', async () => {
     const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'ok' }));
     const messages: MessageParam[] = [{ role: 'user', content: 'do work' }];
-    const journalSync = makeJournalSync();
+    const { journalSync, sync } = makeJournalSync();
 
     let callIdx = 0;
     const client = makeClient(() => {
@@ -145,7 +153,7 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
     // (before tool dispatch) AND by applyBeforeNextRound (after steering push).
     // We assert it was called with a messages array that INCLUDES the steering
     // turn — proving the inter-round sync fired, not just the tool-round sync.
-    const syncCalls = journalSync.sync.mock.calls as [MessageParam[]][];
+    const syncCalls = sync.mock.calls as [MessageParam[]][];
     const steeringWasSynced = syncCalls.some(([msgs]) =>
       msgs.some(
         (m) =>
@@ -162,7 +170,7 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
   it('is a no-op at the round boundary when beforeNextRound returns undefined', async () => {
     const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'ok' }));
     const messages: MessageParam[] = [{ role: 'user', content: 'do work' }];
-    const journalSync = makeJournalSync();
+    const { journalSync, sync } = makeJournalSync();
 
     let callIdx = 0;
     const client = makeClient(() => {
@@ -174,7 +182,7 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
       );
     });
 
-    const syncCallsBefore = journalSync.sync.mock.calls.length;
+    const syncCallsBefore = sync.mock.calls.length;
 
     await collect(
       runTurn({
@@ -207,7 +215,7 @@ describe('runTurn — round-boundary injection integration (#4769)', () => {
     // but NOT by applyBeforeNextRound (which is a no-op when text is undefined).
     // The key assertion: no sync call contains a dedicated steering-text user turn
     // (a user turn whose ONLY blocks are plain text, not tool_result).
-    const syncCalls = journalSync.sync.mock.calls as [MessageParam[]][];
+    const syncCalls = sync.mock.calls as [MessageParam[]][];
     const anyDedicatedSteeringTurn = syncCalls.some(([msgs]) =>
       msgs.some(
         (m) =>
