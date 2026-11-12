@@ -24,7 +24,7 @@ vi.mock('../../agent/auth/credential-resolver.js', () => ({
 }));
 
 vi.mock('../auth-wizard.describe-source.js', () => ({
-  describeCredentialSource: vi.fn(() => 'Claude Code login (keychain)'),
+  describeCredentialSource: vi.fn((_source?: string | null) => 'Claude Code login (keychain)'),
 }));
 
 vi.mock('../auth-wizard.js', () => ({

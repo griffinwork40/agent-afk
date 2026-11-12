@@ -48,13 +48,16 @@ export function registerStatusCommand(program: Command): void {
         // instead of hardcoding bypass-on.
         const permissionMode = resolveCliPermissionMode();
 
+        // Use the Anthropic-only loader so an xAI user with only XAI_API_KEY
+        // does not get anthropic.ok: true (getApiKey() is model-routed and
+        // would return the xAI key when the active model is xai/xai-oauth).
+        // Token and provenance come from ONE loader call (#4778), so the
+        // reported source is always the tier that produced the token.
+        // Hoisted above the if/else so both text and JSON paths share the same
+        // single resolve call and provenance is always a loader output (#4817).
+        const anthropic = resolveAnthropicCredential();
+
         if (options.format === 'json') {
-          // Use the Anthropic-only loader so an xAI user with only XAI_API_KEY
-          // does not get anthropic.ok: true (getApiKey() is model-routed and
-          // would return the xAI key when the active model is xai/xai-oauth).
-          // Token and provenance come from ONE loader call (#4778), so the
-          // reported source is always the tier that produced the token.
-          const anthropic = resolveAnthropicCredential();
           const anthropicApiKey = anthropic?.token;
           const codexApiKey = getCodexApiKey();
           const xaiApiKey = loadXaiApiKey();
@@ -107,7 +110,7 @@ export function registerStatusCommand(program: Command): void {
                         ? 'Found (XAI_API_KEY)'
                         : 'No XAI_API_KEY set'
                       : apiKey
-                        ? `Found (${describeCredentialSource()})`
+                        ? `Found (${describeCredentialSource(anthropic?.source ?? null)})`
                         : 'Falling back to Claude OAuth',
                   kind: apiKey ? 'ok' : 'warn',
                 },
