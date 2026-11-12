@@ -77,10 +77,9 @@ export function parseCommits(repoRoot: string): CommitEntry[] {
  *
  * @param commits - Parsed commit entries to format.
  * @param options.includeHash - When true, appends `(<short-hash>)` to each
- *   bullet. Required for `updateChangelog`/`updateAndStampChangelog` dedup
- *   to function (dedup matches on the trailing hash). When false (default),
- *   bullets are plain `- <subject>` — matching the pre-refactor /changelog
- *   slash-command output for human-facing changelogs.
+ *   bullet. Required for `updateAndStampChangelog` dedup to function
+ *   (dedup matches on the trailing hash). When false (default), bullets
+ *   are plain `- <subject>` — the human-facing default for changelogs.
  *
  *   CI (scripts/generate-changelog.mjs) sets this to true so repeated runs
  *   skip already-written commits. Plain bullets (includeHash: false) are the

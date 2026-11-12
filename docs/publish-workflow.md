@@ -16,11 +16,22 @@ every releasable merge to `main`, has been removed.
 
 1. Make sure `main` is green in CI and your local `main` matches
    `origin/main`.
-2. Fill the `## [Unreleased]` section of `CHANGELOG.md`. Run
-   `node scripts/generate-changelog.mjs <version>` to auto-populate
-   entries from conventional commits since the last tag, or edit
-   `[Unreleased]` manually. `scripts/release.mjs` refuses to run on an
-   empty `[Unreleased]`.
+2. Fill the `## [Unreleased]` section of `CHANGELOG.md`. Preview
+   entries from conventional commits since the last tag with this
+   read-only snippet (no build needed):
+
+   ```bash
+   pnpm exec tsx --eval "import('./src/changelog.ts').then(m=>{const c=m.parseCommits(process.cwd()).filter(e=>!/^v\d+\.\d+\.\d+$/.test(e.subject));console.log(m.formatEntries(c,{includeHash:true}))})"
+   ```
+
+   Paste those entries under `## [Unreleased]`, or write entries by
+   hand. `scripts/release.mjs` refuses to run on an empty
+   `[Unreleased]`.
+
+   > **Warning:** do **not** run `scripts/generate-changelog.mjs`
+   > before `pnpm release`. It moves the new entries under a dated
+   > version heading (the heading `release.mjs` writes itself) and leaves
+   > `[Unreleased]` empty, so `pnpm release` then refuses to run.
 3. If `engines.node` changed since the last tag, check whether the floor
    was raised (a raised floor is a breaking change, so the release must be
    a major):

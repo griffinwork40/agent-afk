@@ -43,11 +43,10 @@ const INITIAL_CHANGELOG = `# Changelog
 // formatEntries
 // ─────────────────────────────────────────────────────────────────────────────
 describe('formatEntries', () => {
-  it('omits hash by default — preserves pre-refactor /changelog slash-command bullet format', () => {
+  it('omits hash by default — plain `- <subject>` bullets for human-facing changelogs', () => {
     // Regression guard for PR #145 review finding H-1.
-    // The /changelog slash command historically wrote plain `- <subject>`
-    // bullets. The refactor must not silently change the human-facing
-    // CHANGELOG.md format. Default behavior of formatEntries is includeHash=false.
+    // Plain `- <subject>` bullets are the human-facing default for
+    // CHANGELOG.md. Default behavior of formatEntries is includeHash=false.
     const commits: CommitEntry[] = [
       { hash: 'abc1234', subject: 'add new feature', category: 'Added' },
       { hash: 'def5678', subject: 'resolve crash', category: 'Fixed' },
