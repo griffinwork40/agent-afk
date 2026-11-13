@@ -26,6 +26,7 @@ import { emitSessionIdAssigned } from './session-id-trace.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
+import { getConfiguredFallbackModel } from './fallback-model.js';
 import { dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError, ensureError} from '../../utils/errors.js';
 import { buildMcpFailureNotice } from '../mcp/failure-notice.js';
@@ -105,6 +106,9 @@ function buildProviderQuery(
       resolveProvider: resolveProviderFn,
       providerNameForModel: (m) => providerForModel(m),
       resolveApiKey: (m) => resolveCredentialForModel(m),
+      // Read live (per arming check), so a `/config set models.fallback` lands
+      // without a session restart. The router owns eligibility.
+      getFallbackModel: getConfiguredFallbackModel,
     },
   );
 }

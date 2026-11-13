@@ -82,6 +82,8 @@ export interface ProviderRouterDeps {
    * to its own env source (e.g. `resolveCredentialForModel`).
    */
   resolveApiKey: (model: string | undefined) => string | undefined;
+  /** Raw configured main-session fallback model (`models.fallback`), unresolved; omit to disable. */
+  getFallbackModel?: () => string | undefined;
 }
 
 export interface ProviderRouterArgs {
@@ -90,21 +92,6 @@ export interface ProviderRouterArgs {
   config: AgentConfig;
 }
 
-/** One constructed inner provider plus the plumbing to drive it. */
-interface ActiveInner {
-  family: string;
-  /**
-   * Routing signature the inner was built for: family + resolved endpoint(s) +
-   * resolved apiKey (see {@link ProviderRouter.resolveInner}). A switch whose
-   * target signature differs requires a REBUILD — `family` alone is too coarse
-   * because two same-family tiers can target different endpoints/credentials
-   * (e.g. a cloud OpenAI model vs. a local OpenAI-shim tier on its own baseUrl).
-   */
-  signature: string;
-  query: ProviderQuery;
-  iterator: AsyncIterator<ProviderEvent>;
-  input: QueryInputStream;
-}
 
 // Switch-notice helpers extracted to keep this file within the 350-code-line
 // ceiling. See provider-router.switch.ts for docs and rationale.
@@ -113,14 +100,17 @@ import {
   prependNotice,
   stringifyUserContent,
 } from './provider-router.switch.js';
+import { ModelFallbackController, type ActiveInner } from './provider-router.fallback.js';
 
 export class ProviderRouter implements ProviderQuery {
   private readonly outerIterator: AsyncIterator<ProviderUserTurn>;
-  private readonly baseConfig: AgentConfig;
+  /** @internal read by the fallback controller. */
+  readonly baseConfig: AgentConfig;
   private readonly deps: ProviderRouterDeps;
 
   /** The model the NEXT turn should run on (updated by `setModel`). */
-  private currentModel: string | undefined;
+  /** @internal mutated by the fallback swap. */
+  currentModel: string | undefined;
   /** Permission mode / cwd carried across inner swaps. */
   private currentPermissionMode: AgentConfig['permissionMode'];
   private currentCwd: string | undefined;
@@ -135,19 +125,20 @@ export class ProviderRouter implements ProviderQuery {
   /** The provider family `config.apiKey` was resolved for (anti-leak gate). */
   private readonly startupFamily: string;
 
-  private active: ActiveInner | undefined;
+  /** @internal swapped by the fallback controller. */
+  active: ActiveInner | undefined;
   /**
    * The model the `active` inner was built for. Gates the per-turn signature
    * recompute in the event lane: an unchanged model skips resolution entirely,
    * so a session that never switches pays no per-turn cost.
    */
-  private activeModel: string | undefined;
-  private closed = false;
+  activeModel: string | undefined;
+  closed = false;
 
   /** Text-only conversation carry, seeded from any resumeHistory, grown per turn. */
   private readonly shadowHistory: ResumeHistoryTurn[];
   private pendingUserText: string | undefined;
-  private pendingAssistantText = '';
+  pendingAssistantText = '';
   /** sessionId of the most recent outer turn, forwarded to inner input streams. */
   private lastSessionId: string | undefined;
   /**
@@ -165,6 +156,8 @@ export class ProviderRouter implements ProviderQuery {
    * continuation wiring.
    */
   private _beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
+  /** Main-session fallback model: arming, swap, replay (provider-router.fallback.ts). */
+  private readonly fallback: ModelFallbackController;
 
   constructor(args: ProviderRouterArgs, deps: ProviderRouterDeps) {
     this.outerIterator = args.prompt[Symbol.asyncIterator]();
@@ -175,6 +168,7 @@ export class ProviderRouter implements ProviderQuery {
     this.currentCwd = args.config.cwd;
     this.startupFamily = deps.providerNameForModel(this.currentModel);
     this.shadowHistory = [...(args.config.resumeHistory ?? [])];
+    this.fallback = new ModelFallbackController(this, deps);
   }
 
   // ---- inner construction -------------------------------------------------
@@ -249,7 +243,8 @@ export class ProviderRouter implements ProviderQuery {
    * the new model sees prior turns as prose. Credentials/endpoint are resolved for the model's OWN family
    * + tier via {@link resolveInner}.
    */
-  private buildInner(model: string | undefined, seed: boolean, live?: JournalMessage[]): ActiveInner {
+  /** @internal also driven by the fallback swap. */
+  buildInner(model: string | undefined, seed: boolean, live?: JournalMessage[]): ActiveInner {
     const { provider, innerConfig, signature } = this.resolveInner(model);
     const input = new QueryInputStream(() => this.lastSessionId);
 
@@ -272,6 +267,8 @@ export class ProviderRouter implements ProviderQuery {
       else delete innerConfig.resumeMessages;
     }
 
+    // LIVE predicate: the tiers read it at decision time (model-fallback-armed.ts).
+    if (this.deps.getFallbackModel !== undefined) innerConfig.modelFallbackArmed = this.fallback.armed;
     const query = provider.query({ prompt: input.createIterable(), config: innerConfig });
     // Forward the stored steering callback onto the new inner immediately so a
     // model swap never silently drops it. The inner silently ignores the call
@@ -291,7 +288,8 @@ export class ProviderRouter implements ProviderQuery {
     };
   }
 
-  private async closeActive(): Promise<void> {
+  /** @internal */
+  async closeActive(): Promise<void> {
     const a = this.active;
     if (!a) return;
     this.active = undefined;
@@ -394,6 +392,13 @@ export class ProviderRouter implements ProviderQuery {
             break;
           }
           const ev = r.value;
+          // Consumed BEFORE the yield: the request never reaches the session.
+          // true = replayed on the fallback, keep pumping this same turn.
+          if (ev.type === 'model.fallback_request') {
+            if (yield* this.fallback.consume(ev, turn)) continue;
+            this.commitShadowTurn();
+            break;
+          }
           this.observeEvent(ev);
           yield ev;
           if (ev.type === 'turn.completed') {
@@ -444,6 +449,7 @@ export class ProviderRouter implements ProviderQuery {
   // ---- ProviderQuery delegation ------------------------------------------
 
   async interrupt(reason: import('../../abort-reason.js').ProviderAbortReason = 'interrupted'): Promise<void> {
+    if (this.fallback.noteInterrupt()) return; // mid-swap: the swap synthesises the terminal
     await this.active?.query.interrupt(reason);
   }
 
@@ -468,6 +474,7 @@ export class ProviderRouter implements ProviderQuery {
   }
 
   async setModel(model?: string): Promise<void> {
+    if (this.fallback.deferSetModel(model)) return; // mid-swap: applied once the swap completes
     if (typeof model === 'string' && model.length > 0) {
       this.currentModel = model;
       // Forward to the live inner ONLY for a true same-inner switch — same
