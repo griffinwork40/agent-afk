@@ -617,6 +617,13 @@ export interface TurnHandles {
    * Receives the exact string onTurnComplete later receives as
    * `userInput`. Best-effort — errors are swallowed by the caller.
    */
+  /**
+   * Fired when a `model-fallback` notice arrives mid-turn so the surface can
+   * update its model display (status line, `/info`, `/where`) immediately.
+   * `to` is the new model the session switched to.
+   * Best-effort — errors are swallowed by the caller.
+   */
+  onModelFallback?(to: string): void;
   onUserMessage?(userInput: string): Promise<void> | void;
   /**
    * Fired when a typed-ahead message is flushed into the ALREADY-RUNNING turn

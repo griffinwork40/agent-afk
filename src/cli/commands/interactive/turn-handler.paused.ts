@@ -17,6 +17,7 @@ import { isDebugEnabled } from '../../../utils/debug.js';
 import { usageLimitBox } from '../../render.js';
 import { runPicker } from '../../render/picker.js';
 import { usageLimitProviderName } from '../../../agent/usage/usage-formatter.js';
+import { buildFallbackHint } from '../../render/fallback-hint.js';
 
 /**
  * Picker header for a `paused` event. The `claude login` hot-swap tip is
@@ -95,6 +96,12 @@ export interface HandlePausedEventParams {
    * flag so the for-await loop breaks and `recordTurn` is skipped.
    */
   onPauseInterrupt: () => void;
+  /**
+   * The session's current model (stats.model as a string). Used to build the
+   * one-line fallback hint when a configured fallback differs from this model.
+   * Optional — when absent the hint is suppressed.
+   */
+  currentModel?: string;
 }
 
 // Option labels — defined at module scope so the `.then()` match is
@@ -127,7 +134,10 @@ export async function handlePausedEvent(params: HandlePausedEventParams): Promis
     disposeRendererOnce,
     setPausedState,
     onPauseInterrupt,
+    currentModel,
   } = params;
+
+  const fallbackHint = currentModel !== undefined ? buildFallbackHint(currentModel) : undefined;
 
   // Mark the compositor paused so a submitted line ends the wait (via
   // the pause-interrupt handler + input-dispatch Enter path) instead of
@@ -161,7 +171,10 @@ export async function handlePausedEvent(params: HandlePausedEventParams): Promis
     // the wait, which the keychain hot-swap picks up automatically.
     // Options are ordered by increasing disruption so the safe default
     // (keep waiting) is first and pre-selected.
-    const header = pausedPickerHeader(event, resetsAtStr);
+    const header = [
+      ...pausedPickerHeader(event, resetsAtStr),
+      ...(fallbackHint ? [fallbackHint, ''] : []),
+    ];
 
     void runPicker(borrowedCompositor, {
       header,
@@ -210,13 +223,17 @@ export async function handlePausedEvent(params: HandlePausedEventParams): Promis
   } else {
     // Passive card — the only surface when no interactive picker applies
     // (non-TTY, or autoResume=false where there is no wait to decide on).
-    (completionWriter ?? { fn: console.log }).fn(usageLimitBox({
+    const passiveCard = usageLimitBox({
       reason: event.reason,
       ...(event.resetsAt !== undefined ? { resetsAt: event.resetsAt } : {}),
       ...(event.accountId !== undefined ? { accountId: event.accountId } : {}),
       ...(event.autoResume !== undefined ? { autoResume: event.autoResume } : {}),
       ...(event.provider !== undefined ? { provider: event.provider } : {}),
       ...(event.plan !== undefined ? { plan: event.plan } : {}),
-    }));
+    });
+    const passiveOutput = fallbackHint
+      ? passiveCard + '\n' + fallbackHint + '\n'
+      : passiveCard;
+    (completionWriter ?? { fn: console.log }).fn(passiveOutput);
   }
 }
