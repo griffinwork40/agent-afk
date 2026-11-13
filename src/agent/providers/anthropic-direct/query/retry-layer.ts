@@ -87,6 +87,8 @@ export interface RetryLayerOptions {
   tokenRefresher?: () => Promise<Anthropic | null>;
   /** Whether to auto-wait+resume on 429 usage-limit (default true). */
   autoResumeOnUsageLimit: boolean;
+  /** `AgentConfig.modelFallbackArmed`, stored as given (a getter stays live). */
+  modelFallbackArmed?: boolean | (() => boolean);
   /**
    * User-facing surface that produced this session (`AgentConfig.surface`,
    * plumbed index.ts → query.ts → here). The ONLY consumer is
@@ -139,6 +141,7 @@ export class RetryLayer {
   private readonly baseUrl?: string;
   private readonly tokenRefresher?: () => Promise<Anthropic | null>;
   private readonly autoResumeOnUsageLimit: boolean;
+  private readonly modelFallbackArmed: boolean | (() => boolean) | undefined;
   private readonly surface?: string;
   private readonly _credentialFromStore: boolean | undefined;
 
@@ -176,6 +179,7 @@ export class RetryLayer {
     this.baseUrl = opts.baseUrl;
     this.tokenRefresher = opts.tokenRefresher;
     this.autoResumeOnUsageLimit = opts.autoResumeOnUsageLimit;
+    this.modelFallbackArmed = opts.modelFallbackArmed;
     if (opts.surface !== undefined) this.surface = opts.surface;
     this._credentialFromStore = opts.credentialFromStore;
   }
@@ -229,6 +233,9 @@ export class RetryLayer {
       },
       get autoResumeOnUsageLimit() {
         return layer.autoResumeOnUsageLimit;
+      },
+      get modelFallbackArmed() {
+        return layer.modelFallbackArmed;
       },
       get tokenRefresher() {
         return layer.tokenRefresher;

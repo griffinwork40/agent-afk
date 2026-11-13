@@ -198,6 +198,11 @@ export interface AnthropicDirectQueryOptions {
    */
   autoResumeOnUsageLimit?: boolean;
   /**
+   * `AgentConfig.modelFallbackArmed` forwarded verbatim (value or live getter)
+   * to {@link RetryLayer}; see `query/usage-limit-tier.fallback.ts`.
+   */
+  modelFallbackArmed?: boolean | (() => boolean);
+  /**
    * User-facing surface (`AgentConfig.surface`) forwarded verbatim to
    * {@link RetryLayer} so the overload-pause ceiling can differ for interactive
    * vs. daemon sessions (#762). Undefined ⇒ treated as non-interactive.
