@@ -12,6 +12,7 @@
  *   status.stop();   // before exit
  */
 
+import { CommitWriteTx } from './terminal-compositor.commit-write-tx.js';
 import { ResizeBus } from './terminal-size.js';
 import { isPlainOutputRequested } from '../config/env.js';
 import { formatStatusLine, type StatusLineFields } from './render/status-line-format.js';
@@ -201,12 +202,17 @@ export class StatusLine {
   setExtraRows(n: number): void {
     this.extraRows = n;
     if (this.started && this.enabled) {
-      const rows = this.currentRows();
-      this.stream.write('\x1b[s');
-      this.writeScrollRegion(rows);
-      this.stream.write('\x1b[u');
-      this.eraseReservedBand(rows);
-      this.flush();
+      const tx = CommitWriteTx.begin(this.stream);
+      try {
+        const rows = this.currentRows();
+        this.stream.write('\x1b[s');
+        this.writeScrollRegion(rows);
+        this.stream.write('\x1b[u');
+        this.eraseReservedBand(rows);
+        this.flush();
+      } finally {
+        tx.end();
+      }
     }
   }
 
