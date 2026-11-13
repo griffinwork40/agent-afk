@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.354.0] - 2026-11-13
+
 ### Added
 - compact: structured summaries, head-and-tail excerpts, input cap, honest trigger and microcompaction reporting (#4842) (ab65485e5)
 - docs: keep the docs site current with a public-surface snapshot, stale-reference check, and PR impact summary (#4107) (faa73b821)
