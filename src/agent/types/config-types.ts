@@ -802,8 +802,14 @@ export interface AgentConfig {
    * tiers to emit `model.fallback_request` instead of parking (`paused`) or
    * failing, provided nothing has been yielded for the turn yet. Never set by
    * users, config files, or env.
+   *
+   * The router passes a FUNCTION so the answer is live: an inner provider can
+   * outlive the state it was built under (a same-endpoint `/model` change is
+   * forwarded without a rebuild), and a frozen `true` would then ask to fall
+   * back to the model already in use. Read it only through
+   * `isModelFallbackArmed` (providers/shared/model-fallback-armed.ts).
    */
-  modelFallbackArmed?: boolean;
+  modelFallbackArmed?: boolean | (() => boolean);
 
   // --- Awareness metadata (Phase 1: get_runtime_state) ---
   // Pure metadata fields surfaced through the `get_runtime_state` tool's
