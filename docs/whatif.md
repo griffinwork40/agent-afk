@@ -87,6 +87,9 @@ afk whatif --model claude-haiku-4-5 \
 # From a prepared spec file (may include predictions field)
 afk whatif --spec my-change.json
 
+# A/A calibration: zero changes, structural diff only, free (#2415)
+afk whatif --aa
+
 # REPL
 /whatif "disable the diagnose skill" --quick
 /whatif --memory-add "prefers pnpm test:file" --verify --yes
@@ -184,8 +187,23 @@ is no TTY readline prompt in the REPL.
 | `--max-turns <n>` | 3 | Max turns per episode |
 | `--timeout <sec>` | 180 | Episode timeout |
 | `--keep-sandboxes` | off | Keep sandbox dirs after run |
-| `--yes` | off | Skip confirmation of compiled spec |
+| `--no-baseline-sample` | sampling on | Skip the baseline-sample preflight and fall back to the analyst-estimate headroom check. The preflight runs the baseline arm on up to 3 probes per prediction and refuses a prediction whose *measured* headroom is below the MDE; that refusal is not cleared by `--force`, only by this flag (#2511). |
+| `--aa` | off | A/A calibration: both arms run with zero changes and only their structural snapshots are compared, so any difference is harness asymmetry, not a behavioural effect. Free: no analyst calls, predictions, or episodes (#2415). |
+| `--yes` | off | Skip confirmation of compiled spec. Also suppresses the "Proceed anyway?" prompt when the MDE gate refuses. |
+| `--force` | off | Bypass the MDE underpowered gate and the analyst-estimate headroom gate (`--verify` only). Does not bypass a measured baseline-sample refusal; use `--no-baseline-sample` for that. |
 | `--json` | off | Print JSON to stdout |
+
+### Flag combinations
+
+The parser rejects these combinations before anything runs
+(`src/whatif/args.conflicts.ts`):
+
+- `--spec` with any change flag, plain-English text, or `--aa`.
+- `--aa` with any change flag or plain-English text (A/A uses no changes).
+- `--aa` with `--verify`: A/A runs no episodes, so `--verify` would be silently
+  ignored. For a verdict-level null test, run `--verify` with a change that has
+  no behavioural effect.
+- No text, no change flags, no `--spec`, and no `--aa` ("nothing to predict").
 
 ---
 
@@ -219,7 +237,7 @@ Every `--verify` run writes four files under `~/.afk/state/whatif/<run-id>/`:
 | `traces.jsonl` | One `EpisodeTrace` per line: episode id, env, sample, text, tools, cost |
 | `grades.jsonl` | Per-output judge grades — see below (#2477) |
 
-Predict-only runs (`--no-verify`) omit `traces.jsonl` and `grades.jsonl`.
+Predict-only runs (no `--verify`) omit `traces.jsonl` and `grades.jsonl`.
 
 #### grades.jsonl
 
