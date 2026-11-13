@@ -41,6 +41,37 @@ Use the sections below. If the same failure returns, change the diagnosis rather
 
 **Fix:** Let bounded retries or the displayed reset window finish. In the interactive pause picker, choose **Keep waiting**, **Switch model / provider**, or **Stop waiting** with the arrow keys and Enter. Switching stops the wait so you can use `/model`; it does not silently move the task to a new provider. Inspect `/usage` or `afk usage`, and reduce concurrent requests if your account is repeatedly throttled. Do not rotate credentials merely to silence a `429`.
 
+## My session paused on a usage limit even though I set a fallback
+
+The fallback model only activates when the primary cannot serve a turn _and_
+nothing has been sent for that turn yet. If the usage limit was hit after the
+model had already produced output or run a tool in that turn, the session pauses
+as normal. The pause card includes the line:
+`Fallback <model> is configured. Run /model <model>, then /retry.`
+
+Switch to the fallback manually with `/model <fallback>` and then `/retry` to
+replay the interrupted turn. See [Fallback model](/configuration/models-providers#fallback-model)
+for the full list of conditions that trigger an automatic switch.
+
+## The session switched models by itself
+
+This is the fallback model activating. You will have seen a notice line such as:
+
+```
+opus hit its usage limit (resets 6:00 PM). Continuing on sonnet. Run /model opus to switch back.
+```
+
+The session stays on the fallback for its remaining turns. To return to the
+original model, run `/model <primary>` in the REPL. To disable the fallback
+entirely, run:
+
+```bash
+afk config unset models.fallback
+```
+
+This takes effect on the next session. The current session keeps whichever model
+is now active.
+
 ## Context-window overflow
 
 **Symptom:** `[afk] Context-window overflow`, or a provider error such as `input length and max_tokens exceed context limit`.

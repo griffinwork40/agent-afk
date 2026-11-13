@@ -12,6 +12,9 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- models: set a fallback model with `afk config set models.fallback <model>` — when the primary hits a usage limit, runs out of credit, or is rejected before producing any output, the session continues on the fallback instead of pausing; one notice line is shown at the switch; costs are recorded under the model that served each turn; the session stays on the fallback until you run `/model <primary>` or start a new session
+
 ## [5.354.0] - 2026-11-13
 
 ### Added
