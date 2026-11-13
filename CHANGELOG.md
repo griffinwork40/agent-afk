@@ -30,6 +30,7 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 - ci: drop cancelled() from Report failure condition (#4847) (371b1d46a)
 - address advisory findings from model-intent dispatch (#4608) (fc7c9981f)
 - docs: add /bgsub:list to the public-surface snapshot and the REPL page (#4866) (d81fc9891)
+- test: capture grandchild PID by marker in bash process-group kill test (#4867) (bec8a46e6)
 
 ### Changed
 - wait-for: align analyzeCommand test comment with its retitled assertion (#4825) (764c249be)
