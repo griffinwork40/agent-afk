@@ -15,12 +15,28 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 ### Added
 - compact: structured summaries, head-and-tail excerpts, input cap, honest trigger and microcompaction reporting (#4842) (ab65485e5)
 - docs: keep the docs site current with a public-surface snapshot, stale-reference check, and PR impact summary (#4107) (faa73b821)
+- tui: UX parity: /keys hint, Ctrl+X D diff verbosity, /bgsub:list, AFK_SESSION_PICKER (#4690) (c43c4046b)
 
 ### Fixed
 - tui: gate the startup-recall timing line behind AFK_DEBUG, recall only sealed sessions, and ratchet tagged stderr writes (#4840) (fc0c200d1)
+- case-insensitive credential scrub, aggregate-cap unit test, human-readable byte sizes (#4855) (848e97877)
+- unify shell-fence set, add impact entry-point tests, improve surface-check message (#4849) (99931e7e5)
+- status: pass resolved credential source to describeCredentialSource in the text branch (#4854) (a13285674)
+- guard surface!='unknown', fix comment, name PREFIX_BYTES, type map callbacks (#4850) (31e52c8f3)
+- ci: pass github.base_ref through env instead of inline shell interpolation (#4848) (de9646d62)
+- document compose wiring coupling in test; remove unused beforeEach import (#4853) (2d79fcc6d)
+- bound hot-key entries, document round semantics, narrow ledger accessor (#4857) (b934a832a)
+- add drainMicrotasks helper and multi-value paused variant test (#4856) (0974bd88c)
+- ci: drop cancelled() from Report failure condition (#4847) (371b1d46a)
+- address advisory findings from model-intent dispatch (#4608) (fc7c9981f)
+- docs: add /bgsub:list to the public-surface snapshot and the REPL page (#4866) (d81fc9891)
 
 ### Changed
 - wait-for: align analyzeCommand test comment with its retitled assertion (#4825) (764c249be)
+- move SubagentOutcomeSummaryEntry into awareness types and drop the DefectCluster barrel re-export (#4455) (60698e50e)
+
+### Removed
+- slash: remove the /changelog command (#4862) (9c1e28ec6)
 
 ## [5.353.1] - 2026-11-12
 
