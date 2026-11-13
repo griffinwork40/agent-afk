@@ -101,6 +101,7 @@ import {
   stringifyUserContent,
 } from './provider-router.switch.js';
 import { ModelFallbackController, type ActiveInner } from './provider-router.fallback.js';
+import { pinSessionIds } from './provider-router.identity.js';
 
 export class ProviderRouter implements ProviderQuery {
   private readonly outerIterator: AsyncIterator<ProviderUserTurn>;
@@ -322,7 +323,12 @@ export class ProviderRouter implements ProviderQuery {
 
   // ---- the multiplexing event lane ---------------------------------------
 
-  async *[Symbol.asyncIterator](): AsyncGenerator<ProviderEvent, void, unknown> {
+  // A rebuilt inner mints its own id; the session must keep the one it adopted.
+  [Symbol.asyncIterator](): AsyncGenerator<ProviderEvent, void, unknown> {
+    return pinSessionIds(this.lane());
+  }
+
+  private async *lane(): AsyncGenerator<ProviderEvent, void, unknown> {
     try {
       // Construct the first inner and surface its session.init to the session.
       this.active = this.buildInner(this.currentModel, /* seed */ false);

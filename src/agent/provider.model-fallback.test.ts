@@ -30,6 +30,6 @@ describe('model fallback contracts', () => {
   });
 
   it('declares AgentConfig.modelFallbackArmed', () => {
-    expectTypeOf<AgentConfig['modelFallbackArmed']>().toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<AgentConfig['modelFallbackArmed']>().toEqualTypeOf<boolean | (() => boolean) | undefined>();
   });
 });

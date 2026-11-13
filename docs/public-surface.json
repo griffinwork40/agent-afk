@@ -758,6 +758,11 @@
     },
     {
       "kind": "config",
+      "name": "models.fallback",
+      "source": "src/config/settable-keys.ts"
+    },
+    {
+      "kind": "config",
       "name": "models.large",
       "source": "src/config/settable-keys.ts"
     },

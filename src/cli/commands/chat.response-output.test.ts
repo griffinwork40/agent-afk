@@ -8,12 +8,18 @@
  *    "Response received" and must re-throw so the caller can surface the error.
  *  - `runStreamJsonPath`: `maybePublish` is called with the accumulated text
  *    and error flag; on an error event the loop exits early.
+ *  - Fallback (text mode): when a model-fallback notice fires, it is printed
+ *    to stderr exactly once; stdout receives nothing extra; no fallback = no
+ *    extra stderr line.
+ *  - Fallback (JSON mode): output includes `servedModel` and `modelFallback`;
+ *    no fallback = neither field present and output is otherwise unchanged.
  *
  * No real Anthropic API calls are made — AgentSession is fully mocked.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SessionStats } from '../slash/types.js';
+import type { OutputEvent } from '../../agent/types/session-types.js';
 
 // ---------------------------------------------------------------------------
 // Shared mock state (mutated per-test in beforeEach)
@@ -22,6 +28,7 @@ import type { SessionStats } from '../slash/types.js';
 let mockSendMessage: ReturnType<typeof vi.fn>;
 let mockGetLastResponseMetadata: ReturnType<typeof vi.fn>;
 let mockSendMessageStream: ReturnType<typeof vi.fn>;
+let mockGetOutputStream: ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Module mocks (hoisted before imports)
@@ -32,6 +39,7 @@ vi.mock('../palette.js', () => ({
     heading: (s: string) => s,
     dim: (s: string) => s,
     error: (s: string) => s,
+    info: (s: string) => s,
   },
 }));
 
@@ -48,7 +56,12 @@ vi.mock('../formatter.js', () => ({
 }));
 
 vi.mock('./chat.json-output.js', () => ({
-  buildOneShotJsonOutput: vi.fn(() => ({ response: 'mock-json' })),
+  buildOneShotJsonOutput: vi.fn((opts: Record<string, unknown>) => ({
+    response: 'mock-json',
+    ...(opts['modelFallback'] !== undefined
+      ? { servedModel: (opts['modelFallback'] as { to: string }).to, modelFallback: opts['modelFallback'] }
+      : {}),
+  })),
 }));
 
 vi.mock('../slash/session-stats.js', () => ({
@@ -63,11 +76,17 @@ vi.mock('./chat.stdin-stream.js', () => ({
   writeAndDrain: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('./chat.fallback-notice.js', () => ({
+  collectFallbackNotice: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ---------------------------------------------------------------------------
 // Import after mocks
 // ---------------------------------------------------------------------------
 
 import { renderTextResponse, runStreamJsonPath } from './chat.response-output.js';
+import { collectFallbackNotice } from './chat.fallback-notice.js';
+import { buildOneShotJsonOutput } from './chat.json-output.js';
 import type {
   TextResponseParams,
   StreamJsonPathParams,
@@ -109,6 +128,7 @@ function makeSession() {
     sendMessage: mockSendMessage,
     sendMessageStream: mockSendMessageStream,
     getLastResponseMetadata: mockGetLastResponseMetadata,
+    getOutputStream: mockGetOutputStream,
     sessionId: 'test-session-id',
     abortSignal: new AbortController().signal,
   };
@@ -125,8 +145,11 @@ describe('renderTextResponse', () => {
       timestamp: new Date(),
     });
     mockGetLastResponseMetadata = vi.fn().mockReturnValue(null);
+    mockGetOutputStream = vi.fn().mockReturnValue((async function* () {})());
+    vi.mocked(collectFallbackNotice).mockResolvedValue(undefined);
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
 
   afterEach(() => {
@@ -162,6 +185,11 @@ describe('renderTextResponse', () => {
         resolveMessage = resolve;
       }),
     );
+    // collectFallbackNotice awaits the same promise internally; resolve it here.
+    vi.mocked(collectFallbackNotice).mockImplementation(async (_session, work) => {
+      await work;
+      return undefined;
+    });
 
     const spinner = makeSpinner();
     const params = makeParams({ spinner: spinner as unknown as TextResponseParams['spinner'] });
@@ -181,6 +209,7 @@ describe('renderTextResponse', () => {
 
   it('does NOT call spinner.succeed when sendMessage rejects', async () => {
     mockSendMessage = vi.fn().mockRejectedValue(new Error('provider error'));
+    vi.mocked(collectFallbackNotice).mockRejectedValue(new Error('provider error'));
     const spinner = makeSpinner();
     const params = makeParams({ spinner: spinner as unknown as TextResponseParams['spinner'] });
 
@@ -191,6 +220,7 @@ describe('renderTextResponse', () => {
 
   it('does NOT print "Response received" to console when sendMessage rejects', async () => {
     mockSendMessage = vi.fn().mockRejectedValue(new Error('provider error'));
+    vi.mocked(collectFallbackNotice).mockRejectedValue(new Error('provider error'));
     const consoleSpy = vi.spyOn(console, 'log');
     const params = makeParams();
 
@@ -203,6 +233,7 @@ describe('renderTextResponse', () => {
   it('re-throws when sendMessage rejects so the caller can surface the error', async () => {
     const original = new Error('provider timeout');
     mockSendMessage = vi.fn().mockRejectedValue(original);
+    vi.mocked(collectFallbackNotice).mockRejectedValue(original);
     const params = makeParams();
 
     const caught = await renderTextResponse(params).catch((e: unknown) => e);
@@ -218,19 +249,99 @@ describe('renderTextResponse', () => {
 
   it('does not call maybePublish when sendMessage rejects', async () => {
     mockSendMessage = vi.fn().mockRejectedValue(new Error('boom'));
+    vi.mocked(collectFallbackNotice).mockRejectedValue(new Error('boom'));
     const maybePublish = vi.fn().mockResolvedValue(undefined);
     const params = makeParams({ maybePublish });
 
     await expect(renderTextResponse(params)).rejects.toThrow();
     expect(maybePublish).not.toHaveBeenCalled();
   });
+
+  // ---------------------------------------------------------------------------
+  // Fallback notice — text mode
+  // ---------------------------------------------------------------------------
+
+  it('text mode: prints notice to stderr exactly once when a fallback fired', async () => {
+    const noticeText = 'opus hit its usage limit. Continuing on sonnet.';
+    vi.mocked(collectFallbackNotice).mockResolvedValue({
+      text: noticeText,
+      fallback: { from: 'opus', to: 'sonnet', reason: 'usage_limit' },
+    });
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const params = makeParams({ format: 'text' });
+
+    await renderTextResponse(params);
+
+    const stderrCalls = stderrSpy.mock.calls.map((c) => String(c[0]));
+    const noticeCalls = stderrCalls.filter((s) => s.includes(noticeText));
+    expect(noticeCalls).toHaveLength(1);
+  });
+
+  it('text mode: nothing extra on stdout when a fallback fired', async () => {
+    vi.mocked(collectFallbackNotice).mockResolvedValue({
+      text: 'opus hit its limit. Continuing on sonnet.',
+      fallback: { from: 'opus', to: 'sonnet', reason: 'usage_limit' },
+    });
+    const stdoutSpy = vi.spyOn(console, 'log');
+    const params = makeParams({ format: 'text' });
+
+    await renderTextResponse(params);
+
+    const stdoutOutput = stdoutSpy.mock.calls.flat().join('\n');
+    expect(stdoutOutput).not.toContain('usage_limit');
+    expect(stdoutOutput).not.toContain('modelFallback');
+  });
+
+  it('text mode: nothing written to stderr when no fallback fired', async () => {
+    vi.mocked(collectFallbackNotice).mockResolvedValue(undefined);
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const params = makeParams({ format: 'text' });
+
+    await renderTextResponse(params);
+
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Fallback notice — JSON mode
+  // ---------------------------------------------------------------------------
+
+  it('JSON mode: output includes servedModel and modelFallback when fallback fired', async () => {
+    const fallback = { from: 'opus', to: 'sonnet', reason: 'usage_limit' };
+    vi.mocked(collectFallbackNotice).mockResolvedValue({
+      text: 'opus hit its limit.',
+      fallback,
+    });
+    const consoleSpy = vi.spyOn(console, 'log');
+    const params = makeParams({ format: 'json' });
+
+    await renderTextResponse(params);
+
+    // buildOneShotJsonOutput was called with modelFallback
+    expect(vi.mocked(buildOneShotJsonOutput)).toHaveBeenCalledWith(
+      expect.objectContaining({ modelFallback: fallback }),
+    );
+    // The printed JSON (from our mock) includes the fallback fields
+    const printed = consoleSpy.mock.calls.flat().join('\n');
+    expect(printed).toContain('sonnet');
+    expect(printed).toContain('modelFallback');
+  });
+
+  it('JSON mode: modelFallback field absent and output unchanged when no fallback fired', async () => {
+    vi.mocked(collectFallbackNotice).mockResolvedValue(undefined);
+    const params = makeParams({ format: 'json' });
+
+    await renderTextResponse(params);
+
+    expect(vi.mocked(buildOneShotJsonOutput)).toHaveBeenCalledWith(
+      expect.objectContaining({ modelFallback: undefined }),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
 // runStreamJsonPath
 // ---------------------------------------------------------------------------
-
-import type { OutputEvent } from '../../agent/types/session-types.js';
 
 async function* makeStream(events: OutputEvent[]): AsyncIterable<OutputEvent> {
   for (const event of events) {

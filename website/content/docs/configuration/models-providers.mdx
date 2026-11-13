@@ -109,8 +109,8 @@ fallback needs no flag and still works for a single-model setup.
 
 ## Fallback model
 
-Set one fallback model for the main session so that a usage-limit pause becomes
-a silent switch instead:
+Set `models.fallback` to one model and the main session switches to it, and
+tells you, instead of pausing when the primary cannot serve a turn:
 
 ```bash
 afk config set models.fallback sonnet
@@ -139,7 +139,9 @@ Telegram, so an unattended session continues rather than stalling.
 opus hit its usage limit (resets 6:00 PM). Continuing on sonnet. Run /model opus to switch back.
 ```
 
-The status line, `/info`, and the session record show the new model. Costs are
+One-shot `afk chat` prints the line on stderr, and `--format json` adds
+`servedModel` and `modelFallback` fields. The status line and the session record
+show the new model. Costs are
 recorded under the model that actually served each turn. The switch appears in
 the session trace as a `model_fallback` phase.
 
