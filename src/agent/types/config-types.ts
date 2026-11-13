@@ -796,6 +796,15 @@ export interface AgentConfig {
    */
   autoResumeOnUsageLimit?: boolean;
 
+  /**
+   * Set ONLY by `ProviderRouter` when it builds an inner provider for a
+   * session that has a `models.fallback` model to switch to. Tells the retry
+   * tiers to emit `model.fallback_request` instead of parking (`paused`) or
+   * failing, provided nothing has been yielded for the turn yet. Never set by
+   * users, config files, or env.
+   */
+  modelFallbackArmed?: boolean;
+
   // --- Awareness metadata (Phase 1: get_runtime_state) ---
   // Pure metadata fields surfaced through the `get_runtime_state` tool's
   // `self` view. All optional — top-level sessions leave them undefined and

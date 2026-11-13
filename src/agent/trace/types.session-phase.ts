@@ -324,6 +324,12 @@ export type SessionPhaseName =
   // `reason` (≤200 chars of the provider error). Only forks whose model came
   // from the default tier are eligible; explicit models fail loudly.
   | 'subagent_model_fallback'
+  // Main-session fallback: the primary model hit a usage limit, exhausted
+  // credit, or a rejected model id before anything was sent for the turn, and
+  // ProviderRouter rebuilt on the configured `models.fallback` model and
+  // replayed the turn. `metadata`: `fromModel`, `toModel`, `reason`
+  // (ModelFallbackReason). Sticky: emitted at most once per session.
+  | 'model_fallback'
   // The round-cap delivery notice (roundDeliveryNotice) could not be injected
   // into any valid message position — the tail message shape did not allow it
   // (e.g. anthropic: tail was not a user message; openai: no string-content

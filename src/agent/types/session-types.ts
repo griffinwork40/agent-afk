@@ -22,6 +22,7 @@ import type {
   StructuredMessageOptions,
 } from './message-types.js';
 import type {
+  ModelFallbackReason,
   ProviderCommandInfo,
   ProviderCompactResult,
   ProviderContextUsage,
@@ -109,7 +110,7 @@ export interface PanelSpec {
  * New notice kinds must be added here so downstream switch statements are
  * flagged by the TypeScript compiler.
  */
-export type NoticeKind = 'truncation' | 'refusal' | 'fast-tier';
+export type NoticeKind = 'truncation' | 'refusal' | 'fast-tier' | 'model-fallback';
 
 /** Output stream event types */
 export type OutputEvent =
@@ -148,6 +149,8 @@ export type OutputEvent =
       text: string;
       /** Semantic category — guides rendering and programmatic branching. */
       kind: NoticeKind;
+      /** Set on `kind: 'model-fallback'`: the model switch that just happened. */
+      fallback?: { from: string; to: string; reason: ModelFallbackReason };
     }
   // Live tool-activity marker (Phase 2, issue #516). Mirrors ProviderEvent
   // 'tool.activity'. Reports the tool calls ACTUALLY running at this instant,

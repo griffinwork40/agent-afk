@@ -175,6 +175,14 @@ describe('coerceConfigValue', () => {
     it('accepts a bare id string', () => {
       expect(coerceConfigValue(spec, 'glm-5.2')).toEqual({ ok: true, value: 'glm-5.2' });
     });
+    it('models.fallback is a registered agent-tier model-slot key', () => {
+      const fb = getConfigKeySpec('models.fallback');
+      expect(fb).toBeDefined();
+      expect(fb!.type).toBe('model-slot');
+      expect(fb!.tier).toBe('agent');
+      expect(fb!.description).toMatch(/usage limit/);
+      expect(coerceConfigValue(fb!, 'sonnet')).toEqual({ ok: true, value: 'sonnet' });
+    });
     it('registered models.* specs are model-slot typed', () => {
       for (const path of ['models.local', 'models.small', 'models.medium', 'models.large']) {
         expect(getConfigKeySpec(path)!.type).toBe('model-slot');
