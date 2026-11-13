@@ -109,8 +109,8 @@ fallback needs no flag and still works for a single-model setup.
 
 ## Fallback model
 
-Set `models.fallback` to one model and the main session switches to it, and
-tells you, instead of pausing when the primary cannot serve a turn:
+Set `models.fallback` to one model and an interactive session switches to it,
+and tells you, instead of pausing when the primary cannot serve a turn:
 
 ```bash
 afk config set models.fallback sonnet
@@ -130,20 +130,17 @@ turn yet, for one of three reasons:
 - The Anthropic API account is out of credit.
 - The model id was rejected as unknown, retired, or unavailable.
 
-The switch happens on every surface, including daemon and scheduled runs and
-Telegram, so an unattended session continues rather than stalling.
+**Where it works.** Interactive sessions only (`afk interactive`). One-shot
+`afk chat`, the daemon and scheduled runs, Telegram, the web dashboard, and ACP
+sessions do not switch. They behave exactly as they do with no fallback set.
 
-**What you see.** One notice line at the moment of the switch on every surface:
+**What you see.** One notice line at the moment of the switch:
 
 ```
 opus hit its usage limit (resets 6:00 PM). Continuing on sonnet. Run /model opus to switch back.
 ```
 
-One-shot `afk chat` prints the line on stderr, and `--format json` adds
-`servedModel` and `modelFallback` fields. The status line and the session record
-show the new model. Costs are
-recorded under the model that actually served each turn. The switch appears in
-the session trace as a `model_fallback` phase.
+The status line and the session record show the new model.
 
 **What it does not do.**
 

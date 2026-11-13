@@ -43,8 +43,12 @@ Use the sections below. If the same failure returns, change the diagnosis rather
 
 ## My session paused on a usage limit even though I set a fallback
 
-The fallback model only activates when the primary cannot serve a turn _and_
-nothing has been sent for that turn yet. If the usage limit was hit after the
+The fallback applies to interactive sessions only. One-shot `afk chat`, the
+daemon and scheduled runs, Telegram, the web dashboard, and ACP sessions never
+switch, whatever is configured.
+
+In an interactive session it only activates when the primary cannot serve a turn
+_and_ nothing has been sent for that turn yet. If the usage limit was hit after the
 model had already produced output or run a tool in that turn, the session pauses
 as normal. The pause card includes the line:
 `Fallback <model> is configured. Run /model <model>, then /retry.`
@@ -69,8 +73,7 @@ entirely, run:
 afk config unset models.fallback
 ```
 
-This takes effect on the next session. The current session keeps whichever model
-is now active.
+A session that has already switched keeps the model it is on.
 
 ## Context-window overflow
 
