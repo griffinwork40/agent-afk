@@ -107,6 +107,69 @@ global OpenAI auth chain: an ambient `OPENAI_API_KEY` wins, so a subscription
 model and a custom-keyed OpenAI model can't be used side by side. That global
 fallback needs no flag and still works for a single-model setup.
 
+## Fallback model
+
+Set one fallback model for the main session so that a usage-limit pause becomes
+a silent switch instead:
+
+```bash
+afk config set models.fallback sonnet
+```
+
+The value is a model name in exactly the same form as `/model`: an alias
+(`sonnet`, `haiku`), a tier name (`small`, `local`), or a raw model id. A tier
+name brings that tier's configured endpoint and key, so the fallback can reach a
+different provider or a local server.
+
+**When it switches.** The runtime replaces the primary model with the fallback
+only when the primary cannot serve a turn _and_ nothing has been sent for that
+turn yet, for one of three reasons:
+
+- The primary hit its usage limit (the case that otherwise pauses the session
+  for up to two hours).
+- The Anthropic API account is out of credit.
+- The model id was rejected as unknown, retired, or unavailable.
+
+The switch happens on every surface, including daemon and scheduled runs and
+Telegram, so an unattended session continues rather than stalling.
+
+**What you see.** One notice line at the moment of the switch on every surface:
+
+```
+opus hit its usage limit (resets 6:00 PM). Continuing on sonnet. Run /model opus to switch back.
+```
+
+The status line, `/info`, and the session record show the new model. Costs are
+recorded under the model that actually served each turn. The switch appears in
+the session trace as a `model_fallback` phase.
+
+**What it does not do.**
+
+- It does not switch in the middle of a turn. If the limit is hit after the
+  model has already produced output or run a tool, the session pauses as usual.
+  The pause card adds: `Fallback <model> is configured. Run /model <model>, then /retry.`
+- It does not switch on overloaded (529) errors, authentication errors,
+  context-length errors, refusals, or user interrupts.
+- It is one model, not a chain, and is used at most once per session. If the
+  fallback also fails, the usual behaviour for that failure applies.
+- The session stays on the fallback model for the rest of the session. It does
+  not return to the primary automatically. Use `/model <primary>` to switch
+  back, or start a new session, which begins on the primary again.
+- Subagents do not use it; they keep their own model selection.
+- Out-of-credit detection applies to Anthropic API accounts only.
+
+**Considerations.** The fallback may be a weaker or differently priced model. A
+subscription model that falls back to a paid API model will bill the API for
+those turns. If the fallback is on a different provider family, the earlier
+conversation is carried as plain text so prior tool calls and reasoning lose
+their structure, and the prompt cache is lost at the switch.
+
+To turn the fallback off:
+
+```bash
+afk config unset models.fallback
+```
+
 ## Selecting a model
 
 Set the default for all sessions:

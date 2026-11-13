@@ -52,7 +52,7 @@ the ones worth closing if outside developers are to adopt agent-afk *as an SDK*.
 | 10 | System prompt | preset `claude_code` vs custom + append | framework base + operator overlay (append-only), raw string | ● Equivalent, inverted model |
 | 11 | settingSources | explicit `["user","project","local"]` selector | config tiers (env / cwd json / global json / AFK.md) + 4-tier mcp; field exists but is a pass-through stub | ◑ Partial |
 | 12 | Slash commands | built-in + custom + supportedCommands() + commands_changed | slash registry + plugin commands + Levenshtein dispatch; no library add/remove API | ◑ Partial |
-| 13 | Model / fallback | alias/id + `fallbackModel` + setModel + effort + thinking — Claude-only | 5-tier `providerForModel` across Anthropic + OpenAI-compatible + local, slots, effort/thinking; no auto-fallback | ● Ahead on multi-provider, behind on auto-fallback |
+| 13 | Model / fallback | alias/id + `fallbackModel` + setModel + effort + thinking — Claude-only | 5-tier `providerForModel` across Anthropic + OpenAI-compatible + local, slots, effort/thinking; `models.fallback` config key — one fallback model, pre-output only, main session only | ● Ahead on multi-provider; partial on fallback (single model, pre-output gate, not a chain) |
 | 14 | Cost & usage | total_cost_usd + per-model usage + maxBudgetUsd | totalCostUsd/turn + session running cost/tokens + maxBudgetUsd + BudgetExceededError | ● High |
 | 15 | Abort/interrupt | AbortController + interrupt() + close() + stopTask | AbortGraph (transitive parent→child cascade, child→parent notify) + typed errors | ● Full / ahead |
 | 16 | **Structured output** | `outputFormat: json_schema` on the main query, w/ retry | `sendMessageStructured<T>()` + `queryStructured<T>()`: Zod-validated, bounded re-prompt retry (`maxRetries`, default 2) | ● Done (`00298f3`) |
@@ -89,9 +89,10 @@ the ones worth closing if outside developers are to adopt agent-afk *as an SDK*.
 5. **Permission rules-engine (Dim 8).** `canUseTool` + read-only phase gating
    exist, but not persisted allow/deny/ask rule lists with settings-tier
    destinations.
-6. **Backlog.** Auto-`fallbackModel` (Dim 13), standalone session CRUD
-   list/rename/tag/delete (Dim 9), wire the `settingSources` stub (Dim 11),
-   slash-command library add/remove API (Dim 12).
+6. **Backlog.** Standalone session CRUD list/rename/tag/delete (Dim 9), wire
+   the `settingSources` stub (Dim 11), slash-command library add/remove API
+   (Dim 12). Note: `models.fallback` now provides a single pre-output fallback
+   for the main session; mid-turn failover and chaining remain unsupported.
 
 ## Where agent-afk is ahead
 
