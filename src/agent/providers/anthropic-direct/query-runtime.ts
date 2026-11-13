@@ -223,6 +223,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.tokenRefresher ? { tokenRefresher: opts.tokenRefresher } : {}),
       autoResumeOnUsageLimit: opts.autoResumeOnUsageLimit ?? true,
+      ...(opts.modelFallbackArmed !== undefined ? { modelFallbackArmed: opts.modelFallbackArmed } : {}),
       ...(opts.surface !== undefined ? { surface: opts.surface } : {}),
       credentialFromStore: opts.credentialFromStore,
     });
