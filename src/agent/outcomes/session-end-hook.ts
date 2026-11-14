@@ -55,8 +55,10 @@ import type { Artifacts } from './schema.js';
  * the LAST root closure (no `subagentId`) represents the cycle that is
  * actually ending. Scanning forward and overwriting on each root closure
  * means we always return the last cycle's reason.
+ *
+ * @internal exported for tests
  */
-function closureFromTrace(tracePath: string | undefined): ClosureInfo | null {
+export function closureFromTrace(tracePath: string | undefined): ClosureInfo | null {
   if (!tracePath || !existsSync(tracePath)) return null;
   try {
     const raw = readFileSync(tracePath, 'utf8');

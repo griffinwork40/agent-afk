@@ -82,8 +82,14 @@ import { z } from 'zod';
  * surface-aware filtering) can use a structural predicate on `surface` instead
  * of a separate sidecar read. Values mirror `source`; absent on old cached
  * facets (treat as `'cli'` on `facet_version < 14`).
+ *
+ * v15 (#4896): derivation only, no field added or removed. A REPL session
+ * that runs `/clear` writes one root closure per cycle, so the LAST root
+ * closure now decides `traceClosureReason`, and
+ * `token_breakdown.subagent_cost_usd` no longer absorbs the cost of earlier
+ * root REPL cycles.
  */
-export const FACET_VERSION = 14;
+export const FACET_VERSION = 15;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)

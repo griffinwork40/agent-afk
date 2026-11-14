@@ -123,10 +123,19 @@ export interface RunReceipt {
   };
   // Contract (#3879): `finalCostUsd` and `tokens` are ROOT-scoped and kept
   // for back-compat: `finalCostUsd` and `turnCount` are the root's figures
-  // over every REPL cycle (#4896, from `computeSessionCost`), and `tokens` is
-  // the last closure's (normally the root's). Whole-
-  // session spend including every subagent is `totalCostUsd` / `totalTokens`,
-  // computed by `computeSessionCost` in `./cost.ts`.
+  // over every REPL cycle (#4896, from `computeSessionCost`) when the
+  // root/subagent split is unambiguous, and `tokens` is the last closure's
+  // (normally the root's). Exceptions, per `rootSplit` in `./cost.ts` and
+  // `buildReceiptCost` in `./receipt.ts`:
+  //   - The trace shows subagent activity but no closure carries
+  //     `subagentId` (a trace written before 2026-10-17, or one whose
+  //     children never closed): they are the seal's last-cycle figures (the
+  //     last closure's when there is no seal).
+  //   - After a process-exit backstop seal (`incomplete: true`), or with no
+  //     cost record (source `none`): they are the raw seal values, else the
+  //     last closure's.
+  // Whole-session spend including every subagent is `totalCostUsd` /
+  // `totalTokens`, computed by `computeSessionCost` in `./cost.ts`.
   cost: {
     finalCostUsd?: number;
     turnCount?: number;
