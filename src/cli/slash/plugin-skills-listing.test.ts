@@ -155,16 +155,19 @@ describe('/skills listing UX (Phase 1)', () => {
     expect(detail).toMatch(/Source\s+command/);
   });
 
-  it('wraps long descriptions instead of clipping them at 80 chars', async () => {
+  it('truncates long descriptions to a brief and wraps within columns', async () => {
     setColumns(50);
     const { ctx, lines } = makeCtx();
     await initialSkillsCmd.handler(ctx, '');
     const out = stripAnsi(lines.join('\n'));
 
-    // The last word survives (clipping would have dropped it) and no ellipsis
-    // truncation marker appears.
-    expect(out).toContain('final-sentinel-word');
-    expect(out).not.toContain('…');
+    // Listing shows a truncated brief with an ellipsis for long descriptions;
+    // the sentinel word at the tail is NOT shown (full text via /skills <name>).
+    expect(out).toContain('…');
+    expect(out).not.toContain('final-sentinel-word');
+    // The brief itself still wraps across multiple lines (not clipped at 80).
+    const descLines = out.split('\n').filter((l) => l.includes('Alpha') || l.includes('theta'));
+    expect(descLines.length).toBeGreaterThanOrEqual(2);
   });
 
   it('surfaces shadowed/alias forms inline as "↳ also:" (not hidden)', async () => {

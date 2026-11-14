@@ -2,17 +2,20 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
+import { resolveUnattendedLimits } from '../unattended-limits.js';
+
 import { errCodeOrString } from '../../utils/errors.js';
 import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { getStateDatabasePath, getDaemonStateDir } from '../../paths.js';
 import { createDefaultHookRegistry } from '../default-hook-registry.js';
-import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../memory/index.js';
+import { MemoryStore, injectHotMemory, injectGoalPrompt, injectEpisodeRecall } from '../memory/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
 import { injectCompanionPrimer } from '../companion/index.js';
 import { AgentSession } from '../session/agent-session.js';
 import { registerSurfaceSession } from '../session/register-surface-session.js';
 import { loadHooksConfig } from '../hooks/config-loader.js';
+import { resolveModelId } from '../session/model-resolution.js';
 import { StateStore } from '../state/state-store.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
@@ -128,45 +131,32 @@ export function daemonDefaultCwd(): string {
  * is pure with respect to the env object and its contract is visible at the
  * call site.
  *
- * `rawMaxToolIters` — raw value of `AFK_MAX_TOOL_USE_ITERATIONS`:
- *   - `undefined` / non-numeric / `<= 0` → `undefined` (unlimited, no change)
- *   - positive number → `Math.floor(parsed)` (integer ceiling)
- *
- * `rawMaxBudget` — raw value of `AFK_MAX_BUDGET_USD`:
- *   - `undefined` → `undefined` (uncapped, no change)
- *   - empty / whitespace-only → `undefined` (treated as unset, not $0 hard-stop)
- *   - malformed / negative / NaN → `undefined` + `console.warn` (never throws)
- *   - valid non-negative number → parsed value
+ * Unset/empty/invalid values use finite unattended defaults. Numeric <=0
+ * rounds preserve the unlimited escape hatch; dollar zero remains a stop
+ * sentinel. See resolveUnattendedLimits for the shared surface policy.
  */
+/**
+ * Build the `getModel` callback wired into the hook registry for a daemon tick.
+ *
+ * Extracted from the inline IIFE in {@link spawnDaemonSession} so the resolution
+ * logic can be unit-tested without invoking the full spawn path (MCP, DB, etc.).
+ *
+ * @param configuredModel - The raw model value from `sessionConfig.model`.
+ *   Undefined when `sessionConfig` is absent or when `model` is not set.
+ * @returns A zero-argument function that returns the resolved wire id for this tick.
+ */
+export function buildDaemonGetModel(configuredModel: string | undefined): () => string {
+  const raw = configuredModel ?? 'sonnet';
+  const daemonModel = resolveModelId(raw) ?? String(raw);
+  return () => daemonModel;
+}
+
 export function parseDaemonEnvLimits(
   rawMaxToolIters: string | undefined,
   rawMaxBudget: string | undefined,
-): { parsedMaxToolIters: number | undefined; parsedMaxBudget: number | undefined } {
-  const parsedMaxToolIters =
-    rawMaxToolIters !== undefined &&
-    Number.isFinite(Number(rawMaxToolIters)) &&
-    Number(rawMaxToolIters) > 0
-      ? Math.floor(Number(rawMaxToolIters))
-      : undefined;
-
-  let parsedMaxBudget: number | undefined;
-  if (rawMaxBudget === undefined || rawMaxBudget.trim() === '') {
-    // undefined or empty/whitespace → uncapped (not a $0 hard-stop)
-    parsedMaxBudget = undefined;
-  } else {
-    const n = Number(rawMaxBudget);
-    if (!Number.isFinite(n) || n < 0) {
-      console.warn(
-        `[daemon] AFK_MAX_BUDGET_USD is not a valid finite non-negative number — ` +
-          `ignoring (budget uncapped). Set AFK_MAX_BUDGET_USD to a non-negative number or leave it unset.`,
-      );
-      parsedMaxBudget = undefined;
-    } else {
-      parsedMaxBudget = n;
-    }
-  }
-
-  return { parsedMaxToolIters, parsedMaxBudget };
+): { parsedMaxToolIters: number; parsedMaxBudget: number } {
+  const limits = resolveUnattendedLimits(rawMaxToolIters, rawMaxBudget);
+  return { parsedMaxToolIters: limits.maxToolUseIterations, parsedMaxBudget: limits.maxBudgetUsd };
 }
 
 export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOptions): Promise<{
@@ -238,6 +228,9 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
       // enabled:false) as 'medium'. This value comes from the scheduler, not
       // from any model-supplied input — it cannot be spoofed by the agent.
       daemonTaskId: taskId,
+      // Daemon ticks use a fixed model per tick; resolve it once at dispatch
+      // time so hook payloads reflect the actual wire id.
+      getModel: buildDaemonGetModel(options.sessionConfig?.model),
     },
   );
   const stateStore = new StateStore(getStateDatabasePath());
@@ -255,16 +248,16 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     throw err;
   }
 
-  // Opt-in top-level tool-use-round ceiling and USD budget ceiling.
+  // Finite unattended defaults; explicit session settings still win.
   // Delegated to the named helper below to keep spawnDaemonSession under the
   // 200-line function-size ceiling (spec item 1). The helper reads from the
   // `env` object (the single read-point) with explicit params rather than a
   // closure, making it independently testable.
-  // Placed BEFORE the `...sessionConfig` spread so an explicit caller value
-  // still wins (escape-hatch parity with permissionMode/surface).
-  const { parsedMaxToolIters, parsedMaxBudget } = parseDaemonEnvLimits(
+  // Resolve explicit config too so undefined fields cannot erase defaults.
+  const unattendedLimits = resolveUnattendedLimits(
     env.AFK_MAX_TOOL_USE_ITERATIONS,
     env.AFK_MAX_BUDGET_USD,
+    options.sessionConfig,
   );
   const config: AgentConfig = {
     model: 'sonnet',
@@ -295,15 +288,11 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // permissionMode).
     ...(hookTraceWriter ? { traceWriter: hookTraceWriter } : {}),
     ...(mcpManager !== undefined ? { mcpManager } : {}),
-    // Opt-in top-level tool-round ceiling default; overridable by an explicit
-    // sessionConfig.maxToolUseIterations via the spread below.
-    ...(parsedMaxToolIters !== undefined ? { maxToolUseIterations: parsedMaxToolIters } : {}),
-    // USD budget ceiling default; overridable by an explicit
-    // sessionConfig.maxBudgetUsd via the spread below.
-    ...(parsedMaxBudget !== undefined ? { maxBudgetUsd: parsedMaxBudget } : {}),
+
     // sessionConfig may override permissionMode if the operator explicitly
     // wants a different mode for daemon tasks (intentional escape hatch).
     ...options.sessionConfig,
+    ...unattendedLimits,
     // Per-task cwd wins over sessionConfig.cwd (daemon-wide AFK_DAEMON_CWD).
     // Placed AFTER the sessionConfig spread so the task-level value is never
     // overwritten by the daemon-wide one. agentCwd already encodes the correct
@@ -314,7 +303,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     const traceOwner = options.sessionConfig?.traceWriter === undefined ? hookTraceWriter : undefined;
     const session = options.sessionFactory
       ? options.sessionFactory(config, traceOwner)
-      : new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory(config))), traceOwner);
+      : new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory(config), undefined, undefined, memoryStore))), traceOwner);
     // Wire session-layer Stop dispatch for the daemon surface. Daemon/cron tasks
     // are one-shot: there is no next user turn for injectContext delivery.
     // `getHasNextTurn: () => false` causes the session layer to drop injectContext

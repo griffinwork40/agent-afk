@@ -1,19 +1,21 @@
 import { env } from '../../config/env.js';
-import { getApiKeyForModel, getDefaultSubagentModel, getMaxToolUseIterations, getMaxBudgetUsd, parseProvider } from '../shared-helpers.js';
+import { resolveUnattendedLimits } from '../../agent/unattended-limits.js';
+import { getApiKeyForModel, getDefaultSubagentModel, parseProvider } from '../shared-helpers.js';
+import { tryCredentialSourceForModel } from '../../agent/auth/credential-source.js';
 import type { AgentConfig, AgentModelInput } from '../../agent/types.js';
 import { AgentSession } from '../../agent/session.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
-import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
+import { MemoryStore, injectHotMemory, injectGoalPrompt, injectEpisodeRecall } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
-import { STATE_TOOL_NAMES } from '../../agent/state/state-tools.js';
 import { getStateDatabasePath } from '../../paths.js';
-import { WORKSPACE_TOOL_NAMES } from '../../agent/workspace/index.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
+import type { ModelProvider } from '../../agent/provider.js';
+import { cliProviderFamily } from '../provider-selection.js';
+import { injectedProviderWiring } from '../provider-fallback-factory.js';
 import { createStubParentSession } from '../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
-import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
-import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/index.js';
+import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
 
 /**
@@ -144,28 +146,20 @@ export function buildDaemonSessionFactory(
     const mcpManager = config.mcpManager;
     const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
 
-    const provider = parseProvider(undefined, {
+    // ONE build function for the task's primary provider and for a
+    // `models.fallback` provider, so a fallback carries the same executors,
+    // stores and MCP manager. Built per session (per task tick), never shared.
+    const routeHints = opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {};
+    const buildProvider = (m: string): ModelProvider => parseProvider(undefined, {
       subagentExecutor,
       skillExecutor,
       composeExecutor,
       memoryStore, stateStore, workspaceStore,
-      model: String(opts.model),
-      ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
+      model: m,
+      ...routeHints,
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     }) ?? new AnthropicDirectProvider({
-      permissions: {
-        allowedTools: [
-          ...BUILTIN_TOOL_NAMES,
-          ...MEMORY_TOOL_NAMES,
-          ...STATE_TOOL_NAMES,
-          ...AWARENESS_TOOL_NAMES,
-          ...WORKSPACE_TOOL_NAMES,
-          'agent',
-          'skill',
-          'compose',
-          ...mcpToolWireNames,
-        ],
-      },
+      permissions: { allowedTools: topLevelSurfaceAllowedTools(mcpToolWireNames) },
       subagentExecutor,
       skillExecutor,
       composeExecutor,
@@ -173,23 +167,18 @@ export function buildDaemonSessionFactory(
       surface: 'daemon',
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     });
+    const providerWiring = injectedProviderWiring({
+      model: String(opts.model),
+      build: buildProvider,
+      familyOf: (m) => cliProviderFamily(undefined, { model: m, ...routeHints }),
+    });
 
-    // Opt-in top-level tool-use-round ceiling. Explicit caller config wins;
-    // AFK_MAX_TOOL_USE_ITERATIONS is the fallback (undefined/<=0 → unlimited, no
-    // behavior change). Resolved after `...config` so an explicit value on the
-    // caller's config takes precedence over the env default. This is the
-    // production chokepoint the scheduler routes every task through, so it also
-    // caps scheduler/cron-spawned top-level sessions.
-    const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
-    // USD budget ceiling. Explicit caller config wins (set by session-spawn.ts
-    // from AFK_MAX_BUDGET_USD); getMaxBudgetUsd() is the re-read fallback so
-    // buildDaemonSessionFactory works in isolation (e.g. tests) without
-    // session-spawn.ts pre-populating config.maxBudgetUsd.
-    // undefined/NaN/negative → undefined = uncapped (no behavior change).
-    const daemonMaxBudgetUsd = config.maxBudgetUsd ?? getMaxBudgetUsd();
-    const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
+    const unattendedLimits = resolveUnattendedLimits(
+      env.AFK_MAX_TOOL_USE_ITERATIONS, env.AFK_MAX_BUDGET_USD, config,
+    );
+    const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory({
       ...config,
-      provider,
+      ...providerWiring,
       // Daemon sessions are headless by default: no human watches to answer
       // ask_question. Pull tasks set isNonInteractive: false in the caller's
       // config (scheduler.ts spawnSession) so they keep the ask_question tool
@@ -215,11 +204,9 @@ export function buildDaemonSessionFactory(
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.
       surface: 'daemon',
-      ...(daemonMaxToolUseIterations !== undefined
-        ? { maxToolUseIterations: daemonMaxToolUseIterations }
-        : {}),
-      ...(daemonMaxBudgetUsd !== undefined ? { maxBudgetUsd: daemonMaxBudgetUsd } : {}),
-    }))), ownedTraceWriter);
+      credentialSource: tryCredentialSourceForModel(String(config.model ?? opts.model)),
+      ...unattendedLimits,
+    }), undefined, undefined, memoryStore))), ownedTraceWriter);
     bound = session;
     const close = session.close.bind(session);
     let closing: Promise<void> | undefined;

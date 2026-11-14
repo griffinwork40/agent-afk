@@ -637,9 +637,13 @@ describe('interactive command - streaming logic', () => {
       expect(startupHintLine()).not.toContain('/resume');
     });
 
-    it('stays compact (≤ 6 dot-separated items) so the busiest startup line is scannable', () => {
+    it('stays compact (≤ 7 dot-separated items) so the busiest startup line is scannable', () => {
       const items = startupHintLine().split(' · ');
-      expect(items.length).toBeLessThanOrEqual(6);
+      expect(items.length).toBeLessThanOrEqual(7);
+    });
+
+    it('surfaces /keys shortcut reference', () => {
+      expect(startupHintLine()).toContain('/keys for shortcuts');
     });
   });
 

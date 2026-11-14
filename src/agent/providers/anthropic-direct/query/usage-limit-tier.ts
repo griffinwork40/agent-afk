@@ -23,6 +23,12 @@ import {
 import { usageLimitNoTimestampPause, usageLimitResetPause } from './usage-limit-pause.js';
 import { anthropicCreditErrorEvent } from '../usage-limit.error.js';
 import { catchUpStaleCredential } from './usage-limit-catch-up.js';
+import {
+  modelFallbackRequest,
+  modelRejectedFallbackRequest,
+  noteOutwardEvent,
+  noteTurnProgress,
+} from './usage-limit-tier.fallback.js';
 
 /**
  * Outer tier: intercept 429 usage-limit errors and (when enabled)
@@ -100,16 +106,22 @@ export async function* turnWithUsageLimitRetry(
         // An empty API credit balance is terminal (never parked): surface it
         // with the shared provider-labeled message, status 400 preserved.
         if (c && c.kind === 'credit-exhausted') {
+          const request = modelFallbackRequest(ctx, runInput, isClosed, 'credit-exhausted', event.error);
+          if (request) { yield request; return; }
+          noteTurnProgress(runInput);
           yield anthropicCreditErrorEvent(event);
           continue;
         }
+        const rejected = modelRejectedFallbackRequest(ctx, runInput, isClosed, event.error);
+        if (rejected) { yield rejected; return; }
       }
+      noteOutwardEvent(runInput, event);
       yield event;
     }
 
     // A usage-limit 429 on a client whose token is older than the store
     // means the operator already switched accounts: replay on the new
-    // credential instead of parking on the old one (which needed /reauth).
+    // credential instead of parking on the old one.
     if (pendingErrorEvent && !credentialCatchUpTried) {
       credentialCatchUpTried = true;
       if (isClosed() || runInput.signal.aborted) return;
@@ -158,6 +170,16 @@ export async function* turnWithUsageLimitRetry(
   if (!pendingErrorEvent) {
     return;
   }
+
+  // Ordering: decide on the model fallback HERE, after the stale-credential
+  // catch-up above had its chance and BEFORE either park yields `paused` (or
+  // its fail-fast error). Once `paused` is out the turn has visible progress
+  // and can no longer be replayed on another model without a duplicate.
+  if (pendingErrorEvent.type === 'error') {
+    const request = modelFallbackRequest(ctx, runInput, isClosed, 'usage-limit', pendingErrorEvent.error);
+    if (request) { yield request; return; }
+  }
+  noteTurnProgress(runInput);
 
   // ── oauth-limit-no-ts path ─────────────────────────────────────────────
   if (noTimestamp) {

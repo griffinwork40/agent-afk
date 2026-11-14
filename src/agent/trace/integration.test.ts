@@ -93,21 +93,19 @@ describe('AgentSession + witness-layer wiring', () => {
       expect(seals).toHaveLength(1);
     });
 
-    it('seal fires on reset() too (the reason changes; status stays succeeded)', async () => {
+    it('reset() does not seal; the single seal comes from close() (#4884)', async () => {
       const session = new AgentSession(config, writer);
       await session.waitForInitialization();
       await session.reset();
-      // reset rebuilds internal state; close the new session too so we
-      // can inspect both seal events.
+      expect(writer.events.some((e) => e.kind === 'session_sealed')).toBe(false);
       await session.close();
 
       const seals = writer.events.filter((e) => e.kind === 'session_sealed');
-      // One from reset(), one from close().
-      expect(seals.length).toBeGreaterThanOrEqual(1);
-      for (const seal of seals) {
-        if (seal.kind !== 'session_sealed') continue;
-        expect(seal.payload.status).toBe('succeeded');
-      }
+      expect(seals).toHaveLength(1);
+      const seal = seals[0];
+      if (seal?.kind !== 'session_sealed') throw new Error('unreachable');
+      expect(seal.payload.status).toBe('succeeded');
+      expect(writer.events.at(-1)?.kind).toBe('session_sealed');
     });
 
     it('runs even when no trace writer is configured (graceful no-op)', async () => {

@@ -55,7 +55,7 @@ export interface OpenAIChunk {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
-    prompt_tokens_details?: { cached_tokens?: number };
+    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
   };
 }
 
@@ -211,6 +211,7 @@ export function usageFromState(
     };
   }
   const cachedInputTokens = u.prompt_tokens_details?.cached_tokens ?? 0;
+  const cacheWriteTokens = u.prompt_tokens_details?.cache_write_tokens ?? 0;
   const inputTokens = u.prompt_tokens ?? 0;
   const outputTokens = u.completion_tokens ?? 0;
   const out: ProviderUsage = {
@@ -218,7 +219,7 @@ export function usageFromState(
     outputTokens,
     cachedInputTokens,
     totalTokens: u.total_tokens ?? inputTokens + outputTokens,
-    billing: openAICompatibleBilling(inputTokens, cachedInputTokens, outputTokens),
+    billing: openAICompatibleBilling(inputTokens, cachedInputTokens, outputTokens, cacheWriteTokens),
     stopReason: state.finishReason ?? null,
     resultSubtype: 'success',
     isError: false,

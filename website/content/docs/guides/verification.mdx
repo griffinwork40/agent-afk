@@ -112,10 +112,13 @@ The shipping skill aborts on failed test, typecheck, or lint gates, records skip
 
 The runtime can distinguish a turn with no code changes, a turn with post-change verification, and one with changes but no recognized verification afterward. Stop hooks can use this evidence to ask for a correction, and surfaces can indicate that a completion lacks corroboration.
 
+The human-controlled `telegram.verifyDone` setting opts into marking unsupported REPL completion pushes unverified; `enforceDoneEvidence` opts into a correction on the next autonomous REPL turn rather than merely relabeling the push.
+
 These are conservative heuristics over observed tool events and command shapes, not a proof of correctness. A command can look like a test while covering the wrong behavior. Delegated work also has its own evidence stream. Ask for concrete artifacts and inspect the final state rather than relying only on a status label.
 
 ## Design for a better failure mode
 
+{/* docs-refs-ignore-next-line */}
 The failure-geometry pattern is a way to make failure earlier, smaller, louder, cheaper, more local, more informative, or easier to recover from. It is not a separate `/failure-geometry` command or a runtime guarantee.
 
 Use four questions when writing a custom skill:

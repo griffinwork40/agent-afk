@@ -51,6 +51,7 @@ describe('interactive bootstrap status line hooks', () => {
     vi.doMock('../agent/memory/index.js', () => ({
       MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
       injectHotMemory: vi.fn((config: unknown) => config),
+      injectEpisodeRecall: vi.fn((config: unknown) => config),
       injectGoalPrompt: vi.fn((config: unknown) => config),
       memoryToolSchemas: [],
       MEMORY_TOOL_NAMES: [],
@@ -209,6 +210,7 @@ function applyCommonMocks(): void {
   vi.doMock('../agent/memory/index.js', () => ({
     MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
     injectHotMemory: vi.fn((config: unknown) => config),
+    injectEpisodeRecall: vi.fn((config: unknown) => config),
     injectGoalPrompt: vi.fn((config: unknown) => config),
     memoryToolSchemas: [],
     MEMORY_TOOL_NAMES: [],
@@ -1215,6 +1217,7 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
     vi.doMock('../agent/memory/index.js', () => ({
       MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
       injectHotMemory: vi.fn((config: unknown) => config),
+      injectEpisodeRecall: vi.fn((config: unknown) => config),
       injectGoalPrompt: vi.fn((config: unknown) => config),
       memoryToolSchemas: [],
       MEMORY_TOOL_NAMES: [],

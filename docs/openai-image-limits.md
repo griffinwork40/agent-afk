@@ -1,9 +1,10 @@
 # OpenAI-compatible provider — image limits and many-image guard
 
-> **Context:** Anthropic-direct has a many-image guard
+> **Context:** Anthropic-direct has a per-image pixel-ceiling guard
 > (`src/agent/providers/anthropic-direct/loop/_many-image-guard.ts`) that
-> replaces oversized images with text placeholders once a request carries
-> more than 20 image blocks. This document records why an equivalent guard
+> replaces oversized images with text placeholders on every request: over
+> 8,000 px per side, or over 2,000 px once a request carries more than 20
+> image blocks. This document records why an equivalent guard
 > is **not** needed for the openai-compatible provider (closes issue #2421).
 
 ## Documented limits by backend
@@ -18,8 +19,9 @@
 
 Anthropic's API has an **undocumented, non-resizing** behaviour:
 
-- ≤ 20 images in a request → max dimension 8,000 px per side (enforced by
-  tool handlers at call time)
+- ≤ 20 images in a request → max dimension 8,000 px per side (checked by
+  the built-in tool handlers at call time, and by the request-build guard for
+  every other source, e.g. MCP screenshots)
 - > 20 images in a request → max dimension drops to **2,000 px** with a
   hard HTTP 400 and no auto-resize
 
@@ -27,8 +29,9 @@ An image in the 2,001–8,000 px range passes the per-tool check but causes a
 400 once the conversation accumulates more than 20 images. Because the 400
 is not retried and the oversized image block persists in history, the session
 becomes **unrecoverable** — every subsequent turn re-triggers the same 400.
-`enforceManyImageLimit` (applied in `loop/round-request.ts`) exists
-specifically to prevent this session-poisoning failure mode.
+`enforceImageLimits` (applied in `loop/round-request.ts` before every
+request) exists specifically to prevent this session-poisoning failure mode,
+for both ceilings.
 
 OpenAI and xAI do **not** have an equivalent cliff:
 

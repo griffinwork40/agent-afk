@@ -218,7 +218,34 @@ describe('hook command data exemptions (#3762)', () => {
       const lines = result.split('\n');
       expect(lines[0]).toBe("cat >big.txt <<'EOF'");
       expect(lines[lines.length - 1]).toBe('EOF');
+      // Body lines should be replaced by blank lines (one per masked line).
+      expect(lines.length).toBe(50_000 + 2); // header + 50k body + EOF
       // Should complete quickly (well under 5s even on slow CI).
+      expect(elapsed).toBeLessThan(5000);
+    });
+
+    it('K≥3 blocks each with a large body: masks all and stays fast (#4031 stress)', () => {
+      // Regression: O(K²·B) concat or push.apply stack-overflow both blow up here.
+      // Each block has 10k lines so aggregate body size is 30k+ lines across K=3 blocks.
+      const K = 3;
+      const LINES_PER_BLOCK = 10_000;
+      const blocks = Array.from({ length: K }, (_, k) => {
+        const body = Array.from({ length: LINES_PER_BLOCK }, (__, i) => `block${k}-line${i}`).join('\n');
+        return `cat >file${k}.txt <<'EOF'\n${body}\nEOF`;
+      });
+      const command = blocks.join('\n');
+      const start = performance.now();
+      const result = maskHookCommandData(command);
+      const elapsed = performance.now() - start;
+      // Every body line in every block must be blanked.
+      for (let k = 0; k < K; k++) {
+        expect(result).not.toContain(`block${k}-line0`);
+        expect(result).not.toContain(`block${k}-line${LINES_PER_BLOCK - 1}`);
+      }
+      // Each block's EOF delimiter is preserved.
+      const resultLines = result.split('\n');
+      expect(resultLines.filter(l => l === 'EOF')).toHaveLength(K);
+      // Must complete well under 5s even on slow CI.
       expect(elapsed).toBeLessThan(5000);
     });
   });

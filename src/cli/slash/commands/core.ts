@@ -145,6 +145,12 @@ const compactCmd: SlashCommand = {
         ctx.out.success(
           `Compacted ${promptsBefore} → ${promptsAfter} prompts${saved}.`,
         );
+        const mc = result.microcompaction;
+        if (mc && mc.blocksCleared > 0) {
+          ctx.out.info(
+            `Also cleared ${mc.blocksCleared} large tool result${mc.blocksCleared === 1 ? '' : 's'} (~${formatBytes(mc.bytesReclaimed)} reclaimed).`,
+          );
+        }
       }
     } catch (err) {
       stopSpinner();
@@ -188,7 +194,7 @@ const helpCmd: SlashCommand = {
     });
     if (provided === undefined || provided.has('tty')) {
       ctx.out.line(palette.dim('  Tip: Ctrl+C interrupts a running turn; a second press exits.'));
-      ctx.out.line(palette.dim('  Hidden: /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode'));
+      ctx.out.line(palette.dim('  /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode'));
       ctx.out.line();
     }
     return 'continue';

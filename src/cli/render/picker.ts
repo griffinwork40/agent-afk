@@ -39,11 +39,8 @@
  * would re-introduce the phantom-turn bug fixed in PR #511.
  */
 
-import { truncateDisplayWidth } from '../display.js';
 import { palette } from '../palette.js';
-import { getTerminalWidth } from '../terminal-size.js';
 import type { PickerController } from '../terminal-compositor.js';
-import { contentBand } from './measure.js';
 import { filterOptions } from './picker-filter.js';
 
 /**
@@ -174,7 +171,6 @@ export function renderPickerRows(
   multi: boolean,
   searchable: boolean,
   terminalRowsFn: (() => number | undefined) | undefined,
-  bandWidth?: number,
 ): readonly string[] {
   const lines: string[] = [];
   for (const h of header) lines.push(h);
@@ -189,12 +185,11 @@ export function renderPickerRows(
   const windowSize = pickerViewportSize(terminalRowsFn, header.length, searchable, len);
   clampPickerScroll(state, ao, windowSize);
 
-  // Truncate picker rows to the content band width so long option labels
-  // do not wrap when AFK_CENTER_CONTENT narrows the band. Only the
-  // selection picker needs this — bash-output-viewer and text-input pickers
-  // carry content that must not be truncated by the frame assembler.
-  const fit = (row: string): string =>
-    bandWidth !== undefined ? truncateDisplayWidth(row, bandWidth) : row;
+  // Row fitting is intentionally absent here: truncation is performed
+  // once, authoritatively, by buildPickerFrameLines in the frame assembler.
+  // Applying it here as well would double-truncate if stdout.columns changed
+  // between the two calls (terminal resize mid-render).
+  const fit = (row: string): string => row;
 
   // Virtual-scroll window.
   const visStart = state.scrollOffset;
@@ -505,7 +500,7 @@ export function runPicker(
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
 
     const renderRows = (): readonly string[] =>
-      renderPickerRows(state, header, options, multi, searchable, host.terminalRows?.bind(host), contentBand(getTerminalWidth()).width);
+      renderPickerRows(state, header, options, multi, searchable, host.terminalRows?.bind(host));
 
     const onKey = (
       _char: string | undefined,

@@ -241,6 +241,84 @@ describe('deriveRiskLevel', () => {
   }
 });
 
+describe('proposeFromCard — tool-failure-density integration', () => {
+  function makeToolFailureCard(overrides: Partial<FailureCard> = {}): FailureCard {
+    return {
+      schemaVersion: 1,
+      slug: 'tool-failure-read-file-aabbccdd1122',
+      title: "'read_file' tool failed 6/20 calls (30.0%)",
+      pattern: 'tool-failure-density',
+      severity: 'medium',
+      status: 'open',
+      firstSeen: '2026-05-22T10:00:00.000Z',
+      lastSeen: '2026-05-22T10:00:00.000Z',
+      occurrenceCount: 1,
+      evidence: [
+        {
+          sessionId: 'sess-abc',
+          tracePath: 'state/witness/sess-abc/trace.jsonl',
+          eventIndices: [1, 2, 3, 4, 5, 6],
+          excerpt: '{"kind":"tool_call","payload":{"isError":true}}',
+          annotation: 'isError=true · class=permission denied reading file',
+        },
+      ],
+      detail: {
+        detector: 'tool-failure-density@v2',
+        toolName: 'read_file',
+        totalCalls: 20,
+        failureCount: 6,
+        failureRate: 0.3,
+        truncatedFailureCount: 0,
+        affectedSessionCount: 2,
+        avgFailureDurationMs: 120,
+        failureClassBreakdown: { 'permission denied reading file': 5, 'enoent no such file': 1 },
+        excludedByClass: {},
+        sessionIds: ['sess-abc', 'sess-def'],
+        seqs: [1, 2, 3, 4, 5, 6],
+      },
+      notes: [],
+      ...overrides,
+    };
+  }
+
+  it('derives rootCauseClass from failureClassBreakdown dominant key', () => {
+    const proposal = proposeFromCard(makeToolFailureCard(), CTX);
+    // 'permission denied reading file' → rootCauseFromClusterKey → 'hook-overreach'
+    expect(proposal.rootCauseClass).toBe('hook-overreach');
+    expect(proposal.rootCauseClass).not.toBe('unknown');
+  });
+
+  it('uses hyphenated handler path in likelyFiles[0] (Fix 2)', () => {
+    const proposal = proposeFromCard(makeToolFailureCard(), CTX);
+    // read_file → read-file.ts (underscores converted to hyphens)
+    expect(proposal.likelyFiles[0]?.path).toContain('read-file.ts');
+    expect(proposal.likelyFiles[0]?.path).not.toContain('read_file.ts');
+  });
+
+  it('handler file has confidence medium not high (Fix 3)', () => {
+    const proposal = proposeFromCard(makeToolFailureCard(), CTX);
+    expect(proposal.likelyFiles[0]?.confidence).toBe('medium');
+  });
+
+  it('falls back to template.rootCauseClass when failureClassBreakdown is absent', () => {
+    const card = makeToolFailureCard();
+    // Remove the breakdown entirely
+    const detail = { ...card.detail };
+    delete (detail as Record<string, unknown>)['failureClassBreakdown'];
+    const proposal = proposeFromCard({ ...card, detail }, CTX);
+    // toolFailureDensityTemplate.rootCauseClass is 'unknown'
+    expect(proposal.rootCauseClass).toBe('unknown');
+  });
+
+  it('falls back to template.rootCauseClass when failureClassBreakdown is empty', () => {
+    const card = makeToolFailureCard({
+      detail: { ...makeToolFailureCard().detail, failureClassBreakdown: {} },
+    });
+    const proposal = proposeFromCard(card, CTX);
+    expect(proposal.rootCauseClass).toBe('unknown');
+  });
+});
+
 describe('proposeFromCard — risk + approval gating', () => {
   it('marks requiresExplicitApproval=true when riskLevel=high', () => {
     // subagent-block has a file with riskTier='high' → forces riskLevel='high'.

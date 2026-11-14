@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEffectLedgerHooks } from './hook.js';
@@ -24,7 +25,7 @@ beforeEach(() => {
   path = join(dir, 'ledger.jsonl');
   store = new EffectStore(path);
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmSyncRetry(dir));
 
 describe('write-ahead effect hooks with fake remote', () => {
   it('persists intent before remote dispatch, then updates the SAME record to unknown', async () => {

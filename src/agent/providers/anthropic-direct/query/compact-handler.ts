@@ -12,8 +12,9 @@
  *   3. On a non-empty summary: splice `state.messages` in place,
  *      emit a witness-layer `compaction` event, and return the
  *      success result.
- *   4. On any no-op result: run deterministic tool-result microcompaction
- *      as a fallback to reclaim context in short-but-full sessions.
+ *   4. After every attempt: run deterministic tool-result microcompaction.
+ *      On a no-op it is the fallback (`reason: 'microcompacted'`); on a
+ *      success its counts are attached to the success result.
  *
  * Mutates `state.messages` in place on success. Leaves history
  * untouched on every failure path (closed, in-flight, too-short,
@@ -43,13 +44,19 @@ import {
   COMPACT_SYSTEM_PROMPT,
 } from '../compact.js';
 import {
+  COMPACT_SUMMARY_MAX_TOKENS,
   readKeepLastN,
   readShrinkFraction,
   resolveMicrocompactOptions,
   runCompactionCore,
+  summarizerInputCharBudget,
   wrapTranscriptForSummary,
 } from '../../shared/compaction.js';
-import { resolveCrossProviderSummarize } from '../../shared/compact-summarizer.js';
+import type { CompactionTrigger } from '../../../trace/types.js';
+import {
+  resolveCrossProviderSummarize,
+  resolveSummarizerWindow,
+} from '../../shared/compact-summarizer.js';
 import {
   contextFullnessFraction,
   contextWindowTokensUsed,
@@ -66,7 +73,6 @@ import type { RetryLayer } from './retry-layer.js';
 import { env } from '../../../../config/env.js';
 
 const DEFAULT_COMPACT_MODEL = 'claude-haiku-4-5-20251001';
-const DEFAULT_COMPACT_MAX_TOKENS = 1024;
 
 /** Injected dependencies for {@link compactHistory}. */
 export interface CompactHandlerDeps {
@@ -75,6 +81,12 @@ export interface CompactHandlerDeps {
   retry: RetryLayer;
   initSessionId: string;
   traceWriter?: import('../../../trace/index.js').TraceSink;
+  /**
+   * What initiated this compaction, recorded on the witness `compaction`
+   * event. `'manual'` (REPL /compact, Telegram, web) or `'token_threshold'`
+   * (the turn-boundary auto-compaction). Defaults to `'manual'`.
+   */
+  trigger?: CompactionTrigger;
 }
 
 /**
@@ -137,9 +149,14 @@ export async function compactHistory(
     // passes through the turn-start credential catch-up. Adopt an account
     // switch here too, then read `client` via the retry layer's getter so we
     // always see the post-swap reference, never a stale snapshot.
-    // Invariant: the sync is best-effort. A credential check must never be
-    // the reason a compaction fails, so any throw falls back to the client
-    // the session already holds.
+    //
+    // Invariant: syncClientWithStore() is called INSIDE this per-retry closure
+    // so that every summarization attempt (including transient-retry replays)
+    // re-checks the store. Placing it outside the closure would mean a swap
+    // that lands between a failed attempt and its retry would not be seen until
+    // the next full compaction call. The sync is best-effort — a credential
+    // check must never be the reason a compaction fails — so any throw falls
+    // back to the client the session already holds.
     try {
       const swapResult = await retry.syncClientWithStore();
       if (swapResult?.swapped) {
@@ -160,7 +177,7 @@ export async function compactHistory(
       client.messages.create(
         {
           model: compactModel,
-          max_tokens: DEFAULT_COMPACT_MAX_TOKENS,
+          max_tokens: COMPACT_SUMMARY_MAX_TOKENS,
           system: COMPACT_SYSTEM_PROMPT,
           messages: [{ role: 'user', content: wrapTranscriptForSummary(transcript) }],
           stream: true,
@@ -189,13 +206,17 @@ export async function compactHistory(
       keepLastN: readKeepLastN(),
       usedFraction,
       shrinkAtFraction: readShrinkFraction(),
+      // Budget follows the window of the connection that actually sends the
+      // summary (AFK_COMPACT_MODEL may route to another provider, including a
+      // chatgpt-oauth binding), not the session model.
+      summarizerInputMaxChars: summarizerInputBudget(),
       summarize: (transcript: string) => summarize(transcript, controller.signal),
       isAborted: () => controller.signal.aborted,
       abortInFlight: () => controller.abort(),
       onSuccess: (info) => {
         // Fire-and-forget; emitCompaction swallows writer errors internally.
         void emitCompaction(traceWriter, {
-          trigger: 'manual',
+          trigger: deps.trigger ?? 'manual',
           preCompactionMessages: info.olderSlice,
           summary: info.summary,
           keptTailCount: info.keptTailCount,
@@ -219,17 +240,18 @@ export async function compactHistory(
   // prevents double-clearing any block already replaced in a prior pass.
   const opts = readMicrocompactOptions();
   const { blocksCleared, bytesReclaimed, firstClearedIndex } = microcompactToolResults(state.messages, opts);
-  if (blocksCleared > 0 && !result.compacted) {
-    return {
-      compacted: false,
-      reason: 'microcompacted',
-      messagesBefore,
-      messagesAfter: state.messages.length,
-      microcompaction: { blocksCleared, bytesReclaimed, ...(firstClearedIndex !== undefined ? { firstClearedIndex } : {}) },
-    };
-  }
-
-  return result;
+  if (blocksCleared === 0) return result;
+  const microcompaction = { blocksCleared, bytesReclaimed, ...(firstClearedIndex !== undefined ? { firstClearedIndex } : {}) };
+  // A successful summary keeps its own result; the cleared counts ride along
+  // so surfaces can report them instead of silently dropping them.
+  if (result.compacted) return { ...result, microcompaction };
+  return {
+    compacted: false,
+    reason: 'microcompacted',
+    messagesBefore,
+    messagesAfter: state.messages.length,
+    microcompaction,
+  };
 }
 
 /** Resolve the microcompaction threshold/keep-last from env (see shared resolver). */
@@ -239,6 +261,19 @@ function readMicrocompactOptions(): { thresholdBytes: number; keepLast: number; 
     env.AFK_MICROCOMPACT_KEEP_LAST,
     env.AFK_MICROCOMPACT_DELEGATION_BYTES,
   );
+}
+
+/**
+ * Summarizer input cap. The session's own closure sends `readCompactModel()`
+ * over the Anthropic connection (never a subscription catalog); a foreign
+ * route is resolved by `resolveSummarizerWindow`.
+ */
+function summarizerInputBudget(): number {
+  const window = resolveSummarizerWindow('anthropic-direct', env.AFK_COMPACT_MODEL, {
+    model: readCompactModel(),
+    subscriptionPath: false,
+  });
+  return summarizerInputCharBudget(window.model, window.subscriptionPath);
 }
 
 function readCompactModel(): string {

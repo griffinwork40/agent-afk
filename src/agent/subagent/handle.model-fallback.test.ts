@@ -38,7 +38,10 @@ function makeHandle(first: IAgentSession, fallback?: Partial<HandleModelFallback
   const handle = new SubagentHandleImpl('h', first, controller, graph, undefined, 5000, undefined, onTerminal, undefined, undefined, 'agent', undefined, undefined, trace);
   const createSession = vi.fn(() => fallback?.second ?? session(ok('fallback answer')));
   if (fallback !== undefined) {
-    handle._modelFallback = { fromModel: fallback.fromModel ?? 'q36-hf', toModel: fallback.toModel ?? 'claude-opus-4', createSession };
+    handle._modelFallback = {
+      fromModel: fallback.fromModel ?? 'q36-hf', toModel: fallback.toModel ?? 'claude-opus-4', createSession,
+      ...(fallback.credentialSource !== undefined ? { credentialSource: fallback.credentialSource } : {}),
+    };
   }
   return { handle, controller, trace, createSession, onTerminal };
 }
@@ -62,6 +65,23 @@ describe('SubagentHandleImpl — default-tier model fallback', () => {
     const ev = fallbackEvents(trace);
     expect(ev).toHaveLength(1);
     expect(ev[0]!.payload).toMatchObject({ metadata: { fromModel: 'q36-hf', toModel: 'claude-opus-4', subagentId: 'h' } });
+  });
+
+  it('#4882: the fallback event carries the re-run session\'s credential source, read after createSession', async () => {
+    const order: string[] = [];
+    const credentialSource = vi.fn(() => { order.push('source'); return 'openai:chatgpt-oauth'; });
+    const { handle, trace, createSession } = makeHandle(session(fail(rejected())), { credentialSource });
+    createSession.mockImplementation(() => { order.push('create'); return session(ok('fallback answer')); });
+    await handle.runToResult('go');
+    expect(order).toEqual(['create', 'source']);
+    expect(fallbackEvents(trace)[0]!.payload).toMatchObject({ metadata: { credentialSource: 'openai:chatgpt-oauth' } });
+  });
+
+  it('#4882: an absent re-run source omits the field', async () => {
+    const { handle, trace } = makeHandle(session(fail(rejected())), { credentialSource: () => undefined });
+    await handle.runToResult('go');
+    const meta = (fallbackEvents(trace)[0]!.payload as { metadata: Record<string, unknown> }).metadata;
+    expect('credentialSource' in meta).toBe(false);
   });
 
   it('no fallback configured (explicit model) → rejection surfaces unchanged', async () => {

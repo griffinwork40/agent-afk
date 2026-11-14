@@ -9,7 +9,7 @@
  * Temp AFK_HOME set before import so no real ~/.afk/state is touched.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -192,7 +192,11 @@ describe('makeAbortWatcher (criterion 4)', () => {
     const nonce = 'valid-nonce-001';
     const hmac = signAbortRequest(key, id, nonce);
     writer.record({ kind: 'abort_request', nonce, hmac });
-    await sleep(200);
+    // tailLedger wakes on fs.watch and falls back to a 250ms poll
+    // (POLL_INTERVAL_MS in session-ledger-reader.ts). macOS drops or delays
+    // watch events under load, so a fixed 200ms wait is shorter than the
+    // fallback and the abort has not been read yet (#4789). Poll for it.
+    await vi.waitFor(() => { expect(abortReasons).toHaveLength(1); }, { timeout: 5_000, interval: 20 });
 
     expect(abortReasons).toHaveLength(1);
     expect(abortReasons[0]).toContain('abort');

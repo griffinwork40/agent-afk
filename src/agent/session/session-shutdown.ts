@@ -64,7 +64,7 @@ export class SessionShutdown {
    * Ordering (externally governed by writer contract — see Invariant below):
    *   1. Drain in-flight subagents (bounded, never rethrows).
    *   2. Emit the `closure` trace event.
-   *   3. Seal the trace writer (top-level sessions only).
+   *   3. Seal the trace writer (top-level sessions only; never on `reset`).
    *   4. Dispatch the SessionEnd hook.
    *   5. Await background SessionEnd handlers (top-level, non-reset only).
    *
@@ -143,7 +143,14 @@ export class SessionShutdown {
     // Subagents still emit their own `closure` record above; only the seal
     // is gated. If the top-level never calls close(), the process-exit
     // backstop still seals.
-    if (ownsTraceSeal) {
+    //
+    // Invariant (#4884): `reset` (`/clear`) never seals. The REPL keeps the
+    // same writer after a reset, so a seal here would make the writer reject
+    // every later event and leave the next conversation untraced. One trace
+    // spans the process lifetime: each cycle's `closure` above delimits it
+    // (cost.ts sums closures per cycle), and only the final close/error seals.
+    const seals = ownsTraceSeal && reason !== 'reset';
+    if (seals) {
       const sealInput: SealTraceInput = {
         ...signals,
         finalTurnCount: getTurnCount(),
@@ -184,9 +191,9 @@ export class SessionShutdown {
         // In-memory assistant turns, for surfaces that never write a sidecar.
         ...(getAssistantTexts ? { assistantTexts: getAssistantTexts() } : {}),
       },
-      // Invariant: skip traceWriter when this session owns the seal (step 3
+      // Invariant: skip traceWriter when this session sealed it (step 3
       // above) — the writer is sealed, so the hook_decision write would throw.
-      config.traceWriter && !ownsTraceSeal ? { traceWriter: config.traceWriter } : {},
+      config.traceWriter && !seals ? { traceWriter: config.traceWriter } : {},
     );
 
     // Invariant: `reset` (`/clear`) must NOT await background SessionEnd

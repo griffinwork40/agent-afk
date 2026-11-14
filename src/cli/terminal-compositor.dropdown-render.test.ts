@@ -202,7 +202,7 @@ describe('TerminalCompositor — renderDropdownRows() output', () => {
     // compositor jumping up and down" while scrolling the menu.
     //
     // Many real commands carry no hint (`/allow-dir`, `/bgsub`,
-    // `/changelog`, `/keys`, `/stats`, `/worktree`, the `/bgsub:*`
+    // `/keys`, `/stats`, `/worktree`, the `/bgsub:*`
     // variants), so this boundary crossing fires constantly in
     // practice. Fix: always reserve a hint-row slot when the dropdown
     // is open, even if it renders blank.

@@ -105,6 +105,7 @@ export const MEMORY_GC_SWEEP_START_DELAY_MS = 7_000;
  */
 export const GC_EXCLUDED_CATEGORIES: ReadonlySet<FactCategory> = new Set<FactCategory>([
   'preference',
+  'episode',
 ]);
 
 const STAMP_FILE = '.last-gc-sweep';

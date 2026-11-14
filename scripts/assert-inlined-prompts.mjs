@@ -33,9 +33,9 @@ const SURVIVING_MD_READ = /readFileSync\([^)]{0,400}?\.md['"`]/g;
 /**
  * Invariant: only a read anchored to the MODULE'S OWN directory is in scope.
  * Plenty of legitimate runtime `.md` reads exist and must not fail the build —
- * `/changelog` reads the user's repo `CHANGELOG.md`, `user-skills.ts` reads
- * user-authored `SKILL.md` from disk, and tests read temp fixtures. Those target
- * files on the USER's disk, which the package never ships and never should.
+ * `user-skills.ts` reads user-authored `SKILL.md` from disk, and tests read
+ * temp fixtures. Those target files on the USER's disk, which the package
+ * never ships and never should.
  * A `__dirname`/`here` anchor is what distinguishes "this file must be inside the
  * published package" from "this path belongs to the user" — an unanchored scan
  * flagged 13 correct call sites on the first run.

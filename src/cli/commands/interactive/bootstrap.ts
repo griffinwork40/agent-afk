@@ -177,11 +177,13 @@ export async function bootstrapSession(
     // rows instead of vanishing (#733).
     ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
     ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
+    // Commander's --no-recall sets options.recall = false (negated boolean).
+    ...(options.recall === false ? { noRecall: true } : {}),
   });
 
   await activatePluginEntrypoints(hookRegistry);
 
-  const session = buildAgentSession(sharedDeps);
+  const session = buildAgentSession(sharedDeps, sharedMemoryStore);
   // Populate sessionRef (declared above deferredParent so the proxy works).
   sessionRef.current = session;
 

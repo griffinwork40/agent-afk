@@ -21,6 +21,7 @@
  */
 
 import { env } from '../../config/env.js';
+import { resolveDelegationProfile } from '../../config/delegation-profiles.js';
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -68,6 +69,42 @@ function resolvePositiveInt(
   return Math.min(n, ceiling);
 }
 
+// ─── Individual-or-profile resolution ───────────────────────────────────────
+
+/**
+ * Resolve one budget field from an individual env var or a profile fallback.
+ *
+ * Invariant: if `raw` is set (non-undefined), the profile MUST NOT win for
+ * this field — even when `raw` is invalid. An invalid-but-set individual var
+ * means "no cap", not "fall through to profile". Only consult the profile when
+ * `raw === undefined` (the var was never set).
+ *
+ * Emits a `console.warn` when `raw` is set but fails to parse as a positive
+ * integer, so operators see a clear signal rather than silent no-cap behaviour.
+ */
+function resolveIndividualOrProfile(
+  raw: string | undefined,
+  ceiling: number,
+  profileValue: number | undefined,
+  name: string,
+): number | undefined {
+  if (raw !== undefined) {
+    // Individual var explicitly set — profile must not win, even if invalid.
+    const resolved = resolvePositiveInt(raw, ceiling);
+    if (resolved === undefined) {
+      console.warn(
+        `[delegation-budget] ${name}=${JSON.stringify(raw)} is not a valid positive integer` +
+        ` — no cap applied for this field (profile value, if any, is NOT used).`,
+      );
+    }
+    return resolved;
+  }
+  // Unset — profile is the fallback.
+  return profileValue !== undefined
+    ? resolvePositiveInt(String(profileValue), ceiling)
+    : undefined;
+}
+
 /**
  * Resolve delegation budget config from environment variables.
  *
@@ -76,25 +113,41 @@ function resolvePositiveInt(
  * `DelegationBudget` only when this returns a non-undefined config.
  */
 export function resolveDelegationBudgetConfig(): DelegationBudgetConfig | undefined {
-  const maxChildren = resolvePositiveInt(
+  // Consult the delegation profile as a source of fallback defaults only.
+  const profile = resolveDelegationProfile(env.AFK_DELEGATION_PROFILE);
+
+  // Individual env vars always override the profile — even when invalid.
+  // An invalid-but-set var resolves to undefined (no cap), not to the profile.
+  const effectiveChildren = resolveIndividualOrProfile(
     env.AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT,
     CEILING_CONCURRENT_CHILDREN_PER_AGENT,
+    profile?.maxConcurrentChildrenPerAgent,
+    'AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT',
   );
-  const maxConcurrent = resolvePositiveInt(
+  const effectiveConcurrent = resolveIndividualOrProfile(
     env.AFK_MAX_CONCURRENT_AGENTS,
     CEILING_CONCURRENT_AGENTS,
+    profile?.maxConcurrentAgents,
+    'AFK_MAX_CONCURRENT_AGENTS',
   );
-  const maxTotal = resolvePositiveInt(
+  const effectiveTotal = resolveIndividualOrProfile(
     env.AFK_MAX_TOTAL_AGENTS,
     CEILING_TOTAL_AGENTS,
+    profile?.maxTotalAgents,
+    'AFK_MAX_TOTAL_AGENTS',
   );
-  if (maxChildren === undefined && maxConcurrent === undefined && maxTotal === undefined) {
+
+  if (
+    effectiveChildren === undefined &&
+    effectiveConcurrent === undefined &&
+    effectiveTotal === undefined
+  ) {
     return undefined;
   }
   return {
-    ...(maxChildren !== undefined ? { maxConcurrentChildrenPerAgent: maxChildren } : {}),
-    ...(maxConcurrent !== undefined ? { maxConcurrentAgents: maxConcurrent } : {}),
-    ...(maxTotal !== undefined ? { maxTotalAgents: maxTotal } : {}),
+    ...(effectiveChildren !== undefined ? { maxConcurrentChildrenPerAgent: effectiveChildren } : {}),
+    ...(effectiveConcurrent !== undefined ? { maxConcurrentAgents: effectiveConcurrent } : {}),
+    ...(effectiveTotal !== undefined ? { maxTotalAgents: effectiveTotal } : {}),
   };
 }
 

@@ -80,7 +80,7 @@ describe('runForegroundWithPromotion — promotionTookBudget (delegation-budget 
       label: jobOverrides?.label ?? 'promoted job',
       model: 'sonnet',
       status: 'running',
-      provenance: 'user',
+      provenance: 'user-backgrounded',
       startedAt: Date.now(),
     };
     return {

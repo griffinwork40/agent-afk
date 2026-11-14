@@ -15,9 +15,9 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
-  rmSync,
   symlinkSync,
 } from 'node:fs';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveAndContain, wouldBeRestricted, _resetRootRealpathCacheForTests } from './_cwd-utils.js';
@@ -68,7 +68,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  rmSync(scratch, { recursive: true, force: true });
+  rmSyncRetry(scratch);
   _resetScratchRootsCacheForTests();
   _resetWriteDenylistCacheForTests();
 });
@@ -179,7 +179,7 @@ describe('scratch roots — credential floor is NOT relaxed', () => {
     sshDir = path.join(os.homedir(), '.ssh');
     mkdirSync(sshDir, { recursive: true });
   });
-  afterEach(() => rmSync(sshDir, { recursive: true, force: true }));
+  afterEach(() => rmSyncRetry(sshDir));
 
   it('a temp-dir DIRECTORY symlink into ~/.ssh resolves through realpath and is denied', async () => {
     const link = path.join(scratch, 'keys');

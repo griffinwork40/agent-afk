@@ -31,6 +31,7 @@ export const SubagentStartedPayloadSchema = z.object({
   chainId: z.string().optional(),
   continuationOf: z.string().optional(),
   continuationIndex: z.number().int().positive().optional(),
+  credentialSource: z.string().optional(),
 });
 
 export const SubagentSucceededPayloadSchema = z.object({

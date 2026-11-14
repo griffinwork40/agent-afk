@@ -64,8 +64,9 @@ export const SessionPhaseNameSchema = z.enum([
   // `sessionId` on the payload carries the provider-issued id; present only
   // on this phase kind. Absent on all older traces — treat absence as unknown.
   'session_id_assigned',
-  // Many-image dimension guard replacement. See SessionPhaseName JSDoc in
-  // types.ts — metadata carries degradedCount, threshold, maxDimension.
+  // Per-image pixel-ceiling guard replacement. See SessionPhaseName JSDoc in
+  // types.ts — metadata carries degradedCount, imageCount, threshold,
+  // maxDimension (the ceiling that applied) and manyImage.
   'many_image_degraded',
   // Mid-stream transport drop accepted as clean completion (#2780).
   // See SessionPhaseName JSDoc in types.ts for the full contract.
@@ -138,6 +139,9 @@ export const SessionPhaseNameSchema = z.enum([
   // (subagent/handle.model-fallback.ts). metadata: { subagentId, fromModel,
   // toModel, reason }. Must mirror types.session-phase.ts.
   'subagent_model_fallback',
+  // Main-session switch to `models.fallback` (provider router). metadata:
+  // { fromModel, toModel, reason }. Must mirror types.session-phase.ts.
+  'model_fallback',
   // Round-cap delivery notice silently dropped — tail message shape did not
   // allow injection. See SessionPhaseName JSDoc in types.session-phase.ts.
   // metadata: { provider, round }
@@ -145,6 +149,10 @@ export const SessionPhaseNameSchema = z.enum([
   // Continuation chain settling ended degraded (continuation-dispatch.ts).
   // metadata: { chainId, childId, reason }. Must mirror types.session-phase.ts.
   'continuation_settle_degraded',
+  // Per-fragment token-count snapshot at prompt assembly time (#4449).
+  // Must mirror the SessionPhaseName union in types.session-phase.ts;
+  // session-phase.test.ts parity enforces it.
+  'prompt_fragment_sizes',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({
@@ -177,4 +185,9 @@ export const SessionPhasePayloadSchema = z.object({
   // Running afk version, set ONLY on `session_id_assigned`. Absent on older
   // traces and all other phase kinds. (#3808)
   afkVersion: z.string().optional(),
+  // Credential/auth source id, set ONLY on `session_init_start`. Absent on
+  // older traces, subagent sessions, and all other phase kinds.
+  // Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' | 'claude-code-keychain' | 'claude-code-session-refresh'
+  // OpenAI: 'chatgpt-oauth' | 'config' | 'env' | 'codex-cli' | etc.
+  credentialSource: z.string().optional(),
 });

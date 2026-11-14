@@ -6,6 +6,7 @@
  *          `detectDefaultBaseRef`.
  */
 
+import { palette } from '../../palette.js';
 import type { ExecFileFn } from './worktree.js';
 import { isExecError } from './worktree.errors.js';
 
@@ -47,10 +48,7 @@ export async function fetchIfRemoteRef(repoRoot: string, ref: string, execFile: 
   } catch (err) {
     const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
     // eslint-disable-next-line no-console
-    console.warn(
-      `Worktree base: could not fetch '${candidateRemote}/${branchName}' (${message.trim()}). ` +
-        `Using the local copy of '${ref}', which may be stale.`,
-    );
+    console.warn(palette.warning(`Worktree base: could not fetch '${candidateRemote}/${branchName}' (${message.trim()}). Using the local copy of '${ref}', which may be stale.`));
   }
 }
 

@@ -6,11 +6,12 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import BetterSqlite3 from 'better-sqlite3';
-import { existsSync, readFileSync, mkdirSync, rmSync, appendFileSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { MemoryStore, estimateTokens } from '../../../src/agent/memory/memory-store.js';
+import { rmSyncRetry } from '../../../src/__test-utils__/rm-sync-retry.js';
 
 let tmpMemDir: string;
 let store: MemoryStore;
@@ -23,7 +24,8 @@ beforeEach(() => {
 
 afterEach(() => {
   store.close();
-  rmSync(tmpMemDir, { recursive: true, force: true });
+  // best-effort: better-sqlite3 file handles may linger on Windows CI
+  try { rmSyncRetry(tmpMemDir); } catch { /* EBUSY on CI — OS reclaims tmpdir */ }
 });
 
 describe('estimateTokens', () => {
@@ -305,7 +307,7 @@ describe('Schema versioning', () => {
     const db = new Database(join(tmpMemDir, 'memory.db'));
     const version = db.pragma('user_version', { simple: true });
     db.close();
-    expect(version).toBe(5);
+    expect(version).toBe(6);
   });
 
   it('opens cleanly when user_version matches SCHEMA_VERSION', () => {

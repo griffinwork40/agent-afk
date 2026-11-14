@@ -31,13 +31,13 @@ export { cleanupComposeSpills };
 import { errorMessage } from '../../utils/errors.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
 import { raceComposeDetach } from './detach-compose.js';
-import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { createComposeManager } from './compose-executor.manager.js';
 import type { SubagentManager } from '../subagent.js';
 import { buildComposeDagNode, type ComposeNodeBuildResult } from './compose-executor.node-build.js';
 import { preflightComposeCall, startComposeDag, recordComposeCompleted } from './compose-executor.preflight.js';
 import type { ComposeInput } from './compose-input-parse.js';
 import { updateComposeWaveUnits, buildComposeResultContent, filterComposeEdges } from './compose-executor.settle.js';
+import { evaluateDispatchUsageForModel } from './usage-notice.js';
 
 /**
  * Emit a `compose_leaf_tools_stripped` session-phase trace event for every
@@ -172,8 +172,18 @@ export class ComposeExecutor {
     if (!pre.ok) return pre.result;
     const { parsed, parseWarnings, identity, depth, maxDepth, maxToolRoundsPerNode } = pre;
 
-    // Usage notice: evaluate quota at compose-wave start (observer-only, no blocking).
-    const usageNotice = await evaluateDispatchUsageForModel(this.ctx.defaultModel, this.ctx.traceWriter);
+    // Usage notice: evaluate quota at compose-wave start; block at `over`.
+    const { notice: usageNotice, blocked: usageBlocked } = await evaluateDispatchUsageForModel(this.ctx.defaultModel, this.ctx.traceWriter);
+
+    // Contract: at `over` (>= 100%), refuse the compose dispatch instead of
+    // spawning N nodes that each immediately fail with UsageLimitError.
+    if (usageBlocked) {
+      return {
+        content: `Compose dispatch refused: usage limit exceeded. ${usageNotice ?? 'The subscription quota is exhausted.'}` +
+          `\n\nReduce parallel dispatches, wait for the quota window to reset, or switch to a non-Claude model.`,
+        isError: true,
+      };
+    }
 
     // Read-scope inheritance (#547): derive the DAG nodes' parentReadRoots from
     // the parent session's read scope + this executor's cwd, mirroring the
@@ -265,10 +275,17 @@ export class ComposeExecutor {
         }),
       ));
 
-      // Split build results into runnable DAG nodes and pre-failed attachment errors.
-      // Nodes with attachment errors are injected into result.failed so they appear
-      // in the formatted output alongside runtime failures — siblings still run.
-      const { dagNodes, attachmentErrors } = splitComposeNodeResults(nodeBuildResults);
+      // Split build results into runnable DAG nodes, pre-failed attachment errors,
+      // and per-node usage blocks. Usage-blocked nodes are surfaced as pre-failed
+      // entries alongside attachment errors — siblings on a different model still run.
+      const { dagNodes, attachmentErrors, usageBlocks } = splitComposeNodeResults(nodeBuildResults);
+
+      // Surface per-node usage blocks as pre-failed nodes so formatDAGResult
+      // reports them alongside attachment errors. Mirroring the attachment-error
+      // pattern: convert notice string into an Error for uniform downstream handling.
+      for (const block of usageBlocks) {
+        attachmentErrors.push({ id: block.id, error: new Error(`Node dispatch refused: usage limit exceeded for this model. ${block.notice}`) });
+      }
 
       // Wave manifest: create before the DAG starts so a crash mid-run leaves
       // a recoverable record. Only for ≥2 nodes (no manifest for solo dispatch).

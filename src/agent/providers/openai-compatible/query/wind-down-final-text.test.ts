@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { CONTEXT_PRESSURE_WIND_DOWN } from '../../shared/context-pressure.js';
 import { TOOL_USE_LOOP_CAPPED } from '../../shared/tool-loop-cap.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../../shared/soft-deadline.js';
+import { INCOMPLETE_MARKER } from './turn-driver.js';
 import type { TurnDriverContext } from './turn-driver.js';
 
 // ---------------------------------------------------------------------------
@@ -88,7 +89,7 @@ describe('fix #3963-2: canSynthesizeUnderPressure failure always overwrites fina
   it('incomplete marker text is distinct from any planning sentence', () => {
     // Verify the marker string is what the fix uses — not an empty string, not
     // the old ||= fallback text.
-    const INCOMPLETE_MARKER = 'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
+
     expect(INCOMPLETE_MARKER).toMatch(/context capacity exhausted/i);
     expect(INCOMPLETE_MARKER.length).toBeGreaterThan(0);
   });
@@ -169,6 +170,30 @@ describe('fix #3963-4: emitTurnTerminal replaces tool-call markup on wind-down',
     const markup = '<TOOL_CALL>{"name":"bash"}</TOOL_CALL>';
     const events = await collectEvents(
       emitTurnTerminal(ctx, markup, [], makeUsage(), CONTEXT_PRESSURE_WIND_DOWN, Date.now()),
+    );
+    const msg = events.find(e => e.type === 'assistant.message') as { type: string; text: string } | undefined;
+    expect(msg).toBeDefined();
+    expect(msg!.text).toMatch(/incomplete wind-down/i);
+  });
+
+  it('replaces self-closing <tool_call/> markup (was missed by old [\\ s>] class)', async () => {
+    const { emitTurnTerminal } = await import('./turn-driver.emit-terminal.js');
+    const ctx = makeCtx();
+    const markup = '<tool_call/>';
+    const events = await collectEvents(
+      emitTurnTerminal(ctx, markup, [], makeUsage(), CONTEXT_PRESSURE_WIND_DOWN, Date.now()),
+    );
+    const msg = events.find(e => e.type === 'assistant.message') as { type: string; text: string } | undefined;
+    expect(msg).toBeDefined();
+    expect(msg!.text).toMatch(/incomplete wind-down/i);
+  });
+
+  it('replaces Mistral/Mixtral plural <tool_calls> markup (was missed by old pattern)', async () => {
+    const { emitTurnTerminal } = await import('./turn-driver.emit-terminal.js');
+    const ctx = makeCtx();
+    const markup = '<tool_calls>[{"name":"bash","arguments":{"command":"ls"}}]</tool_calls>';
+    const events = await collectEvents(
+      emitTurnTerminal(ctx, markup, [], makeUsage(), TOOL_USE_LOOP_CAPPED, Date.now()),
     );
     const msg = events.find(e => e.type === 'assistant.message') as { type: string; text: string } | undefined;
     expect(msg).toBeDefined();

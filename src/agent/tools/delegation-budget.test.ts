@@ -232,6 +232,7 @@ describe('DelegationBudget', () => {
 
 describe('resolveDelegationBudgetConfig', () => {
   const ENV_KEYS = [
+    'AFK_DELEGATION_PROFILE',
     'AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT',
     'AFK_MAX_CONCURRENT_AGENTS',
     'AFK_MAX_TOTAL_AGENTS',
@@ -239,11 +240,13 @@ describe('resolveDelegationBudgetConfig', () => {
 
   // Save and restore env around each test
   const saved: Partial<Record<string, string>> = {};
+  let warnSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     for (const key of ENV_KEYS) {
       saved[key] = process.env[key];
       delete process.env[key];
     }
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
   afterEach(() => {
     for (const key of ENV_KEYS) {
@@ -253,6 +256,7 @@ describe('resolveDelegationBudgetConfig', () => {
         process.env[key] = saved[key];
       }
     }
+    warnSpy.mockRestore();
     vi.resetModules();
   });
 
@@ -309,6 +313,11 @@ describe('resolveDelegationBudgetConfig', () => {
     // Only this one var set, and it is non-numeric — all three resolve undefined
     const config = resolveDelegationBudgetConfig();
     expect(config).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('abc'));
   });
 
   it('returns undefined for zero (zero is not a positive int)', () => {
@@ -331,6 +340,52 @@ describe('resolveDelegationBudgetConfig', () => {
     // Fields not set remain absent
     expect(config?.maxConcurrentChildrenPerAgent).toBeUndefined();
     expect(config?.maxConcurrentAgents).toBeUndefined();
+  });
+
+  // ── Individual-var-overrides-profile invariant tests ──────────────────────
+  // These verify that an explicitly-set-but-invalid individual env var does NOT
+  // fall through to the profile value — it must resolve to undefined (no cap).
+
+  it('profile=deep + AFK_MAX_CONCURRENT_AGENTS=notanumber → maxConcurrentAgents undefined (profile must not win)', () => {
+    process.env['AFK_DELEGATION_PROFILE'] = 'deep';
+    process.env['AFK_MAX_CONCURRENT_AGENTS'] = 'notanumber';
+    const config = resolveDelegationBudgetConfig();
+    // profile deep would give maxConcurrentAgents=16 — individual invalid var must block that
+    expect(config?.maxConcurrentAgents).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('AFK_MAX_CONCURRENT_AGENTS'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('notanumber'));
+  });
+
+  it('profile=deep + AFK_MAX_CONCURRENT_AGENTS=0 → maxConcurrentAgents undefined (zero is not positive)', () => {
+    process.env['AFK_DELEGATION_PROFILE'] = 'deep';
+    process.env['AFK_MAX_CONCURRENT_AGENTS'] = '0';
+    const config = resolveDelegationBudgetConfig();
+    // zero is not a valid positive int; profile must not override an explicitly-set var
+    expect(config?.maxConcurrentAgents).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('AFK_MAX_CONCURRENT_AGENTS'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('0'));
+  });
+
+  it('profile=deep + AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT=notanumber → maxConcurrentChildrenPerAgent undefined; profile still fills other fields', () => {
+    process.env['AFK_DELEGATION_PROFILE'] = 'deep';
+    process.env['AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT'] = 'notanumber';
+    const config = resolveDelegationBudgetConfig();
+    // The invalid individual var must not fall through to profile's maxConcurrentChildrenPerAgent=4
+    expect(config?.maxConcurrentChildrenPerAgent).toBeUndefined();
+    // The other two fields are unset — profile fills them in normally
+    expect(config?.maxConcurrentAgents).toBe(16);
+    expect(config?.maxTotalAgents).toBe(48);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('notanumber'));
   });
 });
 

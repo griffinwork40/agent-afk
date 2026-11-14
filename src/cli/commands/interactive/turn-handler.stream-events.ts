@@ -13,7 +13,7 @@ import type { AgentSession } from '../../../agent/session.js';
 import type { ResponseMetadata } from '../../../agent/types/message-types.js';
 import type { CompletionWriter, TurnHandles } from './shared.js';
 import type { TerminalCompositor } from '../../terminal-compositor.js';
-import type { ToolEvent } from '../../slash/types.js';
+import type { ToolEvent, SessionStats } from '../../slash/types.js';
 import { StreamRenderer } from '../../_lib/stream-renderer.js';
 import { palette } from '../../palette.js';
 import { classifyError, presentError } from '../../errors/index.js';
@@ -22,6 +22,7 @@ import { observeFirstContent, type TurnTtfbState } from './turn-handler.ttfb.js'
 import { tickContextProgress } from './turn-handler.context-progress.js';
 import { handlePausedEvent, type PausedPickerRef } from './turn-handler.paused.js';
 import { buildVerificationResultTail } from '../../../agent/outcomes/verification-patterns.js';
+import { handleNoticeEvent } from './turn-handler.notice.js';
 
 // ─── Mutable state ───────────────────────────────────────────────────────────
 
@@ -69,6 +70,13 @@ export interface StreamEventContext {
   disposeRendererOnce: () => Promise<void>;
   armAndWire: () => Promise<void>;
   buildRenderer: () => StreamRenderer;
+  /**
+   * Session stats — updated by `model-fallback` notices so the status line,
+   * `/info`, and `/where` show the correct model immediately after a switch.
+   * Optional because non-REPL callers (daemon, one-shot) don't need to
+   * repaint a status line, though the model update is still applied.
+   */
+  stats?: SessionStats;
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
@@ -89,7 +97,16 @@ export async function processStreamEvent(
   ctx: StreamEventContext,
 ): Promise<'continue' | 'normal'> {
   const { state, pickerRef, toolEvents, pendingTools, turnTtfb, h, session,
-    completionWriter, borrowedCompositor, disposeRendererOnce, armAndWire, buildRenderer } = ctx;
+    completionWriter, borrowedCompositor, disposeRendererOnce, armAndWire, buildRenderer,
+    stats } = ctx;
+
+  // ── notice: model-fallback state update ─────────────────────────────────
+  // Must run before the renderer so stats.model is current when the status
+  // line repaints. Other notice kinds are display-only and handled by the
+  // renderer's existing generic notice path.
+  if (event.type === 'notice' && stats) {
+    handleNoticeEvent(event, stats, h);
+  }
 
   const isFirstContentEvent = observeFirstContent(turnTtfb, event, state.streamingStarted);
 
@@ -172,6 +189,7 @@ export async function processStreamEvent(
       disposeRendererOnce,
       setPausedState: h.setPausedState,
       onPauseInterrupt: () => { state.pauseInterruptRequested = true; },
+      ...(stats ? { currentModel: String(stats.model) } : {}),
     });
     return 'continue';
   }

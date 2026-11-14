@@ -104,10 +104,12 @@ import {
   afkAllowlistFileForms,
   relocatedAfkSensitiveRoots,
 } from './afk-home-refs.js';
+import { getAfkConfigDir } from '../../../paths.js';
 import { escapeRegExp } from '../../../utils/regexp.js';
 import { homeAliasSpellings, restrictedRootSpellings } from './bash-restriction-hook.win32-spellings.js';
 import { isProvablyReadOnly } from './bash-restriction-hook.readonly-gate.js';
 import { EXACT_REF_TAIL, scrubSshPubKeyRefs } from './bash-restriction-hook.pubkey-scrub.js';
+import { safeRealpath } from '../handlers/write-denylist.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -288,6 +290,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     ) {
       return {
         decision: 'block',
+        ruleId: 'bash-restriction.sensitive-interpreter',
         reason:
           'Interpreter one-liner (python -c, node -e, sh -c, ...) referencing a sensitive path ' +
           '(SSH keys, cloud credentials, GPG, /etc/shadow, ...) is blocked by the path-approval ' +
@@ -324,11 +327,14 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
 
     for (const sub of restrictedSubstrings) {
       if (mentionsRestrictedRoot(scanned, sub, home)) {
+        const sanctionedHint = sanctionedAlternativeHint(sub);
         if (!headless) {
           return {
             decision: 'block',
+            ruleId: 'bash-restriction.restricted-path',
             reason:
               `Bash command references a restricted path (${sub}). ` +
+              sanctionedHint +
               'For sensitive paths, use read_file / write_file / edit_file — ' +
               'those tools support per-call user approval via an inline prompt. ' +
               'If you genuinely need a shell command for this path, ask the user ' +
@@ -338,11 +344,15 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
         // Headless: no interactive approval path; block unconditionally.
         return {
           decision: 'block',
+          ruleId: 'bash-restriction.restricted-path',
           reason:
             `Bash command references a restricted path (${sub}) on a headless surface ` +
-            '(daemon / afk chat / subagent / thread). Direct shell access to credential and config ' +
+            '(daemon / afk chat / subagent / thread). ' +
+            sanctionedHint +
+            'Direct shell access to credential and config ' +
             'paths is blocked to prevent prompt-injection bypass of the typed-tool ' +
-            'write-denylist. Use the typed file tools (read_file, write_file, edit_file) ' +
+            'write-denylist. ' +
+            'Use the typed file tools (read_file, write_file, edit_file) ' +
             'or run the command interactively where a human can approve it.',
         };
       }
@@ -350,6 +360,77 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
 
     return {};
   };
+}
+
+/**
+ * Return a one-sentence hint naming the sanctioned alternative for a blocked
+ * restricted path, or an empty string when no specific alternative applies.
+ * Always ends with a space so it can be safely concatenated into a block reason.
+ *
+ * Path-specific rather than generic so the model immediately routes to the
+ * correct surface:
+ *   - LaunchAgents / LaunchDaemons / systemd → `afk service install` (the only
+ *     sanctioned way to register a service; direct plist/unit writes are blocked
+ *     to prevent privilege escalation and service-name hijacking).
+ *   - `~/.afk/config` → `config_get` / `config_set` (reads masked values
+ *     without exposing raw secrets; the typed tools for writes).
+ *
+ * Invariant: pure / O(1) — no filesystem I/O, no throws. `sub` is compared
+ * lexically against the resolved config dir from {@link getAfkConfigDir} so
+ * the comparison is always in normal form and never hand-joins `~/.afk/`.
+ */
+function sanctionedAlternativeHint(sub: string): string {
+  // LaunchAgents / LaunchDaemons / systemd — managed by `afk service install`.
+  if (
+    sub.includes('LaunchAgents') ||
+    sub.includes('LaunchDaemons') ||
+    sub.includes('systemd')
+  ) {
+    return (
+      'To register an AFK service use `afk service install` instead of writing ' +
+      'launchd plist / systemd unit files directly. '
+    );
+  }
+
+  // Contract: ~/.afk/config — credential tree; config_get exposes masked
+  // values safely. getAfkConfigDir() → getAfkHome() throws on a malformed
+  // AFK_HOME; swallow it so the hint degrades gracefully rather than
+  // propagating (same fail-safe posture as configuredAfkHome()).
+  //
+  // `sub` arrives in multiple spellings for the AFK config dir:
+  //   1. The raw `getAfkConfigDir()` path (AFK_HOME/config) — when the
+  //      matched restricted root came from relocatedAfkSensitiveRoots().
+  //   2. The safeRealpath-resolved form of the BUILTIN_READ_DENYLIST entry
+  //      (homedir()/.afk/config) — always present in the builtin floor,
+  //      regardless of AFK_HOME. When AFK_HOME differs from homedir()/.afk
+  //      (e.g. tests redirect AFK_HOME to a tmpdir sentinel), the matched sub
+  //      is the realpath of homedir()/.afk/config, which getAfkConfigDir()
+  //      alone does not return — causing the hint to be silently suppressed.
+  // Collect ALL candidate config-dir spellings (raw + realpath) for BOTH the
+  // AFK_HOME-based and the default-home-based forms, then check if sub matches
+  // any. Forward-slash normalization makes this cross-platform correct.
+  const normSub = sub.replace(/\\/g, '/');
+  // Default-home form: keyed to homedir()/.afk/config, which mirrors the
+  // BUILTIN_READ_DENYLIST template literal. path.join is used (not a literal
+  // `~/.afk/` string) so the result is platform-correct on Windows too.
+  const defaultConfigDir = path.join(homedir(), '.afk', 'config');
+  const configDirCandidates: string[] = [defaultConfigDir, safeRealpath(defaultConfigDir)];
+  try {
+    const akd = getAfkConfigDir();
+    configDirCandidates.push(akd, safeRealpath(akd));
+  } catch { /* malformed AFK_HOME — skip */ }
+  const isAfkConfigSub = configDirCandidates.some((dir) => {
+    const nd = dir.replace(/\\/g, '/');
+    return normSub === nd || normSub.startsWith(nd + '/');
+  });
+  if (isAfkConfigSub) {
+    return (
+      'To read AFK config values use the `config_get` tool (values are masked). ' +
+      'To write config use `afk config set` or the `config_set` tool. '
+    );
+  }
+
+  return '';
 }
 
 /**

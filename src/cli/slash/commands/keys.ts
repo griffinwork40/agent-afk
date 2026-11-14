@@ -55,7 +55,6 @@ const BINDINGS: Array<{ group: string; rows: Array<[string, string]> }> = [
     rows: [
       ['@<path>', 'Autocomplete and attach a file — type @ then start the path'],
       ['ctrl+v', 'Paste image from clipboard (macOS: Cmd+V also works)'],
-      ['ctrl+x', 'Remove the last attached image from the prompt'],
     ],
   },
   {
@@ -66,8 +65,16 @@ const BINDINGS: Array<{ group: string; rows: Array<[string, string]> }> = [
       ['ctrl+l', 'Clear screen and repaint'],
       ['ctrl+c', 'Interrupt running turn / exit (second press)'],
       ['ctrl+d', 'EOF / exit (when buffer is empty)'],
-      ['tab', 'Accept autocomplete suggestion'],
+      ['ctrl+x d', 'Cycle future diff output: compact → expanded → full (idle only; existing output unchanged)'],
+      ['tab', 'Accept autocomplete suggestion (idle) / open live task view (mid-turn)'],
       ['enter', 'Submit prompt'],
+    ],
+  },
+  {
+    group: 'Background Jobs',
+    rows: [
+      ['/bgsub:list', 'List all background subagent jobs'],
+      ['/bgsub:cancel <id>', 'Cancel a running background subagent job by ID'],
     ],
   },
 ];
