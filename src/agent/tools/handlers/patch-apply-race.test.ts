@@ -4,6 +4,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { createPatchApplyHandler } from './patch-apply.js';
 import { _setRealScratchRootsForTests, _resetScratchRootsCacheForTests } from './scratch-roots.js';
+import type { FileCheckpointRegistry } from '../../file-checkpoint/file-checkpoint.js';
+
+/** Minimal checkpoint registry whose snapshot hook runs `onSnapshot`. */
+function checkpoint(onSnapshot: () => Promise<void> = async () => {}): FileCheckpointRegistry {
+  return { sessionId: 'test', turnId: 'test', touchedPaths: () => [], snapshotFile: onSnapshot,
+    recordPriorState: async () => {} };
+}
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -33,7 +40,7 @@ describe('patch checkpoint race guards', () => {
       { path: 'dir/a.ts', content: 'new' }, { path: 'missing/nested/new.ts', content: 'created' },
     ] }, new AbortController().signal, {
       resolveBase: allowed, writeRoots: [allowed],
-      fileCheckpoint: { turnId: 'test', touchedPaths: () => [], snapshotFile: async () => {} },
+      fileCheckpoint: checkpoint(),
     });
     expect(JSON.parse(result.content as string).status).toBe('applied');
     expect(await readFile(join(dir, 'a.ts'), 'utf8')).toBe('new');
@@ -47,12 +54,12 @@ describe('patch checkpoint race guards', () => {
       { path: 'other.ts', content: 'changed' }, { path: 'dir/a.ts', content: 'new' },
     ] }, new AbortController().signal, {
       resolveBase: allowed, writeRoots: [allowed],
-      fileCheckpoint: { turnId: 'test', touchedPaths: () => [], snapshotFile: async () => {
+      fileCheckpoint: checkpoint(async () => {
         if (swapped) return;
         swapped = true;
         await rename(dir, `${dir}-saved`);
         await symlink(outside, dir, 'dir');
-      } },
+      }),
     });
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.content as string).status).toBe('validation_failed');
@@ -68,9 +75,9 @@ describe('patch checkpoint race guards', () => {
       { path: 'missing/nested/new.ts', content: 'created' },
     ] }, new AbortController().signal, {
       resolveBase: allowed, writeRoots: [allowed],
-      fileCheckpoint: { turnId: 'test', touchedPaths: () => [], snapshotFile: async () => {
+      fileCheckpoint: checkpoint(async () => {
         await symlink(join(outside, 'not-yet'), join(allowed, 'missing'), 'dir');
-      } },
+      }),
     });
     const body = JSON.parse(result.content as string);
     expect(body.status).toBe('validation_failed');
@@ -84,9 +91,9 @@ describe('patch checkpoint race guards', () => {
       { path: 'other.ts', content: 'changed' }, { path: 'dir/a.ts', content: 'new' },
     ] }, new AbortController().signal, {
       resolveBase: allowed, writeRoots: [allowed],
-      fileCheckpoint: { turnId: 'test', touchedPaths: () => [], snapshotFile: async () => {
+      fileCheckpoint: checkpoint(async () => {
         await writeFile(join(dir, 'a.ts'), 'external update');
-      } },
+      }),
     });
     const body = JSON.parse(result.content as string);
     expect(body.status).toBe('validation_failed');
@@ -101,11 +108,11 @@ describe('patch checkpoint race guards', () => {
       { path: 'dir/a.ts', content: 'new' },
     ] }, new AbortController().signal, {
       resolveBase: allowed, writeRoots: [allowed],
-      fileCheckpoint: { turnId: 'test', touchedPaths: () => [], snapshotFile: async () => {
+      fileCheckpoint: checkpoint(async () => {
         await rename(dir, `${dir}-saved`);
         await mkdir(dir);
         await writeFile(join(dir, 'a.ts'), 'old');
-      } },
+      }),
     });
     expect(JSON.parse(result.content as string).status).toBe('validation_failed');
     expect(await readFile(join(dir, 'a.ts'), 'utf8')).toBe('old');
