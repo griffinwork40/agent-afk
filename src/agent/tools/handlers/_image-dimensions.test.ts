@@ -208,3 +208,37 @@ describe('readImageDimensions — unknown format', () => {
     expect(readImageDimensions(buf, 'avif')).toBeNull();
   });
 });
+
+describe('readImageDimensions — JPEG frame markers', () => {
+  /** SOI + APP0 (len 16) + frame segment with the given marker. */
+  function jpegWithMarker(marker: number, width: number, height: number): Buffer {
+    const buf = Buffer.alloc(2 + 18 + 19 + 16, 0);
+    buf[0] = 0xff; buf[1] = 0xd8;
+    buf[2] = 0xff; buf[3] = 0xe0; buf.writeUInt16BE(16, 4);
+    const at = 20;
+    buf[at] = 0xff; buf[at + 1] = marker; buf.writeUInt16BE(17, at + 2);
+    buf[at + 4] = 8;
+    buf.writeUInt16BE(height, at + 5);
+    buf.writeUInt16BE(width, at + 7);
+    return buf;
+  }
+
+  it.each([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc9, 0xcf])('reads SOF marker 0x%s', (marker) => {
+    expect(readImageDimensions(jpegWithMarker(marker, 3456, 14002), 'jpeg')).toEqual({ width: 3456, height: 14002 });
+  });
+
+  it.each([0xc4, 0xc8, 0xcc])('does not treat non-frame marker 0x%s as SOF', (marker) => {
+    // The fake segment is skipped and the buffer ends before any real SOF.
+    expect(readImageDimensions(jpegWithMarker(marker, 3456, 14002), 'jpeg')).toBeNull();
+  });
+
+  it('finds an SOF0 far into the file after a long APP2 (ICC) segment', () => {
+    const app2 = Buffer.alloc(2 + 600, 0);
+    app2[0] = 0xff; app2[1] = 0xe2; app2.writeUInt16BE(600, 2);
+    const sof = Buffer.alloc(19 + 16, 0);
+    sof[0] = 0xff; sof[1] = 0xc0; sof.writeUInt16BE(17, 2); sof[4] = 8;
+    sof.writeUInt16BE(14002, 5); sof.writeUInt16BE(3456, 7);
+    const buf = Buffer.concat([Buffer.from([0xff, 0xd8]), app2, sof]);
+    expect(readImageDimensions(buf, 'jpeg')).toEqual({ width: 3456, height: 14002 });
+  });
+});

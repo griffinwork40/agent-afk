@@ -40,7 +40,7 @@ import { dumpThinkingDiagnostic } from './thinking-diagnostic.js';
 import { isNonDefaultSamplingForbiddenModel } from '../resolve-params.js';
 import { buildSignatureRetryMessages, isInvalidSignatureError } from './signature-retry.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
-import { enforceManyImageLimit, MANY_IMAGE_THRESHOLD, MAX_DIMENSION_MANY_IMAGES } from './_many-image-guard.js';
+import { applyImageLimitGuard } from './round-request.image-guard.js';
 
 /**
  * Contract: project an internal {@link AnthropicToolDef} to the wire-safe shape
@@ -361,22 +361,12 @@ export async function* openRound({
     });
   }
 
-  // Many-image dimension guard: Anthropic drops the per-image pixel ceiling
-  // from 8 000 px to 2 000 px when a request carries >20 image blocks. Images
-  // in the 2 001–8 000 px range pass the tool-level guards but cause a hard
-  // HTTP 400 here. Replace out-of-range images with imageOmitted text blocks
-  // so the request succeeds instead of permanently poisoning the session.
-  const manyImageDegraded = enforceManyImageLimit(input.messages);
-  if (manyImageDegraded > 0) {
-    void emitSessionPhase(input.traceWriter, {
-      phase: 'many_image_degraded',
-      metadata: {
-        degradedCount: manyImageDegraded,
-        threshold: MANY_IMAGE_THRESHOLD,
-        maxDimension: MAX_DIMENSION_MANY_IMAGES,
-      },
-    });
-  }
+  // Per-image pixel ceiling (8 000 px, or 2 000 px when >20 images): replace
+  // oversized images with imageOmitted text so one bad image cannot poison the
+  // session with a permanent HTTP 400. Invalidates the journal for the in-place
+  // edit and hands back one operator notice for this round. Never throws.
+  const imageNotice = applyImageLimitGuard(input);
+  if (imageNotice !== null) yield imageNotice;
 
   // Journal commit point: history is final for this request (orphan repair and
   // image degradation applied, cache marker not yet stamped — the clone below

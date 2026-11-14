@@ -14,6 +14,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ### Added
 - models: set a fallback model with `afk config set models.fallback <model>`. When the primary hits a usage limit, runs out of credit, or is rejected before producing any output, the session continues on the fallback instead of pausing or failing, and shows one notice line at the switch. Covers interactive sessions, one-shot `afk chat` (notice on stderr; `--format json` adds `servedModel` and `modelFallback`), and daemon and scheduled runs (noted in the log, on the run record, and in the task notification). Telegram, web and ACP sessions are not covered yet
+- receipt: top-level `credentialSource`, and the session credential source is now provider-aware (a non-Anthropic model never records an Anthropic tier); new ids `openai:*`, `xai:*`, `anthropic:config`; a base URL override records `local` only for a clearly self-hosted host (loopback, RFC1918, link-local, 100.64/10, fc00::/7, a single-label name, `.local`/`.lan`/`.internal`/`.home.arpa`/`.ts.net`), `custom-endpoint` for any other non-official host (billing unknown), and the provider's official API host resolves normally; the fork path never reads the credential store (#4882)
+- receipt: `subagents.byModel[*].credentialSources` (sorted, unique), from the new `credentialSource` on `subagent_lifecycle` `started` and on `subagent_model_fallback` metadata (#4882)
 
 ### Fixed
 - router: a session keeps its id when the provider is rebuilt on another model; switching to a different provider with `/model` used to change the id and leave the message journal under the old one

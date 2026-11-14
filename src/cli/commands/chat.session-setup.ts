@@ -28,7 +28,7 @@ import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { parseProvider, getApiKeyForModel, getModel, getDefaultSubagentModel } from '../shared-helpers.js';
-import { credentialSourceId } from '../auth-wizard.describe-source.js';
+import { tryCredentialSourceForModel } from '../../agent/auth/credential-source.js';
 import { cliProviderFamily } from '../provider-selection.js';
 import { injectedProviderWiring } from '../provider-fallback-factory.js';
 import type { ModelProvider } from '../../agent/provider.js';
@@ -226,7 +226,7 @@ export async function buildChatSession(
   const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory({
     model: sessionModel,
     surface: 'cli',
-    credentialSource: credentialSourceId() ?? undefined,
+    credentialSource: tryCredentialSourceForModel(String(sessionModel), providerHints),
     apiKey: getApiKeyForModel(sessionModel, providerHints),
     ...managerShutdownConfig(rootManager, composeExecutor),
     maxTurns,

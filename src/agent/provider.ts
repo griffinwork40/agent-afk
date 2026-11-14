@@ -184,7 +184,7 @@ export type ProviderEvent =
        * lets consumers programmatically distinguish notice classes without
        * substring-matching `text`. Extend as new harness notice classes emerge.
        */
-      kind: 'truncation' | 'refusal' | 'fast-tier' | 'model-fallback';
+      kind: 'truncation' | 'refusal' | 'fast-tier' | 'image-omitted' | 'model-fallback';
       /** Set on `kind: 'model-fallback'`: the switch the router just made. */
       fallback?: { from: string; to: string; reason: ModelFallbackReason };
       sessionId?: string;

@@ -632,9 +632,9 @@ export interface AgentConfig {
    * Stable credential/auth source id recorded at session start.
    *
    * Passed in from CLI/surface entry points that have already resolved which
-   * auth tier is active (e.g. via `credentialSourceId()` in
-   * `src/cli/auth-wizard.describe-source.ts` for Anthropic, or from
-   * `resolveOpenAIAuth().source` for OpenAI-compatible sessions).
+   * auth tier is active, via `credentialSourceForModel()` in
+   * `src/agent/auth/credential-source.ts` (provider-aware, #4882: the id names
+   * the credential of the provider serving the session model).
    * Absent for subagent forks (they inherit the parent's auth implicitly).
    * Stored in the session sidecar and emitted on `session_init_start` so
    * post-session analysis can determine which auth tier was used without

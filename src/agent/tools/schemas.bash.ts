@@ -22,15 +22,15 @@ export const bashTool: AnthropicToolDef = {
   description:
     'Execute a shell command and return its stdout and stderr. ' +
     'Use for running programs, installing packages, git operations, and any task that requires a shell. ' +
+    'For reading or writing files prefer the typed file tools (read_file, write_file, edit_file, grep, glob): ' +
+    'they support per-call user approval and produce structured output. ' +
     `${bashToolShellGuidance()} Long-running commands should use timeout_ms. ` +
     'Do not background with `&` or `nohup`: the call waits on the open output pipe and the process is killed or left untracked. ' +
     'For a program that must keep running while you work (a long search, a model server, a dev server), set run_in_background: true. ' +
     'It returns at once with a job_id and log_path; a <background-process-result> notice arrives when the process exits; ' +
     'inspect it with get_background_job_health and stop it with cancel_background_job. Background jobs end with the session. ' +
     'Output is capped to a ~100KB head+tail view (the start and end are kept, the middle elided with a notice), so the command still runs to completion and you keep the real exit code and the tail (test/build summaries, final errors). For the full body of a verbose command, filter it (`| tail -n`, `--quiet`, narrower flags) or redirect to a file and read slices. Commands emitting extreme output (>8MB) are terminated. ' +
-    'For reading or writing files — especially anything sensitive — prefer the typed file tools ' +
-    '(read_file, write_file, edit_file): they support per-call user approval, and interpreter ' +
-    'one-liners (python -c, node -e, sh -c, ...) that reference credential paths (SSH keys, cloud ' +
+    'Interpreter one-liners (python -c, node -e, sh -c, ...) that reference credential paths (SSH keys, cloud ' +
     'credentials, /etc/shadow) are blocked by the path-approval policy on interactive surfaces.',
   input_schema: {
     type: 'object',

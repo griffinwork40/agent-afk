@@ -134,7 +134,7 @@ export function createOutcomeSessionEndHook(): HookHandler {
     if (!sessionId) return {};
 
     // Fire-and-forget: never block or throw into teardown
-    void _runImmediatePass(sessionId, context.tracePath, context.cwd).catch(() => {});
+    void _runImmediatePass(sessionId, context.tracePath, context.cwd, context.reason !== 'reset').catch(() => {});
 
     return {};
   };
@@ -183,6 +183,7 @@ async function _runImmediatePass(
   sessionId: string,
   tracePath: string | undefined,
   cwd: string | undefined,
+  memoize: boolean,
 ): Promise<void> {
   // Load session turns — sidecar first, journal fallback for scheduled/daemon
   // sessions that never write a sidecar (see load-outcome-turns.ts).
@@ -191,7 +192,7 @@ async function _runImmediatePass(
   // Artifacts come from the shared OutcomesV1 computation (git range + effect
   // ledger — authoritative, not truncated previews). Preview regexing remains
   // only as the fallback when the computation failed or timed out.
-  const outcomes = await getSessionOutcomes(sessionId, cwd !== undefined ? { cwd } : {});
+  const outcomes = await getSessionOutcomes(sessionId, cwd !== undefined ? { cwd } : {}, { memoize });
   const artifacts = outcomes ? artifactsFromOutcomes(outcomes) : recoverArtifacts(turns);
 
   // When a journal is present (either as primary source or alongside the

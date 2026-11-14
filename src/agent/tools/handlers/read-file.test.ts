@@ -384,6 +384,21 @@ describe('readFileHandler cwd containment', () => {
     expect(result.content).toContain('hello');
   });
 
+  it('returns an actionable message when file_path is a directory (EISDIR)', async () => {
+    // tempDir itself is a directory — reading it should return a helpful error
+    // pointing the caller toward list_directory or glob, not a raw errno string.
+    const result = await readFileHandler(
+      { file_path: tempDir },
+      new AbortController().signal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('is a directory');
+    expect(result.content).toContain('list_directory');
+    expect(result.content).toContain('glob');
+    // Must NOT expose the raw EISDIR errno string
+    expect(result.content).not.toContain('EISDIR');
+  });
+
   it('allows absolute path within context.resolveBase', async () => {
     const filePath = join(tempDir, 'inside.txt');
     await fs.writeFile(filePath, 'inside content\n');

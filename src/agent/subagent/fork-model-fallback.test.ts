@@ -74,6 +74,20 @@ describe('forkSubagent — default-tier model fallback (single choke point)', ()
     expect(phases).toContain('subagent_model_fallback');
   });
 
+  it('#4882: the fallback event records the credential id of the key the re-run session holds', async () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-parent');
+    try {
+      scripts.push(reject('q36-hf'), answer('ok'));
+      const { handle, trace } = await fork(defaultTierModelFallback({ model: 'q36-hf', source: 'default' }, 'claude-opus-4-1'));
+      await handle.runToResult('task');
+      expect(constructed[1]!.apiKey).toBe('sk-ant-parent');
+      const ev = trace.events.find((e) => e.kind === 'session_phase' && (e.payload as { phase: string }).phase === 'subagent_model_fallback');
+      expect(ev!.payload).toMatchObject({ metadata: { toModel: 'claude-opus-4-1', credentialSource: 'ANTHROPIC_API_KEY' } });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('explicit-model child (no modelFallback) fails loudly', async () => {
     scripts.push(reject('q36-hf'));
     const resolved = defaultTierModelFallback({ model: 'q36-hf', source: 'callSite' }, 'claude-opus-4-1');

@@ -41,5 +41,12 @@ export function fsErrorToToolResult(
     return { content: `Not a directory: ${path}`, isError: true };
   }
 
+  if (code === 'EISDIR') {
+    return {
+      content: `${path} is a directory; use list_directory to list its contents or glob to find files within it`,
+      isError: true,
+    };
+  }
+
   return undefined;
 }
