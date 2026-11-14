@@ -31,6 +31,7 @@ import type { SubagentProgressSink } from '../types/session-types.js';
 import { classifyModelRejection } from '../providers/shared/model-rejected-error.js';
 import { providerForModel } from '../providers/index.js';
 import { emitSessionPhase } from '../trace/emit.js';
+import { tryCredentialSourceForModel } from '../auth/credential-source.js';
 import { debugLog } from '../../utils/debug.js';
 import type { RunBillingContext } from './handle.billing.js';
 import type { SubagentHandleImpl } from './handle.js';
@@ -88,9 +89,14 @@ export async function streamWithModelFallback<T>(
     // One-shot: never chain a second fallback, even if the retry is rejected too.
     handle._modelFallback = undefined;
     const reason = rejection.message;
+    // #4882: the re-run is served by toModel's provider; record its credential id.
+    const credentialSource = tryCredentialSourceForModel(fallback.toModel, undefined, { background: true });
     await emitSessionPhase(handle._traceWriter, {
       phase: 'subagent_model_fallback',
-      metadata: { subagentId: handle.id, fromModel: fallback.fromModel, toModel: fallback.toModel, reason: reason.slice(0, 200) },
+      metadata: {
+        subagentId: handle.id, fromModel: fallback.fromModel, toModel: fallback.toModel, reason: reason.slice(0, 200),
+        ...(credentialSource !== undefined ? { credentialSource } : {}),
+      },
     });
     const previous = handle.session;
     handle.session = fallback.createSession();

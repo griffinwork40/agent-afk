@@ -421,8 +421,8 @@ export interface SessionPhasePayload {
    * Other providers (#4882, provider-prefixed): 'openai:env' |
    *   'openai:config' | 'openai:codex-cli' | 'openai:chatgpt-oauth' |
    *   'xai:env' | 'xai:config' | 'xai:oauth' | 'anthropic:config' | 'local'.
-   *   See src/agent/auth/credential-source.ts. Also on child sessions'
-   *   session_init_start (actor 'subagent').
+   *   See src/agent/auth/credential-source.ts. Per-child ids live on
+   *   subagent_lifecycle `started.credentialSource` instead.
    */
   credentialSource?: string;
 }

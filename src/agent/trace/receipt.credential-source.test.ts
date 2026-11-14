@@ -40,3 +40,53 @@ describe('receipt top-level credentialSource', () => {
     expect('credentialSource' in r).toBe(false);
   });
 });
+
+function started(id: string, model: string, credentialSource?: string): TraceEvent {
+  return ev('subagent_lifecycle', {
+    transition: 'started', subagentId: id, parentId: 'root', model,
+    ...(credentialSource !== undefined ? { credentialSource } : {}),
+  });
+}
+function ok(id: string): TraceEvent {
+  return ev('subagent_lifecycle', { transition: 'succeeded', subagentId: id, durationMs: 1, turnCount: 1 });
+}
+
+describe('receipt subagents.byModel[*].credentialSources', () => {
+  it('Claude parent with a qwen child and an OpenAI child: three sources, each on the right entry', () => {
+    const r = generateReceipt([
+      init('main', 'sonnet', 'claude-sonnet-4-6', 'claude-code-keychain'),
+      started('a', 'local', 'local'),
+      started('b', 'gpt-5', 'openai:chatgpt-oauth'),
+      started('c', 'gpt-5', 'openai:env'),
+      init('subagent', 'local', 'qwen3.8-flash-next'),
+      init('subagent', 'gpt-5', 'gpt-5'),
+      ok('a'), ok('b'), ok('c'),
+    ], META);
+    expect(r.credentialSource).toBe('claude-code-keychain');
+    const by = r.subagents.byModel!;
+    expect(by['qwen3.8-flash-next']?.credentialSources).toEqual(['local']);
+    expect(by['gpt-5']?.credentialSources).toEqual(['openai:chatgpt-oauth', 'openai:env']);
+  });
+
+  it('dedupes and sorts', () => {
+    const by = generateReceipt([
+      started('a', 'gpt-5', 'openai:env'), started('b', 'gpt-5', 'openai:env'),
+    ], META).subagents.byModel!;
+    expect(by['gpt-5']?.credentialSources).toEqual(['openai:env']);
+  });
+
+  it('model fallback re-run takes the source from subagent_model_fallback metadata', () => {
+    const by = generateReceipt([
+      started('a', 'local', 'local'),
+      ev('session_phase', { phase: 'subagent_model_fallback', metadata: { subagentId: 'a', fromModel: 'local', toModel: 'sonnet', reason: 'x', credentialSource: 'ANTHROPIC_API_KEY' } }),
+      ok('a'),
+    ], META).subagents.byModel!;
+    expect(by['sonnet']?.credentialSources).toEqual(['ANTHROPIC_API_KEY']);
+    expect(by['local']).toBeUndefined();
+  });
+
+  it('old traces without the field produce no credentialSources key', () => {
+    const by = generateReceipt([started('a', 'gpt-5'), ok('a')], META).subagents.byModel!;
+    expect('credentialSources' in by['gpt-5']!).toBe(false);
+  });
+});

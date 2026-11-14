@@ -79,12 +79,14 @@ export interface AnthropicCredential {
  *
  * Returns `undefined` when no tier yields a credential. Never logs the token.
  */
-export function resolveAnthropicCredential(): AnthropicCredential | undefined {
+export function resolveAnthropicCredential(
+  storeReadOpts?: { quiet?: boolean; background?: boolean },
+): AnthropicCredential | undefined {
   if (env.ANTHROPIC_API_KEY) return { token: env.ANTHROPIC_API_KEY, source: 'ANTHROPIC_API_KEY' };
   if (env.CLAUDE_CODE_OAUTH_TOKEN) {
     return { token: env.CLAUDE_CODE_OAUTH_TOKEN, source: 'CLAUDE_CODE_OAUTH_TOKEN' };
   }
-  const stored = loadClaudeCodeOauthToken();
+  const stored = loadClaudeCodeOauthToken(storeReadOpts);
   if (stored) return { token: stored, source: 'claude-code-keychain' };
   if (refreshedClaudeCodeOauthToken) {
     return { token: refreshedClaudeCodeOauthToken, source: 'claude-code-session-refresh' };

@@ -14,6 +14,7 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ### Added
 - receipt: top-level `credentialSource`, and the session credential source is now provider-aware (a non-Anthropic model never records an Anthropic tier); new ids `openai:*`, `xai:*`, `anthropic:config`, `local` (#4882)
+- receipt: `subagents.byModel[*].credentialSources` (sorted, unique), from the new `credentialSource` on `subagent_lifecycle` `started` and on `subagent_model_fallback` metadata (#4882)
 
 ## [5.354.0] - 2026-11-13
 

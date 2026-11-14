@@ -40,6 +40,16 @@ function nonEmpty(v: string | undefined): v is string {
   return typeof v === 'string' && v.trim().length > 0;
 }
 
+/** Options for {@link credentialSourceForModel}. */
+export interface CredentialSourceOptions {
+  /**
+   * Bounded, quiet credential-store read (fork-time / per-dispatch callers):
+   * the Claude Code store read times out instead of waiting on an OS unlock
+   * dialog. See `loadClaudeCodeOauthToken` in keychain.ts.
+   */
+  background?: boolean;
+}
+
 /**
  * Resolve the credential source id for the provider serving `model`.
  * Mirrors the routing in `resolveCredentialForModel` + `applySlotCredentials`.
@@ -47,6 +57,7 @@ function nonEmpty(v: string | undefined): v is string {
 export function credentialSourceForModel(
   model: string | undefined,
   hints?: ProviderRouteHints,
+  opts?: CredentialSourceOptions,
 ): string | undefined {
   const binding = resolveBinding(model, hints?.slots);
   const provider = providerForModel(model, hints);
@@ -71,7 +82,9 @@ export function credentialSourceForModel(
   // Anthropic-routed (anthropic-direct / anthropic).
   if (nonEmpty(binding.baseUrl) || nonEmpty(env.AFK_LOCAL_BASE_URL)) return LOCAL_CREDENTIAL_SOURCE;
   if (nonEmpty(binding.apiKey)) return 'anthropic:config';
-  return resolveAnthropicCredential()?.source;
+  return resolveAnthropicCredential(
+    opts?.background === true ? { background: true, quiet: true } : undefined,
+  )?.source;
 }
 
 /**
@@ -81,9 +94,10 @@ export function credentialSourceForModel(
 export function tryCredentialSourceForModel(
   model: string | undefined,
   hints?: ProviderRouteHints,
+  opts?: CredentialSourceOptions,
 ): string | undefined {
   try {
-    return credentialSourceForModel(model, hints);
+    return credentialSourceForModel(model, hints, opts);
   } catch {
     return undefined;
   }
