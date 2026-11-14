@@ -73,13 +73,22 @@ describe('/keys slash command', () => {
     expect(body).toContain('alt+f');
   });
 
-  it('documents @ file attachment, ctrl+v paste, and ctrl+x remove', async () => {
+  it('documents @ file attachment and ctrl+v paste', async () => {
     const { ctx, lines } = makeCtx();
     await keysCmd.handler(ctx, '');
     const body = lines.join('\n');
     expect(body).toContain('@<path>');
     expect(body).toContain('ctrl+v');
-    expect(body).toContain('ctrl+x');
+  });
+
+  it('documents ctrl+x d as future-only diff verbosity, not scrollback expansion', async () => {
+    const { ctx, lines } = makeCtx();
+    await keysCmd.handler(ctx, '');
+    const row = lines.find((line) => line.includes('ctrl+x d'));
+    expect(row).toContain('Cycle future diff output: compact → expanded → full');
+    expect(row).toContain('idle only');
+    expect(row).toContain('existing output unchanged');
+    expect(row).not.toContain('Cycle diff expansion');
   });
 
   it('documents the ctrl+o $EDITOR handoff', async () => {

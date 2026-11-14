@@ -66,6 +66,9 @@ import type { IterationResult } from './stream-drive.js';
 import { classifyChatGptUsageLimit, isChatGptUsageLimitError } from './chatgpt-usage-limit.js';
 import type { ChatGptUsageLimitInfo } from './chatgpt-usage-limit.js';
 import { usageLimitErrorEvent } from '../../shared/usage-limit-error.js';
+import {
+  isFallbackProgress, modelRejectedFallbackRequest, quotaFallbackRequest, type QuotaFallbackContext,
+} from './usage-limit-tier.fallback.js';
 
 /**
  * Same magnitude threshold as `anthropic-direct/usage-limit.ts`
@@ -243,6 +246,8 @@ export interface QuotaLimitTierContext {
   isClosed: () => boolean;
   /** Session id for the paused / resumed events. */
   sessionId: string;
+  /** Model-fallback wiring (usage-limit-tier.fallback.ts). Absent = never request a fallback. */
+  fallback?: QuotaFallbackContext;
 }
 
 /**
@@ -266,6 +271,8 @@ export async function* runIterationWithQuotaLimitPause(
   const pausedAt = Date.now();
   let pauseEmitted = false;
   let resumeEmitted = false;
+  // Any yielded progress (or our own `paused`) makes the turn non-replayable.
+  let progressed = false;
 
   for (;;) {
     // ── Manual generator protocol: preserve the typed return value ──────────
@@ -290,6 +297,15 @@ export async function* runIterationWithQuotaLimitPause(
         await gen.return(null);
         break;
       }
+      const rejected = modelRejectedFallbackRequest(event, progressed, ctx.fallback, ctx.sessionId);
+      if (rejected !== null) {
+        // Same exhaust-then-close protocol as the quota branch above.
+        await gen.next();
+        await gen.return(null);
+        yield rejected;
+        return null;
+      }
+      if (isFallbackProgress(event)) progressed = true;
       yield event;
     }
 
@@ -319,6 +335,16 @@ export async function* runIterationWithQuotaLimitPause(
     // not promise an auto-resume it will not deliver.
     const willWait = ctx.autoResumeOnUsageLimit && !farReset;
 
+    // Ordering: decide the fallback BEFORE `paused` is emitted (and before the
+    // fail-fast branch, so it fires even with autoResumeOnUsageLimit=false),
+    // and only on the first request of the turn with nothing yielded yet.
+    // Once `paused` is out the turn has progressed and the park proceeds.
+    const fallback = quotaFallbackRequest(quotaEvent, progressed, ctx.fallback, ctx.sessionId);
+    if (fallback !== null) {
+      yield fallback;
+      return null;
+    }
+
     // ── Emit paused on the first quota 429 ───────────────────────────────────
     if (!pauseEmitted) {
       yield quotaPausedEvent(codex, willWait);
@@ -335,6 +361,7 @@ export async function* runIterationWithQuotaLimitPause(
         },
       });
       pauseEmitted = true;
+      progressed = true;
     }
 
     // ── Fail-fast: autoResumeOnUsageLimit = false, or reset beyond 2h ─────────

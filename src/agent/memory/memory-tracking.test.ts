@@ -60,7 +60,7 @@ describe('per-database tracking epoch', () => {
         INSERT INTO facts_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
       END;`);
     store = new MemoryStore(dir);
-    expect(db.pragma('user_version', { simple: true })).toBe(5);
+    expect(db.pragma('user_version', { simple: true })).toBe(6);
     expect(marker()).toBe(epoch);
     vi.setSystemTime(new Date('2027-03-01'));
     expect((await sweepMemoryGc({ memoryDir: dir, force: true })).archived).toBe(0);
@@ -207,7 +207,7 @@ describe('runMigrations(db, 4) — v4→v5 seeds tracking_started_at', () => {
       // Fake timers are active from beforeEach — the seeded value must be epoch.
       runMigrations(migDb, 4);
 
-      expect(migDb.pragma('user_version', { simple: true })).toBe(5);
+      expect(migDb.pragma('user_version', { simple: true })).toBe(6);
       const row = migDb.prepare('SELECT value FROM memory_metadata WHERE key = ?')
         .get('tracking_started_at') as { value: string } | undefined;
       expect(row).toBeDefined();

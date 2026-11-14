@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { env } from '../../config/env.js';
+import { palette } from '../palette.js';
 import ora from 'ora';
 import { handleCommandError } from '../errors/index.js';
 import { AgentSession } from '../../agent/session.js';
@@ -7,8 +8,8 @@ import { providerForModel } from '../../agent/providers/index.js';
 import { statusPanel } from '../render.js';
 import { getApiKeyForModel, getModel, getCodexApiKey } from '../shared-helpers.js';
 import { resolveCliPermissionMode } from '../config.js';
-import { describeCredentialSource, credentialSourceId } from '../auth-wizard.describe-source.js';
-import { loadXaiApiKey, loadAnthropicCredential } from '../../agent/auth/credential-resolver.js';
+import { describeCredentialSource } from '../auth-wizard.describe-source.js';
+import { loadXaiApiKey, resolveAnthropicCredential } from '../../agent/auth/credential-resolver.js';
 
 export function registerStatusCommand(program: Command): void {
   program
@@ -47,19 +48,21 @@ export function registerStatusCommand(program: Command): void {
         // instead of hardcoding bypass-on.
         const permissionMode = resolveCliPermissionMode();
 
+        // Use the Anthropic-only loader so an xAI user with only XAI_API_KEY
+        // does not get anthropic.ok: true (getApiKey() is model-routed and
+        // would return the xAI key when the active model is xai/xai-oauth).
+        // Token and provenance come from ONE loader call (#4778), so the
+        // reported source is always the tier that produced the token.
+        // Hoisted above the if/else so both text and JSON paths share the same
+        // single resolve call and provenance is always a loader output (#4817).
+        const anthropic = resolveAnthropicCredential();
+
         if (options.format === 'json') {
-          // Use the Anthropic-only loader so an xAI user with only XAI_API_KEY
-          // does not get anthropic.ok: true (getApiKey() is model-routed and
-          // would return the xAI key when the active model is xai/xai-oauth).
-          const anthropicApiKey = loadAnthropicCredential();
+          const anthropicApiKey = anthropic?.token;
           const codexApiKey = getCodexApiKey();
           const xaiApiKey = loadXaiApiKey();
 
-          // Stable enum from the same precedence walk as the text Auth row
-          // (describeCredentialSource), so text and JSON never disagree.
-          const anthropicSource: string | null = anthropicApiKey
-            ? credentialSourceId()
-            : null;
+          const anthropicSource: string | null = anthropic?.source ?? null;
 
           const codexSource = codexApiKey
             ? env.OPENAI_API_KEY
@@ -92,7 +95,7 @@ export function registerStatusCommand(program: Command): void {
           const bypassRow = permissionMode === 'bypassPermissions'
             ? { label: 'Permissions', value: 'Bypass — path containment off (read/write anywhere)', kind: 'warn' as const }
             : { label: 'Permissions', value: `Contained — mode: ${permissionMode}`, kind: 'info' as const };
-          console.log(
+          console.log(palette.info(
             '\n' +
               statusPanel('Agent AFK · Status', [
                 { label: 'Provider', value: provider, kind: 'info' },
@@ -107,14 +110,14 @@ export function registerStatusCommand(program: Command): void {
                         ? 'Found (XAI_API_KEY)'
                         : 'No XAI_API_KEY set'
                       : apiKey
-                        ? `Found (${describeCredentialSource()})`
+                        ? `Found (${describeCredentialSource(anthropic?.source ?? null)})`
                         : 'Falling back to Claude OAuth',
                   kind: apiKey ? 'ok' : 'warn',
                 },
                 { label: 'Model', value: String(model), kind: 'info' },
                 bypassRow,
               ]) +
-              '\n',
+              '\n'),
           );
         }
       } catch (error) {

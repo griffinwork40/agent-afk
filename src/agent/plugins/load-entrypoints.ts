@@ -21,6 +21,7 @@ import type { StateStore } from '../state/state-store.js';
 import type { SendInput, SendToSessionResult } from '../peer/send.js';
 import type { PresenceRecord } from '../awareness/presence.js';
 import { runWithPluginSessionContext } from './plugin-session-context.js';
+import { env } from '../../config/env.js';
 
 /**
  * Host runtime API injected into a plugin entrypoint's default-export function.
@@ -204,16 +205,13 @@ export function installPluginHooks(registry: HookRegistry): void {
       // which is correct: they must not operate with an unknown identity.
       // S-4: type-guard extraction instead of an unsafe cast. When
       // sessionId is absent the ALS is still entered with undefined (clearing
-      // any outer context), but we log a warning so the absence is observable.
+      // any outer context). A debug trace is emitted under AFK_DEBUG so the
+      // absence is observable without producing daemon stderr noise at runtime.
       // Peer API methods (listSessions, sendToSession) fail closed on undefined.
-      const rawCtx = ctx as unknown as Record<string, unknown>;
-      const sessionId =
-        typeof rawCtx['sessionId'] === 'string' ? rawCtx['sessionId'] : undefined;
-      if (sessionId === undefined) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          '[plugin-hook] hook dispatched without a sessionId — peer API will fail closed for this invocation',
-          { event },
+      const sessionId = (ctx as { sessionId?: string }).sessionId;
+      if (sessionId === undefined && env.AFK_DEBUG) {
+        process.stderr.write(
+          `[plugin-hook] hook dispatched without a sessionId — peer API will fail closed for this invocation (event=${event})\n`,
         );
       }
       const run = async (): Promise<HookDecision> => {

@@ -36,7 +36,7 @@
 import { existsSync, accessSync, constants, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { errorMessage } from '../../utils/errors.js';
-import { pushIfConfigured } from '../../telegram/push.js';
+import { operatorNotify } from '../operator-notify.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 
 /** Create the telemetry parent directory; the later write reports any I/O error. */
@@ -142,7 +142,7 @@ export class TelemetryAlertLatch {
       `would re-fire on every restart if allowed to run.`;
     // eslint-disable-next-line no-console
     console.warn(text);
-    await pushIfConfigured(text).catch(() => undefined);
+    await operatorNotify(text).catch(() => undefined);
   }
 
   /** Exposed for tests: reset the latch between test cases. */

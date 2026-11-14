@@ -146,6 +146,7 @@ describe('SubagentExecutor — isolation:"worktree" wiring', () => {
       subagentManager: mockSubagentMgr as never,
       parentSession: mockParentSession as never,
       defaultConfig: { apiKey: 'test-key', systemPrompt: 'test system prompt' },
+      defaultSubagentModel: 'claude-sonnet-4-5',
       depth: 0,
       // A real cwd so the anchor is deterministic (executor uses
       // `this.currentCwd ?? process.cwd()` as createIsolatedWorktree's cwd).

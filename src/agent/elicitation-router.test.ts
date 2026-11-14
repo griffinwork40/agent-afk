@@ -20,8 +20,8 @@ import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js
 
 // Mock the Telegram push primitive so park-and-notify can be asserted without
 // touching the network. Hoisted above the router import below.
-vi.mock('../telegram/push.js', () => ({
-  pushIfConfigured: vi.fn().mockResolvedValue(null),
+vi.mock('./operator-notify.js', () => ({
+  operatorNotify: vi.fn().mockResolvedValue(null),
 }));
 
 // Mock the presence writer so the blocked-marker lifecycle can be asserted as
@@ -32,7 +32,7 @@ vi.mock('./awareness/presence.js', () => ({
 }));
 
 import { elicitationRouter } from './elicitation-router.js';
-import { pushIfConfigured } from '../telegram/push.js';
+import { operatorNotify } from './operator-notify.js';
 import { setPresenceBlocked } from './awareness/presence.js';
 
 /** Ordered [sessionId, blocked] pairs the router asked presence to write. */
@@ -63,7 +63,7 @@ const URL_REQUEST: ElicitationRequest = {
 describe('elicitationRouter', () => {
   beforeEach(() => {
     elicitationRouter.uninstall();
-    vi.mocked(pushIfConfigured).mockClear();
+    vi.mocked(operatorNotify).mockClear();
     vi.mocked(setPresenceBlocked).mockClear();
   });
 
@@ -79,8 +79,8 @@ describe('elicitationRouter', () => {
   it('park-and-notify: no handler → fires a Telegram notification, then declines', async () => {
     const result = await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL });
     expect(result.action).toBe('decline');
-    expect(pushIfConfigured).toHaveBeenCalledTimes(1);
-    const msg = vi.mocked(pushIfConfigured).mock.calls[0]?.[0] as string;
+    expect(operatorNotify).toHaveBeenCalledTimes(1);
+    const msg = vi.mocked(operatorNotify).mock.calls[0]?.[0] as string;
     expect(msg).toContain('supabase'); // serverName label
     expect(msg).toContain('Sign in with Supabase to continue'); // request.message
     expect(msg).toContain('https://supabase.example/oauth/abc'); // request.url
@@ -89,11 +89,11 @@ describe('elicitationRouter', () => {
   it('park-and-notify: does NOT notify when a handler is installed (human already prompted)', async () => {
     elicitationRouter.install(vi.fn().mockResolvedValue({ action: 'accept' } as ElicitationResult));
     await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL });
-    expect(pushIfConfigured).not.toHaveBeenCalled();
+    expect(operatorNotify).not.toHaveBeenCalled();
   });
 
   it('park-and-notify: a notification failure never breaks the decline', async () => {
-    vi.mocked(pushIfConfigured).mockRejectedValueOnce(new Error('telegram down'));
+    vi.mocked(operatorNotify).mockRejectedValueOnce(new Error('telegram down'));
     const result = await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL });
     expect(result.action).toBe('decline');
   });
@@ -103,7 +103,7 @@ describe('elicitationRouter', () => {
     aborted.abort();
     const result = await elicitationRouter.route(URL_REQUEST, { signal: aborted.signal });
     expect(result.action).toBe('decline');
-    expect(pushIfConfigured).not.toHaveBeenCalled();
+    expect(operatorNotify).not.toHaveBeenCalled();
   });
 
   it('park-and-notify: no handler + aborted while waiting in queue → declines without notifying', async () => {
@@ -124,13 +124,13 @@ describe('elicitationRouter', () => {
     const [r1, r2] = await Promise.all([first, second]);
     expect(r1).toEqual({ action: 'accept' });
     expect(r2).toEqual({ action: 'decline' });
-    expect(pushIfConfigured).not.toHaveBeenCalled();
+    expect(operatorNotify).not.toHaveBeenCalled();
   });
 
   it('park-and-notify: truncates an over-long message to bound inadvertent disclosure', async () => {
     const longMsg = 'x'.repeat(500);
     await elicitationRouter.route({ ...URL_REQUEST, message: longMsg }, { signal: NO_SIGNAL });
-    const msg = vi.mocked(pushIfConfigured).mock.calls[0]?.[0] as string;
+    const msg = vi.mocked(operatorNotify).mock.calls[0]?.[0] as string;
     expect(msg).toContain('…(truncated)');
     expect(msg).not.toContain(longMsg); // the full 500-char message is never sent
     expect(msg).toContain('x'.repeat(300)); // first 300 chars preserved

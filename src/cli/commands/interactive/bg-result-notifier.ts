@@ -95,16 +95,18 @@ function extractOutput(job: BackgroundJob): string {
  * ~64KB post-escape and bypass the cap. Plain-text surfaces (e.g. Telegram push
  * via {@link formatBgResultBody}) intentionally skip escaping and call this on
  * raw output — that is correct, not an omission.
- * Truncation may cut a multi-byte codepoint or XML entity mid-sequence; harmless
- * in the respective contexts.
+ * Truncation strips any trailing U+FFFD replacement characters produced when
+ * the byte slice lands mid-codepoint; XML entities are unaffected because
+ * callers that embed in XML pass already-escaped text (see escaping note above).
  */
 function truncateBytes(text: string, maxBytes: number, jobId: string): string {
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
   const buf = Buffer.from(text, 'utf8').subarray(0, maxBytes);
-  // toString on a sliced buffer may end mid-codepoint; the replacement char
-  // it produces is harmless in model context.
+  // toString on a sliced buffer may end mid-codepoint, producing U+FFFD at the
+  // tail. Strip any trailing replacement characters for consistency with other
+  // truncation sites (journal.ts, witness.query.io.ts).
   return (
-    buf.toString('utf8') +
+    buf.toString('utf8').replace(/\uFFFD+$/, '') +
     `\n… [truncated at ${maxBytes} bytes — full result via /bgsub:join ${jobId}]`
   );
 }

@@ -40,7 +40,6 @@ remain deferred to Stages 4 and 5.
 | /goal | portable | TEXT | S0 + UX | goal chip in session header |
 | /name | portable | DONE | S1 | canonical rename updates sidebar and session title |
 | /fork | portable | DONE | S4 | creates new owned session + navigate control; dashboard selects the fork |
-| /changelog | portable | TEXT | S0 | text |
 | /bgsub, /bgsub:status, /bgsub:join, /bgsub:cancel | portable | TEXT | S0 + UX | jobs view (cancel route deferred) |
 | /tasks | partial | TEXT | S0 (list) → UX | subagent tree already in transcript; list as text |
 | /tasks:view | tty-only | TEXT | UX | open subagent card in the transcript spine |
@@ -51,7 +50,6 @@ remain deferred to Stages 4 and 5.
 | /font-size | portable | GATED | N/A | edits VS Code/Cursor terminal settings; browser zoom covers web |
 | /allow-dir | portable | TEXT | S0 | text; later a settings section |
 | /worktree | portable | DONE (list) | S2 | list table; other actions retain text |
-| /reauth | portable | GATED | S1 | settings action |
 | /search | portable | TEXT | S0 + UX | transcript find (Cmd+F within session) |
 | /diff | portable | DONE | S2 | structured unified diff; empty-state message |
 | /doctor | portable | TEXT | S0 → S2 | checklist |
@@ -141,7 +139,7 @@ nearest suggestion. Session skills and SDK commands pass through to the agent un
 | /help, /cost, /tokens (/ctx), /usage, /info, /history, /tools, /limits, /debug, /mcp, /diff, ... | DONE (shared) | rendered via `writer.telegram.ts`: list → bullets, keyValue → bold labels, table/diff → `<pre>`, link → anchor |
 | /clear | DONE (shared) | reset-in-place (`clearConversation`); chat-level identity wrapper in SessionManager (see the Contract in `handlers/slash.ts`) |
 | /compact, /model &lt;name&gt;, /name, /thinking, /fast | DONE (shared) | session-control service; queued while the route is busy; bare `/model` keeps the tap-to-switch keyboard |
-| /editor, /copy, /theme, /keys, /sh, /plan, /retry, /reauth, ... | GATED | capability reason (same `requires` metadata as web) |
+| /editor, /copy, /theme, /keys, /sh, /plan, /retry, ... | GATED | capability reason (same `requires` metadata as web) |
 | /exit, /resume, /fork, /rewind | GATED | Telegram lifecycle deferrals: /new, /sessions cover the chat equivalents |
 | /start, /cd (/cwd), /sessions, /new, /watch, /unwatch, /abort, /afk, /inbox, /insights, /good, /bad | Telegram-only | bot-specific handlers, unchanged |
 

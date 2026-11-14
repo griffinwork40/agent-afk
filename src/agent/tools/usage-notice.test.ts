@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, it, expect } from 'vitest';
-import { buildUsageNotice, evaluateDispatchUsage } from './usage-notice.js';
+import { buildUsageNotice, evaluateDispatchUsage, type DispatchUsageResult } from './usage-notice.js';
 import { setUsageAwareness, resetUsageAwarenessForTests } from '../usage/usage-awareness-toggle.js';
 import { InMemoryTraceWriter } from '../trace/writer.js';
 import { USAGE_STALE_AFTER_MS, type UsageRecord } from '../usage/usage-record.js';
@@ -49,9 +49,11 @@ describe('buildUsageNotice', () => {
 });
 
 describe('evaluateDispatchUsage', () => {
+  const none: DispatchUsageResult = { notice: undefined, blocked: false };
+
   it('ignores non-Claude parents', async () => {
     const writer = new InMemoryTraceWriter();
-    expect(await evaluateDispatchUsage('openai-compatible', writer, () => rec({ fiveHour: 0.95 }))).toBeUndefined();
+    expect(await evaluateDispatchUsage('openai-compatible', writer, () => rec({ fiveHour: 0.95 }))).toEqual(none);
     expect(phaseEvents(writer)).toHaveLength(0);
   });
 
@@ -61,7 +63,7 @@ describe('evaluateDispatchUsage', () => {
     ['stale', () => rec({ fiveHour: 0.99, ageMs: USAGE_STALE_AFTER_MS + 1000 })],
   ])('adds nothing when %s', async (_label, read) => {
     const writer = new InMemoryTraceWriter();
-    expect(await evaluateDispatchUsage('anthropic-direct', writer, read)).toBeUndefined();
+    expect(await evaluateDispatchUsage('anthropic-direct', writer, read)).toEqual(none);
     expect(phaseEvents(writer)).toHaveLength(0);
   });
 
@@ -69,7 +71,8 @@ describe('evaluateDispatchUsage', () => {
     const writer = new InMemoryTraceWriter();
     const resetsAt = Date.now() + 3_600_000;
     const result = await evaluateDispatchUsage('anthropic-direct', writer, () => rec({ fiveHour: 0.86, fiveHourResetsAt: resetsAt }));
-    expect(result).toContain('Usage notice: Claude 5h window at 86%');
+    expect(result.notice).toContain('Usage notice: Claude 5h window at 86%');
+    expect(result.blocked).toBe(false);
     const events = phaseEvents(writer);
     expect(events).toHaveLength(1);
     const ev = events[0]!;
@@ -78,21 +81,25 @@ describe('evaluateDispatchUsage', () => {
     expect(ev.payload.metadata).toMatchObject({ level: 'warn', pct: 86, windowLabel: '5h', resetsAtMs: resetsAt });
   });
 
-  it('emits level=over at 100%', async () => {
+  it('emits level=over at 100% and sets blocked', async () => {
     const writer = new InMemoryTraceWriter();
-    await evaluateDispatchUsage('anthropic-direct', writer, () => rec({ fiveHour: 1 }));
+    const result = await evaluateDispatchUsage('anthropic-direct', writer, () => rec({ fiveHour: 1 }));
+    expect(result.blocked).toBe(true);
+    expect(result.notice).toContain('Usage notice');
     const ev = phaseEvents(writer)[0]!;
     if (ev.kind !== 'session_phase') throw new Error('unreachable');
     expect(ev.payload.metadata?.level).toBe('over');
   });
 
   it('works without a trace writer', async () => {
-    expect(await evaluateDispatchUsage('anthropic-direct', undefined, () => rec({ fiveHour: 0.9 }))).toBeTruthy();
+    const result = await evaluateDispatchUsage('anthropic-direct', undefined, () => rec({ fiveHour: 0.9 }));
+    expect(result.notice).toBeTruthy();
+    expect(result.blocked).toBe(false);
   });
 
-  it('returns undefined when usage awareness is toggled off', async () => {
+  it('returns none when usage awareness is toggled off', async () => {
     setUsageAwareness(false);
-    expect(await evaluateDispatchUsage('anthropic-direct', undefined, () => rec({ fiveHour: 0.95 }))).toBeUndefined();
+    expect(await evaluateDispatchUsage('anthropic-direct', undefined, () => rec({ fiveHour: 0.95 }))).toEqual(none);
   });
 
   afterEach(() => resetUsageAwarenessForTests());

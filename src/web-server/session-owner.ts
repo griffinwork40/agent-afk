@@ -400,15 +400,19 @@ export class SessionOwner {
     this.owned.delete(id);
     this.sessions.delete(id);
     this.info.delete(id);
+    const control = this.controls.get(id);
     this.controls.delete(id);
     this.pending.delete(id);
     this.turns.delete(id);
     this.autosavers.delete(id);
     const mcpManager = this.mcpManagers.get(id);
     this.mcpManagers.delete(id);
-    // Close async but do not await — retire() is called from a sync context
-    // (handleWebExit returns a CommandControl, not a Promise<void>).
+    // Close async but do not await — retire() is called from an async context
+    // (handleWebExit is async) but callers do not await the cleanup.
+    // Contract: session closes BEFORE control, mirroring closeAll() — a closing
+    // session may raise a final tool call that needs the MCP/control transport alive.
     if (session) session.close().catch(() => {});
+    if (control) control.close().catch(() => {});
     if (mcpManager) mcpManager.disconnectAll().catch(() => {});
   }
 
@@ -460,8 +464,8 @@ export class SessionOwner {
     this.turns.clear();
     this.mcpManagers.clear();
     this.autosavers.clear();
-    // Sessions close BEFORE MCP disconnect: a closing session may raise a final
-    // tool call that needs the MCP transport alive.
+    // Sessions close BEFORE controls, controls BEFORE MCP disconnect: a closing
+    // session may raise a final tool call that needs the MCP transport alive.
     await Promise.all(all.map((s) => s.close().catch(() => {})));
     await Promise.all(controls.map((c) => c.close().catch(() => {})));
     await Promise.all(mcps.map((m) => m.disconnectAll().catch(() => {})));

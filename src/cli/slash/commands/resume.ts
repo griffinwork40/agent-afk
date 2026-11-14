@@ -66,7 +66,7 @@ function fmtWhen(ts: number): string {
 }
 
 /** Convert a found session entry into a ResolvedResumeTarget. */
-function resolveFromFound(found: NonNullable<ReturnType<typeof findSession>>): ResolvedResumeTarget {
+export function resolveFromFound(found: NonNullable<ReturnType<typeof findSession>>): ResolvedResumeTarget {
   return {
     id: found.id,
     resumeId: found.data.sessionId ?? found.id,
@@ -283,6 +283,13 @@ export const resumeCmd: SlashCommand = {
     try { currentRepoRoot = resolveRepoRootSync({ cwd: currentCwd, mode: 'git-common-dir' }); } catch { /* not a git repo */ }
     const nonDaemon = entries.filter((e) => e.source !== 'daemon');
     const repoRootCache = new Map<string, string | undefined>();
+    // TODO(#4321): Both the current-cwd lookup above and legacy lookups below
+    // call `resolveRepoRootSync`/`execFileSync`, blocking the event loop for up
+    // to ~5 s per lookup (legacy cwds are cached for this listing). For the typical
+    // case (a handful of recent sessions, most with a stored `repoRoot`) the
+    // synchronous path is imperceptible. A future improvement is to resolve
+    // unknown roots asynchronously (e.g. via `resolveRepoRoot`) so that
+    // long-running daemon processes are not stalled during session listing.
     const cachedRepoRoot = (cwd: string): string | undefined => {
       if (repoRootCache.has(cwd)) return repoRootCache.get(cwd);
       let root: string | undefined;

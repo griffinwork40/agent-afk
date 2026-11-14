@@ -26,17 +26,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { hasMergeBase, parseDiffOutput } from './lib/clone-gate.js';
+import { addedLinesByFile, fragmentOverlapsAdded, CloneFile } from './lib/clone-gate.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-interface CloneFile {
-  name: string;
-  start: number;
-  end: number;
-  startLoc: { line: number };
-  endLoc: { line: number };
-}
 
 interface Clone {
   firstFile: CloneFile;
@@ -44,51 +36,6 @@ interface Clone {
   isNew: boolean;
   lines: number;
   tokens: number;
-}
-
-/**
- * Lines added in the diff of this PR, keyed by relative path.
- *
- * Uses three-dot diff (`baseRef...HEAD`) when a merge-base exists, which
- * isolates exactly the PR's own commits. Falls back to two-dot diff
- * (`baseRef HEAD`) on shallow clones where the merge-base commit is absent;
- * on pull_request CI this is equivalent because HEAD is the synthetic merge
- * commit whose first parent is the base tip.
- */
-function addedLinesByFile(baseRef: string): Map<string, Set<number>> {
-  const threeDot = hasMergeBase(baseRef);
-  const diffArgs = threeDot
-    ? ['diff', '--unified=0', '--diff-filter=ACMR', `${baseRef}...HEAD`]
-    : ['diff', '--unified=0', '--diff-filter=ACMR', baseRef, 'HEAD'];
-
-  if (!threeDot) {
-    console.log(
-      `[clone-gate] shallow checkout: no merge base for ${baseRef}; ` +
-        `using two-dot diff (${baseRef} HEAD) — equivalent on pull_request CI.`,
-    );
-  }
-
-  const raw = execFileSync('git', diffArgs, {
-    encoding: 'utf-8',
-    maxBuffer: 50 * 1024 * 1024,
-  });
-
-  return parseDiffOutput(raw);
-}
-
-/** Check whether a clone fragment overlaps any added line in the diff. */
-function fragmentOverlapsAdded(
-  frag: CloneFile,
-  added: Map<string, Set<number>>,
-): boolean {
-  const lines = added.get(frag.name);
-  if (!lines) return false;
-  const startLine = frag.startLoc.line;
-  const endLine = frag.endLoc.line;
-  for (let l = startLine; l <= endLine; l++) {
-    if (lines.has(l)) return true;
-  }
-  return false;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@
  */
 
 import type { Command } from 'commander';
+import { palette } from '../palette.js';
 import { collectUsage, ANTHROPIC_OAUTH } from '../../agent/usage/usage-snapshot.js';
 import { CODEX_SUBSCRIPTION } from '../../agent/usage/codex-usage.js';
 import type { UsageResult } from '../../agent/subscription-usage.js';
@@ -58,10 +59,22 @@ export async function collectUsageSummary(
   const providers: ProviderUsageSummary[] = records.map((r) => summarizeUsageRecord(r, now));
   const has = (provider: string): boolean => providers.some((p) => p.provider === provider);
   // A credential with no record: show why (endpoint error) or `unknown`.
-  const placeholder = (ids: { provider: string; account: string }, result: UsageResult | undefined) =>
-    result?.kind === 'unavailable' && result.reason !== 'no-token'
-      ? errorProviderSummary(ids.provider, ids.account, result.detail)
-      : unknownProviderSummary(ids.provider, ids.account);
+  // The no-token case gets a distinct errorDetail so Telegram (and any other
+  // surface that renders errorDetail) can surface the `claude login` hint
+  // rather than a generic "no signal" message.
+  const placeholder = (ids: { provider: string; account: string }, result: UsageResult | undefined) => {
+    if (result?.kind === 'unavailable') {
+      if (result.reason === 'no-token' && ids.provider === 'anthropic') {
+        return errorProviderSummary(
+          ids.provider,
+          ids.account,
+          'No Claude Code OAuth token found. Run `claude login` on the host machine, then try again.',
+        );
+      }
+      return errorProviderSummary(ids.provider, ids.account, result.detail);
+    }
+    return unknownProviderSummary(ids.provider, ids.account);
+  };
 
   if (!has('anthropic') && loadAnthropicCredential()) providers.push(placeholder(ANTHROPIC_OAUTH, anthropic));
   // Codex subscription windows come from the ChatGPT usage endpoint
@@ -108,7 +121,7 @@ export function registerUsageCommand(program: Command): void {
           return;
         }
         const asOf = new Date(summary.asOfMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-        console.log('\n' + statusPanel(`Agent AFK · Usage  (as of ${asOf})`, panelRows(summary)) + '\n');
+        console.log(palette.info('\n' + statusPanel(`Agent AFK · Usage  (as of ${asOf})`, panelRows(summary)) + '\n'));
       } catch (error) {
         handleCommandError(error);
       }

@@ -29,6 +29,7 @@ import {
   type DefaultHookRegistryResult,
 } from '../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../agent/hooks/config-loader.js';
+import { resolveModelId } from '../agent/session/model-resolution.js';
 import type { MemoryStore } from '../agent/memory/index.js';
 import type { AgentSession } from '../agent/session.js';
 import type { TraceWriter } from '../agent/trace/index.js';
@@ -74,6 +75,11 @@ export function createTelegramAfkHookBundle(
       ...(traceWriter !== null ? { traceWriter } : {}),
       // Always-on host posture: hard-refuse high-risk ops, never phone-approve.
       afkPromptForApproval: false,
+      getModel: () => {
+        const s = getSession();
+        const m = s?.getSessionMetadata().model;
+        return m !== undefined ? (resolveModelId(m) ?? String(m)) : undefined;
+      },
     },
     () => cwd,
   );

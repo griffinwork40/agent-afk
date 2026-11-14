@@ -16,6 +16,7 @@ import {
   type DetectorOptions,
 } from '../../../improve/scan/detectors/index.js';
 import { writeCard } from '../../../improve/scan/card-writer.js';
+import { palette } from '../../palette.js';
 
 // ---------------------------------------------------------------------------
 // scan
@@ -108,9 +109,7 @@ export function registerScanSubcommand(improve: Command): void {
             const known = new Set(knownDetectorNames());
             const unknown = requested.filter((n) => !known.has(n));
             if (unknown.length > 0) {
-              console.error(
-                `Unknown detector(s): ${unknown.join(', ')}. Known: ${knownDetectorNames().join(', ')}`,
-              );
+              console.error(palette.error(`Unknown detector(s): ${unknown.join(', ')}. Known: ${knownDetectorNames().join(', ')}`));
               process.exit(2);
             }
             enabled = new Set(requested);
@@ -120,9 +119,7 @@ export function registerScanSubcommand(improve: Command): void {
           if (opts.since && opts.since !== 'all') {
             const ms = parseDuration(opts.since);
             if (ms === undefined) {
-              console.error(
-                `Invalid --since: '${opts.since}'. Use forms like '7d', '24h', '30m', '3600s', or 'all'.`,
-              );
+              console.error(palette.error(`Invalid --since: '${opts.since}'. Use forms like '7d', '24h', '30m', '3600s', or 'all'.`));
               process.exit(2);
             }
             sinceMs = Date.now() - ms;
@@ -144,23 +141,21 @@ export function registerScanSubcommand(improve: Command): void {
             opts.includeDisabled,
           );
 
-          console.log(`Scanned ${scan.sessionsScanned} sessions`);
+          console.log(palette.info(`Scanned ${scan.sessionsScanned} sessions`));
           if (scan.sessionsSkippedOld > 0) {
-            console.log(`  ↳ skipped ${scan.sessionsSkippedOld} older than --since`);
+            console.log(palette.dim(`  ↳ skipped ${scan.sessionsSkippedOld} older than --since`));
           }
           if (scan.sessionsSkippedEmpty > 0) {
-            console.log(`  ↳ skipped ${scan.sessionsSkippedEmpty} with missing/unreadable trace.jsonl`);
+            console.log(palette.dim(`  ↳ skipped ${scan.sessionsSkippedEmpty} with missing/unreadable trace.jsonl`));
           }
           if (scan.invalidLineCount > 0) {
-            console.log(`  ⚠ ${scan.invalidLineCount} invalid JSONL lines skipped`);
+            console.log(palette.warning(`  ⚠ ${scan.invalidLineCount} invalid JSONL lines skipped`));
           }
 
           // Surface a note when disabled-by-default detectors were silently skipped.
           const disabled = disabledByDefaultDetectorNames();
           if (!opts.only && !opts.includeDisabled && disabled.length > 0) {
-            console.log(
-              `Skipped ${disabled.length} detectors (disabled by default — pass --only or --include-disabled): ${disabled.join(', ')}`,
-            );
+            console.log(palette.dim(`Skipped ${disabled.length} detectors (disabled by default — pass --only or --include-disabled): ${disabled.join(', ')}`));
           }
 
           // Per-pattern summary.
@@ -168,23 +163,23 @@ export function registerScanSubcommand(improve: Command): void {
           for (const d of detections) {
             byPattern.set(d.pattern, (byPattern.get(d.pattern) ?? 0) + 1);
           }
-          console.log(`Detections: ${detections.length}`);
+          console.log(palette.info(`Detections: ${detections.length}`));
           for (const [pattern, count] of byPattern.entries()) {
-            console.log(`  ↳ ${pattern}: ${count}`);
+            console.log(palette.dim(`  ↳ ${pattern}: ${count}`));
           }
 
           if (detections.length === 0) {
-            if (opts.write) console.log('No cards written.');
+            if (opts.write) console.log(palette.dim('No cards written.'));
             return;
           }
 
           for (const d of detections) {
-            console.log(`  • ${d.slug}  [${d.severity}]  ${d.pattern}  evidence=${d.evidence.length}`);
+            console.log(palette.dim(`  • ${d.slug}  [${d.severity}]  ${d.pattern}  evidence=${d.evidence.length}`));
           }
 
           if (!opts.write) {
-            console.log('');
-            console.log('(dry-run — pass --write to persist cards)');
+            console.log(''); // console-ok
+            console.log(palette.dim('(dry-run — pass --write to persist cards)'));
             return;
           }
 
@@ -197,8 +192,8 @@ export function registerScanSubcommand(improve: Command): void {
             else if (outcome.event === 'updated') updated += 1;
             else noop += 1;
           }
-          console.log('');
-          console.log(`Wrote cards: ${created} created, ${updated} updated, ${noop} no-op merges.`);
+          console.log(''); // console-ok
+          console.log(palette.success(`Wrote cards: ${created} created, ${updated} updated, ${noop} no-op merges.`));
         } catch (err) {
           handleCommandError(err);
         }
@@ -213,7 +208,7 @@ export function registerScanSubcommand(improve: Command): void {
 function parsePositiveInt(input: string, name: string, min: number): number {
   const n = Number.parseInt(input, 10);
   if (!Number.isFinite(n) || n < min) {
-    console.error(`Invalid --${name}: '${input}' (must be integer >= ${min})`);
+    console.error(palette.error(`Invalid --${name}: '${input}' (must be integer >= ${min})`));
     process.exit(2);
   }
   return n;
@@ -222,7 +217,7 @@ function parsePositiveInt(input: string, name: string, min: number): number {
 function parseRate(input: string, name: string): number {
   const n = Number.parseFloat(input);
   if (!Number.isFinite(n) || n <= 0 || n > 1) {
-    console.error(`Invalid --${name}: '${input}' (must be number in (0, 1])`);
+    console.error(palette.error(`Invalid --${name}: '${input}' (must be number in (0, 1])`));
     process.exit(2);
   }
   return n;

@@ -29,6 +29,7 @@ import {
 import { getPeerInboundModeConfig } from '../../agent/peer/inbound-mode.js';
 import type { SessionManager } from '../session-manager.js';
 import { routeFromCtx } from '../route.js';
+import { palette } from '../../cli/palette.js';
 import { escapeHtml, splitLongMessage } from '../formatter.js';
 
 // ---------------------------------------------------------------------------
@@ -164,7 +165,7 @@ async function handleRelease(
   for (const entry of releasable) {
     const released = await releaseHeld(sessionId, entry.file);
     if (!released) {
-      console.warn('[inbox] releaseHeld returned false for', entry.file);
+      console.warn(palette.warning(`[inbox] releaseHeld returned false for ${entry.file}`));
       continue;
     }
     accepted++;

@@ -209,6 +209,51 @@ export function patchYieldFields(
   atomicWriteFile(cachePath, `${JSON.stringify(facet, null, 2)}\n`, { mode: 0o600, encoding: 'utf-8' });
 }
 
+/**
+ * Patch the cached facet's `decisions` field with LLM-synthesized decisions
+ * from episode synthesis (#4569).
+ *
+ * Design mirrors patchYieldFields:
+ * - Reads the cached facet atomically, patches only the `decisions` field,
+ *   and writes back via atomicWriteFile.
+ * - No-ops when the cache file is absent, corrupt, or schema-invalid.
+ * - Never throws — episode backflow is additive, never critical.
+ * - Only writes when the synthesized decisions array is non-empty; an empty
+ *   array from the fallback path is not persisted (the facet default [] is
+ *   already correct and an LLM-free run should not overwrite real decisions).
+ */
+export function patchFacetDecisions(
+  sessionId: string,
+  decisions: string[],
+  cacheDir: string = getFacetCacheDir(),
+): void {
+  if (decisions.length === 0) return;
+
+  const cachePath = cachePathFor(sessionId, cacheDir);
+  if (!existsSync(cachePath)) return;
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(cachePath, 'utf8'));
+  } catch {
+    return; // corrupt cache — leave as-is, will be re-derived on next read
+  }
+
+  const parsed = SessionFacetSchema.safeParse(raw);
+  if (!parsed.success) return;
+
+  const facet: SessionFacet = {
+    ...parsed.data,
+    decisions,
+  };
+
+  try {
+    atomicWriteFile(cachePath, `${JSON.stringify(facet, null, 2)}\n`, { mode: 0o600, encoding: 'utf-8' });
+  } catch {
+    // Swallow write errors — episode backflow is additive, never critical.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Top-level: probe + patch
 // ---------------------------------------------------------------------------

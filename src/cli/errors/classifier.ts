@@ -18,9 +18,56 @@
  */
 
 import { BudgetExceededError, HookBlockedError, TimeoutError, UnsupportedProviderConfigError, errorMessage } from '../../utils/errors.js';
+
+/**
+ * Check if the error carries Anthropic SDK error structure.
+ *
+ * Real `@anthropic-ai/sdk` errors (source: node_modules/@anthropic-ai/sdk/src/core/error.ts)
+ * store the raw response body in `.error`, giving the envelope shape:
+ *   `err.error = { type: 'error', error: { type: 'authentication_error', ... } }`
+ * Real OpenAI SDK errors (source: node_modules/openai/src/core/error.ts) unwrap one
+ * level in `generate()` before storing, so `.error` is flat:
+ *   `err.error = { type: 'invalid_request_error', ... }`
+ *
+ * We gate on `err.error.type === 'error'` (the Anthropic envelope sentinel) and read
+ * the discriminating type from `err.error.error.type`. Flat shapes are excluded,
+ * so OpenAI errors can never match even when their type string is in the Anthropic set.
+ */
+function isAnthropicSdkError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const outer = (err as Record<string, unknown>)['error'];
+  if (!outer || typeof outer !== 'object') return false;
+  // The Anthropic SDK wraps the response body: outer.type === 'error' and
+  // the real type is nested one level deeper in outer.error.type.
+  const outerType = (outer as Record<string, unknown>)['type'];
+  if (outerType !== 'error') return false; // Not the Anthropic envelope shape
+  const inner = (outer as Record<string, unknown>)['error'];
+  if (!inner || typeof inner !== 'object') return false;
+  const type = (inner as Record<string, unknown>)['type'];
+  return typeof type === 'string' && (
+    type === 'authentication_error' ||
+    type === 'permission_error' ||
+    type === 'overloaded_error' ||
+    type === 'api_error' ||
+    type === 'rate_limit_error' ||
+    type === 'invalid_request_error' ||
+    type === 'not_found_error'
+  );
+}
+/**
+ * True when an error carries the Anthropic 403 body
+ * (`{ type: 'error', error: { type: 'permission_error' } }`).
+ */
+function hasAnthropicPermissionBody(err: unknown): boolean {
+  const body = (err as Record<string, unknown>)['error'];
+  if (!body || typeof body !== 'object') return false;
+  const inner = (body as Record<string, unknown>)['error'];
+  return !!inner && typeof inner === 'object' && (inner as Record<string, unknown>)['type'] === 'permission_error';
+}
 import { isRateLimitError, isNetworkError } from '../../utils/error-classifiers.js';
 import { usageLimitInfoOf } from '../../agent/usage/usage-limit-info.js';
 import { describeUsageLimit } from '../../agent/usage/usage-formatter.js';
+import { DaemonAlreadyRunningError } from '../../agent/daemon-instance.lock.js';
 
 type ErrorKind =
   | 'auth'
@@ -33,6 +80,7 @@ type ErrorKind =
   | 'timeout'
   | 'network'
   | 'not_git_repo'
+  | 'daemon_already_running'
   | 'unknown';
 
 export interface ClassifiedError {
@@ -49,6 +97,22 @@ export interface ClassifiedError {
  * Never throws.
  */
 export function classifyError(err: unknown): ClassifiedError {
+  // 0. DaemonAlreadyRunningError — exit 2 so scripts/service managers can
+  // distinguish "already running" from a crash (exit 1). ownerPid is surfaced
+  // in the hint so the operator knows which process to stop.
+  if (err instanceof DaemonAlreadyRunningError) {
+    const pidHint = err.ownerPid !== null
+      ? `Daemon PID ${err.ownerPid} is already running. Stop it with \`afk daemon stop\` before starting a new one.`
+      : 'Another afk daemon is already running. Stop it with `afk daemon stop` before starting a new one.';
+    return {
+      kind: 'daemon_already_running',
+      userMessage: err.message,
+      hint: pidHint,
+      exitCode: 2,
+      raw: err,
+    };
+  }
+
   // 1. BudgetExceededError
   if (err instanceof BudgetExceededError) {
     return {
@@ -99,21 +163,39 @@ export function classifyError(err: unknown): ClassifiedError {
   const lowerMsg = message.toLowerCase();
 
   // 5. HTTP 401 / AuthenticationError
+  // Architecture rule: @anthropic-ai/sdk must not be imported outside
+  // src/agent/providers/ — so we cannot use `instanceof AuthenticationError`.
+  // SDK error instances inherit `.name === 'Error'` (the SDKs do not set it),
+  // so `err.constructor.name` is what matches a real SDK error; the `.name`
+  // check covers errors that set it explicitly. Class names survive the build
+  // (scripts/build-dist.mjs sets `minifyIdentifiers: false`).
   if (
     errObj['status'] === 401 ||
-    (err instanceof Error && err.name === 'AuthenticationError')
+    (err instanceof Error && (err.name === 'AuthenticationError' || err.constructor.name === 'AuthenticationError'))
   ) {
+    const isAnthropic = isAnthropicSdkError(err);
     return {
       kind: 'auth',
       userMessage: 'Authentication failed. Check that your API key is valid and has not expired.',
-      hint: 'Verify the ANTHROPIC_API_KEY environment variable or run `afk login --force`.',
+      hint: isAnthropic
+        ? 'Verify the ANTHROPIC_API_KEY environment variable or run `afk login --force`.'
+        : 'Check the API key for your configured provider (OPENAI_API_KEY, per-slot AFK_MODEL_<TIER>_API_KEY, or XAI_API_KEY). Run `afk doctor` for credential diagnostics.',
       exitCode: 1,
       raw: err,
     };
   }
 
   // 5a. Anthropic PermissionDeniedError (seat removed, subscription inactive)
-  if (err instanceof Error && err.name === 'PermissionDeniedError') {
+  // See comment at §5 above: .name + constructor.name used instead of instanceof
+  // to avoid an SDK import outside src/agent/providers/. The OpenAI SDK also
+  // has a PermissionDeniedError class, so both arms require the Anthropic 403
+  // body shape (`{ type: 'error', error: { type: 'permission_error' } }`);
+  // an OpenAI 403 must not receive seat-removal guidance.
+  if (
+    err instanceof Error &&
+    (err.name === 'PermissionDeniedError' || err.constructor.name === 'PermissionDeniedError') &&
+    hasAnthropicPermissionBody(err)
+  ) {
     return {
       kind: 'auth',
       userMessage: 'Access denied (HTTP 403). Your account seat may have been removed or subscription access is inactive.',
@@ -158,9 +240,12 @@ export function classifyError(err: unknown): ClassifiedError {
   // 6b. HTTP 529 (overloaded) / HTTP 503 (service unavailable)
   if (errObj['status'] === 529 || errObj['status'] === 503) {
     const code = errObj['status'] as number;
+    const isAnthropic = isAnthropicSdkError(err);
     return {
       kind: 'overloaded',
-      userMessage: `Anthropic API is temporarily overloaded (HTTP ${code}). All retry attempts were exhausted.`,
+      userMessage: isAnthropic
+        ? `Anthropic API is temporarily overloaded (HTTP ${code}). All retry attempts were exhausted.`
+        : `API is temporarily overloaded (HTTP ${code}). All retry attempts were exhausted.`,
       hint: 'Wait a minute and try again, or switch to a less loaded model (e.g. sonnet).',
       exitCode: 1,
       raw: err,
@@ -197,6 +282,7 @@ export function classifyError(err: unknown): ClassifiedError {
   return {
     kind: 'unknown',
     userMessage: unknownMsg || 'An unexpected error occurred.',
+    hint: 'If this keeps happening, check `afk trace show` for the full error or try `afk doctor`.',
     exitCode: 1,
     raw: err,
   };

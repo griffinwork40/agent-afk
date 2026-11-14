@@ -8,7 +8,7 @@
  *
  * Ordering mirrors AnthropicDirectProvider.query():
  *   [toolBase, userSystem?, memoryPrompt, workspace?, hotMemory?, goalPrompt?,
- *    envFragment, manifest?]
+ *    envFragment, manifest?, agentTypeListing?, episodeRecall?]
  *
  * `envFragment` is the ONLY cwd-dependent piece — see `buildSystemPromptWiring`
  * below (#876) for why the rest are computed once and treated as stable across
@@ -88,6 +88,24 @@ export interface SystemPromptWiringResult {
    * replacement base, not the construction-time default (#2420 P1 invariant).
    */
   systemPromptRebuildFactory: (base: string | undefined) => string;
+  /**
+   * Snapshot of the cwd-independent named fragments captured at construction
+   * time (#4449). Used by the caller to emit per-fragment token-count logging
+   * to the witness trace without re-deriving the fragments from config.
+   * The cwd-dependent `# Environment` fragment is NOT included here — it is
+   * recomputed per `setCwd()` and its size varies continuously.
+   */
+  stableFragments: {
+    toolBase: string;
+    userSystem: string | undefined;
+    memoryPrompt: string;
+    workspacePrompt: string;
+    hotMemory: string;
+    goalPrompt: string;
+    manifest: string;
+    agentTypeListing: string;
+    episodeRecall: string; // runtime always produces a string (empty when disabled)
+  };
 }
 
 /**
@@ -135,6 +153,7 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
     : '';
   const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
   const goalPrompt = typeof config.goalPrompt === 'string' ? config.goalPrompt : '';
+  const episodeRecall = typeof config.episodeRecall === 'string' ? config.episodeRecall : '';
   // Fix #3261: use the shared normalizer so a preset { append } is forwarded,
   // not silently dropped. Previously `typeof ... === 'string'` discarded the
   // `append` text of preset objects.
@@ -191,11 +210,25 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
     // Agent-type listing is placed after the manifest in the volatile tail so
     // sessions differing only in their agent sets keep a stable prefix (#4217).
     if (agentTypeListing.length > 0) parts.push(agentTypeListing);
+    // Episode recall is placed last in the volatile tail so per-session episode
+    // sets never invalidate the stable-prefix cache (#4680).
+    if (episodeRecall.length > 0) parts.push(episodeRecall);
     return parts.join('\n\n');
   };
 
   return {
     initialSystemPrompt: assemble(buildEnvFragment(), existingSys),
+    stableFragments: {
+      toolBase,
+      userSystem: existingSys ?? undefined,
+      memoryPrompt,
+      workspacePrompt: resolveWorkspaceSystemPrompt(workspacePromptEnabled) ?? '',
+      hotMemory,
+      goalPrompt,
+      manifest,
+      agentTypeListing,
+      episodeRecall,
+    },
     rebuildAfterCwdChange: (): string => {
       // Contract: when systemPromptRebuildFactory was never called (`set` is
       // false), fall back to the construction-time `existingSys` so the preset

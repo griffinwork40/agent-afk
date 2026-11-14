@@ -1,7 +1,7 @@
 import type { SubagentResult } from './subagent.js';
 
 export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
-export type BackgroundJobProvenance = 'model' | 'user';
+export type BackgroundJobProvenance = 'model' | 'user' | 'user-backgrounded';
 
 export interface BackgroundJob {
   readonly jobId: string;

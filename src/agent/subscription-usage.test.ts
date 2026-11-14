@@ -1,5 +1,5 @@
 /**
- * Tests for {@link fetchSubscriptionUsage} and {@link formatUsagePlain}.
+ * Tests for {@link fetchSubscriptionUsage}.
  *
  * Network access uses an injected `fetchImpl` or a mocked `h1ModelFetch`;
  * no real network calls are made.
@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { h1ModelFetch } from './providers/shared/h1-fetch.js';
 import {
   fetchSubscriptionUsage,
-  formatUsagePlain,
   type UsageResult,
   type UsageSnapshot,
 } from './subscription-usage.js';
@@ -324,44 +323,4 @@ describe('fetchSubscriptionUsage', () => {
   });
 });
 
-describe('formatUsagePlain', () => {
-  it('renders all four windows, one per line', () => {
-    const snapshot: UsageResult = {
-      kind: 'ok',
-      fiveHour: { utilization: 0.62, resetsAt: new Date('2026-07-26T18:00:00Z') },
-      sevenDay: { utilization: 0.31 },
-      sevenDaySonnet: { utilization: 0.28 },
-      sevenDayOpus: { utilization: 0.44 },
-    };
-    const text = formatUsagePlain(snapshot);
-    expect(text).toBe(
-      ['5h: 62% (resets 18:00)', '7d: 31%', '7d-sonnet: 28%', '7d-opus: 44%'].join('\n'),
-    );
-    expect(text).not.toMatch(/\x1b\[/);
-    expect(text).not.toMatch(/<[a-z]+>/i);
-  });
 
-  it('renders a single line when only one window is present', () => {
-    const snapshot: UsageResult = { kind: 'ok', fiveHour: { utilization: 0.1 } };
-    expect(formatUsagePlain(snapshot)).toBe('5h: 10%');
-  });
-
-  it('renders a fallback line when kind is ok but no windows are present', () => {
-    const snapshot: UsageResult = { kind: 'ok' };
-    expect(formatUsagePlain(snapshot)).toBe('No usage windows available.');
-  });
-
-  it.each([
-    ['no-token', 'Run `claude login`.'],
-    ['http-error', 'HTTP 401.'],
-    ['malformed-response', 'Body was not valid JSON.'],
-    ['timeout', 'Request timed out.'],
-    ['network-error', 'Could not reach the usage endpoint.'],
-  ] as const)('renders a clear single line for reason=%s', (reason, detail) => {
-    const result: UsageResult = { kind: 'unavailable', reason, detail };
-    const text = formatUsagePlain(result);
-    expect(text.split('\n')).toHaveLength(1);
-    expect(text).toContain(reason);
-    expect(text).toContain(detail);
-  });
-});

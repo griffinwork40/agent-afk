@@ -62,7 +62,7 @@ async function harness() {
     } }, replRenderer: { writeLine: vi.fn() }, statusLine: { rearm: vi.fn(), repaint: vi.fn() },
   } as unknown as InteractiveCtx;
   const run = () => runInputLoop(ctx, {} as never, {} as never, vi.fn(), surface, vi.fn(),
-    { peerNotifier: peer, bgResultNotifier: bg, shellPassthrough: shell } as unknown as FooterSubsystems,
+    { peerNotifier: peer, bgResultNotifier: bg, shellPassthrough: shell, mascotBar: { releaseBand: vi.fn() } } as unknown as FooterSubsystems,
     { push: vi.fn() } as never);
   return { run, surface, compositor, submit, peer, bg, shell, boundary: () => boundary?.() };
 }

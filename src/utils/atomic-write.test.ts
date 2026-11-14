@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, readFileSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { rmSyncRetry } from '../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { atomicWriteFile, atomicWriteFileAsync, renameWithRetry, renameWithRetrySync } from './atomic-write.js';
@@ -540,7 +541,7 @@ describe('atomicWriteFileAsync — E2E wiring through renameWithRetry', () => {
 describe('atomicWriteFileAsync commitGuard', () => {
   let dir: string;
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'afk-atomic-guard-')); });
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+  afterEach(() => { rmSyncRetry(dir); });
 
   it('commits and resolves true when the guard passes', async () => {
     const dest = join(dir, 'f.json');

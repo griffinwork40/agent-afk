@@ -9,7 +9,6 @@
  */
 
 import { SUBAGENT_BACKGROUND_TIMEOUT_MS } from '../subagent.js';
-import { computeInheritedReadRoots } from '../subagent-read-scope.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { resolveMaxNestingDepth } from './nesting.js';
 import { resolveNamedAgent } from './subagent-executor.execute-once.gates.js';
@@ -23,7 +22,8 @@ import { classifyDispatchIntent, checkReadOnlyDispatchIntent } from './subagent-
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budget.js';
-import { evaluateDispatchUsageForModel } from './usage-notice.js';
+import { evaluateDispatchUsageForModel, type DispatchUsageResult } from './usage-notice.js';
+import type { TraceSink } from '../trace/index.js';
 import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
 import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
@@ -39,6 +39,7 @@ import {
   checkNestedScope,
   checkAndRunRemoteDispatch,
 } from './subagent-executor.execute-once.helpers.js';
+import { resolveChildInheritedReadRoots } from './subagent-executor.execute-once.read-scope.js';
 
 export interface ExecuteOnceArgs {
   ctx: SubagentExecutorContext;
@@ -57,6 +58,29 @@ export interface ExecuteOnceArgs {
     error?: string,
     cwd?: string,
   ) => void;
+}
+
+/**
+ * Evaluate usage and build a refusal when the subscription is over limit.
+ * Returns the notice string for healthy dispatches, or a ToolResult refusal
+ * that the caller returns immediately to block the dispatch.
+ */
+async function usageGate(
+  model: unknown,
+  traceWriter: TraceSink | undefined,
+  budgetReceipt: SpawnReceipt | undefined,
+): Promise<{ notice: string | undefined; refusal?: ToolResult }> {
+  const { notice, blocked }: DispatchUsageResult = await evaluateDispatchUsageForModel(model, traceWriter);
+  if (!blocked) return { notice };
+  budgetReceipt?.rollback();
+  return {
+    notice,
+    refusal: {
+      content: `Subagent dispatch refused: usage limit exceeded. ${notice ?? 'The subscription quota is exhausted.'}` +
+        `\n\nReduce parallel dispatches, wait for the quota window to reset, or switch to a non-Claude model.`,
+      isError: true,
+    },
+  };
 }
 
 export async function executeOnce(
@@ -124,17 +148,12 @@ export async function executeOnce(
     budgetReceipt = ctx.delegationBudget.recordSpawn(ctx.parentSession.sessionId ?? '');
   }
   { const r = await checkAndRunRemoteDispatch(parsed, call.signal, budgetReceipt, call.id, updateCurrentWaveUnit); if (r !== undefined) return r; }
-  const usageNotice = await evaluateDispatchUsageForModel(ctx.parentModel, ctx.traceWriter);
 
-  const childScopeInputs = ctx.subagentManager.getReadScopeInputs?.() ?? {
-    parentReadRoots: undefined,
-    parentCwd: undefined,
-  };
-  const childInheritedReadRoots = computeInheritedReadRoots({
-    parentReadRoots: childScopeInputs.parentReadRoots,
-    parentCwd: childScopeInputs.parentCwd,
-    childCwd: parsed.cwd ?? currentCwd,
-  });
+  // Resolve child read-scope from the parent manager. See resolveChildInheritedReadRoots
+  // in the helpers module for the full collapse-caveat documentation (#4438, #4472).
+  const { childScopeInputs, childInheritedReadRoots } = resolveChildInheritedReadRoots(
+    ctx.subagentManager.getReadScopeInputs?.bind(ctx.subagentManager),
+  );
 
   // Phase 1: build base config (model, tools, budgets, credential) without
   // nesting wiring. Nesting is deferred until after isolation setup so depth-2+
@@ -148,10 +167,16 @@ export async function executeOnce(
   const preNesting = buildChildConfigWithoutNesting(childConfigArgs);
   const { childConfig, childWriteCapable, childSideEffectFree } = preNesting;
 
+  // Usage gate runs AFTER child model is resolved so the gate checks the child
+  // model (not the parent). This lets an explicitly-requested non-Claude child
+  // dispatch even when the Claude parent quota is exhausted. (#4475)
+  const { notice: usageNotice, refusal: usageRefusal } = await usageGate(childConfig.model, ctx.traceWriter, budgetReceipt);
+  if (usageRefusal !== undefined) return usageRefusal;
+
   if (probe !== undefined) probe.sideEffectFree = childSideEffectFree;
 
   // Pre-dispatch implementation-intent gate (#3754): rejects implementation briefs sent to read-only named agents.
-  { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.release(); return r; } }
+  { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.rollback(); return r; } }
 
   // isolation:"worktree" — may mutate childConfig.cwd to the worktree path.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;

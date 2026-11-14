@@ -94,11 +94,17 @@ export const MAX_ERROR_CLUSTERS = 5;
  *
  *   1. Known ID prefixes (`toolu_…`, `bg-…`, `call_…`, `sess-…`,
  *      `msg-…`, `sub-…`) → `<id>`.
- *   2. Absolute paths (`/Users/…`, `/tmp/…`, `/home/…`, etc.) → `<path>`.
- *   3. Duration patterns (`123ms`, `4.5s elapsed`, `2m30s`) → `<dur>`.
- *   4. Quoted values (single or double, ≤120 chars) → `<val>`.
- *   5. Remaining digit runs (≥2 digits) → `#`.
- *   6. Collapse runs of whitespace to a single space and trim.
+ *   2. URLs (`https://…`, `http://…`, `file://…`) → `<url>`, applied before
+ *      the path pass so that `https://example.com/a` is not partially matched.
+ *   3. Absolute paths (Unix-style: whitespace/start-of-string + `/` + ≥2
+ *      non-space chars) → `<path>`. Anchored so that `and/or` and contractions
+ *      such as `it's` are not collapsed.
+ *   4. Duration patterns, including compound forms (`2m30s`, `1h05m`) → `<dur>`.
+ *   5. Quoted values — double-quoted (≤120 chars) → `<val>`; single-quoted
+ *      only when the quote is preceded by `^` (start of string), whitespace,
+ *      `(`, `[`, `{`, `,`, `;`, or `:` (not a contraction apostrophe) → `<val>`.
+ *   6. Remaining digit runs (≥2 digits) → `#`.
+ *   7. Collapse runs of whitespace to a single space and trim.
  *
  * The result is a stable string suitable for use as a `Map` key.
  */
@@ -108,20 +114,29 @@ export function normalizeErrorHead(head: string): string {
   // 1. Known ID prefixes → <id>
   s = s.replace(/\b(?:toolu|call|bg|sess|msg|sub)[_-][A-Za-z0-9_-]+/g, '<id>');
 
-  // 2. Absolute paths (Unix-style: starts with / followed by at least one non-space char).
-  s = s.replace(/\/[^\s"',;)}\]]{2,}/g, '<path>');
+  // 2. URLs — must run before the path pass so that `https://host/path` is
+  //    collapsed as a whole rather than leaving `https:` as a stray token.
+  s = s.replace(/\b(?:https?|file):\/\/[^\s"',;)}\]]{2,}/g, '<url>');
 
-  // 3. Duration patterns: optional number + unit combos like 123ms, 4.5s, 2m30s.
-  s = s.replace(/\b\d+(?:\.\d+)?(?:ms|s|m|h)\b/g, '<dur>');
+  // 3. Absolute paths anchored at whitespace or start-of-string, so that
+  //    internal slashes in words like `and/or` are not matched.
+  s = s.replace(/(^|\s)\/[^\s"',;)}\]]{2,}/g, '$1<path>');
 
-  // 4. Quoted values (double or single quotes, up to 120 chars content).
+  // 4. Duration patterns including compound forms: 123ms, 4.5s, 2m30s, 1h05m.
+  //    The inner group `(?:\d+(?:ms|s|m|h))+` captures one or more unit
+  //    segments so that `2m30s` collapses to a single `<dur>` token.
+  s = s.replace(/\b(?:\d+(?:\.\d+)?(?:ms|s|m|h))+\b/g, '<dur>');
+
+  // 5. Quoted values — double quotes (straightforward) and single quotes only
+  //    at word boundaries (prevents collapsing contraction apostrophes like
+  //    `can't` or `it's`).
   s = s.replace(/"[^"]{0,120}"/g, '<val>');
-  s = s.replace(/'[^']{0,120}'/g, '<val>');
+  s = s.replace(/(^|[\s([{,;:])('[^']{0,120}')(?=$|[\s)\]},;:])/g, '$1<val>');
 
-  // 5. Remaining digit runs of 2+ digits → #
+  // 6. Remaining digit runs of 2+ digits → #
   s = s.replace(/\b\d{2,}\b/g, '#');
 
-  // 6. Collapse whitespace.
+  // 7. Collapse whitespace.
   s = s.replace(/\s+/g, ' ').trim();
 
   return s;
@@ -357,9 +372,9 @@ export interface ErrorCluster {
  * Group failures by normalized `errorHead` and return the top
  * {@link MAX_ERROR_CLUSTERS} clusters by descending count.
  *
- * Failures with no `errorHead` are tallied under the sentinel key
- * `'(no errorHead)'` only when they constitute the majority; if every failure
- * lacks an `errorHead` the returned array is empty (nothing useful to cluster).
+ * Failures with no `errorHead` are excluded from clustering entirely. If no
+ * failure carries an `errorHead` the returned array is empty (nothing useful
+ * to cluster).
  */
 function buildErrorClusters(failures: FailureSighting[]): ErrorCluster[] {
   const withHead = failures.filter((f) => f.errorHead !== undefined);

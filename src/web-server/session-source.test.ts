@@ -11,7 +11,8 @@
  * though this file imports the modules under test statically.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as LedgerModule from '../agent/session-ledger.js';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -481,6 +482,115 @@ describe('listWebSessions', () => {
     fs.writeFileSync(path.join(getSessionsDir(), 'unnamed.json'), JSON.stringify(sidecar, null, 2));
     const [s0] = await listWebSessions(new Set());
     expect(s0?.title).toBe('hello there');
+  });
+
+  it('reads cwd and surface from ledger when sidecar provides model but not identity fields', async () => {
+    // Mixed-sidecar scenario: session-meta.json has `model` set but no `cwd`/`surface`.
+    // The ledger meta record must backfill cwd+surface; the sidecar supplies model.
+    // This test proves the early-exit fires at record 3 (meta+user+break) by
+    // spying on readLedger and counting how many records the iterator yields.
+    const sessionId = 'mixed-sidecar-1';
+
+    // Write a session-meta.json with model but no cwd/surface (the mixed sidecar).
+    const sessionDir = path.join(getSessionsDir(), sessionId);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const sessionMetaPath = path.join(sessionDir, 'session-meta.json');
+    const mixedMeta = { v: 1, sessionId, model: 'sidecar-model' };
+    fs.writeFileSync(sessionMetaPath, JSON.stringify(mixedMeta), 'utf8');
+
+    // Ledger: meta record (supplies cwd+surface), user record (supplies title),
+    // then 20 dummy records. The break fires after record 2, so at most 3
+    // records are consumed (the loop reads one ahead to detect the end).
+    const dummyRecords = Array.from({ length: 20 }, (_, i) =>
+      JSON.stringify({ v: 1, ts: Date.now(), kind: 'tool_call', name: `dummy-${i}` }),
+    );
+    writeLedger(sessionId, [
+      metaLine(sessionId, { cwd: '/ledger/cwd', surface: 'cli' }),
+      userLine('the real first message'),
+      ...dummyRecords,
+    ]);
+
+    // Spy on readLedger: wrap the real generator and count yielded records.
+    let recordsYielded = 0;
+    const realReadLedger = LedgerModule.readLedger;
+    const spy = vi.spyOn(LedgerModule, 'readLedger').mockImplementation(async function* (sid) {
+      for await (const rec of realReadLedger(sid)) {
+        recordsYielded += 1;
+        yield rec;
+      }
+    });
+
+    let results: Awaited<ReturnType<typeof listWebSessions>>;
+    try {
+      results = await listWebSessions(new Set());
+    } finally {
+      spy.mockRestore();
+    }
+
+    const entry = results.find((r) => r.id === sessionId);
+
+    expect(entry).toBeDefined();
+    // model comes from the sidecar (not the ledger meta record's 'test-model')
+    expect(entry?.model).toBe('sidecar-model');
+    // cwd and surface come from the ledger meta record
+    expect(entry?.cwd).toBe('/ledger/cwd');
+    expect(entry?.surface).toBe('cli');
+    // title comes from the ledger user record
+    expect(entry?.title).toBe('the real first message');
+    // Early-exit proof: break fires after meta+user, so ≤3 records consumed
+    // (meta at 1, user at 2, then the loop checks record 3 before seeing break).
+    // Well under the 20 dummy records that would be consumed without early-exit.
+    expect(recordsYielded).toBeLessThanOrEqual(3);
+  });
+
+  it('backfills surface from ledger meta when fork-sidecar has cwd+model but no surface', async () => {
+    // Fork-sidecar shape: session-meta.json has v, sessionId, model, cwd — but NO surface.
+    // The ledger meta record must backfill surface; sidecar supplies model+cwd.
+    const sessionId = 'fork-sidecar-1';
+
+    const sessionDir = path.join(getSessionsDir(), sessionId);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const sessionMetaPath = path.join(sessionDir, 'session-meta.json');
+    const forkMeta = { v: 1, sessionId, model: 'fork-model', cwd: '/fork/cwd' };
+    fs.writeFileSync(sessionMetaPath, JSON.stringify(forkMeta), 'utf8');
+
+    writeLedger(sessionId, [
+      metaLine(sessionId, { cwd: '/ledger/cwd', surface: 'cli' }),
+      userLine('fork sidecar first message'),
+    ]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === sessionId);
+
+    expect(entry).toBeDefined();
+    // surface must be backfilled from ledger meta (absent in fork sidecar)
+    expect(entry?.surface).toBe('cli');
+    // model and cwd come from the sidecar
+    expect(entry?.model).toBe('fork-model');
+    expect(entry?.cwd).toBe('/fork/cwd');
+  });
+
+  it('reads all identity fields from ledger when no session-meta.json exists (pre-sidecar path)', async () => {
+    // Pure pre-sidecar regression test: no session-meta.json at all.
+    // All fields (cwd, surface, model, title) must come from the ledger.
+    // Exercises the OR entry-guard (out.cwd === undefined || out.model === undefined)
+    // and the break condition (title && cwd && model) under the corrected logic.
+    const sessionId = 'pre-sidecar-1';
+
+    // No session-meta.json written — only a ledger.
+    writeLedger(sessionId, [
+      metaLine(sessionId, { cwd: '/pre/cwd', surface: 'telegram' }),
+      userLine('pre-sidecar first message'),
+    ]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === sessionId);
+
+    expect(entry).toBeDefined();
+    expect(entry?.cwd).toBe('/pre/cwd');
+    expect(entry?.surface).toBe('telegram');
+    expect(entry?.model).toBe('test-model'); // from metaLine helper
+    expect(entry?.title).toBe('pre-sidecar first message');
   });
 });
 

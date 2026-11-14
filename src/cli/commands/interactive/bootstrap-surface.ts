@@ -120,8 +120,8 @@ export function createReplSurface(a: {
   // sink owns wrapping (and band reflow on resize) and this bound is gone
   // with the closure — the two must never both wrap the same line.
   const completionWriter: CompletionWriter = {
-    fn: (line) => console.log(boundLineToTerminal(line)),
-    idleFn: (line) => console.log(boundLineToTerminal(line)),
+    fn: (line) => console.log(boundLineToTerminal(line)), // console-ok
+    idleFn: (line) => console.log(boundLineToTerminal(line)), // console-ok
   };
   // Construct StatusLine BEFORE createReplRenderer so the renderer can route
   // its inter-turn raw writes through statusLine.withFullScrollRegion(...) —

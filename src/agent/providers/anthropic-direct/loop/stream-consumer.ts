@@ -356,7 +356,7 @@ export async function* consumeRoundStream({
     // single clean `turn.completed`. Uses `input.signal` (the user/turn
     // interrupt), NOT `ttfb.signal`, so the TTFB stall-timer path is untouched.
     for await (const out of translateMessageStream(
-      abortableStream(events, input.signal) as Parameters<typeof translateMessageStream>[0],
+      abortableStream(events, input.signal, stall) as Parameters<typeof translateMessageStream>[0],
       input.ctx,
       // Second reset source for the stall watchdog: content deltas the
       // translator consumes WITHOUT yielding (a tool call's streaming argument

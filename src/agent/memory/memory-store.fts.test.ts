@@ -122,4 +122,26 @@ describe('sanitizeFtsQuery', () => {
   it('preserves a trailing-only paren as a group-close delimiter', () => {
     expect(sanitizeFtsQuery('bar)')).toBe('bar)');
   });
+
+  // ── Hash and apostrophe (issue #4879) ────────────────────────
+  it('wraps a token containing a hash (#) in double-quotes', () => {
+    // FTS5 treats # as a syntax character; queries like "PR #4553" fail.
+    expect(sanitizeFtsQuery('#4553')).toBe('"#4553"');
+  });
+
+  it('wraps a natural-language query containing a PR reference', () => {
+    // Reproduces the exact failure from the issue: "PR #4553 agent-afk model-intent credential dispatch"
+    expect(sanitizeFtsQuery('PR #4553 agent-afk model-intent credential dispatch')).toBe(
+      'PR "#4553" "agent-afk" "model-intent" credential dispatch',
+    );
+  });
+
+  it('wraps a token containing an apostrophe in double-quotes', () => {
+    // FTS5 treats \' as a syntax character in some configurations.
+    expect(sanitizeFtsQuery("don't")).toBe('"don\'t"');
+  });
+
+  it('wraps a possessive token containing an apostrophe', () => {
+    expect(sanitizeFtsQuery("agent's")).toBe('"agent\'s"');
+  });
 });

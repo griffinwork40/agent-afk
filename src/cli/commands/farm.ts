@@ -139,11 +139,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
     process.exit(1);
   }
   if (labels !== undefined && labels.length !== count) {
-    console.error(
-      palette.error(
-        `--labels count (${labels.length}) must equal --branches (${count})`,
-      ),
-    );
+    console.error(palette.error(`--labels count (${labels.length}) must equal --branches (${count})`));
     process.exit(1);
   }
 
@@ -174,7 +170,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
     agentType: `branch-${b.index}${b.label ? ` (${b.label})` : ''}`,
     systemPrompt,
     promptBuilder: (_inputs: Record<string, unknown>): string => {
-      console.log(`[branch-${b.index}] started`);
+      console.log(palette.info(`[branch-${b.index}] started`));
       return [
         `Task: ${task}`,
         '',
@@ -247,7 +243,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
 
     if (failedNode || skipped) {
       const errMsg = failedNode ? failedNode.error.message : 'skipped';
-      console.log(`[branch-${b.index}] ✗ failed: ${errMsg}`);
+      console.log(palette.error(`[branch-${b.index}] ✗ failed: ${errMsg}`));
       branchResults.push({ index: b.index, ok: false, commitCount: 0, error: errMsg });
       continue;
     }
@@ -256,10 +252,10 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
     const commitCount = await getCountFn(b.path, baseSha);
     if (commitCount === 0) {
       const errMsg = 'no commits made';
-      console.log(`[branch-${b.index}] ✗ failed: ${errMsg}`);
+      console.log(palette.error(`[branch-${b.index}] ✗ failed: ${errMsg}`));
       branchResults.push({ index: b.index, ok: false, commitCount: 0, error: errMsg });
     } else {
-      console.log(`[branch-${b.index}] ✓ done`);
+      console.log(palette.info(`[branch-${b.index}] ✓ done`));
       branchResults.push({ index: b.index, ok: true, commitCount });
     }
   }
@@ -349,7 +345,7 @@ export function registerFarmCommand(program: Command): void {
           ...(scoreTimeoutMs !== undefined ? { scoreTimeoutMs } : {}),
         });
       } catch (err) {
-        console.error(err);
+        console.error(err); // console-ok
         process.exitCode = 1;
       }
     });

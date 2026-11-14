@@ -185,6 +185,7 @@ export class TurnStreamRunner {
       fallbackModel: String(config.model),
       tracePath: config.traceWriter?.getTracePath(),
       getMetadata: getLedgerMetadata,
+      credentialSource: config.credentialSource,
     });
   }
 

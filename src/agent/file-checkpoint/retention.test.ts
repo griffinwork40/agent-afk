@@ -3,7 +3,8 @@
  * exclusion of the active session, grace window, rewind lock, stamp throttle.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import os from 'node:os';
 import path from 'node:path';
 import { acquireRewindLock, sweepFileCheckpoints, FILE_CHECKPOINT_GRACE_MS } from './retention.js';
@@ -13,7 +14,7 @@ let root: string;
 const NOW = Date.UTC(2026, 9, 22);
 
 beforeEach(() => { root = mkdtempSync(path.join(os.tmpdir(), 'afk-ckpt-retention-')); });
-afterEach(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.unstubAllEnvs(); rmSyncRetry(root); });
 
 /** A session dir whose only file has the given age and size. */
 function session(name: string, ageMs: number, bytes = 10): string {

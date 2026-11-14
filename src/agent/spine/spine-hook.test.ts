@@ -23,8 +23,8 @@ vi.mock('./spine-classifier.js', () => ({
 
 // ── Mock Telegram push so no real network calls happen ───────────────────────
 
-vi.mock('../../telegram/push.js', () => ({
-  pushIfConfigured: vi.fn().mockResolvedValue(undefined),
+vi.mock('../operator-notify.js', () => ({
+  operatorNotify: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ── Mock git so no real shell commands happen ─────────────────────────────────
@@ -451,7 +451,7 @@ describe('createSpineSessionEndHook — label branches', () => {
     expect(writeSpine).not.toHaveBeenCalled();
   });
 
-  it('contradicts: calls pushIfConfigured (mocked via best-effort)', async () => {
+  it('contradicts: calls operatorNotify (mocked via best-effort)', async () => {
     await setupDiffMock();
 
     const { classifyDiff } = await import('./spine-classifier.js');
@@ -484,7 +484,7 @@ describe('createSpineSessionEndHook — label branches', () => {
 
     // contradicts does NOT write SPINE.md
     expect(writeSpine).not.toHaveBeenCalled();
-    // hook still returns {} (best-effort — pushIfConfigured is called
+    // hook still returns {} (best-effort — operatorNotify is called
     // but may fail silently in test environment)
     expect(result).toEqual({});
   });

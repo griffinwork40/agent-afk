@@ -170,6 +170,12 @@ export class LspClient {
       capabilities: CLIENT_CAPABILITIES,
     }, { timeoutMs: opts.timeoutMs ?? DEFAULT_INIT_TIMEOUT_MS, signal: opts.signal });
     this.serverCapabilities = result?.capabilities ?? {};
+    // LSP spec §3.4.1: `initialized` MUST be sent after the `initialize`
+    // response has been received. The `await` above guarantees that, so this
+    // notification is spec-compliant. Note: some servers (e.g. typescript-
+    // language-server) also tolerate `initialized` arriving before the response
+    // (LSP has no separate ACK; "response" is the protocol term per §3.4.1);
+    // we rely on the stricter sequencing that `await` gives us here.
     this.notify('initialized', {});
     this.initialized = true;
   }

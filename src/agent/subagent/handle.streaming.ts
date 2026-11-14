@@ -348,19 +348,16 @@ function resolveStreamResult<T>(
   // stopReason. A consumer's natural `status !== 'succeeded'` check now catches
   // the zero-output run, while describeFailure(result) still reads sensibly.
   //
-  // Invariant: stamp STREAM_INCOMPLETE UNCONDITIONALLY (`=`, not `??=`) before
-  // the throw so buildResultFromError surfaces stopReason:'stream_incomplete'
-  // on the failed result (letting callers distinguish a stream-incomplete
-  // failure from an ordinary error). This differs from the buffered-text branch
-  // above, which uses `??=` deliberately: a capped run that also streamed text
-  // reaches there with `tool_use_loop_capped` already set and must keep it.
-  // Nothing worth preserving can reach HERE — the cap case returned at the
-  // tool_use_loop_capped branch, and cancel/abort threw just above. Any
-  // stopReason still set is a clean terminal one (end_turn / max_tokens /
-  // interrupted) reached via an empty-text turn the stream consumer drops
-  // before emitting a `message` event (see stream-consumer 'assistant.message':
-  // `if (event.text)`); none of those describe this zero-output cutoff, so
-  // overwrite it.
+  // Invariant: stamp STREAM_INCOMPLETE UNCONDITIONALLY (`=`) before the throw
+  // so buildResultFromError surfaces stopReason:'stream_incomplete' on the
+  // failed result (letting callers distinguish a stream-incomplete failure from
+  // an ordinary error). Nothing worth preserving can reach HERE — the cap case
+  // returned at the tool_use_loop_capped branch, and cancel/abort threw just
+  // above. Any stopReason still set is a clean terminal one (end_turn /
+  // max_tokens / interrupted) reached via an empty-text turn the stream
+  // consumer drops before emitting a `message` event (see stream-consumer
+  // 'assistant.message': `if (event.text)`); none of those describe this
+  // zero-output cutoff, so overwrite it unconditionally.
   //
   // Do NOT downgrade this to a returned placeholder to "keep return, don't
   // throw" — throwing is precisely what makes the run classify 'failed'. The

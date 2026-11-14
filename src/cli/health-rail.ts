@@ -233,9 +233,13 @@ export class HealthRail {
     const totalSubs = this.totalBgSubsEver + this.totalFgSubsEver;
 
     // Background processes: sourced from the ProcessJobRegistry.
-    const allProcJobs = this.processJobs ? this.processJobs.list() : [];
-    const activeProcs = allProcJobs.filter((j) => j.status === 'running').length;
-    this.totalProcsEver = Math.max(this.totalProcsEver, allProcJobs.length);
+    // Use startedCount() as the authoritative total — list().length is capped
+    // at MAX_HISTORY (50) and undercounts once more than 50 jobs have been
+    // started. startedCount() is a monotonic counter incremented in start()
+    // before pruneHistory can evict anything. (Issue #4395, finding #1.)
+    const activeProcs = this.processJobs ? this.processJobs.runningCount() : 0;
+    const startedTotal = this.processJobs ? this.processJobs.startedCount() : 0;
+    this.totalProcsEver = Math.max(this.totalProcsEver, startedTotal);
 
     // Accumulate total tool calls across all completed turns.
     const toolCalls = stats.turns.reduce(
@@ -290,7 +294,11 @@ export class HealthRail {
 
     // Compute elapsedMs at paint time so the counter ticks even between update()
     // calls (e.g. during long tool executions or streaming without tool events).
+    // activeProcs is also read live here — processJobs.runningCount() is O(n)
+    // over the jobs map and cheap to call on every paint, ensuring the count
+    // reflects reality between update() calls during idle input. (Issue #4395, finding #2.)
     const snap = this.snapshot;
+    const liveActiveProcs = this.processJobs ? this.processJobs.runningCount() : 0;
     const fields: HealthRailFields = snap
       ? {
           totalTurns: snap.totalTurns,
@@ -298,7 +306,7 @@ export class HealthRail {
           toolCalls: snap.toolCalls,
           activeSubs: snap.activeSubs,
           totalSubs: snap.totalSubs,
-          activeProcs: snap.activeProcs,
+          activeProcs: liveActiveProcs,
           totalProcs: snap.totalProcs,
           contextRatio: snap.contextRatio,
         }

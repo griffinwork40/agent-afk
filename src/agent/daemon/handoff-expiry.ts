@@ -46,7 +46,7 @@ import {
 } from './handoff-store.js';
 import { setLeaseState } from './lease-store.js';
 import { reclaimSingleLease } from './lease-reclaim.js';
-import { pushIfConfigured } from '../../telegram/push.js';
+import { operatorNotify } from '../operator-notify.js';
 import { isChatAllowed, parseAllowedChatIds } from '../../telegram/allowlist.js';
 import { env } from '../../config/env.js';
 import { errorMessage } from '../../utils/errors.js';
@@ -163,7 +163,7 @@ export async function expireHandoff(
   const ageHours = Math.round((now - Date.parse(expired.createdAt)) / 3_600_000);
   // eslint-disable-next-line no-console
   console.error(`[handoff-expiry] expired stale handoff for task ${taskId} (age: ${ageHours}h)`);
-  void pushIfConfigured(buildExpiryNotice(expired, ageHours), expiryNoticeRoute(expired.route))
+  void operatorNotify(buildExpiryNotice(expired, ageHours), expiryNoticeRoute(expired.route))
     .catch(() => undefined);
   return true;
 }

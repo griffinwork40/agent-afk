@@ -60,6 +60,8 @@ const READ_TOOLS = new Set([
   'workspace_query',
   // witness-layer search: read-only scan of trace.jsonl files.
   'read_witness', 'search_witness',
+  // journal reader: read-only access to session conversation content.
+  'read_journal',
   // get_facet — read-only: derives or loads the session facet sidecar; no
   // mutation surface. Schema declares category='read'; this entry makes
   // categorizeTool() agree so the schema-as-source-of-truth test passes.
@@ -76,6 +78,8 @@ const READ_TOOLS = new Set([
   'code_symbols',
   // state-tools.ts — read-only queries against the durable cross-session KV store.
   'state_get', 'state_query',
+  // Existing registry reads; IDs never bypass filesystem authorization.
+  'artifact_get', 'artifact_list', 'artifact_read',
 ]);
 const WRITE_TOOLS = new Set([
   'Write', 'Edit', 'NotebookEdit', 'MultiEdit',
@@ -278,6 +282,8 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   'memory_search',
   // Witness-layer search — read-only NDJSON scan of trace.jsonl files.
   'read_witness', 'search_witness',
+  // Journal reader — read-only access to session conversation content.
+  'read_journal',
   // Shared workspace publish — EPHEMERAL per-root-session state, not persistent
   // like memory. Deliberately admitted despite its WRITE categorization above;
   // see the membership-rule note in this block's header for why the two

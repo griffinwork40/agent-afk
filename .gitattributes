@@ -41,6 +41,9 @@
 # Generated MDX (website env-var page) is byte-compared by `pnpm scan:env:check`;
 # a CRLF checkout would report permanent false drift.
 *.mdx text eol=lf
+# The public-surface snapshot is byte-compared by `pnpm scan:surface:check`;
+# a CRLF checkout would report permanent false drift.
+docs/public-surface.json text eol=lf
 
 # Force .mjs files to LF on checkout (Windows / CRLF defense).
 # scripts/postinstall.mjs starts with a shebang (#!) which vitest's vite-node
