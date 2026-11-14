@@ -8,13 +8,14 @@
  *   - appendArtifacts merges correctly (store integration)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { artifactsFromOutcomes, createOutcomeSessionEndHook } from './session-end-hook.js';
 import { readRecord, writeRecord, appendArtifacts, upsertVotes } from './store.js';
 import type { VerifiedOutcome } from './schema.js';
+import * as sessionOutcomes from './session-outcomes.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,6 +81,19 @@ describe('createOutcomeSessionEndHook', () => {
       parentSessionId: 'root-1',
     });
     expect(result).toEqual({});
+  });
+
+  it('bypasses the shared outcomes memo on reset but uses it on close', () => {
+    const outcomes = vi.spyOn(sessionOutcomes, 'getSessionOutcomes').mockResolvedValue(null);
+    try {
+      const hook = createOutcomeSessionEndHook();
+      hook({ event: 'SessionEnd', sessionId: 'root-reset', reason: 'reset' });
+      expect(outcomes).toHaveBeenLastCalledWith('root-reset', {}, { memoize: false });
+      hook({ event: 'SessionEnd', sessionId: 'root-reset', reason: 'close' });
+      expect(outcomes).toHaveBeenLastCalledWith('root-reset', {}, { memoize: true });
+    } finally {
+      outcomes.mockRestore();
+    }
   });
 
   it('returns {} synchronously for a root session (fire-and-forget)', () => {

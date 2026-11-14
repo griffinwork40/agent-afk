@@ -127,13 +127,17 @@ function bounded(sessionId: string, ctx: SessionOutcomesContext, timeoutMs: numb
 /**
  * Memoized OutcomesV1 for a root session. Resolves to null on any failure;
  * never rejects. `ctx.cwd` is the fallback when the session-meta sidecar
- * carries no cwd.
+ * carries no cwd. Set `opts.memoize: false` for non-terminal lifecycle reads
+ * (reset) so they cannot seed or consume the terminal consumers' memo.
  */
 export function getSessionOutcomes(
   sessionId: string,
   ctx: SessionOutcomesContext = {},
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; memoize?: boolean } = {},
 ): Promise<OutcomesV1 | null> {
+  // Reset has only one consumer and the session id survives into the next cycle.
+  // Its computation must neither read nor populate the close-time memo.
+  if (opts.memoize === false) return bounded(sessionId, ctx, opts.timeoutMs ?? TOTAL_TIMEOUT_MS);
   let entry = cache.get(sessionId);
   if (!entry) {
     const timer = setTimeout(() => cache.delete(sessionId), CACHE_TTL_MS);

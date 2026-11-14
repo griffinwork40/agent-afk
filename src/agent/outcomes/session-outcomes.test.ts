@@ -82,6 +82,23 @@ describe('getSessionOutcomes', () => {
     expect(getSessionOutcomes(sessionId)).not.toBe(a);
   });
 
+  it('does not reuse a reset-time computation at close before the TTL expires', async () => {
+    const sessionId = await startSession();
+    const resetPromise = getSessionOutcomes(sessionId, {}, { memoize: false });
+    const resetOutcomes = await resetPromise;
+    expect(resetOutcomes).not.toBeNull();
+    const sha = commit('feat: after reset');
+
+    // No clock advance: close must be fresh even within the cache TTL.
+    const closePromise = getSessionOutcomes(sessionId);
+    expect(closePromise).not.toBe(resetPromise);
+    const closeOutcomes = await closePromise;
+    expect(closeOutcomes).not.toBe(resetOutcomes);
+    expect(closeOutcomes!.commits.map((c) => c.sha)).toContain(sha);
+    expect(resetOutcomes!.commits.map((c) => c.sha)).not.toContain(sha);
+    expect(getSessionOutcomes(sessionId)).toBe(closePromise);
+  });
+
   it('merges PRs from effect-ledger rows for this sessionId only', async () => {
     const sessionId = await startSession();
     const row = (sid: string, url: string) => ({
