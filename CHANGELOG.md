@@ -13,12 +13,27 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 ## [Unreleased]
 
 ### Added
-- models: set a fallback model with `afk config set models.fallback <model>`. When the primary hits a usage limit, runs out of credit, or is rejected before producing any output, the session continues on the fallback instead of pausing or failing, and shows one notice line at the switch. Covers interactive sessions, one-shot `afk chat` (notice on stderr; `--format json` adds `servedModel` and `modelFallback`), and daemon and scheduled runs (noted in the log, on the run record, and in the task notification). Telegram, web and ACP sessions are not covered yet
-- receipt: top-level `credentialSource`, and the session credential source is now provider-aware (a non-Anthropic model never records an Anthropic tier); new ids `openai:*`, `xai:*`, `anthropic:config`; a base URL override records `local` only for a clearly self-hosted host (loopback, RFC1918, link-local, 100.64/10, fc00::/7, a single-label name, `.local`/`.lan`/`.internal`/`.home.arpa`/`.ts.net`), `custom-endpoint` for any other non-official host (billing unknown), and the provider's official API host resolves normally; the fork path never reads the credential store (#4882)
-- receipt: `subagents.byModel[*].credentialSources` (sorted, unique), from the new `credentialSource` on `subagent_lifecycle` `started` and on `subagent_model_fallback` metadata (#4882)
+- models: set a fallback model with `afk config set models.fallback <model>`. When the primary hits a usage limit, runs out of credit, or is rejected before producing any output, the session continues on the fallback instead of pausing or failing, and shows one notice line at the switch. Covers interactive sessions, one-shot `afk chat` (notice on stderr; `--format json` adds `servedModel` and `modelFallback`), and daemon and scheduled runs (noted in the log, on the run record, and in the task notification). Telegram, web and ACP sessions are not covered yet (#4892) (b663d8344)
+- receipt: top-level `credentialSource`, and the session credential source is now provider-aware (a non-Anthropic model never records an Anthropic tier); new ids `openai:*`, `xai:*`, `anthropic:config`; a base URL override records `local` only for a clearly self-hosted host (loopback, RFC1918, link-local, 100.64/10, fc00::/7, a single-label name, `.local`/`.lan`/`.internal`/`.home.arpa`/`.ts.net`), `custom-endpoint` for any other non-official host (billing unknown), and the provider's official API host resolves normally; the fork path never reads the credential store (#4882) (#4895) (035232859)
+- receipt: `subagents.byModel[*].credentialSources` (sorted, unique), from the new `credentialSource` on `subagent_lifecycle` `started` and on `subagent_model_fallback` metadata (#4882) (#4895) (035232859)
+- tools: lead `model_complete` with challenging a conclusion, and route prompt-sized second opinions to it (#4863) (869a059ee)
 
 ### Fixed
-- router: a session keeps its id when the provider is rebuilt on another model; switching to a different provider with `/model` used to change the id and leave the message journal under the old one
+- router: a session keeps its id when the provider is rebuilt on another model; switching to a different provider with `/model` used to change the id and leave the message journal under the old one (#4892) (b663d8344)
+- tui: flush scrollback commits as one synchronized write, so a block commit no longer flickers through half-drawn states (#4843) (2ae48b86a)
+- correct multi-cycle REPL cost/turn split and closure attribution (#4898) (c63413eeb)
+- compact: keep surrogate pairs whole at excerpt and cap cuts, and size the summarizer input budget from the connection that sends the summary (#4865) (02d2dfd55)
+- images: enforce the 8000px image limit on every request (#4881) (12ea1dc7b)
+- keep the witness trace open across /clear (#4890) (29e8e03bb)
+- accept empty --format=, split valued options, --ancestry-path, log -S (#4889) (cb8c56074)
+- rerun grep once with \| rewritten to | when first search finds nothing (#4888) (c26263e8d)
+- accept file_path alias and reject unknown keys in grep handler (#4886) (f948edc49)
+- actionable errors and descriptions for five tool audit items (#4885) (3f4b516b6)
+- trim duplicated ask_question answerability block, send_telegram routing prose; add list_schedules filter (#4887) (4e0f5c64d)
+- ci: add explicit permissions: contents: read to docs-lighthouse workflow (#4846) (ca9e9e2fb)
+
+### Changed
+- whatif: document --aa, --force, --no-baseline-sample and pin cost formulas (#4869) (508383bf3)
 
 ## [5.354.0] - 2026-11-13
 
