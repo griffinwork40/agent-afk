@@ -65,8 +65,11 @@ describe('shared dispatch model preparation (#4042)', () => {
     const parent = prepareDispatchModel({ modelIntent: { defaultModel: 'opus' }, credentialPolicy, resolveApiKeyForModel });
     expect(parent).toMatchObject({ model: 'opus', source: 'parent' });
     expect(defaultTierModelFallback(parent, 'haiku')).toBeUndefined();
-    const floor = prepareDispatchModel({ modelIntent: {}, credentialPolicy, resolveApiKeyForModel });
-    expect(floor).toMatchObject({ model: 'sonnet', source: 'floor' });
+    // The floor ('sonnet') is still reachable when defaultSubagentModel is the
+    // only tier and it matches the hardcoded floor. Passing a fully-empty
+    // modelIntent is now a runtime error (see assertion in prepareDispatchModel).
+    const floor = prepareDispatchModel({ modelIntent: { defaultSubagentModel: 'sonnet' }, credentialPolicy, resolveApiKeyForModel });
+    expect(floor).toMatchObject({ model: 'sonnet', source: 'default' });
   });
 
   it.each(policies)('%s refreshes each invocation, falling back only to an Anthropic-shaped parent', (credentialPolicy) => {
@@ -76,6 +79,28 @@ describe('shared dispatch model preparation (#4042)', () => {
     expect(prepareDispatchModel(input).apiKey).toBe('fresh-two');
     expect(prepareDispatchModel(input).apiKey).toBe('sk-ant-parent');
     expect(prepareDispatchModel({ ...input, parentApiKey: 'sk-proj-foreign' }).apiKey).toBeUndefined();
+  });
+
+  it('throws when modelIntent is fully empty (finding #1, issue #4563)', () => {
+    expect(() =>
+      prepareDispatchModel({ modelIntent: {}, credentialPolicy: 'skip-openai-resolution' }),
+    ).toThrow('prepareDispatchModel: modelIntent has no resolvable tier');
+  });
+
+  it('resolve-then-omit-openai discards the resolved key for an OpenAI model even when parentApiKey is set', () => {
+    // Regression guard for finding #3 (issue #4563): the resolver IS invoked
+    // (intentional — see 'resolve-then-omit-openai' comment in dispatch-preparation.ts)
+    // but apiKey must be undefined regardless of parentApiKey.
+    const resolver = vi.fn(() => 'fresh-openai-key');
+    const result = prepareDispatchModel({
+      modelIntent: { callSiteModel: 'gpt-4o' },
+      credentialPolicy: 'resolve-then-omit-openai',
+      resolveApiKeyForModel: resolver,
+      parentApiKey: 'sk-ant-parent',
+    });
+    expect(result.apiKey).toBeUndefined();
+    expect(result.isOpenAI).toBe(true);
+    expect(resolver).toHaveBeenCalledExactlyOnceWith('gpt-4o');
   });
 
   it('uses the live default resolver when none is injected, except for compose OpenAI nodes', () => {
@@ -134,11 +159,13 @@ describe('shared dispatch model preparation (#4042)', () => {
     const resolver = () => 'fresh';
     const agent = agentArgs(undefined, resolver);
     const compose = composeArgs(undefined, resolver);
-    // The agent default is required in production; absence here exercises its
-    // historical floor vs. compose's optional parent safety net.
+    // The agent default is required in production. Nulling it with no other tier
+    // now throws (finding #1, issue #4563) — the historical silent sonnet floor
+    // is no longer reachable through prepareDispatchModel.
     agent.defaultSubagentModel = undefined as unknown as typeof agent.defaultSubagentModel;
     compose.ctx.defaultSubagentModel = undefined as unknown as typeof compose.ctx.defaultSubagentModel;
-    expect(buildChildConfigWithoutNesting(agent).childConfig.model).toBe('sonnet');
+    expect(() => buildChildConfigWithoutNesting(agent)).toThrow('prepareDispatchModel: modelIntent has no resolvable tier');
+    // compose path: defaultModel is wired so it falls back to parent model, not floor.
     expect((await composeNode(compose)).model).toBe('opus');
     agent.namedAgent = { name: 'inherited', source: 'user', definition: { description: 'test', prompt: 'worker', model: 'inherit' } };
     expect(buildChildConfigWithoutNesting(agent)).toMatchObject({ childConfig: { model: 'opus' }, childModelSource: 'namedAgent' });

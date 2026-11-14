@@ -40,7 +40,6 @@ remain deferred to Stages 4 and 5.
 | /goal | portable | TEXT | S0 + UX | goal chip in session header |
 | /name | portable | DONE | S1 | canonical rename updates sidebar and session title |
 | /fork | portable | DONE | S4 | creates new owned session + navigate control; dashboard selects the fork |
-| /changelog | portable | TEXT | S0 | text |
 | /bgsub, /bgsub:status, /bgsub:join, /bgsub:cancel | portable | TEXT | S0 + UX | jobs view (cancel route deferred) |
 | /tasks | partial | TEXT | S0 (list) → UX | subagent tree already in transcript; list as text |
 | /tasks:view | tty-only | TEXT | UX | open subagent card in the transcript spine |

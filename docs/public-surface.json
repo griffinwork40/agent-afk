@@ -4288,6 +4288,11 @@
     },
     {
       "kind": "slash",
+      "name": "/bgsub:list",
+      "source": "src/cli/slash/commands/bgsub.ts"
+    },
+    {
+      "kind": "slash",
       "name": "/bgsub:status",
       "source": "src/cli/slash/commands/bgsub.ts"
     },
@@ -4300,11 +4305,6 @@
       "kind": "slash",
       "name": "/bug",
       "source": "src/cli/slash/commands/bug.ts"
-    },
-    {
-      "kind": "slash",
-      "name": "/changelog",
-      "source": "src/cli/slash/commands/changelog.ts"
     },
     {
       "kind": "slash",

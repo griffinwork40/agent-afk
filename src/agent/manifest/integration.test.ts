@@ -115,6 +115,7 @@ function makeExecutor(): SubagentExecutor {
     subagentManager: mockManager as any,
     parentSession: mockParentSession as any,
     defaultConfig: { apiKey: 'test-key', systemPrompt: 'system' },
+    defaultSubagentModel: 'claude-sonnet-4-5',
     depth: 0,
   };
   return new SubagentExecutor(ctx);

@@ -30,8 +30,8 @@ import { compactUsageEntries } from '../usage/usage-formatter.js';
 import {
   aggregateSubagentOutcomes,
   buildSubagentOutcomeSummary,
-  type SubagentOutcomeSummaryEntry,
 } from '../../insights/aggregators/subagent-outcomes.js';
+import type { SubagentOutcomeSummaryEntry } from './types.js';
 import { debugLog } from '../../utils/debug.js';
 
 // ---------------------------------------------------------------------------

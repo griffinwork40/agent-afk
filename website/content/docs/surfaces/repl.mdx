@@ -99,7 +99,7 @@ For large captured bash output, press **Ctrl+G** to open the scrollable viewer. 
 2. If no subagent is promotable, detach registered in-flight bash or compose calls so they can finish without holding up the immediate tool await.
 3. If nothing is eligible, do nothing.
 
-This does not detach the whole conversation turn. Detached tool results arrive later as session input. Background subagents can be inspected with `/bgsub`, `/bgsub:status`, `/bgsub:join <id>`, and `/bgsub:cancel <id>`. These jobs belong to the session, they are not persistent services. See [Background processes](/guides/background-processes) and [Subagents](/guides/subagents).
+This does not detach the whole conversation turn. Detached tool results arrive later as session input. Background subagents can be listed with `/bgsub` (or its alias `/bgsub:list`) and inspected with `/bgsub:status`, `/bgsub:join <id>`, and `/bgsub:cancel <id>`. These jobs belong to the session, they are not persistent services. See [Background processes](/guides/background-processes) and [Subagents](/guides/subagents).
 
 ### Run your own shell command
 
@@ -257,7 +257,7 @@ Other slash-command highlights, grouped by task:
 | Control access | `/allow-dir`, `/afk`, Shift+Tab. |
 | Discover extensions | `/skills`, `/agents`, `/reload-plugins`. |
 | Start guided work | `/get-started`, `/mint`, `/diagnose`, `/service-setup`, `/telegram-setup`. |
-| Project maintenance | `/init`, `/changelog`. |
+| Project maintenance | `/init`. |
 | Terminal convenience | `/clear`, `/keys`, `/font-size`. |
 
 `/goal` stores a project-scoped objective across sessions; changes are saved immediately but enter the model's standing context at the next session start. `/todo` manages this session's durable checklist. `/spine` manages the git-tracked `SPINE.md` architecture manifest, including its invariants and rejected patterns. See [Goal tracking](/guides/goal-tracking), [State store](/guides/state-store), and [Spine](/guides/spine).

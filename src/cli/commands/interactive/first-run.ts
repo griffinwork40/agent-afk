@@ -82,6 +82,7 @@ export function printFirstRunBanner(opts: FirstRunBannerOpts): boolean {
     `  ${palette.bold('Welcome to AFK!')} Here are two good starting points:`,
     `  ${palette.info('/skills')} ${palette.dim('— browse 50+ amplifier skills (try /skills <query> to search by intent)')}`,
     `  ${palette.info('/help')}   ${palette.dim('— interactive command reference and tips')}`,
+    `  ${palette.info('/keys')}   ${palette.dim('— keyboard shortcuts reference')}`,
     '',
   ].join('\n'));
 

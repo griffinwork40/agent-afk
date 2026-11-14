@@ -49,6 +49,7 @@ describe('depth-2 agent fork message journal', () => {
       subagentManager: { forkSubagent: vi.fn().mockResolvedValue(handle), teardownAll: vi.fn() } as never,
       parentSession: { sessionId: 'root-sess', getInputStreamRef: vi.fn(), abortSignal: new AbortController().signal, messageJournal: root },
       defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+      defaultSubagentModel: 'claude-sonnet-4-5',
       childProviderFactory: vi.fn().mockImplementation(({ childExecutor }: { childExecutor: SubagentExecutor }) => {
         childCtx = (childExecutor as unknown as { ctx: SubagentExecutorContext }).ctx;
         return { name: 'p', query: vi.fn() };

@@ -26,5 +26,4 @@ export type {
   OutcomeWeekCounts,
 } from './types.js';
 export type { PreexistingDefectAggregates } from './aggregators/preexisting-defects.js';
-export type { DefectCluster } from '../agent/preexisting-ledger/reader.js';
 export type { GuardrailFalsePositiveAggregates } from './aggregators/guardrail-false-positives.js';

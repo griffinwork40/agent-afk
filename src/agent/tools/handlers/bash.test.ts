@@ -923,23 +923,30 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
       // leave `sleep 9999` running as an orphan.
       //
       // Command breakdown:
-      //   sleep 9999 &   — start a long-running grandchild in the background
-      //   echo $!        — print its PID to stdout so the test can capture it
-      //   wait           — keep the shell alive (so it can be killed by the handler)
+      //   sleep 9999 &              — start a long-running grandchild in the background
+      //   echo GRANDCHILD_PID=$!    — print its PID with a marker so the test can capture it
+      //   wait                      — keep the shell alive (so it can be killed by the handler)
       const result = await createBashHandler('default')(
-        { command: 'sleep 9999 & echo $!; wait', timeout_ms: 300 },
+        { command: 'sleep 9999 & echo GRANDCHILD_PID=$!; wait', timeout_ms: 300 },
         new AbortController().signal,
       );
 
       // The handler must have timed out (isError) and the stdout must contain
-      // at least one numeric PID printed by `echo $!`.
+      // the grandchild PID printed by `echo GRANDCHILD_PID=$!`.
       expect(result.isError).toBe(true);
       expect(result.content).toContain('timed out');
 
-      // Extract the first decimal integer from output — that is the grandchild PID.
-      const pidMatch = (result.content as string).match(/\d+/);
+      // Extract the grandchild PID via its marker. The content opens with the
+      // headline `Command timed out after 300ms`, so a bare /\d+/ captured the
+      // timeout value (300) instead of the PID: the probe below then checked
+      // PID 300, never the grandchild. That made the test vacuous (it passed
+      // even with a broken group kill) and flaky (it failed whenever PID 300
+      // belonged to a live process the test user may signal — observed on
+      // macos-latest, run 43282873760, where kill -0 300 succeeded for the
+      // whole 2 s poll).
+      const pidMatch = (result.content as string).match(/GRANDCHILD_PID=(\d+)/);
       expect(pidMatch).not.toBeNull();
-      const grandchildPid = pidMatch![0];
+      const grandchildPid = pidMatch![1]!;
 
       // Poll until the grandchild is gone, up to 2 s.
       //

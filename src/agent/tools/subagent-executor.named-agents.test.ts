@@ -140,6 +140,7 @@ describe('SubagentExecutor named-agent dispatch', () => {
         abortSignal: new AbortController().signal,
       } as never,
       defaultConfig: { apiKey: 'k', systemPrompt: 'BASE PROMPT' },
+      defaultSubagentModel: 'claude-sonnet-4-5',
       depth: 0,
       childProviderFactory: childProviderFactory as never,
       agentRegistry: makeRegistry([RESEARCH, GIT, INHERIT_AGENT, PINNED_AGENT]),

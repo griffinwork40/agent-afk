@@ -79,8 +79,8 @@ pnpm exec tsx --eval "import('./src/changelog.ts').then(m=>{const c=m.parseCommi
 ```
 
 Write those entries under `## [Unreleased]` with `edit_file`. Keep the
-trailing `(hash)` on each bullet, because `/changelog` and
-`scripts/generate-changelog.mjs` dedup on it. Light edits for readability are
+trailing `(hash)` on each bullet, because `scripts/generate-changelog.mjs`
+dedups on it. Light edits for readability are
 fine. Do not invent entries that no commit supports. Do **not** run
 `scripts/generate-changelog.mjs`: it also stamps the version heading, which
 collides with the stamp `release.mjs` writes.

@@ -337,6 +337,14 @@ export interface TerminalCompositorOptions {
    */
   onOpenEditor?: () => void;
   /**
+   * Ctrl+X D handler — cycle the body-line cap for future diff output through
+   * compact → expanded → full → compact; existing scrollback is unchanged.
+   * Wired at REPL-arm time by `surface-setup.ts`; absent without a tool lane.
+   * The handler owns state mutation and the selected-state notice; dispatch fires it.
+   * Only fired in idle mode (gated in input-dispatch).
+   */
+  onCycleDiffCap?: () => void;
+  /**
    * Ctrl+G handler — open the in-TUI bash output viewer on the most recent
    * capture file. Wired at REPL-arm time by `surface-setup.ts`; absent on
    * surfaces that don't have a ToolLane (daemon, Telegram, non-TTY).

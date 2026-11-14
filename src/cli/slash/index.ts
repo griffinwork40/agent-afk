@@ -16,7 +16,6 @@ import { goalCmd } from './commands/goal.js';
 import { nameCmd } from './commands/name.js';
 import { resumeCmd } from './commands/resume.js';
 import { forkCmd } from './commands/fork.js';
-import { changelogCmd } from './commands/changelog.js';
 import { bgsubCommands } from './commands/bgsub.js';
 import { tasksCommands } from './commands/tasks.js';
 import { shCmd } from './commands/sh.js';
@@ -68,7 +67,6 @@ export function registerAll(): void {
   register(nameCmd);
   register(resumeCmd);
   register(forkCmd);
-  register(changelogCmd);
   for (const cmd of bgsubCommands) register(cmd);
   for (const cmd of tasksCommands) register(cmd);
   register(shCmd);

@@ -263,7 +263,7 @@ With containment on (`default`), a file tool (read/write/edit/list/glob/grep) ta
 
 ## Changelog
 
-Recent releases at [`CHANGELOG.md`](CHANGELOG.md), also viewable in-REPL via `/changelog`.
+Recent releases at [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Follow Along
 

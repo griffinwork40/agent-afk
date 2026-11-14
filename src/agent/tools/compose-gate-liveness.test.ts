@@ -174,6 +174,7 @@ function makeContext(overrides?: Partial<ComposeExecutorContext>): ComposeExecut
       abortSignal: new AbortController().signal,
     },
     apiKey: 'test-key',
+    defaultSubagentModel: 'claude-sonnet-4-5',
     systemPrompt: 'You are a helpful assistant.',
     ...overrides,
   };

@@ -9,8 +9,8 @@
  * Usage: node scripts/generate-changelog.mjs <version>
  *   e.g. node scripts/generate-changelog.mjs 1.3.0
  *
- * Reuses the same parsing/formatting logic as the /changelog slash command
- * via src/changelog.ts (built to dist/changelog.js).
+ * Reuses the parsing/formatting logic from src/changelog.ts (built to
+ * dist/changelog.js).
  *
  * WARNING: The import path "dist/changelog.js" mirrors tsconfig.json `outDir`.
  * No package.json `exports` map enforces this contract — if `outDir` ever
@@ -46,8 +46,7 @@ if (commits.length === 0) {
 console.log(`${commits.length} commits since last tag`);
 
 // CI passes includeHash: true so updateAndStampChangelog can dedup on
-// repeated workflow runs. The /changelog slash command omits this flag
-// to preserve plain `- <subject>` bullets in human-facing changelogs.
+// repeated workflow runs. Omit this flag for plain `- <subject>` bullets.
 const formatted = formatEntries(commits, { includeHash: true });
 console.log('Generated entries:\n' + formatted);
 

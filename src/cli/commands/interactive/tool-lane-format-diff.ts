@@ -1,5 +1,6 @@
 import { env } from '../../../config/env.js';
 import type { DiffPayload, DiffLine } from '../../../utils/diff.js';
+import { currentDiffCap } from './tool-lane-diff-cap.js';
 import { palette } from '../../palette.js';
 import { stripAnsi, displayWidth } from '../../display.js';
 import { previewDiff } from '../../render/preview-diff.js';
@@ -28,32 +29,6 @@ export const MAX_OVERLAY_DIFF_LINES = 8;
  * accountability during a large refactor).
  */
 export const FLUSH_DIFF_LINES_DEFAULT = 30;
-
-/**
- * Resolve the flush-mode body-line cap from the environment.
- *
- * Reads `AFK_DIFF_LINES` at call time so tests and one-off invocations
- * can override without a config reload. Invalid values (non-numeric,
- * negative, decimal, trailing garbage) fail open to {@link
- * FLUSH_DIFF_LINES_DEFAULT}.
- *
- * Returns `0` only when the user explicitly set `AFK_DIFF_LINES=0`,
- * which the caller interprets as "no cap."
- *
- * The regex (`/^\d+$/`) is intentionally stricter than `parseInt`:
- * `parseInt('1.5xyz', 10)` silently returns `1`, which would let a typo
- * collapse the diff to a single line without warning. Whole non-negative
- * integers only — anything else is rejected.
- */
-function diffFlushMaxLines(): number {
-  const raw = env.AFK_DIFF_LINES;
-  if (raw === undefined) return FLUSH_DIFF_LINES_DEFAULT;
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) return FLUSH_DIFF_LINES_DEFAULT;
-  const n = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(n)) return FLUSH_DIFF_LINES_DEFAULT;
-  return n;
-}
 
 /**
  * Opt-out switch for the inline diff render. Reads `AFK_SHOW_DIFFS` at
@@ -159,10 +134,11 @@ const _diffBlockCache = new WeakMap<DiffPayload, Map<string, string[]>>();
  *
  * - `overlay` mode caps body lines at {@link MAX_OVERLAY_DIFF_LINES}
  *   and appends a `… +N more` footer when truncated.
- * - `flush` mode caps body lines at the value of `AFK_DIFF_LINES` (default
- *   {@link FLUSH_DIFF_LINES_DEFAULT}). When truncated, the footer names
- *   the env var to set to expand the diff — discoverability without docs.
- *   Set `AFK_DIFF_LINES=0` to disable the flush cap entirely.
+ * - `flush` mode uses {@link currentDiffCap}: compact reads `AFK_DIFF_LINES`
+ *   (default {@link FLUSH_DIFF_LINES_DEFAULT}), expanded uses 50, full is uncapped.
+ *   Ctrl+X D cycles this setting for future diff output; committed scrollback
+ *   is unchanged. The truncation footer names `AFK_DIFF_LINES=0` to disable
+ *   the compact cap for future output.
  *
  * Hunk headers (`@@ -X,Y +A,B @@`) do NOT count against either cap —
  * they're structural markers, and counting them would let a diff with
@@ -192,9 +168,9 @@ export function formatDiffBlock(
   if (diff.hunks.length === 0) return [];
 
   // Resolve the body-line cap. Overlay is a fixed module constant; flush
-  // reads AFK_DIFF_LINES each call so tests and ad-hoc overrides work
-  // without a config reload. `cap === 0` means "uncapped" (flush only).
-  const cap = mode === 'overlay' ? MAX_OVERLAY_DIFF_LINES : diffFlushMaxLines();
+  // reads the selected state (and AFK_DIFF_LINES in compact mode) each call.
+  // `cap === 0` means "uncapped" (flush only).
+  const cap = mode === 'overlay' ? MAX_OVERLAY_DIFF_LINES : currentDiffCap();
 
   // Memo key must include the cap value — same payload + same mode +
   // same indent + different cap = different rendered output.
