@@ -286,6 +286,44 @@ describe('generateReceipt — missing/partial metadata', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #4896 multi-cycle REPL trace (two root cycles, no subagents)
+// ---------------------------------------------------------------------------
+
+function rootCycle(cost: number, turns: number): TraceEvent {
+  const s = seq++;
+  return {
+    ts: TS(s + 1), seq: s, kind: 'closure',
+    payload: { reason: 'model_end_turn', finalTurnCount: turns, finalCostUsd: cost, finalTokens: {} },
+  };
+}
+
+function sealedCycle(cost: number, turns: number): TraceEvent {
+  const s = seq++;
+  return {
+    ts: TS(s + 1), seq: s, kind: 'session_sealed',
+    payload: { status: 'succeeded', finalCostUsd: cost, finalTurnCount: turns, closedAt: TS(s + 1) },
+  };
+}
+
+describe('generateReceipt: multi-cycle REPL trace (#4896)', () => {
+  it('issue example: finalCostUsd and turnCount cover both root cycles', () => {
+    const r = generateReceipt([rootCycle(1.0, 4), rootCycle(0.25, 1), sealedCycle(0.25, 1)], META);
+    expect(r.cost.finalCostUsd).toBeCloseTo(1.25);
+    expect(r.cost.turnCount).toBe(5);
+    expect(r.cost.rootCostUsd).toBeCloseTo(1.25);
+    expect(r.cost.subagentCostUsd).toBe(0);
+    expect(r.cost.totalCostUsd).toBeCloseTo(1.25);
+  });
+
+  it('process-exit backstop seal: finalCostUsd and turnCount stay the raw seal values', () => {
+    const r = generateReceipt([sealed('failed', { incomplete: true })], META);
+    expect(r.cost.rootCostUsd).toBeUndefined();
+    expect(r.cost.finalCostUsd).toBe(0.1234);
+    expect(r.cost.turnCount).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Markdown rendering
 // ---------------------------------------------------------------------------
 

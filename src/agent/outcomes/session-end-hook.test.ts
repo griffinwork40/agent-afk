@@ -305,7 +305,7 @@ describe('closureFromTrace non-normal reasons map to unknown (finding #1)', () =
 });
 
 // ---------------------------------------------------------------------------
-// #4896 item 5 — closureFromTrace must return the LAST root closure reason
+// #4896 item 5: closureFromTrace must return the LAST root closure reason
 //
 // Before this fix the function returned on the first closure it found, which
 // on a multi-cycle REPL trace is cycle 1's reason, not the cycle that ended.
@@ -314,7 +314,7 @@ describe('closureFromTrace non-normal reasons map to unknown (finding #1)', () =
 describe('#4896 closureFromTrace returns last root closure reason', () => {
   it('multi-cycle trace: last root cycle model_end_turn is returned, not earlier iteration_cap', () => {
     // Cycle 1 ended with iteration_cap; cycle 2 ended cleanly (model_end_turn).
-    // The closure_reason stored should reflect cycle 2 — the cycle that ended.
+    // The closure_reason stored should reflect cycle 2, the cycle that ended.
     const traceDir = join(tmpDir, 'trace-multicycle-clean-last');
     mkdirSync(traceDir, { recursive: true });
     const tracePath = join(traceDir, 'trace.jsonl');

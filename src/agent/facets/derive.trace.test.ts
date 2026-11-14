@@ -259,10 +259,10 @@ describe('parseTraceSignals', () => {
 });
 
 // ---------------------------------------------------------------------------
-// #4896 item 6 — multi-cycle REPL: last root closure wins for traceClosureReason
+// #4896 item 6: on a multi-cycle REPL trace the last root closure wins for traceClosureReason
 //
 // Before this fix, the first downgrade-reason root closure set traceClosureReason
-// and it stuck — a clean last cycle could not clear it. The fix scans all root
+// and it stuck, so a clean last cycle could not clear it. The fix scans all root
 // closures and the final one's reason is used (last cycle wins).
 // ---------------------------------------------------------------------------
 
@@ -294,7 +294,7 @@ describe('#4896 multi-cycle REPL closure reason: last root cycle wins', () => {
     // Expected: traceClosureReason is undefined (last root cycle is clean).
     const content = [
       closureLineWithSubagent('model_end_turn'),          // root cycle 1
-      closureLineWithSubagent('budget_exceeded', 'child'), // child — ignored
+      closureLineWithSubagent('budget_exceeded', 'child'), // child closure, ignored
       closureLineWithSubagent('model_end_turn'),          // root cycle 2
     ].join('\n');
     const signals = parseTraceSignals(content);

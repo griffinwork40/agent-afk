@@ -150,12 +150,13 @@ function buildReceiptCost(
   closureTokens: RunReceipt['cost']['tokens'],
 ): RunReceipt['cost'] {
   const sc = acc.result();
-  // #4896: for a multi-cycle REPL trace the seal's finalCostUsd and
-  // finalTurnCount reflect only the last cycle. Use rootCostUsd (summed across
-  // all root cycles by the accumulator) and rootTurnCount when available.
-  const accRootTurns = acc.rootTurnCount > 0 ? acc.rootTurnCount : undefined;
+  // #4896: the seal's finalCostUsd and finalTurnCount cover the last REPL
+  // cycle only. Prefer the accumulator's root figures, which sum every root
+  // cycle. They are absent when the trace has no cost record (source none)
+  // and after a process-exit backstop seal; the raw seal and closure values
+  // cover those cases exactly as before.
   const finalCostUsd = sc.rootCostUsd ?? sealedCostUsd ?? closureCostUsd;
-  const turnCount = accRootTurns ?? sealedTurnCount ?? closureTurnCount;
+  const turnCount = sc.rootTurnCount ?? sealedTurnCount ?? closureTurnCount;
   return {
     ...(finalCostUsd !== undefined ? { finalCostUsd } : {}),
     ...(turnCount !== undefined ? { turnCount } : {}),

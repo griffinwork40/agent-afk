@@ -106,18 +106,18 @@ export interface RunReceipt {
      * equals `subagents.started`.
      *
      * Cost invariant: `sum(byModel[*].costUsd) <= cost.subagentCostUsd`.
-     * Equality holds on single-cycle traces. On multi-cycle REPL traces,
-     * earlier root cycles lack a `subagentId` on their closure and are
-     * attributed to `subagentCostUsd` by `SessionCostAccumulator`, so
-     * `subagentCostUsd` can exceed the `byModel` sum.
+     * `subagentCostUsd` can exceed the `byModel` sum on a pre-#3932 trace,
+     * where unstamped child closures cannot be told apart from root cycles
+     * and earlier root cycles land in `subagentCostUsd` (see `./cost.ts`).
      *
      * Absent when the session started no subagents.
      */
     byModel?: SubagentsByModel;
   };
   // Contract (#3879): `finalCostUsd` and `tokens` are ROOT-scoped and kept
-  // for back-compat: `finalCostUsd` is the seal's root cost (last lifecycle
-  // cycle) and `tokens` is the last closure's (normally the root's). Whole-
+  // for back-compat: `finalCostUsd` and `turnCount` are the root's figures
+  // over every REPL cycle (#4896, from `computeSessionCost`), and `tokens` is
+  // the last closure's (normally the root's). Whole-
   // session spend including every subagent is `totalCostUsd` / `totalTokens`,
   // computed by `computeSessionCost` in `./cost.ts`.
   cost: {

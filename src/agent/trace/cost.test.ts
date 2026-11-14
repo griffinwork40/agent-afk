@@ -21,7 +21,7 @@ function closure(cost: number, tokens: Record<string, number> = {}): TraceEvent 
   } as unknown as TraceEvent;
 }
 
-/** A root closure event (no subagentId) with configurable turn count — for multi-cycle tests (#4896). */
+/** A root closure event (no subagentId) with a configurable turn count, for multi-cycle tests (#4896). */
 function closureRoot(cost: number, turns: number, reason = 'model_end_turn'): TraceEvent {
   return {
     ts,
@@ -126,7 +126,8 @@ describe('computeSessionCost', () => {
   it('lost-root-closure: $2 failed-child closure + sealed(1) reports $3 not $2 (#3890 item 1)', () => {
     // closureSum=$2 (failed child only), sealRoot=$1, sealSubagent=$0
     // Math.max(2,1)=$2 is wrong; correct total is closureSum + sealRoot = $3
-    const r = computeSessionCost([closure(2), sealed(1)]);
+    // The started event is what a real pre-#3932 trace holds for that child.
+    const r = computeSessionCost([started('c', 'root'), closure(2), sealed(1)]);
     expect(r.totalCostUsd).toBe(3);
     expect(r.rootCostUsd).toBe(1);
     expect(r.subagentCostUsd).toBe(2);
@@ -160,8 +161,14 @@ describe('computeSessionCost', () => {
   });
 
   it('trace with no seal: root falls back to the last closure', () => {
-    const r = computeSessionCost([closure(2), closure(1)]);
+    // Pre-#3932 child closure (unstamped) beside the root's: split case 3.
+    const r = computeSessionCost([started('c', 'root'), closure(2), closure(1)]);
     expect(r).toMatchObject({ rootCostUsd: 1, subagentCostUsd: 2, totalCostUsd: 3, source: 'closures' });
+  });
+
+  it('trace with no seal and no subagent evidence: every closure is a root cycle (#4896)', () => {
+    const r = computeSessionCost([closure(2), closure(1)]);
+    expect(r).toMatchObject({ rootCostUsd: 3, subagentCostUsd: 0, totalCostUsd: 3, source: 'closures' });
   });
 
   it('seal without closures: falls back to seal root + seal subagent', () => {
@@ -171,10 +178,13 @@ describe('computeSessionCost', () => {
 
   it('multi-cycle REPL root: disjoint per-cycle closures are summed', () => {
     // `/clear` re-zeroes the root accumulator, so each cycle closes with its
-    // own spend and the seal covers only the last cycle.
+    // own spend and the seal covers only the last cycle. With no subagent in
+    // the trace both cycles are the root's (#4896; this test used to pin the
+    // last-cycle-only root figure).
     const r = computeSessionCost([closure(1.127), closure(0.812), sealed(0.812)]);
     expect(r.totalCostUsd).toBeCloseTo(1.939);
-    expect(r.rootCostUsd).toBe(0.812);
+    expect(r.rootCostUsd).toBeCloseTo(1.939);
+    expect(r.subagentCostUsd).toBe(0);
   });
 
   // --- #3932 acceptance criteria ---
@@ -211,57 +221,54 @@ describe('computeSessionCost', () => {
 });
 
 // ---------------------------------------------------------------------------
-// #4896 — multi-cycle REPL cost and turn-count attribution
+// #4896: multi-cycle REPL cost and turn-count attribution
 //
 // `/clear` emits a root closure per cycle; the seal carries only the last
-// cycle. When child closures carry subagentId (post-#3932 traces), root
-// closures are unambiguously identified and rootCostUsd should sum all cycles.
+// cycle. Unstamped closures are root cycles when some closure is stamped with
+// subagentId or when the trace shows no subagent activity at all; the split
+// contract in cost.ts states the rule.
 // ---------------------------------------------------------------------------
 
 describe('#4896 multi-cycle REPL root attribution', () => {
-  it('issue example: cycle1 $1.00/4t + cycle2 $0.25/1t, one child — rootCostUsd sums both cycles', () => {
-    // Worked example from the issue. A child closure (with subagentId) proves
-    // this is a post-#3932 trace, so root cycles are unambiguously identified.
-    // cycle 1: $1.00 over 4 turns; cycle 2: $0.25 over 1 turn.
-    // The seal carries only cycle 2 (finalCostUsd=$0.25, finalTurnCount=1).
+  /** The issue's worked example: two root cycles, no subagents, seal carries cycle 2 only. */
+  const issueExample = (): TraceEvent[] => [
+    closureRoot(1.0, 4), // root cycle 1, closed by /clear
+    closureRoot(0.25, 1), // root cycle 2, closed at exit
+    sealed(0.25), // seal: last cycle only (finalTurnCount 1)
+  ];
+
+  it('issue example: two root cycles and no subagents sum to root $1.25, subagent $0, 5 turns', () => {
+    const acc = new SessionCostAccumulator();
+    for (const ev of issueExample()) acc.add(ev);
+    const r = acc.result();
+    expect(r.rootCostUsd).toBeCloseTo(1.25);
+    expect(r.subagentCostUsd).toBe(0);
+    expect(r.totalCostUsd).toBeCloseTo(1.25);
+    expect(r.rootTurnCount).toBe(5);
+  });
+
+  it('two root cycles plus one stamped child closure: root sums both cycles, child stays subagent', () => {
+    // Post-#3932 trace: the child closure carries subagentId, so the two
+    // unstamped closures are unambiguously the root's.
     const events = [
-      closureChild(0.5, 'child-1'),   // child in cycle 1
-      closureRoot(1.0, 4),            // root cycle 1 closure
-      closureRoot(0.25, 1),           // root cycle 2 closure (last)
-      sealed(0.25),                   // seal: last cycle only
+      started('child-1', 'root'),
+      closureChild(0.5, 'child-1'),
+      closureRoot(1.0, 4),
+      closureRoot(0.25, 1),
+      sealed(0.25),
     ];
     const r = computeSessionCost(events);
-    // totalCostUsd = all closures: 0.5 + 1.0 + 0.25 = 1.75
     expect(r.totalCostUsd).toBeCloseTo(1.75);
-    // rootCostUsd sums both root cycles: 1.0 + 0.25 = 1.25
     expect(r.rootCostUsd).toBeCloseTo(1.25);
-    // subagentCostUsd = total - root: 1.75 - 1.25 = 0.50
     expect(r.subagentCostUsd).toBeCloseTo(0.5);
     expect(r.closureCount).toBe(3);
   });
 
-  it('multi-cycle with no subagents (hasChildClosure=false): falls back to sealRoot for cost, rootTurnCount sums turns', () => {
-    // Pre-#3932 compatibility path: no child closure has subagentId, so we
-    // cannot distinguish root cycles from children. rootCostUsd falls back to
-    // sealRoot (last cycle). rootTurnCount still accumulates across root-looking
-    // closures so the receipt can report a more accurate turn count.
-    const acc = new SessionCostAccumulator();
-    acc.add(closureRoot(1.0, 4));
-    acc.add(closureRoot(0.25, 1));
-    acc.add(sealed(0.25));
-    const r = acc.result();
-    expect(r.totalCostUsd).toBeCloseTo(1.25);
-    // rootCostUsd falls back to sealRoot — cannot distinguish without subagentId
-    expect(r.rootCostUsd).toBeCloseTo(0.25);
-    // rootTurnCount correctly sums across root cycles
-    expect(acc.rootTurnCount).toBe(5);
-  });
-
   it('multi-cycle with subagents: rootCostUsd does not include child cost', () => {
-    // Three root cycles ($0.30, $0.50, $0.20) and one child closure ($1.00).
-    // hasChildClosure=true so rootCycleSum is used.
+    // Three root cycles ($0.30, $0.50, $0.20) and one stamped child closure ($1.00).
     const events = [
       closureRoot(0.30, 2),
+      started('sub-a', 'root'),
       closureChild(1.00, 'sub-a'),
       closureRoot(0.50, 3),
       closureRoot(0.20, 1),
@@ -269,8 +276,38 @@ describe('#4896 multi-cycle REPL root attribution', () => {
     ];
     const r = computeSessionCost(events);
     expect(r.totalCostUsd).toBeCloseTo(2.00);
-    expect(r.rootCostUsd).toBeCloseTo(1.00);  // 0.30 + 0.50 + 0.20
+    expect(r.rootCostUsd).toBeCloseTo(1.00); // 0.30 + 0.50 + 0.20
     expect(r.subagentCostUsd).toBeCloseTo(1.00);
+  });
+
+  it('no subagent evidence and the last root closure lost: the seal is root spend too', () => {
+    // Cycle 1 closed ($1.00, 4 turns); cycle 2 crashed after the seal but
+    // before its closure. Every dollar in the trace is the root's.
+    const acc = new SessionCostAccumulator();
+    for (const ev of [closureRoot(1.0, 4), sealed(0.25)]) acc.add(ev);
+    const r = acc.result();
+    expect(r.totalCostUsd).toBeCloseTo(1.25);
+    expect(r.rootCostUsd).toBeCloseTo(1.25);
+    expect(r.subagentCostUsd).toBe(0);
+    expect(r.rootTurnCount).toBe(5);
+  });
+
+  it('pre-#3932 trace (subagent_lifecycle present, no closure stamped): root stays the seal figure', () => {
+    // Child closures written before #3932 lack subagentId, so unstamped
+    // closures cannot be told apart. Keep the seal's last-cycle root figures.
+    const acc = new SessionCostAccumulator();
+    for (const ev of [started('a', 'root'), closureRoot(2, 7), closureRoot(1, 3), sealed(1)]) acc.add(ev);
+    const r = acc.result();
+    expect(r.totalCostUsd).toBe(3);
+    expect(r.rootCostUsd).toBe(1);
+    expect(r.subagentCostUsd).toBe(2);
+    expect(r.rootTurnCount).toBe(1); // the seal's finalTurnCount
+  });
+
+  it('facet trace signals carry the issue example split', () => {
+    const signals = parseTraceSignals(toJsonl(issueExample()));
+    expect(signals.totalCostUsd).toBeCloseTo(1.25);
+    expect(signals.subagentCostUsd).toBe(0);
   });
 });
 

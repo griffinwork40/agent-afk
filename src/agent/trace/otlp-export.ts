@@ -145,8 +145,8 @@ export function traceToOtlp(
   let sessionStatus: SpanStatus = { code: 0 };
   let sealedSeen = false;
   let finalTokens: { input?: number; output?: number } | undefined;
-  // #4896: use the shared cost accumulator for root cost and turn count so
-  // multi-cycle REPL traces report the full session total, not just the last cycle.
+  // #4896: the shared cost accumulator sums every root REPL cycle; the seal
+  // carries the last cycle only.
   const costAcc = new SessionCostAccumulator();
 
   for (const ev of events) {
@@ -165,9 +165,14 @@ export function traceToOtlp(
   }
   void sealedSeen; // informational; status already captures the distinction
 
+  // Contract: the session span's `gen_ai.usage.cost_usd` is ROOT-only spend
+  // (every REPL cycle), not the session total. Each `agent.invoke` child span
+  // carries its own subagent's cost, so a sum over spans must not count child
+  // spend twice. Absent when the root's spend is unknown (no cost record, or a
+  // process-exit backstop seal).
   const costResult = costAcc.result();
-  const finalCost = costResult.totalCostUsd;
-  const finalTurns = costAcc.rootTurnCount > 0 ? costAcc.rootTurnCount : undefined;
+  const finalCost = costResult.rootCostUsd;
+  const finalTurns = costResult.rootTurnCount;
 
   // Root span attributes.
   const rootSpanId = seedSpanId(`session:${sessionId}`);

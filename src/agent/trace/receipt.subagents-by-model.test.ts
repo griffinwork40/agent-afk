@@ -17,7 +17,7 @@
  *   - regression: two terminal rows for one id — both counted (not last-write-wins)
  *   - regression: id collision across managers — started counted per event
  *   - `generateReceipt` test where the only started row has no model
- *   - multi-root-closure trace: byModel sum <= subagentCostUsd
+ *   - multi-root-closure trace: byModel sum equals subagentCostUsd (#4896)
  */
 
 import { describe, it, expect } from 'vitest';
@@ -466,11 +466,11 @@ describe('generateReceipt: subagents.byModel', () => {
     expect(sumStarted).toBe(r.subagents.started);
   });
 
-  it('multi-root-closure trace: byModel sum <= cost.subagentCostUsd', () => {
-    // Finding 3: on a multi-cycle REPL trace, earlier root cycles emit a
-    // closure with no subagentId. SessionCostAccumulator attributes them to
-    // subagentCostUsd (total - last root cost), so subagentCostUsd > byModel
-    // sum (which only counts closures that carry a subagentId).
+  it('multi-root-closure trace: byModel sum equals cost.subagentCostUsd (#4896)', () => {
+    // On a multi-cycle REPL trace each root cycle emits a closure with no
+    // subagentId. The child closure here is stamped, so SessionCostAccumulator
+    // counts both unstamped closures as root spend and subagentCostUsd is the
+    // child's cost alone. Before #4896 cycle 1 landed in subagentCostUsd.
     const events: TraceEvent[] = [
       // Cycle 1 root closure (no subagentId) — simulates a /clear cycle.
       {
@@ -497,11 +497,11 @@ describe('generateReceipt: subagents.byModel', () => {
     const sumCost = Object.values(byModel).reduce((n, b) => n + b.costUsd, 0);
     // byModel only sees the subagent closure (0.03).
     expect(sumCost).toBeCloseTo(0.03, 10);
-    // subagentCostUsd = total(0.10) - root(0.02) = 0.08 — includes cycle 1.
-    expect(r.cost.subagentCostUsd).toBeDefined();
-    expect(sumCost).toBeLessThanOrEqual(r.cost.subagentCostUsd!);
-    // The equality does NOT hold on this multi-cycle trace.
-    expect(sumCost).not.toBeCloseTo(r.cost.subagentCostUsd!, 10);
+    // root = cycle 1 (0.05) + cycle 2 (0.02); subagent = total(0.10) - root.
+    expect(r.cost.rootCostUsd).toBeCloseTo(0.07, 10);
+    expect(r.cost.subagentCostUsd).toBeCloseTo(0.03, 10);
+    expect(sumCost).toBeCloseTo(r.cost.subagentCostUsd!, 10);
+    expect(r.cost.turnCount).toBe(3);
   });
 });
 

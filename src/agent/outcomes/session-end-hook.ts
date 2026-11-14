@@ -67,7 +67,7 @@ function closureFromTrace(tracePath: string | undefined): ClosureInfo | null {
         const obj = JSON.parse(line) as Record<string, unknown>;
         if (obj['kind'] === 'closure') {
           const p = obj['payload'] as Record<string, unknown> | undefined;
-          // Skip child closures (subagentId present) — only root cycles matter.
+          // Skip child closures (subagentId present); only root cycles matter.
           if (p?.['subagentId'] != null) continue;
           const reason = p?.['reason'];
           // Invariant: only 'model_end_turn' should map to 'normal'.

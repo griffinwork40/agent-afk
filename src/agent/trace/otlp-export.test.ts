@@ -7,7 +7,7 @@
  *   - Subagent lifecycle events produce a child span attributed via subagentId.
  *   - Tool call attributed to a subagent becomes a grandchild of that subagent span.
  *   - Failed tool call sets span status ERROR.
- *   - session_sealed drives session root attributes (cost, turn count).
+ *   - Root cost and turns drive session root attributes (summed over REPL cycles, #4896).
  *   - Non-tool/subagent events attach as span events on the root.
  *   - Malformed count surfaces as afk.trace.malformed attribute.
  *   - Orphaned started event (no completed) does not crash.
@@ -193,6 +193,42 @@ describe('traceToOtlp', () => {
     expect(attr(root!, 'gen_ai.usage.cost_usd')).toBe(0.05);
     expect(attr(root!, 'afk.session.turn_count')).toBe('3');
     expect(root!.status.code).toBe(1); // succeeded → OK
+  });
+
+  it('multi-cycle REPL trace (#4896 issue example): session span sums both root cycles', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:00.000Z', seq: 0, kind: 'closure', payload: { reason: 'model_end_turn', finalTurnCount: 4, finalCostUsd: 1.0, finalTokens: {} } }),
+      ev({ ts: '2026-01-01T00:00:01.000Z', seq: 1, kind: 'closure', payload: { reason: 'model_end_turn', finalTurnCount: 1, finalCostUsd: 0.25, finalTokens: {} } }),
+      ev({ ts: '2026-01-01T00:00:02.000Z', seq: 2, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.25, finalTurnCount: 1, closedAt: '2026-01-01T00:00:02.000Z', subagentCount: 0 } }),
+    ];
+    const [root] = allSpans(traceToOtlp(events, { sessionId: SESSION_ID }));
+    expect(attr(root!, 'gen_ai.usage.cost_usd')).toBeCloseTo(1.25);
+    expect(attr(root!, 'afk.session.turn_count')).toBe('5');
+  });
+
+  it('session span cost is root-only so it does not double count a subagent span (#4896)', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'started', subagentId: 'sub1', parentId: 'root', model: 'm' } }),
+      ev({ ts: '2026-01-01T00:00:01.000Z', seq: 1, kind: 'closure', payload: { reason: 'model_end_turn', finalTurnCount: 2, finalCostUsd: 0.5, finalTokens: {}, subagentId: 'sub1' } }),
+      ev({ ts: '2026-01-01T00:00:02.000Z', seq: 2, kind: 'subagent_lifecycle', payload: { transition: 'succeeded', subagentId: 'sub1', durationMs: 1000, turnCount: 2, outputBytes: 10, totalCostUsd: 0.5 } }),
+      ev({ ts: '2026-01-01T00:00:03.000Z', seq: 3, kind: 'closure', payload: { reason: 'model_end_turn', finalTurnCount: 3, finalCostUsd: 1.0, finalTokens: {} } }),
+      ev({ ts: '2026-01-01T00:00:04.000Z', seq: 4, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 1.0, finalTurnCount: 3, closedAt: '2026-01-01T00:00:04.000Z', subagentCount: 1, subagentCostUsd: 0.5 } }),
+    ];
+    const spans = allSpans(traceToOtlp(events, { sessionId: SESSION_ID }));
+    const root = findSpan(spans, 'afk.session')!;
+    const sub = spans.find((s) => s.name.startsWith('agent.invoke'))!;
+    expect(attr(root, 'gen_ai.usage.cost_usd')).toBe(1.0);
+    expect(attr(sub, 'gen_ai.usage.cost_usd')).toBe(0.5);
+    expect(attr(root, 'afk.session.turn_count')).toBe('3');
+  });
+
+  it('process-exit backstop seal: session span omits cost and turns (root spend unknown)', () => {
+    const events: TraceEvent[] = [
+      ev({ ts: '2026-01-01T00:00:01.000Z', seq: 0, kind: 'session_sealed', payload: { status: 'failed', finalCostUsd: 0, finalTurnCount: 0, closedAt: '2026-01-01T00:00:01.000Z', incomplete: true } }),
+    ];
+    const [root] = allSpans(traceToOtlp(events, { sessionId: SESSION_ID }));
+    expect(attr(root!, 'gen_ai.usage.cost_usd')).toBeUndefined();
+    expect(attr(root!, 'afk.session.turn_count')).toBeUndefined();
   });
 
   it('failed session_sealed sets root span status ERROR', () => {
