@@ -31,6 +31,7 @@ import { createStreamingCap, SCAN_CAP_BYTES, scanCapKillNote } from './_streamin
 import { errorMessage } from '../../../utils/errors.js';
 import { awaitChildExit } from './_await-child-exit.js';
 import { debugLog } from '../../../utils/debug.js';
+import { hasUnescapedBackslashPipe, rewriteBackslashPipe, runPipeRetry } from './grep.pipe-retry.js';
 
 /** Optional overrides for {@link createGrepHandler}. */
 export interface GrepHandlerOptions {
@@ -294,8 +295,16 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
       if (scanKilled) return;
 
       if (code === 1) {
-        const message = `No matches found for '${pattern}' in ${path}`;
-        settle({ content: message });
+        if (hasUnescapedBackslashPipe(pattern)) {
+          // Pattern contains `\|` (literal pipe in ripgrep, not alternation).
+          // Re-run once with `\|` → `|`. Never retries more than once.
+          const retryArgs = buildRgArgs(rewriteBackslashPipe(pattern), path, include);
+          const spawnOpts = effectiveCwd !== undefined ? { cwd: effectiveCwd } : {};
+          runPipeRetry(pattern, rgPath, retryArgs, spawnOpts, path)
+            .then((result) => settle(result));
+          return;
+        }
+        settle({ content: `No matches found for '${pattern}' in ${path}` });
         return;
       }
 
