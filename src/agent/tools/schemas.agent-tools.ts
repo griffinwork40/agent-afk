@@ -47,7 +47,8 @@ export const agentTool: AnthropicToolDef = {
     'about in the same turn.\n\n' +
     'Do not use this tool for: trivial one-file edits, conversational answers, ' +
     'direct tool calls the user explicitly requested, or tasks where dispatch ' +
-    'overhead exceeds the work.\n\n' +
+    'overhead exceeds the work. For a second opinion on a conclusion whose evidence ' +
+    'already fits in one prompt, `model_complete` (when you have it) is cheaper than a fork.\n\n' +
     'For tasks with explicit dependencies between steps (A→B→C pipelines) or ' +
     'structured fan-out with automatic upstream-to-downstream data flow, prefer `compose`.',
   input_schema: {

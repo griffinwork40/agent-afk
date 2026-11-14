@@ -44,6 +44,7 @@ import { pushIfConfigured } from './push.js';
 import { formatDuration } from '../cli/format-utils.js';
 import { routeKey } from './route.js';
 import { registerBgInjectionSource, unregisterBgInjectionSource } from './bg-injection.js';
+import { palette } from '../cli/palette.js';
 
 /** Maximum number of pending injections kept; oldest dropped (matches REPL). */
 const MAX_PENDING = 25;
@@ -124,7 +125,7 @@ export class TelegramBgResultNotifier {
         target: this.chatId,
         ...(this.threadId !== undefined ? { messageThreadId: this.threadId } : {}),
       }).catch((err: unknown) => {
-        console.error(`[bg-notifier] push failed for job ${job.jobId}:`, err);
+        console.error(palette.error(`[bg-notifier] push failed for job ${job.jobId}: ${err instanceof Error ? err.message : String(err)}`));
       });
     });
 

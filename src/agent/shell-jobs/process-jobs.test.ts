@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { ProcessJobCapError, ProcessJobRegistry, isProcessJobId } from './process-jobs.js';
 import { enforceSessionQuota, sweepProcessJobDirs } from './process-jobs.sweep.js';
 import { ProcessLogSink } from './process-log-sink.js';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 
 // Real processes: these tests exercise process groups, signals and pipes.
 // POSIX-shaped commands run under the resolved shell (Git Bash on Windows).
@@ -35,7 +36,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await reg.killAll();
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmSyncRetry(dir);
 });
 
 describe('ProcessJobRegistry', () => {
@@ -322,7 +323,7 @@ describe('sweepProcessJobDirs', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(root, { recursive: true, force: true });
+    rmSyncRetry(root);
   });
 
   it('removes stale session dirs and preserves the current session dir', () => {

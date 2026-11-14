@@ -63,9 +63,9 @@ export function printSummary(
 ): void {
   const line = '─'.repeat(45);
   console.log(palette.dim(line));
-  console.log(`farm:    ${taskName}`);
-  console.log(`slug:    ${taskSlug}`);
-  console.log('');
+  console.log(palette.info(`farm:    ${taskName}`));
+  console.log(palette.dim(`slug:    ${taskSlug}`));
+  console.log(''); // console-ok
 
   // Determine if any scoring data is present — drives ranked-order display.
   const anyScored = branchResults.some((r) => r.score != null);
@@ -85,14 +85,14 @@ export function printSummary(
       : palette.error(`[error: ${r.error}]`);
     const rank = anyScored ? palette.brand(`#${i + 1} `) : '';
     const scoreCol = anyScored ? `  ${formatScore(r.score)}` : '';
-    console.log(`${rank}branch-${r.index}  ${icon}  ${ref}   ${detail}${scoreCol}`);
+    console.log(`${rank}branch-${r.index}  ${icon}  ${ref}   ${detail}${scoreCol}`); // console-ok
     console.log(palette.dim(`        worktree: ${branch.path}`));
   }
 
   console.log(palette.dim(line));
   const succeeded = branchResults.filter((r) => r.ok).length;
   const total = branchResults.length;
-  console.log(`${succeeded}/${total} branches completed.`);
+  console.log(palette.info(`${succeeded}/${total} branches completed.`));
 
   // All-fail warning per Day 3 spec.
   const anyTestsPassed = branchResults.some(

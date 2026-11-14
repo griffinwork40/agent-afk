@@ -179,16 +179,15 @@ export type SessionPhaseName =
   // must treat its absence as "id unknown from trace alone" — the ledger
   // `traceLabel` bridge remains the fallback for those traces.
   | 'session_id_assigned'
-  // Many-image dimension guard fired at request-build time and replaced one or
-  // more image blocks with imageOmitted text blocks (issue #2348). Emitted when
-  // `enforceManyImageLimit` degrades at least one image in `openRound` (single
-  // event, no paired start). `metadata` carries `degradedCount` (number of
-  // blocks replaced), `threshold` (MANY_IMAGE_THRESHOLD = 20), and
-  // `maxDimension` (MAX_DIMENSION_MANY_IMAGES = 2000). PURE OBSERVABILITY: the
-  // degradation itself is already reflected in the mutated messages array; this
-  // event makes the repair visible in the trace so operators can diagnose
-  // sessions that hit the many-image ceiling without inspecting raw message
-  // payloads.
+  // Per-image pixel-ceiling guard fired at request-build time and replaced one
+  // or more image blocks with imageOmitted text blocks (issue #2348; always-on
+  // since the 8000px fix). Emitted once per round from `openRound` when at
+  // least one image was replaced (single event, no paired start). The name is
+  // historical: it also fires for the ≤20-image 8000px ceiling. `metadata`
+  // carries `degradedCount` (blocks replaced), `imageCount` (images in the
+  // request), `threshold` (MANY_IMAGE_THRESHOLD = 20), `maxDimension` (the
+  // ceiling that APPLIED: 8000 or 2000) and `manyImage` (true when >20). PURE
+  // OBSERVABILITY: the repair itself is in the mutated messages array.
   | 'many_image_degraded'
   // Mid-stream transport drop was accepted as a clean completion because a
   // terminal finish_reason had already arrived before the socket closed
@@ -324,6 +323,12 @@ export type SessionPhaseName =
   // `reason` (≤200 chars of the provider error). Only forks whose model came
   // from the default tier are eligible; explicit models fail loudly.
   | 'subagent_model_fallback'
+  // Main-session fallback: the primary model hit a usage limit, exhausted
+  // credit, or a rejected model id before anything was sent for the turn, and
+  // ProviderRouter rebuilt on the configured `models.fallback` model and
+  // replayed the turn. `metadata`: `fromModel`, `toModel`, `reason`
+  // (ModelFallbackReason). Sticky: emitted at most once per session.
+  | 'model_fallback'
   // The round-cap delivery notice (roundDeliveryNotice) could not be injected
   // into any valid message position — the tail message shape did not allow it
   // (e.g. anthropic: tail was not a user message; openai: no string-content
@@ -411,4 +416,18 @@ export interface SessionPhasePayload {
    * other phase kinds. (#3808)
    */
   afkVersion?: string;
+  /**
+   * Stable credential/auth source id. Set ONLY on `session_init_start` —
+   * the always-emitted attribution anchor — so a trace names its auth tier
+   * even without consulting the sidecar. Absent on older traces, subagent
+   * sessions, and all other phase kinds.
+   * Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' |
+   *   'claude-code-keychain' | 'claude-code-session-refresh'
+   * Other providers (#4882, provider-prefixed): 'openai:env' |
+   *   'openai:config' | 'openai:codex-cli' | 'openai:chatgpt-oauth' |
+   *   'xai:env' | 'xai:config' | 'xai:oauth' | 'anthropic:config' | 'local'.
+   *   See src/agent/auth/credential-source.ts. Per-child ids live on
+   *   subagent_lifecycle `started.credentialSource` instead.
+   */
+  credentialSource?: string;
 }

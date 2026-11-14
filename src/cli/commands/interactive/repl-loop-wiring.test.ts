@@ -109,6 +109,10 @@ import { runReplLoop, type TurnState } from './repl-loop.js';
 import type { InteractiveCtx } from './shared.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { readWithAutocomplete } from '../../input-box.js';
+import { stripAnsi } from '../../display.js';
+import { computeLineDiff } from '../../../utils/diff.js';
+import { formatDiffBlock } from './tool-lane-format-diff.js';
+import { getDiffCapState, resetDiffCap } from './tool-lane-diff-cap.js';
 
 const readMock = readWithAutocomplete as unknown as ReturnType<typeof vi.fn>;
 
@@ -314,6 +318,54 @@ describe('runReplLoop — skill-dispatch handles wired onto slashCtx', () => {
  * the slots back to `console.log`.
  */
 describe('runReplLoop — completionWriter wired to persistent compositor.commitAbove', () => {
+  it('announces the wired diff-cap selection and applies it only to future formatting', async () => {
+    resetDiffCap();
+    vi.stubEnv('AFK_DIFF_LINES', '30');
+    vi.stubEnv('AFK_SHOW_DIFFS', '1');
+    const commitAboveSpy = vi.fn();
+    fakeCompositorState.commitAbove = commitAboveSpy;
+    const ctx = makeMinimalCtx(new BackgroundAgentRegistry({}));
+    const bootstrapWriter = vi.fn();
+    ctx.completionWriter.fn = bootstrapWriter;
+    const diff = computeLineDiff('', Array.from({ length: 60 }, (_, i) => `line ${i}`).join('\n'))!;
+    const bodyCount = (lines: string[]) => lines.map(stripAnsi).filter((line) => line.startsWith('+ ')).length;
+    const committed = formatDiffBlock(diff, 'flush', '');
+    const committedSnapshot = [...committed];
+    expect(bodyCount(committed)).toBe(30);
+    const slashMod = await import('../../slash/registry.js');
+    vi.mocked(slashMod.parse).mockReturnValueOnce({ command: 'exit', args: '' } as never);
+    vi.mocked(slashMod.dispatch).mockImplementationOnce(async () => {
+      const { onCycleDiffCap } = fakeCompositorState.lastArmOpts as { onCycleDiffCap: () => void };
+      expect(onCycleDiffCap).toBeTypeOf('function');
+      expect(commitAboveSpy.mock.calls.some(([line]) => stripAnsi(line).includes('Future diff output:'))).toBe(false);
+      for (const [state, count] of [['expanded', 50], ['full', 60], ['compact', 30]] as const) {
+        const before = commitAboveSpy.mock.calls.length;
+        onCycleDiffCap();
+        expect(getDiffCapState()).toBe(state);
+        // Exactly one selected-state notice, routed through the post-arm writer.
+        expect(commitAboveSpy).toHaveBeenCalledTimes(before + 1);
+        expect(stripAnsi(commitAboveSpy.mock.calls.at(-1)![0])).toBe(
+          `Future diff output: ${state} (Ctrl+X D to cycle); existing output unchanged.`,
+        );
+        // Same payload exercises cap-sensitive memoization, not just fresh data.
+        expect(bodyCount(formatDiffBlock(diff, 'flush', ''))).toBe(count);
+        expect(bodyCount(formatDiffBlock(diff, 'overlay', ''))).toBe(8);
+        expect(committed).toEqual(committedSnapshot);
+      }
+      expect(bootstrapWriter).not.toHaveBeenCalled();
+      return { handled: true, result: 'exit' as const };
+    });
+    try {
+      await runReplLoop(ctx, makeTranscript() as never, {
+        turnInFlight: false, lastSigintAt: 0, activeCompositor: null,
+      } as TurnState, vi.fn());
+      expect(commitAboveSpy.mock.calls.filter(([line]) => stripAnsi(line).includes('Future diff output:'))).toHaveLength(3);
+    } finally {
+      resetDiffCap();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('between turns, completionWriter.fn and idleFn route through compositor.commitAbove', async () => {
     const commitAboveSpy = vi.fn();
     fakeCompositorState.commitAbove = commitAboveSpy;

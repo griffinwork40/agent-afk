@@ -102,8 +102,8 @@ export function makeSigintHandler(deps: SignalHandlerDeps): () => void {
       else { ctx.session.current.interrupt().catch(() => { /* swallow during teardown */ }); }
       turnState.notifyInterrupting?.(true);
       const msg = '\n' + palette.info('ℹ ') + 'Press Ctrl+C again to exit.';
-      if (c && c.isArmed()) { try { c.commitAbove(msg); } catch { console.log(msg); } }
-      else { console.log(msg); }
+      if (c && c.isArmed()) { try { c.commitAbove(msg); } catch { console.log(msg); } } // console-ok
+      else { console.log(msg); } // console-ok
       return;
     }
     if (now - turnState.lastSigintAt < SIGINT_EXIT_WINDOW_MS) {

@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { ProviderEvent } from '../provider.js';
+import type { ProviderEvent, ModelFallbackReason } from '../provider.js';
 import { transformProviderEvent } from './stream-consumer.js';
 import type { TransformDeps } from './stream-consumer.js';
 import type { Message } from '../types.js';
@@ -152,5 +152,54 @@ describe('stream-consumer: notice ProviderEvent', () => {
     // History gets the assistant.message but NOT the notice.
     expect(deps._history).toHaveLength(1);
     expect(deps._history[0]?.role).toBe('assistant');
+  });
+
+  it('model-fallback notice with fallback payload produces OutputEvent carrying the payload', () => {
+    const fallback = {
+      from: 'claude-sonnet-4-6',
+      to: 'haiku',
+      reason: 'usage-limit' as ModelFallbackReason,
+    };
+    const evt: ProviderEvent = {
+      type: 'notice',
+      text: 'Switched to fallback model haiku (usage-limit)',
+      kind: 'model-fallback',
+      fallback,
+    };
+    const deps = makeDeps();
+    const out = transformProviderEvent(evt, deps);
+
+    expect(out).not.toBeNull();
+    expect(out!.type).toBe('notice');
+    if (out!.type !== 'notice') throw new Error('unreachable');
+    expect(out.kind).toBe('model-fallback');
+    expect(out.fallback).toEqual(fallback);
+  });
+
+  it('notice without fallback payload has no fallback key on the OutputEvent', () => {
+    const evt: ProviderEvent = {
+      type: 'notice',
+      text: 'truncated',
+      kind: 'truncation',
+    };
+    const deps = makeDeps();
+    const out = transformProviderEvent(evt, deps);
+
+    expect(out).not.toBeNull();
+    expect(out!.type).toBe('notice');
+    if (out!.type !== 'notice') throw new Error('unreachable');
+    expect('fallback' in out).toBe(false);
+  });
+
+  it('model-fallback notice does NOT enter conversationHistory', () => {
+    const evt: ProviderEvent = {
+      type: 'notice',
+      text: 'Switched to fallback',
+      kind: 'model-fallback',
+      fallback: { from: 'sonnet', to: 'haiku', reason: 'credit-exhausted' },
+    };
+    const deps = makeDeps();
+    transformProviderEvent(evt, deps);
+    expect(deps._history).toHaveLength(0);
   });
 });

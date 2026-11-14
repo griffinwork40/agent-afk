@@ -30,6 +30,8 @@ export interface PromptFragments {
   environment?: string;
   manifest?: string;
   agentTypeListing?: string;
+  /** Episode-recall block; placed in the volatile tail (#4680). */
+  episodeRecall?: string;
 }
 
 /**
@@ -76,6 +78,7 @@ export function logStablePartsTokens(
     goalPrompt?: string;
     manifest: string;
     agentTypeListing?: string;
+    episodeRecall?: string;
   },
 ): void {
   logFragmentTokens(traceWriter, parts);

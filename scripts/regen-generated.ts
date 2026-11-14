@@ -102,13 +102,19 @@ function unionConflicts(root: string, unmerged: string[]): number {
 
 // Contract: these are the existing package.json update scripts, executed through
 // Node + tsx to avoid shell quoting and Windows .cmd execution differences.
-const REGENERATORS = [
-  ['audit:filesize:update', 'check-file-size.ts', '--update-baseline'],
-  ['audit:funcsize:update', 'check-function-size.ts', '--update-baseline'],
-  ['scan:env', 'render-env-registry.ts'],
-  ['audit:posix:update', 'check-posix-guard.ts', '--update-baseline'],
-  ['lint:tests:update', 'check-test-typecheck.ts', '--update'],
-] as const;
+// `growth` marks ratchets that accept --allow-growth/--reason; renders never do.
+// Renders write without parsing their previous output, so conflict markers are harmless.
+const REGENERATORS: readonly { name: string; script: string; args: readonly string[]; growth: boolean }[] = [
+  { name: 'audit:filesize:update', script: 'check-file-size.ts', args: ['--update-baseline'], growth: true },
+  { name: 'audit:funcsize:update', script: 'check-function-size.ts', args: ['--update-baseline'], growth: true },
+  { name: 'scan:env', script: 'render-env-registry.ts', args: [], growth: false },
+  { name: 'scan:cli', script: 'lib/isolated-reference.ts', args: ['cli'], growth: false },
+  { name: 'scan:slash', script: 'lib/isolated-reference.ts', args: ['slash'], growth: false },
+  { name: 'scan:config', script: 'lib/isolated-reference.ts', args: ['config'], growth: false },
+  { name: 'scan:surface', script: 'lib/isolated-reference.ts', args: ['surface'], growth: false },
+  { name: 'audit:posix:update', script: 'check-posix-guard.ts', args: ['--update-baseline'], growth: true },
+  { name: 'lint:tests:update', script: 'check-test-typecheck.ts', args: ['--update'], growth: true },
+];
 
 export function main(argv = process.argv.slice(2), cwd = process.cwd()): void {
   const parsed = parseGrowthArgs(argv, ['--allow-growth', '--reason']);
@@ -119,11 +125,11 @@ export function main(argv = process.argv.slice(2), cwd = process.cwd()): void {
   // Invariant: inspect every code conflict BEFORE writing any baseline union.
   const unions = unionConflicts(root, unmerged);
   const growth = parsed.allowGrowth ? ['--allow-growth', '--reason', parsed.reason] : [];
-  for (const [name, script, ...flags] of REGENERATORS) {
+  for (const { name, script, args, growth: ratchet } of REGENERATORS) {
     console.log(`→ pnpm ${name}`);
     const result = spawnSync(process.execPath, [
       '--import', import.meta.resolve('tsx'), path.join(root, 'scripts', script),
-      ...flags, ...(name === 'scan:env' ? [] : growth),
+      ...args, ...(ratchet ? growth : []),
     ], { cwd: root, stdio: 'inherit' });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`${name} failed (${result.signal ?? result.status}); generated files were not staged.`);

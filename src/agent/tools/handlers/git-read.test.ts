@@ -5,7 +5,8 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { planGitRead, confinePathspec, GIT_READ_SUBCOMMANDS } from '../git-read.policy.js';
@@ -221,7 +222,7 @@ describe('git_read handler (live repo)', () => {
     git('commit', '-q', '-m', 'init');
     git('tag', 'v1.0.0');
   });
-  afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
+  afterAll(() => { rmSyncRetry(repo); });
 
   it('runs log, grep and tag listing', async () => {
     const h = createGitReadHandler(repo);
@@ -378,6 +379,16 @@ describe('planGitRead (#4058): new subcommand allowlist', () => {
     expect(plan.ok).toBe(true);
     expect(plan.ok && plan.argv).toContain('--not');
   });
+
+  it('branch accepts --show-current (skips forced --list)', () => {
+    const plan = planGitRead({ subcommand: 'branch', args: ['--show-current'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['branch', '--no-color', '--show-current']);
+  });
+
+  it('rev-list accepts --left-right', () => {
+    const plan = planGitRead({ subcommand: 'rev-list', args: ['--left-right', 'HEAD...HEAD~1'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['rev-list', '--left-right', 'HEAD...HEAD~1']);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -444,6 +455,220 @@ describe('planGitRead (#4227): model-quirk normalization', () => {
     expect(plan.ok && plan.argv).toEqual(['show', '--no-ext-diff', '--no-textconv', 'HEAD', '--']);
     const plan2 = planGitRead({ subcommand: 'log', args: ['log', '--oneline'] }, CWD);
     expect(plan2.ok && plan2.argv).toEqual(['log', '--no-ext-diff', '--no-textconv', '--oneline', '--']);
+  });
+
+  it('strips echoed forced tokens from args', () => {
+    // stash forces ['list'] — model sends {subcommand: "stash", args: ["list"]}
+    const stash = planGitRead({ subcommand: 'stash', args: ['list'] }, CWD);
+    expect(stash.ok && stash.argv).toEqual(['stash', 'list']);
+    // reflog forces ['show'] — model sends {subcommand: "reflog", args: ["show", "HEAD"]}
+    const reflog = planGitRead({ subcommand: 'reflog', args: ['show', 'HEAD'] }, CWD);
+    expect(reflog.ok && reflog.argv).toEqual(['reflog', 'show', 'HEAD']);
+    // worktree forces ['list'] — echoed
+    const wt = planGitRead({ subcommand: 'worktree', args: ['list'] }, CWD);
+    expect(wt.ok && wt.argv).toEqual(['worktree', 'list']);
+    // remote forces ['-v'] — echoed
+    const remote = planGitRead({ subcommand: 'remote', args: ['-v'] }, CWD);
+    expect(remote.ok && remote.argv).toEqual(['remote', '-v']);
+  });
+
+  it('preserves post-separator pathspecs that match forced tokens', () => {
+    // diff forces ['--no-ext-diff', '--no-textconv']; a pathspec after '--'
+    // must not be stripped even if it matches a forced token name.
+    const plan = planGitRead({ subcommand: 'diff', args: ['HEAD', '--', '--no-textconv'], paths: [] }, CWD);
+    expect(plan.ok).toBe(true);
+    if (plan.ok) {
+      expect(plan.argv).toContain('--no-textconv'); // once as forced, once as pathspec
+      // The forced token appears at position 1 (after 'diff'), and the pathspec
+      // appears after '--' at the end
+      const lastIdx = plan.argv.lastIndexOf('--no-textconv');
+      const sepIdx = plan.argv.indexOf('--');
+      expect(lastIdx).toBeGreaterThan(sepIdx);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests for #4878: remaining read-only rejections
+// ---------------------------------------------------------------------------
+
+describe('planGitRead (#4878): empty --format= / --pretty= values', () => {
+  it('show --format= (empty value) is accepted', () => {
+    const plan = planGitRead({ subcommand: 'show', args: ['HEAD', '--format='] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--format=');
+  });
+
+  it('show --pretty= (empty value) is accepted', () => {
+    const plan = planGitRead({ subcommand: 'show', args: ['HEAD', '--pretty='] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--pretty=');
+  });
+
+  it('log --format= (empty value) is accepted', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--format='] }, CWD).ok).toBe(true);
+  });
+
+  it('log --pretty= (empty value) is accepted', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--pretty='] }, CWD).ok).toBe(true);
+  });
+
+  it('non-empty --format=%H is still accepted', () => {
+    expect(planGitRead({ subcommand: 'show', args: ['--format=%H'] }, CWD).ok).toBe(true);
+  });
+
+  it('signature placeholders in --format= are still rejected even when non-empty', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--format=%GS'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'show', args: ['--pretty=%(signature)'] }, CWD).ok).toBe(false);
+  });
+});
+
+describe('planGitRead (#4878): log --ancestry-path', () => {
+  it('log --ancestry-path is accepted', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['--ancestry-path', 'HEAD~5..HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--ancestry-path');
+  });
+});
+
+describe('planGitRead (#4878): show --max-count=', () => {
+  it('show --max-count=1 is accepted', () => {
+    const plan = planGitRead({ subcommand: 'show', args: ['--max-count=1', 'HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--max-count=1');
+  });
+});
+
+describe('planGitRead (#4878): split-valued --contains / --merged / --no-merged (branch)', () => {
+  it('branch --merged main (two tokens) is normalised and accepted', () => {
+    const plan = planGitRead({ subcommand: 'branch', args: ['--merged', 'main'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--merged=main');
+  });
+
+  it('branch --contains HEAD (two tokens) is normalised and accepted', () => {
+    const plan = planGitRead({ subcommand: 'branch', args: ['--contains', 'HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--contains=HEAD');
+  });
+
+  it('branch --no-merged main (two tokens) is normalised and accepted', () => {
+    const plan = planGitRead({ subcommand: 'branch', args: ['--no-merged', 'main'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--no-merged=main');
+  });
+
+  it('pre-joined --merged=main is still accepted', () => {
+    expect(planGitRead({ subcommand: 'branch', args: ['--merged=main'] }, CWD).ok).toBe(true);
+  });
+
+  it('unpaired --contains (no following value) is rejected', () => {
+    expect(planGitRead({ subcommand: 'branch', args: ['--contains'] }, CWD).ok).toBe(false);
+  });
+
+  it('--contains followed by another flag is not joined (both rejected or first rejected)', () => {
+    // --contains is left unpaired; checkToken rejects the bare --contains
+    const plan = planGitRead({ subcommand: 'branch', args: ['--contains', '--merged'] }, CWD);
+    expect(plan.ok).toBe(false);
+  });
+});
+
+describe('planGitRead (#4878): diff -U<N> (unified shorthand)', () => {
+  it('diff -U15 is normalised to --unified=15', () => {
+    const plan = planGitRead({ subcommand: 'diff', args: ['-U15', 'HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--unified=15');
+  });
+
+  it('log -U3 is normalised to --unified=3', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['-U3', '--oneline'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--unified=3');
+  });
+
+  it('-U with non-digits is not normalised and is rejected', () => {
+    expect(planGitRead({ subcommand: 'diff', args: ['-Uabc'] }, CWD).ok).toBe(false);
+  });
+});
+
+describe('planGitRead (#4878): blame -L <range> (two tokens)', () => {
+  it('blame -L 100,130 (two tokens) is normalised and accepted', () => {
+    const plan = planGitRead({ subcommand: 'blame', args: ['-L', '100,130', 'HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('-L100,130');
+  });
+
+  it('pre-joined -L100,130 is still accepted', () => {
+    expect(planGitRead({ subcommand: 'blame', args: ['-L100,130', 'HEAD'] }, CWD).ok).toBe(true);
+  });
+
+  it('unpaired -L (no following value) is rejected', () => {
+    expect(planGitRead({ subcommand: 'blame', args: ['-L'] }, CWD).ok).toBe(false);
+  });
+});
+
+describe('planGitRead (#4878): log -S <text> (pickaxe, two tokens)', () => {
+  it('log -S sometext (two tokens) is normalised and accepted', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['-S', 'sometext', 'HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('-Ssometext');
+  });
+
+  it('pre-joined -Sneedle (single token) is accepted via the -S valued prefix', () => {
+    // A pre-joined -Sneedle token (no space) goes straight to checkToken.
+    // -S is in log.valued as a non-= prefix, so -Sneedle passes because
+    // '-Sneedle'.startsWith('-S') && '-Sneedle'.length > '-S'.length.
+    const plan = planGitRead({ subcommand: 'log', args: ['-Sneedle'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('-Sneedle');
+  });
+
+  it('log -S with value starting with - is rejected (security: could look like a flag)', () => {
+    // A pickaxe value starting with `-` is left as-is by the normaliser
+    // (invariant 1: next token starts with `-`, so no join happens).
+    // The bare `-S` then reaches checkToken — it IS in flags, so it passes,
+    // but the subsequent `-output=x` token is rejected as an unlisted option.
+    const plan = planGitRead({ subcommand: 'log', args: ['-S', '--output=x'] }, CWD);
+    expect(plan.ok).toBe(false);
+  });
+
+  it('unpaired -S alone on log is rejected (no value to join; bare -S is not a valid option)', () => {
+    // -S is in log.valued (prefix `-S`), not flags. A bare `-S` with no
+    // following value token cannot be joined by the normaliser, so it reaches
+    // checkToken unchanged. checkToken requires tok.length > prefix.length for
+    // non-`=` prefixes, so bare `-S` is rejected. This is correct: git log -S
+    // with no argument is a usage error anyway.
+    const plan = planGitRead({ subcommand: 'log', args: ['-S'] }, CWD);
+    expect(plan.ok).toBe(false);
+  });
+});
+
+describe('planGitRead (#4878): injection rejection — split-valued cannot smuggle options', () => {
+  it('--contains value cannot smuggle --output= (value starts with -)', () => {
+    // next token starts with `-` → not joined; bare --contains is rejected
+    expect(planGitRead({ subcommand: 'branch', args: ['--contains', '--output=x'] }, CWD).ok).toBe(false);
+  });
+
+  it('--merged value cannot smuggle -c option (value starts with -)', () => {
+    expect(planGitRead({ subcommand: 'branch', args: ['--merged', '-c'] }, CWD).ok).toBe(false);
+  });
+
+  it('-L value cannot smuggle an option via leading -', () => {
+    expect(planGitRead({ subcommand: 'blame', args: ['-L', '--output=x', 'HEAD'] }, CWD).ok).toBe(false);
+  });
+
+  it('joined --contains=value cannot contain a second option via = splitting', () => {
+    // Even if the value is unusual, it only lands as a string value in --contains=
+    // which is in the valued allowlist; checkToken accepts it as a valued token.
+    // But a value with a null byte or newline is blocked by checkToken.
+    expect(planGitRead({ subcommand: 'branch', args: ['--contains', 'main\n--output=x'] }, CWD).ok).toBe(false);
+  });
+
+  it('existing write-option rejections still hold after normaliser runs', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--output=/tmp/pwn'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'diff', args: ['--ext-diff'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'show', args: ['--upload-pack=sh'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'log', args: ['-c', 'core.pager=sh'] }, CWD).ok).toBe(false);
   });
 });
 
@@ -522,7 +747,7 @@ describe('git_read handler (#4058 live repo)', () => {
     git('commit', '-q', '-m', 'second');
     git('tag', 'v0.1.0');
   });
-  afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
+  afterAll(() => { rmSyncRetry(repo); });
 
   it('rev-list --count HEAD returns a number', async () => {
     const h = createGitReadHandler(repo);
@@ -644,5 +869,18 @@ describe('git_read handler (#4058 live repo)', () => {
     // cat-file --batch would be the most dangerous; policy must reject it
     const r = await h({ subcommand: 'cat-file', args: ['--batch'] }, signal);
     expect(r.isError).toBe(true);
+  });
+
+  it('branch --show-current returns the branch name', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'branch', args: ['--show-current'] }, signal);
+    expect(r.isError).toBeFalsy();
+    expect(String(r.content).trim().length).toBeGreaterThan(0);
+  });
+
+  it('stash with echoed "list" arg succeeds', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'stash', args: ['list'] }, signal);
+    expect(r.isError).toBeFalsy();
   });
 });

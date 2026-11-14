@@ -81,6 +81,8 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'claude-fable-5': 128_000,
   // Claude Fable 5.1: 1M context / 128k output; successor to Fable 5.
   'claude-fable-5-1': 128_000,
+  // Claude Fable 5.2: 1M context / 128k output; successor to Fable 5.1.
+  'claude-fable-5-2': 128_000,
   // OpenAI GPT-5.6 family (GA 2026-07-09) + GPT-5.5. maxOutputTokensFor() is
   // provider-agnostic: the openai-compatible query path
   // (query/model-params.ts:resolveEffectiveMaxOutputTokens) calls it to bound
@@ -221,6 +223,7 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   fable: 1_000_000,
   'claude-fable-5': 1_000_000,
   'claude-fable-5-1': 1_000_000,
+  'claude-fable-5-2': 1_000_000,
   'claude-sonnet-5': 1_000_000,
   // Claude Opus 5 (GA 2026-07-24): native 1M window. Base `opus` still
   // auto-compacts early via MODEL_AUTOCOMPACT_BUDGET (cost/latency policy).

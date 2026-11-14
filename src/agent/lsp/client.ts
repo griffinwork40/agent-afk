@@ -164,7 +164,8 @@ export class LspClient {
     // response has been received. The `await` above guarantees that, so this
     // notification is spec-compliant. Note: some servers (e.g. typescript-
     // language-server) also tolerate `initialized` arriving before the response
-    // ACK; we rely on the stricter sequencing that `await` gives us here.
+    // (LSP has no separate ACK; "response" is the protocol term per §3.4.1);
+    // we rely on the stricter sequencing that `await` gives us here.
     this.notify('initialized', {});
     this.initialized = true;
   }

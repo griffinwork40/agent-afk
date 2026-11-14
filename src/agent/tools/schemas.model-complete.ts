@@ -15,17 +15,23 @@ export const modelCompleteTool: AnthropicToolDef = {
   concurrencySafe: true,
   description:
     'Send ONE prompt to any configured model and return its text reply. No tools, no ' +
-    'conversation, no subagent fork: a single cheap chat completion. Use it to offload ' +
-    'bounded text work to another (often cheaper or local) model: summarizing a large ' +
-    'file, classifying, rewriting, extracting fields, drafting, or a second opinion from ' +
-    'a different model family. Use `agent` instead when the work needs tools or multiple ' +
-    'steps.\n\n' +
+    'conversation, no subagent fork: a single cheap chat completion. The other model ' +
+    'sees only what you send it.\n\n' +
+    'Use it to challenge a consequential conclusion before it drives work, when the ' +
+    'evidence fits in one prompt: a lone finding, a severity rating, a risky plan. Name ' +
+    'a `model` from a different family than your own, send the claim with its evidence ' +
+    'and your uncertainties, and ask for counterarguments rather than agreement. Treat ' +
+    'the reply as a critique to weigh, not as verification.\n\n' +
+    'Also use it to offload bounded text work to a cheaper or local model: summarizing ' +
+    'a large file, classifying, rewriting, extracting fields, drafting. Use `agent` ' +
+    'instead when the work needs tools, fresh evidence, or multiple steps.\n\n' +
     '`model` accepts a slot name (`local`, `small`, `medium`, `large`), a custom slot ' +
     'name from afk.config.json, an identity alias (`haiku`, `sonnet`, `opus`, `grok`), or ' +
     'a raw model id; the slot\'s provider, endpoint, and API key are applied. Defaults to ' +
-    'the operator\'s configured default model (AFK_MODEL); pass `local` or `small` ' +
-    'explicitly for cheap offloads. An unconfigured slot is an error, never a silent ' +
-    'fallback.\n\n' +
+    'the operator\'s configured default model (AFK_MODEL), which is usually the model ' +
+    'you are already running on: name a different one for a challenge, and pass `local` ' +
+    'or `small` explicitly for cheap offloads. An unconfigured slot is an error, never ' +
+    'a silent fallback.\n\n' +
     '`input_path` is read by the tool and appended to the prompt, so a large file can be ' +
     'processed without its contents entering your context; only the reply comes back. ' +
     'Note that the file contents ARE sent to the chosen model\'s provider.',

@@ -105,6 +105,7 @@ function makeSubagentExecutor(handle?: Partial<SubagentHandle>) {
     subagentManager: manager as unknown as SubagentExecutorContext['subagentManager'],
     parentSession: parentSession as SubagentExecutorContext['parentSession'],
     defaultConfig,
+    defaultSubagentModel: 'claude-sonnet-4-5',
     depth: 0,
   };
   return { executor: new SubagentExecutor(ctx), manager };
@@ -138,6 +139,7 @@ function makeExecWithIdentity(opts: { surface?: Surface; depth: number }) {
     subagentManager: manager as unknown as SubagentExecutorContext['subagentManager'],
     parentSession: parentSession as SubagentExecutorContext['parentSession'],
     defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+    defaultSubagentModel: 'claude-sonnet-4-5',
     depth: opts.depth,
     ...(opts.surface !== undefined ? { surface: opts.surface } : {}),
   };
@@ -451,6 +453,7 @@ describe('delegation.skipped telemetry (agent depth limit)', () => {
         abortSignal: new AbortController().signal,
       } as unknown as SubagentExecutorContext['parentSession'],
       defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+      defaultSubagentModel: 'claude-sonnet-4-5',
       depth: opts.depth,
       maxDepth: opts.maxDepth,
       ...(opts.agentRegistry !== undefined ? { agentRegistry: opts.agentRegistry } : {}),
@@ -826,6 +829,8 @@ function makeComposeContext(opts?: Partial<ComposeExecutorContext>): ComposeExec
     },
     apiKey: 'test-key',
     systemPrompt: 'sp',
+    defaultSubagentModel: 'claude-sonnet-4-5',
+    defaultModel: 'claude-sonnet-4-5',
     ...opts,
   };
 }

@@ -48,7 +48,7 @@ let _readCacheExpiresAt = 0;
 //     KEYCHAIN_TIMEOUT_BACKOFF_MS (30 s) and return `undefined` instead.
 //     A successful background read clears the backoff.
 //
-//   background: false / absent  (startup, fork-time, /reauth, refresh/write-back)
+//   background: false / absent  (startup, fork-time, refresh/write-back)
 //     No timeout is passed to execFileSync; the OS shows its unlock dialog if
 //     the keychain is locked, and the user can interact with it. The backoff is
 //     also ignored: foreground callers must always reach the live store. A
@@ -93,8 +93,8 @@ export function _resetKeychainReadCache(): void {
  *     per-turn catch-up, compaction sync, and usage-limit pollers.
  *
  *   `background: false` / absent — no timeout; the OS may show an unlock
- *     dialog; the backoff is ignored. Use for startup, fork-time, /reauth,
- *     and refresh/write-back paths where the user can interact.
+ *     dialog; the backoff is ignored. Use for startup, fork-time, and
+ *     refresh/write-back paths where the user can interact.
  *
  *   `quiet: true` — suppresses the stderr "token is expired" warning.
  *     Always combine with `background: true` for per-turn callers, which

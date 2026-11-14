@@ -28,6 +28,7 @@ import { runInTmpdirScope } from '../session/session-tmpdir.js';
 import { dispatchPostToolUse, dispatchPostToolUseFailure } from '../subagent-hooks.js';
 import { headAndTail } from './handlers/_output-cap.js';
 import { emitPreToolUseBlock } from './dispatcher.pre-dispatch-gates.js';
+import { PauseController } from '../session/pause-controller.js';
 import { executeSubagentProviderTool, isSubagentProviderTool } from './dispatcher.subagent-tools.js';
 import { mcpUnknownToolMessage } from '../mcp/failure-notice.js';
 import type { HookRegistry, PostToolUseContext, PostToolUseFailureContext } from '../hooks.js';
@@ -346,6 +347,7 @@ export async function executeCompose(call: ToolCall, deps: CoreExecDeps): Promis
  * {@link executeCore}, which applies the central output-cap backstop.
  */
 export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Promise<ToolResult> {
+  await PauseController.instance().check(call.signal); // pause gate
   // Agent dispatch and model cancellation share the provider-level executor.
   if (isSubagentProviderTool(call.name)) {
     const outcome = await executeSubagentProviderTool(deps.subagentExecutor, call, deps.processJobs);

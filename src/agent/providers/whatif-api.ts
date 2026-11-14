@@ -8,7 +8,6 @@
 // only this file needs updating — not every consumer.
 
 export { deriveCallCostUsd } from './anthropic-direct/pricing.js';
-export type { CacheWriteSplit, ModelPricing, SpeedPricingContext } from './anthropic-direct/pricing.js';
-export { oneShotCompletion, oneShotCompletionWithStop } from './anthropic-direct/oneshot.js';
+export { oneShotCompletion } from './anthropic-direct/oneshot.js';
 export type { OneShotInput, OneShotStopReason } from './anthropic-direct/oneshot.js';
 export { resolveModelId } from '../session/model-resolution.js';

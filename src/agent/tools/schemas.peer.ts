@@ -70,7 +70,7 @@ export const sendToSessionTool: AnthropicToolDef = {
       reply_to: {
         type: 'string',
         description:
-          'The id of an incoming peer-session-message you are replying to. Threads the reply so the recipient can correlate it.',
+          'The id of an incoming peer-session-message you are replying to. Threads the reply so the recipient can correlate it. When replying to a peer message, set to to the from attribute of the incoming message.',
       },
     },
     required: ['to', 'message'],

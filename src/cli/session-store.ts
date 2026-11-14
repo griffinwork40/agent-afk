@@ -212,6 +212,9 @@ export function saveSession(
     model: stats.model,
     startedAt: stats.sessionStartTime,
     savedAt: now,
+    // Invariant: written before `turns`, like the name fields above. The REPL
+    // startup recall decides sealed-ness from a head-only sidecar read
+    // (interactive/startup-recall.ts), so `endedAt` must stay near the top.
     ...(opts?.closeTime ? { endedAt: now } : {}),
     ...(opts?.closeTime && opts.exitReason ? { exitReason: opts.exitReason } : {}),
     totalTurns: stats.totalTurns,

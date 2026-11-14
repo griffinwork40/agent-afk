@@ -35,7 +35,7 @@ export function resolveWorktreeExitPolicy(sources: PolicySources): WorktreeExitP
   const value = sources.cli ?? sources.env ?? sources.config;
   if (value === undefined) return fallback;
   if (value === 'ask' || value === 'keep' || value === 'remove') return value;
-  sources.console.warn(
+  sources.console.warn( // console-ok
     `Ignoring unrecognised ${source} worktree exit policy ${JSON.stringify(value)}; expected ask, keep, or remove.`,
   );
   return fallback;
@@ -99,7 +99,7 @@ export async function resolveWorktreeDisposition(
     if (picked === null) return 'keep-locked';
     return picked[0] === REMOVE_OPTION ? 'remove' : 'keep-locked';
   } catch (error) {
-    deps.console.warn(
+    deps.console.warn( // console-ok
       `Could not ask how to handle the worktree (${errorMessage(error)}); keeping it.`,
     );
     // The user was present; a widget failure is our bug, so retain durably

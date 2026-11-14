@@ -18,3 +18,9 @@ export { combine } from './combine.js';
 
 export { createOutcomeSessionEndHook } from './session-end-hook.js';
 export { createChildAttributionHook } from './child-attribution.js';
+
+export { computeOutcomes } from './compute-outcomes.js';
+export type { ComputeOutcomesInput, GitLogEntry } from './compute-outcomes.js';
+export { gitLogRange } from './git-range.js';
+export { OutcomesV1Schema } from './outcomes-v1.schema.js';
+export type { OutcomesV1 } from './outcomes-v1.schema.js';

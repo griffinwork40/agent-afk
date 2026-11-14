@@ -9,6 +9,7 @@
  */
 
 import { AgentSession } from '../../agent/session.js';
+import { palette } from '../palette.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
@@ -17,7 +18,8 @@ import { OpenAICompatibleProvider } from '../../agent/providers/openai-compatibl
 import { XaiProvider } from '../../agent/providers/xai/index.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
-import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
+import { resolveModelId } from '../../agent/session/model-resolution.js';
+import { MemoryStore, injectHotMemory, injectEpisodeRecall, injectGoalPrompt } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
@@ -26,7 +28,10 @@ import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { parseProvider, getApiKeyForModel, getModel, getDefaultSubagentModel } from '../shared-helpers.js';
+import { tryCredentialSourceForModel } from '../../agent/auth/credential-source.js';
 import { cliProviderFamily } from '../provider-selection.js';
+import { injectedProviderWiring } from '../provider-fallback-factory.js';
+import type { ModelProvider } from '../../agent/provider.js';
 import type { TraceWriter } from '../../agent/trace/writer.js';
 import { formatSubagentCompletion } from './interactive/progress-banner.js';
 import type { McpManager } from '../../agent/mcp/index.js';
@@ -167,21 +172,22 @@ export async function buildChatSession(
   });
 
   const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
-  const provider = parseProvider(providerRaw, {
+  const familyOf = (m: string): string =>
+    cliProviderFamily(providerRaw, { model: m, ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}) });
+  // ONE build function for the primary and for a `models.fallback` provider,
+  // so a fallback carries the same executors, stores and MCP manager.
+  const buildProvider = (m: string): ModelProvider => parseProvider(providerRaw, {
     subagentExecutor,
     skillExecutor,
     composeExecutor,
     memoryStore: sharedMemoryStore,
     stateStore: sharedStateStore,
-    model: String(model),
+    model: m,
     ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
     ...(mcpManager !== undefined ? { mcpManager } : {}),
   })
     ?? (() => {
-      const family = cliProviderFamily(providerRaw, {
-        model: String(model),
-        ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
-      });
+      const family = familyOf(m);
       const sharedOpts = {
         permissions: { allowedTools: topLevelSurfaceAllowedTools(mcpToolWireNames) },
         subagentExecutor,
@@ -205,15 +211,22 @@ export async function buildChatSession(
         surface: 'cli',
       });
     })();
+  const providerWiring = injectedProviderWiring({
+    model: String(model),
+    explicitProvider: providerRaw,
+    build: buildProvider,
+    familyOf,
+  });
 
   await ensurePluginEntrypointsLoaded();
 
   const getChatPermissionMode = (): PermissionMode =>
     dangerouslySkipPermissions ? 'bypassPermissions' : (permissionMode ?? 'bypassPermissions');
 
-  const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
+  const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory({
     model: sessionModel,
     surface: 'cli',
+    credentialSource: tryCredentialSourceForModel(String(sessionModel), providerHints),
     apiKey: getApiKeyForModel(sessionModel, providerHints),
     ...managerShutdownConfig(rootManager, composeExecutor),
     maxTurns,
@@ -224,12 +237,16 @@ export async function buildChatSession(
       ? { permissionMode }
       : {}),
     hookRegistry: createDefaultHookRegistry(
-      (info) => { console.log(formatSubagentCompletion(info)); },
+      (info) => { console.log(palette.info(formatSubagentCompletion(info))); },
       'cli',
       sharedMemoryStore,
       getChatPermissionMode,
       loadHooksConfig({ cwd: worktreeCwd }),
-      { cwd: worktreeCwd, ...(traceWriter !== undefined ? { traceWriter } : {}) },
+      {
+        cwd: worktreeCwd,
+        ...(traceWriter !== undefined ? { traceWriter } : {}),
+        getModel: () => resolveModelId(sessionModel) ?? String(sessionModel),
+      },
     ).registry,
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
@@ -245,8 +262,8 @@ export async function buildChatSession(
     ...(autoResumeOnUsageLimit !== undefined ? { autoResumeOnUsageLimit } : {}),
     ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
     ...resumeConfig,
-    provider,
-  }))), traceWriter);
+    ...providerWiring,
+  })))), traceWriter);
 
   boundSession = session;
 

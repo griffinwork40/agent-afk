@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -207,6 +207,91 @@ describe('getOrDeriveFacet yield_tracking carry-forward (#2777)', () => {
     expect(facet?.yield_tracking.produced_pr).toBe(true);
     expect(facet?.yield_tracking.pr_merged).toBe(true);
     expect(facet?.yield_tracking.pr_url).toBeNull();
+  });
+});
+
+// #4569: episode synthesis patches decisions after derivation; a FACET_VERSION
+// bump re-derives and resets decisions to []. The store must carry forward
+// patched decisions from the stale cache — same class as #2777.
+describe('getOrDeriveFacet decisions carry-forward (#4569)', () => {
+  function writeStaleCache(id: string, decisions: string[]): void {
+    getOrDeriveFacet(id, { sessionsDir, cacheDir });
+    const cached = readCache(id);
+    cached['facet_version'] = 6;
+    cached['decisions'] = decisions;
+    writeFileSync(join(cacheDir, `${id}.json`), JSON.stringify(cached), 'utf8');
+  }
+
+  it('carries synthesized decisions across a version bump', () => {
+    writeSession('d-a', sampleSession('d-a'));
+    writeStaleCache('d-a', ['Used streaming API', 'Chose WebSocket over SSE']);
+
+    const facet = getOrDeriveFacet('d-a', { sessionsDir, cacheDir });
+    expect(facet?.facet_version).toBeGreaterThan(6);
+    expect(facet?.decisions).toEqual(['Used streaming API', 'Chose WebSocket over SSE']);
+  });
+
+  it('does not carry forward an empty decisions array', () => {
+    writeSession('d-b', sampleSession('d-b'));
+    writeStaleCache('d-b', []);
+
+    const facet = getOrDeriveFacet('d-b', { sessionsDir, cacheDir });
+    expect(facet?.decisions).toEqual([]);
+  });
+
+  it('filters non-string elements from stale decisions', () => {
+    writeSession('d-c', sampleSession('d-c'));
+    getOrDeriveFacet('d-c', { sessionsDir, cacheDir });
+    const cached = readCache('d-c');
+    cached['facet_version'] = 6;
+    cached['decisions'] = ['valid', 42, null, 'also valid'];
+    writeFileSync(join(cacheDir, 'd-c.json'), JSON.stringify(cached), 'utf8');
+
+    const facet = getOrDeriveFacet('d-c', { sessionsDir, cacheDir });
+    expect(facet?.decisions).toEqual(['valid', 'also valid']);
+  });
+
+  // Regression guard (#4636): when derive produces non-empty decisions AND the
+  // stale cache also has decisions, the derived ones win — carry-forward must
+  // never overwrite a non-empty derivation result. derive.ts currently always
+  // returns decisions=[] (LLM digest needed), so this test mocks it to simulate
+  // the future case where derive itself populates decisions.
+  it('derived non-empty decisions win over stale cache decisions (#4636)', async () => {
+    vi.resetModules();
+
+    // Build a minimal SessionFacet-shaped object that deriveSessionFacet would return,
+    // but with decisions pre-populated to simulate a future derive that sets them.
+    vi.doMock('./derive.js', async () => {
+      const actual = await vi.importActual<typeof import('./derive.js')>('./derive.js');
+      return {
+        ...actual,
+        deriveSessionFacet: vi.fn().mockImplementation(
+          (...args: Parameters<typeof actual.deriveSessionFacet>) => {
+            const facet = actual.deriveSessionFacet(...args);
+            return { ...facet, decisions: ['derived-decision-1', 'derived-decision-2'] };
+          },
+        ),
+      };
+    });
+
+    const { getOrDeriveFacet: getOrDerive } = await import('./store.js');
+
+    // Write a stale v6 cache with different decisions
+    writeSession('d-d', sampleSession('d-d'));
+    getOrDerive('d-d', { sessionsDir, cacheDir });
+    const stale = readCache('d-d');
+    stale['facet_version'] = 6;
+    stale['decisions'] = ['stale-decision-only'];
+    writeFileSync(join(cacheDir, 'd-d.json'), JSON.stringify(stale), 'utf8');
+
+    // Re-derive (version bump forces re-derive)
+    const facet = getOrDerive('d-d', { sessionsDir, cacheDir });
+
+    // Derived decisions must win; stale must NOT overwrite
+    expect(facet?.decisions).toEqual(['derived-decision-1', 'derived-decision-2']);
+
+    vi.doUnmock('./derive.js');
+    vi.resetModules();
   });
 });
 

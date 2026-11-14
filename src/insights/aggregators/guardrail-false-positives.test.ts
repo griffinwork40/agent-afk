@@ -392,6 +392,194 @@ describe('aggregateGuardrailFalsePositives — time window', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests: byRule per-ruleId breakdown (#3849)
+// ---------------------------------------------------------------------------
+
+function hookDecisionBlock(seq: number, ruleId?: string, blockedTool = 'bash'): string {
+  return JSON.stringify({
+    ts: NOW_ISO,
+    seq,
+    kind: 'hook_decision',
+    payload: {
+      hookEvent: 'PreToolUse',
+      decision: 'block',
+      reason: 'test block',
+      blockedTool,
+      ...(ruleId !== undefined ? { ruleId } : {}),
+    },
+  });
+}
+
+describe('aggregateGuardrailFalsePositives — byRule (#3849)', () => {
+  it('counts block events by ruleId', () => {
+    writeSession('sess-rule-a');
+    writeTrace('sess-rule-a', [
+      hookDecisionBlock(1, 'readonly-bash.pipe-to-shell'),
+      hookDecisionBlock(2, 'readonly-bash.pipe-to-shell'),
+      hookDecisionBlock(3, 'write-roots.outside'),
+    ]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.byRule['readonly-bash.pipe-to-shell']).toBe(2);
+    expect(result.byRule['write-roots.outside']).toBe(1);
+    expect(result.totalTrips).toBe(0);
+    expect(result.denialBreakerTaggedFailures).toBe(0);
+  });
+
+  it.each(['constructor', 'toString', '__proto__'])('counts and serializes prototype-name ID %s safely', ruleId => {
+    writeSession('sess-prototype-a');
+    writeTrace('sess-prototype-a', [hookDecisionBlock(1, ruleId), hookDecisionBlock(2, ruleId)]);
+    writeSession('sess-prototype-b');
+    writeTrace('sess-prototype-b', [hookDecisionBlock(1, ruleId)]);
+
+    const { byRule } = aggregateGuardrailFalsePositives(opts());
+    expect(byRule[ruleId]).toBe(3);
+    expect(Object.entries(byRule)).toEqual([[ruleId, 3]]);
+    expect(Object.hasOwn(byRule, ruleId)).toBe(true);
+    expect(JSON.parse(JSON.stringify(byRule))).toEqual({ [ruleId]: 3 });
+    expect(Object.getPrototypeOf(byRule)).toBeNull();
+  });
+
+  it('ignores hook_decision block events without ruleId', () => {
+    writeSession('sess-no-ruleid');
+    writeTrace('sess-no-ruleid', [
+      hookDecisionBlock(1, undefined),
+    ]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(Object.keys(result.byRule)).toHaveLength(0);
+  });
+
+  it('ignores approve-decision events even if ruleId is set', () => {
+    writeSession('sess-approve');
+    writeTrace('sess-approve', [
+      JSON.stringify({
+        ts: NOW_ISO, seq: 1, kind: 'hook_decision',
+        payload: { hookEvent: 'PreToolUse', decision: 'approve', ruleId: 'some-rule' },
+      }),
+    ]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(Object.keys(result.byRule)).toHaveLength(0);
+  });
+
+  it('accumulates byRule counts across multiple sessions', () => {
+    writeSession('sess-r1');
+    writeTrace('sess-r1', [hookDecisionBlock(1, 'write-roots.outside')]);
+    writeSession('sess-r2');
+    writeTrace('sess-r2', [hookDecisionBlock(1, 'write-roots.outside')]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.byRule['write-roots.outside']).toBe(2);
+  });
+
+  it('byRule is an empty record when no ruleId blocks occur', () => {
+    writeSession('sess-empty-rule');
+    writeTrace('sess-empty-rule', [tripEvent(1)]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.byRule).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: denialBreakerTaggedFailures blindspot measurement (#3849)
+// ---------------------------------------------------------------------------
+
+function denialBreakerTaggedFailureEvent(seq: number, subagentId?: string): string {
+  return JSON.stringify({
+    ts: NOW_ISO,
+    seq,
+    kind: 'tool_call',
+    payload: {
+      phase: 'completed',
+      toolUseId: `tu-db-${seq}`,
+      name: 'read_file',
+      inputBytes: 10,
+      resultBytes: 50,
+      durationMs: 5,
+      isError: true,
+      failureClass: 'denial-breaker',
+      truncated: false,
+      ...(subagentId ? { subagentId } : {}),
+    },
+  });
+}
+
+describe('aggregateGuardrailFalsePositives — denialBreakerTaggedFailures (#3849)', () => {
+  it('counts each completed tagged failure row, not distinct trips or actors', () => {
+    writeSession('sess-db-1');
+    writeTrace('sess-db-1', [
+      denialBreakerTaggedFailureEvent(1, 'child-abc'),
+      denialBreakerTaggedFailureEvent(2, 'child-abc'),
+    ]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTaggedFailures).toBe(2);
+    expect(result.totalTrips).toBe(0);
+    expect(result.byRule).toEqual({});
+  });
+
+  it('does not count denial-breaker events that are not errors', () => {
+    writeSession('sess-db-no-err');
+    writeTrace('sess-db-no-err', [
+      JSON.stringify({
+        ts: NOW_ISO, seq: 1, kind: 'tool_call',
+        payload: {
+          phase: 'completed', toolUseId: 'tu-1', name: 'read_file',
+          inputBytes: 10, resultBytes: 20, durationMs: 5,
+          isError: false, failureClass: 'denial-breaker', truncated: false,
+        },
+      }),
+    ]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTaggedFailures).toBe(0);
+  });
+
+  it('does not count started tool calls even when tagged as errors', () => {
+    writeSession('sess-db-started');
+    const event = JSON.parse(denialBreakerTaggedFailureEvent(1)) as { payload: { phase: string } };
+    event.payload.phase = 'started';
+    writeTrace('sess-db-started', [JSON.stringify(event)]);
+    expect(aggregateGuardrailFalsePositives(opts()).denialBreakerTaggedFailures).toBe(0);
+  });
+
+  it('does not count tool_call errors with other failureClass values', () => {
+    writeSession('sess-db-other');
+    writeTrace('sess-db-other', [
+      JSON.stringify({
+        ts: NOW_ISO, seq: 1, kind: 'tool_call',
+        payload: {
+          phase: 'completed', toolUseId: 'tu-1', name: 'bash',
+          inputBytes: 10, resultBytes: 20, durationMs: 5,
+          isError: true, failureClass: 'timeout', truncated: false,
+        },
+      }),
+    ]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTaggedFailures).toBe(0);
+  });
+
+  it('accumulates denialBreakerTaggedFailures across multiple sessions', () => {
+    writeSession('sess-db-a');
+    writeTrace('sess-db-a', [denialBreakerTaggedFailureEvent(1)]);
+    writeSession('sess-db-b');
+    writeTrace('sess-db-b', [denialBreakerTaggedFailureEvent(1), denialBreakerTaggedFailureEvent(2)]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.denialBreakerTaggedFailures).toBe(3);
+  });
+
+  it('zero-aggregate has denialBreakerTaggedFailures = 0', () => {
+    const z = zeroGuardrailFalsePositiveAggregates();
+    expect(z.denialBreakerTaggedFailures).toBe(0);
+    expect(z.byRule).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: resilience
 // ---------------------------------------------------------------------------
 

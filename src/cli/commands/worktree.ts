@@ -68,7 +68,7 @@ export function registerWorktreeCommand(program: Command): void {
         'PRUNE?',
       ].join(' | ');
       console.log(palette.heading(header));
-      console.log('-'.repeat(header.length));
+      console.log(palette.dim('-'.repeat(header.length)));
 
       for (const c of result.candidates) {
         const row = [
@@ -78,7 +78,7 @@ export function registerWorktreeCommand(program: Command): void {
           c.verdict.padEnd(22),
           verdictWouldPrune(c.verdict),
         ].join(' | ');
-        console.log(row);
+        console.log(palette.dim(row));
       }
 
       if (result.candidates.length === 0) {
@@ -86,7 +86,7 @@ export function registerWorktreeCommand(program: Command): void {
       }
 
       if (result.warnings.length > 0) {
-        console.log('');
+        console.log(''); // console-ok
         for (const w of result.warnings) {
           console.log(palette.warning(w));
         }
@@ -175,14 +175,12 @@ export function registerWorktreeCommand(program: Command): void {
       const warnCount = result.warnings.filter((w) => w.startsWith('[WARN]')).length;
       const errorCount = result.warnings.filter((w) => w.startsWith('[ERROR]')).length;
       const tallyStr = buildVerdictTallyString(result.candidates);
-      console.log(
-        `Removed: ${result.removed.length}, Warned: ${warnCount}, Errors: ${errorCount}${tallyStr}`,
-      );
+      console.log(palette.info(`Removed: ${result.removed.length}, Warned: ${warnCount}, Errors: ${errorCount}${tallyStr}`));
 
       for (const c of result.candidates) {
         const isRemoved = result.removed.includes(c.path);
         const icon = isRemoved ? palette.error('✗') : palette.success('✓');
-        console.log(`  ${icon} [${c.verdict.padEnd(22)}] ${c.path}`);
+        console.log(palette.dim(`  ${icon} [${c.verdict.padEnd(22)}] ${c.path}`));
       }
 
       const hasErrors = printWarnings(result.warnings);
