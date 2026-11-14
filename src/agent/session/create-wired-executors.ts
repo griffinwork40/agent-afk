@@ -32,6 +32,7 @@ import type { HookRegistry } from '../hooks.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import type { TraceSink } from '../trace/writer.js';
 import { pendingChildBillingStreams } from './manager-shutdown-config.js';
+import { drainThenDispose } from '../subagent/continuation-dispose.js';
 
 
 /** Options for {@link createWiredExecutors}. */
@@ -214,10 +215,9 @@ export function createWiredExecutors(
   return {
     executors,
     dispose(): Promise<void> {
-      disposedPromise ??= drain('close').then(() => {
-        // Release any worktrees kept for continuation chains at session end.
-        wired.continuationRegistry.dispose();
-      });
+      // Release any worktrees kept for continuation chains at session end,
+      // even when the drain rejects (#4266). The rejection still propagates.
+      disposedPromise ??= drainThenDispose(() => drain('close'), wired.continuationRegistry).then(() => undefined);
       return disposedPromise;
     },
   };

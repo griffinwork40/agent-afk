@@ -26,6 +26,7 @@ import {
   getApiKeyForModel,
 } from '../cli/shared-helpers.js';
 import type { TelegramTraceWriter } from './session-context.js';
+import { drainThenDispose } from '../agent/subagent/continuation-dispose.js';
 
 export interface TelegramExecutorWiringOptions {
   /** API key for the session model. */
@@ -137,15 +138,13 @@ export function wireTelegramExecutors(
   });
 
   // -- Drain callback -------------------------------------------------------
-  const drainSubagents: AgentConfig['drainSubagents'] = async (reason) => {
+  const drainSubagents: AgentConfig['drainSubagents'] = (reason) => drainThenDispose(async () => {
     bgNotifier.dispose();
     await backgroundRegistry.cancelAll();
-    const result = await executors.rootManager.abortAllAndDrain(
+    return executors.rootManager.abortAllAndDrain(
       'session_end', 'user_signal', undefined, reason === 'reset',
     );
-    executors.continuationRegistry.dispose();
-    return result;
-  };
+  }, executors.continuationRegistry); // dispose even when the drain rejects (#4266)
 
   // -- Late-bind helper -----------------------------------------------------
   const bindSession = (session: AgentSession): void => {

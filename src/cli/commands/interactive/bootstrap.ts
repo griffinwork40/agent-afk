@@ -21,6 +21,7 @@ import { wireTrustedSkillEvents, wireProviderGrants, createReplInput, createTurn
 import { buildAgentSession, buildSharedDeps, createBootstrapSharedStores } from './bootstrap-session-builder.js';
 import { registerAll } from '../../slash/index.js';
 import { setTasksIctx } from '../../slash/commands/tasks.js';
+import { withContinuationDispose } from '../../../agent/subagent/continuation-dispose.js';
 
 // Re-exported so `resume-swap.test.ts` (and the mid-session swap closure
 // below) can resolve `buildAgentSession` from this module — the historical
@@ -45,25 +46,6 @@ export { buildAgentSession } from './bootstrap-session-builder.js';
 async function activatePluginEntrypoints(hookRegistry: Parameters<typeof installPluginHooks>[0]): Promise<void> {
   await ensurePluginEntrypointsLoaded();
   installPluginHooks(hookRegistry);
-}
-
-/**
- * Wrap a shutdown config's drainSubagents to also dispose the continuation
- * registry at session end. Extracted from bootstrapSession to stay within the
- * 200-line ceiling.
- */
-function withContinuationDispose(
-  shutdown: ReturnType<typeof managerShutdownConfig>,
-  registry: import('../../../agent/subagent/continuation-registry.js').ContinuationRegistry,
-): ReturnType<typeof managerShutdownConfig> {
-  return {
-    ...shutdown,
-    drainSubagents: async (reason: Parameters<NonNullable<typeof shutdown.drainSubagents>>[0]) => {
-      const result = await shutdown.drainSubagents?.(reason);
-      registry.dispose();
-      return result;
-    },
-  };
 }
 
 /**

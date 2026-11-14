@@ -5,6 +5,7 @@ import { tryCredentialSourceForModel } from '../../agent/auth/credential-source.
 import type { AgentConfig, AgentModelInput } from '../../agent/types.js';
 import { AgentSession } from '../../agent/session.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
+import { withContinuationDispose } from '../../agent/subagent/continuation-dispose.js';
 import { MemoryStore, injectHotMemory, injectGoalPrompt, injectEpisodeRecall } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
@@ -189,17 +190,8 @@ export function buildDaemonSessionFactory(
       // Cascade-abort and drain in-flight children before the writer seals,
       // so a wave still running when this session ends emits real `cancelled`
       // rows instead of vanishing (#733).
-      ...(() => {
-        const shutdown = managerShutdownConfig(rootManager, composeExecutor);
-        return {
-          ...shutdown,
-          drainSubagents: async (reason: Parameters<NonNullable<AgentConfig['drainSubagents']>>[0]) => {
-            const result = await shutdown.drainSubagents?.(reason);
-            continuationRegistry.dispose();
-            return result;
-          },
-        };
-      })(),
+      // The continuation registry is disposed even when the drain rejects (#4266).
+      ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
       // User-facing surface for trace `origin` attribution. Forced after
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.
