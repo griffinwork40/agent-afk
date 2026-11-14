@@ -51,6 +51,8 @@ Isolation creates a managed branch under `.afk-worktrees/` from the dispatching 
 
 Alternatively, call the `worktree` tool's `create` action with `name` and optional `base`, then pass its returned absolute path as the child's `cwd`. Managed creation writes `.afk-worktree-meta.json`; raw `git worktree add` does not, and may be treated as an orphan by the sweeper.
 
+`interactive.worktreeAutoname` controls automatic worktree naming; `interactive.worktreeBranchPrefix` sets the branch prefix and is human-controlled. In the REPL, `/worktree` exposes listing and pruning through the same sweep engine.
+
 ## Inspect and clean up checkouts
 
 ```bash

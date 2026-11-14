@@ -590,7 +590,7 @@ describe('printExitSummary', () => {
     printExitSummary(ctx, undefined, save);
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
-      ['diff', '--shortstat', 'HEAD'],
+      ['--no-optional-locks', 'diff', '--shortstat', 'HEAD'],
       expect.objectContaining({ cwd: process.cwd() }),
     );
   });

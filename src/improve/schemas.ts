@@ -88,8 +88,9 @@ export type TriageNote = z.infer<typeof TriageNoteSchema>;
  * The card schema. Slug-keyed; merged on re-detection by `card-writer.ts`.
  *
  * Merge rules (enforced by writer, asserted in tests):
- *   - `firstSeen` is the MIN of all observations.
- *   - `lastSeen` is the MAX of all observations.
+ *   - `firstSeen` is the MIN of observations where evidence was added (merged-noops do not advance it).
+ *   - `lastSeen` is the MAX of observations where evidence was added (merged-noops do not advance it).
+ *   - `sightingCount` counts every merge call, including merged-noops — tracks recurrence beyond the evidence cap.
  *   - `occurrenceCount` is the count of evidence entries (post-dedup).
  *   - `evidence` is deduped by `(sessionId, eventIndices[0])`.
  *   - `notes` from disk are PRESERVED — scans never touch them.
@@ -106,6 +107,7 @@ export const FailureCardSchema = z.object({
   firstSeen: z.string().datetime(),
   lastSeen: z.string().datetime(),
   occurrenceCount: z.number().int().nonnegative(),
+  sightingCount: z.number().int().nonnegative().default(0),
   evidence: z.array(FailureEvidenceSchema).min(1),
   /** Detector-specific blob. Shape varies by `pattern`; consumers should
    *  guard on `pattern` before reading fields. */

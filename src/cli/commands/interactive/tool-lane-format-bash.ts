@@ -296,6 +296,7 @@ export function findCommandWordSpans(s: string): Span[] {
       // (e.g. `-u=root`) are non-standard and no WRAPPERS entry exercises
       // that form, so we guard with `startsWith('--')` to stay precise.
       if (word.startsWith('--') && word.includes('=')) { return; }
+      if (word.includes('=')) { return; }
       skipWrapperValue = wrapper.has(word);
       return;
     }

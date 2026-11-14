@@ -40,6 +40,7 @@
  */
 
 import { env, isExplicitlyDisabled } from '../../../config/env.js';
+import { isUsageAwarenessEnabled } from '../../usage/usage-awareness-toggle.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { readUsageRecord, ANTHROPIC_OAUTH } from '../../usage/usage-snapshot.js';
 import { bindingWindow, isStale } from '../../usage/usage-budget.js';
@@ -108,7 +109,7 @@ export function buildVitalsNote(input: VitalsInput, deps: VitalsDeps = {}): stri
     const context = contextField(input, deps);
     if (context !== undefined) parts.push(context);
 
-    if (input.subagentId === undefined && input.claudeUsage === true) {
+    if (input.subagentId === undefined && input.claudeUsage === true && isUsageAwarenessEnabled()) {
       const usage = usageField((deps.readClaudeUsage ?? readClaudeUsageCached)(), now);
       if (usage !== undefined) parts.push(usage);
     }

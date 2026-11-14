@@ -35,6 +35,7 @@ import { routeFromCtx, sendOptions, type TelegramRoute } from './route.js';
 import { escapeRegExp } from '../utils/regexp.js';
 import { errorMessage } from '../utils/errors.js';
 import { registerReactionHandler, ALLOWED_UPDATE_TYPES } from './bot.reaction-handler.js';
+import { palette } from '../cli/palette.js';
 
 /**
  * Bot configuration options
@@ -574,7 +575,7 @@ export class TelegramBot {
    */
   private log(...args: unknown[]): void {
     if (this.options.verbose) {
-      console.log('[TelegramBot]', ...args);
+      console.log(palette.dim('[TelegramBot]'), ...args);
     }
   }
 }

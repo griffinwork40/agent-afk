@@ -22,6 +22,8 @@ import {
   type LspLocation,
 } from './lsp-symbols.js';
 import { createCodeSymbolsHandler } from '../lsp-symbols-surface.js';
+import { writeFakeLspServer } from '../../lsp/__test-utils__/fake-lsp-server.js';
+import { getLspPool } from '../../lsp/pool.js';
 
 // ── scratch dir ────────────────────────────────────────────────────────────
 
@@ -31,70 +33,34 @@ const tempDir = path.join(
 );
 
 afterAll(async () => {
+  await getLspPool().disposeAll();
   await rm(tempDir, { recursive: true, force: true });
 });
 
 // ── fake LSP server helpers ────────────────────────────────────────────────
 
 /**
- * Write a fake LSP server that waits for the symbol request (id===2, sent
- * after initialize=1 and initialized notification) and replies with `locs`.
+ * Fake LSP servers use the shared protocol-correct util: they answer
+ * `initialize` (the persistent client waits for it) and reply to
+ * definition/references with `locs`.
  */
 function writeFakeSymbolServer(scriptPath: string, locs: unknown[]): void {
-  const locsJson = JSON.stringify(locs);
-  const script = `
-const chunks = [];
-process.stdin.on('data', (chunk) => {
-  chunks.push(chunk);
-  const buf = Buffer.concat(chunks);
-  const str = buf.toString('utf8');
-  // Wait until we see the symbol request (textDocument/definition or references)
-  if (!str.includes('textDocument/definition') && !str.includes('textDocument/references')) return;
-
-  // Parse id from the LAST request (the symbol one, id=2)
-  const idMatch = str.match(/"id"\\s*:\\s*(\\d+)/g);
-  const lastId = idMatch ? parseInt(idMatch[idMatch.length - 1].match(/\\d+/)[0]) : 2;
-
-  const locs = ${locsJson};
-  const body = JSON.stringify({ jsonrpc: '2.0', id: lastId, result: locs });
-  const msg = 'Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body;
-  process.stdout.write(msg);
-  setTimeout(() => process.exit(0), 200);
-});
-process.stdin.resume();
-`;
-  writeFileSync(scriptPath, script, 'utf8');
+  writeFakeLspServer(scriptPath, { locations: locs });
 }
 
 /** Write a fake server that returns a JSON-RPC error for the symbol request. */
 function writeFakeErrorServer(scriptPath: string): void {
-  const script = `
-const chunks = [];
-process.stdin.on('data', (chunk) => {
-  chunks.push(chunk);
-  const buf = Buffer.concat(chunks);
-  const str = buf.toString('utf8');
-  if (!str.includes('textDocument/definition') && !str.includes('textDocument/references')) return;
-  const idMatch = str.match(/"id"\\s*:\\s*(\\d+)/g);
-  const lastId = idMatch ? parseInt(idMatch[idMatch.length - 1].match(/\\d+/)[0]) : 2;
-  const body = JSON.stringify({ jsonrpc: '2.0', id: lastId, error: { code: -32601, message: 'Method not found' } });
-  const msg = 'Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body;
-  process.stdout.write(msg);
-  setTimeout(() => process.exit(0), 200);
-});
-process.stdin.resume();
-`;
-  writeFileSync(scriptPath, script, 'utf8');
+  writeFakeLspServer(scriptPath, { requestError: true });
 }
 
 /** Write a fake server that never responds (timeout simulation). */
 function writeSilentServer(scriptPath: string): void {
-  writeFileSync(scriptPath, `process.stdin.resume();\n`, 'utf8');
+  writeFakeLspServer(scriptPath, { silent: true });
 }
 
 /** Write a fake server that exits immediately (crash simulation). */
 function writeCrashServer(scriptPath: string): void {
-  writeFileSync(scriptPath, `process.exit(1);\n`, 'utf8');
+  writeFakeLspServer(scriptPath, { crashOnStart: true });
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

@@ -301,9 +301,14 @@ function repaintPickerFrame(self: FrameHost): void {
     self.scrollRegion,
     contentHugBandReserve(self, self.stdout.rows ?? 24),
   );
-  const { margin } = contentBand(self.stdout.columns ?? 80);
+  const { margin, width: bandWidth } = contentBand(self.stdout.columns ?? 80);
+  // Skip band-width truncation when the controller requests it (e.g.
+  // text-input overlays with an inline caret, or bash-output-viewer with
+  // pre-formatted rows). Passing undefined lets buildPickerFrameLines
+  // default to Infinity (no-op).
+  const pickerBandWidth = self.pickerController.skipBandTruncation ? undefined : bandWidth;
   const frameLines = buildPickerFrameLines(
-    chrome, layout.trimmedOverlay, layout.renderGap, pickerRows, margin,
+    chrome, layout.trimmedOverlay, layout.renderGap, pickerRows, margin, pickerBandWidth,
   );
   // Empty-frame guard: when the picker's renderRows() is empty and no
   // chrome is active, frameLines is []. The CupFrameRenderer clamps

@@ -45,6 +45,11 @@ export function liveChildAgentCount(
   entries: ReadonlyMap<string, Entry>,
   parentId: string,
 ): number {
+  // O(N) scan over all lane entries per call. Called once per stalled source
+  // per 80ms repaint tick; non-blocking at current scale (lane entries are
+  // bounded by a single turn's tool-use depth). A future optimization could
+  // maintain an O(1) parent→liveChildren index, but the complexity cost is
+  // not justified until profiling shows this as a hotspot. (Issue #4357.)
   let count = 0;
   for (const entry of entries.values()) {
     if (entry.kind !== 'tool' || entry.agentContext !== parentId) continue;

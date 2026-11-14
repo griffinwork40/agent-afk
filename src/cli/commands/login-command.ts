@@ -4,7 +4,7 @@ import { providerForModel } from '../../agent/providers/index.js';
 import { getModel } from '../shared-helpers.js';
 import { promptToken, runAuthWizard } from '../auth-wizard.js';
 import {
-  loadAnthropicCredential,
+  resolveAnthropicCredential,
   preloadClaudeKeychainOAuth,
 } from '../../agent/auth/credential-resolver.js';
 import { describeCredentialSource } from '../auth-wizard.describe-source.js';
@@ -44,22 +44,14 @@ export function registerLoginCommand(program: Command): void {
       const provider = providerForModel(getModel() as string);
       if (provider === 'openai-compatible' || provider === 'openai-codex') {
         console.log(palette.warning('`afk login` is Anthropic-only.'));
-        console.log('');
-        console.log('For OpenAI-backed models (gpt-*, o1*, o3*, o4*, codex-*), authenticate with one of:');
+        console.log(''); // console-ok
+        console.log(palette.info('For OpenAI-backed models (gpt-*, o1*, o3*, o4*, codex-*), authenticate with one of:'));
         console.log(palette.brand('  export OPENAI_API_KEY=sk-proj-...'));
         console.log(palette.meta('  # or: export CODEX_API_KEY=...'));
         console.log(palette.brand('  codex login --api-key sk-proj-...'));
-        console.log('');
-        console.log(
-          palette.meta(
-            'Run `afk provider auth diagnose` to see which auth source AFK will use.',
-          ),
-        );
-        console.log(
-          palette.meta(
-            'To save an Anthropic key for Claude models instead, re-run with AFK_MODEL=sonnet (or similar) first.',
-          ),
-        );
+        console.log(''); // console-ok
+        console.log(palette.meta('Run `afk provider auth diagnose` to see which auth source AFK will use.'));
+        console.log(palette.meta('To save an Anthropic key for Claude models instead, re-run with AFK_MODEL=sonnet (or similar) first.'));
         return;
       }
 
@@ -76,18 +68,14 @@ export function registerLoginCommand(program: Command): void {
         // Refresh any near-expiry keychain token before checking (same as the
         // first-run detector in src/cli/index.ts).
         await preloadClaudeKeychainOAuth(provider);
-        const existing = loadAnthropicCredential();
+        const existing = resolveAnthropicCredential();
         if (existing) {
-          const source = describeCredentialSource();
+          const source = describeCredentialSource(existing.source);
           console.log(palette.success(`Already authenticated via ${source}.`));
-          console.log('');
-          console.log('You\'re good to go -- run `afk chat "hello"` to get started.');
-          console.log('');
-          console.log(
-            palette.meta(
-              'To replace this credential, run `afk login --force` or pass a token directly: `afk login <token>`',
-            ),
-          );
+          console.log(''); // console-ok
+          console.log(palette.success('You\'re good to go -- run `afk chat "hello"` to get started.'));
+          console.log(''); // console-ok
+          console.log(palette.meta('To replace this credential, run `afk login --force` or pass a token directly: `afk login <token>`'));
           return;
         }
       }

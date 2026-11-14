@@ -349,8 +349,8 @@ describe('handleFarmCallback — Full diff (d)', () => {
     const recordHumanDecision = vi.fn();
     const writeFarmDecisionFact = vi.fn();
     const execGit = vi.fn(async (_cwd: string, args: string[]) => {
-      if (args[0] === 'log') return { stdout: 'abc123 add jose', stderr: '' };
-      if (args[0] === 'diff') return { stdout: ' src/auth.ts | 12 +++++++-----', stderr: '' };
+      if (args.includes('log')) return { stdout: 'abc123 add jose', stderr: '' };
+      if (args.includes('diff')) return { stdout: ' src/auth.ts | 12 +++++++-----', stderr: '' };
       return { stdout: '', stderr: '' };
     });
     const { ctx, answerCbQuery, reply } = makeCtx('afk:f:d:my-slug');
@@ -389,8 +389,8 @@ describe('handleFarmCallback — Full diff (d)', () => {
     const winnerBranch = manifest.branches[1]!; // index: 2
 
     const execGit = vi.fn(async (_cwd: string, args: string[]) => {
-      if (args[0] === 'log') return { stdout: 'def456 winner commit', stderr: '' };
-      if (args[0] === 'diff') return { stdout: ' src/winner.ts | 9 +++++----', stderr: '' };
+      if (args.includes('log')) return { stdout: 'def456 winner commit', stderr: '' };
+      if (args.includes('diff')) return { stdout: ' src/winner.ts | 9 +++++----', stderr: '' };
       return { stdout: '', stderr: '' };
     });
     const { ctx, reply } = makeCtx('afk:f:d:my-slug');

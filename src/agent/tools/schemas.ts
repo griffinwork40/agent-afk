@@ -85,6 +85,7 @@ import {
 // ── Orchestration (background jobs, patch-apply, witness) ─────────────────
 import { cancelBackgroundJobTool, patchApplyTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
+import { readJournalTool } from './schemas.journal.js';
 import { listSessionsTool, sendToSessionTool } from './schemas.peer.js';
 import { waitForTool } from './schemas.wait-for.js';
 import { testRunTool } from './schemas.test-run.js';
@@ -94,6 +95,7 @@ import { modelCompleteTool } from './schemas.model-complete.js';
 import { gitReadTool } from './schemas.git-read.js';
 import { remoteAgentTool } from './schemas.remote-agent.js';
 import { codeSymbolsTool } from './schemas.lsp-symbols.js';
+import { artifactToolSchemas } from './schemas.artifact.js';
 
 /**
  * The always-on built-in tool definitions,
@@ -117,7 +119,7 @@ import { codeSymbolsTool } from './schemas.lsp-symbols.js';
  * reuse on Anthropic prompt caching and local inference servers.
  *
  * The core segment = builtins not in any toolGroups() group, not
- * surface-filtered, and not send_telegram. It starts with the six LOCKED_TOOLS
+ * surface-filtered, not registry-filtered, and not send_telegram. It starts with the six LOCKED_TOOLS
  * builtins (read_file, write_file, edit_file, grep, glob, list_directory),
  * which LOCKED_TOOLS guarantees can never be disabled by operator config.
  * Every other core tool can still be disabled individually via tools.disabled
@@ -133,7 +135,8 @@ import { codeSymbolsTool } from './schemas.lsp-symbols.js';
  *   read_witness, search_witness,
  *   remote_agent, web_scrape, web_request
  *
- * ---- Optional tail (indices 23..44) -----------------------------------------
+ * ---- Optional tail (indices 23..47) -----------------------------------------
+ *   artifact_get, artifact_list, artifact_read,
  *   cancel_background_job, send_message_to_agent, get_background_job_health,
  *   send_telegram,
  *   image_generate, image_edit,
@@ -174,10 +177,12 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   configSetTool,
   readWitnessTool,
   searchWitnessTool,
+  readJournalTool,
   remoteAgentTool,
   webScrapeTool,
   webRequestTool,
-  // -- Optional tail (23..44): disableable groups / surface-filtered -----------
+  // -- Optional tail (24..48): disableable groups / surface-filtered -----------
+  ...artifactToolSchemas,
   cancelBackgroundJobTool,
   sendMessageToAgentTool,
   getBackgroundJobHealthTool,

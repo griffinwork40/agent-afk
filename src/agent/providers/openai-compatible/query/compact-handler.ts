@@ -30,7 +30,9 @@ import {
 import { emitSessionPhase } from '../../../trace/emit.js';
 import { errorMessage } from '../../../../utils/errors.js';
 import {
+  COMPACT_SUMMARY_MAX_TOKENS,
   COMPACT_SYSTEM_PROMPT,
+  summarizerInputCharBudget,
   wrapTranscriptForSummary,
 } from '../../shared/compaction.js';
 import { compactOpenAIHistory, readShrinkFraction } from '../compact.js';
@@ -45,6 +47,7 @@ import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import type { TraceSink } from '../../../trace/index.js';
 import { env } from '../../../../config/env.js';
 import { resolveOpenAICompactModel } from './compact-model-resolver.js';
+import { resolveSummarizerWindow } from '../../shared/compact-summarizer.js';
 
 /** Live accessors the compaction handler needs from the owning query instance. */
 export interface CompactHandlerContext {
@@ -93,7 +96,7 @@ export async function runSummarizeViaResponses(
       system: COMPACT_SYSTEM_PROMPT,
       user: wrapTranscriptForSummary(transcript),
       isChatGptBackend: ctx.opts.auth.source === 'chatgpt-oauth',
-      maxTokens: 1024,
+      maxTokens: COMPACT_SUMMARY_MAX_TOKENS,
       signal,
     });
   } catch (err) {
@@ -173,6 +176,10 @@ export async function runCompactHistory(
     priorTurns: ctx.priorTurns,
     usedFraction,
     shrinkAtFraction: readShrinkFraction(),
+    // Budget follows the window of the connection that sends the summary:
+    // the session's own (subscription catalog on chatgpt-oauth) unless
+    // AFK_COMPACT_MODEL routes to a foreign provider.
+    summarizerInputMaxChars: summarizerInputBudgetFor(ctx, compactModel),
     summarize,
     isClosed: ctx.closed, // boolean snapshot — inherited from pre-split behaviour; compactOpenAIHistory accepts boolean, not a function
     isIdle: ctx.abort.isIdle(),
@@ -191,4 +198,17 @@ export async function runCompactHistory(
   });
   ctx.journal.afterCompact(ctx.priorTurns, compactResult);
   return compactResult;
+}
+
+/**
+ * Summarizer input cap for this session. The route decision lives in
+ * `resolveSummarizerWindow`; this only states what the session's own closure
+ * would use: `compactModel` over the session's connection.
+ */
+function summarizerInputBudgetFor(ctx: CompactHandlerContext, compactModel: string): number {
+  const window = resolveSummarizerWindow('openai-compatible', env.AFK_COMPACT_MODEL, {
+    model: compactModel,
+    subscriptionPath: ctx.opts.auth.source === 'chatgpt-oauth',
+  });
+  return summarizerInputCharBudget(window.model, window.subscriptionPath);
 }

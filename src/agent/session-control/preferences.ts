@@ -1,4 +1,5 @@
 import type { SessionStats, ThinkingUiMode } from '../../cli/slash/types.js';
+import { setUsageAwareness } from '../usage/usage-awareness-toggle.js';
 import type { FastModeContext, FastModeController, FastModePreference, FastModeStatus } from '../fast-mode.js';
 import { saveSession } from '../../cli/session-store.js';
 import { slugifySessionName } from '../../cli/session-name.js';
@@ -58,6 +59,30 @@ export function setSessionThinking(
   stats.thinkingUi = mode;
   return { ok: true, mode };
 }
+
+// ---------------------------------------------------------------------------
+// Usage awareness
+// ---------------------------------------------------------------------------
+
+export function getUsageAwareness(stats: Pick<SessionStats, 'usageAwareness'>): boolean {
+  return stats.usageAwareness !== false;
+}
+
+export function setUsageAwarenessPreference(
+  stats: Pick<SessionStats, 'usageAwareness'>,
+  value: string,
+): { ok: true; enabled: boolean } | { ok: false } {
+  const v = value.trim().toLowerCase();
+  if (v !== 'on' && v !== 'off') return { ok: false };
+  const enabled = v === 'on';
+  stats.usageAwareness = enabled;
+  setUsageAwareness(enabled);
+  return { ok: true, enabled };
+}
+
+// ---------------------------------------------------------------------------
+// Fast mode
+// ---------------------------------------------------------------------------
 
 export function readSessionFast(
   controller: FastModeController,

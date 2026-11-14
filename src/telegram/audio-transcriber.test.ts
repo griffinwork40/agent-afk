@@ -235,37 +235,58 @@ describe('createTranscriber AFK_TRANSCRIBE_TIMEOUT_MS parsing', () => {
     expect(t).not.toBeNull();
   });
 
-  it('falls back to 60000 for a non-numeric value (warns)', () => {
+  it('falls back to 60000 for a non-numeric value (warns)', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ text: 'hi' }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })));
     const t = createTranscriber({
       AFK_TRANSCRIBE_API_URL: API_URL,
       AFK_TRANSCRIBE_TIMEOUT_MS: 'abc',
     });
     expect(t).not.toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('AFK_TRANSCRIBE_TIMEOUT_MS'));
+    await t!.transcribe(AUDIO_BYTES, FILE_NAME, MAX_BYTES);
+    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
     warnSpy.mockRestore();
+    timeoutSpy.mockRestore();
   });
 
-  it('falls back to 60000 for a negative value (warns)', () => {
+  it('falls back to 60000 for a negative value (warns)', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ text: 'hi' }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })));
     const t = createTranscriber({
       AFK_TRANSCRIBE_API_URL: API_URL,
       AFK_TRANSCRIBE_TIMEOUT_MS: '-1',
     });
     expect(t).not.toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('AFK_TRANSCRIBE_TIMEOUT_MS'));
+    await t!.transcribe(AUDIO_BYTES, FILE_NAME, MAX_BYTES);
+    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
     warnSpy.mockRestore();
+    timeoutSpy.mockRestore();
   });
 
-  it('falls back to 60000 for zero (warns)', () => {
+  it('falls back to 60000 for zero (warns)', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ text: 'hi' }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })));
     const t = createTranscriber({
       AFK_TRANSCRIBE_API_URL: API_URL,
       AFK_TRANSCRIBE_TIMEOUT_MS: '0',
     });
     expect(t).not.toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('AFK_TRANSCRIBE_TIMEOUT_MS'));
+    await t!.transcribe(AUDIO_BYTES, FILE_NAME, MAX_BYTES);
+    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
     warnSpy.mockRestore();
+    timeoutSpy.mockRestore();
   });
 
   it('does not warn for a valid positive integer', () => {

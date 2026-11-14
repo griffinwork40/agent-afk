@@ -15,6 +15,7 @@
  */
 
 import os from 'os';
+import { beginBashCheckpoint } from '../../file-checkpoint/bash-checkpoint.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { wouldBeRestricted } from './_cwd-utils.js';
@@ -260,15 +261,12 @@ export function createBashHandler(
     const fallbackBase = context.resolveBase ?? cwd;
     const escaping: string[] = [];
     for (const expanded of scanCandidatePaths(command, os.homedir())) {
+      // Shared actor-root policy only: keep this advisory floor-free and never-blocking.
       const verdict = wouldBeRestricted(expanded, context, 'write', fallbackBase);
       if (verdict.restricted) escaping.push(verdict.resolved);
     }
     if (escaping.length === 0) return;
     _pathEscapeWarned = true;
-    console.warn(
-      `[security] bash: command references path(s) outside writeRoots: ${escaping.join(', ')} — ` +
-        'bash containment is best-effort (tracked C4); use file tools for contained writes.',
-    );
     // Telemetry: counts + mode only. The raw command string and the escaping
     // paths list are tool input and stay out of the JSONL (audit §G.4) — same
     // privacy rule as the overflow-kill path above.
@@ -283,7 +281,10 @@ export function createBashHandler(
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
     let { command, timeout_ms, background, explicitTimeout, clampedTimeoutWarning } = parseBashInput(input);
 
+    const checkpoint = context?.fileCheckpoint ? await beginBashCheckpoint(context.fileCheckpoint, cwd ?? context.resolveBase ?? process.cwd(),
+      signal.aborted ? 'aborted before spawn' : background ? 'run_in_background' : undefined, signal) : undefined;
     if (signal.aborted) {
+      await checkpoint?.finish('aborted before spawn');
       return { content: 'Command aborted', isError: true };
     }
 
@@ -311,6 +312,7 @@ export function createBashHandler(
     }
 
     const startedAt = Date.now();
+    let detachedCapture: Promise<void> | undefined;
     const rawResult = await new Promise<{ content: string; isError?: boolean; truncated?: boolean; capturePath?: string; durationMs?: number; exitCode?: number }>((resolve) => {
       let resolved = false;
 
@@ -403,6 +405,8 @@ export function createBashHandler(
           resolve,
         };
         applyBashDetach(context.detachRegistry, toolUseId, command, (token, label) => {
+          // Invariant: start the final snapshot at detach, not eventual close.
+          detachedCapture = checkpoint?.finish('detached; later changes are not captured');
           execOnDetach(token, label, toolUseId, detachParams);
           resolved = resolvedRef.value;
           deregisterOnClose = deregisterOnCloseRef.value;
@@ -415,7 +419,7 @@ export function createBashHandler(
       });
 
       attachErrorHandler({ proc, context, cwd, startedAt, settle });
-    });
+    }).finally(async () => { await (detachedCapture ?? checkpoint?.finish()); });
     if (clampedTimeoutWarning) {
       return formatClampedWarningResult(rawResult, clampedTimeoutWarning, true);
     }

@@ -230,16 +230,29 @@ export class HookBlockedError extends Error {
     message: string,
     public readonly event: string,
     public readonly reason?: string,
-    options?: { cause?: unknown; injectContext?: string },
+    options?: { cause?: unknown; injectContext?: string; riskCategory?: import('../agent/risk-classifier.js').RiskCategory; ruleId?: string },
   ) {
     super(message);
     this.name = "HookBlockedError";
     if (options?.cause !== undefined) this.cause = options.cause;
     if (options?.injectContext !== undefined) this.injectContext = options.injectContext;
+    if (options?.riskCategory !== undefined) this.riskCategory = options.riskCategory;
+    if (options?.ruleId !== undefined) this.ruleId = options.ruleId;
   }
+
+  /** Stable identifier supplied by the blocking hook, never inferred from its reason. */
+  public ruleId?: string;
 
   /** Optional explanation to append to the blocked tool_result content. */
   public injectContext?: string;
+
+  /**
+   * Named risk category from the AFK mode gate classifier. Populated when the
+   * block originated from {@link import('../agent/afk-mode-gate.js').createAfkModeGate}
+   * and the classifier produced a verdict — allows `emitHookDecision` on the
+   * BLOCK path to forward `riskCategory` to the trace payload.
+   */
+  public riskCategory?: import('../agent/risk-classifier.js').RiskCategory;
 }
 
 /**

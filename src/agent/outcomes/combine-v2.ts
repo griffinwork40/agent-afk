@@ -100,7 +100,16 @@ function hasClosureAbort(votes: Vote[]): boolean {
  */
 const SINGLE_COUNT_LFS: ReadonlySet<string> = new Set(['fix_of_fix']);
 
-/** Keep the first minor negative from each SINGLE_COUNT_LFS labeling function. */
+/**
+ * Keep at most one vote per {@link SINGLE_COUNT_LFS} labeling function.
+ *
+ * Only negative votes (`vote === -1`) are collapsed; non-negative votes
+ * (`vote === 0` abstain, `vote === 1` positive) pass through unconditionally.
+ * No LF currently emits `vote === 0`, but the guard is explicit so future
+ * abstain paths are not silently de-duplicated.
+ *
+ * @internal Not a stable public API — subject to change with the combiner.
+ */
 export function collapseSingleCountVotes(votes: Vote[]): Vote[] {
   const seen = new Set<string>();
   return votes.filter((v) => {

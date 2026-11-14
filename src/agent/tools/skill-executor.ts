@@ -39,6 +39,7 @@ import { executeForkedRegistrySkill, executePluginSkill } from './skill-executor
 import { errorMessage } from '../../utils/errors.js';
 import { skillAllowlistRefusal } from './skill-executor/allowlist.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
+import { runWithPluginSessionContext } from '../plugins/plugin-session-context.js';
 
 export type { SkillExecutorContext } from './skill-executor/types.js';
 
@@ -232,8 +233,17 @@ export class SkillExecutor {
     } catch {
       // not a registry skill — fall through to plugin lookup.
     }
+    // S-3 fix: hoist runWithPluginSessionContext above the fork/load/inline
+    // branch. The inline path already wrapped it internally; fork and load paths
+    // did not, causing the peer API to throw from those execution modes.
+    // Wrapping here gives all three paths a consistent ALS context without
+    // duplicating the wrap inside each branch.
+    const sessionId = this.ctx.parentSession.sessionId;
+
     if (skill) {
-      return await this.executeRegistrySkill(skill, parsed.arguments, call);
+      return await runWithPluginSessionContext(sessionId, () =>
+        this.executeRegistrySkill(skill, parsed.arguments, call),
+      );
     }
 
     // 2. Try plugin skills (SKILL.md body). Default is in-context LOAD; a
@@ -251,17 +261,19 @@ export class SkillExecutor {
         // so there is no child whose tool surface could be restricted.
         const readOnly =
           pluginSkill.readOnly === true || DEFAULT_READ_ONLY_SKILLS.has(parsed.name);
-        return await executePluginSkill(
-          this.internals(),
-          parsed.name,
-          pluginSkill.body,
-          pluginSkill.pluginPath,
-          parsed.arguments,
-          call,
-          readOnly,
-          pluginSkill.allowedTools,
-          pluginSkill.model,
-          entries.find(entry => entry.name === parsed.name)?.description,
+        return await runWithPluginSessionContext(sessionId, () =>
+          executePluginSkill(
+            this.internals(),
+            parsed.name,
+            pluginSkill.body,
+            pluginSkill.pluginPath,
+            parsed.arguments,
+            call,
+            readOnly,
+            pluginSkill.allowedTools,
+            pluginSkill.model,
+            entries.find(entry => entry.name === parsed.name)?.description,
+          ),
         );
       }
       // Default: in-context LOAD (2026-06 load-by-default flip). No readOnly —
@@ -277,12 +289,14 @@ export class SkillExecutor {
         /\$\{PLUGIN_ROOT(?::-(?:[^{}]|\$\{[^{}]*\})*)?\}|\$PLUGIN_ROOT\b/g,
         () => pluginSkill.pluginPath,
       );
-      return executeLoadedPluginSkill(
-        this.internals(),
-        parsed.name,
-        bodyWithRoot,
-        parsed.arguments,
-        call,
+      return runWithPluginSessionContext(sessionId, () =>
+        executeLoadedPluginSkill(
+          this.internals(),
+          parsed.name,
+          bodyWithRoot,
+          parsed.arguments,
+          call,
+        ),
       );
     }
 
@@ -357,6 +371,8 @@ export class SkillExecutor {
     let handlerError: unknown = undefined;
     let result: unknown;
     try {
+      // ALS context is set by the hoisted runWithPluginSessionContext at the
+      // execute() dispatch boundary (S-3 fix) — no inner wrap needed here.
       result = await skill.handler(
         args && args.length > 0 ? args : undefined,
         this.ctx.parentSession as IAgentSession,

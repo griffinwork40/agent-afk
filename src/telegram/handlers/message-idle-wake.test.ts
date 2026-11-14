@@ -208,6 +208,75 @@ describe('MessageHandler.wakeIdleSession (#3839)', () => {
     expect(mockStreamResponse).not.toHaveBeenCalled();
   });
 
+  it('fires a post-turn re-check after a turn releases while a bg job is pending (#3974 medium)', async () => {
+    // Scenario: onInjectable fires WHILE a turn is in flight (claimed). The
+    // initial wakeIdleSession call is a no-op (claimed). After the turn ends
+    // and releaseClaim fires, postTurnWake should trigger a new synthetic turn.
+    const sm = makeSessionManager('idle');
+    const handler = makeHandler(sm);
+    const registry = new BackgroundAgentRegistry({});
+    const notifier = new TelegramBgResultNotifier(registry, 6666);
+
+    // Keep the first synthetic turn alive so the slot stays claimed.
+    let releaseTurn!: () => void;
+    mockStreamResponse.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseTurn = resolve; }),
+    );
+
+    // First wake — claims slot and starts first synthetic turn.
+    handler.wakeIdleSession({ chatId: 6666 });
+    await vi.waitFor(() => expect(mockStreamResponse).toHaveBeenCalledTimes(1));
+
+    // Settle a second job WHILE the first turn is still held (slot claimed).
+    // onInjectable fires → wakeIdleSession returns early (claimed).
+    notifier.onInjectable = () => { handler.wakeIdleSession({ chatId: 6666 }); };
+    settleJob(registry, 'arrived while busy');
+    // Still only the first call — no second wake yet.
+    expect(mockStreamResponse).toHaveBeenCalledTimes(1);
+
+    // Release the first turn. processOne.finally calls postTurnWake which
+    // should detect the pending injection and fire a second synthetic turn.
+    releaseTurn();
+    await vi.waitFor(() => expect(mockStreamResponse).toHaveBeenCalledTimes(2));
+
+    notifier.dispose();
+  });
+
+  it('two bg jobs settling in quick succession on one idle session both get delivered (#3974 nit)', async () => {
+    // Both jobs settle synchronously before any wake turn runs. The first
+    // synthetic turn drains both (pendingInjections holds both). After the
+    // first turn the buffer is empty so postTurnWake is a no-op.
+    const sm = makeSessionManager('idle');
+    const handler = makeHandler(sm);
+    const registry = new BackgroundAgentRegistry({});
+    const notifier = new TelegramBgResultNotifier(registry, 5050);
+
+    // Wire wake BEFORE settling so both fire onInjectable.
+    notifier.onInjectable = () => { handler.wakeIdleSession({ chatId: 5050 }); };
+
+    // Settle both jobs synchronously — second onInjectable fires while first
+    // synthetic turn is still between fire-and-forget dispatch and its first
+    // reserveClaim (i.e. unclaimed at the moment of the second settle).
+    settleJob(registry, 'job-A');
+    settleJob(registry, 'job-B');
+
+    // Both results are held in pendingInjections; the first (and only)
+    // synthetic turn drains them together via drainBgInjections.
+    await vi.waitFor(() => expect(mockStreamResponse).toHaveBeenCalledTimes(1));
+
+    // Exactly one synthetic turn — second settle either fired into an already-
+    // claimed slot or was skipped by hasBgInjections returning false (first
+    // turn started). Either way only one processOne runs.
+    expect(mockStreamResponse).toHaveBeenCalledTimes(1);
+
+    const content = mockStreamResponse.mock.calls[0]![2] as string;
+    // Both envelopes must appear in the injected content.
+    expect(content).toContain('job-A');
+    expect(content).toContain('job-B');
+
+    notifier.dispose();
+  });
+
   it('does NOT fire when messages are already queued', async () => {
     const sm = makeSessionManager('streaming'); // session busy so we can enqueue
     const handler = makeHandler(sm);

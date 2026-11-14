@@ -38,16 +38,17 @@ function makeArgs(
 ): SystemPromptWiringArgs {
   return {
     config: {
+      model: 'sonnet',
       systemPrompt: { type: 'preset', preset: 'claude_code', append: APPEND },
-    },
-    hasSkillExecutor: false,
+    } as SystemPromptWiringArgs['config'],
+    skillExecutor: undefined,
     workspacePromptEnabled: false,
     readOnlyMemory: false,
     readOnlyState: false,
     resolvedSessionId: undefined,
     surface: 'cli',
     getCurrentCwd: () => '/test',
-    runtimeStateSource: { getWorkspace: () => undefined },
+    runtimeStateSource: { getWorkspace: () => undefined } as unknown as SystemPromptWiringArgs['runtimeStateSource'],
     ...overrides,
   };
 }
@@ -120,6 +121,93 @@ describe('buildSystemPromptWiring — agentTypeListing injection (#4217)', () =>
   });
 });
 
+describe('buildSystemPromptWiring — agent-type gate: grantsTool=false (#4220)', () => {
+  /**
+   * The gate in openai-compatible/index.ts:
+   *   `this.schemas.some(s => s.name === 'agent') && this.grantsTool('agent')`
+   * passes '' to buildSystemPromptWiring when either condition is false.
+   * These tests verify that buildSystemPromptWiring correctly suppresses the
+   * listing in both cases — the "grantsTool=false" path (#4220 item 2 & 3).
+   */
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('omits listing when agent schema present but grantsTool returns false (empty string passed)', () => {
+    // Simulates: this.schemas.some(s => s.name === 'agent') === true
+    // but this.grantsTool('agent') === false → caller passes agentTypeListing: ''
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({ agentTypeListing: '' }),
+    );
+    expect(initialSystemPrompt).not.toContain('Available agent types');
+  });
+
+  it('omits listing when agent schema absent (no executor wired) and grantsTool is irrelevant', () => {
+    // Simulates: this.schemas.some(s => s.name === 'agent') === false →
+    // gate short-circuits, caller passes agentTypeListing: undefined
+    const { initialSystemPrompt } = buildSystemPromptWiring(makeArgs());
+    expect(initialSystemPrompt).not.toContain('Available agent types');
+  });
+
+  it('includes listing only when both schema present and grantsTool returns true', () => {
+    // Simulates: schemas includes agent AND grantsTool('agent') === true →
+    // caller passes the real listing string.
+    const LISTING = 'Available agent types:\n- research-agent: Read-only research.';
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({ agentTypeListing: LISTING }),
+    );
+    expect(initialSystemPrompt).toContain('Available agent types');
+  });
+});
+
+describe('buildSystemPromptWiring — episodeRecall ordering in volatile tail (#4680/#4728)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('places episodeRecall after agentTypeListing in the volatile tail', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({
+        config: { model: 'sonnet', episodeRecall: 'EPISODE_RECALL' } as SystemPromptWiringArgs['config'],
+        agentTypeListing: 'AGENT_LISTING',
+      }),
+    );
+    const iListing = initialSystemPrompt.indexOf('AGENT_LISTING');
+    const iEpisode = initialSystemPrompt.indexOf('EPISODE_RECALL');
+    expect(iListing).toBeGreaterThan(-1);
+    expect(iEpisode).toBeGreaterThan(iListing);
+    // Verify fragments are separated by the standard \n\n join.
+    expect(initialSystemPrompt).toContain('AGENT_LISTING\n\nEPISODE_RECALL');
+  });
+
+  it('places episodeRecall after the manifest and ENV even without agentTypeListing', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({
+        config: { model: 'sonnet', episodeRecall: 'EPISODE_RECALL' } as SystemPromptWiringArgs['config'],
+      }),
+    );
+    const iEnv = initialSystemPrompt.indexOf('ENV_FRAG');
+    const iEpisode = initialSystemPrompt.indexOf('EPISODE_RECALL');
+    expect(iEpisode).toBeGreaterThan(iEnv);
+    // Verify \n\n separator between ENV and EPISODE_RECALL.
+    expect(initialSystemPrompt).toContain('ENV_FRAG\n\nEPISODE_RECALL');
+  });
+
+  it('omits episodeRecall when empty string passed', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({
+        config: { model: 'sonnet', episodeRecall: '' } as SystemPromptWiringArgs['config'],
+      }),
+    );
+    expect(initialSystemPrompt).not.toContain('EPISODE_RECALL');
+  });
+
+  it('omits episodeRecall when absent (undefined)', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(makeArgs());
+    expect(initialSystemPrompt).not.toContain('EPISODE_RECALL');
+  });
+});
+
 describe('buildSystemPromptWiring — unnamed-worker toolBase dedupe guard (#3359)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -132,7 +220,7 @@ describe('buildSystemPromptWiring — unnamed-worker toolBase dedupe guard (#335
 
   it('unnamed worker: resolveToolSystemPrompt called with (undefined, true) and result not prepended', () => {
     const { initialSystemPrompt } = buildSystemPromptWiring(
-      makeArgs({ config: { isUnnamedWorker: true } }),
+      makeArgs({ config: { model: 'sonnet', isUnnamedWorker: true } as SystemPromptWiringArgs['config'] }),
     );
     // Verify the call site passes isSkillDispatch=undefined and isUnnamedWorker=true.
     expect(systemPromptMod.resolveToolSystemPrompt).toHaveBeenCalledWith(undefined, true);

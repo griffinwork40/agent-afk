@@ -24,37 +24,17 @@ import {
   removeManagedWorktreeGuarded,
   resolveAnchorBaseRef,
   type RepoContext,
-  type ManagedWorktreeInfo,
 } from './worktree-managed.js';
-import { describeWorktreeSetupFailure } from '../../worktree/worktree-setup.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { buildCreateNote } from './worktree.create-note.js';
 
 /** Injectable deps for tests. */
 export interface WorktreeHandlerDeps {
   execFile?: ExecFileFn;
   /** Override suffix generator for deterministic tests (#1516). */
   generateSuffix?: () => string;
-}
-
-/**
- * Detect install command from the freshly created worktree's lockfile (#439).
- * Inspects the worktree (not main checkout) so `base` lockfile differences are
- * respected. Falls back to `pnpm install`. Best-effort: never throws.
- */
-async function detectInstallCommand(worktreePath: string): Promise<string> {
-  const lockfiles: Array<[string, string]> = [
-    ['pnpm-lock.yaml', 'pnpm install'],
-    ['package-lock.json', 'npm install'],
-    ['yarn.lock', 'yarn install'],
-    ['bun.lockb', 'bun install'],
-  ];
-  for (const [file, command] of lockfiles) {
-    try {
-      await fs.access(join(worktreePath, file));
-      return command;
-    } catch { /* not this one */ }
-  }
-  return 'pnpm install';
+  /** Override fs.stat for tests (avoids real filesystem hits). */
+  stat?: (path: string) => Promise<import('node:fs').Stats>;
 }
 
 /** Returns undefined when no base was supplied — the caller resolves it (#760). */
@@ -154,6 +134,8 @@ interface CreateArgs {
   obj: Record<string, unknown>;
   ctx: RepoContext;
   anchor: string;
+  /** Explicit repo path supplied by the caller; overrides anchor for base-ref resolution (#4430). */
+  explicitRepo?: string;
   execFile: ExecFileFn;
   generateSuffix: () => string;
   signal: AbortSignal;
@@ -161,7 +143,7 @@ interface CreateArgs {
 
 /** `create` action: confined path, collision auto-suffix (#1516), managed create + setup (#3601). */
 async function handleCreate(args: CreateArgs): Promise<ToolResult> {
-  const { obj, ctx, anchor, execFile, generateSuffix, signal } = args;
+  const { obj, ctx, anchor, explicitRepo, execFile, generateSuffix, signal } = args;
   if (typeof obj['name'] !== 'string' || !obj['name']) {
     return { content: 'Invalid input: name required for create', isError: true };
   }
@@ -194,8 +176,9 @@ async function handleCreate(args: CreateArgs): Promise<ToolResult> {
   if (typeof baseInput === 'object') {
     return { content: baseInput.error, isError: true };
   }
-  // An unspecified base resolves at the ANCHOR, not at ctx.repoRoot (#760).
-  const baseRef = baseInput ?? await resolveAnchorBaseRef(execFile, anchor);
+  // An unspecified base resolves at the explicit repo (when the caller supplied
+  // one) or at the ANCHOR, not at ctx.repoRoot (#760, #4430).
+  const baseRef = baseInput ?? await resolveAnchorBaseRef(execFile, explicitRepo ?? anchor);
   const info = await createManagedWorktree({
     execFile,
     repoRoot: ctx.repoRoot,
@@ -207,32 +190,14 @@ async function handleCreate(args: CreateArgs): Promise<ToolResult> {
   return { content: JSON.stringify({ path: info.path, branch: info.branch, base: info.baseRef, note: await buildCreateNote(info) }) };
 }
 
-/**
- * Note returned with a create. A fresh worktree does NOT share the main
- * checkout's node_modules, so a naive build/test fails opaquely. With no
- * repo-declared setup (#3601) the note is the pre-#3601 install hint, derived
- * from the just-created tree's lockfile (info.path at baseRef, not main). A
- * declared setup replaces it with the setup outcome, naming the exact failed
- * command when it did not succeed.
- */
-async function buildCreateNote(info: ManagedWorktreeInfo): Promise<string> {
-  if (info.setup?.status === 'ok') {
-    const ran = (info.setup.completed ?? []).map((c) => `\`${c}\``).join(', ');
-    return `Repo-declared worktree setup (.afk/worktree-setup.json) completed in ${info.path}${ran ? `: ${ran}` : ''}.`;
-  }
-  const failure = describeWorktreeSetupFailure(info.setup, info.path);
-  if (failure !== undefined) return failure;
-  const installCommand = await detectInstallCommand(info.path);
-  return `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${info.path} before building or testing, or the build/tests will fail opaquely.`;
-}
-
-/** Build the `worktree` tool handler bound to a session cwd. */
+/** Build the `worktree` tool handler bound to a session cwd fallback. */
 export function createWorktreeHandler(
-  cwd?: string,
+  cwdFallback?: string,
   deps?: WorktreeHandlerDeps,
 ): ToolHandler {
   const execFile = deps?.execFile ?? defaultExecFile;
   const generateSuffix = deps?.generateSuffix ?? (() => randomBytes(2).toString('hex'));
+  const stat = deps?.stat ?? fs.stat;
 
   return async (input, signal, context) => {
     if (!input || typeof input !== 'object') {
@@ -250,17 +215,58 @@ export function createWorktreeHandler(
       };
     }
 
-    const anchor = context?.resolveBase ?? cwd ?? process.cwd();
+    const anchor = context?.resolveBase ?? cwdFallback ?? process.cwd();
+
+    // Validate the optional explicit repo parameter.
+    let explicitRepo: string | undefined;
+    if (obj['repo'] !== undefined) {
+      // null and '' are explicit model mistakes, not intentional omissions.
+      if (obj['repo'] === null || obj['repo'] === '') {
+        return {
+          content: 'Invalid input: repo must be an absolute path string or omitted entirely; null and empty string are not accepted',
+          isError: true,
+        };
+      }
+      if (typeof obj['repo'] !== 'string') {
+        return { content: 'Invalid input: repo must be a string (absolute path)', isError: true };
+      }
+      if (!isAbsolute(obj['repo'])) {
+        return { content: `Invalid input: repo must be an absolute path, got: ${obj['repo']}`, isError: true };
+      }
+      // Verify the path exists and is a directory before invoking git so we can
+      // distinguish "not found", "not a directory", and "not a git repo".
+      try {
+        const st = await stat(obj['repo']);
+        if (!st.isDirectory()) {
+          return {
+            content: `Invalid input: repo path is not a directory: ${obj['repo']}`,
+            isError: true,
+          };
+        }
+      } catch {
+        return {
+          content: `Invalid input: repo path does not exist on disk: ${obj['repo']}`,
+          isError: true,
+        };
+      }
+      explicitRepo = obj['repo'];
+    }
+
     let ctx: RepoContext;
     try {
-      ctx = await resolveRepoContext(execFile, anchor);
+      ctx = await resolveRepoContext(execFile, anchor, explicitRepo);
     } catch (err) {
+      const source = explicitRepo ?? anchor;
       return {
         content:
-          `Cannot resolve git repo root from ${anchor}: ${errorMessage(err)}\n\n` +
-          `This usually means the subagent was dispatched without an explicit \`cwd\` pointing at a git repository. ` +
-          `Fix: pass \`cwd\` set to the project root when dispatching the subagent (e.g. the repo root returned by a prior worktree create, or the session's own git checkout root). ` +
-          `The worktree tool requires a git working directory to locate \`.afk-worktrees/\`.`,
+          `Cannot resolve git repo root from ${source}: ${errorMessage(err)}\n\n` +
+          (explicitRepo
+            ? `The \`repo\` parameter was set to "${explicitRepo}" but it does not appear to be inside a git repository. ` +
+              `Pass the absolute path to the git project root (e.g. "/home/user/myproject").`
+            : `This usually means the subagent was dispatched without an explicit \`cwd\` pointing at a git repository. ` +
+              `Fix: pass \`cwd\` set to the project root when dispatching the subagent (e.g. the repo root returned by a prior worktree create, or the session's own git checkout root), ` +
+              `or pass the \`repo\` parameter with the absolute path to the git repository root. ` +
+              `The worktree tool requires a git working directory to locate \`.afk-worktrees/\`.`),
         isError: true,
       };
     }
@@ -268,7 +274,7 @@ export function createWorktreeHandler(
     try {
       switch (action) {
         case 'create':
-          return await handleCreate({ obj, ctx, anchor, execFile, generateSuffix, signal });
+          return await handleCreate({ obj, ctx, anchor, explicitRepo, execFile, generateSuffix, signal });
 
         case 'keep': {
           if (typeof obj['path'] !== 'string' || !obj['path']) {

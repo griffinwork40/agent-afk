@@ -19,7 +19,7 @@ import type { WALEntry } from './types.js';
 const WAL_FILE = 'memory-wal.jsonl';
 
 const VALID_WAL_TYPES = new Set(['fact', 'session_start', 'session_end', 'supersede']);
-const VALID_CATEGORIES = new Set(['preference', 'convention', 'decision', 'learning']);
+const VALID_CATEGORIES = new Set(['preference', 'convention', 'decision', 'learning', 'episode']);
 
 export function isValidWALEntry(entry: unknown): entry is WALEntry {
   if (!entry || typeof entry !== 'object') return false;

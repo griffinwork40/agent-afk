@@ -360,8 +360,8 @@ async function handleDiff(
 
   try {
     const [logOut, statOut] = await Promise.all([
-      git(target.path, ['log', '--oneline', `${manifest.baseRef}..HEAD`]),
-      git(target.path, ['diff', '--stat', manifest.baseRef, 'HEAD']),
+      git(target.path, ['--no-optional-locks', 'log', '--oneline', `${manifest.baseRef}..HEAD`]),
+      git(target.path, ['--no-optional-locks', 'diff', '--stat', manifest.baseRef, 'HEAD']),
     ]);
 
     const body =

@@ -17,6 +17,7 @@ import type { SessionState } from './query/session-state.js';
  *   stable prefix — toolBase + doctrine + memoryPrompt + workspacePrompt
  *                   + hotMemory + goalPrompt
  *   volatile tail — `# Environment` block + manifest (if any)
+ *                   + agentTypeListing (if any)
  *
  * The split boundary is exported so tests can assert on it directly.
  */

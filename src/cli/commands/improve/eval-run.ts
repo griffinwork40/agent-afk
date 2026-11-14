@@ -9,6 +9,7 @@ import {
 } from '../../../improve/eval-run/runner.js';
 import { knownContractIds } from '../../../improve/eval-run/contracts.js';
 import type { EvalCase, EvalRun } from '../../../improve/schemas.js';
+import { palette } from '../../palette.js';
 
 // ---------------------------------------------------------------------------
 // eval-run (deterministic guardrail validation)
@@ -39,11 +40,11 @@ export function registerEvalRunSubcommand(improve: Command): void {
             evalCase = forCard[0];
           }
           if (!evalCase) {
-            console.error(
+            console.error(palette.error(
               `No eval-case found for '${arg}'. Pass an eval-case id ` +
                 `(see 'afk improve eval-cases list') or a card slug with at least ` +
                 `one generated eval-case ('afk improve eval-gen <slug>').`,
-            );
+            ));
             process.exit(1);
           }
 
@@ -56,9 +57,9 @@ export function registerEvalRunSubcommand(improve: Command): void {
             if (opts.json) {
               console.log(JSON.stringify(evalRun, null, 2));
             } else {
-              console.log('(preview — not persisted; remove --no-write to save)');
-              console.log('');
-              console.log(renderEvalRunMarkdown(evalRun));
+              console.log(palette.dim('(preview — not persisted; remove --no-write to save)'));
+              console.log(''); // console-ok
+              console.log(renderEvalRunMarkdown(evalRun)); // console-ok
             }
             applyEvalRunExit(evalRun.status);
             return;
@@ -87,22 +88,23 @@ function printEvalRunSummary(evalRun: EvalRun, jsonPath: string, markdownPath: s
   const failed = evalRun.checks.filter((c) => c.status === 'fail').length;
   const skipped = evalRun.checks.filter((c) => c.status === 'skipped').length;
 
-  console.log(`Ran eval-run: ${evalRun.evalRunId}  [${evalRun.status.toUpperCase()}]`);
-  console.log(`  json: ${jsonPath}`);
-  console.log(`  md:   ${markdownPath}`);
-  console.log(
+  const statusOk = evalRun.status === 'pass';
+  console.log((statusOk ? palette.success : palette.error)(`Ran eval-run: ${evalRun.evalRunId}  [${evalRun.status.toUpperCase()}]`));
+  console.log(palette.dim(`  json: ${jsonPath}`));
+  console.log(palette.dim(`  md:   ${markdownPath}`));
+  console.log(palette.dim( // console-ok
     `  eval-case: ${evalRun.evalCaseId} · card: ${evalRun.cardSlug} · ` +
       `pattern: ${evalRun.patternId} · contract: ${evalRun.contract ?? '(none)'}`,
-  );
-  console.log(
+  ));
+  console.log(palette.dim( // console-ok
     `  checks: ${passed} passed${failed ? `, ${failed} failed` : ''}${skipped ? `, ${skipped} skipped` : ''} (${evalRun.checks.length} total)`,
-  );
+  ));
   for (const c of evalRun.checks) {
     const glyph = c.status === 'pass' ? '✓' : c.status === 'fail' ? '✗' : '–';
-    console.log(`    ${glyph} ${c.name}`);
+    console.log(palette.dim(`    ${glyph} ${c.name}`));
   }
   for (const n of evalRun.notes) {
-    console.log(`  note: ${n.text}`);
+    console.log(palette.dim(`  note: ${n.text}`));
   }
 }
 

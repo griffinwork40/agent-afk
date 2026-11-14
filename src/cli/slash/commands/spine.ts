@@ -184,7 +184,7 @@ async function handleInit(
   // 3. Git revert history — strong signal for REJ entries
   try {
     const reverts = execFileSync(
-      'git', ['log', '--all', '--grep=Revert', '--oneline', '-30'],
+      'git', ['--no-optional-locks', 'log', '--all', '--grep=Revert', '--oneline', '-30'],
       { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
     ).trim();
     if (reverts) seeds.push('### Git revert history:', reverts, '');

@@ -145,6 +145,12 @@ export interface ProviderProgress {
   durationMs: number;
 }
 
+/**
+ * Why a provider asked to switch the main session to its fallback model
+ * (`models.fallback`). See the `model.fallback_request` ProviderEvent.
+ */
+export type ModelFallbackReason = 'usage-limit' | 'credit-exhausted' | 'model-rejected';
+
 /** Harness-native event lane emitted by every `ProviderQuery`. */
 export type ProviderEvent =
   | { type: 'session.init'; info: ProviderSessionInfo }
@@ -178,7 +184,9 @@ export type ProviderEvent =
        * lets consumers programmatically distinguish notice classes without
        * substring-matching `text`. Extend as new harness notice classes emerge.
        */
-      kind: 'truncation' | 'refusal' | 'fast-tier';
+      kind: 'truncation' | 'refusal' | 'fast-tier' | 'image-omitted' | 'model-fallback';
+      /** Set on `kind: 'model-fallback'`: the switch the router just made. */
+      fallback?: { from: string; to: string; reason: ModelFallbackReason };
       sessionId?: string;
     }
   | {
@@ -406,6 +414,22 @@ export type ProviderEvent =
     }
   | { type: 'error'; error: Error }
   | {
+      /**
+       * Contract: a provider retry tier asks to switch to the fallback model.
+       * Emitted INSTEAD of `paused` (or the terminal error), and only when
+       * `AgentConfig.modelFallbackArmed` is true AND nothing has been yielded
+       * for the current turn, so the turn can be replayed on another model
+       * without duplicating output. Consumed by `ProviderRouter`, which
+       * rebuilds on the fallback model, replays the turn, and emits a
+       * `notice` of kind `model-fallback`. It must never reach the session:
+       * any other consumer drops it.
+       */
+      type: 'model.fallback_request';
+      reason: ModelFallbackReason;
+      error: Error;
+      sessionId?: string;
+    }
+  | {
       type: 'paused';
       reason: 'usage-limit';
       resetsAt?: Date;
@@ -588,25 +612,6 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * mechanism that delivers Stop on every surface also enables continuation.
    */
   setBeforeTurnEnd?(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void;
-  /**
-   * Optional. Force a fresh SDK client by re-reading whatever credential
-   * source the provider uses (e.g. the macOS Keychain for OAuth tokens).
-   *
-   * Used by the `/reauth` slash command to swap the running session's SDK
-   * client onto a newly-written credential — e.g. after the operator ran
-   * `claude /login` in another terminal to switch accounts.
-   *
-   * Returns `null` when the provider does not support a forced refresh
-   * (api-key mode, local-server mode, providers without keychain integration)
-   * or when the underlying refresh failed. Implementations that succeed
-   * return the active `accountId` and whether the token byte-changed
-   * (`swapped`) so the caller can distinguish "now on a different account"
-   * from "already up to date".
-   *
-   * Implemented by `AnthropicDirectQuery`. Providers that do not implement
-   * leave it undefined; `AgentSession.reauth()` returns `null` in that case.
-   */
-  reauth?(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null>;
   close(): void | Promise<void>;
 }
 
@@ -693,6 +698,18 @@ export interface ProviderRewindResult {
   failures?: RewindFileFailure[];
   /** Paths changed outside the agent since the last recorded state (drift guard). */
   conflicts?: string[];
+  /**
+   * Human-readable warnings for bash calls in the rewound range whose effects
+   * were not captured (ignored/outside-repo files, skipped background jobs,
+   * detached-partial captures). Present when at least one `bash` turn-log entry
+   * in the folded suffix has `status !== 'captured'`, OR when a `captured` entry
+   * noted files that were excluded (git-ignored or outside the repo root).
+   *
+   * These are advisory: the file restore still proceeds. Callers and surfaces
+   * should display each warning so the user understands what the restore does NOT
+   * undo.
+   */
+  uncaptured?: string[];
 }
 
 /** One path a rewind could not restore. */
@@ -735,7 +752,9 @@ export interface ProviderCompactResult {
   tokensSavedEstimate?: number;
   /**
    * Present only when a deterministic tool-result microcompaction pass ran and
-   * reclaimed context (paired with `reason: 'microcompacted'`). No message was
+   * reclaimed context: paired with `reason: 'microcompacted'` on a no-op, or
+   * attached to a `compacted: true` result when the post-summary pass also
+   * cleared blocks. No message was
    * removed — only large `tool_result` block CONTENT was replaced by a
    * placeholder — so this carries the win the message-count delta cannot.
    */

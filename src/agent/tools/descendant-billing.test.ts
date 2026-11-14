@@ -55,7 +55,11 @@ describe('depth-3 abandoned billing stream reaches root session_sealed (#3961)',
     let snapshot = 0;
     const writer = new InMemoryTraceWriter();
     let wired: ReturnType<typeof wireExecutors> | undefined;
-    const hooks = (): ReturnType<typeof managerShutdownConfig> => managerShutdownConfig(wired!.rootManager);
+    // detached: the depth-3 provider ignores interrupts, so the depth-2 parent
+    // would wait out the full 5 s drain timeout before sealing (#3966). Pass a
+    // small timeout so the test completes in <200 ms instead of ~5 s.
+    const drainTimeoutMs = mode === 'detached' ? 50 : undefined;
+    const hooks = (): ReturnType<typeof managerShutdownConfig> => managerShutdownConfig(wired!.rootManager, undefined, drainTimeoutMs);
     const session = new AgentSession({
       model: 'sonnet', apiKey: 'test-key', provider: createMockProvider(), traceWriter: writer,
       drainSubagents: (reason) => hooks().drainSubagents!(reason),

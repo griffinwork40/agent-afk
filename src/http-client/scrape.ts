@@ -175,7 +175,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
       if (BINARY_RE.test(contentType)) {
         throw new Error(
           `web_scrape markdown mode received binary content (${contentType.split(';')[0]}). ` +
-            `Use mode: "raw" to fetch the bytes, or a different tool.`,
+            `Download the file with bash and read it with extract_document instead.`,
         );
       }
       const body = await res.text();

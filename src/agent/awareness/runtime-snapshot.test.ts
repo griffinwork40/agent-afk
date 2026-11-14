@@ -5,7 +5,8 @@
  * source is mocked with hand-rolled object literals.
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
+import { setUsageAwareness, resetUsageAwarenessForTests } from '../usage/usage-awareness-toggle.js';
 import {
   buildRuntimeSnapshot,
   parseView,
@@ -148,10 +149,21 @@ describe('buildRuntimeSnapshot', () => {
     expect(snap).toHaveProperty('tools');
     expect(snap).toHaveProperty('subagents');
     expect(snap).toHaveProperty('workspace');
-    // usage field is always present in view=all (may be empty array)
+    // usage field is present in view=all when usage awareness is on (default)
     expect(snap).toHaveProperty('usage');
     expect(Array.isArray(snap.usage)).toBe(true);
   });
+
+  it('view=all omits usage when usage awareness is toggled off', () => {
+    setUsageAwareness(false);
+    const source = mkSource();
+    const snap = buildRuntimeSnapshot(source, 'all');
+    expect(snap).toHaveProperty('self');
+    expect(snap).toHaveProperty('workspace');
+    expect(snap).not.toHaveProperty('usage');
+  });
+
+  afterEach(() => resetUsageAwarenessForTests());
 
   it('view=workspace returns only workspace', () => {
     const source = mkSource();

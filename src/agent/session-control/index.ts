@@ -11,9 +11,10 @@ export {
   setSessionName, sessionDisplayName, type SetSessionNameResult, type SessionNameOptions,
   THINKING_MODES, getSessionThinking, setSessionThinking,
   readSessionFast, setSessionFast,
+  getUsageAwareness, setUsageAwarenessPreference,
 } from './preferences.js';
 export {
-  readSubscriptionUsage, readContextUsage, readLocalTokenUsage, readTokenUsage,
+  readContextUsage, readLocalTokenUsage, readTokenUsage,
   readMcpStatus, readMcpOauthPending,
   type ContextUsage, type LocalTokenUsage, type TokenUsage,
 } from './reads.js';

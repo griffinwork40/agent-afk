@@ -29,6 +29,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
   createReadStream,
+  closeSync,
+  fstatSync,
+  openSync,
+  readSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -195,10 +199,10 @@ async function appendIndex(indexPath: string, record: ArtifactRecord): Promise<v
  * consistent with a JSONL write-ahead pattern).  Blank or malformed lines
  * are silently skipped.
  */
-function readIndex(indexPath: string): Map<string, ArtifactRecord> {
+function readIndex(indexPath: string, maxBytes?: number): Map<string, ArtifactRecord> {
   const map = new Map<string, ArtifactRecord>();
   if (!existsSync(indexPath)) return map;
-  const raw = readFileSync(indexPath, 'utf8');
+  const raw = maxBytes === undefined ? readFileSync(indexPath, 'utf8') : readBoundedIndex(indexPath, maxBytes);
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -210,6 +214,26 @@ function readIndex(indexPath: string): Map<string, ArtifactRecord> {
     }
   }
   return map;
+}
+
+/** Fixed-cap read for model-facing lookups; bounds concurrent index growth too. */
+function readBoundedIndex(indexPath: string, maxBytes: number): string {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error('Invalid index byte limit');
+  const fd = openSync(indexPath, 'r');
+  try {
+    const cap = Math.min(fstatSync(fd).size, maxBytes) + 1;
+    const buffer = Buffer.allocUnsafe(cap);
+    let bytes = 0;
+    while (bytes < buffer.length) {
+      const n = readSync(fd, buffer, bytes, buffer.length - bytes, null);
+      if (n === 0) break;
+      bytes += n;
+    }
+    if (bytes > maxBytes) throw new Error('Artifact index exceeds tool read limit; compact the registry before retrying');
+    return buffer.subarray(0, bytes).toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -289,9 +313,10 @@ export async function artifactPut(
 export function artifactGet(
   id: string,
   _indexPath?: string,
+  maxIndexBytes?: number,
 ): ArtifactRecord | undefined {
   const indexPath = _indexPath ?? getArtifactIndexPath();
-  return readIndex(indexPath).get(id);
+  return readIndex(indexPath, maxIndexBytes).get(id);
 }
 
 /**
@@ -303,23 +328,24 @@ export function artifactGet(
 export function artifactList(
   filter?: ArtifactListFilter,
   _indexPath?: string,
+  maxIndexBytes?: number,
 ): ArtifactRecord[] {
   const indexPath = _indexPath ?? getArtifactIndexPath();
-  const all = Array.from(readIndex(indexPath).values());
+  const all = Array.from(readIndex(indexPath, maxIndexBytes).values());
 
   const limit = Math.min(filter?.limit ?? 100, 1000);
   const results: ArtifactRecord[] = [];
 
   for (const rec of all.sort((a, b) => a.created_at - b.created_at)) {
     if (filter) {
-      if (filter.session_id && rec.producer.session_id !== filter.session_id) continue;
-      if (filter.subagent_id && rec.producer.subagent_id !== filter.subagent_id) continue;
-      if (filter.tool_name && rec.producer.tool_name !== filter.tool_name) continue;
+      if (filter.session_id && rec.producer?.session_id !== filter.session_id) continue;
+      if (filter.subagent_id && rec.producer?.subagent_id !== filter.subagent_id) continue;
+      if (filter.tool_name && rec.producer?.tool_name !== filter.tool_name) continue;
       if (filter.media_type && rec.media_type !== filter.media_type) continue;
       if (filter.retention && rec.retention !== filter.retention) continue;
       if (filter.since !== undefined && rec.created_at < filter.since) continue;
       if (filter.until !== undefined && rec.created_at > filter.until) continue;
-      if (filter.tag && rec.tags[filter.tag.key] !== filter.tag.value) continue;
+      if (filter.tag && rec.tags?.[filter.tag.key] !== filter.tag.value) continue;
     }
     results.push(rec);
     if (results.length >= limit) break;
@@ -346,8 +372,8 @@ export async function artifactRead(
  * Return the number of artifact records in the index.
  * Useful for health checks and tests.
  */
-export function artifactCount(_indexPath?: string): number {
-  return readIndex(_indexPath ?? getArtifactIndexPath()).size;
+export function artifactCount(_indexPath?: string, maxIndexBytes?: number): number {
+  return readIndex(_indexPath ?? getArtifactIndexPath(), maxIndexBytes).size;
 }
 
 // ---------------------------------------------------------------------------

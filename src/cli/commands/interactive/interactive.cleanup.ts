@@ -74,7 +74,7 @@ export function printExitSummary(
   // of turn-handler.ts) already emitted its trailing blank, so the
   // divider lands one blank below the footer naturally. A leading `\n`
   // here would double-up. See docs/tui-rhythm.md.
-  console.log(divider('Session Summary'));
+  console.log(palette.info(divider('Session Summary')));
 
   // Line 1: turns · duration · cost · tokens
   const parts = [
@@ -82,7 +82,7 @@ export function printExitSummary(
     formatDuration(Date.now() - ctx.stats.sessionStartTime),
   ];
   parts.push(...costTokenParts({ costUsd: ctx.stats.totalCostUsd, tokens: ctx.stats.totalTokens }));
-  console.log(palette.dim('  ' + parts.join(' · ')));
+  console.log(palette.dim('  ' + parts.join(' · '))); // already palette
 
   // Line 2: model · worktree name (or 'none')
   const worktreeName = worktreeHandle ? path.basename(worktreeHandle.path) : 'none';
@@ -95,7 +95,7 @@ export function printExitSummary(
   // skips the line so process exit is never blocked.
   try {
     const cwd = ctx.stats.cwd ?? process.cwd();
-    const stdout = execFileSync('git', ['diff', '--shortstat', 'HEAD'], {
+    const stdout = execFileSync('git', ['--no-optional-locks', 'diff', '--shortstat', 'HEAD'], {
       cwd,
       encoding: 'utf8',
       timeout: 400,
@@ -119,13 +119,10 @@ export function printExitSummary(
     // the cleanup autosave failed for an unrelated filesystem reason.
   }
   if (resumeTarget) {
-    console.log(
-      palette.dim('  Continue with: ') +
-        palette.brand(formatResumeCommand(resumeTarget, ctx.stats.model)),
-    );
+    console.log(palette.dim('  Continue with: ') + palette.brand(formatResumeCommand(resumeTarget, ctx.stats.model)));
   }
 
-  console.log();
+  console.log(); // console-ok
 }
 
 // ---------------------------------------------------------------------------
@@ -145,8 +142,8 @@ export function printExitSummary(
 export async function snapshotGitStateForCancelAll(cwd: string): Promise<void> {
   try {
     const [statResult, statusResult] = await Promise.all([
-      execFile('git', ['diff', '--stat', 'HEAD'], { cwd, encoding: 'utf8', timeout: 2000 }),
-      execFile('git', ['status', '--short'], { cwd, encoding: 'utf8', timeout: 2000 }),
+      execFile('git', ['--no-optional-locks', 'diff', '--stat', 'HEAD'], { cwd, encoding: 'utf8', timeout: 2000 }),
+      execFile('git', ['--no-optional-locks', 'status', '--short'], { cwd, encoding: 'utf8', timeout: 2000 }),
     ]);
     const stat = statResult.stdout.trim();
     const status = statusResult.stdout.trim();

@@ -44,8 +44,20 @@ export interface RetryTierContext {
   readonly surface: string | undefined;
   /** Whether to auto-wait+resume on a 429 usage limit. */
   readonly autoResumeOnUsageLimit: boolean;
+  /**
+   * `AgentConfig.modelFallbackArmed`, as supplied (value or live getter).
+   * Read only through `isModelFallbackArmed`, at the moment of decision.
+   */
+  readonly modelFallbackArmed?: boolean | (() => boolean);
   /** Read LIVE — tests install this after construction. */
   readonly tokenRefresher: (() => Promise<Anthropic | null>) | undefined;
+  /**
+   * True when the session's OAuth credential came from the credential STORE
+   * (keychain / `.credentials.json`). See {@link RetryLayerOptions.credentialFromStore}.
+   * `undefined` means the flag was not supplied (legacy/test helpers): fall
+   * back to the env-var guard in `storeAheadOfClient`.
+   */
+  readonly credentialFromStore?: boolean;
   /** Latest client reference, post-swap. */
   getClient(): Anthropic;
   /**

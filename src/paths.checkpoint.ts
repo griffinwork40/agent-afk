@@ -77,6 +77,20 @@ export function getFileCheckpointRewindLockPath(sessionId: string, stateDir?: st
   return join(session, '.rewind-lock');
 }
 
+/** Private git objects for bash capture; never writes to the user's object store. */
+export function getFileCheckpointGitObjectDir(sessionId: string, stateDir?: string): string {
+  const session = stateDir ? join(stateDir, 'file-checkpoints', sessionId)
+    : getFileCheckpointSessionDir(sessionId);
+  return join(session, '.git-objects');
+}
+
+/** Private git index for bash capture; independent of the user's index. */
+export function getFileCheckpointGitIndexPath(sessionId: string, stateDir?: string): string {
+  const session = stateDir ? join(stateDir, 'file-checkpoints', sessionId)
+    : getFileCheckpointSessionDir(sessionId);
+  return join(session, '.git-index');
+}
+
 // ---------------------------------------------------------------------------
 // Per-turn
 // ---------------------------------------------------------------------------

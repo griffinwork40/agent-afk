@@ -54,6 +54,48 @@ export type SubagentStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'canc
 export const STREAM_INCOMPLETE = 'stream_incomplete';
 
 /**
+ * True when `stopReason` represents a genuine terminal reason — i.e. the child
+ * reached a real final-answer stop (not a tool stop, not a budget cap, not an
+ * incomplete-stream sentinel). Used by the buffered-partial branch in
+ * `handle.streaming.ts` to decide whether a pre-existing `_lastStopReason`
+ * from a previous tool round should be preserved or overwritten.
+ *
+ * A tool-stop reason (`'tool_use'`, `'tool_calls'`) is explicitly NOT terminal:
+ * it means "the provider stopped to run tools" and must never be kept as the
+ * final stop reason when the NEXT round is aborted mid-stream. Budget-cap and
+ * wind-down sentinels ({@link TOOL_USE_LOOP_CAPPED}, {@link SOFT_DEADLINE_WIND_DOWN},
+ * {@link CONTEXT_PRESSURE_WIND_DOWN}, {@link OVERLOAD_EXHAUSTED}) are also not
+ * terminal in this sense — they should be overwritten with
+ * {@link STREAM_INCOMPLETE} on an abort. Only canonical "the model finished
+ * speaking" reasons count as terminal here.
+ *
+ * `'interrupted'` (set by `stampInterrupted` on ESC) IS terminal: the user
+ * explicitly stopped the run, so preserving that intent over
+ * {@link STREAM_INCOMPLETE} is correct.
+ *
+ * Output-token truncation reasons (`'max_tokens'`, `'length'`,
+ * `'max_output_tokens'`) are also terminal for this guard: a prior round was
+ * capped at the token limit, and if the NEXT round aborts, the truncation
+ * reason from the completed round is more informative than
+ * {@link STREAM_INCOMPLETE}. Uses {@link isTruncationStopReason} as the single
+ * source of truth rather than duplicating the literal set.
+ *
+ * The empty-`_lastStopReason` case (`undefined`) is treated as non-terminal so
+ * that a handle that has never been stamped by `processDoneEvent` also gets
+ * {@link STREAM_INCOMPLETE} written — same as before.
+ */
+export function isTerminalStopReason(s: string | undefined): boolean {
+  return (
+    s === 'end_turn' ||
+    s === 'stop' ||
+    s === 'stop_sequence' ||
+    s === 'pause_turn' ||
+    s === 'interrupted' ||
+    isTruncationStopReason(s)
+  );
+}
+
+/**
  * True when `stopReason` indicates the subagent did NOT reach a clean final
  * answer — it was capped by the tool-use budget ({@link TOOL_USE_LOOP_CAPPED})
  * or cut off mid-stream ({@link STREAM_INCOMPLETE}). Applies to a

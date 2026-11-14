@@ -4,7 +4,9 @@
  * Wired alongside the facet hook in default-hook-registry.ts. At SessionEnd
  * for a root (non-forked) session:
  *   1. Loads the session turns (sidecar first, then journal fallback via loadOutcomeTurns).
- *   2. Recovers artifacts (commit SHAs, PR URLs, repo) from tool result previews.
+ *   2. Derives artifacts (commit SHAs, PR URLs, repo) from the session's
+ *      OutcomesV1 (getSessionOutcomes — git range + effect ledger, shared with
+ *      the run receipt); falls back to tool-result previews when that is null.
  *      When the journal was the turn source (or exists alongside the sidecar),
  *      also walks subagents/*.jsonl for child commits and PRs (#2446).
  *   3. Runs all immediate LFs (closure, error_tail, verification,
@@ -31,6 +33,8 @@ import type { HookHandler } from '../hooks.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import { loadOutcomeTurns, recoverSubagentArtifacts } from './load-outcome-turns.js';
 import { recoverArtifacts } from './artifacts.js';
+import { getSessionOutcomes } from './session-outcomes.js';
+import type { OutcomesV1 } from './outcomes-v1.schema.js';
 import { journalExists } from '../journal/reader.js';
 import { runImmediateLFs, type ClosureInfo } from './lf-immediate.js';
 import { upsertVotes } from './store.js';
@@ -46,33 +50,44 @@ import type { Artifacts } from './schema.js';
  * Read the closure reason from a sealed trace.jsonl file.
  * Returns null when tracePath is absent, the file doesn't exist, or parse fails.
  * This is the LoadClosure injectable required by lfClosure/runImmediateLFs.
+ *
+ * #4896: on a multi-cycle REPL trace (one root closure per `/clear` cycle)
+ * the LAST root closure (no `subagentId`) represents the cycle that is
+ * actually ending. Scanning forward and overwriting on each root closure
+ * means we always return the last cycle's reason.
+ *
+ * @internal exported for tests
  */
-function closureFromTrace(tracePath: string | undefined): ClosureInfo | null {
+export function closureFromTrace(tracePath: string | undefined): ClosureInfo | null {
   if (!tracePath || !existsSync(tracePath)) return null;
   try {
     const raw = readFileSync(tracePath, 'utf8');
+    let lastRootClosure: ClosureInfo | null = null;
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue;
       try {
         const obj = JSON.parse(line) as Record<string, unknown>;
         if (obj['kind'] === 'closure') {
           const p = obj['payload'] as Record<string, unknown> | undefined;
+          // Skip child closures (subagentId present); only root cycles matter.
+          if (p?.['subagentId'] != null) continue;
           const reason = p?.['reason'];
-          if (reason === 'abort') return { reason: 'abort' };
-          if (reason === 'iteration_cap') return { reason: 'iteration_cap' };
           // Invariant: only 'model_end_turn' should map to 'normal'.
           // 'truncated', 'timeout', 'budget_exceeded', 'hook_blocked', and
           // 'max_turns_exceeded' are abnormal termination reasons — mapping them
           // to 'normal' lets combiner rules 6/7 label abnormal sessions as
           // succeeded. Use 'unknown' as a safe non-normal sentinel for any
           // trace reason that is not explicitly known to be clean.
-          if (reason === 'model_end_turn') return { reason: 'normal' };
-          return { reason: 'unknown' };
+          if (reason === 'abort') lastRootClosure = { reason: 'abort' };
+          else if (reason === 'iteration_cap') lastRootClosure = { reason: 'iteration_cap' };
+          else if (reason === 'model_end_turn') lastRootClosure = { reason: 'normal' };
+          else lastRootClosure = { reason: 'unknown' };
         }
       } catch {
         // malformed line — skip
       }
     }
+    return lastRootClosure;
   } catch {
     // IO error
   }
@@ -130,7 +145,7 @@ export function createOutcomeSessionEndHook(): HookHandler {
     if (!sessionId) return {};
 
     // Fire-and-forget: never block or throw into teardown
-    void _runImmediatePass(sessionId, context.tracePath, context.cwd).catch(() => {});
+    void _runImmediatePass(sessionId, context.tracePath, context.cwd, context.reason !== 'reset').catch(() => {});
 
     return {};
   };
@@ -165,17 +180,31 @@ function mergeArtifacts(base: Artifacts, extra: Artifacts): Artifacts {
   return base;
 }
 
+/** Preserve commit provenance and creation-only legacy PR scoring semantics. */
+export function artifactsFromOutcomes(o: OutcomesV1): Artifacts {
+  return {
+    commits: o.commits.map((c) => c.sha),
+    prs: o.prs.filter((p) => p.action === 'create').map((p) => p.url),
+    repo: o.cwd,
+    commitRepos: Object.fromEntries(o.commits.map((c) => [c.sha, c.repo])),
+  };
+}
+
 async function _runImmediatePass(
   sessionId: string,
   tracePath: string | undefined,
   cwd: string | undefined,
+  memoize: boolean,
 ): Promise<void> {
   // Load session turns — sidecar first, journal fallback for scheduled/daemon
   // sessions that never write a sidecar (see load-outcome-turns.ts).
   const { turns, source } = loadOutcomeTurns(sessionId);
 
-  // Recover artifacts from the main session turns.
-  const artifacts = recoverArtifacts(turns);
+  // Artifacts come from the shared OutcomesV1 computation (git range + effect
+  // ledger — authoritative, not truncated previews). Preview regexing remains
+  // only as the fallback when the computation failed or timed out.
+  const outcomes = await getSessionOutcomes(sessionId, cwd !== undefined ? { cwd } : {}, { memoize });
+  const artifacts = outcomes ? artifactsFromOutcomes(outcomes) : recoverArtifacts(turns);
 
   // When a journal is present (either as primary source or alongside the
   // sidecar), also walk subagents/*.jsonl to collect child commits/PRs.
@@ -263,6 +292,7 @@ async function _runImmediatePass(
     session_ended_at: now,
     ...(fingerprint.length > 0 ? { first_prompt_tokens: fingerprint } : {}),
     ...(cwd !== undefined ? { first_cwd: cwd } : {}),
+    outcomes,
   };
 
   upsertVotes(sessionId, votes, base, { closureReason });

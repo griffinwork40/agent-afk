@@ -18,6 +18,8 @@ import {
   isLspDiagnosticsEnabled,
   type LspDiagnostic,
 } from './lsp-diagnostics.js';
+import { writeFakeLspServer } from '../../lsp/__test-utils__/fake-lsp-server.js';
+import { getLspPool } from '../../lsp/pool.js';
 
 // ── scratch dir ────────────────────────────────────────────────────────────
 
@@ -27,59 +29,29 @@ const tempDir = path.join(
 );
 
 afterAll(async () => {
+  await getLspPool().disposeAll();
   await rm(tempDir, { recursive: true, force: true });
 });
 
 // ── fake LSP server scripts ────────────────────────────────────────────────
 
 /**
- * Write a tiny Node script that acts as a fake LSP server.
- * It reads stdin, waits for a textDocument/didOpen, then emits a
- * publishDiagnostics notification for the opened URI with `diags`.
+ * Fake LSP servers use the shared protocol-correct util: they answer
+ * `initialize` (the persistent client waits for it) and publish `diags`
+ * after every didOpen/didChange.
  */
 function writeFakeServer(scriptPath: string, diags: unknown[]): void {
-  const diagsJson = JSON.stringify(diags);
-  const script = `
-const chunks = [];
-process.stdin.on('data', (chunk) => {
-  chunks.push(chunk);
-  const buf = Buffer.concat(chunks);
-  const str = buf.toString('utf8');
-  // Wait until we see didOpen
-  if (!str.includes('textDocument/didOpen')) return;
-
-  // Parse the URI from the buffer
-  const m = str.match(/"uri"\\s*:\\s*"([^"]+)"/);
-  const uri = m ? m[1] : 'file:///unknown';
-
-  const diags = ${diagsJson};
-  const body = JSON.stringify({
-    jsonrpc: '2.0',
-    method: 'textDocument/publishDiagnostics',
-    params: { uri, diagnostics: diags },
-  });
-  const msg = 'Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body;
-  process.stdout.write(msg);
-  // Keep stdin open briefly so the parent can send shutdown/exit
-  setTimeout(() => process.exit(0), 200);
-});
-process.stdin.resume();
-`;
-  writeFileSync(scriptPath, script, 'utf8');
+  writeFakeLspServer(scriptPath, { diagnostics: diags });
 }
 
-/**
- * Write a fake server that never responds (simulates a slow/absent server).
- */
+/** Write a fake server that never responds (simulates a slow/absent server). */
 function writeSilentServer(scriptPath: string): void {
-  writeFileSync(scriptPath, `process.stdin.resume();\n`, 'utf8');
+  writeFakeLspServer(scriptPath, { silent: true });
 }
 
-/**
- * Write a fake server that exits immediately (simulates server crash).
- */
+/** Write a fake server that exits immediately (simulates server crash). */
 function writeCrashServer(scriptPath: string): void {
-  writeFileSync(scriptPath, `process.exit(1);\n`, 'utf8');
+  writeFakeLspServer(scriptPath, { crashOnStart: true });
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

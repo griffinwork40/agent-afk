@@ -379,6 +379,43 @@ export class SessionOwner {
     else this.pending.delete(sessionId);
   }
 
+  /**
+   * Remove an ended session from all owner maps and close it.
+   *
+   * Called by `handleWebExit` after the sidecar is persisted and the turn
+   * reservation is released, so the session is no longer drivable:
+   * - `listWebSessions` stops classifying it as live (owned set is empty)
+   * - prompt and command routes 409 with `session_not_owned`
+   * - a subsequent autosave cannot undo the exit by writing without `endedAt`
+   *
+   * In-flight SSE tails are unaffected: they tail the ledger FILE, not the
+   * in-memory session object, so they drain to completion regardless.
+   *
+   * Failures from `session.close()` are swallowed — the session is removed
+   * from the maps regardless, matching the semantics of `closeAll`.
+   */
+  retire(id: string): void {
+    this.cancelChoices?.(id);
+    const session = this.sessions.get(id);
+    this.owned.delete(id);
+    this.sessions.delete(id);
+    this.info.delete(id);
+    const control = this.controls.get(id);
+    this.controls.delete(id);
+    this.pending.delete(id);
+    this.turns.delete(id);
+    this.autosavers.delete(id);
+    const mcpManager = this.mcpManagers.get(id);
+    this.mcpManagers.delete(id);
+    // Close async but do not await — retire() is called from an async context
+    // (handleWebExit is async) but callers do not await the cleanup.
+    // Contract: session closes BEFORE control, mirroring closeAll() — a closing
+    // session may raise a final tool call that needs the MCP/control transport alive.
+    if (session) session.close().catch(() => {});
+    if (control) control.close().catch(() => {});
+    if (mcpManager) mcpManager.disconnectAll().catch(() => {});
+  }
+
   /** Soft-interrupt an in-flight turn. The session stays usable afterwards. */
   async interrupt(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
@@ -427,8 +464,8 @@ export class SessionOwner {
     this.turns.clear();
     this.mcpManagers.clear();
     this.autosavers.clear();
-    // Sessions close BEFORE MCP disconnect: a closing session may raise a final
-    // tool call that needs the MCP transport alive.
+    // Sessions close BEFORE controls, controls BEFORE MCP disconnect: a closing
+    // session may raise a final tool call that needs the MCP transport alive.
     await Promise.all(all.map((s) => s.close().catch(() => {})));
     await Promise.all(controls.map((c) => c.close().catch(() => {})));
     await Promise.all(mcps.map((m) => m.disconnectAll().catch(() => {})));

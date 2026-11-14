@@ -77,6 +77,12 @@ export type SessionPhaseName =
   // 2-hour cap surfacing the error) — so a lone `usage_limit_pause` is expected.
   | 'usage_limit_pause'
   | 'usage_limit_resume'
+  // The SDK client was rebuilt because the credential store held a different
+  // OAuth token than the live client (the operator ran `claude login`, or
+  // another process rotated the shared entry). Single event, no duration;
+  // metadata carries `source` ('turn-start' | 'compaction'), `accountId`, and
+  // `oldAccountId`. Emitted only on an actual token change (swapped === true).
+  | 'credential_swap'
   // Mid-stream overload (529) exhaustion park/unpark (#762). Distinct from
   // `usage_limit_pause` — that brackets an OAuth subscription window with an
   // authoritative reset deadline; a 529 carries NO reset timestamp, so this pair
@@ -173,16 +179,15 @@ export type SessionPhaseName =
   // must treat its absence as "id unknown from trace alone" — the ledger
   // `traceLabel` bridge remains the fallback for those traces.
   | 'session_id_assigned'
-  // Many-image dimension guard fired at request-build time and replaced one or
-  // more image blocks with imageOmitted text blocks (issue #2348). Emitted when
-  // `enforceManyImageLimit` degrades at least one image in `openRound` (single
-  // event, no paired start). `metadata` carries `degradedCount` (number of
-  // blocks replaced), `threshold` (MANY_IMAGE_THRESHOLD = 20), and
-  // `maxDimension` (MAX_DIMENSION_MANY_IMAGES = 2000). PURE OBSERVABILITY: the
-  // degradation itself is already reflected in the mutated messages array; this
-  // event makes the repair visible in the trace so operators can diagnose
-  // sessions that hit the many-image ceiling without inspecting raw message
-  // payloads.
+  // Per-image pixel-ceiling guard fired at request-build time and replaced one
+  // or more image blocks with imageOmitted text blocks (issue #2348; always-on
+  // since the 8000px fix). Emitted once per round from `openRound` when at
+  // least one image was replaced (single event, no paired start). The name is
+  // historical: it also fires for the ≤20-image 8000px ceiling. `metadata`
+  // carries `degradedCount` (blocks replaced), `imageCount` (images in the
+  // request), `threshold` (MANY_IMAGE_THRESHOLD = 20), `maxDimension` (the
+  // ceiling that APPLIED: 8000 or 2000) and `manyImage` (true when >20). PURE
+  // OBSERVABILITY: the repair itself is in the mutated messages array.
   | 'many_image_degraded'
   // Mid-stream transport drop was accepted as a clean completion because a
   // terminal finish_reason had already arrived before the socket closed
@@ -295,6 +300,13 @@ export type SessionPhaseName =
   | 'compose_leaf_tools_stripped'
   /** Hook-block repeat breaker trip (#3736). metadata: { tool, count, fork }. */
   | 'hook_block_repeat_tripped'
+  // Per-endpoint concurrency semaphore wait (#3886). Emitted when a model
+  // request queued behind the semaphore and the wait was non-zero. A single
+  // event (no paired start); `durationMs` is the queue wait in ms. `metadata`
+  // carries `baseUrl` (the normalised endpoint key) and `activeCount` (holders
+  // at the moment the slot was granted). PURE OBSERVABILITY — never alters the
+  // request; exists so operators can diagnose elevated latency on local servers.
+  | 'endpoint_semaphore_wait'
   // Post-cancel late billing settled after the `cancelled` lifecycle row was
   // already written (#3931). Emitted only when spend accrued AFTER cancel()
   // emitted its row — i.e. a `done` drained on interrupt. Carries cumulative
@@ -311,6 +323,12 @@ export type SessionPhaseName =
   // `reason` (≤200 chars of the provider error). Only forks whose model came
   // from the default tier are eligible; explicit models fail loudly.
   | 'subagent_model_fallback'
+  // Main-session fallback: the primary model hit a usage limit, exhausted
+  // credit, or a rejected model id before anything was sent for the turn, and
+  // ProviderRouter rebuilt on the configured `models.fallback` model and
+  // replayed the turn. `metadata`: `fromModel`, `toModel`, `reason`
+  // (ModelFallbackReason). Sticky: emitted at most once per session.
+  | 'model_fallback'
   // The round-cap delivery notice (roundDeliveryNotice) could not be injected
   // into any valid message position — the tail message shape did not allow it
   // (e.g. anthropic: tail was not a user message; openai: no string-content
@@ -325,7 +343,15 @@ export type SessionPhaseName =
   // continuation is refused fail-closed), or an unexpected error forced the
   // fallback record. In-flight still clears. `metadata`: `chainId`, `childId`,
   // `reason` ('flush_timeout' | 'checkpoint_unavailable' | 'error').
-  | 'continuation_settle_degraded';
+  | 'continuation_settle_degraded'
+  // Per-fragment token-count snapshot emitted once per session at prompt
+  // assembly time (#4449). `metadata` carries one key per named fragment
+  // (e.g. `toolBase`, `userSystem`, `memoryPrompt`, `workspacePrompt`,
+  // `hotMemory`, `goalPrompt`, `environment`, `manifest`, `agentTypeListing`)
+  // whose value is `Math.ceil(chars / 4)` — a cheap chars-per-token proxy.
+  // Absent fragments (empty strings) are omitted so the record is sparse.
+  // Read-path only: the prompt itself is never mutated.
+  | 'prompt_fragment_sizes';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
@@ -390,4 +416,18 @@ export interface SessionPhasePayload {
    * other phase kinds. (#3808)
    */
   afkVersion?: string;
+  /**
+   * Stable credential/auth source id. Set ONLY on `session_init_start` —
+   * the always-emitted attribution anchor — so a trace names its auth tier
+   * even without consulting the sidecar. Absent on older traces, subagent
+   * sessions, and all other phase kinds.
+   * Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' |
+   *   'claude-code-keychain' | 'claude-code-session-refresh'
+   * Other providers (#4882, provider-prefixed): 'openai:env' |
+   *   'openai:config' | 'openai:codex-cli' | 'openai:chatgpt-oauth' |
+   *   'xai:env' | 'xai:config' | 'xai:oauth' | 'anthropic:config' | 'local'.
+   *   See src/agent/auth/credential-source.ts. Per-child ids live on
+   *   subagent_lifecycle `started.credentialSource` instead.
+   */
+  credentialSource?: string;
 }

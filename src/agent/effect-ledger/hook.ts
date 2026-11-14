@@ -1,6 +1,7 @@
 /* Write-ahead hooks for the existing external-effect ledger. */
 import { classifyToolCall } from './classifier.js';
 import { computeIdempotencyKey } from './idempotency.js';
+import { remoteIdempotencyInput } from './remote-idempotency.js';
 import { EffectStore } from './store.js';
 import { redactSecrets } from '../redact-secrets.js';
 import type { HookContext, HookDecision, HookHandler } from '../hooks.js';
@@ -97,6 +98,7 @@ export function createEffectLedgerHooks(store: EffectStore = new EffectStore()):
           };
         }
       }
+      const remote = remoteIdempotencyInput(context.toolName, context.input, prior);
       // Invariant: the intent append completes before the dispatcher can invoke the remote handler.
       const pending = store.writePending({
         idempotencyKey: effect.key,
@@ -104,13 +106,15 @@ export function createEffectLedgerHooks(store: EffectStore = new EffectStore()):
         args: redact(context.input),
         sessionId: context.sessionId,
         ...(prior && (prior.status === 'unknown' || prior.status === 'pending') ? { retryOf: prior.id } : {}),
+        ...(remote.remoteIdempotencyKey !== undefined ? { remoteIdempotencyKey: remote.remoteIdempotencyKey } : {}),
       });
       activeIds.add(pending.id);
       if (context.toolUseId) pendingIds.set(context.toolUseId, pending.id);
       if (prior && (prior.status === 'executed' || prior.status === 'confirmed' || prior.status === 'ambiguous')) {
         duplicateIds.add(pending.id);
-        return { injectContext: 'An identical external action already executed in this session. This call is allowed because intentional repetition is possible; verify that another send is intended.' };
+        return { ...(remote.updatedInput ? { updatedInput: remote.updatedInput } : {}), injectContext: 'An identical external action already executed in this session. This call is allowed because intentional repetition is possible; verify that another send is intended.' };
       }
+      return remote.updatedInput ? { updatedInput: remote.updatedInput } : {};
     } catch {
       // Invariant: ledger I/O is best-effort; a broken ledger must never brick tool execution.
       return {};

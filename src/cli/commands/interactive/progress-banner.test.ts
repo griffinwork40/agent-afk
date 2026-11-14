@@ -506,6 +506,32 @@ describe('progress-banner — terminal width clamping', () => {
       expect(committed).toHaveLength(1);
       expect(stripAnsi(committed[0]!)).toContain('background-job');
     });
+
+    // Error-path teardown-race: mirrors the done-path variant above but via
+    // the error branch (settleSubagentError) which also calls
+    // renderedSubagentIds.add. Without the set-based guard the Channel B
+    // completion line would slip through after teardownTurn resets
+    // suppressSubagentCompletion to false, producing a duplicate ✓ line for
+    // a subagent that the tool lane already rendered with an error row.
+    it('suppresses a completion whose Error row the tool lane already rendered (error-path teardown race)', () => {
+      const { writer, committed } = makeWriter();
+      // Simulate armAndWire: flag true + fresh id set for the new turn.
+      writer.suppressSubagentCompletion = true;
+      writer.renderedSubagentIds = new Set();
+
+      // Simulate the error branch recording the id (mirrors settleSubagentError
+      // → stream-renderer-subagent.ts 'error' case which calls
+      // ctx.completionWriter.renderedSubagentIds.add(sourceId)).
+      writer.renderedSubagentIds.add('errored-grandchild');
+
+      // Simulate teardownTurn resetting the turn-scoped flag (but NOT the set).
+      writer.suppressSubagentCompletion = false;
+
+      // Now the SubagentStop hook fires — the flag is false, but the id is in
+      // the set because the error path already recorded it.
+      emitSubagentCompletion(writer, info('errored-grandchild'));
+      expect(committed).toHaveLength(0);
+    });
   });
 });
 

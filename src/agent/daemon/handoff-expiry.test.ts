@@ -22,10 +22,10 @@ import {
 import { getTaskRecord } from './lease-store.js';
 import { listPending } from './queue-store.js';
 import { getHandoffsDir } from '../../paths.js';
-import { pushIfConfigured } from '../../telegram/push.js';
+import { operatorNotify } from '../operator-notify.js';
 
-vi.mock('../../telegram/push.js', () => ({
-  pushIfConfigured: vi.fn().mockResolvedValue(undefined),
+vi.mock('../operator-notify.js', () => ({
+  operatorNotify: vi.fn().mockResolvedValue(undefined),
 }));
 
 const HOUR = 60 * 60 * 1_000;
@@ -37,7 +37,7 @@ let queueDir: string;
 beforeEach(async () => {
   handoffsDir = await mkdtemp(join(tmpdir(), 'afk-handoff-expiry-'));
   queueDir = await mkdtemp(join(tmpdir(), 'afk-handoff-expiry-queue-'));
-  vi.mocked(pushIfConfigured).mockClear();
+  vi.mocked(operatorNotify).mockClear();
   resetExpirySweepThrottleForTests();
 });
 
@@ -94,29 +94,29 @@ describe('expireHandoff', () => {
     const after = await readHandoff('q-stale', handoffsDir);
     expect(after?.status).toBe('expired');
     expect(after?.expiredAt).toBe(new Date(NOW).toISOString());
-    expect(pushIfConfigured).toHaveBeenCalledTimes(1);
-    const notice = vi.mocked(pushIfConfigured).mock.calls[0]?.[0] as string;
+    expect(operatorNotify).toHaveBeenCalledTimes(1);
+    const notice = vi.mocked(operatorNotify).mock.calls[0]?.[0] as string;
     expect(notice).toContain('q-stale');
     expect(notice).toContain('expired');
 
     // Second call is a no-op: no second transition, no second notice.
     expect(await expireHandoff('q-stale', { handoffsDir, queueDir, now: NOW })).toBe(false);
-    expect(pushIfConfigured).toHaveBeenCalledTimes(1);
+    expect(operatorNotify).toHaveBeenCalledTimes(1);
   });
 
   it('routes the notice to the chat/thread the question was sent to', async () => {
     vi.stubEnv('AFK_TELEGRAM_ALLOWED_CHAT_IDS', '42,-100123');
     await writeHandoff(record('q-routed', 25 * HOUR, { route: { chatId: -100123, threadId: 7 } }), handoffsDir);
     expect(await expireHandoff('q-routed', { handoffsDir, queueDir, now: NOW })).toBe(true);
-    expect(vi.mocked(pushIfConfigured).mock.calls[0]?.[1]).toEqual({ target: -100123, messageThreadId: 7 });
+    expect(vi.mocked(operatorNotify).mock.calls[0]?.[1]).toEqual({ target: -100123, messageThreadId: 7 });
   });
 
   it('falls back to default routing when the routed chat is no longer allowlisted', async () => {
     vi.stubEnv('AFK_TELEGRAM_ALLOWED_CHAT_IDS', '42');
     await writeHandoff(record('q-revoked', 25 * HOUR, { route: { chatId: -100123, threadId: 7 } }), handoffsDir);
     expect(await expireHandoff('q-revoked', { handoffsDir, queueDir, now: NOW })).toBe(true);
-    expect(pushIfConfigured).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(pushIfConfigured).mock.calls[0]?.[1]).toBeUndefined();
+    expect(operatorNotify).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(operatorNotify).mock.calls[0]?.[1]).toBeUndefined();
   });
 
   it('still notifies (default routing) and counts when route is null or malformed', async () => {
@@ -124,21 +124,21 @@ describe('expireHandoff', () => {
     await writeHandoff(record('q-nullroute', 25 * HOUR, { route: null as unknown as HandoffRecord['route'] }), handoffsDir);
     await writeHandoff(record('q-badroute', 25 * HOUR, { route: { chatId: 'x' } as unknown as HandoffRecord['route'] }), handoffsDir);
     expect(await expireStaleHandoffs({ handoffsDir, queueDir, now: NOW })).toBe(2);
-    expect(pushIfConfigured).toHaveBeenCalledTimes(2);
-    for (const call of vi.mocked(pushIfConfigured).mock.calls) expect(call[1]).toBeUndefined();
+    expect(operatorNotify).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(operatorNotify).mock.calls) expect(call[1]).toBeUndefined();
     expect((await readHandoff('q-nullroute', handoffsDir))?.status).toBe('expired');
   });
 
   it('uses default routing when the record has no route', async () => {
     await writeHandoff(record('q-unrouted', 25 * HOUR), handoffsDir);
     expect(await expireHandoff('q-unrouted', { handoffsDir, queueDir, now: NOW })).toBe(true);
-    expect(vi.mocked(pushIfConfigured).mock.calls[0]?.[1]).toBeUndefined();
+    expect(vi.mocked(operatorNotify).mock.calls[0]?.[1]).toBeUndefined();
   });
 
   it('still expires and notifies when question is null', async () => {
     await writeHandoff(record('q-nullq', 25 * HOUR, { question: null as unknown as Record<string, unknown> }), handoffsDir);
     expect(await expireHandoff('q-nullq', { handoffsDir, queueDir, now: NOW })).toBe(true);
-    expect(String(vi.mocked(pushIfConfigured).mock.calls[0]?.[0])).toContain('question details unavailable');
+    expect(String(vi.mocked(operatorNotify).mock.calls[0]?.[0])).toContain('question details unavailable');
   });
 
   it('reclaims (dead-letters) a lease parked in the resume queue when attempts exhausted', async () => {
@@ -173,7 +173,7 @@ describe('expireHandoff', () => {
     await writeHandoff(record('q-fresh', 1 * HOUR), handoffsDir);
     expect(await expireHandoff('q-fresh', { handoffsDir, queueDir, now: NOW })).toBe(false);
     expect((await readHandoff('q-fresh', handoffsDir))?.status).toBe('pending');
-    expect(pushIfConfigured).not.toHaveBeenCalled();
+    expect(operatorNotify).not.toHaveBeenCalled();
   });
 
   it('never overwrites an answer that landed after the record was listed', async () => {
@@ -188,7 +188,7 @@ describe('expireHandoff', () => {
     const after = await readHandoff('q-raced', handoffsDir);
     expect(after?.status).toBe('answered');
     expect(after?.answer).toBe('yes');
-    expect(pushIfConfigured).not.toHaveBeenCalled();
+    expect(operatorNotify).not.toHaveBeenCalled();
   });
 
   it('backs off while a concurrent answer holds the handoff lock', async () => {

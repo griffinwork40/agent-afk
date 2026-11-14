@@ -45,6 +45,13 @@ export interface SlotCredentialTarget {
   forceXaiApiKey?: boolean;
   /** Per-slot xAI endpoint only (never global AFK_OPENAI_BASE_URL). */
   xaiBaseUrl?: string;
+  /**
+   * Per-endpoint concurrency cap resolved from the active slot's
+   * `maxConcurrency`. Set by {@link applySlotCredentials} when the resolved
+   * binding carries a `maxConcurrency` value. Cleared to `undefined` for
+   * unconfigured slots. Part of #3886.
+   */
+  endpointConcurrency?: number;
 }
 
 /**
@@ -90,6 +97,7 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
     config.forceXaiOAuth = false;
     config.forceXaiApiKey = false;
     config.xaiBaseUrl = undefined;
+    config.endpointConcurrency = undefined;
     return;
   }
 
@@ -145,4 +153,10 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
     // Clear stale slot override when switching to an xAI tier without baseUrl.
     config.xaiBaseUrl = undefined;
   }
+
+  // Per-slot concurrency cap (#3886): propagate maxConcurrency from the binding
+  // so the provider request boundary can enforce it via the endpoint semaphore.
+  // Cleared when the binding carries no cap so a stale value from a previous
+  // slot does not leak onto a new slot after a /model switch.
+  config.endpointConcurrency = binding.maxConcurrency;
 }

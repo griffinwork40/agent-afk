@@ -585,8 +585,11 @@ export class ToolLane {
   }
 
   /**
-   * Returns `true` if `id` was absorbed by a prior {@link flushSource} call
-   * during the current turn. Used by tests to assert the absorbed-id guard.
+   * Returns `true` if `id` was absorbed by a prior {@link flushSource} or
+   * {@link flushCompletedRoots} call during the current turn. Used by tests
+   * to assert the absorbed-id guard.
+   *
+   * @internal
    */
   isAbsorbed(id: string): boolean {
     return this.absorbedIds.has(id);

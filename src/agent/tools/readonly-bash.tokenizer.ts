@@ -381,8 +381,13 @@ export { DESTRUCTIVE_GIT_SUBCMDS, destructiveGitSegmentReason, classifyDestructi
  * so obfuscated repo mutations stay blocked. Returns a mutation reason or null.
  */
 export function tokenizedSegmentReason(command: string): string | null {
+  return segmentMutationReason(tokenizeSegments(command));
+}
+
+/** Apply the existing positional rules to an already-tokenized command view. */
+export function segmentMutationReason(segments: readonly (readonly string[])[]): string | null {
   const vars = new Map<string, string>();
-  for (const rawTokens of tokenizeSegments(command)) {
+  for (const rawTokens of segments) {
     const seg = resolveSegment(rawTokens, vars);
     if (seg === null) {
       const hidden = hiddenGitMutation(rawTokens);

@@ -112,7 +112,16 @@ async function gitReadImpl(input: unknown, signal: AbortSignal, context: ToolHan
   // git cat-file -e exits 1 when the object does not exist — not an error.
   const catFileAbsent = plan.argv[0] === 'cat-file' && plan.argv.includes('-e') && out.code === 1 && out.stderr.trim() === '';
   if (out.code !== 0 && !out.overflow && !noMatch && !isAncestorFalse && !catFileAbsent) {
-    return { content: boundOutput(`git exited ${out.code ?? 'abnormally'}: ${out.stderr.trim() || out.stdout.trim()}`, maxBytes), isError: true };
+    const errText = out.stderr.trim() || out.stdout.trim();
+    // Contract: when git exits 128 (bad revision / bad ref), enrich the error
+    // with a structured hint so the model breaks out of retry loops instead of
+    // varying the same bad argument. The audit (2026-10-26) found 3 sessions
+    // produced 38% of all git_read errors from looping on bad revision args.
+    const isBadRef = out.code === 128 || /bad revision|unknown revision|bad object|not a valid object name/.test(errText);
+    const hint = isBadRef
+      ? `\n\nDo not retry with the same revision. Use \`git_read\` with subcommand \`log\` (e.g. \`--oneline -20\`) or \`branch\` (\`-a\`) to discover valid refs before retrying.`
+      : '';
+    return { content: boundOutput(`git exited ${out.code ?? 'abnormally'}: ${errText}${hint}`, maxBytes), isError: true };
   }
   const body = out.stdout.length > 0 ? out.stdout
     : noMatch ? '(no matches)'

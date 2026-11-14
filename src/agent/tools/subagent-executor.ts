@@ -10,7 +10,7 @@
 
 import type { TraceSink } from '../trace/index.js';
 import type { AnthropicToolDef, ToolCall, ToolResult } from './types.js';
-import { buildAgentToolDef, buildAgentTypeListing } from '../agents/index.js';
+import { buildAgentToolDef, buildAgentTypeListing, buildComposeTool } from '../agents/index.js';
 import type { AgentExecutionMode } from './subagent/input-parse.js';
 import type { BuildChildConfigArgs } from './subagent/child-config.js';
 import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
@@ -73,14 +73,26 @@ export class SubagentExecutor implements SubagentControl {
   /**
    * The `agent` tool definition this executor's owning provider should
    * advertise. With a non-empty named-agent registry, the definition gains
-   * the `agent_type` input property and an "Available agent types" listing
-   * (Claude Code advertises subagent types in its Task tool the same way).
-   * Without one, returns the static schema byte-identical to the legacy
-   * surface. Providers call this via optional chaining so stubbed executors
-   * in tests fall back to the static def.
+   * the `agent_type` input property (Claude Code advertises subagent types in
+   * its Task tool the same way). Without one, returns the static schema
+   * byte-identical to the legacy surface. The "Available agent types" listing
+   * is injected into the system-prompt tail via {@link describeAgentTypeListing}
+   * rather than the tool description, preserving prefix-cache stability (#4217).
+   * Providers call this via optional chaining so stubbed executors in tests
+   * fall back to the static def.
    */
   describeAgentTool(): AnthropicToolDef {
-    return buildAgentToolDef(this.ctx.agentRegistry);
+    return buildAgentToolDef(this.ctx.agentRegistry, this.ctx.parentModel);
+  }
+
+  /**
+   * The `compose` tool definition with a dynamic `model` parameter description
+   * reflecting the live slot bindings and resolved subagent default (#4509).
+   * Providers that wire a composeExecutor should call this instead of importing
+   * the static `composeTool` constant.
+   */
+  describeComposeTool(): AnthropicToolDef {
+    return buildComposeTool(this.ctx.parentModel);
   }
 
   /**
@@ -174,6 +186,9 @@ export class SubagentExecutor implements SubagentControl {
       ...(c.delegationBudget !== undefined ? { delegationBudget: c.delegationBudget } : {}), ...(c.hookRegistry !== undefined ? { hookRegistry: c.hookRegistry } : {}),
       ...(c.continuationRegistry !== undefined ? { continuationRegistry: c.continuationRegistry } : {}),
       ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
+      ...(c.resolveApiKeyForModel !== undefined ? { resolveApiKeyForModel: c.resolveApiKeyForModel } : {}),
+      ...(c.childProviderFactory !== undefined ? { childProviderFactory: c.childProviderFactory } : {}),
+      ...(c.childSkillExecutorFactory !== undefined ? { childSkillExecutorFactory: c.childSkillExecutorFactory } : {}),
       // #3961: thread the root's billing-stream registry so depth-2+ abandoned
       // streams surface in rootManager.getPendingChildBillingStreams() at shutdown.
       parentBillingStreams: c.subagentManager.billingStreamRegistry,

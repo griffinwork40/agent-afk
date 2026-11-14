@@ -217,7 +217,8 @@ export function parseAgentInput(input: unknown): AgentInput {
     'agent_type',
   )?.trim();
 
-  const id_prefix = readOptionalString(agentInput, 'id_prefix') ?? 'agent-tool';
+  const explicit_prefix = readOptionalString(agentInput, 'id_prefix');
+  const id_prefix = explicit_prefix ?? agent_type ?? 'agent-tool';
 
   // mode: default 'foreground'. Unknown strings reject loudly rather than
   // silently coercing — a typo like "back" would be silently downgraded

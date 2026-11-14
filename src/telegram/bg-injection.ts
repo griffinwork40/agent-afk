@@ -20,6 +20,7 @@
  */
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { palette } from '../cli/palette.js';
 
 /** Minimal notifier surface the registry needs (avoids an import cycle). */
 export interface BgInjectionSource {
@@ -35,7 +36,7 @@ export function registerBgInjectionSource(key: string, source: BgInjectionSource
     // without calling unregisterBgInjectionSource (e.g. it crashed). The new
     // registration is safe — overwrite-on-collision prevents cross-session
     // contamination — but we log so operators can spot persistent leaks.
-    console.warn(`[bg-injection] replacing stale source for route '${key}' — prior session may have exited without dispose()`);
+    console.warn(palette.warning(`[bg-injection] replacing stale source for route '${key}' — prior session may have exited without dispose()`));
   }
   sources.set(key, source);
 }
@@ -51,6 +52,21 @@ export function unregisterBgInjectionSource(key: string, source: BgInjectionSour
 /** Drain pending injections for a route; empty string when none. */
 export function drainBgInjections(key: string): string {
   return sources.get(key)?.drainInjections() ?? '';
+}
+
+/**
+ * Non-destructive check: returns true when the source for `key` has at least
+ * one pending injection. Used by `wakeIdleSessionImpl` (#3974) to guard
+ * against a no-op synthetic turn when the buffer is already empty — without
+ * consuming the buffer the way `drainBgInjections` would.
+ */
+export function hasBgInjections(key: string): boolean {
+  const source = sources.get(key);
+  if (!source) return false;
+  // TelegramBgResultNotifier exposes hasPendingInjections(); fall back to a
+  // drain-and-re-check is NOT done — only the typed path is used so the
+  // buffer is never consumed by the guard.
+  return (source as { hasPendingInjections?(): boolean }).hasPendingInjections?.() ?? false;
 }
 
 /**

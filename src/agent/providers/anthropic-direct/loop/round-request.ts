@@ -35,11 +35,12 @@ import type { RoundRetryBudget } from './retry-budget.js';
 import { connectionRetryMetadata } from './connection-error.js';
 import { createWithRetry, ConnectionOverloadExhaustedError, type ConnectionRetryInfo, type ConnectionLifecycleInfo } from './connection-create.js';
 import { awaitCreateWithThrottleSignals } from './throttle-signals.js';
+import { getEndpointSemaphore } from '../../../../config/endpoint-semaphore.js';
 import { dumpThinkingDiagnostic } from './thinking-diagnostic.js';
 import { isNonDefaultSamplingForbiddenModel } from '../resolve-params.js';
 import { buildSignatureRetryMessages, isInvalidSignatureError } from './signature-retry.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
-import { enforceManyImageLimit, MANY_IMAGE_THRESHOLD, MAX_DIMENSION_MANY_IMAGES } from './_many-image-guard.js';
+import { applyImageLimitGuard } from './round-request.image-guard.js';
 
 /**
  * Contract: project an internal {@link AnthropicToolDef} to the wire-safe shape
@@ -63,6 +64,68 @@ export function toWireTool(tool: AnthropicToolDef): WireToolDef {
 }
 
 export { createWithRetry, type ConnectionRetryInfo } from './connection-create.js';
+
+/**
+ * Acquire the per-endpoint semaphore (if configured for this turn's baseUrl),
+ * call `createWithRetry`, and return the resolved stream wrapped so the
+ * semaphore is held until the stream is fully exhausted, errors, or is aborted.
+ *
+ * Holding the slot for the FULL stream lifetime (not just the connection phase)
+ * is the correct serialisation point for local single-request servers (Ollama,
+ * LM Studio, MLX): the bottleneck is the entire generation, not just the HTTP
+ * handshake. The wrapped async iterable releases in its generator `finally`
+ * block so every exit path — clean completion, error, or abort — is covered.
+ *
+ * If the semaphore acquire itself is aborted (via `signal`), the promise
+ * rejects with an AbortError and no slot is consumed. Part of #3886.
+ *
+ * @param turnInput - The turn-level input carrying `baseUrl`,
+ *   `endpointConcurrency`, and `signal`; used for semaphore key resolution and
+ *   abort propagation. Never forwarded to `createWithRetry`.
+ */
+async function createWithEndpointSemaphore(
+  turnInput: RunTurnInput,
+  ...args: Parameters<typeof createWithRetry>
+): ReturnType<typeof createWithRetry> {
+  const sem = getEndpointSemaphore(turnInput.baseUrl, turnInput.endpointConcurrency);
+  if (sem === null) return createWithRetry(...args);
+
+  const waitStart = Date.now();
+  await sem.acquire(turnInput.signal);
+  const waitMs = Date.now() - waitStart;
+
+  // Trace semaphore wait when non-trivial (> 0 ms recorded).
+  if (waitMs > 0) {
+    void emitSessionPhase(turnInput.traceWriter, {
+      phase: 'endpoint_semaphore_wait',
+      durationMs: waitMs,
+      resolvedModel: turnInput.model,
+      metadata: {
+        baseUrl: turnInput.baseUrl ?? '',
+        activeCount: sem.activeCount,
+      },
+    });
+  }
+
+  // Wrap the stream so the slot is held until the iterable is exhausted or
+  // errors — not just until the HTTP connection is accepted.
+  // Guard: if createWithRetry rejects before the generator is constructed the
+  // acquired slot would leak permanently. Release on throw, then re-throw.
+  let rawStream: Awaited<ReturnType<typeof createWithRetry>>;
+  try {
+    rawStream = await createWithRetry(...args);
+  } catch (e) {
+    sem.release();
+    throw e;
+  }
+  return (async function* semaphoreHeld() {
+    try {
+      yield* rawStream;
+    } finally {
+      sem.release();
+    }
+  })();
+}
 
 function traceConnectionLifecycle(input: RunTurnInput): (info: ConnectionLifecycleInfo) => void {
   return (info) => { void emitSessionPhase(input.traceWriter, { ...info, resolvedModel: input.model }); };
@@ -184,7 +247,7 @@ async function* attemptSignatureRetry(
   const retryStall = armStreamStallWatchdog(retryTtfb.signal, stallTimeoutMs, traceStreamStall(input));
   try {
     const retryEvents = yield* awaitCreateWithThrottleSignals(
-      createWithRetry(input.client, retryParams, input.headers, retryStall.signal, input.signal, traceConnectionRetry(input), traceConnectionLifecycle(input)),
+      createWithEndpointSemaphore(input, input.client, retryParams, input.headers, retryStall.signal, input.signal, traceConnectionRetry(input), traceConnectionLifecycle(input)),
       input,
       extendOnThrottle(retryTtfb),
     );
@@ -298,22 +361,12 @@ export async function* openRound({
     });
   }
 
-  // Many-image dimension guard: Anthropic drops the per-image pixel ceiling
-  // from 8 000 px to 2 000 px when a request carries >20 image blocks. Images
-  // in the 2 001–8 000 px range pass the tool-level guards but cause a hard
-  // HTTP 400 here. Replace out-of-range images with imageOmitted text blocks
-  // so the request succeeds instead of permanently poisoning the session.
-  const manyImageDegraded = enforceManyImageLimit(input.messages);
-  if (manyImageDegraded > 0) {
-    void emitSessionPhase(input.traceWriter, {
-      phase: 'many_image_degraded',
-      metadata: {
-        degradedCount: manyImageDegraded,
-        threshold: MANY_IMAGE_THRESHOLD,
-        maxDimension: MAX_DIMENSION_MANY_IMAGES,
-      },
-    });
-  }
+  // Per-image pixel ceiling (8 000 px, or 2 000 px when >20 images): replace
+  // oversized images with imageOmitted text so one bad image cannot poison the
+  // session with a permanent HTTP 400. Invalidates the journal for the in-place
+  // edit and hands back one operator notice for this round. Never throws.
+  const imageNotice = applyImageLimitGuard(input);
+  if (imageNotice !== null) yield imageNotice;
 
   // Journal commit point: history is final for this request (orphan repair and
   // image degradation applied, cache marker not yet stamped — the clone below
@@ -372,7 +425,8 @@ export async function* openRound({
     // value is the resolved stream iterable; a create rejection propagates here
     // exactly as a direct await would.
     const events = yield* awaitCreateWithThrottleSignals(
-      createWithRetry(
+      createWithEndpointSemaphore(
+        input,
         input.client,
         params,
         input.headers,

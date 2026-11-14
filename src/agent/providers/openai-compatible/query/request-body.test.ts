@@ -143,3 +143,50 @@ describe('buildResponsesRequestBody', () => {
     expect(body['temperature']).toBe(1.8);
   });
 });
+
+// Wind-down rounds send the same tools array — no tool_choice override.
+// Safety lives in the turn driver (wind-down-final.ts); the request body
+// is identical to a normal round so prefix caches stay valid.
+describe('wind-down tools passthrough — Chat Completions', () => {
+  it('includes tools and never sets tool_choice', () => {
+    const body = buildChatCompletionsRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: TOOLS,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: undefined,
+    });
+    expect(body['tools']).toBe(TOOLS);
+    expect('tool_choice' in body).toBe(false);
+  });
+
+  it('omits tools when activeTools is undefined', () => {
+    const body = buildChatCompletionsRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: undefined,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: undefined,
+    });
+    expect('tools' in body).toBe(false);
+    expect('tool_choice' in body).toBe(false);
+  });
+});
+
+describe('wind-down tools passthrough — Responses API', () => {
+  it('includes tools and never sets tool_choice', () => {
+    const body = buildResponsesRequestBody({
+      model: 'gpt-4o',
+      messages: MESSAGES,
+      activeTools: TOOLS,
+      maxOutputTokens: undefined,
+      effort: undefined,
+      temperature: undefined,
+      isChatGptBackend: false,
+    });
+    expect(body['tools']).toBeDefined();
+    expect('tool_choice' in body).toBe(false);
+  });
+});

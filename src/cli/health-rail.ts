@@ -28,6 +28,7 @@
  */
 
 import type { BackgroundAgentRegistry } from '../agent/background-registry.js';
+import type { ProcessJobRegistry } from '../agent/shell-jobs/process-jobs.js';
 import type { SessionStats } from './slash/types.js';
 import { formatHealthRail, type HealthRailFields } from './health-rail.format.js';
 import { contentMargin } from './render/measure.js';
@@ -38,6 +39,8 @@ import { contextLimitFor } from './model-limits.js';
 export interface HealthRailOptions {
   stream?: NodeJS.WriteStream;
   backgroundRegistry?: BackgroundAgentRegistry;
+  /** Background process registry for proc-N count display on the rail. */
+  processJobs?: ProcessJobRegistry;
   /**
    * Returns the total extra-rows count from the StatusLine. The health rail
    * paints within the reserved footer at `totalRows - extraRows + 1`, i.e.
@@ -80,6 +83,10 @@ interface RailSnapshot {
   activeSubs: number;
   /** Total subagents ever dispatched (foreground + background combined high-water mark). */
   totalSubs: number;
+  /** Currently-running background processes (bash run_in_background). */
+  activeProcs: number;
+  /** Total background processes ever started (high-water mark). */
+  totalProcs: number;
   contextRatio: number;
 }
 
@@ -87,6 +94,7 @@ interface RailSnapshot {
 export class HealthRail {
   private readonly stream: NodeJS.WriteStream;
   private readonly registry: BackgroundAgentRegistry | undefined;
+  private readonly processJobs: ProcessJobRegistry | undefined;
   private readonly getExtraRows: () => number;
   private readonly getForegroundAgentCounts: (() => { active: number; total: number }) | undefined;
 
@@ -130,9 +138,19 @@ export class HealthRail {
    */
   private totalFgSubsEver = 0;
 
+  /**
+   * Monotonic high-water mark for total background processes ever started.
+   *
+   * ProcessJobRegistry prunes history at MAX_HISTORY (50), so `list().length`
+   * can shrink. This ratchet ensures the displayed total never decreases
+   * (same contract as `totalBgSubsEver`).
+   */
+  private totalProcsEver = 0;
+
   constructor(opts: HealthRailOptions) {
     this.stream = opts.stream ?? process.stdout;
     this.registry = opts.backgroundRegistry;
+    this.processJobs = opts.processJobs;
     this.getExtraRows = opts.getExtraRows;
     this.getForegroundAgentCounts = opts.getForegroundAgentCounts;
   }
@@ -214,6 +232,15 @@ export class HealthRail {
     const activeSubs = activeBgSubs + fg.active;
     const totalSubs = this.totalBgSubsEver + this.totalFgSubsEver;
 
+    // Background processes: sourced from the ProcessJobRegistry.
+    // Use startedCount() as the authoritative total — list().length is capped
+    // at MAX_HISTORY (50) and undercounts once more than 50 jobs have been
+    // started. startedCount() is a monotonic counter incremented in start()
+    // before pruneHistory can evict anything. (Issue #4395, finding #1.)
+    const activeProcs = this.processJobs ? this.processJobs.runningCount() : 0;
+    const startedTotal = this.processJobs ? this.processJobs.startedCount() : 0;
+    this.totalProcsEver = Math.max(this.totalProcsEver, startedTotal);
+
     // Accumulate total tool calls across all completed turns.
     const toolCalls = stats.turns.reduce(
       (sum, t) => sum + (t.toolEvents?.length ?? 0),
@@ -241,6 +268,8 @@ export class HealthRail {
       toolCalls,
       activeSubs,
       totalSubs,
+      activeProcs,
+      totalProcs: this.totalProcsEver,
       contextRatio: Math.max(0, Math.min(1, contextRatio)),
     };
 
@@ -265,7 +294,11 @@ export class HealthRail {
 
     // Compute elapsedMs at paint time so the counter ticks even between update()
     // calls (e.g. during long tool executions or streaming without tool events).
+    // activeProcs is also read live here — processJobs.runningCount() is O(n)
+    // over the jobs map and cheap to call on every paint, ensuring the count
+    // reflects reality between update() calls during idle input. (Issue #4395, finding #2.)
     const snap = this.snapshot;
+    const liveActiveProcs = this.processJobs ? this.processJobs.runningCount() : 0;
     const fields: HealthRailFields = snap
       ? {
           totalTurns: snap.totalTurns,
@@ -273,6 +306,8 @@ export class HealthRail {
           toolCalls: snap.toolCalls,
           activeSubs: snap.activeSubs,
           totalSubs: snap.totalSubs,
+          activeProcs: liveActiveProcs,
+          totalProcs: snap.totalProcs,
           contextRatio: snap.contextRatio,
         }
       : {
@@ -281,6 +316,8 @@ export class HealthRail {
           toolCalls: 0,
           activeSubs: 0,
           totalSubs: 0,
+          activeProcs: 0,
+          totalProcs: 0,
           contextRatio: 0,
         };
 

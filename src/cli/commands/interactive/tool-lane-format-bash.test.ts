@@ -41,6 +41,7 @@ describe('findCommandWordSpans', () => {
     ['env --unset FOO curl x', ['env', 'curl']],
     ['sudo --user root --chdir /tmp rm x', ['sudo', 'rm']],
     ['sudo --user=root rm x', ['sudo', 'rm']],
+    ['sudo -u=root rm x', ['sudo', 'rm']],
     ['env --unset=FOO curl x', ['env', 'curl']],
     ['env -i FOO=1 BAR=2 node app.js', ['env', 'node']],
     ['FOO=1 node app.js', ['node']],

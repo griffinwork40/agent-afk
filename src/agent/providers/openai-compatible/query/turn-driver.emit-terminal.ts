@@ -40,6 +40,18 @@ export async function* emitTurnTerminal(
   windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
   turnStartTime: number,
 ): AsyncGenerator<ProviderEvent> {
+  // Fix #3963 (fix 4): detect raw tool-call markup leaking into the wind-down
+  // final text.  Wind-down rounds keep the same `tools` array (prefix-cache
+  // stability), so some servers — those that emit markup regardless of `tools`
+  // presence — can still return something like
+  // `<tool_call>{"name":"bash"…}</tool_call>` or `<tool_calls>…</tool_calls>`
+  // as the assistant answer.  Flag it as a partial/incomplete answer and
+  // replace the text so the parent never treats markup as a real answer.
+  // Pattern covers: `<tool_call `, `<tool_call>`, `<tool_call/>`, `<tool_calls>`.
+  if (windDownReason !== null && /^[\s\S]*<tool_calls?[\s>/]/i.test(finalAssistantText)) {
+    finalAssistantText = '[Incomplete wind-down: server returned raw tool-call markup instead of a text answer. Partial tool outputs are journaled; resume from saved work.]';
+  }
+
   // Invariant: the truncation notice is APPENDED to the single terminal
   // assistant.message, never yielded as a second one — last-wins consumers
   // (the non-streaming sendMessage() path, a subagent's final-message

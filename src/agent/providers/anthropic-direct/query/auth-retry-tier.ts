@@ -88,7 +88,7 @@ export async function* turnWithAuthRetry(
 
   // Delegate to the shared refresh helper. Same dedup field
   // (`refreshPromise`) coalesces this call with any concurrent
-  // `forceClientRefresh()` from `/reauth` or a hot-swap branch above.
+  // `forceClientRefresh()` from the turn-start catch-up or a hot-swap branch above.
   const refreshed = await adoptFreshClient(ctx, runInput);
   if (!refreshed) {
     yield authError;

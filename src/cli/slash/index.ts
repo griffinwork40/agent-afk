@@ -16,7 +16,6 @@ import { goalCmd } from './commands/goal.js';
 import { nameCmd } from './commands/name.js';
 import { resumeCmd } from './commands/resume.js';
 import { forkCmd } from './commands/fork.js';
-import { changelogCmd } from './commands/changelog.js';
 import { bgsubCommands } from './commands/bgsub.js';
 import { tasksCommands } from './commands/tasks.js';
 import { shCmd } from './commands/sh.js';
@@ -29,7 +28,6 @@ import { themeCmd } from './commands/theme.js';
 import { allowDirCmd } from './commands/allow-dir.js';
 import { keysCmd } from './commands/keys.js';
 import { worktreeCmd } from './commands/worktree.js';
-import { reauthCmd } from './commands/reauth.js';
 import { retryCmd } from './commands/retry.js';
 import { transcriptCmd } from './commands/transcript.js';
 import { editorCmd } from './commands/editor.js';
@@ -51,7 +49,11 @@ import { bugCmd } from './commands/bug.js';
 import { inboxCmd } from './commands/inbox.js';
 import { peersCmd } from './commands/peers.js';
 import { exportCmd } from './commands/export.js';
+import { usageAwarenessCmd } from './commands/usage-awareness.js';
 import { handoffsCommands } from './commands/handoffs.js';
+import { whereCmd } from './commands/where.js';
+import { branchesCmd } from './commands/branches.js';
+import { recallCmd } from './commands/recall.js';
 import '../trusted-skills-registered.js';
 
 export function registerAll(): void {
@@ -65,7 +67,6 @@ export function registerAll(): void {
   register(nameCmd);
   register(resumeCmd);
   register(forkCmd);
-  register(changelogCmd);
   for (const cmd of bgsubCommands) register(cmd);
   for (const cmd of tasksCommands) register(cmd);
   register(shCmd);
@@ -77,7 +78,6 @@ export function registerAll(): void {
   register(themeCmd);
   register(allowDirCmd);
   register(worktreeCmd);
-  register(reauthCmd);
   register(retryCmd);
   register(transcriptCmd);
   register(editorCmd);
@@ -96,7 +96,11 @@ export function registerAll(): void {
   register(inboxCmd);
   register(peersCmd);
   register(exportCmd);
+  register(usageAwarenessCmd);
   for (const cmd of handoffsCommands) register(cmd);
+  register(whereCmd);
+  register(branchesCmd);
+  register(recallCmd);
   // Placeholders for plugin-backed commands. The real lists get registered
   // after `session.waitForInitialization()` resolves, via
   // `registerPluginSkills(session)` / `registerPluginAgents(session)` in

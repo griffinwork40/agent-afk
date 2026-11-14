@@ -6,7 +6,8 @@ export const sendMessageToAgentTool: AnthropicToolDef = {
   concurrencySafe: false,
   description:
     'Deliver a steering message to a running background subagent at its next tool-call boundary. ' +
-    'Only works for jobs started by the model in mode="background" (not user-backgrounded jobs — those are user-owned and this tool will refuse). ' +
+    'Works for model-created background jobs and foreground subagents the user backgrounded with Ctrl+B ' +
+    '(both have model origin). Does not work for user-initiated jobs. ' +
     'The message is injected as a user turn before the child\'s next tool round. ' +
     'Use to redirect, correct, or update context in a running child.',
   input_schema: {

@@ -477,6 +477,16 @@ describe('createBashRestrictionHook — quoted heredoc data (#3850)', () => {
     const command = `bash -c "cat ${mention}/Google/Chrome/Default/Login\\ Data" <<'EOF'\nignored body\nEOF`;
     expect(hook(ctx(command)).decision).toBe('block');
   });
+
+  it('bash -c credential-theft block carries an Interpreter reason', () => {
+    // The entry added to the blocked set at line 463 is an interpreter -c
+    // one-liner; verify the reason names the interpreter guard, not a generic
+    // restricted-path string, so the block surface is unambiguous.
+    const command = `bash -c 'cat ${mention}/Google/Chrome/Default/Login\\ Data'`;
+    const decision = hook(ctx(command));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('Interpreter');
+  });
 });
 
 describe('createBashRestrictionHook — grant containment direction (F4 regression)', () => {
@@ -1366,5 +1376,53 @@ describe('createBashRestrictionHook — nonInteractive drives the headless floor
   it('disableInterpreterGuard still lifts check 1 on a nonInteractive session', () => {
     const hook = createBashRestrictionHook({ disableInterpreterGuard: true });
     expect(hook(prodCtx(credEval, true)).decision).not.toBe('block');
+  });
+});
+
+describe('createBashRestrictionHook — sanctioned-alternative hints in block reasons (#3850)', () => {
+  // Invariant: the block reason for path-specific restrictions names the
+  // sanctioned alternative so the model immediately routes to the correct
+  // surface instead of guessing. Pins the issue-3850 ask: "Improve the block
+  // reasons to name the sanctioned alternative (config_get, afk service, the
+  // artifact helper)."
+  const hook = createBashRestrictionHook({});
+  const home = homedir();
+
+  it('LaunchAgents block reason names `afk service install`', () => {
+    const decision = hook(ctx(`cat ${home}/Library/LaunchAgents/com.example.plist`));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('afk service install');
+  });
+
+  it('LaunchDaemons block reason names `afk service install`', () => {
+    const decision = hook(ctx(`cat /Library/LaunchDaemons/com.example.plist`));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('afk service install');
+  });
+
+  it('LaunchAgents hint appears on headless surfaces too', () => {
+    const decision = hook(headlessCtx(`echo x > ${home}/Library/LaunchAgents/com.example.plist`));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('afk service install');
+  });
+
+  it('~/.afk/config block reason names `config_get` and `config_set`', () => {
+    const decision = hook(ctx(`cat ${home}/.afk/config/afk.env`));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('config_get');
+    expect(decision.reason).toContain('config_set');
+  });
+
+  it('~/.afk/config hint appears on headless surfaces too', () => {
+    const decision = hook(headlessCtx(`cat ${home}/.afk/config/afk.env`));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('config_get');
+  });
+
+  it('SSH key block reason does NOT include a service hint (generic path, no alternative named)', () => {
+    const decision = hook(ctx(`cat ${home}/.ssh/id_rsa`));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).not.toContain('afk service install');
+    expect(decision.reason).not.toContain('config_get');
   });
 });

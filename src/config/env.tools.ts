@@ -62,4 +62,30 @@ export const TOOLS_ENV_REGISTRY = [
     example: '10000',
     category: 'misc',
   },
+  {
+    name: 'AFK_LSP_IDLE_SHUTDOWN_MS',
+    description:
+      'Idle window in milliseconds after which a pooled (persistent) language ' +
+      'server with no requests is shut down (#4272). Servers are kept warm per ' +
+      'workspace root and language so repeat LSP queries skip the cold start. ' +
+      'Default 300000 (5 min). Idle timers never keep the process alive.',
+    type: 'number',
+    required: false,
+    default: '300000',
+    example: '60000',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_LSP_REPO_MAP_TIMEOUT_MS',
+    description:
+      'Total budget in milliseconds for building the repo-map summary (phase 3 ' +
+      'of #3904, AFK_LSP_DIAGNOSTICS=1). Covers both the LSP workspace/symbol ' +
+      'query and the filesystem fallback scan. Default 8000 ms. Raise for large ' +
+      'monorepos; lower to reduce startup latency when the map is not needed.',
+    type: 'number',
+    required: false,
+    default: '8000',
+    example: '4000',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];

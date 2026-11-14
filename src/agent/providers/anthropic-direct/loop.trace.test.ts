@@ -561,6 +561,12 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
     // We inject completedAt directly so the emit site can read it — this is
     // what the real dispatcher.batch-process.ts now does (issue #2249 fix).
     //
+    // NOTE: the completedAt values below are SYNTHETIC (contract test, not a
+    // timing integration test).  They are not measured from real wall-clock
+    // elapsed time; they are computed as batchBase + fixed delay to make the
+    // durationMs assertions deterministic regardless of host speed or timer
+    // resolution (avoids Windows CI flakes, issue #4140).
+    //
     // To avoid Windows timer-resolution flakes (issue #4140): capture a shared
     // `batchBase` timestamp once before any call runs, then set each call's
     // completedAt = batchBase + delay. Both completedAt values share the same

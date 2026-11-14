@@ -194,6 +194,19 @@ describe('buildSummarizationRequest', () => {
     expect(body).toContain('[tool call: grep');
     expect(body).toContain('[tool result: matched 3 lines]');
   });
+
+  it('keeps the head and tail of a long tool result with an elision marker', () => {
+    const long = 'HEAD-START ' + 'm'.repeat(10_000) + ' Error: final failure line';
+    const older: MessageParam[] = [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'bash', input: { cmd: 'x'.repeat(5_000) } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: long }] },
+    ];
+    const body = buildSummarizationRequest(older, 'm', 256).messages[0]?.content as string;
+    expect(body).toContain('HEAD-START');
+    expect(body).toContain('Error: final failure line');
+    expect(body).toContain('chars elided');
+    expect(body.length).toBeLessThan(4_000);
+  });
 });
 
 describe('estimateTokensSaved', () => {
@@ -404,6 +417,9 @@ describeIntegration('auto-compaction integration', () => {
     // compact() must have been called exactly once — the turn crossed 90%
     // and the auto-trigger fired at the turn boundary.
     expectIntegration(compactSpy).toHaveBeenCalledTimes(1);
+    // The automatic path records the trace vocabulary for an automatic
+    // compaction, not 'manual'.
+    expectIntegration(compactSpy).toHaveBeenCalledWith('token_threshold');
     // The session should have emitted turn.completed (not an error).
     const completed = events.find((e) => e.type === 'turn.completed');
     expectIntegration(completed).toBeDefined();

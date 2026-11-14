@@ -15,7 +15,7 @@
 
 import { loadClaudeCodeOauthToken } from './auth/keychain.js';
 import { env } from '../config/env.js';
-import { DEFAULT_USAGE_TIMEOUT_MS, fetchUsageJson } from './usage/usage-http.js';
+import { DEFAULT_USAGE_TIMEOUT_MS, fetchUsageJson, MAX_REASONABLE_EPOCH_SECONDS, clampFraction } from './usage/usage-http.js';
 import { h1ModelFetch } from './providers/shared/h1-fetch.js';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
@@ -120,7 +120,6 @@ export async function fetchSubscriptionUsage(
 
 /** Reject epoch-seconds values outside a sane [1970, 2100) range. */
 const MIN_REASONABLE_EPOCH_SECONDS = 0;
-const MAX_REASONABLE_EPOCH_SECONDS = 4_102_444_800; // 2100-01-01T00:00:00Z
 
 function parseResetsAt(value: unknown): Date | undefined {
   if (typeof value === 'string') {
@@ -150,8 +149,7 @@ function parseWindow(value: unknown): UsageWindow | undefined {
   // 100. History: the parser used to guess the unit (values <=1 read as a
   // 0..1 fraction), so a real 1% came back as 100% (a phantom full window
   // that the daemon budget gate would act on). Result clamped to [0, 1].
-  const normalized = utilizationRaw / 100;
-  const utilization = Math.min(1, Math.max(0, normalized));
+  const utilization = clampFraction(utilizationRaw / 100);
   const resetsAt = parseResetsAt(record['resets_at']);
   return {
     utilization,
@@ -159,27 +157,4 @@ function parseWindow(value: unknown): UsageWindow | undefined {
   };
 }
 
-/**
- * Surface-neutral plain text. No chalk, no HTML, no markdown.
- * Test-only: no production importers (usage-formatter.ts handles all surfaces).
- * @internal
- */
-export function formatUsagePlain(result: UsageResult): string {
-  if (result.kind === 'unavailable') {
-    return `Usage unavailable (${result.reason}): ${result.detail}`;
-  }
-  const lines: string[] = [];
-  if (result.fiveHour) lines.push(formatWindowLine('5h', result.fiveHour));
-  if (result.sevenDay) lines.push(formatWindowLine('7d', result.sevenDay));
-  if (result.sevenDaySonnet) lines.push(formatWindowLine('7d-sonnet', result.sevenDaySonnet));
-  if (result.sevenDayOpus) lines.push(formatWindowLine('7d-opus', result.sevenDayOpus));
-  return lines.length > 0 ? lines.join('\n') : 'No usage windows available.';
-}
 
-function formatWindowLine(label: string, win: UsageWindow): string {
-  const pct = Math.round(win.utilization * 100);
-  if (!win.resetsAt) return `${label}: ${pct}%`;
-  const hh = String(win.resetsAt.getUTCHours()).padStart(2, '0');
-  const mm = String(win.resetsAt.getUTCMinutes()).padStart(2, '0');
-  return `${label}: ${pct}% (resets ${hh}:${mm})`;
-}

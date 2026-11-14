@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { validateRootPath, type RootField, type RootValidationCaller } from './root-validation.js';
@@ -13,7 +14,7 @@ mkdirSync(directory);
 writeFileSync(file, 'ok');
 const homeLink = path.join(scratch, 'home-link');
 symlinkSync(homedir(), homeLink, 'junction');
-afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+afterAll(() => rmSyncRetry(scratch));
 
 const callers: RootValidationCaller[] = [{ kind: 'agent' }, { kind: 'compose', nodeId: 'A' }];
 const fields: RootField[] = ['cwd', 'readRoots', 'writeRoots'];

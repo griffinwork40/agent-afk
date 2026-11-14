@@ -216,7 +216,7 @@ export interface WaitForResetOpts {
  * Poll interval is 30 s.
  */
 export async function waitForReset(opts: WaitForResetOpts): Promise<'aborted' | 'timer' | 'hot-swap'> {
-  const { resetsAt, signal, readToken = loadClaudeCodeOauthToken } = opts;
+  const { resetsAt, signal, readToken = () => loadClaudeCodeOauthToken({ background: true, quiet: true }) } = opts;
   const initialToken = readToken();
   // NOTE: 30-second buffer past the reset timestamp to let the API actually
   // commit the reset before we retry (the Anthropic backend can lag by a few
@@ -295,7 +295,7 @@ export interface WaitForHotSwapOpts {
 export async function waitForHotSwap(
   opts: WaitForHotSwapOpts,
 ): Promise<'aborted' | 'hot-swap' | 'timer'> {
-  const { signal, readToken = loadClaudeCodeOauthToken, retryAfterMs } = opts;
+  const { signal, readToken = () => loadClaudeCodeOauthToken({ background: true, quiet: true }), retryAfterMs } = opts;
   const initialToken = readToken();
   const deadline = retryAfterMs !== undefined ? Date.now() + retryAfterMs : undefined;
 

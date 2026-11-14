@@ -22,6 +22,8 @@ import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
 import { loadPluginEntrypoints, registerPluginHook } from '../plugins/load-entrypoints.js';
+import type { PluginApi } from '../plugins/load-entrypoints.js';
+import { buildStateApiClosures, buildPeerApiClosures } from '../plugins/plugin-runtime-api.js';
 import { extractPluginSkills, resolveKnownToolNames } from '../plugins/tool-injector.js';
 import { extractPluginCommands } from '../plugins/command-files.js';
 import { readPluginManifest } from '../plugins/plugin-manifest.js';
@@ -595,33 +597,61 @@ export function scanAllPluginRoots(opts?: CollectSkillEntriesOptions): SdkPlugin
  * and non-fatal per plugin. A subagent inherits the parent process's registry,
  * so calling it again in a child is a safe no-op.
  */
-export async function ensurePluginEntrypointsLoaded(): Promise<void> {
+/**
+ * Options for {@link ensurePluginEntrypointsLoaded}.
+ */
+export interface EnsurePluginEntrypointsOptions {
+  // Reserved for future options. stateStore injection was removed (#4396 #3):
+  // the opts.stateStore path was dead code — no production caller ever passed it.
+  // Plugin state closures always use the plugin-runtime-api singleton.
+}
+
+export async function ensurePluginEntrypointsLoaded(
+  _opts?: EnsurePluginEntrypointsOptions,
+): Promise<void> {
   // Inject the host's runtime API so a code-backed plugin's default-export
   // entrypoint (a) registers against THIS process's singleton registry, and
-  // (b) can reach core runtime values (env, SubagentManager, describeFailure,
-  // discoverPluginSkillBodies, the session-facet substrate, the paths getters) WITHOUT a bare
-  // `import 'agent-afk'` — which a marketplace-cloned plugin (no node_modules)
-  // cannot resolve at all. See PluginApi for the full rationale.
+  // (b) can reach core runtime values without a bare `import 'agent-afk'` —
+  // which a marketplace-cloned plugin (no node_modules) cannot resolve.
+  // State and peer API closures live in plugin-runtime-api.ts to keep this
+  // module near its prior size and avoid circular imports through load-entrypoints.
   //
-  // Declarations are installed on each session registry when it is created.
+  // S-2 fix: use buildStateApiClosures so each plugin's state closures are
+  // scoped to `plugin:<pluginId>:` — preventing a plugin from reading or writing
+  // host-owned namespaces. The shared non-state fields (registerSkill, env,
+  // SubagentManager, …) are assembled once and reused across all plugins.
+  const peerApi = buildPeerApiClosures();
+
+  // Shared fields that do not vary by plugin.
+  type SharedBase = Omit<PluginApi, 'stateGet' | 'statePut' | 'stateCas' | 'stateDel' | 'stateInsertIfAbsent' | 'stateQuery' | 'listSessions' | 'sendToSession'>;
+  const sharedBase: SharedBase = {
+    registerSkill,
+    listSkills,
+    getSkill,
+    loadSkillPrompts,
+    env,
+    SubagentManager,
+    describeFailure,
+    discoverPluginSkillBodies,
+    getAgentFrameworkDir,
+    getSkillsDir,
+    getSessionsDir,
+    getOrDeriveFacet,
+    listSessionIds,
+    deriveSessionFacet,
+    loadStoredSession,
+    registerHook: registerPluginHook,
+  };
+
   await loadPluginEntrypoints(scanAllPluginRoots(), {
-    pluginApi: {
-      registerSkill,
-      listSkills,
-      getSkill,
-      loadSkillPrompts,
-      env,
-      SubagentManager,
-      describeFailure,
-      discoverPluginSkillBodies,
-      getAgentFrameworkDir,
-      getSkillsDir,
-      getSessionsDir,
-      getOrDeriveFacet,
-      listSessionIds,
-      deriveSessionFacet,
-      loadStoredSession,
-      registerHook: registerPluginHook,
+    buildPluginApi: (pluginName, _plugin) => {
+      // Build per-plugin state closures scoped to `plugin:<pluginId>:`.
+      // A null pluginName (manifest absent/malformed) means no prefix —
+      // the plugin degrades to the global namespace rather than being
+      // silently broken. This matches the no-manifest behaviour of the
+      // pre-fix code while still being explicit about the missing identity.
+      const stateApi = buildStateApiClosures(pluginName ?? undefined);
+      return { ...sharedBase, ...stateApi, ...peerApi };
     },
   });
 }

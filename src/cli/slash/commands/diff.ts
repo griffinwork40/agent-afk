@@ -224,7 +224,7 @@ function runGitDiff(
   cwd: string,
 ): { ok: true; stdout: string } | { ok: false; message: string } {
   try {
-    const stdout = execFileSync('git', ['diff', ...args], {
+    const stdout = execFileSync('git', ['--no-optional-locks', 'diff', ...args], {
       cwd,
       encoding: 'utf-8',
       // git diff exits 0 when there are diffs, 1 is not an error here —

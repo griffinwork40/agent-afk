@@ -6,7 +6,8 @@
  * so the two can never drift. Only the `# Environment` fragment varies with cwd.
  *
  * Invariant: top-level order is
- *   `[toolBase, userSystem?, memoryPrompt, hotMemory?, <# Environment>, manifest?]`.
+ *   `[toolBase, userSystem?, memoryPrompt, workspacePrompt?, hotMemory?,
+ *    goalPrompt?, <# Environment>, manifest?, agentTypeListing?]`.
  * The `# Agent AFK` doctrine + operator overlay travel in `userSystem` and are
  * placed EARLY — right after the tool/runtime conventions and before the
  * cross-session memory (instructions + hot-memory project context) and the
@@ -41,6 +42,12 @@ export interface StableSystemPromptInputs {
    * across sessions that differ only in their agent sets (#4217).
    */
   agentTypeListing?: string;
+  /**
+   * Episode-recall block (`<recent-episodes>`), placed in the volatile tail
+   * after `# Environment` and the manifest so the stable-prefix cache is never
+   * invalidated by per-session episode sets. Empty string or absent when none.
+   */
+  episodeRecall?: string;
   /** Operator system-prompt overlay; empty string or null when none. */
   userSystem: string | null;
 }
@@ -89,11 +96,13 @@ export interface EnvironmentIdentity {
  *   6. `# Environment`     — cwd/session/workspace (recomputed per cwd)
  *   7. `manifest`          — skill/agent catalog
  *   8. `agentTypeListing`  — dynamic agent-type listing (#4217, volatile tail)
- * Optional parts (`userSystem`, `hotMemory`, `manifest`, `agentTypeListing`)
- * are skipped when empty.  `agentTypeListing` is placed AFTER `manifest` so
- * it lands in the already-volatile tail of the system prompt alongside the
- * `# Environment` block, keeping the prefix cache stable across sessions that
- * differ only in their agent sets.
+ *   9. `episodeRecall`     — `<recent-episodes>` block (#4680, volatile tail)
+ * Optional parts (`userSystem`, `hotMemory`, `manifest`, `agentTypeListing`,
+ * `episodeRecall`) are skipped when empty.  `agentTypeListing` and
+ * `episodeRecall` are placed AFTER `manifest` so they land in the
+ * already-volatile tail of the system prompt alongside the `# Environment`
+ * block, keeping the prefix cache stable across sessions that differ only in
+ * their agent sets or episode sets.
  *
  * `formatEnvironmentFragment` always emits `- Working directory: <cwd>`,
  * conditionally appends `- Session: <id> (...)` when an identity field is
@@ -126,8 +135,11 @@ export function assembleSystemPrompt(
   if (parts.goalPrompt && parts.goalPrompt.length > 0) ordered.push(parts.goalPrompt);
   ordered.push(environment);
   if (parts.manifest.length > 0) ordered.push(parts.manifest);
-  // Agent-type listing is placed last — in the already-volatile tail — so
+  // Agent-type listing is placed after manifest in the volatile tail so
   // agent-set differences between sessions never break the prefix cache (#4217).
   if (parts.agentTypeListing && parts.agentTypeListing.length > 0) ordered.push(parts.agentTypeListing);
+  // Episode recall is placed last in the volatile tail so per-session episode
+  // sets never invalidate the stable-prefix cache (#4680).
+  if (parts.episodeRecall && parts.episodeRecall.length > 0) ordered.push(parts.episodeRecall);
   return ordered.join('\n\n');
 }

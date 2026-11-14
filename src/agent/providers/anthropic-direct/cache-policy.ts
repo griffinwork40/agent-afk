@@ -22,8 +22,10 @@
  * @module agent/providers/anthropic-direct/cache-policy
  */
 import type {
+  AssistantMessageParam,
   ContentBlockParam,
   MessageParam,
+  UserMessageParam,
 } from '@anthropic-ai/sdk/resources';
 import { env } from '../../../config/env.js';
 
@@ -123,15 +125,21 @@ export function withMessagesBreakpoint(
 ): MessageParam[] {
   if (messages.length === 0) return messages;
   const tail = messages[messages.length - 1]!;
+  // Invariant: SystemMessageParam.content was narrowed to string | TextBlockParam[]
+  // in SDK v1.0, making ContentBlockParam[] spreads a TS2322 error for that arm.
+  // Cache breakpoints are only meaningful on user/assistant turns anyway — system
+  // content is stamped separately via withSystemBreakpoint — so we skip system
+  // messages rather than stamp them.
+  if (tail.role === 'system') return messages;
   const stampedTail = stampLastContent(tail, ttl);
   if (stampedTail === tail) return messages;
   return [...messages.slice(0, -1), stampedTail];
 }
 
 function stampLastContent(
-  msg: MessageParam,
+  msg: UserMessageParam | AssistantMessageParam,
   ttl: '5m' | '1h',
-): MessageParam {
+): UserMessageParam | AssistantMessageParam {
   const content = msg.content;
   if (typeof content === 'string') {
     if (content.length === 0) return msg;

@@ -162,7 +162,7 @@ export async function gatherPrState(
       '--json', 'title,baseRefName,headRefName,additions,deletions,changedFiles,files',
     ], { cwd: ctx.cwd }),
     exec('gh', ['pr', 'diff', pr], { cwd: ctx.cwd }),
-    exec('git', ['status', '--porcelain'], { cwd: ctx.cwd }),
+    exec('git', ['--no-optional-locks', 'status', '--porcelain'], { cwd: ctx.cwd }),
   ]);
 
   let metadata: PrMetadata | null = null;

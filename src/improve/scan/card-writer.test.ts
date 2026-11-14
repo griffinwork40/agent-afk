@@ -217,6 +217,67 @@ describe('mergeCard (pure)', () => {
     const first = mergeCard(undefined, makeDetection());
     expect(() => mergeCard(first, makeDetection({ slug: 'different-slug' }))).toThrow(/slug mismatch/);
   });
+
+  // Acceptance: re-scanning with no new evidence leaves firstSeen/lastSeen unchanged (#4228).
+  it('does NOT advance firstSeen/lastSeen when the re-detection adds no new evidence (merged-noop)', () => {
+    const first = mergeCard(undefined, makeDetection({ observedAt: '2026-05-22T10:00:00.000Z' }));
+    // Re-detect with a LATER wall-clock observedAt but identical evidence (same sessionId + seq).
+    const noop = mergeCard(first, makeDetection({ observedAt: '2026-05-29T12:00:00.000Z' }));
+    expect(noop.firstSeen).toBe('2026-05-22T10:00:00.000Z');
+    expect(noop.lastSeen).toBe('2026-05-22T10:00:00.000Z');
+    expect(noop.occurrenceCount).toBe(1);
+  });
+
+  it('increments sightingCount on every merge call, including merged-noops at evidence cap', () => {
+    // Create: sightingCount must be 1.
+    const created = mergeCard(undefined, makeDetection({ observedAt: '2026-05-22T10:00:00.000Z' }));
+    expect(created.sightingCount).toBe(1);
+
+    // Merged-noop (identical evidence, later wall-clock): sightingCount increments,
+    // but lastSeen must NOT advance (the existing merged-noop test pins this).
+    const noop = mergeCard(created, makeDetection({ observedAt: '2026-05-29T12:00:00.000Z' }));
+    expect(noop.sightingCount).toBe(2);
+    expect(noop.lastSeen).toBe('2026-05-22T10:00:00.000Z'); // unchanged
+
+    // Genuine new evidence: sightingCount increments AND lastSeen advances.
+    const updated = mergeCard(
+      noop,
+      makeDetection({
+        observedAt: '2026-06-01T09:00:00.000Z',
+        evidence: [
+          {
+            sessionId: 'sess-C',
+            tracePath: 'state/witness/sess-C/trace.jsonl',
+            eventIndices: [30, 32],
+            excerpt: 'third sighting new evidence',
+          },
+        ],
+      }),
+    );
+    expect(updated.sightingCount).toBe(3);
+    expect(updated.lastSeen).toBe('2026-06-01T09:00:00.000Z');
+  });
+
+  it('DOES advance lastSeen when the re-detection adds genuinely new evidence', () => {
+    const first = mergeCard(undefined, makeDetection({ observedAt: '2026-05-22T10:00:00.000Z' }));
+    const updated = mergeCard(
+      first,
+      makeDetection({
+        observedAt: '2026-05-29T12:00:00.000Z',
+        evidence: [
+          {
+            sessionId: 'sess-NEW',
+            tracePath: 'state/witness/sess-NEW/trace.jsonl',
+            eventIndices: [20, 22],
+            excerpt: 'new evidence',
+          },
+        ],
+      }),
+    );
+    expect(updated.lastSeen).toBe('2026-05-29T12:00:00.000Z');
+    expect(updated.firstSeen).toBe('2026-05-22T10:00:00.000Z');
+    expect(updated.occurrenceCount).toBe(2);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -362,6 +423,7 @@ function makeCard(overrides: Partial<FailureCard> = {}): FailureCard {
     firstSeen: '2026-05-01T10:00:00.000Z',
     lastSeen: '2026-06-10T10:00:00.000Z',
     occurrenceCount: 5,
+    sightingCount: 0,
     evidence: [
       {
         sessionId: 'sess-A',
@@ -553,6 +615,54 @@ describe('selectRegressed (pure)', () => {
 describe('listRegressedCards (round-trip)', () => {
   it('returns empty when no cards exist', () => {
     expect(listRegressedCards()).toEqual([]);
+  });
+
+  // Acceptance #4228: resolve a card, re-scan same evidence window → NOT regressed;
+  // add one newer failure → IS regressed.
+  it('does NOT flag regressed when a resolved card is re-scanned with no new evidence', () => {
+    writeCard(makeDetection({ slug: 'repeated-tool-grep-cccccccccccc', observedAt: '2026-05-20T10:00:00.000Z' }));
+    triageCard('repeated-tool-grep-cccccccccccc', {
+      status: 'resolved',
+      note: 'fixed',
+      now: () => new Date('2026-05-21T10:00:00.000Z'),
+    });
+    // Re-scan same evidence (noop) with later wall-clock — lastSeen must NOT advance.
+    writeCard(makeDetection({ slug: 'repeated-tool-grep-cccccccccccc', observedAt: '2026-05-28T10:00:00.000Z' }));
+
+    const card = getCard('repeated-tool-grep-cccccccccccc');
+    // lastSeen stays at original detection time, not at scan wall-clock.
+    expect(card?.lastSeen).toBe('2026-05-20T10:00:00.000Z');
+    // Therefore NOT regressed (lastSeen < note timestamp '2026-05-21').
+    expect(listRegressedCards()).toHaveLength(0);
+  });
+
+  it('flags regressed when a NEW evidence row lands after the triage note', () => {
+    writeCard(makeDetection({ slug: 'repeated-tool-grep-dddddddddddd', observedAt: '2026-05-20T10:00:00.000Z' }));
+    triageCard('repeated-tool-grep-dddddddddddd', {
+      status: 'resolved',
+      note: 'fixed',
+      now: () => new Date('2026-05-21T10:00:00.000Z'),
+    });
+    // New evidence from a different session — this IS a genuine new failure.
+    writeCard(
+      makeDetection({
+        slug: 'repeated-tool-grep-dddddddddddd',
+        observedAt: '2026-05-25T10:00:00.000Z',
+        evidence: [
+          {
+            sessionId: 'sess-NEW',
+            tracePath: 'state/witness/sess-NEW/trace.jsonl',
+            eventIndices: [3, 5, 7, 9],
+            excerpt: 'recurred',
+          },
+        ],
+      }),
+    );
+
+    const regressed = listRegressedCards();
+    expect(regressed).toHaveLength(1);
+    expect(regressed[0]?.slug).toBe('repeated-tool-grep-dddddddddddd');
+    expect(regressed[0]?.lastSeen).toBe('2026-05-25T10:00:00.000Z');
   });
 
   it('flags a card that re-fired after being resolved, but not a quiet one', () => {

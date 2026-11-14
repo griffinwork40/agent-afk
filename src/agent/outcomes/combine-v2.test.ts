@@ -474,9 +474,32 @@ describe('collapseSingleCountVotes', () => {
     const result = collapseSingleCountVotes(votes);
     // Both positive votes pass through; the single negative vote is kept
     expect(result).toHaveLength(3);
+    // filter preserves insertion order
     const positives = result.filter((v) => v.vote === 1);
     const negatives = result.filter((v) => v.vote === -1);
     expect(positives).toHaveLength(2);
+    expect(negatives).toHaveLength(1);
+    // Evidence fields must be preserved exactly — collapsing must never strip metadata
+    expect(positives[0]!.evidence).toBe('hypothetical positive #1');
+    expect(positives[1]!.evidence).toBe('hypothetical positive #2');
+    expect(negatives[0]!.evidence).toBe('PR #3');
+  });
+
+  it('passes through fix_of_fix votes with vote === 0 (abstain) without collapsing', () => {
+    // vote === 0 (abstain) is not emitted by any LF today but the guard
+    // `v.vote !== -1` must pass it through unconditionally — abstains must
+    // never be silently de-duplicated if a future LF emits them.
+    const votes = [
+      makeVote('fix_of_fix', 0, 'weak', { evidence: 'hypothetical abstain #1' }),
+      makeVote('fix_of_fix', 0, 'weak', { evidence: 'hypothetical abstain #2' }),
+      makeVote('fix_of_fix', -1, 'weak', { severity: 'minor', evidence: 'PR #3' }),
+    ];
+    const result = collapseSingleCountVotes(votes);
+    // Both abstain votes pass through; the single negative is kept (first seen)
+    expect(result).toHaveLength(3);
+    const abstains = result.filter((v) => v.vote === 0);
+    const negatives = result.filter((v) => v.vote === -1);
+    expect(abstains).toHaveLength(2);
     expect(negatives).toHaveLength(1);
   });
 

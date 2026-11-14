@@ -328,7 +328,7 @@ function bar() {
 // ---------------------------------------------------------------------------
 
 describe('editFileHandler cwd containment', () => {
-  it('rejects absolute path outside context.resolveBase', async () => {
+  it('rejects protected absolute path before containment', async () => {
     const signal = new AbortController().signal;
     const result = await editFileHandler(
       {
@@ -340,7 +340,7 @@ describe('editFileHandler cwd containment', () => {
       { resolveBase: tempDir },
     );
     expect(result.isError).toBe(true);
-    expect(result.content).toMatch(/outside the allowed/);
+    expect(result.content).toMatch(/refusing to write to protected path/);
   });
 
   it('resolves relative path against context.resolveBase', async () => {

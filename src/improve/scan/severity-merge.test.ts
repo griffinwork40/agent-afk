@@ -22,6 +22,7 @@ function card(severity: FailureCard['severity'], detector?: string): FailureCard
     firstSeen: '2026-01-01T00:00:00.000Z',
     lastSeen: '2026-01-01T00:00:00.000Z',
     occurrenceCount: 1,
+    sightingCount: 0,
     evidence: [],
     detail: detector === undefined ? {} : { detector },
     notes: [],

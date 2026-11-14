@@ -31,8 +31,14 @@ import { debugLog } from '../../utils/debug.js';
  *          older builds — enabling the prototype migrates the DB forward.
  * v4 → v5: Added per-database tracking metadata and restricted the FTS update
  *          trigger to content/category changes (access accounting is cheap).
+ * v5 → v6: Added 'episode' to the facts.category CHECK constraint so
+ *          auto-generated session summaries live in a dedicated category,
+ *          separate from hand-authored 'learning' facts. Requires a table
+ *          rebuild since SQLite does not support ALTER TABLE to modify
+ *          CHECK constraints. Migration copies all rows to a new table,
+ *          rebuilds FTS and indexes.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** v5: per-database observation epoch; metadata writes must not rebuild FTS. */
 const TRACKING_SCHEMA_SQL = `
@@ -65,7 +71,7 @@ CREATE TABLE IF NOT EXISTS facts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT,
   created_at TEXT NOT NULL,
-  category TEXT NOT NULL CHECK(category IN ('preference', 'convention', 'decision', 'learning')),
+  category TEXT NOT NULL CHECK(category IN ('preference', 'convention', 'decision', 'learning', 'episode')),
   content TEXT NOT NULL,
   source_surface TEXT NOT NULL DEFAULT 'cli',
   superseded_by INTEGER REFERENCES facts(id),
@@ -211,5 +217,77 @@ export function runMigrations(db: BetterSqlite3.Database, existingVersion: numbe
       db.pragma('user_version = 5');
     }).immediate(seedTs);
     debugLog('memory-store: migrated schema v4 → v5 (tracking epoch and metadata-only updates)');
+  }
+  if (existingVersion < 6) {
+    // v5 → v6: expand facts.category CHECK to include 'episode'.
+    // SQLite does not support ALTER TABLE to modify CHECK constraints, so
+    // the migration rebuilds the facts table, FTS index, triggers, and
+    // indexes inside a single transaction. If interrupted, the transaction
+    // rolls back and the version stamp is not advanced.
+    db.transaction(() => {
+      // Drop FTS triggers, virtual table, and indexes that reference facts
+      db.exec(`DROP TRIGGER IF EXISTS facts_ai;`);
+      db.exec(`DROP TRIGGER IF EXISTS facts_ad;`);
+      db.exec(`DROP TRIGGER IF EXISTS facts_au;`);
+      db.exec(`DROP TABLE IF EXISTS facts_fts;`);
+      db.exec(`DROP INDEX IF EXISTS idx_facts_session_id;`);
+      db.exec(`DROP INDEX IF EXISTS idx_facts_fingerprint;`);
+
+      // Create replacement table with 'episode' in the CHECK constraint
+      db.exec(`
+        CREATE TABLE facts_v6 (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT,
+          created_at TEXT NOT NULL,
+          category TEXT NOT NULL CHECK(category IN ('preference', 'convention', 'decision', 'learning', 'episode')),
+          content TEXT NOT NULL,
+          source_surface TEXT NOT NULL DEFAULT 'cli',
+          superseded_by INTEGER,
+          confidence REAL NOT NULL DEFAULT 1.0,
+          access_count INTEGER NOT NULL DEFAULT 0,
+          last_accessed TEXT,
+          evidence TEXT
+        );
+      `);
+      db.exec(`INSERT INTO facts_v6 SELECT * FROM facts;`);
+      db.exec(`DROP TABLE facts;`);
+      db.exec(`ALTER TABLE facts_v6 RENAME TO facts;`);
+
+      // Recreate FTS virtual table and rebuild from data
+      db.exec(`
+        CREATE VIRTUAL TABLE facts_fts USING fts5(
+          content, category, content=facts, content_rowid=id, tokenize='porter'
+        );
+      `);
+      db.exec(`INSERT INTO facts_fts(facts_fts) VALUES('rebuild');`);
+
+      // Recreate triggers
+      db.exec(`
+        CREATE TRIGGER facts_ai AFTER INSERT ON facts BEGIN
+          INSERT INTO facts_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
+        END;
+      `);
+      db.exec(`
+        CREATE TRIGGER facts_ad AFTER DELETE ON facts BEGIN
+          INSERT INTO facts_fts(facts_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
+        END;
+      `);
+      db.exec(`
+        CREATE TRIGGER facts_au AFTER UPDATE OF content, category ON facts BEGIN
+          INSERT INTO facts_fts(facts_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
+          INSERT INTO facts_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
+        END;
+      `);
+
+      // Recreate indexes
+      db.exec(`CREATE INDEX idx_facts_session_id ON facts(session_id);`);
+      db.exec(`
+        CREATE UNIQUE INDEX idx_facts_fingerprint
+          ON facts(content, created_at, COALESCE(session_id, ''), category);
+      `);
+
+      db.pragma('user_version = 6');
+    })();
+    debugLog('memory-store: migrated schema v5 → v6 (added episode category to facts CHECK)');
   }
 }

@@ -337,7 +337,7 @@ async function getLocDelta(
   return new Promise<number>((resolve) => {
     let child: ChildProcess;
     try {
-      child = spawnFn('git', ['diff', '--shortstat', `${baseSha}..HEAD`], {
+      child = spawnFn('git', ['--no-optional-locks', 'diff', '--shortstat', `${baseSha}..HEAD`], {
         cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });

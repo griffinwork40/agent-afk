@@ -43,6 +43,7 @@ export function buildProviderQuery(
     systemPrefix,
     throttleQueue,
     tokenRefresher,
+    credentialFromStore,
     queryDispatcher,
     runtimeStateSource,
     toolDefs,
@@ -75,6 +76,7 @@ export function buildProviderQuery(
     : createCwdDependentsFactory({
         stableSystemPrefix,
         config,
+        resolvedSessionId,
         surface: ctx.surface,
         runtimeStateSource,
         getCurrentCwd: () => ctx.getCurrentCwd(),
@@ -152,6 +154,7 @@ export function buildProviderQuery(
     userSystem: toolSystemAppend,
     systemPrefix,
     tokenRefresher,
+    credentialFromStore,
     ...(config.thinking !== undefined
       ? {
           thinking: resolveThinkingParam(config.thinking, maxTokens, model, resolvedEffort),
@@ -166,12 +169,16 @@ export function buildProviderQuery(
     ...(config.effort !== undefined ? { rawEffort: config.effort } : {}),
     ...(resolvedTemperature !== undefined ? { temperature: resolvedTemperature } : {}),
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
+    ...(config.endpointConcurrency !== undefined ? { endpointConcurrency: config.endpointConcurrency } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
     ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
     ...(config.hasWorkspacePreamble ? { hasWorkspacePreamble: true } : {}),
     ...(config.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: config.autoResumeOnUsageLimit }
       : {}),
+    // Forward the predicate itself, never its current value: the tier reads
+    // it live via `isModelFallbackArmed` at the moment of decision.
+    ...(config.modelFallbackArmed !== undefined ? { modelFallbackArmed: config.modelFallbackArmed } : {}),
     // Overload-pause surface gate (#762): reuse the EXISTING surface signal
     // (the same value stamped as `origin` on session_init_start) rather than
     // inventing a new one, so a daemon session fails fast on upstream capacity

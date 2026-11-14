@@ -29,7 +29,7 @@
  */
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { randomUUID } from 'node:crypto';
-import { isFable51, resolveThinkingParam, resolveEffort } from './resolve-params.js';
+import { isFable51, isFable52, resolveThinkingParam, resolveEffort } from './resolve-params.js';
 import type {
   ProviderAccountInfo,
   ProviderAgentInfo,
@@ -52,6 +52,7 @@ import { type SessionState, createSessionState } from './query/session-state.js'
 import { AbortCoordinator } from '../shared/abort-coordinator.js';
 import { RetryLayer } from './query/retry-layer.js';
 import type { HookRegistry } from '../../hooks.js';
+import type { CompactionTrigger } from '../../trace/types.js';
 import type { AnthropicDirectQueryOptions } from './query-options.js';
 import { starterModels } from './query-options.js';
 import { driveTurns, type TurnDriverContext } from './query-turn-driver.js';
@@ -120,6 +121,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly launchModel: string;
   private readonly temperature?: number;
   private readonly baseUrl?: string;
+  private readonly endpointConcurrency?: number;
   private readonly maxToolUseIterations?: number;
   private readonly softDeadlineMs?: number;
   private readonly traceWriter?: import('../../trace/index.js').TraceSink;
@@ -198,6 +200,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.launchModel = opts.model;
     if (opts.temperature !== undefined) this.temperature = opts.temperature;
     if (opts.baseUrl !== undefined) this.baseUrl = opts.baseUrl;
+    if (opts.endpointConcurrency !== undefined) this.endpointConcurrency = opts.endpointConcurrency;
     if (opts.maxToolUseIterations !== undefined)
       this.maxToolUseIterations = opts.maxToolUseIterations;
     if (opts.softDeadlineMs !== undefined) this.softDeadlineMs = opts.softDeadlineMs;
@@ -220,7 +223,9 @@ export class AnthropicDirectQuery implements ProviderQuery {
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.tokenRefresher ? { tokenRefresher: opts.tokenRefresher } : {}),
       autoResumeOnUsageLimit: opts.autoResumeOnUsageLimit ?? true,
+      ...(opts.modelFallbackArmed !== undefined ? { modelFallbackArmed: opts.modelFallbackArmed } : {}),
       ...(opts.surface !== undefined ? { surface: opts.surface } : {}),
+      credentialFromStore: opts.credentialFromStore,
     });
     this.state = createSessionState({
       model: opts.model,
@@ -290,11 +295,12 @@ export class AnthropicDirectQuery implements ProviderQuery {
       },
       get temperature() { return query.temperature; },
       get thinkingBlockBinding() {
-        return isFable51(query.state.currentModel) && query.baseUrl === undefined
+        return (isFable51(query.state.currentModel) || isFable52(query.state.currentModel)) && query.baseUrl === undefined
           ? ({ prefix_mismatch_behavior: 'drop_block' as const })
           : undefined;
       },
       get baseUrl() { return query.baseUrl; },
+      get endpointConcurrency() { return query.endpointConcurrency; },
       get maxToolUseIterations() { return query.maxToolUseIterations; },
       get softDeadlineMs() { return query.softDeadlineMs; },
       get traceWriter() { return query.traceWriter; },
@@ -308,7 +314,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get cwd() { return query._cwd; },
       composeSystem: () => query.composeSystem(),
       makeInterruptedTurnEvent: () => query.makeInterruptedTurnEvent(),
-      compact: () => query.compact(),
+      compact: (trigger) => query.compact(trigger),
     };
   }
 
@@ -440,10 +446,6 @@ export class AnthropicDirectQuery implements ProviderQuery {
    * fresh `this.retry.client` read at the start of every new turn. The next
    * user message therefore sees the swapped client automatically.
    */
-  async reauth(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
-    return this.retry.forceClientRefresh();
-  }
-
   async rewindFiles(
     userMessageId: string,
     options?: { dryRun?: boolean },
@@ -462,10 +464,10 @@ export class AnthropicDirectQuery implements ProviderQuery {
     );
   }
 
-  async compact(): Promise<ProviderCompactResult> {
+  async compact(trigger: CompactionTrigger = 'manual'): Promise<ProviderCompactResult> {
     const r = await compactQueryHistory({
       state: this.state, abort: this.abort, retry: this.retry,
-      initSessionId: this.initSessionId,
+      initSessionId: this.initSessionId, trigger,
       ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
     });
     if (r.compacted) this.state.lastUsage = null; // #962: stale usage → false-positive

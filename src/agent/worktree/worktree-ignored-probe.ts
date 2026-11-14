@@ -142,6 +142,7 @@ async function readIgnoredEntries(
 ): Promise<{ entries: string[] } | { failure: string }> {
   const args = [
     ...GIT_LITERAL_PATHS,
+    '--no-optional-locks',
     '-C', worktreePath,
     'status', '--porcelain', '--ignored',
   ];

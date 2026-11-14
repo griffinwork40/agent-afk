@@ -170,7 +170,7 @@ function readFingerprintMap(): Record<string, string> {
  */
 function fetchRawDiff(root: string): string {
   try {
-    return execFileSync('git', ['diff', 'HEAD', '--unified=0'], {
+    return execFileSync('git', ['--no-optional-locks', 'diff', 'HEAD', '--unified=0'], {
       cwd: root,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],

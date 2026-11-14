@@ -222,6 +222,7 @@ export function loadConfig(overrides?: Partial<CliConfig>, cwd: string = process
     ...(merged.fileCheckpoints !== undefined ? { fileCheckpoints: merged.fileCheckpoints } : {}),
     ...(merged.importFrom !== undefined ? { importFrom: merged.importFrom } : {}),
     ...(merged.theme !== undefined ? { theme: merged.theme } : {}),
+    ...(merged.tools !== undefined ? { tools: merged.tools } : {}),
   };
 
   // Resolve + install the process-global model-slot bindings (Stage 1).

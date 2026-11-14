@@ -18,6 +18,7 @@ import { type TelegramRoute, routeKey } from './route.js';
 import { clearElicitationRouteForKey } from './session-manager.evict-idle.js';
 import type { SessionData, ChatSessionInfo, RouteTarget } from './session-manager.js';
 import type { SessionStats } from '../cli/slash/types.js';
+import { palette } from '../cli/palette.js';
 
 /** Normalise a RouteTarget to a full route. A bare number is the General topic. */
 function toRoute(target: RouteTarget): TelegramRoute {
@@ -119,7 +120,7 @@ export async function switchToSessionImpl(
     // Guard the close: a throwing close() must never block the delete + target-state
     // adoption below, or the stale session stays keyed in sessions and the next
     // getSession returns it unrebuilt.
-    await old.close().catch((err) => console.error('Error closing session on switch:', err));
+    await old.close().catch((err) => console.error(palette.error(`Error closing session on switch: ${err instanceof Error ? err.message : String(err)}`)));
     sc.sessions.delete(key);
   }
   // Drop in-memory stats so the resumed session hydrates the TARGET's stats

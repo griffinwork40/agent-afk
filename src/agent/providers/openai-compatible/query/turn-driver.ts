@@ -43,6 +43,7 @@ import {
 } from './turn-iteration.js';
 import { runIterationWithOverloadPause } from './overload-pause-tier.js';
 import { runIterationWithQuotaLimitPause } from './usage-limit-tier.js';
+import { isModelFallbackArmed } from '../../shared/model-fallback-armed.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import { dispatchAndAppendToolCalls } from './dispatch-append.js';
@@ -54,8 +55,18 @@ import type { OpenAIJournalWiring } from './journal-wiring.js';
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { OpenAIAuthResolution } from '../auth.js';
 import { emitQueuedUserMessage, emitSessionPhase } from '../../../trace/emit.js';
+import { PauseController, formatPauseNote } from '../../../session/pause-controller.js';
 import { emitTurnTerminal } from './turn-driver.emit-terminal.js';
 import { windDownFinalText } from './wind-down-final.js';
+
+/**
+ * Marker text emitted as the final assistant message when context pressure
+ * forces an incomplete wind-down (Fix #3963-B).
+ * Exported so tests can import the production definition instead of duplicating
+ * the literal.
+ */
+export const INCOMPLETE_MARKER =
+  'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
 
 /** Full context the inner turn driver needs from the owning query. */
 export interface TurnDriverContext extends IterationContext, FinishTurnContext {
@@ -130,9 +141,20 @@ export function applyBeforeNextRound(
  * reference, no diff detected). Syncing here ensures the steering content is
  * persisted before the next model request — mirrors anthropic-direct's
  * inter-round sync (loop/inter-round.ts).
+ *
+ * Pause note: `consumeLastPauseDuration()` is one-shot. When a pause occurs
+ * mid-turn the note is prepended here at the first round boundary after resume
+ * so the model sees it before its next reply — rather than waiting for the next
+ * top-level turn start (issue #4693).
  */
 export function applyAndSyncSteering(ctx: TurnDriverContext): void {
-  const steeringText = ctx.beforeNextRound?.();
+  let steeringText = ctx.beforeNextRound?.();
+  // Consume any pending pause duration and prepend its note.
+  const pauseMs = PauseController.instance().consumeLastPauseDuration();
+  const pauseNote = pauseMs !== undefined ? formatPauseNote(pauseMs) : undefined;
+  if (pauseNote) {
+    steeringText = steeringText ? pauseNote + '\n\n' + steeringText : pauseNote;
+  }
   applyBeforeNextRound(ctx.priorTurns, steeringText, ctx.traceWriter, ctx.opts.config.subagentId);
   if (steeringText) ctx.journal.sync(ctx.priorTurns);
 }
@@ -149,6 +171,7 @@ function makeCompositeIteration(
   controller: AbortController,
   vision: boolean,
   windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
+  firstRequestOfTurn: boolean,
 ): ReturnType<typeof runIterationWithQuotaLimitPause> {
   return runIterationWithQuotaLimitPause(
     () => runIterationWithOverloadPause(
@@ -167,6 +190,8 @@ function makeCompositeIteration(
       signal: controller.signal,
       isClosed: () => ctx.closed,
       sessionId: ctx.initSessionId,
+      // Live read: the router's predicate is consulted only when the tier decides.
+      fallback: { firstRequestOfTurn, isArmed: () => isModelFallbackArmed(ctx.opts.config), model: ctx.currentModel },
     },
   );
 }
@@ -285,6 +310,26 @@ async function pushAssistantAndCheckStopHook(
 
 
 /**
+ * Fold one round's provider usage into the running accumulator and update
+ * the context's last-usage snapshot. Extracted from `runTurnInner` to keep
+ * it under the 200-line function ceiling.
+ */
+function accumulateRoundUsage(
+  ctx: TurnDriverContext,
+  state: StreamState,
+  prior: ProviderUsage,
+): ProviderUsage {
+  const pricedModel = ctx.useOpenAIPricing ? ctx.currentModel : undefined;
+  const roundUsage = usageFromState(state, pricedModel, ctx.fastTier.confirmedFast());
+  const accumulated = sumProviderUsage(prior, roundUsage);
+  // Context-window footprint for this round; carries the last known value
+  // forward (never 0) when the round had no usage. See the helper's Contract.
+  accumulated.contextWindowTokens = roundContextWindowTokens(roundUsage, ctx.lastUsage);
+  ctx.lastUsage = accumulated;
+  return accumulated;
+}
+
+/**
  * Drive a single user turn through the model + tool loop.
  *
  * This is the body of `OpenAICompatibleQuery._runTurnInner`, extracted here so
@@ -381,7 +426,10 @@ export async function* runTurnInner(
         return;
       }
 
-      const result = yield* makeCompositeIteration(ctx, controller, vision, windDownReason);
+      // Only the turn's first request may ask for a model fallback: a later
+      // round or Stop-hook segment already yielded output the replay would repeat.
+      const firstRequest = round === 0 && stopHookContinuation === 0;
+      const result = yield* makeCompositeIteration(ctx, controller, vision, windDownReason, firstRequest);
       if (result === null) {
         ctx.abort.clear(controller);
         if (controller.signal.aborted || ctx.closed) {
@@ -390,13 +438,7 @@ export async function* runTurnInner(
         return;
       }
 
-      const pricedModel = ctx.useOpenAIPricing ? ctx.currentModel : undefined;
-      const roundUsage = usageFromState(result.state, pricedModel, ctx.fastTier.confirmedFast());
-      accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
-      // Context-window footprint for this round; carries the last known value
-      // forward (never 0) when the round had no usage. See the helper's Contract.
-      accumulatedUsage.contextWindowTokens = roundContextWindowTokens(roundUsage, ctx.lastUsage);
-      ctx.lastUsage = accumulatedUsage;
+      accumulatedUsage = accumulateRoundUsage(ctx, result.state, accumulatedUsage);
       if (result.text.length > 0) finalAssistantText = result.text;
       finalReasoningText = result.state.reasoningText;
       finalReasoningField = result.state.reasoningField;
@@ -446,7 +488,10 @@ export async function* runTurnInner(
       if (windDownForContextPressure(ctx, appendedAt)) {
         windDownReason = CONTEXT_PRESSURE_WIND_DOWN;
         if (!canSynthesizeUnderPressure(ctx, appendedAt)) {
-          finalAssistantText ||= 'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
+          // Fix #3963 (B): always overwrite finalAssistantText with the incomplete
+          // marker — the ||= would silently pass a stale planning sentence as the
+          // answer when an earlier round had text.
+          finalAssistantText = INCOMPLETE_MARKER;
           break;
         }
         continue;

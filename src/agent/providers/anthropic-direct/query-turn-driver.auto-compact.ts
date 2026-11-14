@@ -63,7 +63,9 @@ export async function* maybeAutoCompact(ctx: TurnDriverContext): AsyncGenerator<
         trigger: 'auto',
       });
     }
-    const compactResult = await ctx.compact();
+    // 'token_threshold' is the trace vocabulary for the automatic trigger
+    // (matches openai-compatible/query.ts); the hook above keeps 'auto'.
+    const compactResult = await ctx.compact('token_threshold');
     // Reset lastUsage after compaction so the overflow guard (#962) does not
     // false-positive on the next turn: the stale count is no longer a valid
     // lower bound once history has been truncated. The next API call will

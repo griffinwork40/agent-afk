@@ -356,6 +356,86 @@ describe('SubagentHandle streaming', () => {
       },
     );
 
+    it('overwrites stale non-terminal stop reason with STREAM_INCOMPLETE on buffered-partial (#3965)', async () => {
+      // Regression guard for #3965: resolveStreamResult's buffered-partial
+      // branch must overwrite any non-terminal _lastStopReason (e.g. 'tool_use',
+      // 'tool_calls') with STREAM_INCOMPLETE, not preserve it via `??=`.
+      //
+      // The stale reason is injected mid-stream by a custom sendMessageStream
+      // implementation that sets handle._lastStopReason AFTER run()'s own reset
+      // (handle.ts:295) but BEFORE the for-await loop exits. This simulates a
+      // provider variant or stop-hook continuation that emits an inter-round
+      // done event (which processDoneEvent would stamp as 'tool_use') before
+      // the stream is aborted mid-output. The stream then emits a content chunk
+      // and ends without a terminal message, triggering the buffered-partial
+      // branch with the stale reason already set.
+      //
+      // With `??=`: stale 'tool_use' would survive → stopReason:'tool_use'.
+      // With the fix (isTerminalStopReason guard): overwritten → STREAM_INCOMPLETE.
+      let capturedHandle: SubagentHandleImpl<unknown> | null = null;
+
+      const session: IAgentSession = {
+        sessionId: 'mock-stale-reason',
+        state: 'idle',
+        abortSignal: new AbortController().signal,
+        async sendMessage() {
+          return { role: 'assistant', content: '', timestamp: new Date() };
+        },
+        async *sendMessageStream() {
+          // Inject the stale non-terminal reason AFTER run()'s reset, before
+          // the for-await loop exits. This is the seam the bug exploited.
+          if (capturedHandle) {
+            capturedHandle._lastStopReason = 'tool_use';
+          }
+          // Emit buffered text (no terminal message event) — triggers the
+          // buffered-partial branch in resolveStreamResult.
+          yield { type: 'chunk', chunk: { type: 'content', content: 'partial round 2 output' } } as OutputEvent;
+          // Stream ends here without a `message` or `done` event.
+        },
+        async interrupt() {},
+        async close() {},
+        async reset() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        waitForInitialization: async () => ({ sessionId: 'mock-stale-reason', model: 'test-model', persistSession: true }),
+        getSessionIdentity: () => ({ persistSession: true }),
+        getSessionMetadata: () => ({ sessionId: 'mock-stale-reason', model: 'test-model', persistSession: true }),
+        getQuery: () => { throw new Error('not implemented'); },
+        getLastResponseMetadata: () => null,
+        getOutputStream: async function* () {},
+        getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+        supportedCommands: async () => [],
+        supportedModels: async () => [],
+        supportedAgents: async () => [],
+        getContextUsage: async () => ({ contextLimitTokens: 0, contextUsedTokens: 0 }),
+        mcpServerStatus: async () => [],
+        accountInfo: async () => ({ name: 'test', email: 'test@example.com' }),
+      } as unknown as IAgentSession;
+
+      const handle = new SubagentHandleImpl(
+        'stale-toolstop-test',
+        session,
+        controller,
+        abortGraph,
+        undefined,
+        5000,
+        undefined,
+        vi.fn(),
+      );
+      capturedHandle = handle;
+
+      const result = await handle.runToResult('p');
+
+      // The buffered-partial branch fires (text was streamed, no terminal message).
+      // stopReason must be STREAM_INCOMPLETE — not the stale 'tool_use'.
+      expect(result.stopReason).toBe(STREAM_INCOMPLETE);
+      expect(result.stopReason).not.toBe('tool_use');
+      // The run still succeeds (buffered partial salvaged), not failed.
+      expect(result.status).toBe('succeeded');
+      // The partial text is preserved as the message content.
+      expect(result.message?.content).toBe('partial round 2 output');
+    });
+
     it('returns a capped partial result (not a throw) when the tool-use cap fires with no message', async () => {
       // Anti-hang contract: a forked child that hits its tool-use-iteration cap
       // ends the turn with a `tool_use_loop_capped` done and no assistant
@@ -1568,6 +1648,110 @@ describe('SubagentHandle streaming', () => {
       // At runtime, this must be a string — not a MySchema object.
       expect(typeof result.partialOutput).toBe('string');
       expect(result.partialOutput).toBe('partial text');
+    });
+
+    it('#3965: stale tool-stop reason from a prior tool round does not mask an abort in the next round', async () => {
+      // Regression guard for #3965.
+      //
+      // A single sendMessageStream invocation may span multiple provider rounds
+      // (tool-call → result → continuation). The provider emits a `done` event
+      // with stopReason `tool_use` after round 1 (setting _lastStopReason), then
+      // begins round 2. If the stream is aborted mid-round-2 (before any `done`),
+      // the iterator throws and resolveStreamResult is bypassed — _lastStopReason
+      // still holds the stale `tool_use` value from round 1.
+      //
+      // The old `??=` guard in the buffered-text branch of resolveStreamResult
+      // preserved that stale reason when the stream ended normally (without
+      // throwing), causing status:'succeeded' with stopReason:'tool_use' instead
+      // of stopReason:STREAM_INCOMPLETE. annotateIfIncomplete never fired.
+      //
+      // The fix changes `??=` to `=` (unconditional assignment).
+      //
+      // This test models the scenario as a single-stream abort mid-round-2:
+      // the stream emits done(tool_use) between rounds, then partial text in
+      // round 2, then ends abruptly (no message, no done) — matching the real
+      // provider abort path where resolveStreamResult IS reached (the loop exits
+      // normally via break/return rather than throw when an abort surfaces as a
+      // stream-error event rather than a thrown exception).
+
+      const localGraph = new AbortGraph();
+      const localController = new AbortController();
+      localGraph.register('stale-stopreason-3965', localController);
+
+      // Single-stream session that simulates two provider rounds within one
+      // sendMessageStream call:
+      //   Round 1: done(tool_use) — sets _lastStopReason to 'tool_use'
+      //   Round 2: two content chunks, then stream ends with no message/done
+      //            (simulates the HTTP stream being cut before provider closes).
+      const session: IAgentSession = {
+        sessionId: 'mock-session',
+        state: 'idle',
+        abortSignal: localController.signal,
+        async sendMessage() {
+          return { role: 'assistant', content: '', timestamp: new Date() };
+        },
+        async *sendMessageStream() {
+          // Round 2 streams partial assistant text (simulating a cut-off mid-output).
+          yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'partial ' } };
+          yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'round2 text' } };
+          // The stream ends with a `done` carrying stopReason 'tool_use' — this
+          // simulates a prior completed tool round whose reason survives on
+          // _lastStopReason. In the real bug, _lastStopReason is set by an
+          // earlier processDoneEvent call within the same stream; here we model
+          // it by emitting a done(tool_use) as the terminal event while the
+          // loop still has buffered text but no `message` event. The done causes
+          // a break → resolveStreamResult is reached with _lastStopReason='tool_use'
+          // and buffered content — the exact condition the `??=` guard failed on.
+          yield { type: 'done' as const, metadata: { stopReason: 'tool_use' } };
+        },
+        async interrupt() {},
+        async close() {},
+        async reset() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        waitForInitialization: async () => ({ sessionId: 'mock-session', model: 'test-model', persistSession: true }),
+        getSessionIdentity: () => ({ persistSession: true }),
+        getSessionMetadata: () => ({ sessionId: 'mock-session', model: 'test-model', persistSession: true }),
+        getQuery: () => { throw new Error('not implemented'); },
+        getLastResponseMetadata: () => null,
+        getOutputStream: async function* () {},
+        getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+        supportedCommands: async () => [],
+        supportedModels: async () => [],
+        supportedAgents: async () => [],
+        getContextUsage: async () => ({ contextLimitTokens: 0, contextUsedTokens: 0 }),
+        mcpServerStatus: async () => [],
+        accountInfo: async () => ({ name: 'test', email: 'test@example.com' }),
+      } as unknown as IAgentSession;
+
+      const handle = new SubagentHandleImpl(
+        'stale-stopreason-3965',
+        session,
+        localController,
+        localGraph,
+        undefined,
+        5000,
+        undefined,
+        vi.fn(),
+      );
+
+      const result = await handle.runToResult('prompt');
+
+      // The key assertion: stopReason must be STREAM_INCOMPLETE, not the stale
+      // 'tool_use' set by the round-1 done event. With the old `??=` guard,
+      // _lastStopReason stayed 'tool_use' and was preserved, so the result
+      // reported status:'succeeded' with stopReason:'tool_use' — the exact
+      // bug from #3965. With the fix (`=`), STREAM_INCOMPLETE is always stamped.
+      expect(result.stopReason).toBe(STREAM_INCOMPLETE);
+      // The buffered-text branch returns a Message (not throws), so run()
+      // succeeds and runToResult takes the try-path → buildResultFromMessage.
+      // Status is 'succeeded' (partial, flagged by stopReason) — this matches
+      // the existing buffered-partial contract. The regression is purely in
+      // stopReason: with `??=` it was 'tool_use'; with `=` it is STREAM_INCOMPLETE.
+      expect(result.status).toBe('succeeded');
+      // Partial text is in message.content (not partialOutput — that path is
+      // for the throw/error case). annotateIfIncomplete fires on STREAM_INCOMPLETE.
+      expect(result.message?.content).toBe('partial round2 text');
     });
 
     it('lastStreamedContent resets between runs so stale partials do not leak', async () => {

@@ -9,16 +9,7 @@
  */
 
 import type { InsightAggregates } from './types.js';
-import { htmlEscape } from './html.js';
-
-// ---------------------------------------------------------------------------
-// Private helpers (duplicated from html.ts to avoid circular import)
-// ---------------------------------------------------------------------------
-
-function safeNum(n: number | undefined | null, decimals = 0): string {
-  if (n === undefined || n === null || isNaN(n) || !isFinite(n)) return '0';
-  return n.toFixed(decimals);
-}
+import { htmlEscape, safeNum } from './html.helpers.js';
 
 // ---------------------------------------------------------------------------
 // Renderer

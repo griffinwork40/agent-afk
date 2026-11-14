@@ -51,6 +51,13 @@ export interface TelegramSessionBuildContext {
   /** Factory-owned per-chat workspace. Undefined when AFK_WORKSPACE_DISABLED=1. */
   workspaceStore?: WorkspaceStore;
   /**
+   * Stable credential/auth source id resolved at session-factory time
+   * (before provider detection). Absent for pre-change sessions.
+   * Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' | 'claude-code-keychain' | 'claude-code-session-refresh'
+   * OpenAI: 'chatgpt-oauth' | 'config' | 'env' | etc.
+   */
+  credentialSource?: string;
+  /**
    * Telegram chat id for the originating session. Threaded from
    * `sessionConfig.telegramChatId` so the `TelegramBgResultNotifier` can
    * push background job notifications to the right chat in multi-chat setups.

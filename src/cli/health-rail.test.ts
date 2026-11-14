@@ -53,11 +53,11 @@ function mockRegistry(jobs: Array<{ status: 'running' | 'completed' | 'failed' |
  * Access the private `snapshot` field via a cast so we can assert on the
  * computed counts without needing a real TTY repaint.
  */
-function getSnapshot(rail: HealthRail): { activeSubs: number; totalSubs: number } | null {
+function getSnapshot(rail: HealthRail): { activeSubs: number; totalSubs: number; activeProcs: number; totalProcs: number } | null {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const snap = (rail as any).snapshot;
   if (!snap) return null;
-  return { activeSubs: snap.activeSubs, totalSubs: snap.totalSubs };
+  return { activeSubs: snap.activeSubs, totalSubs: snap.totalSubs, activeProcs: snap.activeProcs, totalProcs: snap.totalProcs };
 }
 
 describe('HealthRail subagent counts', () => {
@@ -77,7 +77,7 @@ describe('HealthRail subagent counts', () => {
       getExtraRows,
     });
     rail.update(makeStats());
-    expect(getSnapshot(rail)).toEqual({ activeSubs: 2, totalSubs: 3 });
+    expect(getSnapshot(rail)).toEqual({ activeSubs: 2, totalSubs: 3, activeProcs: 0, totalProcs: 0 });
   });
 
   it('counts only foreground agents when no background registry is provided', () => {
@@ -86,7 +86,7 @@ describe('HealthRail subagent counts', () => {
       getForegroundAgentCounts: () => ({ active: 3, total: 5 }),
     });
     rail.update(makeStats());
-    expect(getSnapshot(rail)).toEqual({ activeSubs: 3, totalSubs: 5 });
+    expect(getSnapshot(rail)).toEqual({ activeSubs: 3, totalSubs: 5, activeProcs: 0, totalProcs: 0 });
   });
 
   it('combines foreground + background active counts', () => {
@@ -155,7 +155,7 @@ describe('HealthRail subagent counts', () => {
   it('shows zero counts when both sources are absent or empty', () => {
     const rail = new HealthRail({ getExtraRows });
     rail.update(makeStats());
-    expect(getSnapshot(rail)).toEqual({ activeSubs: 0, totalSubs: 0 });
+    expect(getSnapshot(rail)).toEqual({ activeSubs: 0, totalSubs: 0, activeProcs: 0, totalProcs: 0 });
   });
 
   it('shows zero activeSubs when all agents are terminal even with large total', () => {
@@ -172,6 +172,50 @@ describe('HealthRail subagent counts', () => {
     expect(getSnapshot(rail)?.activeSubs).toBe(0);
     // 3 bg + 4 fg = 7 total
     expect(getSnapshot(rail)?.totalSubs).toBe(7);
+  });
+
+  it('counts running background processes', () => {
+    // Mock uses runningCount() + startedCount() — the interface update()
+    // now calls. (Issue #4395, finding #1.)
+    const mockProcJobs = {
+      runningCount: () => 2,
+      startedCount: () => 3,
+    };
+    const rail = new HealthRail({
+      getExtraRows,
+      processJobs: mockProcJobs as unknown as import('../agent/shell-jobs/process-jobs.js').ProcessJobRegistry,
+    });
+    rail.update(makeStats());
+    expect(getSnapshot(rail)?.activeProcs).toBe(2);
+    expect(getSnapshot(rail)?.totalProcs).toBe(3);
+  });
+
+  it('ratchets process total upward when registry prunes history', () => {
+    // Simulate pruning: startedCount() is always 3 (monotonic counter),
+    // but runningCount() shrinks after the second update. (Issue #4395, finding #1.)
+    let callCount = 0;
+    const mockProcJobs = {
+      runningCount: () => (callCount === 1 ? 1 : 1),
+      startedCount: () => {
+        callCount++;
+        // First call: 3 started; second call: still 3 (monotonic).
+        return 3;
+      },
+    };
+    const rail = new HealthRail({
+      getExtraRows,
+      processJobs: mockProcJobs as unknown as import('../agent/shell-jobs/process-jobs.js').ProcessJobRegistry,
+    });
+    rail.update(makeStats()); // totalProcsEver = 3
+    rail.update(makeStats()); // startedCount still 3, ratchet stays 3
+    expect(getSnapshot(rail)?.totalProcs).toBe(3);
+  });
+
+  it('shows zero proc counts when processJobs is absent', () => {
+    const rail = new HealthRail({ getExtraRows });
+    rail.update(makeStats());
+    expect(getSnapshot(rail)?.activeProcs).toBe(0);
+    expect(getSnapshot(rail)?.totalProcs).toBe(0);
   });
 });
 

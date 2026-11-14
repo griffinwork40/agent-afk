@@ -13,6 +13,21 @@ import type { EnvVarMeta } from './env.js';
 
 export const FILE_CHECKPOINT_ENV_REGISTRY = [
   {
+    name: 'AFK_FILE_CHECKPOINT_BASH_DISABLE',
+    description: 'Disable best-effort git-backed capture of foreground bash file changes for /rewind.',
+    type: 'boolean', required: false, example: '1', category: 'debug',
+  },
+  {
+    name: 'AFK_FILE_CHECKPOINT_BASH_TIMEOUT_MS',
+    description: 'Maximum milliseconds per bash checkpoint capture or diff. Default 5000.',
+    type: 'number', required: false, default: '5000', category: 'debug',
+  },
+  {
+    name: 'AFK_FILE_CHECKPOINT_BASH_MAX_FILES',
+    description: 'Maximum changed files captured per bash call; larger diffs are reported as partial. Default 1000.',
+    type: 'number', required: false, default: '1000', category: 'debug',
+  },
+  {
     name: 'AFK_FILE_CHECKPOINT_RETENTION_DISABLE',
     description:
       'Disable the file-checkpoint retention sweep (state/file-checkpoints/), so no ' +

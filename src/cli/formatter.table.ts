@@ -195,12 +195,16 @@ export function renderTable(
   lines.push(...dataLines(headerCells, true));
   lines.push(borderLine('├', '┼', '┤'));
 
+  let prevRowHeight = 0;
   for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
-    lines.push(...dataLines(dataRows[rowIdx]!));
-    // Add a thin row separator between data rows (but not after the last row)
-    if (rowIdx < dataRows.length - 1) {
+    const rowLines = dataLines(dataRows[rowIdx]!);
+    // Add a separator only when the previous row wrapped to multiple lines,
+    // so multi-line rows stay visually distinct without bloating compact tables.
+    if (prevRowHeight > 1 && rowIdx > 0) {
       lines.push(borderLine('├', '┼', '┤'));
     }
+    lines.push(...rowLines);
+    prevRowHeight = rowLines.length;
   }
 
   lines.push(borderLine('└', '┴', '┘'));

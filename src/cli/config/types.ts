@@ -28,7 +28,7 @@ export interface AutoRoutingConfig {
 }
 
 export interface CliConfig {
-  tools?: { disabled?: string[] };
+  tools?: { disabled?: string[]; usageAwareness?: boolean };
   apiKey?: string;
   /**
    * Base URL for the Anthropic Messages API. When set, traffic is routed to
@@ -249,6 +249,13 @@ export interface CliConfig {
    */
   autoResumeOnUsageLimit?: boolean;
   /**
+   * Main-session fallback model input (alias, tier name, or model id), parsed
+   * from afk.config.json `models.fallback`. A plain model-input string, NOT a
+   * model slot: it resolves through the existing slots downstream. Read it via
+   * `getConfiguredFallbackModel()` (agent/session/fallback-model.ts).
+   */
+  fallbackModel?: string;
+  /**
    * AFK-mode terminal-state enforcement gate (opt-in; default off when omitted).
    * When true, in autonomous mode a turn that self-certifies `Done` with no
    * corroborating evidence — a successful file write/edit or executed command
@@ -352,7 +359,7 @@ export interface ConfigFileSchema {
    * extra deny list for sessions whose active model resolves to that slot;
    * resolved and enforced in agent/tools/operator-denied.slots.ts.
    */
-  tools?: { disabled?: string[]; disabledBySlot?: Partial<Record<string, string[]>> };
+  tools?: { disabled?: string[]; disabledBySlot?: Partial<Record<string, string[]>>; usageAwareness?: boolean };
   model?: string;
   /**
    * Per-tier model bindings. Each slot accepts a bare id string
@@ -372,6 +379,9 @@ export interface ConfigFileSchema {
      * `AFK_MODEL_SUBAGENT_BASE_URL` / `_API_KEY` env vars to route subagent
      * inference to a different provider (e.g. Together, Fireworks, Groq). */
     subagent?: string | ModelSlotConfigEntry;
+    /** Main-session fallback model (alias, tier name, or id). Not a slot; the
+     * object form contributes only its `id`. See `CliConfig.fallbackModel`. */
+    fallback?: string | ModelSlotConfigEntry;
   };
   maxTokens?: number;
   temperature?: number;
