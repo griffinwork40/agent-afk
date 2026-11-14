@@ -64,8 +64,9 @@ export const SessionPhaseNameSchema = z.enum([
   // `sessionId` on the payload carries the provider-issued id; present only
   // on this phase kind. Absent on all older traces — treat absence as unknown.
   'session_id_assigned',
-  // Many-image dimension guard replacement. See SessionPhaseName JSDoc in
-  // types.ts — metadata carries degradedCount, threshold, maxDimension.
+  // Per-image pixel-ceiling guard replacement. See SessionPhaseName JSDoc in
+  // types.ts — metadata carries degradedCount, imageCount, threshold,
+  // maxDimension (the ceiling that applied) and manyImage.
   'many_image_degraded',
   // Mid-stream transport drop accepted as clean completion (#2780).
   // See SessionPhaseName JSDoc in types.ts for the full contract.

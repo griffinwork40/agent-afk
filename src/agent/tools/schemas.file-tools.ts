@@ -181,7 +181,7 @@ export const globTool: AnthropicToolDef = {
       },
       path: {
         type: 'string',
-        description: 'Base directory to search from. Defaults to the current working directory.',
+        description: 'Base directory to search from. Defaults to the current working directory. When path is set, pattern must be relative.',
       },
     },
     required: ['pattern'],
@@ -194,8 +194,7 @@ export const grepTool: AnthropicToolDef = {
   concurrencySafe: true,
   description:
     'Search file contents for lines matching a pattern. Returns matches in file:line:content format. ' +
-    'Runs on ripgrep: `|` `+` `?` `(` `)` `{` `}` are regex metacharacters by default (e.g. `foo|bar` ' +
-    'alternates, matching either branch) — escape with a backslash for the literal character. Honors ' +
+    'Runs on ripgrep. Honors ' +
     '.gitignore (so build/dependency dirs like node_modules are skipped) but DOES search hidden ' +
     'files/dirs like .github and .env; the .git directory and binary files are skipped. ' +
     'Output is capped to a ~100KB head+tail view; if a search is truncated, narrow it (a more specific ' +

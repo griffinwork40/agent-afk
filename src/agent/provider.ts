@@ -187,7 +187,7 @@ export type ProviderEvent =
        * lets consumers programmatically distinguish notice classes without
        * substring-matching `text`. Extend as new harness notice classes emerge.
        */
-      kind: 'truncation' | 'refusal' | 'fast-tier';
+      kind: 'truncation' | 'refusal' | 'fast-tier' | 'image-omitted';
       sessionId?: string;
     }
   | {

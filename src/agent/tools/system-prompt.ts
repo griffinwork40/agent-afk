@@ -22,7 +22,7 @@ export const TOOL_SYSTEM_PROMPT_BASE = `You have access to tools for working wit
 - Use glob and grep to discover files before reading individual files.
 - When bash/grep output is long it is capped to a head+tail view (start and end kept, middle elided) — the command still completes, so you keep the exit code and the tail. If you need the elided middle, filter the command (\`| tail -n\`, \`--quiet\`, a narrower grep pattern/path) or redirect to a file and read slices; don't just re-run the same broad command.
 - Use absolute paths for file operations.
-- Prefer \`agent\` (and \`skill\`) for multi-file investigation, verification, parallel hypotheses, and any work that would otherwise consume large amounts of inline context. The main session is the coordinator; subagents are the investigators.`;
+- Prefer \`agent\` (and \`skill\`) for multi-file investigation, verification that needs tools or fresh evidence, parallel hypotheses, and any work that would otherwise consume large amounts of inline context. The main session is the coordinator; subagents are the investigators.`;
 
 /**
  * Slash-command routing instruction — only meaningful for main (interactive)
