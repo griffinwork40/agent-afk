@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { getAfkStateDir, getFacetCacheDir } from '../../paths.js';
 import { TraceEventSchema } from '../../agent/trace/events.js';
 import { listSessionIds, getOrDeriveFacet } from '../../agent/facets/index.js';
+import { sidecarPredatesWindow } from './session-prescreen.js';
 import type { InsightsOptions, TraceAggregates } from '../types.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import { SessionCostAccumulator } from '../../agent/trace/cost.js';
@@ -85,6 +86,12 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
   // --- Primary path: iterate session sidecars via facets ---
   const sessionIds = listSessionIds({ sessionsDir });
   for (const sessionId of sessionIds) {
+    // Conservative mtime pre-screen: skip sidecar without calling getOrDeriveFacet
+    // when the file's mtime is strictly before the cutoff. Safe because a sidecar
+    // is always written at or after startedAt, so an old mtime guarantees the
+    // session is outside the window. The authoritative facet.start_time check
+    // below remains the final filter. (#4913)
+    if (sidecarPredatesWindow(sessionId, sessionsDir, cutoffMs)) continue;
     const facet = getOrDeriveFacet(sessionId, { sessionsDir, cacheDir });
     if (!facet) continue;
     if (new Date(facet.start_time).getTime() < cutoffMs) continue;
