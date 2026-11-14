@@ -488,6 +488,190 @@ describe('planGitRead (#4227): model-quirk normalization', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Tests for #4878: remaining read-only rejections
+// ---------------------------------------------------------------------------
+
+describe('planGitRead (#4878): empty --format= / --pretty= values', () => {
+  it('show --format= (empty value) is accepted', () => {
+    const plan = planGitRead({ subcommand: 'show', args: ['HEAD', '--format='] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--format=');
+  });
+
+  it('show --pretty= (empty value) is accepted', () => {
+    const plan = planGitRead({ subcommand: 'show', args: ['HEAD', '--pretty='] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--pretty=');
+  });
+
+  it('log --format= (empty value) is accepted', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--format='] }, CWD).ok).toBe(true);
+  });
+
+  it('log --pretty= (empty value) is accepted', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--pretty='] }, CWD).ok).toBe(true);
+  });
+
+  it('non-empty --format=%H is still accepted', () => {
+    expect(planGitRead({ subcommand: 'show', args: ['--format=%H'] }, CWD).ok).toBe(true);
+  });
+
+  it('signature placeholders in --format= are still rejected even when non-empty', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--format=%GS'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'show', args: ['--pretty=%(signature)'] }, CWD).ok).toBe(false);
+  });
+});
+
+describe('planGitRead (#4878): log --ancestry-path', () => {
+  it('log --ancestry-path is accepted', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['--ancestry-path', 'HEAD~5..HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--ancestry-path');
+  });
+});
+
+describe('planGitRead (#4878): show --max-count=', () => {
+  it('show --max-count=1 is accepted', () => {
+    const plan = planGitRead({ subcommand: 'show', args: ['--max-count=1', 'HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--max-count=1');
+  });
+});
+
+describe('planGitRead (#4878): split-valued --contains / --merged / --no-merged (branch)', () => {
+  it('branch --merged main (two tokens) is normalised and accepted', () => {
+    const plan = planGitRead({ subcommand: 'branch', args: ['--merged', 'main'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--merged=main');
+  });
+
+  it('branch --contains HEAD (two tokens) is normalised and accepted', () => {
+    const plan = planGitRead({ subcommand: 'branch', args: ['--contains', 'HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--contains=HEAD');
+  });
+
+  it('branch --no-merged main (two tokens) is normalised and accepted', () => {
+    const plan = planGitRead({ subcommand: 'branch', args: ['--no-merged', 'main'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--no-merged=main');
+  });
+
+  it('pre-joined --merged=main is still accepted', () => {
+    expect(planGitRead({ subcommand: 'branch', args: ['--merged=main'] }, CWD).ok).toBe(true);
+  });
+
+  it('unpaired --contains (no following value) is rejected', () => {
+    expect(planGitRead({ subcommand: 'branch', args: ['--contains'] }, CWD).ok).toBe(false);
+  });
+
+  it('--contains followed by another flag is not joined (both rejected or first rejected)', () => {
+    // --contains is left unpaired; checkToken rejects the bare --contains
+    const plan = planGitRead({ subcommand: 'branch', args: ['--contains', '--merged'] }, CWD);
+    expect(plan.ok).toBe(false);
+  });
+});
+
+describe('planGitRead (#4878): diff -U<N> (unified shorthand)', () => {
+  it('diff -U15 is normalised to --unified=15', () => {
+    const plan = planGitRead({ subcommand: 'diff', args: ['-U15', 'HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--unified=15');
+  });
+
+  it('log -U3 is normalised to --unified=3', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['-U3', '--oneline'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('--unified=3');
+  });
+
+  it('-U with non-digits is not normalised and is rejected', () => {
+    expect(planGitRead({ subcommand: 'diff', args: ['-Uabc'] }, CWD).ok).toBe(false);
+  });
+});
+
+describe('planGitRead (#4878): blame -L <range> (two tokens)', () => {
+  it('blame -L 100,130 (two tokens) is normalised and accepted', () => {
+    const plan = planGitRead({ subcommand: 'blame', args: ['-L', '100,130', 'HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('-L100,130');
+  });
+
+  it('pre-joined -L100,130 is still accepted', () => {
+    expect(planGitRead({ subcommand: 'blame', args: ['-L100,130', 'HEAD'] }, CWD).ok).toBe(true);
+  });
+
+  it('unpaired -L (no following value) is rejected', () => {
+    expect(planGitRead({ subcommand: 'blame', args: ['-L'] }, CWD).ok).toBe(false);
+  });
+});
+
+describe('planGitRead (#4878): log -S <text> (pickaxe, two tokens)', () => {
+  it('log -S sometext (two tokens) is normalised and accepted', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['-S', 'sometext', 'HEAD'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('-Ssometext');
+  });
+
+  it('pre-joined -Sneedle (single token) is accepted via the -S valued prefix', () => {
+    // A pre-joined -Sneedle token (no space) goes straight to checkToken.
+    // -S is in log.valued as a non-= prefix, so -Sneedle passes because
+    // '-Sneedle'.startsWith('-S') && '-Sneedle'.length > '-S'.length.
+    const plan = planGitRead({ subcommand: 'log', args: ['-Sneedle'] }, CWD);
+    expect(plan.ok).toBe(true);
+    expect(plan.ok && plan.argv).toContain('-Sneedle');
+  });
+
+  it('log -S with value starting with - is rejected (security: could look like a flag)', () => {
+    // A pickaxe value starting with `-` is left as-is by the normaliser
+    // (invariant 1: next token starts with `-`, so no join happens).
+    // The bare `-S` then reaches checkToken — it IS in flags, so it passes,
+    // but the subsequent `-output=x` token is rejected as an unlisted option.
+    const plan = planGitRead({ subcommand: 'log', args: ['-S', '--output=x'] }, CWD);
+    expect(plan.ok).toBe(false);
+  });
+
+  it('unpaired -S alone on log is rejected (no value to join; bare -S is not a valid option)', () => {
+    // -S is in log.valued (prefix `-S`), not flags. A bare `-S` with no
+    // following value token cannot be joined by the normaliser, so it reaches
+    // checkToken unchanged. checkToken requires tok.length > prefix.length for
+    // non-`=` prefixes, so bare `-S` is rejected. This is correct: git log -S
+    // with no argument is a usage error anyway.
+    const plan = planGitRead({ subcommand: 'log', args: ['-S'] }, CWD);
+    expect(plan.ok).toBe(false);
+  });
+});
+
+describe('planGitRead (#4878): injection rejection — split-valued cannot smuggle options', () => {
+  it('--contains value cannot smuggle --output= (value starts with -)', () => {
+    // next token starts with `-` → not joined; bare --contains is rejected
+    expect(planGitRead({ subcommand: 'branch', args: ['--contains', '--output=x'] }, CWD).ok).toBe(false);
+  });
+
+  it('--merged value cannot smuggle -c option (value starts with -)', () => {
+    expect(planGitRead({ subcommand: 'branch', args: ['--merged', '-c'] }, CWD).ok).toBe(false);
+  });
+
+  it('-L value cannot smuggle an option via leading -', () => {
+    expect(planGitRead({ subcommand: 'blame', args: ['-L', '--output=x', 'HEAD'] }, CWD).ok).toBe(false);
+  });
+
+  it('joined --contains=value cannot contain a second option via = splitting', () => {
+    // Even if the value is unusual, it only lands as a string value in --contains=
+    // which is in the valued allowlist; checkToken accepts it as a valued token.
+    // But a value with a null byte or newline is blocked by checkToken.
+    expect(planGitRead({ subcommand: 'branch', args: ['--contains', 'main\n--output=x'] }, CWD).ok).toBe(false);
+  });
+
+  it('existing write-option rejections still hold after normaliser runs', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['--output=/tmp/pwn'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'diff', args: ['--ext-diff'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'show', args: ['--upload-pack=sh'] }, CWD).ok).toBe(false);
+    expect(planGitRead({ subcommand: 'log', args: ['-c', 'core.pager=sh'] }, CWD).ok).toBe(false);
+  });
+});
+
 describe('planGitRead (#4058): injection rejection for new subcommands', () => {
   it('rejects write-mode reflog subcommands via rev allowlist', () => {
     // "expire" starts with a letter so would pass REV_RE; but reflog forces `show`
