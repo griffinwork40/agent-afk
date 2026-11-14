@@ -29,6 +29,9 @@ const emitSessionPhaseMock = vi.hoisted(() => vi.fn());
 const syncClientWithStoreMock = vi.hoisted(() => vi.fn());
 const runCompactionCoreMock = vi.hoisted(() => vi.fn());
 const emitCompactionMock = vi.hoisted(() => vi.fn());
+const summarizerInputCharBudgetMock = vi.hoisted(() => vi.fn((_model: string, _subscriptionPath?: boolean) => 300_000));
+const resolveSummarizerWindowMock = vi.hoisted(() =>
+  vi.fn((_family: string, _raw: string | undefined, session: { model: string; subscriptionPath: boolean }) => session));
 
 vi.mock('../../../trace/emit.js', () => ({
   emitSessionPhase: emitSessionPhaseMock,
@@ -41,13 +44,15 @@ vi.mock('../../shared/compaction.js', () => ({
   readShrinkFraction: () => 0.5,
   resolveMicrocompactOptions: () => ({ thresholdBytes: 10_000, keepLast: 1, delegationThresholdBytes: 5_000 }),
   wrapTranscriptForSummary: (t: string) => t,
-  summarizerInputCharBudget: () => 300_000,
+  summarizerInputCharBudget: summarizerInputCharBudgetMock,
   COMPACT_SUMMARY_MAX_TOKENS: 2_000,
 }));
 
 vi.mock('../../shared/compact-summarizer.js', () => ({
   // Return the sessionSummarize closure unchanged (same-family mock).
   resolveCrossProviderSummarize: (_family: unknown, fn: unknown) => fn,
+  // Same-family route: the session window passes through unchanged.
+  resolveSummarizerWindow: resolveSummarizerWindowMock,
 }));
 
 vi.mock('../../shared/auto-compact.js', () => ({
@@ -168,6 +173,8 @@ beforeEach(() => {
   syncClientWithStoreMock.mockReset();
   emitCompactionMock.mockReset();
   emitCompactionMock.mockResolvedValue(undefined);
+  summarizerInputCharBudgetMock.mockClear();
+  resolveSummarizerWindowMock.mockClear();
 });
 
 describe('compactHistory: compaction trace trigger', () => {
@@ -190,6 +197,14 @@ describe('compactHistory: compaction trace trigger', () => {
     wireRunCompactionCore();
     await compactHistory({ state: makeState(), abort: new AbortCoordinator(), retry: makeRetry(null), initSessionId: 's1' });
     expect(runCompactionCoreMock.mock.calls[0]?.[0]).toMatchObject({ summarizerInputMaxChars: 300_000 });
+    // The budget must be sized from the resolved summarizer model (the default
+    // Anthropic compact model here), on the API-tier table, not the session model.
+    expect(resolveSummarizerWindowMock).toHaveBeenCalledWith('anthropic-direct', undefined, {
+      model: 'claude-haiku-4-5-20251001',
+      subscriptionPath: false,
+    });
+    expect(summarizerInputCharBudgetMock).toHaveBeenCalledTimes(1);
+    expect(summarizerInputCharBudgetMock).toHaveBeenCalledWith('claude-haiku-4-5-20251001', false);
   });
 });
 

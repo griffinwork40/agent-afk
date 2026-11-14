@@ -53,7 +53,10 @@ import {
   wrapTranscriptForSummary,
 } from '../../shared/compaction.js';
 import type { CompactionTrigger } from '../../../trace/types.js';
-import { resolveCrossProviderSummarize } from '../../shared/compact-summarizer.js';
+import {
+  resolveCrossProviderSummarize,
+  resolveSummarizerWindow,
+} from '../../shared/compact-summarizer.js';
 import {
   contextFullnessFraction,
   contextWindowTokensUsed,
@@ -203,9 +206,10 @@ export async function compactHistory(
       keepLastN: readKeepLastN(),
       usedFraction,
       shrinkAtFraction: readShrinkFraction(),
-      // Budget follows the model that actually writes the summary
-      // (AFK_COMPACT_MODEL may route elsewhere), not the session model.
-      summarizerInputMaxChars: summarizerInputCharBudget(readCompactModel()),
+      // Budget follows the window of the connection that actually sends the
+      // summary (AFK_COMPACT_MODEL may route to another provider, including a
+      // chatgpt-oauth binding), not the session model.
+      summarizerInputMaxChars: summarizerInputBudget(),
       summarize: (transcript: string) => summarize(transcript, controller.signal),
       isAborted: () => controller.signal.aborted,
       abortInFlight: () => controller.abort(),
@@ -257,6 +261,19 @@ function readMicrocompactOptions(): { thresholdBytes: number; keepLast: number; 
     env.AFK_MICROCOMPACT_KEEP_LAST,
     env.AFK_MICROCOMPACT_DELEGATION_BYTES,
   );
+}
+
+/**
+ * Summarizer input cap. The session's own closure sends `readCompactModel()`
+ * over the Anthropic connection (never a subscription catalog); a foreign
+ * route is resolved by `resolveSummarizerWindow`.
+ */
+function summarizerInputBudget(): number {
+  const window = resolveSummarizerWindow('anthropic-direct', env.AFK_COMPACT_MODEL, {
+    model: readCompactModel(),
+    subscriptionPath: false,
+  });
+  return summarizerInputCharBudget(window.model, window.subscriptionPath);
 }
 
 function readCompactModel(): string {

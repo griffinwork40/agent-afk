@@ -56,6 +56,101 @@ describe('capTranscriptForSummarizer', () => {
   });
 });
 
+/** True when `s` contains a UTF-16 surrogate that is not part of a valid pair. */
+function hasUnpairedSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i++;
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Put a two-unit emoji so its high surrogate sits at index `at - 1` and its low at `at`. */
+function emojiAcross(length: number, at: number): string {
+  return 'a'.repeat(at - 1) + '\u{1F600}' + 'b'.repeat(length - at - 1);
+}
+
+describe('surrogate pairs at the cut points', () => {
+  const EXCERPT_MARKER = /\[\.\.\. (\d+) chars elided \.\.\.\]/;
+  const CAP_MARKER = /\[Transcript middle omitted: (\d+) characters dropped/;
+
+  it('excerptHeadTail: emoji across the head cut keeps no half pair and an exact elided count', () => {
+    // maxChars 100: head cut at 40, tail cut at 1000 - 60 = 940.
+    const text = emojiAcross(1_000, 40);
+    const out = excerptHeadTail(text, 100);
+    expect(hasUnpairedSurrogate(out)).toBe(false);
+    const [head, tail] = out.split(EXCERPT_MARKER.exec(out)?.[0] ?? '');
+    const elided = Number(EXCERPT_MARKER.exec(out)?.[1]);
+    expect((head ?? '').trimEnd().length + elided + (tail ?? '').trimStart().length).toBe(text.length);
+    expect(out.length).toBeLessThanOrEqual(excerptHeadTail('a'.repeat(1_000), 100).length);
+  });
+
+  it('excerptHeadTail: emoji across the tail cut keeps no half pair and an exact elided count', () => {
+    const text = emojiAcross(1_000, 940);
+    const out = excerptHeadTail(text, 100);
+    expect(hasUnpairedSurrogate(out)).toBe(false);
+    const elided = Number(EXCERPT_MARKER.exec(out)?.[1]);
+    const [head, tail] = out.split(EXCERPT_MARKER.exec(out)?.[0] ?? '');
+    expect((head ?? '').slice(0, -1).length + elided + (tail ?? '').slice(1).length).toBe(text.length);
+    expect(out.length).toBeLessThanOrEqual(excerptHeadTail('a'.repeat(1_000), 100).length);
+  });
+
+  it('capTranscriptForSummarizer: emoji across the opening cut keeps no half pair and an exact dropped count', () => {
+    // maxChars 100: opening cut at 20, newest cut at 1000 - 80 = 920.
+    const text = emojiAcross(1_000, 20);
+    const out = capTranscriptForSummarizer(text, 100);
+    expect(hasUnpairedSurrogate(out)).toBe(false);
+    const dropped = Number(CAP_MARKER.exec(out)?.[1]);
+    const opening = out.slice(0, out.indexOf('\n\n['));
+    const newest = out.slice(out.lastIndexOf(']\n\n') + 3);
+    expect(opening.length + dropped + newest.length).toBe(text.length);
+    expect(out.length).toBeLessThanOrEqual(capTranscriptForSummarizer('a'.repeat(1_000), 100).length);
+  });
+
+  it('capTranscriptForSummarizer: emoji across the newest cut keeps no half pair and an exact dropped count', () => {
+    const text = emojiAcross(1_000, 920);
+    const out = capTranscriptForSummarizer(text, 100);
+    expect(hasUnpairedSurrogate(out)).toBe(false);
+    const dropped = Number(CAP_MARKER.exec(out)?.[1]);
+    const opening = out.slice(0, out.indexOf('\n\n['));
+    const newest = out.slice(out.lastIndexOf(']\n\n') + 3);
+    expect(opening.length + dropped + newest.length).toBe(text.length);
+    expect(out.length).toBeLessThanOrEqual(capTranscriptForSummarizer('a'.repeat(1_000), 100).length);
+  });
+
+  it('never emits a half pair for any budget on emoji-dense input', () => {
+    const text = 'x' + '\u{1F600}'.repeat(300) + 'y';
+    for (let budget = 1; budget < 120; budget++) {
+      const ex = excerptHeadTail(text, budget);
+      const cap = capTranscriptForSummarizer(text, budget);
+      expect(hasUnpairedSurrogate(ex)).toBe(false);
+      expect(hasUnpairedSurrogate(cap)).toBe(false);
+      expect(ex.replace(EXCERPT_MARKER, '').length).toBeLessThanOrEqual(budget + 2);
+      expect(cap.replace(/\n\n\[Transcript middle omitted[^\]]*\]\n\n/, '').length).toBeLessThanOrEqual(budget);
+    }
+  });
+
+  it('leaves ASCII output byte-identical to the plain slice behaviour', () => {
+    const text = 'HEAD' + 'abcdefghij'.repeat(200) + 'TAIL';
+    const headLen = Math.floor(100 * 0.4);
+    expect(excerptHeadTail(text, 100)).toBe(
+      `${text.slice(0, headLen)} [... ${text.length - 100} chars elided ...] ${text.slice(text.length - 60)}`,
+    );
+    expect(capTranscriptForSummarizer(text, 100)).toBe(
+      text.slice(0, 20) +
+        `\n\n[Transcript middle omitted: ${text.length - 100} characters dropped to fit the ` +
+        'summarizer context budget. The opening above and the newest content below are kept.]\n\n' +
+        text.slice(text.length - 80),
+    );
+  });
+});
+
 describe('summarizerInputCharBudget', () => {
   it('derives about half the summarizer model window, in characters', () => {
     const window = contextLimitFor('claude-haiku-4-5-20251001');
