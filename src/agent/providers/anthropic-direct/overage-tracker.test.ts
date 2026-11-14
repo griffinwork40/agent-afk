@@ -54,6 +54,20 @@ describe('classifyOverage', () => {
     expect(c.overage).toBe(false);
   });
 
+  it('a repeated header (joined with ", " by Headers) still matches on its first token', () => {
+    const a = new Headers();
+    a.append(`${P}overage-in-use`, 'true');
+    a.append(`${P}overage-in-use`, 'true');
+    expect(a.get(`${P}overage-in-use`)).toBe('true, true');
+    expect(classifyOverage(a)).toMatchObject({ measured: true, overage: true, evidence: { overageInUse: 'true' } });
+    const b = new Headers();
+    b.append(`${P}status`, 'Rejected');
+    b.append(`${P}status`, 'rejected');
+    b.append(`${P}overage-status`, 'allowed_warning');
+    b.append(`${P}overage-status`, 'allowed_warning');
+    expect(classifyOverage(b)).toMatchObject({ overage: true, evidence: { status: 'rejected', overageStatus: 'allowed_warning' } });
+  });
+
   it('caps evidence values to short strings', () => {
     const c = classifyOverage(h({ [`${P}representative-claim`]: 'x'.repeat(500) }));
     expect(c.evidence.representativeClaim?.length).toBe(64);
@@ -112,6 +126,19 @@ describe('OverageTracker', () => {
       metadata: { status: 'allowed', overageStatus: 'allowed', representativeClaim: 'five_hour', overage: false },
     });
     expect(recs[1]?.payload).toMatchObject({ metadata: { status: 'rejected', overage: true } });
+  });
+
+  it('an alternating representative claim writes a single evidence record', async () => {
+    const w = new InMemoryTraceWriter();
+    const t = new OverageTracker(w);
+    const base = { [`${P}status`]: 'allowed', [`${P}overage-status`]: 'allowed' };
+    for (const claim of ['five_hour', 'seven_day', 'five_hour', 'seven_day']) {
+      t.observe(h({ ...base, [`${P}representative-claim`]: claim }));
+    }
+    await new Promise((r) => setTimeout(r, 0));
+    const recs = w.events.filter((e) => e.kind === 'session_phase');
+    expect(recs).toHaveLength(1);
+    expect(recs[0]?.payload).toMatchObject({ metadata: { representativeClaim: 'five_hour', overage: false } });
   });
 
   it('never throws, even when the writer throws or headers are broken', () => {

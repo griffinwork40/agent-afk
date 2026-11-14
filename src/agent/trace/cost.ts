@@ -61,6 +61,31 @@ export interface SessionCostBreakdown {
   overageCostUsd?: number;
   /** Sum of `closure.overageRequests`; same presence rule as `overageCostUsd`. */
   overageRequests?: number;
+  /**
+   * `true` when the overage pair is present but the closure set did not account
+   * for the whole of `totalCostUsd` (see {@link overageIsIncomplete}), so both
+   * overage figures are lower bounds. Never `false`: absence means complete.
+   */
+  overageIncomplete?: true;
+}
+
+/**
+ * Slack for comparing the closure sum with a total built from seal figures:
+ * the seal sums the same per-session costs in a different order, so an exact
+ * comparison could flag float rounding as missing spend.
+ */
+const OVERAGE_TOTAL_EPSILON_USD = 1e-9;
+
+/**
+ * Whether the overage figures summed from closures are partial (#4883). True
+ * when the root closure is known missing (`closures-incomplete`), or when
+ * `totalCostUsd` exceeds the closure sum because seal figures filled in spend
+ * no closure reported (a lost root closure, or a child whose closure was never
+ * written but whose cost reached `seal.subagentCostUsd`).
+ */
+function overageIsIncomplete(r: SessionCostBreakdown, closureSum: number): boolean {
+  if (r.source === 'closures-incomplete') return true;
+  return (r.totalCostUsd ?? 0) - closureSum > OVERAGE_TOTAL_EPSILON_USD;
 }
 
 /** Structural event shape: accepts typed `TraceEvent`s and raw parsed JSON. */
@@ -138,7 +163,16 @@ export class SessionCostAccumulator {
     const r = this.baseResult();
     if (this.overage === undefined) return r;
     const cap = r.totalCostUsd ?? 0;
-    return { ...r, overageCostUsd: Math.min(this.overage.costUsd, cap), overageRequests: this.overage.requests };
+    // A clamp that actually reduces the figure means the accounting disagreed:
+    // the request count no longer matches the dollars, so flag it as well.
+    const clamped = this.overage.costUsd > cap;
+    const incomplete = clamped || overageIsIncomplete(r, this.closureSum);
+    return {
+      ...r,
+      overageCostUsd: Math.min(this.overage.costUsd, cap),
+      overageRequests: this.overage.requests,
+      ...(incomplete ? { overageIncomplete: true as const } : {}),
+    };
   }
 
   private baseResult(): SessionCostBreakdown {
@@ -205,14 +239,20 @@ export class SessionCostAccumulator {
 
 /**
  * Receipt `cost` whole-session fields: `totalCostUsd` when known, plus the
- * overage pair (#4883), both or neither per the presence rule.
+ * overage pair (#4883), both or neither per the presence rule, and
+ * `overageIncomplete` only alongside the pair.
  */
 export function totalCostFields(
   sc: SessionCostBreakdown,
-): { totalCostUsd?: number; overageCostUsd?: number; overageRequests?: number } {
+): { totalCostUsd?: number; overageCostUsd?: number; overageRequests?: number; overageIncomplete?: true } {
   const total = sc.totalCostUsd !== undefined ? { totalCostUsd: sc.totalCostUsd } : {};
   if (sc.overageCostUsd === undefined || sc.overageRequests === undefined) return total;
-  return { ...total, overageCostUsd: sc.overageCostUsd, overageRequests: sc.overageRequests };
+  return {
+    ...total,
+    overageCostUsd: sc.overageCostUsd,
+    overageRequests: sc.overageRequests,
+    ...(sc.overageIncomplete === true ? { overageIncomplete: true as const } : {}),
+  };
 }
 
 /** Compute the cost breakdown of one trace from its events. Pure. */

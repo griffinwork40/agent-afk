@@ -17,7 +17,8 @@
  * Nobody has captured these headers from an account actually in overage, so
  * the rule is unconfirmed. The tracker therefore also writes the raw values to
  * the trace (a `ratelimit_unified_state` session phase) at first observation
- * and whenever the observed combination changes, never per request, so the
+ * and whenever the (status, overage-status, overage-in-use, verdict)
+ * combination changes, never per request, so the
  * first real overage confirms or refutes the rule.
  *
  * Attribution contract: the tracker holds the classification of the LATEST
@@ -63,9 +64,14 @@ export interface OverageClassification {
   evidence: OverageEvidence;
 }
 
+/**
+ * Normalise one header value: `Headers.get` joins a repeated header with
+ * `, `, so keep only the first comma-separated token, trimmed and lower-cased.
+ * The rule and the evidence record both see this normalised value.
+ */
 function norm(v: string | null): string | undefined {
   if (v === null) return undefined;
-  const t = v.trim();
+  const t = (v.split(',')[0] ?? '').trim().toLowerCase();
   return t.length > 0 ? t.slice(0, EVIDENCE_VALUE_CAP) : undefined;
 }
 
@@ -80,7 +86,8 @@ function hasUnifiedHeader(headers: Headers): boolean {
 /**
  * Classify one response's headers with the Claude Code 2.1.319 rule. Header
  * names are matched case-insensitively (the `Headers` contract) and values are
- * compared case-insensitively after trimming; any other value is not overage.
+ * normalised by {@link norm} (first comma token, trimmed, lower-cased); any
+ * other value is not overage.
  */
 export function classifyOverage(headers: Headers): OverageClassification {
   const evidence: OverageEvidence = {};
@@ -94,10 +101,9 @@ export function classifyOverage(headers: Headers): OverageClassification {
   if (claim !== undefined) evidence.representativeClaim = claim;
   const measured = hasUnifiedHeader(headers);
   if (!measured) return { measured: false, overage: false, evidence };
-  const os = overageStatus?.toLowerCase();
-  const inUse = overageInUse?.toLowerCase() === 'true';
-  const rejectedButAllowed =
-    status?.toLowerCase() === 'rejected' && (os === 'allowed' || os === 'allowed_warning');
+  const os = overageStatus;
+  const inUse = overageInUse === 'true';
+  const rejectedButAllowed = status === 'rejected' && (os === 'allowed' || os === 'allowed_warning');
   return { measured: true, overage: inUse || rejectedButAllowed, evidence };
 }
 
@@ -107,9 +113,14 @@ export interface ResponseOverageState {
   overage: boolean;
 }
 
+/**
+ * Change-detection key for the evidence record. `representativeClaim` is left
+ * out on purpose: a claim that alternates between responses would otherwise
+ * write one record per request. It is still carried in the records written.
+ */
 function evidenceKey(c: OverageClassification): string {
   const e = c.evidence;
-  return [e.status ?? '', e.overageStatus ?? '', e.overageInUse ?? '', e.representativeClaim ?? '', c.overage ? '1' : '0'].join('|');
+  return [e.status ?? '', e.overageStatus ?? '', e.overageInUse ?? '', c.overage ? '1' : '0'].join('|');
 }
 
 /** Per-session overage observer. One instance per provider query (session). */

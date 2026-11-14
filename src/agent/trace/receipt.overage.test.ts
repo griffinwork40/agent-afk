@@ -96,6 +96,7 @@ describe('overage cost end to end (#4883)', () => {
     expect(r.cost.overageCostUsd).toBeCloseTo(expected, 12);
     expect(r.cost.overageCostUsd!).toBeLessThan(r.cost.totalCostUsd!);
     expect(r.cost.totalCostUsd).toBeCloseTo(3 * roundCost(9) + 2 * roundCost(5), 12);
+    expect(r.cost).not.toHaveProperty('overageIncomplete');
   });
 
   it('measured with no overage reports 0 and 0', async () => {
@@ -148,5 +149,6 @@ describe('overage cost end to end (#4883)', () => {
     ] as unknown as TraceEvent[];
     const r = generateReceipt(events, { tracePath: '/x/w/trace.jsonl', witnessLabel: 'w' });
     expect(r.cost.overageCostUsd).toBe(1);
+    expect(r.cost.overageIncomplete).toBe(true);
   });
 });

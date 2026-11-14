@@ -155,6 +155,18 @@ export interface RunReceipt {
     overageCostUsd?: number;
     /** Number of overage-flagged responses; same presence rule as `overageCostUsd`. */
     overageRequests?: number;
+    /**
+     * `true` when `overageCostUsd` and `overageRequests` are present but are
+     * lower bounds (#4883): overage is summed from `closure` events only, and
+     * the closure set did not account for the whole of `totalCostUsd`. Set when
+     * `costSource` is `closures-incomplete` (the root closure was never
+     * written), when `totalCostUsd` exceeds the closure sum because seal
+     * figures filled in spend no closure reported (a lost root closure, or a
+     * cancelled or timed-out child whose cost reached the seal), or when the
+     * overage sum had to be clamped to `totalCostUsd`. Only ever emitted
+     * alongside the pair, and never as `false`: absence means complete.
+     */
+    overageIncomplete?: true;
   };
   failures: ReceiptToolFailure[];
   humanReviewRequired: boolean;
