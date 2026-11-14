@@ -417,7 +417,11 @@ export interface SessionPhasePayload {
    * sessions, and all other phase kinds.
    * Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' |
    *   'claude-code-keychain' | 'claude-code-session-refresh'
-   * OpenAI: 'chatgpt-oauth' | 'config' | 'env' | 'codex-cli' | etc.
+   * Other providers (#4882, provider-prefixed): 'openai:env' |
+   *   'openai:config' | 'openai:codex-cli' | 'openai:chatgpt-oauth' |
+   *   'xai:env' | 'xai:config' | 'xai:oauth' | 'anthropic:config' | 'local'.
+   *   See src/agent/auth/credential-source.ts. Per-child ids live on
+   *   subagent_lifecycle `started.credentialSource` instead.
    */
   credentialSource?: string;
 }

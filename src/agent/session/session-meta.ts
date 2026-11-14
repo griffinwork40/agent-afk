@@ -49,7 +49,9 @@ export interface SessionMeta {
   /**
    * Stable credential/auth source id recorded at session start. Provider-specific:
    *  Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' | 'claude-code-keychain' | 'claude-code-session-refresh'
-   *  OpenAI: 'chatgpt-oauth' | 'config' | 'env' | 'codex-cli' | etc.
+   *  Others (#4882, provider-prefixed): 'openai:env' | 'openai:config' | 'openai:codex-cli' |
+   *    'openai:chatgpt-oauth' | 'xai:env' | 'xai:config' | 'xai:oauth' | 'anthropic:config' | 'local'
+   *  (see src/agent/auth/credential-source.ts).
    *  Absent on pre-change sessions and subagent sessions.
    */
   credentialSource?: string;
