@@ -9,6 +9,11 @@
  * @module agent/tools/handlers/_image-dimensions
  */
 
+/** True for JPEG start-of-frame markers (SOF0-SOF15 minus DHT/JPG/DAC). */
+function isJpegSofMarker(marker: number): boolean {
+  return marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+}
+
 /**
  * Reads width × height from a PNG, JPEG, WebP, or GIF buffer by inspecting the
  * file header bytes. Returns null when the format is unrecognised or the
@@ -28,13 +33,17 @@ export function readImageDimensions(
     }
 
     if (format === 'jpeg') {
-      // JPEG: scan for SOF0/SOF2 marker (0xFF 0xC0 / 0xFF 0xC2).
+      // JPEG: walk the marker segments to the first start-of-frame (SOFn)
+      // marker. SOFn is 0xC0-0xCF except DHT (0xC4), JPG (0xC8) and DAC
+      // (0xCC), which share the range but are not frame headers.
       let i = 2;
       while (i < buf.length - 8) {
         if (buf[i] !== 0xff) break;
         const marker = buf[i + 1]!;
+        // 0xFF fill bytes may pad between segments; step over them.
+        if (marker === 0xff) { i++; continue; }
         const segLen = buf.readUInt16BE(i + 2);
-        if (marker === 0xc0 || marker === 0xc2) {
+        if (isJpegSofMarker(marker)) {
           // Precision (1), height (2), width (2)
           const height = buf.readUInt16BE(i + 5);
           const width = buf.readUInt16BE(i + 7);

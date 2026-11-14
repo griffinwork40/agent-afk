@@ -109,7 +109,7 @@ export interface PanelSpec {
  * New notice kinds must be added here so downstream switch statements are
  * flagged by the TypeScript compiler.
  */
-export type NoticeKind = 'truncation' | 'refusal' | 'fast-tier';
+export type NoticeKind = 'truncation' | 'refusal' | 'fast-tier' | 'image-omitted';
 
 /** Output stream event types */
 export type OutputEvent =

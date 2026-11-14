@@ -518,27 +518,20 @@ describe('enforceManyImageLimit — short buffer triggers null dims', () => {
   });
 });
 
-describe('enforceManyImageLimit — JPEG silent skip (SOF marker beyond 60-byte prefix)', () => {
-  it('leaves a JPEG image alone when the SOF marker falls beyond the 60-byte decoded prefix', () => {
-    // The guard decodes only the first 80 base64 chars (~60 raw bytes). A JPEG
-    // whose SOF0/SOF2 marker sits beyond byte 60 returns null from
-    // readImageDimensions and is conservatively left in place (no degradation).
-    //
-    // Craft a JPEG stub: 0xFF 0xD8 (SOI) + a 60-byte APP0-like segment that
-    // pushes the SOF marker past the 60-byte window. The exact dimensions are
-    // irrelevant — we only need the guard to skip it silently.
+describe('enforceManyImageLimit — JPEG with SOF marker beyond the 60-byte header prefix', () => {
+  it('measures the JPEG and omits it when over the many-image limit', () => {
+    // Before the always-on fix the guard decoded only ~60 raw bytes, so a JPEG
+    // whose SOF0 marker sits past byte 60 parsed as null and was silently
+    // left in place. JPEGs are now read far enough to reach the SOF marker.
     const jpeg = Buffer.alloc(100, 0);
     jpeg[0] = 0xff; jpeg[1] = 0xd8; // SOI marker
-    // Byte 2: 0xFF, byte 3: 0xE0 (APP0), length 60 (bytes 4-5)
-    jpeg[2] = 0xff; jpeg[3] = 0xe0;
-    jpeg.writeUInt16BE(60, 4); // segment length 60 → parser skips to byte 62
-    // SOF0 marker at byte 62 (beyond the 60-byte window) — will NOT be seen
-    jpeg[62] = 0xff; jpeg[63] = 0xc0;
-    jpeg.writeUInt16BE(17, 64); // SOF0 length
-    // Precision (1) + height (2) + width (2)
+    jpeg[2] = 0xff; jpeg[3] = 0xe0; // APP0
+    jpeg.writeUInt16BE(58, 4); // segment length 58 (incl. length bytes) → next marker at byte 62
+    jpeg[62] = 0xff; jpeg[63] = 0xc0; // SOF0 beyond the old 60-byte window
+    jpeg.writeUInt16BE(17, 64);
     jpeg[66] = 8;
-    jpeg.writeUInt16BE(3000, 67); // height 3000px (oversized — but invisible)
-    jpeg.writeUInt16BE(4000, 69); // width 4000px (oversized — but invisible)
+    jpeg.writeUInt16BE(3000, 67); // height
+    jpeg.writeUInt16BE(4000, 69); // width
 
     const msgs: MessageParam[] = [];
     for (let i = 0; i < 21; i++) {
@@ -564,8 +557,13 @@ describe('enforceManyImageLimit — JPEG silent skip (SOF marker beyond 60-byte 
     }
 
     const degraded = enforceManyImageLimit(msgs);
-    // SOF beyond 60-byte prefix → dims is null → silent skip, no degradation
-    expect(degraded).toBe(0);
-    expect(countImageBlocks(msgs)).toBe(21);
+    expect(degraded).toBe(21);
+    expect(countImageBlocks(msgs)).toBe(0);
+    expect(countImageOmittedBlocks(msgs)).toBe(21);
+    const inner = ((msgs[0]!.content as unknown[])[0] as Record<string, unknown>)['content'] as unknown[];
+    const parsed = JSON.parse((inner[0] as Record<string, unknown>)['text'] as string);
+    expect(parsed.width).toBe(4000);
+    expect(parsed.height).toBe(3000);
+    expect(parsed.imageOmitted).toContain('2000');
   });
 });
