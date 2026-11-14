@@ -66,10 +66,16 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
       ? effectiveChildModel
       : JSON.stringify(effectiveChildModel);
   // #4882: provider-aware credential id for the child's model (ids only;
-  // bounded store read; never throws — observability only, INV-040).
+  // never reads the credential store: no process spawn on the fork path;
+  // never throws: observability only, INV-040). The child's real key and
+  // base URL are passed so a key of unknown origin records nothing.
   const credentialSource =
     typeof effectiveChildModel === 'string'
-      ? tryCredentialSourceForModel(effectiveChildModel, undefined, { background: true })
+      ? tryCredentialSourceForModel(effectiveChildModel, undefined, {
+        noStoreRead: true,
+        ...(childConfig.apiKey !== undefined ? { configApiKey: childConfig.apiKey } : {}),
+        ...(childConfig.baseUrl !== undefined ? { configBaseUrl: childConfig.baseUrl } : {}),
+      })
       : undefined;
 
   // Invariant: fire-and-forget — emitSubagentLifecycle is best-effort trace

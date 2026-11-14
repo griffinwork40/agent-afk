@@ -30,6 +30,11 @@ import { env } from '../../config/env.js';
 // token available to every subsequent CLI credential read in this process.
 let refreshedClaudeCodeOauthToken: string | undefined;
 
+// #4882: the last Anthropic credential a normal (foreground) resolution
+// produced. Read by the fork-time credential-source path, which must never
+// spawn the keychain reader. Process-local; never logged or persisted.
+let lastResolvedAnthropic: AnthropicCredential | undefined;
+
 /**
  * Load an Anthropic credential from the environment or the Claude Code
  * keychain. Precedence:
@@ -79,19 +84,41 @@ export interface AnthropicCredential {
  *
  * Returns `undefined` when no tier yields a credential. Never logs the token.
  */
-export function resolveAnthropicCredential(
-  storeReadOpts?: { quiet?: boolean; background?: boolean },
-): AnthropicCredential | undefined {
-  if (env.ANTHROPIC_API_KEY) return { token: env.ANTHROPIC_API_KEY, source: 'ANTHROPIC_API_KEY' };
-  if (env.CLAUDE_CODE_OAUTH_TOKEN) {
-    return { token: env.CLAUDE_CODE_OAUTH_TOKEN, source: 'CLAUDE_CODE_OAUTH_TOKEN' };
-  }
-  const stored = loadClaudeCodeOauthToken(storeReadOpts);
+export function resolveAnthropicCredential(): AnthropicCredential | undefined {
+  const cred = resolveAnthropicCredentialFromEnv() ?? resolveAnthropicFromStore();
+  if (cred) lastResolvedAnthropic = cred;
+  return cred;
+}
+
+function resolveAnthropicFromStore(): AnthropicCredential | undefined {
+  const stored = loadClaudeCodeOauthToken();
   if (stored) return { token: stored, source: 'claude-code-keychain' };
   if (refreshedClaudeCodeOauthToken) {
     return { token: refreshedClaudeCodeOauthToken, source: 'claude-code-session-refresh' };
   }
   return undefined;
+}
+
+/** The env tiers only (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`): no I/O. */
+export function resolveAnthropicCredentialFromEnv(): AnthropicCredential | undefined {
+  if (env.ANTHROPIC_API_KEY) return { token: env.ANTHROPIC_API_KEY, source: 'ANTHROPIC_API_KEY' };
+  if (env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return { token: env.CLAUDE_CODE_OAUTH_TOKEN, source: 'CLAUDE_CODE_OAUTH_TOKEN' };
+  }
+  return undefined;
+}
+
+/**
+ * The last credential {@link resolveAnthropicCredential} produced in this
+ * process, or `undefined`. Never touches the credential store (#4882).
+ */
+export function lastResolvedAnthropicCredential(): AnthropicCredential | undefined {
+  return lastResolvedAnthropic;
+}
+
+/** Reset the last-resolved memo. Intended for isolated tests. */
+export function _resetLastResolvedAnthropicCredential(): void {
+  lastResolvedAnthropic = undefined;
 }
 
 /**

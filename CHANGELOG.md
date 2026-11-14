@@ -13,7 +13,7 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 ## [Unreleased]
 
 ### Added
-- receipt: top-level `credentialSource`, and the session credential source is now provider-aware (a non-Anthropic model never records an Anthropic tier); new ids `openai:*`, `xai:*`, `anthropic:config`, `local` (#4882)
+- receipt: top-level `credentialSource`, and the session credential source is now provider-aware (a non-Anthropic model never records an Anthropic tier); new ids `openai:*`, `xai:*`, `anthropic:config`; a base URL override records `local` only for a clearly self-hosted host (loopback, RFC1918, link-local, 100.64/10, fc00::/7, a single-label name, `.local`/`.lan`/`.internal`/`.home.arpa`/`.ts.net`), `custom-endpoint` for any other non-official host (billing unknown), and the provider's official API host resolves normally; the fork path never reads the credential store (#4882)
 - receipt: `subagents.byModel[*].credentialSources` (sorted, unique), from the new `credentialSource` on `subagent_lifecycle` `started` and on `subagent_model_fallback` metadata (#4882)
 
 ## [5.354.0] - 2026-11-13

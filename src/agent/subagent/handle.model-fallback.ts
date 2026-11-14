@@ -44,6 +44,11 @@ export interface HandleModelFallback {
   toModel: string;
   /** Build the replacement child session (fallback model + its own credential/provider). */
   createSession: () => IAgentSession;
+  /**
+   * #4882: credential id of the session the last `createSession` built.
+   * Must not read the credential store. Absent: derived from `toModel`.
+   */
+  credentialSource?: () => string | undefined;
 }
 
 export const MODEL_FALLBACK_WARNING_PREFIX = '[model-fallback]';
@@ -89,8 +94,13 @@ export async function streamWithModelFallback<T>(
     // One-shot: never chain a second fallback, even if the retry is rejected too.
     handle._modelFallback = undefined;
     const reason = rejection.message;
-    // #4882: the re-run is served by toModel's provider; record its credential id.
-    const credentialSource = tryCredentialSourceForModel(fallback.toModel, undefined, { background: true });
+    const previous = handle.session;
+    handle.session = fallback.createSession();
+    // #4882: the re-run is served by toModel's provider; record its credential
+    // id from the session just built (never reads the credential store).
+    const credentialSource = fallback.credentialSource !== undefined
+      ? fallback.credentialSource()
+      : tryCredentialSourceForModel(fallback.toModel, undefined, { noStoreRead: true });
     await emitSessionPhase(handle._traceWriter, {
       phase: 'subagent_model_fallback',
       metadata: {
@@ -98,8 +108,6 @@ export async function streamWithModelFallback<T>(
         ...(credentialSource !== undefined ? { credentialSource } : {}),
       },
     });
-    const previous = handle.session;
-    handle.session = fallback.createSession();
     // Best-effort close: the rejected session produced no progress, so any
     // close failure is a resource-cleanup concern only, not a correctness one.
     // Fire-and-forget is intentional; errors are logged but not propagated.
