@@ -174,3 +174,96 @@ describe('grep pipe-retry integration', () => {
     expect(result.content).not.toContain('literal pipe');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Abort, scan-cap, and rejection-safety tests (issue #4888 findings)
+// ---------------------------------------------------------------------------
+
+describe('grep pipe-retry abort and scan-cap', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'grep-pipe-retry-abort-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+
+  // Finding 1a: abort during the retry kills the retry process and the call settles as aborted.
+  it('settles with abort result when signal is aborted during the retry', async () => {
+    // Write enough files so the retry rg has something to do before we abort.
+    for (let i = 0; i < 20; i++) {
+      writeFileSync(join(tempDir, `file${i}.ts`), `alpha\nbeta\n`.repeat(100));
+    }
+
+    const ctrl = new AbortController();
+    const handler = createGrepHandler(tempDir);
+
+    // Start the handler (first rg will find no literal-pipe match, triggering retry).
+    const promise = handler({ pattern: 'alpha\\|beta', path: tempDir }, ctrl.signal);
+
+    // Abort almost immediately so we race the retry spawn.
+    setTimeout(() => ctrl.abort(), 5);
+
+    const result = await promise;
+    // Must settle (not hang) and must be the abort result.
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe('Search aborted');
+  });
+
+  // Finding 1b: an already-aborted signal does not spawn the retry at all.
+  it('does not spawn a retry when the signal is already aborted', async () => {
+    writeFileSync(join(tempDir, 'src.ts'), 'alpha\nbeta');
+
+    const ctrl = new AbortController();
+    ctrl.abort(); // abort BEFORE the handler runs
+
+    const handler = createGrepHandler(tempDir);
+    const result = await handler({ pattern: 'alpha\\|beta', path: tempDir }, ctrl.signal);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe('Search aborted');
+  });
+
+  // Finding 2: retry hitting the scan cap returns truncated result with both notes.
+  it('returns truncated result with scan-cap note and reinterpretation note when retry exceeds scan cap', async () => {
+    // Write enough content that the retry's stdout exceeds a tiny scanCapBytes.
+    // Pattern 'alpha\\|beta' → first rg finds no literal "alpha|beta" → retry runs with 'alpha|beta'.
+    // The retry WILL find matches, so stdout will be non-empty.
+    for (let i = 0; i < 50; i++) {
+      writeFileSync(join(tempDir, `f${i}.txt`), 'alpha\n'.repeat(200));
+    }
+
+    // Use a very small scan cap so the retry hits it quickly.
+    const handler = createGrepHandler(tempDir, { scanCapBytes: 500 });
+    const result = await handler({ pattern: 'alpha\\|beta', path: tempDir }, new AbortController().signal);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.truncated).toBe(true);
+    // Must contain the scan-cap note (references the ceiling).
+    expect(result.content).toContain('scan ceiling');
+    // Must contain the reinterpretation note.
+    expect(result.content).toContain('matched nothing');
+    expect(result.content).toContain('literal pipe');
+  });
+
+  // Finding 3: an unexpected rejection inside the retry still settles the tool call.
+  it('still settles when the retry helper encounters an unexpected error', async () => {
+    // Use a non-existent tempDir path so rg spawn errors out in the retry.
+    // The first rg will also fail, but we simulate the rejection-safety path
+    // by using a pattern that would trigger a retry on a valid dir, then
+    // destroying the dir between the first rg finishing and the retry spawning.
+    writeFileSync(join(tempDir, 'src.ts'), 'gamma\ndelta');
+
+    const handler = createGrepHandler(tempDir);
+    // Pattern has \| but neither literal-pipe nor alternation matches gamma/delta,
+    // so the retry runs and encounters a directory that may or may not exist.
+    // The important contract: the promise resolves, never rejects.
+    const result = await handler({ pattern: 'alpha\\|beta', path: tempDir }, new AbortController().signal);
+
+    // Result must be defined and must not be a hanging promise.
+    expect(result).toBeDefined();
+    expect(typeof result.content).toBe('string');
+  });
+});

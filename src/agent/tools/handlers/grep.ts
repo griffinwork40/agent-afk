@@ -31,7 +31,7 @@ import { createStreamingCap, SCAN_CAP_BYTES, scanCapKillNote } from './_streamin
 import { errorMessage } from '../../../utils/errors.js';
 import { awaitChildExit } from './_await-child-exit.js';
 import { debugLog } from '../../../utils/debug.js';
-import { hasUnescapedBackslashPipe, rewriteBackslashPipe, runPipeRetry } from './grep.pipe-retry.js';
+import { hasUnescapedBackslashPipe, rewriteBackslashPipe, handlePipeRetry } from './grep.pipe-retry.js';
 
 /** Optional overrides for {@link createGrepHandler}. */
 export interface GrepHandlerOptions {
@@ -204,8 +204,6 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
       resolve(afterKill ? awaitChildExit(proc).then(() => result) : result);
     }
 
-    const args = buildRgArgs(pattern, path, include);
-
     // Effective cwd priority (parity with the bash handler, #441):
     //   1. context?.resolveBase — permission anchor (updated in place on an
     //      in-flight setResolveBase re-anchor)
@@ -215,7 +213,7 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
     // different dir than spawn used, reverting to a raw `spawn <rgPath> ENOENT`
     // (Codex P2 on #471). spawn treats `cwd: undefined` as inherit process.cwd().
     const effectiveCwd = context?.resolveBase ?? cwd;
-    const proc = spawn(rgPath, args, effectiveCwd !== undefined ? { cwd: effectiveCwd } : {});
+    const proc = spawn(rgPath, buildRgArgs(pattern, path, include), effectiveCwd !== undefined ? { cwd: effectiveCwd } : {});
 
     // Invariant: the model never receives more than MODEL_CAP_BYTES, so there
     // is no reason to hold more than that in memory. Both streams feed bounded
@@ -298,10 +296,7 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
         if (hasUnescapedBackslashPipe(pattern)) {
           // Pattern contains `\|` (literal pipe in ripgrep, not alternation).
           // Re-run once with `\|` → `|`. Never retries more than once.
-          const retryArgs = buildRgArgs(rewriteBackslashPipe(pattern), path, include);
-          const spawnOpts = effectiveCwd !== undefined ? { cwd: effectiveCwd } : {};
-          runPipeRetry(pattern, rgPath, retryArgs, spawnOpts, path)
-            .then((result) => settle(result));
+          handlePipeRetry(pattern, rgPath, buildRgArgs(rewriteBackslashPipe(pattern), path, include), effectiveCwd, path, signal, scanCap, settle);
           return;
         }
         settle({ content: `No matches found for '${pattern}' in ${path}` });
