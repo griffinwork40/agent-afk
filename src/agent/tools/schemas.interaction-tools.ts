@@ -25,11 +25,21 @@ export const askQuestionTool: AnthropicToolDef = {
     'materially different work, a decision with significant or irreversible consequences, or context that exists ' +
     "only in the operator's head (a preference, a secret, an external constraint). " +
     '\n\n' +
-    'Answerability: `daemon` sessions and sub-agent forks have no elicitation handler — the call\n' +
-    "returns `{ action: 'decline' }` instantly. Even interactive surfaces may be unattended.\n" +
-    'Treat this tool as best-effort: `decline` or `cancel` means "no answer is coming." When unsure\n' +
-    'a human will answer: (1) proceed on a stated assumption and record it in your terminal state,\n' +
-    'or (2) end with a **Blocked** state naming exactly what the operator must supply.\n' +
+    'ANSWERABILITY — a question only helps if a human will answer it:\n' +
+    '`surface` (from `get_runtime_state`, view "self") is a partial signal, not a guarantee:\n' +
+    '- `daemon`, or any session started by a scheduler, cron, or another agent: no human is\n' +
+    '  watching — never block on a question here.\n' +
+    '- `cli` is AMBIGUOUS: the interactive REPL and Telegram bot reach a human, but one-shot\n' +
+    '  `chat` runs and sub-agent forks report the same `cli` with no elicitation handler —\n' +
+    "  there the call returns `{ action: 'decline' }` instantly.\n" +
+    '- Even with a handler, the operator is usually away, so a blocking question may stall\n' +
+    '  until the turn aborts.\n' +
+    'Treat this tool as best-effort: `decline` or `cancel` means "no answer is coming," not a\n' +
+    'reason to abort. When unsure a human will answer, instead of asking:\n' +
+    '1. Proceed on a stated assumption — pick the most reasonable interpretation, act, and record\n' +
+    '   it in your Done/Blocked terminal state.\n' +
+    '2. If no safe assumption exists and proceeding is irreversible, end with a **Blocked** terminal\n' +
+    '   state naming exactly what the operator must supply.\n' +
     '\n' +
     'Question types:\n' +
     '- `text` (default): free-form text answer. Use for open-ended questions.\n' +
