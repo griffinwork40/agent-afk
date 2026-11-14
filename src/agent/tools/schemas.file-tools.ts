@@ -181,7 +181,7 @@ export const globTool: AnthropicToolDef = {
       },
       path: {
         type: 'string',
-        description: 'Base directory to search from. Defaults to the current working directory.',
+        description: 'Base directory to search from. Defaults to the current working directory. When path is set, pattern must be relative.',
       },
     },
     required: ['pattern'],
