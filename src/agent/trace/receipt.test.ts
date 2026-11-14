@@ -475,6 +475,12 @@ describe('writeRunReceipt + runReceiptSessionEndHook (filesystem)', () => {
     expect(existsSync(join(getReceiptsDir(), 'child.json'))).toBe(false);
   });
 
+  it('hook skips reason reset: the trace stays open and close writes the only receipt (#4884)', async () => {
+    const tracePath = await writeTrace('cleared', [toolDone('bash'), closure('model_end_turn')]);
+    await runReceiptSessionEndHook({ event: 'SessionEnd', sessionId: 's1', reason: 'reset', tracePath });
+    expect(existsSync(join(getReceiptsDir(), 'cleared.json'))).toBe(false);
+  });
+
   it('hook respects AFK_RUN_RECEIPT_DISABLED=1', async () => {
     process.env['AFK_RUN_RECEIPT_DISABLED'] = '1';
     const tracePath = await writeTrace('disabled', [toolDone('bash'), sealed('succeeded')]);

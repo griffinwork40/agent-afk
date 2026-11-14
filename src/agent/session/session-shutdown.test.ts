@@ -93,6 +93,41 @@ describe('SessionShutdown — billing rollups on session_sealed (#3878)', () => 
   });
 });
 
+describe('SessionShutdown — reset keeps the owned trace open (#4884)', () => {
+  function owned() {
+    const writer = new InMemoryTraceWriter();
+    const shutdown = new SessionShutdown({
+      getConfig: () => ({ model: 'sonnet', cwd: '/repo', traceWriter: writer }) as unknown as AgentConfig,
+      getAbortController: () => new AbortController(),
+      getHookRegistry: () => undefined,
+      accounting: new AccountingAccumulator(),
+      getTurnCount: () => 1,
+      getSessionId: () => 'sess-r',
+      ownedTraceWriter: writer,
+      ownsTraceSeal: true,
+    });
+    return { shutdown, writer };
+  }
+
+  it("reason 'reset' writes the closure delimiter but does not seal", async () => {
+    const { shutdown, writer } = owned();
+    await shutdown.dispatchOnce('reset');
+    expect(writer.events.map((e) => e.kind)).toEqual(['closure']);
+    await expect(writer.write({ kind: 'session_phase', payload: { phase: 'session_init_start' } } as never)).resolves.not.toThrow();
+  });
+
+  it('the next cycle seals once on close, after both closures', async () => {
+    const { shutdown, writer } = owned();
+    await shutdown.dispatchOnce('reset');
+    shutdown.reset();
+    await shutdown.dispatchOnce('close');
+    const kinds = writer.events.map((e) => e.kind);
+    expect(kinds.filter((k) => k === 'closure')).toHaveLength(2);
+    expect(kinds.filter((k) => k === 'session_sealed')).toHaveLength(1);
+    expect(kinds.at(-1)).toBe('session_sealed');
+  });
+});
+
 describe('SessionShutdown — background SessionEnd lane (/clear latency)', () => {
   function withBackground(parentSessionId?: string) {
     const registry = createHookRegistry();
