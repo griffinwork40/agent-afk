@@ -179,16 +179,15 @@ export type SessionPhaseName =
   // must treat its absence as "id unknown from trace alone" — the ledger
   // `traceLabel` bridge remains the fallback for those traces.
   | 'session_id_assigned'
-  // Many-image dimension guard fired at request-build time and replaced one or
-  // more image blocks with imageOmitted text blocks (issue #2348). Emitted when
-  // `enforceManyImageLimit` degrades at least one image in `openRound` (single
-  // event, no paired start). `metadata` carries `degradedCount` (number of
-  // blocks replaced), `threshold` (MANY_IMAGE_THRESHOLD = 20), and
-  // `maxDimension` (MAX_DIMENSION_MANY_IMAGES = 2000). PURE OBSERVABILITY: the
-  // degradation itself is already reflected in the mutated messages array; this
-  // event makes the repair visible in the trace so operators can diagnose
-  // sessions that hit the many-image ceiling without inspecting raw message
-  // payloads.
+  // Per-image pixel-ceiling guard fired at request-build time and replaced one
+  // or more image blocks with imageOmitted text blocks (issue #2348; always-on
+  // since the 8000px fix). Emitted once per round from `openRound` when at
+  // least one image was replaced (single event, no paired start). The name is
+  // historical: it also fires for the ≤20-image 8000px ceiling. `metadata`
+  // carries `degradedCount` (blocks replaced), `imageCount` (images in the
+  // request), `threshold` (MANY_IMAGE_THRESHOLD = 20), `maxDimension` (the
+  // ceiling that APPLIED: 8000 or 2000) and `manyImage` (true when >20). PURE
+  // OBSERVABILITY: the repair itself is in the mutated messages array.
   | 'many_image_degraded'
   // Mid-stream transport drop was accepted as a clean completion because a
   // terminal finish_reason had already arrived before the socket closed
@@ -418,7 +417,11 @@ export interface SessionPhasePayload {
    * sessions, and all other phase kinds.
    * Anthropic: 'ANTHROPIC_API_KEY' | 'CLAUDE_CODE_OAUTH_TOKEN' |
    *   'claude-code-keychain' | 'claude-code-session-refresh'
-   * OpenAI: 'chatgpt-oauth' | 'config' | 'env' | 'codex-cli' | etc.
+   * Other providers (#4882, provider-prefixed): 'openai:env' |
+   *   'openai:config' | 'openai:codex-cli' | 'openai:chatgpt-oauth' |
+   *   'xai:env' | 'xai:config' | 'xai:oauth' | 'anthropic:config' | 'local'.
+   *   See src/agent/auth/credential-source.ts. Per-child ids live on
+   *   subagent_lifecycle `started.credentialSource` instead.
    */
   credentialSource?: string;
 }

@@ -33,6 +33,12 @@ export interface SubagentModelEntry {
   costUsd: number;
   /** Sorted distinct requested model names that landed in this bucket. */
   requested: string[];
+  /**
+   * Sorted distinct credential source ids that served subagents in this bucket
+   * (#4882), from `started.credentialSource`, or the `subagent_model_fallback`
+   * metadata for a re-run child. Omitted when none was recorded (old traces).
+   */
+  credentialSources?: string[];
 }
 
 /**
@@ -56,12 +62,15 @@ function finitePos(v: unknown): number | undefined {
 }
 
 /**
- * Collect subagentId -> toModel from subagent_model_fallback phase events.
+ * Collect subagentId -> { toModel, credentialSource? } from
+ * subagent_model_fallback phase events.
  * Tolerates malformed events: missing or non-object metadata, non-string or
  * empty subagentId / toModel fields are silently skipped.
  */
-function buildFallbackMap(events: TraceEvent[]): Map<string, string> {
-  const map = new Map<string, string>();
+interface FallbackInfo { toModel: string; credentialSource?: string }
+
+function buildFallbackMap(events: TraceEvent[]): Map<string, FallbackInfo> {
+  const map = new Map<string, FallbackInfo>();
   for (const ev of events) {
     if (ev.kind !== 'session_phase') continue;
     const p = ev.payload as unknown as Record<string, unknown>;
@@ -72,7 +81,8 @@ function buildFallbackMap(events: TraceEvent[]): Map<string, string> {
     const subagentId = str(m['subagentId']);
     const toModel = str(m['toModel']);
     if (subagentId === undefined || toModel === undefined) continue;
-    map.set(subagentId, toModel);
+    const credentialSource = str(m['credentialSource']);
+    map.set(subagentId, credentialSource !== undefined ? { toModel, credentialSource } : { toModel });
   }
   return map;
 }
@@ -186,6 +196,7 @@ export function buildSubagentsByModel(
   const requested = new Map<string, string>();          // subagentId -> requested model (first seen)
   const startedResolved = new Map<string, string>();    // subagentId -> resolvedModel from started payload (first seen)
   const costs = new Map<string, number>();              // subagentId -> closure finalCostUsd (accumulated)
+  const startedCred = new Map<string, string>();        // subagentId -> credentialSource from started payload (first seen)
 
   let anyStarted = false;
 
@@ -208,6 +219,10 @@ export function buildSubagentsByModel(
           const res = str(p['resolvedModel']);
           if (res !== undefined) startedResolved.set(id, res);
         }
+        if (!startedCred.has(id)) {
+          const cred = str(p['credentialSource']);
+          if (cred !== undefined) startedCred.set(id, cred);
+        }
       }
     } else if (ev.kind === 'closure') {
       const p = ev.payload as unknown as Record<string, unknown>;
@@ -229,6 +244,7 @@ export function buildSubagentsByModel(
   const buckets = new Map<string, SubagentModelEntry>();
   // Track requested names per bucket for the `requested` array.
   const bucketRequested = new Map<string, Set<string>>();
+  const bucketCreds = new Map<string, Set<string>>();
 
   const getOrCreateBucket = (key: string): SubagentModelEntry => {
     let bucket = buckets.get(key);
@@ -236,6 +252,7 @@ export function buildSubagentsByModel(
       bucket = { started: 0, succeeded: 0, failed: 0, cancelled: 0, costUsd: 0, requested: [] };
       buckets.set(key, bucket);
       bucketRequested.set(key, new Set());
+      bucketCreds.set(key, new Set());
     }
     return bucket;
   };
@@ -253,12 +270,16 @@ export function buildSubagentsByModel(
     const req = requested.get(id);
     if (req === undefined) continue;
 
-    const key = modelKey(req, startedResolved.get(id), initMap, fallbackMap.get(id));
+    const key = modelKey(req, startedResolved.get(id), initMap, fallbackMap.get(id)?.toModel);
     const bucket = getOrCreateBucket(key);
 
     if (t === 'started') {
       bucket.started++;
       bucketRequested.get(key)?.add(req);
+      // A fallback re-run was served by toModel's credential, not the first attempt's.
+      const fb = fallbackMap.get(id);
+      const cred = fb !== undefined ? fb.credentialSource : startedCred.get(id);
+      if (cred !== undefined) bucketCreds.get(key)?.add(cred);
     } else if (t === 'succeeded') {
       bucket.succeeded++;
     } else if (t === 'failed') {
@@ -272,7 +293,7 @@ export function buildSubagentsByModel(
   for (const [id, cost] of costs) {
     const req = requested.get(id);
     if (req === undefined) continue;
-    const key = modelKey(req, startedResolved.get(id), initMap, fallbackMap.get(id));
+    const key = modelKey(req, startedResolved.get(id), initMap, fallbackMap.get(id)?.toModel);
     const bucket = buckets.get(key);
     if (bucket !== undefined) bucket.costUsd += cost;
   }
@@ -281,6 +302,8 @@ export function buildSubagentsByModel(
   for (const [key, bucket] of buckets) {
     const reqSet = bucketRequested.get(key);
     bucket.requested = reqSet !== undefined ? [...reqSet].sort() : [];
+    const credSet = bucketCreds.get(key);
+    if (credSet !== undefined && credSet.size > 0) bucket.credentialSources = [...credSet].sort();
   }
 
   if (buckets.size === 0) return undefined;

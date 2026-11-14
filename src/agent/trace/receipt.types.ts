@@ -56,6 +56,13 @@ export interface RunReceipt {
    * Absent for the same reasons as `model`.
    */
   resolvedModel?: string;
+  /**
+   * Credential source id of the provider that served the root session model
+   * (#4882), from `session_init_start.credentialSource`. Ids only, never token
+   * material. Vocabulary: see `src/agent/auth/credential-source.ts`. Absent
+   * on traces that predate the field.
+   */
+  credentialSource?: string;
   status: 'succeeded' | 'failed' | 'cancelled' | 'unknown';
   closureReason?: ClosureReason;
   lastStopReason?: string;

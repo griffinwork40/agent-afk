@@ -434,6 +434,14 @@ export interface SubagentStartedPayload {
    * Absent on traces written before this field existed.
    */
   maxToolUseIterations?: number;
+  /**
+   * Credential source id of the provider serving this child's model (#4882),
+   * same vocabulary as `session_init_start.credentialSource` (see
+   * src/agent/auth/credential-source.ts). Ids only. Absent on older traces or
+   * when no credential resolved; a model fallback re-run records its own id on
+   * `subagent_model_fallback` metadata.
+   */
+  credentialSource?: string;
   /** Continuation chain id (docs/subagent-continuation.md, D10). Set on continuation forks only; an initial fork's `started` event carries none. */
   chainId?: string;
   /** Subagent id of the chain's previous link this continuation resumes. */

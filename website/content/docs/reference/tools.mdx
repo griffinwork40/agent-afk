@@ -552,7 +552,11 @@ Invoke a registered skill by name. A skill either forks an isolated subagent or 
 
 ### `model_complete`
 
-Send one prompt to any configured model and return its text reply: no tools, no conversation, no subagent fork. Use it to offload bounded text work (summarize, classify, extract, rewrite, second opinion) to a cheaper or local model; use `agent` when the work needs tools. `model` resolves through your model slots, so the slot's provider, endpoint, and API key apply. An unconfigured slot is an error, never a silent fallback to a cloud model.
+Send one prompt to any configured model and return its text reply: no tools, no conversation, no subagent fork. The other model sees only what the prompt contains.
+
+It has two uses. The first is challenging a consequential conclusion before it drives work, when the evidence fits in one prompt: the agent names a model from a different family, sends the claim with its evidence, and asks for counterarguments. The reply is a critique to weigh, not verification. The second is offloading bounded text work (summarize, classify, extract, rewrite) to a cheaper or local model. Use `agent` when the work needs tools or fresh evidence.
+
+`model` resolves through your model slots, so the slot's provider, endpoint, and API key apply. The default is your configured default model, which is usually the one the session already runs on, so a challenge should name a different one. An unconfigured slot is an error, never a silent fallback to a cloud model.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

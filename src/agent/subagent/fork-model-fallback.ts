@@ -29,6 +29,7 @@ import { applyManagerApiKeyFallback, applyParentCredentialFallback } from '../to
 import { buildPhaseRestrictedProvider } from '../tools/nesting.js';
 import type { ForkSubagentOptions } from './fork-types.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
+import { tryCredentialSourceForModel } from '../auth/credential-source.js';
 import type { HandleModelFallback } from './handle.model-fallback.js';
 
 export interface BuildForkModelFallbackArgs<T> {
@@ -64,6 +65,7 @@ export function buildForkModelFallback<T>(args: BuildForkModelFallbackArgs<T>): 
             : undefined;
   // Foreign-family pre-built provider with no rebuild: fail closed (no fallback).
   if (rebuildProvider === undefined) return undefined;
+  let lastConfig: AgentConfig | undefined;
   const createSession = (): AgentSession => {
     const resolved = applyParentCredentialFallback({
       childModel: toModel,
@@ -86,7 +88,16 @@ export function buildForkModelFallback<T>(args: BuildForkModelFallbackArgs<T>): 
       messageJournal: options.parent.messageJournal?.forSubagent(id, { model: toModel, provider: rebuilt?.name ?? providerForModel(toModel) }),
     };
     if (rebuilt === undefined) delete config.provider;
+    lastConfig = config;
     return new AgentSession(config);
   };
-  return { fromModel, toModel, createSession };
+  // #4882: the re-run's credential id, from the config createSession built.
+  const credentialSource = (): string | undefined => lastConfig === undefined
+    ? undefined
+    : tryCredentialSourceForModel(toModel, undefined, {
+      noStoreRead: true,
+      ...(lastConfig.apiKey !== undefined ? { configApiKey: lastConfig.apiKey } : {}),
+      ...(lastConfig.baseUrl !== undefined ? { configBaseUrl: lastConfig.baseUrl } : {}),
+    });
+  return { fromModel, toModel, createSession, credentialSource };
 }
