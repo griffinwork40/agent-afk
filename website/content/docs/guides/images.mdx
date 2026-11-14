@@ -77,6 +77,8 @@ Do not paste base64 into a dispatch prompt. IDs belong to the current session an
 
 The inline payload is limited to **2 MiB of base64** and **8,000 pixels in either dimension**. Oversized images return an omission notice rather than pixels. Crop or resize the source and try again.
 
+The same limit applies to images from any source, including MCP tools such as a browser's full-page screenshot. Before each Anthropic request, AFK replaces any image over 8,000 pixels per side (2,000 pixels once the request carries more than 20 images) with a text note giving its size and the limit, and prints a notice so you know it happened. Ask for a viewport-size or single-element screenshot, or a cropped or smaller image, instead.
+
 A vision-capable model is required. Both Anthropic and the OpenAI-compatible provider have image transport paths; for OpenAI-compatible tool results, pixels are delivered in a follow-up user message rather than in the text-only tool-result message. A text-only model or endpoint cannot inspect the pixels merely because the tool returned a filename.
 
 ## Generate an image

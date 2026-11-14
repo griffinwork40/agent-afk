@@ -50,8 +50,18 @@ const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
     // reaches git verbatim. The tradeoff (boolean slot for a paired option) was
     // accepted in #4371 because the normalizer makes the behavior correct and
     // the prompt steers models toward `--max-count=` anyway (see schemas.git-read.ts).
-    flags: ['--oneline', '--graph', '--decorate', '--all', '--merges', '--no-merges', '--first-parent', '--reverse', '-p', '--patch', '--follow', '-n', '-i', '--regexp-ignore-case', '--not', ...DIFF_FORMAT],
-    valued: ['--format=', '--pretty=', '--author=', '--committer=', '--grep=', '--since=', '--until=', '--after=', '--before=', '--max-count=', '--skip=', '--date=', '--unified=', '--diff-filter='],
+    // `--ancestry-path` and `-S` added by #4878.
+    // `--ancestry-path` limits the walk to commits that are ancestors of a range
+    // endpoint; purely read-only.
+    // `-S` (pickaxe) searches history for a string that changed; read-only. The
+    // split-token normaliser joins `-S <text>` into `-S<text>` before checkToken
+    // runs, so `-S` alone never reaches git verbatim.
+    // `-S` is in `valued` (prefix `-S`) so that the joined form `-Ssometext`
+    // passes checkToken. The split-token normaliser joins `-S <text>` → `-Stext`
+    // before validation; a bare `-S` alone is still recognised by the normaliser
+    // but left unpaired when the next token is absent or starts with `-`.
+    flags: ['--oneline', '--graph', '--decorate', '--all', '--merges', '--no-merges', '--first-parent', '--reverse', '-p', '--patch', '--follow', '-n', '-i', '--regexp-ignore-case', '--not', '--ancestry-path', ...DIFF_FORMAT],
+    valued: ['--format=', '--pretty=', '--author=', '--committer=', '--grep=', '--since=', '--until=', '--after=', '--before=', '--max-count=', '--skip=', '--date=', '--unified=', '--diff-filter=', '-S'],
     forced: ['--no-ext-diff', '--no-textconv'], revs: true,
   },
   diff: {
@@ -60,13 +70,15 @@ const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
     forced: ['--no-ext-diff', '--no-textconv'], revs: true,
   },
   show: {
+    // `--max-count=` added by #4878: harmless on `show` (caps objects shown),
+    // models reach for it when show-range queries need limiting.
     flags: ['--oneline', '--no-patch', '-s', '-p', '--patch', ...DIFF_FORMAT],
-    valued: ['--format=', '--pretty=', '--unified=', '--date='],
+    valued: ['--format=', '--pretty=', '--unified=', '--date=', '--max-count='],
     forced: ['--no-ext-diff', '--no-textconv'], revs: true,
   },
   grep: { flags: ['-n', '--line-number', '-i', '--ignore-case', '-w', '--word-regexp', '-l', '--files-with-matches', '--count', '-E', '--extended-regexp', '-F', '--fixed-strings', '-I', '--cached', '--untracked'], valued: ['--max-count=', '--max-depth='], forced: ['--no-textconv', '--no-color'], revs: true },
   tag: { flags: [], valued: ['--sort=', '--contains=', '--merged=', '--format='], forced: ['--list'], revs: false },
-  branch: { flags: ['-a', '--all', '-r', '--remotes', '-v', '-vv', '--verbose'], valued: ['--sort=', '--contains=', '--merged=', '--no-merged=', '--format='], forced: ['--list', '--no-color'], revs: false },
+  branch: { flags: ['-a', '--all', '-r', '--remotes', '-v', '-vv', '--verbose', '--show-current'], valued: ['--sort=', '--contains=', '--merged=', '--no-merged=', '--format='], forced: ['--list', '--no-color'], revs: false },
   blame: { flags: ['-w', '-s', '--porcelain', '--line-porcelain', '-l'], valued: ['-L'], forced: ['--no-textconv'], revs: true },
   'ls-files': { flags: ['--cached', '--others', '-o', '--exclude-standard', '--modified', '-m', '--deleted', '-d', '--stage', '-s'], valued: [], forced: [], revs: false },
   'rev-parse': { flags: ['--abbrev-ref', '--short', '--verify', '--show-toplevel', '--show-prefix', '--is-inside-work-tree', '--symbolic-full-name'], valued: [], forced: [], revs: true },
@@ -80,7 +92,7 @@ const POLICIES: Record<GitReadSubcommand, SubcommandPolicy> = {
 
   // rev-list: walks commit graph, no writes. --objects/--disk-usage omitted (can be
   // very expensive / expose object layout). --stdin omitted (network of stdin).
-  'rev-list': { flags: ['--count', '--oneline', '--reverse', '--merges', '--no-merges', '--first-parent', '--ancestry-path', '--topo-order', '--date-order', '--not'], valued: ['--max-count=', '--max-age=', '--min-age=', '--since=', '--until=', '--after=', '--before=', '--format=', '--pretty=', '--author=', '--committer=', '--grep='], forced: [], revs: true },
+  'rev-list': { flags: ['--count', '--oneline', '--reverse', '--merges', '--no-merges', '--first-parent', '--ancestry-path', '--topo-order', '--date-order', '--not', '--left-right'], valued: ['--max-count=', '--max-age=', '--min-age=', '--since=', '--until=', '--after=', '--before=', '--format=', '--pretty=', '--author=', '--committer=', '--grep='], forced: [], revs: true },
 
   // reflog: forced to `show` (the read-only subcommand). `expire`/`delete` are write
   // subcommands and are structurally blocked because `forced` prepends `show` and the
@@ -152,7 +164,12 @@ function checkToken(tok: string, policy: SubcommandPolicy, sub: GitReadSubcomman
     return `Rejected argument ${JSON.stringify(tok.slice(0, 80))}: empty, oversized, or contains control characters.`;
   }
   if (policy.flags.includes(tok)) return null;
-  if (policy.valued.some((p) => tok.startsWith(p) && tok.length > p.length)) {
+  // For `=`-terminated prefixes (e.g. `--format=`), allow an empty value:
+  // `tok === p` means the token is exactly `--format=` with nothing after the
+  // `=`, which git treats as "suppress the commit header". Valid and read-only.
+  // For non-`=` prefixes (e.g. `-L`, `-S`), still require a non-empty suffix
+  // so a bare `-L` or `-S` token doesn't slip through as a zero-length value.
+  if (policy.valued.some((p) => tok.startsWith(p) && (p.endsWith('=') ? tok.length >= p.length : tok.length > p.length))) {
     // `%G?`/`%GS`/… (pretty) and `%(signature…)`/`%(*signature…)` (ref-filter, tag/branch)
     // make git run gpg.program / gpg.ssh.program to verify signatures.
     if (/^--(format|pretty)=/.test(tok) && (/%G/.test(tok) || /%\(\s*\*?\s*signature/i.test(tok))) {
@@ -232,6 +249,33 @@ const NO_PATH_SUBCOMMANDS = new Set<GitReadSubcommand>([
  */
 const COUNT_SHORT_RE = /^-(?:n(\d+)|(\d+))$/;
 
+/**
+ * Split-valued options (#4878): options that take their value as the next
+ * positional token. The normaliser joins them before `checkToken` runs.
+ * Maps the bare option token to the prefix used to build the joined form.
+ *
+ * Security invariants:
+ * 1. The next token must exist and must NOT start with `-`; a leading `-`
+ *    signals another flag, not a value — the option is left unpaired and
+ *    `checkToken` rejects the bare flag.
+ * 2. The joined value is passed to `checkToken` exactly like a pre-joined
+ *    `--opt=value` token, so all existing guards (signature, sort-key,
+ *    character-class) still apply.
+ * 3. `-S` accepts arbitrary text. A value starting with `-` is intentionally
+ *    blocked by invariant 1; callers who need a pickaxe string beginning with
+ *    `-` can supply the pre-joined form `-S-foo` as a single token.
+ */
+const SPLIT_VALUED: ReadonlyMap<string, string> = new Map([
+  ['--contains', '--contains='],
+  ['--merged',   '--merged='],
+  ['--no-merged','--no-merged='],
+  ['-L', '-L'],  // blame: joined as -L<range> (no separator needed by git)
+  ['-S', '-S'],  // log:   joined as -S<value> (no separator)
+]);
+
+/** `-U<N>` compact shorthand → `--unified=<N>`. Only digits accepted after -U. */
+const UNIFIED_SHORT_RE = /^-U(\d+)$/;
+
 /** Validate a request and build the argv that follows the fixed global options. */
 export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   const sub = req.subcommand;
@@ -248,6 +292,18 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   // "show", args: ["show", "HEAD"]}`). git would treat the echo as an
   // operand and fail, so drop a leading echo before any other handling.
   const argsIn = rawArgs.length > 0 && rawArgs[0] === subcommand ? rawArgs.slice(1) : rawArgs;
+  // Contract: models naturally echo forced tokens (e.g. `git stash list`,
+  // `git reflog show`). The policy prepends them unconditionally, so the
+  // echo would be rejected as an unlisted option or bare revision. Strip
+  // echoed tokens from the pre-separator segment only — post-separator
+  // tokens are pathspecs and must never be filtered.
+  const forcedTokens = new Set(policy.forced);
+  const rawSep = argsIn.indexOf('--');
+  const preRaw = rawSep === -1 ? argsIn : argsIn.slice(0, rawSep);
+  const postRaw = rawSep === -1 ? [] : argsIn.slice(rawSep + 1);
+  const argsClean = forcedTokens.size > 0
+    ? preRaw.filter((t) => !forcedTokens.has(t))
+    : preRaw;
   // A pattern is only meaningful for grep. Models that fill optional string
   // fields with "" must not trip the grep-only guard below, so an
   // empty/whitespace-only pattern counts as absent for every other subcommand.
@@ -260,8 +316,7 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   // Accept git's own grammar: a literal `--` in `args` separates revisions
   // from pathspecs. Tokens after it join `paths` and are confined below like
   // any other path, so this widens nothing.
-  const sep = argsIn.indexOf('--');
-  const preSep = sep === -1 ? argsIn : argsIn.slice(0, sep);
+  const preSep = argsClean;
   // Normalise shorthand count flags to `--max-count=<N>` before validation —
   // only where the allowlist already admits --max-count=.
   const args: string[] = [];
@@ -298,29 +353,71 @@ export function planGitRead(req: GitReadRequest, cwd: string): GitReadPlan {
   } else {
     args.push(...preSep);
   }
-  const paths = sep === -1 ? fieldPaths : [...fieldPaths, ...argsIn.slice(sep + 1)];
+  // Phase 2: split-valued option normalisation (#4878). Runs over the
+  // count-normalised `args` list. Handles:
+  //   -U<N>              → --unified=<N>
+  //   --contains <val>   → --contains=<val>
+  //   --merged <val>     → --merged=<val>
+  //   --no-merged <val>  → --no-merged=<val>
+  //   -L <range>         → -L<range>
+  //   -S <text>          → -S<text>
+  // Security: the next token must be present and must not start with `-`.
+  // The joined result goes through checkToken just like a pre-joined token.
+  const normalised: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const tok = args[i] ?? '';
+    // -U<N> compact form → --unified=<N>
+    const um = UNIFIED_SHORT_RE.exec(tok);
+    if (um !== null) {
+      normalised.push(`--unified=${um[1]}`);
+      continue;
+    }
+    // Split-valued: join with the following token only when it is present
+    // and does not start with `-`.
+    const joinPrefix = SPLIT_VALUED.get(tok);
+    if (joinPrefix !== undefined) {
+      const val = args[i + 1];
+      if (val !== undefined && !val.startsWith('-')) {
+        normalised.push(`${joinPrefix}${val}`);
+        i++; // consume the value token
+        continue;
+      }
+      // Unpaired or next token is another flag: pass through unchanged;
+      // checkToken will reject the bare option as not in the allowlist.
+    }
+    normalised.push(tok);
+  }
+  const paths = [...fieldPaths, ...postRaw];
   if (paths.length > MAX_ARGS) return { ok: false, error: `"paths" accepts at most ${MAX_ARGS} entries.` };
-  for (const tok of args) {
+  for (const tok of normalised) {
     const err = checkToken(tok, policy, subcommand);
     if (err !== null) return { ok: false, error: err };
   }
-  const argv: string[] = [subcommand, ...policy.forced];
+  // Invariant: branch --show-current is a read-only query that returns the
+  // current branch name. It is incompatible with the forced --list flag
+  // (which switches branch to pattern-matching mode). Skip --list when
+  // --show-current is present; the safety contract holds because
+  // --show-current never creates branches.
+  const forced = subcommand === 'branch' && normalised.includes('--show-current')
+    ? policy.forced.filter((f) => f !== '--list')
+    : policy.forced;
+  const argv: string[] = [subcommand, ...forced];
   if (subcommand === 'grep') {
     if (typeof pattern !== 'string' || pattern.length === 0 || pattern.length > MAX_TOKEN_LEN || pattern.includes('\0')) {
       return { ok: false, error: 'git grep requires a non-empty "pattern" string.' };
     }
     // git grep wants options, then `-e <pattern>`, then revisions.
-    const opts = args.filter((t) => t.startsWith('-'));
-    const revs = args.filter((t) => !t.startsWith('-'));
+    const opts = normalised.filter((t) => t.startsWith('-'));
+    const revs = normalised.filter((t) => !t.startsWith('-'));
     argv.push(...opts, '-e', pattern, ...revs);
   } else {
     if (pattern !== undefined) return { ok: false, error: '"pattern" is only valid for subcommand "grep".' };
-    argv.push(...args);
+    argv.push(...normalised);
   }
 
   // shortlog: if no rev was supplied, inject HEAD so git uses the commit-graph
   // path (not stdin). This prevents a hang when stdin is closed/pipe.
-  if (subcommand === 'shortlog' && !args.some((t) => !t.startsWith('-'))) {
+  if (subcommand === 'shortlog' && !normalised.some((t) => !t.startsWith('-'))) {
     argv.push('HEAD');
   }
 

@@ -44,10 +44,7 @@
 
 import type { HookContext, HookDecision } from './hooks.js';
 import { maskHookCommandData } from './hook-command-data.js';
-import {
-  RELEASE_BOUNDARY_PATTERNS,
-  type ReleaseBoundaryPattern,
-} from './release-boundary-patterns.js';
+import { analyzeCommand } from './command-classifier.js';
 import type { RiskCategory } from './risk-classifier.js';
 
 /** The risk category emitted on every release-boundary gate verdict. */
@@ -88,38 +85,12 @@ function isDryRun(command: string): boolean {
 }
 
 /**
- * Mask known message/stdin data and single-quoted literal search arguments.
- * Shell and interpreter payloads remain visible, including their quotes.
- *
- * Known limitation: `stripLiterals` mode only strips single-segment
- * `echo`/`grep`/`rg` literals. Compound literal searches such as
- * `grep 'npm publish' CHANGELOG && git status` will false-positive because
- * the second segment (`git status`) is not recognised as a literal consumer.
- * This is intentional: the conservative fallback avoids false negatives on
- * genuinely dangerous compound commands.
- */
-function stripQuotedLiterals(command: string): string {
-  return maskHookCommandData(command, true);
-}
-
-/**
  * Return the ids of every release-boundary pattern the command matches (empty
  * when none). Pure and stateless — no global-flag regexes, so `.test()` is safe
  * to call repeatedly. Exported for tests.
  */
 export function detectReleaseBoundaryCommands(command: string): string[] {
-  if (!command) return [];
-  const stripped = stripQuotedLiterals(command);
-  const hits: string[] = [];
-  for (const { id, re } of RELEASE_BOUNDARY_PATTERNS) {
-    if (re.test(stripped)) hits.push(id);
-  }
-  return hits;
-}
-
-/** Look up a pattern by id. */
-function getPattern(id: string): ReleaseBoundaryPattern | undefined {
-  return RELEASE_BOUNDARY_PATTERNS.find((p) => p.id === id);
+  return analyzeCommand(command).releaseBoundary.map(({ id }) => id);
 }
 
 /**
@@ -138,8 +109,9 @@ export function createReleaseBoundaryDetect(): (context: HookContext) => HookDec
     const command = typeof input?.['command'] === 'string' ? input['command'] : '';
     if (!command) return {};
 
-    const matched = detectReleaseBoundaryCommands(command);
-    if (matched.length === 0) return {};
+    const patterns = analyzeCommand(command).releaseBoundary;
+    const matched = patterns.map(({ id }) => id);
+    if (patterns.length === 0) return {};
 
     // Dry-run exemption: commands like `npm publish --dry-run`,
     // `cargo --locked publish --dry-run`, or `terraform apply -refresh-only`
@@ -182,9 +154,8 @@ export function createReleaseBoundaryDetect(): (context: HookContext) => HookDec
     // is ordered by severity (package-registry → container → release-cut →
     // infra), so the first hit is the highest-priority signal and the most
     // actionable reason for the agent.
-    for (const id of matched) {
-      const pattern = getPattern(id);
-      if (pattern?.tier === 'block') {
+    for (const pattern of patterns) {
+      if (pattern.tier === 'block') {
         return {
           decision: 'block',
           reason: pattern.blockReason,

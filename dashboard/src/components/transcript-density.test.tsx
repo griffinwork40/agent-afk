@@ -9,7 +9,7 @@ import { ToolCallCard } from './tool-call-card';
 import { ToolSummaryCwd } from '@/lib/tool-summary-context';
 import type { SpineNode } from '@/lib/topology-types';
 
-vi.mock('shiki', () => ({ createHighlighter: vi.fn().mockRejectedValue(new Error('use fallback')) }));
+// highlight is stubbed globally in src/__test-utils__/setup.ts
 const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join('\n');
 const node: SpineNode = { id: '1', kind: 'tool', label: 'read_file', category: 'read', status: 'ok', preview: '/repo/a.ts', children: [], isActive: false, seq: 0 };
 

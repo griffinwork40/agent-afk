@@ -23,6 +23,14 @@ describe('openai isFreshUserTurn', () => {
 });
 
 describe('openaiCompactionOps.renderMessage', () => {
+  it('excerpts long tool results head-and-tail with an elision marker', () => {
+    const long = 'HEAD-START ' + 'm'.repeat(10_000) + ' Error: final failure line';
+    const r = openaiCompactionOps.renderMessage({ role: 'tool', content: long, tool_call_id: 'c' });
+    expect(r).toContain('HEAD-START');
+    expect(r).toContain('Error: final failure line');
+    expect(r).toContain('chars elided');
+    expect(r.length).toBeLessThan(2_000);
+  });
   it('renders assistant tool_calls as [tool call: NAME args]', () => {
     const msg = {
       role: 'assistant',
@@ -246,5 +254,8 @@ describe('compactOpenAIHistory — microcompaction runs after successful compact
     const content = toolMsg!.content;
     const text = typeof content === 'string' ? content : '';
     expect(isMicrocompactPlaceholder(text)).toBe(true);
+    // The cleared counts are reported on the success result, not dropped.
+    expect(result.microcompaction?.blocksCleared).toBe(1);
+    expect(result.microcompaction?.bytesReclaimed).toBeGreaterThan(0);
   });
 });

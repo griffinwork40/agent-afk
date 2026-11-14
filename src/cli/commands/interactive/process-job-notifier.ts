@@ -30,6 +30,7 @@
  * @module cli/commands/interactive/process-job-notifier
  */
 
+import { truncateDisplayWidth } from '../../display.js';
 import type { ProcessJobRegistry, ProcessJobSnapshot } from '../../../agent/shell-jobs/process-jobs.js';
 
 const MAX_PENDING = 25;
@@ -73,7 +74,7 @@ export function formatProcessNotice(job: ProcessJobSnapshot): string {
   const secs = Math.round(((job.endedAt ?? Date.now()) - job.startedAt) / 1000);
   const exit = job.signal ? ` signal ${job.signal}` : job.exitCode !== undefined && job.exitCode !== null ? ` exit ${job.exitCode}` : '';
   const cmd = job.command.replace(/\s+/g, ' ').trim();
-  const label = cmd.length > 60 ? `${cmd.slice(0, 59)}…` : cmd;
+  const label = truncateDisplayWidth(cmd, 60);
   return `  ⏹ ${job.id} ${job.status}${exit} after ${secs}s: ${label}`;
 }
 

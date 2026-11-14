@@ -8,7 +8,7 @@
 import { providerForModel } from '../providers/index.js';
 import type { AgentModelInput } from '../types.js';
 import { env } from '../../config/env.js';
-import { getSlotBindings } from './model-slots.js';
+import { getSlotBindings, type ModelSlots } from './model-slots.js';
 
 /**
  * Get the default model for dispatched subagents (`agent` and `skill` tools).
@@ -58,4 +58,30 @@ export function getDefaultSubagentModel(parentModel?: AgentModelInput): AgentMod
     }
   }
   return 'medium';
+}
+
+/**
+ * Produce a human-readable label for the resolved default subagent model,
+ * attributing the source (env var, subagent slot, or bare model name).
+ *
+ * Accepts the already-resolved `defaultModel` (from {@link getDefaultSubagentModel})
+ * and the active `bindings` so callers do not re-derive the precedence logic.
+ * Used by `buildAgentModelParamDescription` to annotate the `model` parameter
+ * description without duplicating the precedence checks in this module.
+ *
+ * @param defaultModel - The value returned by {@link getDefaultSubagentModel}.
+ * @param bindings - Active slot bindings (pass the result of {@link getSlotBindings}).
+ */
+export function describeDefaultSubagentModelSource(
+  defaultModel: AgentModelInput,
+  bindings: ModelSlots,
+): string {
+  // Source 1: AFK_DEFAULT_SUBAGENT_MODEL env var wins.
+  const raw = env.AFK_DEFAULT_SUBAGENT_MODEL;
+  if (raw && raw.length > 0) return `\`${String(defaultModel)}\` (from AFK_DEFAULT_SUBAGENT_MODEL)`;
+  // Source 2: subagent slot configured.
+  const subagentId = bindings.subagent?.id;
+  if (subagentId && subagentId.length > 0) return `\`subagent\` slot → \`${subagentId}\``;
+  // Source 3 & 4: parent-inherit or medium fallback — just show the model name.
+  return `\`${String(defaultModel)}\``;
 }

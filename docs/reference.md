@@ -120,7 +120,6 @@ The interactive REPL registers slash commands directly in TypeScript (`src/cli/s
 - `/todo` — manage the persistent todo list
 - `/resume` — resume a saved session
 - `/init` — scan the current project and write `AFK.md`
-- `/changelog` — render `CHANGELOG.md` paginated
 
 ### Background subagent jobs
 - `/bgsub` — list background subagent jobs with status (dispatched via `mode:'background'`)

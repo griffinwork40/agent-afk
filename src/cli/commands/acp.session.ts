@@ -15,7 +15,7 @@ import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
-import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { MemoryStore, injectHotMemory, injectEpisodeRecall } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
@@ -85,8 +85,18 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
 
   await ensurePluginEntrypointsLoaded();
 
+  // Fix #4725: pass the session-scoped memoryStore as the 4th arg so episode
+  // recall queries the same store that was opened for this session, rather than
+  // a cold MemoryStore.default() instantiated inside injectEpisodeRecall.
+  //
+  // Note: the full injection chain used by other surfaces is:
+  //   injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory(…))))
+  // injectGoalPrompt and injectCompanionPrimer are omitted here because they
+  // carry additional dependencies (goal/companion state) that are not relevant
+  // to the ACP server surface. Document this divergence rather than adding
+  // partial parity — see issue #4725 finding 2 for follow-up context.
   const session = new AgentSession(
-    injectHotMemory({
+    injectEpisodeRecall(injectHotMemory({
       model,
       surface: 'cli',
       apiKey,
@@ -104,7 +114,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
       ).registry,
       provider,
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-    }),
+    }), undefined, undefined, memoryStore),
     undefined,
   );
 

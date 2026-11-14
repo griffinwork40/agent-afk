@@ -87,6 +87,8 @@ export interface RetryLayerOptions {
   tokenRefresher?: () => Promise<Anthropic | null>;
   /** Whether to auto-wait+resume on 429 usage-limit (default true). */
   autoResumeOnUsageLimit: boolean;
+  /** `AgentConfig.modelFallbackArmed`, stored as given (a getter stays live). */
+  modelFallbackArmed?: boolean | (() => boolean);
   /**
    * User-facing surface that produced this session (`AgentConfig.surface`,
    * plumbed index.ts → query.ts → here). The ONLY consumer is
@@ -124,9 +126,9 @@ export class RetryLayer {
    * The OAuth token string the current `_client` was built with.
    *
    * `loadClaudeCodeOauthToken()` reads the credential STORE, which may already
-   * contain account B when `/reauth` runs (the user ran `claude login` before
-   * calling us). Comparing store-before vs store-after therefore yields
-   * `swapped: false` even when the live client is switching from A to B.
+   * contain account B when the catch-up runs (the user ran `claude login`
+   * before the turn started). Comparing store-before vs store-after therefore
+   * yields `swapped: false` even when the live client is switching from A to B.
    *
    * Tracking the token we actually wired into `_client` at construction (and
    * updating it on every client swap) lets `forceClientRefresh` compute
@@ -139,6 +141,7 @@ export class RetryLayer {
   private readonly baseUrl?: string;
   private readonly tokenRefresher?: () => Promise<Anthropic | null>;
   private readonly autoResumeOnUsageLimit: boolean;
+  private readonly modelFallbackArmed: boolean | (() => boolean) | undefined;
   private readonly surface?: string;
   private readonly _credentialFromStore: boolean | undefined;
 
@@ -176,6 +179,7 @@ export class RetryLayer {
     this.baseUrl = opts.baseUrl;
     this.tokenRefresher = opts.tokenRefresher;
     this.autoResumeOnUsageLimit = opts.autoResumeOnUsageLimit;
+    this.modelFallbackArmed = opts.modelFallbackArmed;
     if (opts.surface !== undefined) this.surface = opts.surface;
     this._credentialFromStore = opts.credentialFromStore;
   }
@@ -230,6 +234,9 @@ export class RetryLayer {
       get autoResumeOnUsageLimit() {
         return layer.autoResumeOnUsageLimit;
       },
+      get modelFallbackArmed() {
+        return layer.modelFallbackArmed;
+      },
       get tokenRefresher() {
         return layer.tokenRefresher;
       },
@@ -262,10 +269,10 @@ export class RetryLayer {
    * We have to construct a new client.
    *
    * Used by:
+   *   - The turn-start credential catch-up (`adoptFreshClient` in
+   *     `usage-limit-catch-up.ts`) at the top of every turn.
    *   - The hot-swap branches of the usage-limit tier (mid-turn, after a
    *     keychain token change is detected by the wait loops).
-   *   - The `/reauth` slash command (between turns, when the user manually
-   *     requests an account swap or proactive refresh).
    *
    * Returns `null` when:
    *   - No `tokenRefresher` is wired (api-key mode, or local-server mode).
@@ -274,20 +281,19 @@ export class RetryLayer {
    * Returns `{ accountId, oldAccountId, swapped }` on success, where `swapped`
    * is `true` iff the new client's underlying token differs from the previous
    * one. `oldAccountId` is the account id parsed from the token the old client
-   * was built with (useful for the `/reauth` message "switched from X to Y").
-   * Callers (e.g. `/reauth`) can use `swapped` to distinguish "now on a
-   * different account" from "the existing token was already current".
+   * was built with, useful for distinguishing "now on a different account"
+   * from "the existing token was already current".
    *
    * Deduplicates concurrent calls via {@link refreshPromise} — the same field
-   * the 401 path uses, so a 401-driven refresh racing with an explicit
-   * `/reauth` collapses to a single upstream call.
+   * the 401 path uses, so a 401-driven refresh racing with the turn-start
+   * catch-up collapses to a single upstream call.
    */
   async forceClientRefresh(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
     if (!this.tokenRefresher) return null;
     // Capture the token the CURRENT CLIENT was built with. This is the correct
     // baseline for "did we just swap accounts?". Reading loadClaudeCodeOauthToken()
     // here instead would return the STORE's current value — which is already
-    // account B when the user ran `claude login` before calling `/reauth`,
+    // account B when the user ran `claude login` before the catch-up fires,
     // producing store-before === store-after and a false `swapped: false`.
     const priorClientToken = this._clientToken;
 
@@ -385,7 +391,7 @@ export class RetryLayer {
     } else if (!runInput.signal.aborted) {
       // Contract: an account switch with NO error (`claude login` between
       // turns) is adopted here, on every surface, instead of waiting for a
-      // 401 / usage-limit 429 or a manual `/reauth`. A no-op unless the store
+      // 401 / usage-limit 429 or the turn-start catch-up. A no-op unless the store
       // is the session's credential source and its token differs from the
       // live client's; see `storeAheadOfClient` in usage-limit-catch-up.ts.
       await catchUpStaleCredential(ctx, runInput, 'turn-start');

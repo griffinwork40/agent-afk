@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 
 const isWin32 = process.platform === 'win32';
-import { promises as fs, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { promises as fs, mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -923,23 +923,30 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
       // leave `sleep 9999` running as an orphan.
       //
       // Command breakdown:
-      //   sleep 9999 &   — start a long-running grandchild in the background
-      //   echo $!        — print its PID to stdout so the test can capture it
-      //   wait           — keep the shell alive (so it can be killed by the handler)
+      //   sleep 9999 &              — start a long-running grandchild in the background
+      //   echo GRANDCHILD_PID=$!    — print its PID with a marker so the test can capture it
+      //   wait                      — keep the shell alive (so it can be killed by the handler)
       const result = await createBashHandler('default')(
-        { command: 'sleep 9999 & echo $!; wait', timeout_ms: 300 },
+        { command: 'sleep 9999 & echo GRANDCHILD_PID=$!; wait', timeout_ms: 300 },
         new AbortController().signal,
       );
 
       // The handler must have timed out (isError) and the stdout must contain
-      // at least one numeric PID printed by `echo $!`.
+      // the grandchild PID printed by `echo GRANDCHILD_PID=$!`.
       expect(result.isError).toBe(true);
       expect(result.content).toContain('timed out');
 
-      // Extract the first decimal integer from output — that is the grandchild PID.
-      const pidMatch = (result.content as string).match(/\d+/);
+      // Extract the grandchild PID via its marker. The content opens with the
+      // headline `Command timed out after 300ms`, so a bare /\d+/ captured the
+      // timeout value (300) instead of the PID: the probe below then checked
+      // PID 300, never the grandchild. That made the test vacuous (it passed
+      // even with a broken group kill) and flaky (it failed whenever PID 300
+      // belonged to a live process the test user may signal — observed on
+      // macos-latest, run 43282873760, where kill -0 300 succeeded for the
+      // whole 2 s poll).
+      const pidMatch = (result.content as string).match(/GRANDCHILD_PID=(\d+)/);
       expect(pidMatch).not.toBeNull();
-      const grandchildPid = pidMatch![0];
+      const grandchildPid = pidMatch![1]!;
 
       // Poll until the grandchild is gone, up to 2 s.
       //
@@ -1065,6 +1072,38 @@ describe('bash path-containment scan — C4 (#354)', () => {
     expect(escapeWarnings()).toHaveLength(0);
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('hi');
+  });
+
+  it('does NOT warn and command executes successfully for a credential path under bypass (allowAll)', async () => {
+    // Counterpart to path-policy.scope.test.ts "floor then actor roots / write:
+    // denies floor under bypass, unconfined and explicitly granted scope" which
+    // tests decidePathAccess directly. Here we verify the BASH HANDLER advisory
+    // scan (wouldBeRestricted, not decidePathAccess) respects bypass: the scan
+    // is roots-only and has no credential floor, so bypass suppresses it and
+    // the command runs — credential enforcement for bash remains out-of-scope
+    // for the advisory scan (documented in docs/decisions/0001-bash-tool-path-containment.md).
+    const fakeHome = realpathSync(mkdtempSync(join(tmpdir(), 'bash-cred-bypass-')));
+    vi.stubEnv('HOME', fakeHome);
+    vi.stubEnv('USERPROFILE', fakeHome);
+    const sshDir = join(fakeHome, '.ssh');
+    mkdirSync(sshDir, { recursive: true });
+    writeFileSync(join(sshDir, 'id_ed25519'), 'fake-key');
+    try {
+      const handler = createBashHandler('default', root);
+      const credPath = join(fakeHome, '.ssh', 'id_ed25519');
+      const result = await handler(
+        { command: `echo hi ${credPath}` },
+        createSignal(),
+        { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: true },
+      );
+      // No escape warning — bypass suppresses the roots-advisory scan entirely.
+      expect(escapeWarnings()).toHaveLength(0);
+      // Command executes successfully; advisory does NOT block.
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('hi');
+    } finally {
+      try { rmSync(fakeHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   });
 
   it('does NOT warn when the command references only in-root paths', async () => {

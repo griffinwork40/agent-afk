@@ -261,6 +261,7 @@ export function createBashHandler(
     const fallbackBase = context.resolveBase ?? cwd;
     const escaping: string[] = [];
     for (const expanded of scanCandidatePaths(command, os.homedir())) {
+      // Shared actor-root policy only: keep this advisory floor-free and never-blocking.
       const verdict = wouldBeRestricted(expanded, context, 'write', fallbackBase);
       if (verdict.restricted) escaping.push(verdict.resolved);
     }

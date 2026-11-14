@@ -38,7 +38,7 @@ afk schedule logs daily-review
 </Step>
 </Steps>
 
-You can also supply an ad hoc task directly: `afk daemon --cron "0 */6 * * *" --task "Review the repository"`. Test one tick with `--once`; the daemon prints a JSON telemetry record and exits.
+You can also supply an ad hoc task directly: `afk daemon --cron "0 */6 * * *" --task "Review the repository"`. Test one tick with `--once`; the daemon prints a JSON telemetry record and exits. In configuration, `daemon.task` stores the ad hoc prompt and `daemon.taskId` stores its task identifier.
 
 ## Triggers and the pull queue
 
@@ -63,6 +63,21 @@ afk queue list
 ```
 
 Use `afk queue remove TASK_ID` to remove a pending item by the ID shown in the list. `afk queue clear` asks before removing all pending items; `afk queue clear --yes` is the noninteractive form. Neither command cancels a task already claimed for execution.
+
+### Feed the queue from GitHub webhooks
+
+`afk events serve` starts a local HTTP receiver for GitHub webhook deliveries and writes each actionable event into the same pull queue:
+
+```bash
+export AFK_EVENTS_WEBHOOK_SECRET=...   # the secret set on the GitHub webhook
+afk events serve --port 9876
+```
+
+GitHub must deliver to `POST /webhook`. Every request is checked against the `X-Hub-Signature-256` HMAC with a constant-time comparison, and requests with a missing or invalid signature get a 401. The secret is read from the env var named by `--secret-env` (default `AFK_EVENTS_WEBHOOK_SECRET`), so it never appears in the process table, and only registered secret env vars are accepted. Bodies over 1 MB are rejected with a 413.
+
+Only actionable events are enqueued: new or edited PR review comments, `check_run` deliveries that completed with a failure-class conclusion (`failure`, `timed_out`, `cancelled`, `action_required`, `stale`), and newly opened issues. Other events and actions get a 200 response and are ignored. Delivery IDs (`X-GitHub-Delivery`) are recorded atomically on disk, so GitHub redeliveries do not enqueue the same task twice.
+
+The receiver binds to `127.0.0.1` by default. Expose it to GitHub through a tunnel such as ngrok or cloudflared. Binding to a non-loopback `--host` requires `--allow-external` (or `AFK_EVENTS_WEBHOOK_ALLOW_EXTERNAL=1`). `AFK_EVENTS_WEBHOOK_PORT` overrides `--port`, and `--command` sets the task prompt template (placeholders `{{event_type}}`, `{{repo}}`, `{{event_id}}`). The event payload is appended to the prompt as untrusted data.
 
 ## Schedule fields
 

@@ -1,6 +1,7 @@
 /* Coverage preserved from the original post-only ledger hook tests. */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createEffectLedgerHooks, createEffectLedgerPostHook, createEffectLedgerPreHook } from './hook.js';
@@ -19,7 +20,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'effect-ledger-coverage-'));
   store = new EffectStore(join(dir, 'ledger.jsonl'));
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmSyncRetry(dir));
 
 async function execute(hooks: ReturnType<typeof createEffectLedgerHooks>, name: string, args: unknown, id: string, sessionId = 's'): Promise<void> {
   expect((await hooks.pre(pre(name, args, id, sessionId))).decision).not.toBe('block');

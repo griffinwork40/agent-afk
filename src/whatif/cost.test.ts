@@ -192,6 +192,169 @@ describe('estimateVerifyCost', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// estimateVerifyCost: exact formula pins
+// ---------------------------------------------------------------------------
+
+/** USD for one call at the given per-MTok rates. */
+function usdAt(inTok: number, outTok: number, inRate: number, outRate: number): number {
+  return (inTok / 1_000_000) * inRate + (outTok / 1_000_000) * outRate;
+}
+
+// claude-sonnet-5 = $2/$10, claude-opus-5 = $5/$25 per MTok (pricing.ts).
+const SONNET = { inRate: 2.0, outRate: 10.0 };
+const OPUS = { inRate: 5.0, outRate: 25.0 };
+// Fallback for unknown models is sonnet-class $2/$10 (cost.ts).
+const FALLBACK = { inRate: 2.0, outRate: 10.0 };
+const UNKNOWN_MODEL = 'zz-not-a-real-model-for-cost-test';
+
+// Agent episodes are priced as one aggregated multi-turn call (cost.ts, #3876):
+//   in  = system + maxTurns x 1 000 user + (maxTurns - 1) x 800 history
+//   out = maxTurns x 800
+const MAX_TURNS = 3;
+function agentTokens(systemTokens: number, maxTurns = MAX_TURNS): { inTok: number; outTok: number } {
+  return {
+    inTok: systemTokens + maxTurns * 1_000 + (maxTurns - 1) * 800,
+    outTok: maxTurns * 800,
+  };
+}
+
+/** USD for one agent call with the given system prompt size. */
+function agentUsd(systemTokens: number, rates: { inRate: number; outRate: number }): number {
+  const { inTok, outTok } = agentTokens(systemTokens);
+  return usdAt(inTok, outTok, rates.inRate, rates.outRate);
+}
+
+describe('estimateVerifyCost: exact formula', () => {
+  const base = {
+    episodes: 3,
+    samples: 2,
+    agentModel: 'claude-sonnet-5',
+    analystModel: 'claude-sonnet-5',
+    maxTurns: MAX_TURNS,
+    systemTokens: { baseline: 4_000, candidate: 4_000 },
+    judgeExternal: false,
+  };
+
+  it('judge cost is 2 000 in / 200 out per output, one output per episode x sample x env', () => {
+    const r = estimateVerifyCost(base);
+    const perJudge = usdAt(2_000, 200, SONNET.inRate, SONNET.outRate);
+    expect(r.breakdown.judge).toBeCloseTo(perJudge * 3 * 2 * 2, 10);
+  });
+
+  it('total usd is exactly discover + predict + agent + judge', () => {
+    const r = estimateVerifyCost(base);
+    const discover = usdAt(20_000, 1_000, SONNET.inRate, SONNET.outRate);
+    const predict = usdAt(15_000, 2_000, SONNET.inRate, SONNET.outRate);
+    const agentPerCall = agentUsd(4_000, SONNET);
+    const agent = agentPerCall * 2 * 3 * 2;
+    const judge = usdAt(2_000, 200, SONNET.inRate, SONNET.outRate) * 3 * 2 * 2;
+    expect(r.usd).toBeCloseTo(discover + predict + agent + judge, 10);
+  });
+
+  it('agent and judge cost scale linearly with episodes x samples; discover/predict are fixed', () => {
+    const one = estimateVerifyCost({ ...base, episodes: 1, samples: 1 });
+    const many = estimateVerifyCost({ ...base, episodes: 7, samples: 3 });
+    expect(many.breakdown.agent).toBeCloseTo(one.breakdown.agent! * 21, 10);
+    expect(many.breakdown.judge).toBeCloseTo(one.breakdown.judge! * 21, 10);
+    expect(many.breakdown.discover).toBe(one.breakdown.discover);
+    expect(many.breakdown.predict).toBe(one.breakdown.predict);
+  });
+
+  it('samples and episodes are interchangeable for cost and call count', () => {
+    const a = estimateVerifyCost({ ...base, episodes: 4, samples: 5 });
+    const b = estimateVerifyCost({ ...base, episodes: 5, samples: 4 });
+    expect(a.usd).toBeCloseTo(b.usd, 10);
+    expect(a.calls).toBe(b.calls);
+  });
+
+  it('baseline and candidate system tokens are each priced on their own call', () => {
+    // Agent cost is linear in input tokens, so an asymmetric split with the
+    // same sum must cost the same as the symmetric split.
+    const asym = estimateVerifyCost({ ...base, systemTokens: { baseline: 1_000, candidate: 9_000 } });
+    const sym = estimateVerifyCost({ ...base, systemTokens: { baseline: 5_000, candidate: 5_000 } });
+    expect(asym.breakdown.agent).toBeCloseTo(sym.breakdown.agent!, 10);
+
+    // Growing only the candidate prompt raises agent cost by exactly the
+    // extra input tokens, once per (episode, sample).
+    const bigger = estimateVerifyCost({ ...base, systemTokens: { baseline: 4_000, candidate: 14_000 } });
+    const delta = usdAt(10_000, 0, SONNET.inRate, SONNET.outRate) * 3 * 2;
+    expect(bigger.breakdown.agent! - estimateVerifyCost(base).breakdown.agent!).toBeCloseTo(delta, 10);
+  });
+
+  it('agent calls are priced with agentModel; discover, predict and judge with analystModel', () => {
+    const r = estimateVerifyCost({
+      ...base,
+      episodes: 1,
+      samples: 1,
+      agentModel: 'claude-opus-5',
+      analystModel: 'claude-sonnet-5',
+    });
+    expect(r.breakdown.agent).toBeCloseTo(2 * agentUsd(4_000, OPUS), 10);
+    expect(r.breakdown.discover).toBeCloseTo(usdAt(20_000, 1_000, SONNET.inRate, SONNET.outRate), 10);
+    expect(r.breakdown.predict).toBeCloseTo(usdAt(15_000, 2_000, SONNET.inRate, SONNET.outRate), 10);
+    expect(r.breakdown.judge).toBeCloseTo(2 * usdAt(2_000, 200, SONNET.inRate, SONNET.outRate), 10);
+  });
+
+  it('call count does not depend on models, system tokens or judgeExternal', () => {
+    const expected = 2 + 2 * 3 * 2 + 3 * 2 * 2;
+    for (const variant of [
+      base,
+      { ...base, judgeExternal: true },
+      { ...base, agentModel: UNKNOWN_MODEL, analystModel: 'claude-opus-5' },
+      { ...base, systemTokens: { baseline: 0, candidate: 100_000 } },
+    ]) {
+      expect(estimateVerifyCost(variant).calls).toBe(expected);
+    }
+  });
+
+  it('zero episodes: only discover + predict are counted and charged', () => {
+    const r = estimateVerifyCost({ ...base, episodes: 0 });
+    expect(r.calls).toBe(2);
+    expect(r.breakdown.agent).toBe(0);
+    expect(r.breakdown.judge).toBe(0);
+    expect(r.usd).toBeCloseTo(r.breakdown.discover! + r.breakdown.predict!, 10);
+  });
+});
+
+describe('estimateVerifyCost: unknown-model fallback', () => {
+  const base = {
+    episodes: 1,
+    samples: 1,
+    agentModel: 'claude-sonnet-5',
+    analystModel: 'claude-sonnet-5',
+    maxTurns: MAX_TURNS,
+    systemTokens: { baseline: 5_000, candidate: 5_000 },
+    judgeExternal: false,
+  };
+
+  it('unknown agent model is priced at the sonnet-class fallback rates', () => {
+    const r = estimateVerifyCost({ ...base, agentModel: UNKNOWN_MODEL });
+    expect(r.approximate).toBe(true);
+    expect(r.breakdown.agent).toBeCloseTo(2 * agentUsd(5_000, FALLBACK), 10);
+  });
+
+  it('unknown analyst model sets approximate and prices discover/predict/judge at fallback rates', () => {
+    const r = estimateVerifyCost({ ...base, analystModel: UNKNOWN_MODEL });
+    expect(r.approximate).toBe(true);
+    expect(r.breakdown.discover).toBeCloseTo(usdAt(20_000, 1_000, FALLBACK.inRate, FALLBACK.outRate), 10);
+    expect(r.breakdown.predict).toBeCloseTo(usdAt(15_000, 2_000, FALLBACK.inRate, FALLBACK.outRate), 10);
+    expect(r.breakdown.judge).toBeCloseTo(2 * usdAt(2_000, 200, FALLBACK.inRate, FALLBACK.outRate), 10);
+  });
+
+  it('unknown analyst model still flags approximate when the judge is external', () => {
+    const r = estimateVerifyCost({ ...base, analystModel: UNKNOWN_MODEL, judgeExternal: true });
+    expect(r.approximate).toBe(true);
+    expect(r.breakdown.judge).toBe(0);
+  });
+
+  it('approximate key is omitted entirely (not set to false) for fully priced runs', () => {
+    const r = estimateVerifyCost(base);
+    expect('approximate' in r).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // BudgetTracker
 // ---------------------------------------------------------------------------
@@ -232,5 +395,50 @@ describe('BudgetTracker', () => {
     const t = new BudgetTracker(0.1);
     t.add(0.5);
     expect(t.remaining()).toBeLessThan(0);
+  });
+
+  it('remaining equals the cap before any spend and 0 at exactly the cap', () => {
+    const t = new BudgetTracker(1.25);
+    expect(t.remaining()).toBe(1.25);
+    t.add(1.25);
+    expect(t.remaining()).toBe(0);
+    expect(t.exceeded).toBe(false);
+  });
+
+  it('remaining reports the exact overspend as a negative number', () => {
+    const t = new BudgetTracker(1);
+    t.add(1.5);
+    expect(t.remaining()).toBeCloseTo(-0.5, 10);
+  });
+
+  it('stays exceeded once past the cap as further spend accrues', () => {
+    const t = new BudgetTracker(0.5);
+    t.add(0.4);
+    expect(t.exceeded).toBe(false);
+    t.add(0.2);
+    expect(t.exceeded).toBe(true);
+    t.add(0);
+    expect(t.exceeded).toBe(true);
+    t.add(1);
+    expect(t.exceeded).toBe(true);
+    expect(t.spent).toBeCloseTo(1.6, 10);
+  });
+
+  it('a zero cap is not exceeded until any spend is recorded', () => {
+    const t = new BudgetTracker(0);
+    expect(t.exceeded).toBe(false);
+    t.add(0);
+    expect(t.exceeded).toBe(false);
+    t.add(0.0001);
+    expect(t.exceeded).toBe(true);
+  });
+
+  it('separate trackers do not share state', () => {
+    const a = new BudgetTracker(1);
+    const b = new BudgetTracker(1);
+    a.add(2);
+    expect(a.exceeded).toBe(true);
+    expect(b.spent).toBe(0);
+    expect(b.exceeded).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { env } from '../../config/env.js';
+import { palette } from '../palette.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { resolveChatTarget, loadChatAliases } from '../../telegram/notify-routing.js';
 import { parseAllowedChatIds, isChatAllowed } from '../../telegram/allowlist.js';
@@ -40,13 +41,13 @@ export function resolveNotifyChatTarget(
   const resolved = resolveChatTarget(notifyChat, loadChatAliases());
   if (!resolved.ok) {
     // eslint-disable-next-line no-console
-    console.error(`[daemon] task ${taskId}: ignoring notifyChat — ${resolved.message} Falling back to default routing.`);
+    console.error(palette.warning(`[daemon] task ${taskId}: ignoring notifyChat — ${resolved.message} Falling back to default routing.`));
     return undefined;
   }
   const allowlist = parseAllowedChatIds(env.AFK_TELEGRAM_ALLOWED_CHAT_IDS);
   if (!isChatAllowed(resolved.id, allowlist)) {
     // eslint-disable-next-line no-console
-    console.error(`[daemon] task ${taskId}: ignoring notifyChat ${resolved.id} — not in AFK_TELEGRAM_ALLOWED_CHAT_IDS. Falling back to default routing.`);
+    console.error(palette.warning(`[daemon] task ${taskId}: ignoring notifyChat ${resolved.id} — not in AFK_TELEGRAM_ALLOWED_CHAT_IDS. Falling back to default routing.`));
     return undefined;
   }
   return resolved.id;
@@ -95,6 +96,7 @@ export function formatTaskCompletion(
     `trigger=${record.trigger} duration=${durationSec}s`,
   ];
   if (record.gateRecoveryNote) lines.push(record.gateRecoveryNote);
+  if (record.modelFallbackNote) lines.push(record.modelFallbackNote);
   if (record.skipReason) lines.push(`skipReason=${record.skipReason}`);
   if (record.errorMessage) lines.push(`error: ${record.errorMessage.slice(0, 400)}`);
   if (hasOutput) {

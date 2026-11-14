@@ -137,6 +137,17 @@ describe('anthropic-direct auth', () => {
   it('buildSystemPrefix("api-key") returns null', () => {
     expect(buildSystemPrefix('api-key')).toBeNull();
   });
+
+  it('CLI_USER_AGENT and BILLING_HEADER_TEXT carry the same semver (version-skew guard)', () => {
+    // Both constants must stay in sync: the API uses them together to gate
+    // model features. A future bump that changes one site but not the other
+    // would pass CI silently without this assertion.
+    const agentVersion = CLI_USER_AGENT.match(/claude-cli\/(\S+)/)?.[1];
+    const billingVersion = BILLING_HEADER_TEXT.match(/cc_version=([^;]+)/)?.[1];
+    expect(agentVersion).toBeDefined();
+    expect(billingVersion).toBeDefined();
+    expect(agentVersion).toBe(billingVersion);
+  });
 });
 
 // ── thinking-binding-controls beta (drop_block policy, Fable 5.1) ─────────

@@ -56,10 +56,11 @@ export interface GitCtx { args: readonly string[]; env: GitEnv; deadline: number
  * Pattern matching env-var names that carry credentials. Any key whose name
  * (case-insensitive) ends in one of these suffixes is stripped, plus a
  * belt-and-suspenders list of well-known names that might not match the regex
- * (e.g. GOOGLE_APPLICATION_CREDENTIALS ends in _CREDENTIALS, not _CREDENTIAL).
+ * (e.g. GOOGLE_APPLICATION_CREDENTIALS ends in _CREDENTIALS, not _CREDENTIAL,
+ * and DATABASE_URL ends in _URL which is not a credential suffix).
  */
 const CREDENTIAL_SUFFIX_RE = /_(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)$/i;
-const CREDENTIAL_EXACT: readonly string[] = [
+const CREDENTIAL_EXACT_UPPER: ReadonlySet<string> = new Set([
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
   'GITHUB_TOKEN',
@@ -69,14 +70,21 @@ const CREDENTIAL_EXACT: readonly string[] = [
   'AWS_SESSION_TOKEN',
   'AZURE_CLIENT_SECRET',
   'GOOGLE_APPLICATION_CREDENTIALS',
-];
+  // Connection strings / DSNs: not covered by the suffix regex but commonly
+  // carry embedded passwords (e.g. postgres://user:pass@host/db).
+  'DATABASE_URL',
+  'REDIS_URL',
+  'MONGODB_URI',
+  'MONGODB_URL',
+  'SENTRY_DSN',
+]);
 
 /** Inherited env (sanctioned builder) minus every `GIT_*` override and minus
  * every credential env var, so no secret leaks into a git subprocess. */
 export function buildSnapshotEnv(): GitEnv {
   const base = buildChildEnv(undefined);
   for (const key of Object.keys(base)) {
-    if (key.startsWith('GIT_') || CREDENTIAL_SUFFIX_RE.test(key) || CREDENTIAL_EXACT.includes(key)) {
+    if (key.startsWith('GIT_') || CREDENTIAL_SUFFIX_RE.test(key) || CREDENTIAL_EXACT_UPPER.has(key.toUpperCase())) {
       delete base[key];
     }
   }

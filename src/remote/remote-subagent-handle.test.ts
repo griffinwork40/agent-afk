@@ -110,6 +110,12 @@ describe('RemoteSubagentHandle', () => {
       expect(h.status).toBe('failed');
     });
 
+    it('includes remoteDetail in error message thrown by run()', async () => {
+      const h = makeHandle(fakeRunner({ streams: [[ERR_EV('detailed failure reason')]] }));
+      await expect(h.run('x')).rejects.toThrow('detailed failure reason');
+      expect(h.status).toBe('failed');
+    });
+
     it('throws and sets status failed on unreachable host', async () => {
       const h = makeHandle(fakeRunner({ launch: { code: 255, stdout: '', stderr: '' }, streams: [] }));
       await expect(h.run('x')).rejects.toThrow('host unreachable');

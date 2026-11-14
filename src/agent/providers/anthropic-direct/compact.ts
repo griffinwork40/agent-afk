@@ -30,6 +30,9 @@ import {
   applyCompaction as sharedApplyCompaction,
   byteLengthOf,
   estimateTokensSaved as sharedEstimateTokensSaved,
+  excerptHeadTail,
+  TOOL_ARGS_EXCERPT_CHARS,
+  TOOL_RESULT_EXCERPT_CHARS,
   findCompactionBoundary as sharedFindCompactionBoundary,
   isMicrocompactPlaceholder,
   microcompactToolResults as sharedMicrocompactToolResults,
@@ -84,11 +87,11 @@ function renderMessage(msg: MessageParam): string {
         lines.push((block as { text: string }).text);
       } else if (t === 'tool_use') {
         const name = (block as { name?: string }).name ?? 'unknown';
-        const inputJson = safeJson((block as { input?: unknown }).input);
+        const inputJson = excerptHeadTail(safeJson((block as { input?: unknown }).input), TOOL_ARGS_EXCERPT_CHARS);
         lines.push(`[tool call: ${name} ${inputJson}]`);
       } else if (t === 'tool_result') {
         const content = (block as { content?: unknown }).content;
-        lines.push(`[tool result: ${stringifyToolResultContent(content)}]`);
+        lines.push(`[tool result: ${excerptHeadTail(stringifyToolResultContent(content), TOOL_RESULT_EXCERPT_CHARS)}]`);
       } else if (t === 'image') {
         lines.push('[image]');
       } else if (t === 'document') {
@@ -98,6 +101,11 @@ function renderMessage(msg: MessageParam): string {
   }
   return lines.join('\n');
 }
+
+// The saved-tokens estimate keeps its historical per-block caps so widening the
+// summarizer excerpts does not shift the reported estimate.
+const ESTIMATE_ARGS_CHARS = 240;
+const ESTIMATE_RESULT_CHARS = 320;
 
 /** Approximate content-character count for one message (saved-tokens estimate). */
 function countChars(msg: MessageParam): number {
@@ -110,9 +118,9 @@ function countChars(msg: MessageParam): number {
       if (t === 'text' && 'text' in block) {
         total += (block as { text: string }).text.length;
       } else if (t === 'tool_use') {
-        total += safeJson((block as { input?: unknown }).input).length;
+        total += Math.min(ESTIMATE_ARGS_CHARS, safeJson((block as { input?: unknown }).input).length);
       } else if (t === 'tool_result') {
-        total += stringifyToolResultContent((block as { content?: unknown }).content).length;
+        total += Math.min(ESTIMATE_RESULT_CHARS, stringifyToolResultContent((block as { content?: unknown }).content).length);
       }
     }
   }
@@ -293,18 +301,14 @@ export function estimateTokensSaved(
 
 function safeJson(v: unknown): string {
   try {
-    const s = JSON.stringify(v);
-    if (s.length > 240) return s.slice(0, 237) + '...';
-    return s;
+    return JSON.stringify(v) ?? '{}';
   } catch {
     return '{}';
   }
 }
 
 function stringifyToolResultContent(content: unknown): string {
-  if (typeof content === 'string') {
-    return content.length > 320 ? content.slice(0, 317) + '...' : content;
-  }
+  if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     const parts: string[] = [];
     for (const block of content) {
@@ -313,8 +317,7 @@ function stringifyToolResultContent(content: unknown): string {
         parts.push((block as { text: string }).text);
       }
     }
-    const joined = parts.join(' ');
-    return joined.length > 320 ? joined.slice(0, 317) + '...' : joined;
+    return parts.join(' ');
   }
   return '';
 }

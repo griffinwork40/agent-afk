@@ -33,6 +33,8 @@ export interface JournalAdapterOptions {
    * @default 2000
    */
   resultTextCap?: number;
+  /** Optional deadline check for bounded teardown consumers. May throw. */
+  checkBudget?: () => void;
 }
 
 
@@ -102,8 +104,10 @@ export function journalRecordsToToolEvents(
   const toolResultPartialCount = new Map<string, number>(); // id → partial node count (#2978)
 
   for (const rec of records) {
+    options.checkBudget?.();
     if (rec.kind !== 'append') continue;
     for (const block of extractToolBlocks(rec.message.content)) {
+      options.checkBudget?.();
       if (block.type === 'tool_use') {
         if (!toolUseNames.has(block.id)) {
           // First time we see this tool_use id — record its position.
@@ -142,6 +146,7 @@ export function journalRecordsToToolEvents(
   // Pass 2: build ToolEventInput[] in first-seen call order, deduped by id.
   const events: ToolEventInput[] = [];
   for (const id of toolUseOrder) {
+    options.checkBudget?.();
     const toolName = toolUseNames.get(id);
     if (!toolName) continue; // should never happen
     const inputRaw = toolUseInputRaw.get(id);

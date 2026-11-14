@@ -59,7 +59,7 @@ export interface DaemonStatus {
 // ---------------------------------------------------------------------------
 
 export interface MemorySearchResult {
-  type: 'fact' | 'procedure';
+  type: 'fact' | 'procedure' | 'session';
   content: string;
   category?: 'preference' | 'convention' | 'decision' | 'learning';
   created_at: string;

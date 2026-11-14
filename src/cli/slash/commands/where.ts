@@ -32,7 +32,7 @@ export const whereCmd: SlashCommand = {
       const dirtyLabel = ws.dirty === null
         ? palette.dim('unknown')
         : ws.dirty
-          ? palette.warning(`${ws.dirtyCount} dirty`)
+          ? palette.warning(`${ws.dirtyCount ?? '?'} dirty`)
           : palette.success('clean');
       out.line(`  ${palette.dim('Branch'.padEnd(14))}${branch} @ ${ws.headSha}`);
       out.line(`  ${palette.dim('Working tree'.padEnd(14))}${dirtyLabel}`);
@@ -41,7 +41,7 @@ export const whereCmd: SlashCommand = {
 
     // Session
     out.line();
-    const name = stats.name ?? 'unnamed';
+    const name = stats.displayName ?? stats.name ?? 'unnamed';
     const sessionId = stats.sessionId ?? palette.dim('not assigned');
     out.line(`  ${palette.dim('Session'.padEnd(14))}${name} (${sessionId})`);
     out.line(`  ${palette.dim('Model'.padEnd(14))}${palette.brand(stats.model)}`);

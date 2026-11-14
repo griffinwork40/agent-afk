@@ -28,7 +28,6 @@ const LEGACY_REQUIREMENTS: Readonly<Record<string, readonly SurfaceCapability[]>
   '/plan': ['permissionMode'],
   '/afk': ['permissionMode'],
   '/retry': ['conversationRetry'],
-  '/reauth': ['hostCredentials'],
   '/init': ['consoleOutput'],
   '/sh': ['shellJobs'],
   '/editor': ['tty'],

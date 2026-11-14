@@ -274,27 +274,12 @@ export function aggregateSubagentOutcomes(
 // Compact summary for get_runtime_state
 // ---------------------------------------------------------------------------
 
-/**
- * One line of the compact summary emitted to `get_runtime_state`.
- *
- * Format: `"<model> <agentType> depth <depth>: <successPct>% ok, <capPct>% capped, <count> runs"`
- *
- * Only buckets with `count >= minCount` are included so the summary stays
- * actionable (sparse buckets with 1–2 samples are noisy).
- */
-export interface SubagentOutcomeSummaryEntry {
-  model: string;
-  agentType: string;
-  depth: number;
-  count: number;
-  successRate: number;
-  capHitRate: number;
-  /** Fraction of outcomes whose stop_reason contains `timeout` (0–1). */
-  timeoutRate: number;
-  p50Ms: number;
-  /** p95 latency in ms across outcomes in this bucket. 0 when no data. */
-  p95Ms: number;
-}
+// Contract: SubagentOutcomeSummaryEntry is defined in agent/awareness/types.ts
+// (the canonical owner). Imported locally for use in buildSubagentOutcomeSummary
+// and re-exported for backward compatibility with any consumer that imported it
+// from this module.
+import type { SubagentOutcomeSummaryEntry } from '../../agent/awareness/types.js';
+export type { SubagentOutcomeSummaryEntry };
 
 /**
  * Build a compact flat list from the full aggregate. Sorted by count descending

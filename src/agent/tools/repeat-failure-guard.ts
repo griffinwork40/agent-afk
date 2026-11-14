@@ -126,18 +126,23 @@ export class RepeatFailureGuard {
   /**
    * Record a settled result. An error advances the streak; anything else clears
    * it, which is what keeps the guard scoped to unbroken failure runs.
+   *
+   * Returns the normalized fingerprint it computed so the dispatch boundary can
+   * record the same outcome in the session `ToolCallLedger` without hashing the
+   * call a second time (#4476).
    */
-  note(call: ToolCall, result: ToolResult): void {
+  note(call: ToolCall, result: ToolResult): string {
     const fingerprint = repeatFailureFingerprint(call);
     if (result.isError !== true) {
       this.streaks.delete(fingerprint);
-      return;
+      return fingerprint;
     }
     const existing = this.streaks.get(fingerprint);
     this.streaks.set(fingerprint, {
       count: (existing?.count ?? 0) + 1,
       lastError: summarizeError(result),
     });
+    return fingerprint;
   }
 
   /** Current streak length for a call — exposed for tests and diagnostics. */
