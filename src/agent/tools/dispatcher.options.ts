@@ -151,6 +151,13 @@ export interface SessionToolDispatcherOptions {
    */
   readOnlyBash?: boolean;
   /**
+   * When true, the dispatcher blocks bash commands that would destroy
+   * working-tree state (git checkout, switch, restore, clean, reset --hard,
+   * stash drop/clear/pop). Set for ALL forked children via
+   * `createChildProviderFactory`. Defaults to false.
+   */
+  blockDestructiveGit?: boolean;
+  /**
    * Central per-result output cap, in UTF-8 bytes. When set, `executeCore`
    * reduces any tool result whose `content` exceeds this to head+tail via
    * {@link headAndTail} (and stamps `truncated: true`) as the FINAL step before
