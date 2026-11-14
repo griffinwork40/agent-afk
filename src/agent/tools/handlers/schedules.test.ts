@@ -302,6 +302,58 @@ describe('list_schedules handler', () => {
     expect(parsed[0]?.enabled).toBe(true);
     expect(parsed[0]?.notifyOn).toBe('always');
   });
+
+  it('name filter returns only matching tasks (case-insensitive substring)', async () => {
+    await createScheduleHandler({ name: 'Alpha Task', command: '/a', cron: '0 1 * * *' }, fakeSignal);
+    await createScheduleHandler({ name: 'Beta Task', command: '/b', cron: '0 2 * * *' }, fakeSignal);
+    await createScheduleHandler({ name: 'Gamma Run', command: '/c', cron: '0 3 * * *' }, fakeSignal);
+
+    const result = await listSchedulesHandler({ name: 'task' }, fakeSignal);
+    const parsed = JSON.parse(result.content as string) as Array<{ name: string }>;
+    expect(parsed).toHaveLength(2);
+    expect(parsed.map((t) => t.name).sort()).toEqual(['Alpha Task', 'Beta Task']);
+  });
+
+  it('enabled filter: true returns only enabled tasks', async () => {
+    await createScheduleHandler({ name: 'Active Task', command: '/a', cron: '0 1 * * *' }, fakeSignal);
+    await createScheduleHandler({ name: 'Inactive Task', command: '/b', cron: '0 2 * * *', enabled: false }, fakeSignal);
+
+    const result = await listSchedulesHandler({ enabled: true }, fakeSignal);
+    const parsed = JSON.parse(result.content as string) as Array<{ name: string; enabled: boolean }>;
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.name).toBe('Active Task');
+    expect(parsed[0]?.enabled).toBe(true);
+  });
+
+  it('enabled filter: false returns only disabled tasks', async () => {
+    await createScheduleHandler({ name: 'Active Task', command: '/a', cron: '0 1 * * *' }, fakeSignal);
+    await createScheduleHandler({ name: 'Inactive Task', command: '/b', cron: '0 2 * * *', enabled: false }, fakeSignal);
+
+    const result = await listSchedulesHandler({ enabled: false }, fakeSignal);
+    const parsed = JSON.parse(result.content as string) as Array<{ name: string; enabled: boolean }>;
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.name).toBe('Inactive Task');
+    expect(parsed[0]?.enabled).toBe(false);
+  });
+
+  it('name + enabled filters combine (AND)', async () => {
+    await createScheduleHandler({ name: 'Nightly Backup', command: '/bk', cron: '0 2 * * *' }, fakeSignal);
+    await createScheduleHandler({ name: 'Nightly Report', command: '/rp', cron: '0 3 * * *', enabled: false }, fakeSignal);
+    await createScheduleHandler({ name: 'Daily Sync', command: '/ds', cron: '0 4 * * *' }, fakeSignal);
+
+    const result = await listSchedulesHandler({ name: 'nightly', enabled: true }, fakeSignal);
+    const parsed = JSON.parse(result.content as string) as Array<{ name: string }>;
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.name).toBe('Nightly Backup');
+  });
+
+  it('no matching name filter returns empty array', async () => {
+    await createScheduleHandler({ name: 'Some Task', command: '/s', cron: '0 1 * * *' }, fakeSignal);
+
+    const result = await listSchedulesHandler({ name: 'zzz-no-match' }, fakeSignal);
+    const parsed = JSON.parse(result.content as string) as unknown[];
+    expect(parsed).toHaveLength(0);
+  });
 });
 
 describe('cancel_schedule handler', () => {
