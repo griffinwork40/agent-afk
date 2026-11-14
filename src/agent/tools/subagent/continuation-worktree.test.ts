@@ -94,6 +94,8 @@ function makeExecutor(registry: ContinuationRegistry): SubagentExecutor {
     subagentManager: { forkSubagent: vi.fn().mockResolvedValue(mockHandle()) } as never,
     parentSession: { sessionId: 'root-1', getInputStreamRef: vi.fn(), abortSignal: new AbortController().signal } as never,
     defaultConfig: { apiKey: 'test-key', systemPrompt: 'sys' },
+    // main now requires a resolvable model tier at dispatch (prepareDispatchModel).
+    defaultSubagentModel: 'sonnet',
     depth: 0,
     cwd: '/repo',
     continuationRegistry: registry,
