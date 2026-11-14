@@ -9,6 +9,7 @@
  */
 import { __setAnthropicClientFactory } from '../../providers/anthropic-direct/index.js';
 import { __setOpenAIClientFactory } from '../../providers/openai-compatible/query.js';
+import { resetUsageLedgerForTests } from '../../usage/usage-ledger.js';
 import type { AgentSession } from '../agent-session.js';
 import type { OutputEvent } from '../../types.js';
 
@@ -52,6 +53,12 @@ export function installWire(script: (model: string, n: number) => WireStep): Wir
 export function uninstallWire(): void {
   __setAnthropicClientFactory(null);
   __setOpenAIClientFactory(null);
+  // A tool round can open the process-wide usage ledger (`state/kv/kv.db`
+  // under the test's temp AFK_HOME). Close it here, before `useTmpAfkHome`
+  // removes that directory: Windows cannot delete an open file (EBUSY), POSIX
+  // can, so the leak only shows there. Callers invoke this from their own
+  // `afterEach`, which runs before the helper's (hooks unwind in reverse).
+  resetUsageLedgerForTests();
 }
 
 const usage = { input_tokens: 5, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
