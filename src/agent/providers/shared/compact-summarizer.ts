@@ -36,7 +36,10 @@ import {
   routedOneShot,
   type OneShotBinding,
   type OneShotLabel,
+  type OneShotTarget,
 } from './one-shot-router.js';
+import { resolveOpenAIAuth } from '../openai-compatible/auth.js';
+import { resolveWireMode } from '../openai-compatible/responses-config.js';
 import {
   COMPACT_SUMMARY_MAX_TOKENS,
   COMPACT_SYSTEM_PROMPT,
@@ -99,40 +102,79 @@ export function resolveCrossProviderSummarize(
   compactModelRaw: string | undefined,
   sessionKey: object,
 ): SummarizeFn {
-  if (!compactModelRaw || compactModelRaw.trim().length === 0) {
-    return sessionSummarize;
-  }
+  const foreign = resolveForeignCompactTarget(sessionFamily, compactModelRaw);
+  // Unset or same family: let the session summarize (it has the right client,
+  // wire, credentials). Do not rebuild auth or construct a foreign client.
+  if (!foreign) return sessionSummarize;
+  // Foreign family: build a cross-provider summarize closure.
+  return buildForeignSummarize(foreign.model, foreign.provider, foreign.binding, sessionKey);
+}
 
+/** Collapse provider aliases so `anthropic`/`anthropic-direct` etc. compare equal. */
+function normalizeFamily(family: BundledProviderName): BundledProviderName {
+  return family === 'anthropic' ? 'anthropic-direct' :
+    family === 'openai-codex' ? 'openai-compatible' :
+    family === 'xai-oauth' ? 'xai' :
+    family;
+}
+
+/**
+ * Contract: the single routing decision for a compaction summary. Returns the
+ * foreign one-shot target when `compactModelRaw` resolves to a provider family
+ * other than `sessionFamily`, or `undefined` when the session's own summarize
+ * closure (and therefore the session's own connection) sends the request:
+ * unset, empty, or same family. Both {@link resolveCrossProviderSummarize} and
+ * {@link resolveSummarizerWindow} read this, so the budget can never disagree
+ * with the route.
+ */
+function resolveForeignCompactTarget(
+  sessionFamily: BundledProviderName,
+  compactModelRaw: string | undefined,
+): OneShotTarget | undefined {
+  if (!compactModelRaw || compactModelRaw.trim().length === 0) return undefined;
   // Resolve slot aliases / custom names to the concrete binding so we can
   // inspect the provider family without instantiating a full AgentSession.
-  const {
-    model: targetModel,
-    provider: targetProvider,
-    binding,
-  } = resolveOneShotTarget(compactModelRaw);
+  const target = resolveOneShotTarget(compactModelRaw);
+  return normalizeFamily(target.provider) === normalizeFamily(sessionFamily) ? undefined : target;
+}
 
-  // Normalize the session family so both `anthropic` and `anthropic-direct`
-  // compare equal (providerForModel returns `'anthropic-direct'` but callers
-  // may pass `'anthropic'`).
-  const normalizedSession =
-    sessionFamily === 'anthropic' ? 'anthropic-direct' :
-    sessionFamily === 'openai-codex' ? 'openai-compatible' :
-    sessionFamily === 'xai-oauth' ? 'xai' :
-    sessionFamily;
-  const normalizedTarget =
-    targetProvider === 'anthropic' ? 'anthropic-direct' :
-    targetProvider === 'openai-codex' ? 'openai-compatible' :
-    targetProvider === 'xai-oauth' ? 'xai' :
-    targetProvider;
+/** Which context window sizes the summarizer input: model id plus catalog choice. */
+export interface SummarizerWindow {
+  /** Model id passed to `contextLimitFor`. */
+  model: string;
+  /** True when the request goes over a ChatGPT-subscription (`chatgpt-oauth`) connection. */
+  subscriptionPath: boolean;
+}
 
-  if (normalizedTarget === normalizedSession) {
-    // Same family — let the session summarize (it has the right client, wire,
-    // credentials). Do not rebuild auth or construct a foreign client.
-    return sessionSummarize;
-  }
+/**
+ * Contract: resolve the window that applies to the connection that will
+ * actually send the summary request, using the same routing decision as
+ * {@link resolveCrossProviderSummarize}.
+ *   - Unset or same-family compact model: the session's connection sends it, so
+ *     `session` is returned as given (the caller states the model its own
+ *     closure will use and whether its own connection is `chatgpt-oauth`).
+ *   - Foreign family: the routed one-shot target's model, with the
+ *     subscription catalog only when that target resolves to a `chatgpt-oauth`
+ *     credential on the ChatGPT backend (mirrors `viaOpenAI` in
+ *     `one-shot-router.ts`). Anthropic and xAI targets never use it.
+ */
+export function resolveSummarizerWindow(
+  sessionFamily: BundledProviderName,
+  compactModelRaw: string | undefined,
+  session: SummarizerWindow,
+): SummarizerWindow {
+  const foreign = resolveForeignCompactTarget(sessionFamily, compactModelRaw);
+  if (!foreign) return session;
+  return { model: foreign.model, subscriptionPath: foreignUsesChatGptSubscription(foreign) };
+}
 
-  // Foreign family — build a cross-provider summarize closure.
-  return buildForeignSummarize(targetModel, targetProvider, binding, sessionKey);
+/** True when a foreign one-shot target would be sent over a ChatGPT-subscription connection. */
+function foreignUsesChatGptSubscription(target: OneShotTarget): boolean {
+  if (normalizeFamily(target.provider) !== 'openai-compatible') return false;
+  const { binding } = target;
+  const auth = resolveOpenAIAuth(binding.apiKey, {}, binding.provider === 'chatgpt-oauth');
+  if (auth.source !== 'chatgpt-oauth') return false;
+  return resolveWireMode(auth, false, binding.baseUrl).mode === 'responses';
 }
 
 /** Error vocabulary for compaction's routed one-shot calls. */
