@@ -24,6 +24,7 @@ export const SubagentStartedPayloadSchema = z.object({
   model: z.string(),
   allowedTools: z.array(z.string()).readonly().optional(),
   systemPromptHash: z.string().optional(),
+  credentialSource: z.string().optional(),
   promptHead: z.string().optional(),
   agentType: z.string().optional(),
   resolvedAgentType: z.string().optional(),

@@ -29,7 +29,7 @@ import { isOpenAiRoutedProvider, isXaiRoutedProvider } from './credentials.js';
 import { buildAnthropicTelegramSession } from './session-anthropic.js';
 import { buildOpenAiTelegramSession } from './session-openai.js';
 import { buildXaiTelegramSession } from './session-xai.js';
-import { credentialSourceId } from '../cli/auth-wizard.describe-source.js';
+import { resolveCredentialSourceForModel } from '../agent/auth/credential-source.js';
 import type { TelegramBotConfig, TelegramSessionBuildContext } from './session-context.js';
 
 export interface TelegramSessionFactoryOptions {
@@ -137,7 +137,7 @@ export function createTelegramSessionFactory(
         memoryStore,
         ...(stateStore !== undefined ? { stateStore } : {}),
         workspaceStore,
-        credentialSource: credentialSourceId() ?? undefined,
+        credentialSource: resolveCredentialSourceForModel(fullModelId as string),
         ...(sessionConfig.telegramChatId !== undefined ? { chatId: sessionConfig.telegramChatId } : {}),
         ...(sessionConfig.telegramThreadId !== undefined ? { threadId: sessionConfig.telegramThreadId } : {}),
         // Wire the pre-bound idle-wake hook injected by SessionManager.

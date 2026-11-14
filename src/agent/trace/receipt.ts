@@ -161,6 +161,7 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
   let incomplete = false;
   let sessionModel: string | undefined;
   let sessionResolvedModel: string | undefined;
+  let sessionCredentialSource: string | undefined;
   const costAcc = new SessionCostAccumulator();
 
   for (const ev of events) {
@@ -234,6 +235,7 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
         if (ev.payload.phase === 'session_init_start' && sessionModel === undefined) {
           if (ev.payload.model !== undefined) sessionModel = ev.payload.model;
           if (ev.payload.resolvedModel !== undefined) sessionResolvedModel = ev.payload.resolvedModel;
+          if (ev.payload.credentialSource !== undefined) sessionCredentialSource = ev.payload.credentialSource;
         }
         break;
       }
@@ -298,6 +300,7 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
     ...(meta.endReason !== undefined ? { endReason: meta.endReason } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(resolvedModel !== undefined ? { resolvedModel } : {}),
+    ...(sessionCredentialSource !== undefined ? { credentialSource: sessionCredentialSource } : {}),
     status,
     ...(closureReason !== undefined ? { closureReason } : {}),
     ...(lastStopReason !== undefined ? { lastStopReason } : {}),

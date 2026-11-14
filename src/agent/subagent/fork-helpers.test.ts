@@ -147,6 +147,25 @@ describe('emitForkStarted', () => {
     expect(payload).toMatchObject({ transition: 'started', subagentId: 'child-abc' });
   });
 
+  it('carries credentialSource on the started payload when supplied, omits it otherwise (#4882)', () => {
+    const base = {
+      effectiveTraceWriter: undefined,
+      id: 'child-abc',
+      parentSessionId: 'parent-123',
+      rootId: 'root-999',
+      effectiveChildModel: 'gpt-5',
+      childConfig: {},
+      promptHead: undefined,
+      effectiveAgentType: undefined,
+      effectiveResolvedAgentType: undefined,
+    };
+    emitForkStarted({ ...base, credentialSource: 'chatgpt-oauth' });
+    emitForkStarted(base);
+    const calls = vi.mocked(emitSubagentLifecycle).mock.calls;
+    expect(calls[0]?.[1]).toMatchObject({ credentialSource: 'chatgpt-oauth' });
+    expect(calls[1]?.[1]).not.toHaveProperty('credentialSource');
+  });
+
   it('uses parentSessionId as parentId when present', () => {
     emitForkStarted({
       effectiveTraceWriter: undefined,

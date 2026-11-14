@@ -31,6 +31,11 @@ export interface EmitForkStartedArgs {
   effectiveResolvedAgentType: string | undefined;
   /** D10: continuation chain fields, present only on continuation forks. */
   continuation?: { chainId: string; continuationOf: string; continuationIndex: number } | undefined;
+  /**
+   * Credential source id serving the child model (#4882). Id only, never
+   * token material. Omitted from the payload when undefined.
+   */
+  credentialSource?: string | undefined;
 }
 
 /**
@@ -58,6 +63,7 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
     effectiveAgentType,
     effectiveResolvedAgentType,
     continuation,
+    credentialSource,
   } = args;
 
   const modelString =
@@ -77,6 +83,7 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
     subagentId: id,
     parentId: parentSessionId ?? rootId,
     model: modelString,
+    ...(credentialSource !== undefined ? { credentialSource } : {}),
     ...(childConfig.tools?.allowedTools
       ? { allowedTools: [...childConfig.tools.allowedTools] }
       : {}),

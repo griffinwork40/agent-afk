@@ -395,6 +395,14 @@ export interface SubagentStartedPayload {
   /** SHA-256 hex digest of the child's system prompt, for audit. */
   systemPromptHash?: string;
   /**
+   * Stable credential source id that served this child's model (#4882),
+   * chosen by the provider family that serves the model — e.g. an Anthropic
+   * tier, an OpenAI auth source, `local` for keyless endpoints. Ids only,
+   * never token material. Absent on older traces and when no credential
+   * resolved.
+   */
+  credentialSource?: string;
+  /**
    * First 80 chars of the dispatch prompt, for at-a-glance forensics — lets a
    * trace reader see WHAT a child was asked to do without opening the child's
    * own transcript. Absent when the fork site had no prompt in scope (e.g. a

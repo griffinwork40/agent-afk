@@ -56,6 +56,14 @@ export interface RunReceipt {
    * Absent for the same reasons as `model`.
    */
   resolvedModel?: string;
+  /**
+   * Stable credential source id of the ROOT session (#4882), read from the
+   * root `session_init_start` event. Provider-aware: an Anthropic tier only
+   * when the session model routes to Anthropic. Ids only, never token
+   * material. Absent on traces that predate the field — never guessed.
+   * Per-subagent sources live on `subagents.byModel[*].credentialSources`.
+   */
+  credentialSource?: string;
   status: 'succeeded' | 'failed' | 'cancelled' | 'unknown';
   closureReason?: ClosureReason;
   lastStopReason?: string;

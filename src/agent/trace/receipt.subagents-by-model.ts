@@ -33,6 +33,14 @@ export interface SubagentModelEntry {
   costUsd: number;
   /** Sorted distinct requested model names that landed in this bucket. */
   requested: string[];
+  /**
+   * Sorted, unique credential source ids that served subagents in this bucket
+   * (#4882), read from `credentialSource` on the `started` payload (or on the
+   * `subagent_model_fallback` metadata when the child was re-run). Ids only,
+   * never token material. Absent when no subagent in the bucket recorded one
+   * (older traces): never guessed.
+   */
+  credentialSources?: string[];
 }
 
 /**
@@ -60,7 +68,10 @@ function finitePos(v: unknown): number | undefined {
  * Tolerates malformed events: missing or non-object metadata, non-string or
  * empty subagentId / toModel fields are silently skipped.
  */
-function buildFallbackMap(events: TraceEvent[]): Map<string, string> {
+function buildFallbackMap(
+  events: TraceEvent[],
+  fallbackSources?: Map<string, string>,
+): Map<string, string> {
   const map = new Map<string, string>();
   for (const ev of events) {
     if (ev.kind !== 'session_phase') continue;
@@ -73,6 +84,8 @@ function buildFallbackMap(events: TraceEvent[]): Map<string, string> {
     const toModel = str(m['toModel']);
     if (subagentId === undefined || toModel === undefined) continue;
     map.set(subagentId, toModel);
+    const source = str(m['credentialSource']);
+    if (source !== undefined) fallbackSources?.set(subagentId, source);
   }
   return map;
 }
@@ -171,7 +184,10 @@ export function buildSubagentsByModel(
 ): SubagentsByModel | undefined {
   // Pass 1: build init resolution map and fallback map (session_phase events).
   const initMap = buildInitResolvedMap(events);
-  const fallbackMap = buildFallbackMap(events);
+  // subagentId -> credential source of the model that actually ran (#4882).
+  const sources = new Map<string, string>();
+  const fallbackSources = new Map<string, string>();
+  const fallbackMap = buildFallbackMap(events, fallbackSources);
 
   // Pass 2: collect per-subagentId model provenance and cost from events.
   //
@@ -208,6 +224,10 @@ export function buildSubagentsByModel(
           const res = str(p['resolvedModel']);
           if (res !== undefined) startedResolved.set(id, res);
         }
+        if (!sources.has(id)) {
+          const src = str(p['credentialSource']);
+          if (src !== undefined) sources.set(id, src);
+        }
       }
     } else if (ev.kind === 'closure') {
       const p = ev.payload as unknown as Record<string, unknown>;
@@ -219,6 +239,14 @@ export function buildSubagentsByModel(
   }
 
   if (!anyStarted) return undefined;
+  // A model fallback re-ran the child on another model: its credential wins.
+  // A fallback without a recorded source drops the started one (it described
+  // the rejected attempt) rather than guessing.
+  for (const id of fallbackMap.keys()) {
+    const src = fallbackSources.get(id);
+    if (src !== undefined) sources.set(id, src);
+    else sources.delete(id);
+  }
 
   // Pass 3: aggregate into per-modelKey buckets by iterating events again.
   //
@@ -229,6 +257,7 @@ export function buildSubagentsByModel(
   const buckets = new Map<string, SubagentModelEntry>();
   // Track requested names per bucket for the `requested` array.
   const bucketRequested = new Map<string, Set<string>>();
+  const bucketSources = new Map<string, Set<string>>();
 
   const getOrCreateBucket = (key: string): SubagentModelEntry => {
     let bucket = buckets.get(key);
@@ -259,6 +288,12 @@ export function buildSubagentsByModel(
     if (t === 'started') {
       bucket.started++;
       bucketRequested.get(key)?.add(req);
+      const src = sources.get(id);
+      if (src !== undefined) {
+        let set = bucketSources.get(key);
+        if (set === undefined) { set = new Set(); bucketSources.set(key, set); }
+        set.add(src);
+      }
     } else if (t === 'succeeded') {
       bucket.succeeded++;
     } else if (t === 'failed') {
@@ -281,6 +316,8 @@ export function buildSubagentsByModel(
   for (const [key, bucket] of buckets) {
     const reqSet = bucketRequested.get(key);
     bucket.requested = reqSet !== undefined ? [...reqSet].sort() : [];
+    const srcSet = bucketSources.get(key);
+    if (srcSet !== undefined && srcSet.size > 0) bucket.credentialSources = [...srcSet].sort();
   }
 
   if (buckets.size === 0) return undefined;

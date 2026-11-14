@@ -38,6 +38,7 @@ import { validatePhaseRole } from './subagent/fork-validation.js';
 import { assembleChildConfig, type ParentForkFields } from './subagent/fork-child-config.js';
 import { buildForkModelFallback } from './subagent/fork-model-fallback.js';
 import { emitForkStarted, appendForkTelemetry, emitSubagentStartedEvent } from './subagent/fork-lifecycle.js';
+import { traceCredentialSource } from './subagent/fork-credential-source.js';
 import { SubagentHandleImpl, type SubagentHandle } from './subagent/handle.js';
 import { resolveForkInputs, applyContinuationSeed } from './subagent/fork-resolution.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
@@ -496,6 +497,7 @@ export class SubagentManager {
       effectiveAgentType,
       effectiveResolvedAgentType,
       continuation: options.continuation,
+      credentialSource: traceCredentialSource(effectiveTraceWriter, effectiveChildModel),
     });
     await appendForkTelemetry({
       modelString,
