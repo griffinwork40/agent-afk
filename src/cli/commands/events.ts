@@ -53,11 +53,9 @@ async function runGithubAction(opts: GithubOpts): Promise<void> {
     (t) => !SUPPORTED_EVENT_TYPES.includes(t as GithubEventType),
   );
   if (invalidTypes.length > 0) {
-    console.error(
-      palette.error(
-        `Unknown event type(s): ${invalidTypes.join(', ')}. Supported: ${SUPPORTED_EVENT_TYPES.join(', ')}`,
-      ),
-    );
+    console.error(palette.error(
+      `Unknown event type(s): ${invalidTypes.join(', ')}. Supported: ${SUPPORTED_EVENT_TYPES.join(', ')}`,
+    ));
     process.exit(1);
   }
   const events = requestedTypes as GithubEventType[];
@@ -128,18 +126,14 @@ async function runServeAction(opts: ServeOpts): Promise<void> {
   // cannot be used to read arbitrary env vars or `env` object keys.
   const secretEnvName = resolveSecretEnvName(opts.secretEnv);
   if (secretEnvName === undefined) {
-    console.error(
-      palette.error(
-        `--secret-env must name a registered secret env var (e.g. AFK_EVENTS_WEBHOOK_SECRET), got: ${opts.secretEnv}`,
-      ),
-    );
+    console.error(palette.error(
+      `--secret-env must name a registered secret env var (e.g. AFK_EVENTS_WEBHOOK_SECRET), got: ${opts.secretEnv}`,
+    ));
     process.exit(1);
   }
   const secret = env[secretEnvName];
   if (!secret) {
-    console.error(
-      palette.error(`Missing webhook secret. Set ${opts.secretEnv} in your environment.`),
-    );
+    console.error(palette.error(`Missing webhook secret. Set ${opts.secretEnv} in your environment.`));
     process.exit(1);
   }
 
