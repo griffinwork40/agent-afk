@@ -16,8 +16,12 @@ export async function capturePatchGuard(
   contents: Map<string, string | null>, context: ToolHandlerContext | undefined, cwd?: string,
 ): Promise<(path: string) => Promise<void>> {
   const identities = new Map<string, Array<{ path: string; dev: number; ino: number }>>();
+  // Ancestors absent at capture time may be created later (mkdir), but never
+  // as a symlink: a dangling link resolves to itself and passes containment.
+  const absent = new Map<string, string[]>();
   for (const [path, content] of contents) {
     const chain: Array<{ path: string; dev: number; ino: number }> = [];
+    const missing: string[] = [];
     let current = path;
     for (;;) {
       try {
@@ -28,12 +32,14 @@ export async function capturePatchGuard(
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
         if (current === path && content !== null) throw err;
+        if (current !== path) missing.push(current);
       }
       const parent = dirname(current);
       if (parent === current) break;
       current = parent;
     }
     identities.set(path, chain);
+    absent.set(path, missing);
   }
   return async (path) => {
     // Re-run containment/denylist checks, then require the same canonical target.
@@ -42,6 +48,13 @@ export async function capturePatchGuard(
       const info = await lstat(identity.path);
       if (info.isSymbolicLink() || info.dev !== identity.dev || info.ino !== identity.ino) {
         fail('path_identity_changed', identity.path);
+      }
+    }
+    for (const ancestor of absent.get(path) ?? []) {
+      try {
+        if ((await lstat(ancestor)).isSymbolicLink()) fail('path_identity_changed', ancestor);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
       }
     }
     const before = contents.get(path);

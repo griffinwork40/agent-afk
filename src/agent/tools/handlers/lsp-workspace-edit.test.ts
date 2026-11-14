@@ -59,6 +59,16 @@ describe('WorkspaceEdit safe application', () => {
     expect(await readFile(paths[1]!, 'utf8')).toBe('new');
   });
 
+  it('names null-version edits to a previously synced document that no request-time text verifies', async () => {
+    const [synced, guarded, unknown] = await Promise.all(['a.ts', 'b.ts', 'c.ts'].map((name) => file(name)));
+    const result = await applyWorkspaceEdit({ documentChanges: [synced!, guarded!, unknown!].map((p) => ({
+      textDocument: { uri: uri(p), version: null }, edits: [edit(0, 3, 'new')],
+    })) }, { ...options, documentVersion: (u) => (u === uri(unknown!) ? undefined : 3),
+      expectedContents: new Map([[uri(guarded!), 'old']]) });
+    expect(result.isError).toBe(false);
+    expect(JSON.parse(result.content as string).unverified_versions).toEqual([uri(synced!)]);
+  });
+
   it.each([undefined, () => 2])('rejects unverifiable or stale numeric versions atomically', async (documentVersion) => {
     const p = await file('a.ts');
     const result = await applyWorkspaceEdit({ documentChanges: [{ textDocument: { uri: uri(p), version: 4 }, edits: [edit(0, 3, 'new')] }] }, { ...options, documentVersion });

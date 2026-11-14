@@ -62,6 +62,22 @@ describe('patch checkpoint race guards', () => {
     expect(await readdir(outside)).toEqual(['a.ts']);
   });
 
+  it('rejects a symlink created at a missing ancestor during checkpoint', async () => {
+    const { allowed, outside } = await setup();
+    const result = await createPatchApplyHandler(allowed)({ changes: [
+      { path: 'missing/nested/new.ts', content: 'created' },
+    ] }, new AbortController().signal, {
+      resolveBase: allowed, writeRoots: [allowed],
+      fileCheckpoint: { turnId: 'test', touchedPaths: () => [], snapshotFile: async () => {
+        await symlink(join(outside, 'not-yet'), join(allowed, 'missing'), 'dir');
+      } },
+    });
+    const body = JSON.parse(result.content as string);
+    expect(body.status).toBe('validation_failed');
+    expect(body.errors[0].error).toBe('path_identity_changed');
+    expect(await readdir(outside)).toEqual(['a.ts']);
+  });
+
   it('rejects changed content during checkpoint even without caller expected_hash', async () => {
     const { allowed, dir } = await setup();
     const result = await createPatchApplyHandler(allowed)({ changes: [

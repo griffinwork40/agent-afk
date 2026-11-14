@@ -24,6 +24,7 @@ export interface WorkspaceEditOptions {
 }
 
 interface PlannedDocument { change: PatchFileChange; sourcePath: string }
+interface WorkspaceEditPlan { planned: PlannedDocument[]; unverified: string[] }
 
 function checkAbort(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error('Aborted');
@@ -40,10 +41,11 @@ function localFile(uri: string): string {
   return path;
 }
 
-async function planWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): Promise<PlannedDocument[]> {
+async function planWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): Promise<WorkspaceEditPlan> {
   checkAbort(options.signal);
   const documents = workspaceDocuments(edit);
   const paths = new Set<string>();
+  const unverified: string[] = [];
   // Resolve every destination through the SAME grants/denylist/canonicalization
   // as patch_apply, before reading any file or taking a checkpoint.
   const targets: Array<{ path: string; sourcePath: string; document: typeof documents[number] }> = [];
@@ -53,12 +55,11 @@ async function planWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): 
         options.documentVersion?.(document.uri) !== document.version) {
       throw new Error(`WorkspaceEdit document version mismatch: ${document.uri}`);
     }
-    if (document.version === null && options.documentVersion?.(document.uri) !== undefined) {
-      // LSP server sent null version; local document is open at a known version.
-      // Apply proceeds (null is a legitimate server-side sentinel) but flag the
-      // staleness risk so callers can surface it in sync_warnings.
-      (options as { _nullVersionUris?: string[] })._nullVersionUris ??= [];
-      (options as { _nullVersionUris?: string[] })._nullVersionUris!.push(document.uri);
+    if (document.version === null && options.documentVersion?.(document.uri) !== undefined &&
+        !options.expectedContents?.has(document.uri)) {
+      // Null is a legitimate server sentinel, so the edit proceeds, but neither
+      // a version nor request-time text can verify it: report it to the caller.
+      unverified.push(document.uri);
     }
     const sourcePath = localFile(document.uri);
     const path = await validatedWriteTarget(sourcePath, options.context, options.cwd);
@@ -86,12 +87,12 @@ async function planWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): 
     }
   }
   checkAbort(options.signal);
-  return planned;
+  return { planned, unverified };
 }
 
 /** Convert validated UTF-16 edits to hash-guarded full-content patch changes; no writes. */
 export async function convertWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): Promise<PatchFileChange[]> {
-  return (await planWorkspaceEdit(edit, options)).map(({ change }) => change);
+  return (await planWorkspaceEdit(edit, options)).planned.map(({ change }) => change);
 }
 
 /**
@@ -102,8 +103,9 @@ export async function convertWorkspaceEdit(edit: unknown, options: WorkspaceEdit
  */
 export async function applyWorkspaceEdit(edit: unknown, options: WorkspaceEditOptions): Promise<ToolResult> {
   let planned: PlannedDocument[];
+  let unverified: string[];
   try {
-    planned = await planWorkspaceEdit(edit, options);
+    ({ planned, unverified } = await planWorkspaceEdit(edit, options));
   } catch (err) {
     return { isError: true, content: JSON.stringify({ status: 'validation_failed', diff: '', files_changed: [],
       errors: [{ error: 'workspace_edit_invalid', detail: errorMessage(err) }] }) };
@@ -119,7 +121,13 @@ export async function applyWorkspaceEdit(edit: unknown, options: WorkspaceEditOp
     return { isError: true, content: JSON.stringify({ status: 'validation_failed', files_changed: [],
       errors: [{ error: 'workspace_edit_apply_failed', detail: errorMessage(err) }] }) };
   }
-  const payload = JSON.parse(result.content) as { status?: string; sync_warnings?: string[] };
+  const payload = JSON.parse(result.content) as { status?: string; sync_warnings?: string[]; unverified_versions?: string[] };
+  if (unverified.length) {
+    // Contract: a null-version edit to a previously synced document has no
+    // staleness check; name it instead of applying it silently.
+    payload.unverified_versions = unverified;
+    result = { ...result, content: JSON.stringify(payload) };
+  }
   if (options.client && (payload.status === 'applied' || payload.status === 'partial_failure') && !options.dryRun) {
     const warnings: string[] = [];
     // Read actual disk state, including after the engine's best-effort rollback.
