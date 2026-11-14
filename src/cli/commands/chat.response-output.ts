@@ -16,6 +16,7 @@ import { buildOneShotJsonOutput } from './chat.json-output.js';
 import { recordTurn } from '../slash/session-stats.js';
 import { jsonDateReplacer } from '../json-date-replacer.js';
 import { writeAndDrain } from './chat.stdin-stream.js';
+import { collectFallbackNotice } from './chat.fallback-notice.js';
 import type { AgentSession } from '../../agent/session.js';
 import type { SessionStats } from '../slash/types.js';
 import type { AgentModelInput } from '../../agent/types.js';
@@ -81,6 +82,13 @@ export interface TextResponseParams {
 /**
  * Run the text or JSON output path: send a single message and render the
  * result. Mutates `stats` in place.
+ *
+ * Fallback detection: `session.getOutputStream()` is subscribed concurrently
+ * with `sendMessage` so any `notice`/`model-fallback` event emitted by the
+ * runtime during the turn is captured. The notice is printed to stderr (text
+ * mode) or included as `servedModel` + `modelFallback` fields (JSON mode).
+ * `model` in the JSON output always reports the REQUESTED model; `servedModel`
+ * is added only when a fallback actually fired.
  */
 export async function renderTextResponse(params: TextResponseParams): Promise<void> {
   const {
@@ -96,8 +104,22 @@ export async function renderTextResponse(params: TextResponseParams): Promise<vo
     spinner,
   } = params;
 
-  const response = await session.sendMessage(message, { stream: streamFlag });
+  // Start the sendMessage call and collect any model-fallback notice emitted
+  // on the output broadcast concurrently. collectFallbackNotice awaits both.
+  const sendPromise = session.sendMessage(message, { stream: streamFlag });
+  const fallbackNotice = await collectFallbackNotice(session, sendPromise);
+  const response = await sendPromise;
+
   spinner.succeed('Response received');
+
+  // If a fallback fired, print the runtime's ready-made notice sentence to
+  // stderr (stdout must stay clean for piping). Style matches the REPL's
+  // notice rendering: palette.info glyph + palette.dim body.
+  if (fallbackNotice !== undefined) {
+    process.stderr.write( // console-ok
+      palette.info('ℹ ') + palette.dim(fallbackNotice.text) + '\n',
+    );
+  }
 
   const responseMeta = session.getLastResponseMetadata();
   recordTurn(stats, message, response.content, responseMeta ?? undefined);
@@ -114,6 +136,7 @@ export async function renderTextResponse(params: TextResponseParams): Promise<vo
       sessionId: stats.sessionId,
       witnessLabel: receiptSessionLabel,
       tracePath: receiptTracePath,
+      modelFallback: fallbackNotice?.fallback,
     }), null, 2));
   } else {
     console.log(palette.heading('\n🤖 Claude:'));

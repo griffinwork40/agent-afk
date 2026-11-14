@@ -4,6 +4,7 @@
  * Owns five public mutators that change live session configuration
  * without starting a new provider turn, plus the plan-exit seed drainer:
  *   - `setModel()` — swap the active model
+ *   - `applyFallbackModel()` — record a provider-initiated model swap (no provider call)
  *   - `setPermissionMode()` — flip plan/default mode
  *   - `setSystemPrompt()` — override the base system prompt
  *   - `setCwd()` — update the working directory
@@ -52,6 +53,24 @@ export async function setModel(model: AgentModelInput | undefined, deps: ConfigD
   if (typeof model === 'string' && model.length > 0) await deps.getProviderQuery().setModel(model);
   if (resolved) deps.getStateManager().setSessionMetadata((prev) => ({ ...prev, model: resolved }));
   if (resolved && resolved !== previous) deps.getJournal?.().markModelSwitch(resolved);
+}
+
+/**
+ * Record a provider-initiated model swap in session metadata and the journal.
+ *
+ * Contract: the provider router has ALREADY switched its own model by the time
+ * this is called (via the `model-fallback` notice observation path). Do NOT
+ * call `providerQuery.setModel` here — that would trigger a redundant rebuild.
+ * Idempotent: when the resolved id matches the current metadata model, nothing
+ * is written (no metadata mutation, no journal mark).
+ */
+export function applyFallbackModel(model: string, deps: ConfigDeps): void {
+  const resolved = resolveModelId(model);
+  if (!resolved) return;
+  const previous = deps.getStateManager().getSessionMetadata().model;
+  if (resolved === previous) return;
+  deps.getStateManager().setSessionMetadata((prev) => ({ ...prev, model: resolved }));
+  deps.getJournal?.().markModelSwitch(resolved);
 }
 
 /** Flip plan vs. default permission mode, updating provider + state + sideband. */

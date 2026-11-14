@@ -67,6 +67,8 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
 
   const config: Partial<CliConfig> = parseToolsConfig(json);
   const modelsPartial = parseModelsConfig(json.models);
+  const fallbackModel = parseFallbackModel(json.models?.fallback);
+  if (fallbackModel !== undefined) config.fallbackModel = fallbackModel;
 
   if (typeof json.model === 'string' && json.model.length > 0) {
     const loweredModel = json.model.toLowerCase();
@@ -195,6 +197,18 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
 }
 
 /**
+ * `models.fallback` → a trimmed model-input string. Accepts a bare string or a
+ * `{ id }` object (only `id` is used; the fallback is not a slot, so per-slot
+ * credentials come from naming a tier such as `local`). Empty → undefined.
+ */
+function parseFallbackModel(raw: unknown): string | undefined {
+  const value = raw !== null && typeof raw === 'object' ? (raw as { id?: unknown }).id : raw;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
  * A parsed file's values as one dotted-path-walkable record, for consumers that
  * ask "what does this file resolve `<path>` to?" (`/config` provenance).
  *
@@ -204,5 +218,7 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
 export function validatedValueView(parsed: ParsedJsonConfigFile): Record<string, unknown> {
   const view: Record<string, unknown> = { ...parsed.config };
   if (Object.keys(parsed.modelsPartial).length > 0) view['models'] = parsed.modelsPartial;
+  const fallback = parsed.config.fallbackModel;
+  if (fallback !== undefined) view['models'] = { ...parsed.modelsPartial, fallback };
   return view;
 }

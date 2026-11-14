@@ -71,11 +71,11 @@ import * as ss from './session-send.js';
 import * as sc from './session-config.js';
 import { toModelInfo, toAgentInfo, toContextUsageResponse, toMcpServerStatus } from './provider-type-mappers.js';
 import { applyStopHookWiring } from './agent-session.stop-hook-wiring.js';
+import { observeFallbackNotice } from './agent-session.fallback-observer.js';
 import { bindSessionExecutors, recordSubagentCompletionInTree } from './agent-session.executors.js';
 import { startMcpInit, disconnectOwnedManager } from './agent-session.mcp.js';
 import { buildSessionRunner, buildSessionInitPromise, applyLifecycle } from './agent-session.lifecycle.js';
 import type { McpManager } from '../mcp/manager.js';
-
 
 export class AgentSession implements IAgentSession {
   /**
@@ -292,7 +292,7 @@ export class AgentSession implements IAgentSession {
       incTurnCount: () => { this.turnCount++; },
       getProviderQuery: () => this.providerQuery,
       getStopWiring: () => this.stopWiring,
-      observeProviderEvent: (e) => this.planExit.planText.observe(e),
+      observeProviderEvent: (e) => { this.planExit.planText.observe(e); observeFallbackNotice(e, () => this.makeConfigDeps()); },
     });
 
     this.initPromise = buildSessionInitPromise({

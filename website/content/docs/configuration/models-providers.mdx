@@ -107,6 +107,90 @@ global OpenAI auth chain: an ambient `OPENAI_API_KEY` wins, so a subscription
 model and a custom-keyed OpenAI model can't be used side by side. That global
 fallback needs no flag and still works for a single-model setup.
 
+## Fallback model
+
+Set `models.fallback` to one model and a session switches to it, and tells you,
+instead of pausing or failing when the primary cannot serve a turn:
+
+```bash
+afk config set models.fallback sonnet
+```
+
+The value is a model name in exactly the same form as `/model`: an alias
+(`sonnet`, `haiku`), a tier name (`small`, `local`), or a raw model id. A tier
+name brings that tier's configured endpoint and key, so the fallback can reach a
+different provider or a local server.
+
+**When it switches.** The runtime replaces the primary model with the fallback
+only when the primary cannot serve a turn _and_ nothing has been sent for that
+turn yet, for one of three reasons:
+
+- The primary hit its usage limit (the case that otherwise pauses the session
+  for up to two hours).
+- The Anthropic API account is out of credit.
+- The model id was rejected as unknown, retired, or unavailable.
+
+**Where it works.** Interactive sessions, one-shot `afk chat`, and the daemon
+with its scheduled runs. Telegram, the web dashboard, and ACP sessions do not
+switch yet. They behave exactly as they do with no fallback set.
+
+**What you see.** One notice line at the moment of the switch:
+
+```
+opus hit its usage limit (resets 6:00 PM). Continuing on sonnet. Run /model opus to switch back.
+```
+
+The hint to switch back appears only in an interactive session, and never for a
+model that was rejected. Where the line goes depends on the surface:
+
+- **Interactive.** In the conversation. The status line and the session record
+  show the new model.
+- **One-shot `afk chat`.** On stderr, so stdout stays clean. `--format json`
+  adds `servedModel` and `modelFallback` (`from`, `to`, `reason`) beside the
+  requested `model`, and `--format stream-json` emits the notice event.
+- **Daemon and scheduled runs.** In the daemon log, on the run record as
+  `modelFallbackNote`, and in the task notification when one is sent. A run
+  that switched and then succeeded does not notify unless the task's
+  `notifyOn` is `always`.
+
+The switch is also recorded in the session trace as a `model_fallback` phase.
+
+**What it does not do.**
+
+- It does not switch in the middle of a turn. If the limit is hit after the
+  model has already produced output or run a tool, the session pauses as usual.
+  The pause card adds: `Fallback <model> is configured. Run /model <model>, then /retry.`
+- It does not switch on overloaded (529) errors, authentication errors,
+  context-length errors, refusals, or user interrupts.
+- It is one model, not a chain, and is used at most once per session. If the
+  fallback also fails, the usual behaviour for that failure applies.
+- Each scheduled run is its own session. It starts on the primary again and
+  switches again if the primary is still unavailable, so the daemon returns to
+  the primary by itself once it recovers.
+- With `--provider` or `AFK_PROVIDER` set, one-shot `afk chat` and daemon runs
+  never switch, because the provider is fixed for every model. An interactive
+  session does not check this, so give it a fallback the pinned provider can
+  serve.
+- The session stays on the fallback model for the rest of the session. It does
+  not return to the primary automatically. Use `/model <primary>` to switch
+  back, or start a new session, which begins on the primary again.
+- Subagents do not use it; they keep their own model selection.
+- Out-of-credit detection applies to Anthropic API accounts only.
+
+**Considerations.** The fallback may be a weaker or differently priced model. A
+subscription model that falls back to a paid API model will bill the API for
+those turns. If the fallback is on a different provider family, the earlier
+conversation is carried as plain text so prior tool calls and reasoning lose
+their structure, and the prompt cache is lost at the switch. Directories
+approved with `/allow-dir` belong to the provider they were approved on, so
+after a switch to a different provider you may be asked again.
+
+To turn the fallback off:
+
+```bash
+afk config unset models.fallback
+```
+
 ## Selecting a model
 
 Set the default for all sessions:

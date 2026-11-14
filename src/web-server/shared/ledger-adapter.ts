@@ -219,6 +219,16 @@ export function settleRunningTools(toolIndex?: ToolIndex): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Render a `model_fallback` ledger record as a notice transcript item.
+ * Extracted to keep `ledgerRecordToItem` within the 200-line function ceiling.
+ */
+function modelFallbackItem(record: LedgerRecordLike): TranscriptItem {
+  const from = str(record['from']) ?? '?';
+  const to   = str(record['to'])   ?? '?';
+  return { kind: 'notice', id: nextId('n'), text: `ℹ Model switched: ${from} → ${to}` };
+}
+
+/**
  * Convert one ledger record into a transcript item, optionally patching an
  * existing tool or subagent item when the record is a `tool_result` or a
  * subsequent `subagent_lifecycle` event.
@@ -426,6 +436,9 @@ export function ledgerRecordToItem(
       const mode = str(record['mode']) ?? 'default';
       return { kind: 'notice', id: nextId('n'), text: `Switched to ${mode} mode` };
     }
+
+    case 'model_fallback':
+      return modelFallbackItem(record);
 
     default:
       return undefined;

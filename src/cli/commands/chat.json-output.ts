@@ -7,6 +7,17 @@
  * by issue #1538 — enabling headless runners to locate the witness record
  * without racing against concurrent sessions via `ls -t`.
  *
+ * Field semantics:
+ *   `model`         — the model that was REQUESTED (unchanged; keeps its prior meaning).
+ *   `servedModel`   — the model that ACTUALLY served the response. Present only
+ *                     when a fallback fired and it differs from `model`; absent
+ *                     when no fallback occurred (served === requested). Headless
+ *                     callers that only need the served model should prefer
+ *                     `servedModel ?? model`.
+ *   `modelFallback` — present only when the runtime switched models mid-turn.
+ *                     Carries `{ from, to, reason }` matching the session
+ *                     OutputEvent `{ type: 'notice', kind: 'model-fallback' }`.
+ *
  * @module cli/commands/chat.json-output
  */
 
@@ -23,6 +34,11 @@ export interface OneShotJsonOutputOpts {
   witnessLabel?: string;
   /** Absolute path to the trace.jsonl file. Conditionally present. */
   tracePath?: string;
+  /**
+   * Fallback that fired during this turn. When present, `servedModel` and
+   * `modelFallback` are added to the output. Absent when no fallback occurred.
+   */
+  modelFallback?: { from: string; to: string; reason: string };
 }
 
 /**
@@ -32,19 +48,27 @@ export interface OneShotJsonOutputOpts {
  * `outputTokens`) are best-effort and omitted when zero or absent.
  * The three trace-identity fields are omitted when tracing is disabled
  * (`AFK_TRACE_DISABLED=1`) or when the field is not available.
+ *
+ * When `modelFallback` is supplied:
+ *   - `model` still reports the REQUESTED model (backward-compatible).
+ *   - `servedModel` reports the model that actually produced the response.
+ *   - `modelFallback: { from, to, reason }` documents the switch.
  */
 export function buildOneShotJsonOutput(
   opts: OneShotJsonOutputOpts,
 ): Record<string, unknown> {
   const {
     sessionModel, responseContent, responseTimestamp, responseMeta,
-    sessionId, witnessLabel, tracePath,
+    sessionId, witnessLabel, tracePath, modelFallback,
   } = opts;
   const inputTokens = responseMeta ? Number(responseMeta.usage?.['input_tokens'] ?? 0) : 0;
   const outputTokens = responseMeta ? Number(responseMeta.usage?.['output_tokens'] ?? 0) : 0;
   return {
     success: true,
+    // `model` = requested model (unchanged — existing consumers rely on this).
     model: sessionModel,
+    // `servedModel` present only when a fallback fired (served !== requested).
+    ...(modelFallback !== undefined ? { servedModel: modelFallback.to } : {}),
     message: responseContent,
     timestamp: responseTimestamp,
     ...(responseMeta?.totalCostUsd !== undefined ? { costUsd: responseMeta.totalCostUsd } : {}),
@@ -56,5 +80,7 @@ export function buildOneShotJsonOutput(
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(witnessLabel !== undefined ? { witnessLabel } : {}),
     ...(tracePath !== undefined ? { tracePath } : {}),
+    // Fallback facts: present only when the runtime switched models this turn.
+    ...(modelFallback !== undefined ? { modelFallback } : {}),
   };
 }

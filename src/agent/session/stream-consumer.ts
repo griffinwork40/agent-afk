@@ -428,7 +428,15 @@ export function transformProviderEvent(
       // `default: return null`). A missing case is the same silent-drop bug this
       // channel exists to fix — the tsc compiler catches it when the switch is
       // exhaustive, so do not remove the `default` arm either.
-      return { type: 'notice', text: event.text, kind: event.kind };
+      //
+      // Contract: forward `fallback` when present (kind: 'model-fallback').
+      // Omit the key entirely when absent — exactOptionalPropertyTypes style.
+      return {
+        type: 'notice',
+        text: event.text,
+        kind: event.kind,
+        ...(event.fallback !== undefined ? { fallback: event.fallback } : {}),
+      };
 
     case 'tool.activity':
       // Live tool-activity marker (Phase 2, issue #516). Surfaces on TTY REPL
