@@ -13,6 +13,7 @@
  * borrows them through the host interface.
  */
 
+import { CommitWriteTx } from './terminal-compositor.commit-write-tx.js';
 import { resetArchivedReveal } from './terminal-compositor.archived-reveal.js';
 import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
 import type { LogUpdateFn, CompositorScrollRegionGuard, BandRowMeta, FramePlacementMode } from './terminal-compositor.types.js';
@@ -184,7 +185,18 @@ function preCommitBannerSync(self: CommittedBandHost, rows: number): void {
   }
 }
 
+// The transaction encloses every phase, including banner sync and disarmed
+// scroll guards. Suspended commits only queue text and emit no physical write.
 export function commitAbove(self: CommittedBandHost, text: string): void {
+  const tx = CommitWriteTx.begin(self.stdout);
+  try {
+    commitAboveWithinTransaction(self, text);
+  } finally {
+    tx.end();
+  }
+}
+
+function commitAboveWithinTransaction(self: CommittedBandHost, text: string): void {
   self.debugLog('commitAbove:enter', { textLen: text.length, anchorRow: self.anchorRow ?? null, committing: self.committing, topRow: self.logUpdate?.topRow ?? null });
 
   // Contract (queue-and-replay, issue #2382): while suspended, repaint() is

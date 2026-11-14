@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { artifactsFromOutcomes, createOutcomeSessionEndHook } from './session-end-hook.js';
+import { artifactsFromOutcomes, closureFromTrace, createOutcomeSessionEndHook } from './session-end-hook.js';
 import { readRecord, writeRecord, appendArtifacts, upsertVotes } from './store.js';
 import type { VerifiedOutcome } from './schema.js';
 import * as sessionOutcomes from './session-outcomes.js';
@@ -301,6 +301,53 @@ describe('closureFromTrace non-normal reasons map to unknown (finding #1)', () =
     );
     const rec = readRecord('sess-trace-normal', tmpDir);
     expect(rec?.closure_reason).toBe('normal');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4896: closureFromTrace must return the LAST root closure reason
+//
+// Before this fix the function returned on the first closure line of any
+// kind, which on a multi-cycle REPL trace is cycle 1's reason (or a child's),
+// not the root cycle that ended. These tests run the real reader on real files.
+// ---------------------------------------------------------------------------
+
+function rootClosure(reason: string): string {
+  return JSON.stringify({ kind: 'closure', payload: { reason, finalTurnCount: 1, finalCostUsd: 0.1 } });
+}
+
+function childClosure(reason: string): string {
+  return JSON.stringify({
+    kind: 'closure',
+    payload: { reason, subagentId: 'child-1', finalTurnCount: 1, finalCostUsd: 0.05 },
+  });
+}
+
+function writeTrace(name: string, lines: string[]): string {
+  const tracePath = join(tmpDir, `${name}.jsonl`);
+  writeFileSync(tracePath, lines.join('\n') + '\n', 'utf8');
+  return tracePath;
+}
+
+describe('#4896 closureFromTrace returns last root closure reason', () => {
+  it('root iteration_cap then root model_end_turn gives normal', () => {
+    const tracePath = writeTrace('cap-then-clean', [rootClosure('iteration_cap'), rootClosure('model_end_turn')]);
+    expect(closureFromTrace(tracePath)).toEqual({ reason: 'normal' });
+  });
+
+  it('root model_end_turn then root iteration_cap gives iteration_cap', () => {
+    const tracePath = writeTrace('clean-then-cap', [rootClosure('model_end_turn'), rootClosure('iteration_cap')]);
+    expect(closureFromTrace(tracePath)).toEqual({ reason: 'iteration_cap' });
+  });
+
+  it('a trailing child closure is skipped: root model_end_turn still gives normal', () => {
+    const tracePath = writeTrace('root-then-child', [rootClosure('model_end_turn'), childClosure('budget_exceeded')]);
+    expect(closureFromTrace(tracePath)).toEqual({ reason: 'normal' });
+  });
+
+  it('a trace whose only closure is a child closure gives null', () => {
+    const tracePath = writeTrace('child-only', [childClosure('budget_exceeded')]);
+    expect(closureFromTrace(tracePath)).toBeNull();
   });
 });
 

@@ -181,6 +181,7 @@ export async function runTurn(
       disposeRendererOnce,
       armAndWire,
       buildRenderer,
+      stats,
     };
 
     await runWithSink(ambientSink, async () => {

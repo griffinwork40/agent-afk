@@ -398,4 +398,47 @@ describe('afk chat --format stream-json', () => {
     expect(instance?.sendMessageStream).toHaveBeenCalledOnce();
     expect(instance?.sendMessage).not.toHaveBeenCalled();
   });
+
+  it('emits a model-fallback notice event as NDJSON including the fallback payload', async () => {
+    // The notice event is emitted by the runtime when the primary model is
+    // switched mid-turn. The stream-json path must relay it verbatim so
+    // headless consumers can detect and act on the model switch.
+    const events: OutputEvent[] = [
+      { type: 'chunk', chunk: { type: 'content', content: 'hi' } },
+      {
+        type: 'notice',
+        kind: 'model-fallback',
+        text: 'opus hit its usage limit. Continuing on sonnet. Run /model opus to switch back.',
+        fallback: { from: 'claude-opus-4-5', to: 'claude-sonnet-4-5', reason: 'usage-limit' },
+      },
+      { type: 'done' },
+    ];
+    configureStream(events);
+
+    const lines = await captureStdout(() => runChat('say hi', '--format', 'stream-json'));
+
+    // Every line must be valid JSON
+    for (const line of lines) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+
+    // The notice line must be present with type and kind
+    const noticeLine = lines.find((l) => l.includes('"notice"'));
+    expect(noticeLine).toBeDefined();
+
+    const parsed = JSON.parse(noticeLine!) as {
+      type: string;
+      kind: string;
+      text: string;
+      fallback: { from: string; to: string; reason: string };
+    };
+    expect(parsed.type).toBe('notice');
+    expect(parsed.kind).toBe('model-fallback');
+    expect(parsed.text).toContain('opus');
+    // The fallback payload must be present with from/to/reason
+    expect(parsed.fallback).toBeDefined();
+    expect(parsed.fallback.from).toBe('claude-opus-4-5');
+    expect(parsed.fallback.to).toBe('claude-sonnet-4-5');
+    expect(parsed.fallback.reason).toBe('usage-limit');
+  });
 });

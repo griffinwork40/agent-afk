@@ -40,6 +40,7 @@
  */
 
 import type { TraceEvent } from './types.js';
+import { SessionCostAccumulator } from './cost.js';
 import {
   strAttr, intAttr, doubleAttr,
   SCOPE_NAME, SCOPE_VERSION, GEN_AI_SYSTEM,
@@ -143,12 +144,14 @@ export function traceToOtlp(
   // remain UNSET rather than being falsely reported as successful.
   let sessionStatus: SpanStatus = { code: 0 };
   let sealedSeen = false;
-  let finalCost: number | undefined;
-  let finalTurns: number | undefined;
   let finalTokens: { input?: number; output?: number } | undefined;
+  // #4896: the shared cost accumulator sums every root REPL cycle; the seal
+  // carries the last cycle only.
+  const costAcc = new SessionCostAccumulator();
 
   for (const ev of events) {
     if (ev.ts > lastTs) lastTs = ev.ts;
+    costAcc.add(ev);
     if (ev.kind === 'session_sealed') {
       lastTs = ev.ts;
       sealedSeen = true;
@@ -157,12 +160,19 @@ export function traceToOtlp(
       } else {
         sessionStatus = { code: 2, message: `session ${ev.payload.status}` };
       }
-      finalCost = ev.payload.finalCostUsd;
-      finalTurns = ev.payload.finalTurnCount;
       finalTokens = ev.payload.subagentTokens;
     }
   }
   void sealedSeen; // informational; status already captures the distinction
+
+  // Contract: the session span's `gen_ai.usage.cost_usd` is ROOT-only spend
+  // (every REPL cycle), not the session total. Each `agent.invoke` child span
+  // carries its own subagent's cost, so a sum over spans must not count child
+  // spend twice. Absent when the root's spend is unknown (no cost record, or a
+  // process-exit backstop seal).
+  const costResult = costAcc.result();
+  const finalCost = costResult.rootCostUsd;
+  const finalTurns = costResult.rootTurnCount;
 
   // Root span attributes.
   const rootSpanId = seedSpanId(`session:${sessionId}`);

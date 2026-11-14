@@ -86,6 +86,8 @@ interface AttemptResult {
   responseText: string;
   recovered: boolean;
   doneUnverified: boolean;
+  /** The fallback notice sentence when this run switched to `models.fallback`. */
+  modelFallbackNote?: string;
   /** Set when a cron-task elicitation was declined and a handoff written. */
   elicitationMessage?: string;
 }
@@ -160,7 +162,7 @@ export async function executeAgentTask(
       ctx.writeTelemetry(record, task);
       return record;
     }
-    const { responseText, recovered, doneUnverified, elicitationMessage } = outcome.value;
+    const { responseText, recovered, doneUnverified, elicitationMessage, modelFallbackNote } = outcome.value;
     const status = gateBlockCounter.count > 0 && !recovered ? 'blocked' : 'success';
     const recoveryNote = gateBlockCounter.count > 0 && recovered ? gateRecoveryNote(gateBlockCounter) : undefined;
     const record: TelemetryRecord = {
@@ -169,6 +171,7 @@ export async function executeAgentTask(
       status,
       ...(status === 'blocked' ? { errorMessage: gateBlockReason(gateBlockCounter) } : {}),
       ...(recoveryNote !== undefined ? { gateRecoveryNote: recoveryNote } : {}),
+      ...(modelFallbackNote !== undefined ? { modelFallbackNote } : {}),
       responseExcerpt: responseText.length > 280
         ? `${responseText.slice(0, 280)}… [truncated]`
         : responseText,
@@ -184,6 +187,12 @@ export async function executeAgentTask(
   } finally {
     ctx.idleDetector.decrement();
   }
+}
+
+/** Telemetry fields for a run that switched to the `models.fallback` model. */
+export interface ModelFallbackFields {
+  /** The notice sentence shown at the switch. Absent when the run stayed on its model. */
+  modelFallbackNote?: string;
 }
 
 /**
@@ -275,6 +284,11 @@ async function runAgentAttempt(
 
     const response = await session.sendMessage(task.command);
     const responseText = redactInlineSecrets(response.content);
+    // Nobody watches a daemon run's event stream, so the switch is read off the
+    // session afterwards: logged here, kept on the telemetry record, and shown
+    // in the task notification when one is sent.
+    const modelFallbackNote = readModelFallbackNote(session);
+    if (modelFallbackNote !== undefined) console.error(`[daemon] task ${task.taskId}: ${modelFallbackNote}`);
     // Persist the run like a REPL turn so it appears in `/resume`. Injected
     // (the sidecar store lives in src/cli/) and guarded: persistence must
     // never fail a tick that already succeeded.
@@ -294,6 +308,7 @@ async function runAgentAttempt(
       recovered: hasRecoveredFromGate(response, session.abortSignal?.aborted === true),
       doneUnverified: probeDoneUnverified(ctx, responseText, response),
       elicitationMessage,
+      ...(modelFallbackNote !== undefined ? { modelFallbackNote } : {}),
     };
   } finally {
     if (handlerInstalled) elicitationRouter.uninstallForSession(elicitationKey);
@@ -316,6 +331,21 @@ async function runAgentAttempt(
     }
     memoryStore?.close();
     stateStore?.close();
+  }
+}
+
+/**
+ * The fallback notice sentence, when the session switched to `models.fallback`.
+ * Fully guarded: the note is informational, so a session without the metadata
+ * accessor, or one that throws from it, must never turn a finished tick into a
+ * failure.
+ */
+function readModelFallbackNote(session: AgentSession): string | undefined {
+  try {
+    const text = session.getSessionMetadata?.().modelFallback?.text;
+    return typeof text === 'string' && text.length > 0 ? text : undefined;
+  } catch {
+    return undefined;
   }
 }
 

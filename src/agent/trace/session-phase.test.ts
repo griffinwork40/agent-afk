@@ -179,6 +179,16 @@ describe('session_phase payload schema — acceptance', () => {
     ).not.toThrow();
   });
 
+  it('accepts the model_fallback phase (main-session fallback model switch)', () => {
+    expect(() => SessionPhaseNameSchema.parse('model_fallback')).not.toThrow();
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'model_fallback',
+        metadata: { fromModel: 'opus', toModel: 'sonnet', reason: 'usage-limit' },
+      }),
+    ).not.toThrow();
+  });
+
   it('accepts the interrupt_halt phase with durationMs + provider metadata', () => {
     // Deliverable B: the ESC→terminal halt-latency marker. A single event
     // carrying the interrupt→terminal wall-clock in durationMs, tagged with the
@@ -390,6 +400,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     hook_block_repeat_tripped: true,
     billing_settled: true,
     subagent_model_fallback: true,
+    model_fallback: true,
     round_cap_notice_dropped: true,
     continuation_settle_degraded: true,
     prompt_fragment_sizes: true,

@@ -43,6 +43,7 @@ import {
 } from './turn-iteration.js';
 import { runIterationWithOverloadPause } from './overload-pause-tier.js';
 import { runIterationWithQuotaLimitPause } from './usage-limit-tier.js';
+import { isModelFallbackArmed } from '../../shared/model-fallback-armed.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import { dispatchAndAppendToolCalls } from './dispatch-append.js';
@@ -170,6 +171,7 @@ function makeCompositeIteration(
   controller: AbortController,
   vision: boolean,
   windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
+  firstRequestOfTurn: boolean,
 ): ReturnType<typeof runIterationWithQuotaLimitPause> {
   return runIterationWithQuotaLimitPause(
     () => runIterationWithOverloadPause(
@@ -188,6 +190,8 @@ function makeCompositeIteration(
       signal: controller.signal,
       isClosed: () => ctx.closed,
       sessionId: ctx.initSessionId,
+      // Live read: the router's predicate is consulted only when the tier decides.
+      fallback: { firstRequestOfTurn, isArmed: () => isModelFallbackArmed(ctx.opts.config), model: ctx.currentModel },
     },
   );
 }
@@ -422,7 +426,10 @@ export async function* runTurnInner(
         return;
       }
 
-      const result = yield* makeCompositeIteration(ctx, controller, vision, windDownReason);
+      // Only the turn's first request may ask for a model fallback: a later
+      // round or Stop-hook segment already yielded output the replay would repeat.
+      const firstRequest = round === 0 && stopHookContinuation === 0;
+      const result = yield* makeCompositeIteration(ctx, controller, vision, windDownReason, firstRequest);
       if (result === null) {
         ctx.abort.clear(controller);
         if (controller.signal.aborted || ctx.closed) {

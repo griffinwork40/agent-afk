@@ -83,6 +83,11 @@ export function renderLedgerRecord(rec: LedgerRecord): string | null {
       return `⏸️ paused on usage limit${rec.resetsAt ? ` (resets ${rec.resetsAt})` : ''}`;
     case 'resumed':
       return '▶️ resumed';
+    case 'model_fallback': {
+      const from = typeof rec.from === 'string' ? rec.from : '?';
+      const to   = typeof rec.to   === 'string' ? rec.to   : '?';
+      return `ℹ️ Model switched: ${from} → ${to}`;
+    }
     case 'closed':
       return `🏁 session closed${rec.reason ? ` (${rec.reason})` : ''} — watch ended`;
     default:

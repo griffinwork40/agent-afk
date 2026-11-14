@@ -115,6 +115,10 @@ export async function runOneTurn(
     ctx.stats,
     {
       setInFlight(v: boolean) { turnState.turnInFlight = v; },
+      onModelFallback(to: string) {
+        ctx.stats.model = to as typeof ctx.stats.model;
+        ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
+      },
       onToolEvent: (event) => footer.bgResultNotifier.observeToolEvent(event),
       ...(ctx.subagentControl ? { subagentControl: ctx.subagentControl } : {}),
       // #2542/#2735: Forward the detach registry so the Ctrl+B handler can
