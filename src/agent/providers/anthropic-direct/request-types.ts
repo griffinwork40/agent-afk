@@ -43,6 +43,8 @@ export interface RunTurnInput {
   subagentId?: string;
   onUsageProgress?: (usage: ProviderUsage) => void;
   throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
+  /** Subscription-overage observer; its latest state is attributed to each round's cost (#4883). */
+  overageTracker?: import('./overage-tracker.js').OverageTracker;
   /** Callback invoked after each tool round returns 'continue', before the next openRound(). Returns steering text to inject, or undefined. */
   beforeNextRound?: () => string | undefined;
   /**

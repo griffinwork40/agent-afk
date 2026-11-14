@@ -269,6 +269,8 @@ export interface AnthropicDirectQueryOptions {
    * installed.
    */
   throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
+  /** Per-session subscription-overage observer wired to the client fetch (#4883). */
+  overageTracker?: import('./overage-tracker.js').OverageTracker;
   fastModeController?: import('../../fast-mode.js').FastModeController;
   /**
    * Inter-round steering callback. Called after each tool-round returns

@@ -136,6 +136,25 @@ export interface RunReceipt {
     totalCostUsd?: number;
     totalTokens?: CostTokens;
     costSource?: SessionCostSource;
+    /**
+     * Whole-session cost (root plus every subagent) of the responses served
+     * from Claude subscription overage (#4883): the sum of the per-response
+     * costs AFK already computes, for responses whose
+     * `anthropic-ratelimit-unified-*` headers matched the overage rule
+     * (`overage-in-use: true`, or `status: rejected` with `overage-status`
+     * `allowed`/`allowed_warning`; Claude Code 2.1.319 logic, unconfirmed by a
+     * live capture). Always `>= 0` and `<= totalCostUsd`.
+     *
+     * Presence rule: `overageCostUsd` and `overageRequests` are both present
+     * (possibly `0`) if and only if at least one response anywhere in the
+     * session carried `anthropic-ratelimit-unified-*` headers. Absent means
+     * "not measured" (API key sessions, non-Anthropic providers, old traces),
+     * never "none". A flagged response whose cost could not be computed
+     * (unknown model price) is counted as not flagged.
+     */
+    overageCostUsd?: number;
+    /** Number of overage-flagged responses; same presence rule as `overageCostUsd`. */
+    overageRequests?: number;
   };
   failures: ReceiptToolFailure[];
   humanReviewRequired: boolean;

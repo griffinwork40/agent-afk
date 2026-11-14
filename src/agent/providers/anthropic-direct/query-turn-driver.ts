@@ -61,6 +61,7 @@ export interface TurnDriverContext {
   readonly mcpManager: import('../../mcp/index.js').McpManager | undefined;
   readonly hookRegistry: HookRegistry | undefined;
   readonly throttleQueue: import('./throttle-queue.js').ThrottleQueue | undefined;
+  readonly overageTracker: import('./overage-tracker.js').OverageTracker | undefined;
   readonly fastModeController: import('../../fast-mode.js').FastModeController | undefined;
   /** Inter-round steering callback; undefined when not wired (top-level or non-background sessions). */
   readonly beforeNextRound: (() => string | undefined) | undefined;
@@ -150,6 +151,7 @@ function buildTurnRunInput(
     ...(ctx.traceWriter ? { traceWriter: ctx.traceWriter } : {}),
     ...(ctx.subagentId !== undefined ? { subagentId: ctx.subagentId } : {}),
     ...(ctx.throttleQueue ? { throttleQueue: ctx.throttleQueue } : {}),
+    ...(ctx.overageTracker ? { overageTracker: ctx.overageTracker } : {}),
     ...(ctx.beforeNextRound ? { beforeNextRound: ctx.beforeNextRound } : {}),
     ...(ctx.beforeTurnEnd ? { beforeTurnEnd: ctx.beforeTurnEnd } : {}),
     journalSync: ctx.state.journalSync,

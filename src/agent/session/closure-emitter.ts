@@ -115,6 +115,8 @@ export interface ClosureTotals {
 /** Inputs for {@link emitClosureEvent}: terminal signals + session-run totals. */
 export interface EmitClosureInput extends ClosureSignals, ClosureTotals {
   runningTokens: ClosureTokenCounters;
+  /** Subscription-overage rollup for this cycle (#4883); omitted when not measured. */
+  overage?: { costUsd: number; requests: number };
   /**
    * The subagent id of this session when it is a forked child; absent for
    * the root session. Stamped into the `closure` payload so readers
@@ -157,7 +159,21 @@ export async function emitClosureEvent(
     ...(input.lastStopReason !== undefined ? { lastStopReason: input.lastStopReason } : {}),
     ...(guidance !== null ? { guidance } : {}),
     ...(input.subagentId !== undefined ? { subagentId: input.subagentId } : {}),
+    ...closureOverageFields(input.overage, input.finalCostUsd),
   });
+}
+
+/**
+ * Closure overage fields (#4883). Clamped to `finalCostUsd` so a closure never
+ * claims more overage than it spent (the two can only diverge through a
+ * provider rounding quirk; both sum the same per-response costs).
+ */
+function closureOverageFields(
+  overage: { costUsd: number; requests: number } | undefined,
+  finalCostUsd: number,
+): { overageCostUsd?: number; overageRequests?: number } {
+  if (overage === undefined) return {};
+  return { overageCostUsd: Math.min(overage.costUsd, Math.max(0, finalCostUsd)), overageRequests: overage.requests };
 }
 
 /** Inputs for {@link sealTraceWriter}: terminal signals + totals + subagent rollup. */

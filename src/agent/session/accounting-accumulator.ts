@@ -27,6 +27,12 @@ interface TokenCounters {
 /** Read-only snapshot of the accumulator's current state. */
 export interface AccountingSnapshot {
   sessionRunningCostUsd: number;
+  /**
+   * Part of `sessionRunningCostUsd` served from subscription overage (#4883),
+   * with the flagged-response count. Absent when no turn of this cycle was
+   * measured (no `anthropic-ratelimit-unified-*` headers seen).
+   */
+  sessionOverage?: { costUsd: number; requests: number };
   sessionRunningTokens: Readonly<TokenCounters>;
   subagentCompletedCount: number;
   subagentRunningTokens: Readonly<TokenCounters>;
@@ -63,6 +69,8 @@ export class AccountingAccumulator {
    *  `session_sealed` payload can report the final figure without
    *  reaching into `TransformDeps`. */
   private sessionRunningCostUsd = 0;
+  /** Overage rollup for this cycle (#4883); undefined until a measured turn. */
+  private sessionOverage: { costUsd: number; requests: number } | undefined;
   /** Cumulative token counters across all turns. Mirrored from each
    *  turn's `metadata.usage` so the `closure` event can report the final
    *  tuple. Per-counter optionality on the schema lets us emit a partial
@@ -127,6 +135,7 @@ export class AccountingAccumulator {
    */
   reset(): void {
     this.sessionRunningCostUsd = 0;
+    this.sessionOverage = undefined;
     this.sessionRunningTokens = zeroCounters();
     this.lastStopReason = undefined;
     this.maxTurnsHit = false;
@@ -155,6 +164,7 @@ export class AccountingAccumulator {
       this.sessionRunningCostUsd += m.totalCostUsd;
       this.lifetimeSessionCostUsd += m.totalCostUsd;
     }
+    this.recordOverage(m);
     const usage = m.usage;
     if (usage && typeof usage === 'object') {
       const u = usage as Record<string, unknown>;
@@ -173,6 +183,20 @@ export class AccountingAccumulator {
     if (typeof m.stopReason === 'string') {
       this.lastStopReason = m.stopReason;
     }
+  }
+
+  /**
+   * Fold a turn's overage fields (#4883) into the cycle rollup. Presence is
+   * the contract: a turn without the fields was not measured and leaves the
+   * rollup untouched; a measured turn creates it even at 0.
+   */
+  private recordOverage(m: ResponseMetadata): void {
+    const cost = m.overageCostUsd;
+    const requests = m.overageRequests;
+    const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+    if (!ok(cost) || !ok(requests)) return;
+    const prev = this.sessionOverage ?? { costUsd: 0, requests: 0 };
+    this.sessionOverage = { costUsd: prev.costUsd + cost, requests: prev.requests + requests };
   }
 
   /** Set when a SessionStart hook throws {@link HookBlockedError}. */
@@ -286,6 +310,7 @@ export class AccountingAccumulator {
   snapshot(): AccountingSnapshot {
     return {
       sessionRunningCostUsd: this.sessionRunningCostUsd,
+      ...(this.sessionOverage !== undefined ? { sessionOverage: { ...this.sessionOverage } } : {}),
       sessionRunningTokens: { ...this.sessionRunningTokens },
       subagentCompletedCount: this.subagentCompletedCount,
       subagentRunningTokens: { ...this.subagentRunningTokens },

@@ -30,7 +30,7 @@ import { getReceiptsDir } from '../../paths.js';
 import { env } from '../../config/env.js';
 import type { HookHandler } from '../hooks.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
-import { SessionCostAccumulator } from './cost.js';
+import { SessionCostAccumulator, totalCostFields } from './cost.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import { loadJournalMessages, readJournalRecords } from '../journal/reader.js';
 import { extractJournalSummary } from './receipt.journal.js';
@@ -282,7 +282,7 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
     ...(closureTokens !== undefined ? { tokens: closureTokens } : {}),
     ...(sc.rootCostUsd !== undefined ? { rootCostUsd: sc.rootCostUsd } : {}),
     ...(sc.subagentCostUsd !== undefined ? { subagentCostUsd: sc.subagentCostUsd } : {}),
-    ...(sc.totalCostUsd !== undefined ? { totalCostUsd: sc.totalCostUsd } : {}),
+    ...totalCostFields(sc),
     ...(sc.totalTokens !== undefined ? { totalTokens: sc.totalTokens } : {}),
     costSource: sc.source,
   };

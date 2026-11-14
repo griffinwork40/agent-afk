@@ -53,6 +53,14 @@ export interface SessionCostBreakdown {
   /** Number of `closure` events seen. */
   closureCount: number;
   source: SessionCostSource;
+  /**
+   * Whole-trace subscription-overage cost (#4883): sum of `closure.overageCostUsd`
+   * over the same closures as `totalCostUsd`, clamped to `totalCostUsd`. Present
+   * (possibly 0) only when at least one closure carried the field.
+   */
+  overageCostUsd?: number;
+  /** Sum of `closure.overageRequests`; same presence rule as `overageCostUsd`. */
+  overageRequests?: number;
 }
 
 /** Structural event shape: accepts typed `TraceEvent`s and raw parsed JSON. */
@@ -87,6 +95,8 @@ export class SessionCostAccumulator {
   private sealRoot: number | undefined;
   private sealSubagent = 0;
   private sealIncomplete = false;
+  /** #4883 overage totals; undefined until a closure carries the fields. */
+  private overage: { costUsd: number; requests: number } | undefined;
 
   add(event: CostEventLike): void {
     const p = asRecord(event.payload);
@@ -101,6 +111,7 @@ export class SessionCostAccumulator {
       this.lastClosureCost = cost;
       // Track provenance: string = child actor, null = root (field absent).
       this.lastClosureSubagentId = typeof p['subagentId'] === 'string' ? p['subagentId'] : null;
+      this.addOverage(p);
       const t = asRecord(p['finalTokens']);
       if (t !== undefined) {
         for (const k of TOKEN_KEYS) this.tokens[k] += finiteNonNeg(t[k]) ?? 0;
@@ -114,7 +125,23 @@ export class SessionCostAccumulator {
     }
   }
 
+  /** Fold one valid closure's overage fields; both must be present and valid. */
+  private addOverage(p: Record<string, unknown>): void {
+    const cost = finiteNonNeg(p['overageCostUsd']);
+    const requests = finiteNonNeg(p['overageRequests']);
+    if (cost === undefined || requests === undefined) return;
+    const prev = this.overage ?? { costUsd: 0, requests: 0 };
+    this.overage = { costUsd: prev.costUsd + cost, requests: prev.requests + requests };
+  }
+
   result(): SessionCostBreakdown {
+    const r = this.baseResult();
+    if (this.overage === undefined) return r;
+    const cap = r.totalCostUsd ?? 0;
+    return { ...r, overageCostUsd: Math.min(this.overage.costUsd, cap), overageRequests: this.overage.requests };
+  }
+
+  private baseResult(): SessionCostBreakdown {
     const hasClosures = this.closureCount > 0;
     const hasSeal = this.sealRoot !== undefined;
     if (!hasClosures && !hasSeal) return { closureCount: 0, source: 'none' };
@@ -174,6 +201,18 @@ export class SessionCostAccumulator {
     for (const k of TOKEN_KEYS) if (this.tokens[k] > 0) totalTokens[k] = this.tokens[k];
     return Object.keys(totalTokens).length > 0 ? { totalTokens } : {};
   }
+}
+
+/**
+ * Receipt `cost` whole-session fields: `totalCostUsd` when known, plus the
+ * overage pair (#4883), both or neither per the presence rule.
+ */
+export function totalCostFields(
+  sc: SessionCostBreakdown,
+): { totalCostUsd?: number; overageCostUsd?: number; overageRequests?: number } {
+  const total = sc.totalCostUsd !== undefined ? { totalCostUsd: sc.totalCostUsd } : {};
+  if (sc.overageCostUsd === undefined || sc.overageRequests === undefined) return total;
+  return { ...total, overageCostUsd: sc.overageCostUsd, overageRequests: sc.overageRequests };
 }
 
 /** Compute the cost breakdown of one trace from its events. Pure. */
