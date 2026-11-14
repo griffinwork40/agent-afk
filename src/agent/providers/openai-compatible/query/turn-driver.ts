@@ -172,10 +172,11 @@ function makeCompositeIteration(
   vision: boolean,
   windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
   firstRequestOfTurn: boolean,
+  synthesisTurns?: OpenAIMessage[],
 ): ReturnType<typeof runIterationWithQuotaLimitPause> {
   return runIterationWithQuotaLimitPause(
     () => runIterationWithOverloadPause(
-      () => runIteration(ctx, controller, vision, windDownReason),
+      () => runIteration(ctx, controller, vision, windDownReason, synthesisTurns),
       {
         surface: ctx.opts.config.surface,
         traceWriter: ctx.traceWriter,
@@ -308,6 +309,22 @@ async function pushAssistantAndCheckStopHook(
 }
 
 
+/** Run the preflight with the live model/auth settings, keeping the driver bounded. */
+function turnContextOverflow(ctx: TurnDriverContext): Error | null {
+  return checkContextOverflow(
+    ctx.lastUsage,
+    ctx.currentModel,
+    ctx.opts.config.maxOutputTokens,
+    ctx.opts.config.model ?? ctx.currentModel,
+    ctx.opts.auth.source === 'chatgpt-oauth',
+  );
+}
+
+/** Build a request-only relief view without replacing live history or journal slots. */
+function pressureSynthesisTurns(ctx: TurnDriverContext, appendedAt: number): OpenAIMessage[] | undefined {
+  const turns = ctx.priorTurns.slice();
+  return windDownForContextPressure(ctx, appendedAt, turns) ? turns : undefined;
+}
 
 /**
  * Fold one round's provider usage into the running accumulator and update
@@ -354,13 +371,7 @@ export async function* runTurnInner(
 
   // Context-overflow guard (#962): fail fast before the provider rejects
   // with 400. Yields an error event (not throw) so the abort slot is cleared.
-  const overflowErr = checkContextOverflow(
-    ctx.lastUsage,
-    ctx.currentModel,
-    ctx.opts.config.maxOutputTokens,
-    ctx.opts.config.model ?? ctx.currentModel,
-    ctx.opts.auth.source === 'chatgpt-oauth',
-  );
+  const overflowErr = turnContextOverflow(ctx);
   if (overflowErr) {
     ctx.abort.clear(controller);
     yield { type: 'error', error: overflowErr };
@@ -403,6 +414,7 @@ export async function* runTurnInner(
       resultSubtype: 'success',
       isError: false,
     };
+    let synthesisTurns: OpenAIMessage[] | undefined;
     let finalAssistantText = '';
     let finalReasoningText = '';
     let finalReasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content';
@@ -429,7 +441,7 @@ export async function* runTurnInner(
       // Only the turn's first request may ask for a model fallback: a later
       // round or Stop-hook segment already yielded output the replay would repeat.
       const firstRequest = round === 0 && stopHookContinuation === 0;
-      const result = yield* makeCompositeIteration(ctx, controller, vision, windDownReason, firstRequest);
+      const result = yield* makeCompositeIteration(ctx, controller, vision, windDownReason, firstRequest, synthesisTurns);
       if (result === null) {
         ctx.abort.clear(controller);
         if (controller.signal.aborted || ctx.closed) {
@@ -485,9 +497,10 @@ export async function* runTurnInner(
         return;
       }
 
-      if (windDownForContextPressure(ctx, appendedAt)) {
+      synthesisTurns = pressureSynthesisTurns(ctx, appendedAt);
+      if (synthesisTurns) {
         windDownReason = CONTEXT_PRESSURE_WIND_DOWN;
-        if (!canSynthesizeUnderPressure(ctx, appendedAt)) {
+        if (!canSynthesizeUnderPressure(ctx, appendedAt, synthesisTurns)) {
           // Fix #3963 (B): always overwrite finalAssistantText with the incomplete
           // marker — the ||= would silently pass a stale planning sentence as the
           // answer when an earlier round had text.
