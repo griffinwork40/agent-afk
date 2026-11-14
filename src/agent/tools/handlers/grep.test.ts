@@ -812,4 +812,112 @@ describe('grepHandler cwd containment', () => {
       }
     });
   });
+
+  // #4872: file_path alias and unknown-key rejection
+  describe('input validation (#4872)', () => {
+    it('file_path alone scopes the search to that file', async () => {
+      const targetFile = join(tempDir, 'target.txt');
+      const otherFile = join(tempDir, 'other.txt');
+      writeFileSync(targetFile, 'needle here');
+      writeFileSync(otherFile, 'needle elsewhere');
+
+      const handler = createGrepHandler(tempDir);
+      const result = await handler(
+        { pattern: 'needle', file_path: targetFile },
+        createSignal(),
+      );
+
+      expect(result.isError).toBeFalsy();
+      // rg searching a single file emits line:content without the filename;
+      // the content itself proves it was scoped to targetFile's content.
+      expect(result.content).toContain('needle here');
+      // Must NOT include content from the other file
+      expect(result.content).not.toContain('needle elsewhere');
+    });
+
+    it('path alone behaves unchanged', async () => {
+      writeFileSync(join(tempDir, 'a.txt'), 'needle');
+      writeFileSync(join(tempDir, 'b.txt'), 'needle');
+
+      const handler = createGrepHandler(tempDir);
+      const result = await handler(
+        { pattern: 'needle', path: tempDir },
+        createSignal(),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('a.txt');
+      expect(result.content).toContain('b.txt');
+    });
+
+    it('path and file_path equal: accepts and searches that path', async () => {
+      const targetFile = join(tempDir, 'eq.txt');
+      writeFileSync(targetFile, 'needle');
+
+      const handler = createGrepHandler(tempDir);
+      const result = await handler(
+        { pattern: 'needle', path: targetFile, file_path: targetFile },
+        createSignal(),
+      );
+
+      expect(result.isError).toBeFalsy();
+      // rg on a single file omits the filename; the match content is the signal.
+      expect(result.content).toContain('needle');
+    });
+
+    it('path and file_path differ: returns an error naming both values', async () => {
+      const handler = createGrepHandler(tempDir);
+      const result = await handler(
+        { pattern: 'needle', path: join(tempDir, 'a.txt'), file_path: join(tempDir, 'b.txt') },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('path');
+      expect(result.content).toContain('file_path');
+      expect(result.content).toContain('a.txt');
+      expect(result.content).toContain('b.txt');
+    });
+
+    it('glob key: returns error that says to use include', async () => {
+      const handler = createGrepHandler(tempDir);
+      const result = await handler(
+        { pattern: 'needle', path: tempDir, glob: '*.ts' },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('glob');
+      expect(result.content).toContain('include');
+    });
+
+    it('arbitrary unknown key: returns error listing accepted parameters', async () => {
+      const handler = createGrepHandler(tempDir);
+      const result = await handler(
+        { pattern: 'needle', path: tempDir, recursive: true },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('recursive');
+      expect(result.content).toContain('pattern');
+      expect(result.content).toContain('path');
+      expect(result.content).toContain('include');
+    });
+
+    it('all three known keys together: normal search', async () => {
+      writeFileSync(join(tempDir, 'match.ts'), 'needle');
+      writeFileSync(join(tempDir, 'skip.txt'), 'needle');
+
+      const handler = createGrepHandler(tempDir);
+      const result = await handler(
+        { pattern: 'needle', path: tempDir, include: '*.ts' },
+        createSignal(),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('match.ts');
+      expect(result.content).not.toContain('skip.txt');
+    });
+  });
 });
