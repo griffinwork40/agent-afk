@@ -39,6 +39,21 @@ The original conversation stays active. The fork receives a new session identity
 </Step>
 </Steps>
 
+## Export a conversation
+
+Use `/export [md|html] [path]` in the REPL to save the current session. For non-interactive export of a saved conversation, run `afk export <session> [--format md|html] [--out <path>]`:
+
+```sh
+afk export my-session --format html --out ./review.html
+afk export latest
+```
+
+The CLI accepts a saved session name or ID, or a witness label or `latest` as with `afk trace show`. The `latest` selector uses the most recently written witness trace, not the newest saved sidecar. Export requires a saved session transcript; a trace alone cannot reconstruct conversation text. Named sessions can be exported even if tracing was disabled.
+
+Both commands use the same Markdown and self-contained HTML renderers. The default is Markdown under `$AFK_HOME/exports/<session>.md` (`~/.afk/exports/` when `AFK_HOME` is unset). If the destination omits the selected extension, it is appended. Explicit destination directories must already exist. Export files replace existing destinations atomically with owner-only permissions on POSIX systems.
+
+Exports contain the saved top-level turns, recorded tool arguments and results, and cost and tool summaries. They are not full-fidelity journal backups: recorded tool results may be truncated, and child subagent conversations are not nested yet. Known secret patterns are redacted, but code, paths, command output, and other sensitive content can remain. Review the file before sharing.
+
 ## What the journal preserves
 
 The message journal stores user and assistant messages, structured tool inputs, and full tool results. Large payloads can live in separate blob files referenced by the journal. Each journaled child session has its own subagent journal, rather than writing into the parent's conversation.

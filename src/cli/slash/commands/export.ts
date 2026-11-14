@@ -20,14 +20,9 @@
  * @module cli/slash/commands/export
  */
 
-import * as path from 'node:path';
-import { getAfkHome } from '../../../paths.js';
+import { renderSessionExport, resolveExportOutputPath, type ExportFormat } from '../../session-export.js';
 import { atomicWriteFileAsync } from '../../../utils/atomic-write.js';
-import { renderSessionMarkdown } from './export.render-md.js';
-import { renderSessionHtml } from './export.render-html.js';
 import type { SlashCommand } from '../types.js';
-
-type ExportFormat = 'md' | 'html';
 
 // ---------------------------------------------------------------------------
 // arg parsing
@@ -46,30 +41,6 @@ function parseArgs(raw: string): { format: ExportFormat; outPath: string | undef
     }
   }
   return { format, outPath };
-}
-
-// ---------------------------------------------------------------------------
-// path resolution
-// ---------------------------------------------------------------------------
-
-async function resolveOutputPath(
-  format: ExportFormat,
-  explicit: string | undefined,
-  sessionId: string | undefined,
-): Promise<string> {
-  const ext = `.${format}`;
-  if (explicit) {
-    // Add extension if caller omitted it.
-    return explicit.endsWith(ext) ? explicit : explicit + ext;
-  }
-  // Invariant: mkdir runs inside resolveOutputPath, which is called before either
-  // try/catch in the handler. Wrap here so mkdir failures surface as a normal
-  // error message rather than an unhandled rejection.
-  const { promises: fs } = await import('node:fs');
-  const exportDir = path.join(getAfkHome(), 'exports');
-  await fs.mkdir(exportDir, { recursive: true });
-  const stem = sessionId ?? `session-${Date.now()}`;
-  return path.join(exportDir, `${stem}${ext}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +63,7 @@ export const exportCmd: SlashCommand = {
     const { format, outPath: explicitPath } = parseArgs(args);
     let outPath: string;
     try {
-      outPath = await resolveOutputPath(format, explicitPath, stats.sessionId);
+      outPath = await resolveExportOutputPath(format, explicitPath, stats.sessionId);
     } catch (err) {
       out.error(`Could not resolve export path: ${err instanceof Error ? err.message : String(err)}`);
       return 'continue';
@@ -100,9 +71,7 @@ export const exportCmd: SlashCommand = {
 
     let content: string;
     try {
-      content = format === 'html'
-        ? renderSessionHtml(stats)
-        : renderSessionMarkdown(stats);
+      content = renderSessionExport(stats, format);
     } catch (err) {
       out.error(`Export render failed: ${err instanceof Error ? err.message : String(err)}`);
       return 'continue';
