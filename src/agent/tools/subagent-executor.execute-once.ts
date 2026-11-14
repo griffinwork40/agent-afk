@@ -179,8 +179,7 @@ export async function executeOnce(
   // Pre-dispatch implementation-intent gate (#3754): rejects implementation briefs sent to read-only named agents.
   { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.rollback(); return r; } }
 
-  // isolation:"worktree" — may mutate childConfig.cwd to the worktree path.
-  // Skip worktree setup on continuation: the chain already owns the worktree.
+  // isolation:"worktree" — may mutate childConfig.cwd; a continuation reuses the chain's tree.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
   let setupNotice: string | undefined; // #3601: failed repo-declared setup, surfaced to the parent too
   if (parsed.isolation === 'worktree' && plan === undefined) {
@@ -250,10 +249,7 @@ export async function executeOnce(
 
   const budgetRelease = budgetReceipt?.release;
   const promotionTookBudget = { value: false };
-  // For worktree-isolated chains: if the chain is still continuable after the
-  // child ends, keep the worktree locked (for the next link) instead of tearing
-  // it down. Extracted to buildIsolationTeardownHook (continuation-worktree.ts)
-  // to satisfy the 200-line function ceiling.
+  // #4266: a still-continuable isolated chain keeps its worktree locked for the next link.
   const onIsolationTeardown = buildIsolationTeardownHook(isolationTeardown, chain, ctx.continuationRegistry, isContinuableChain);
   const result = await runForegroundWithPromotion({
     handle,
