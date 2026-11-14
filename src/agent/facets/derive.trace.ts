@@ -93,8 +93,17 @@ export function parseTraceSignals(content: string): TraceSignals {
         // would falsely downgrade the root session.
         if (p['subagentId'] == null) {
           const reason = p['reason'];
+          // #4896 item 6: on a multi-cycle REPL trace the LAST root closure
+          // represents the cycle that ended the session. We scan forward and
+          // reset traceClosureReason on each root closure so the final value
+          // reflects the last cycle. A clean last cycle (reason not in
+          // DOWNGRADE_REASONS) therefore clears a downgrade set by an earlier
+          // cycle — the last cycle wins.
           if (typeof reason === 'string' && DOWNGRADE_REASONS.has(reason)) {
             traceClosureReason = reason as DowngradableClosureReason;
+          } else {
+            // Last root cycle ended cleanly — clear any earlier downgrade.
+            traceClosureReason = undefined;
           }
         }
       }

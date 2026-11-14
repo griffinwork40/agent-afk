@@ -50,33 +50,42 @@ import type { Artifacts } from './schema.js';
  * Read the closure reason from a sealed trace.jsonl file.
  * Returns null when tracePath is absent, the file doesn't exist, or parse fails.
  * This is the LoadClosure injectable required by lfClosure/runImmediateLFs.
+ *
+ * #4896: on a multi-cycle REPL trace (one root closure per `/clear` cycle)
+ * the LAST root closure (no `subagentId`) represents the cycle that is
+ * actually ending. Scanning forward and overwriting on each root closure
+ * means we always return the last cycle's reason.
  */
 function closureFromTrace(tracePath: string | undefined): ClosureInfo | null {
   if (!tracePath || !existsSync(tracePath)) return null;
   try {
     const raw = readFileSync(tracePath, 'utf8');
+    let lastRootClosure: ClosureInfo | null = null;
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue;
       try {
         const obj = JSON.parse(line) as Record<string, unknown>;
         if (obj['kind'] === 'closure') {
           const p = obj['payload'] as Record<string, unknown> | undefined;
+          // Skip child closures (subagentId present) — only root cycles matter.
+          if (p?.['subagentId'] != null) continue;
           const reason = p?.['reason'];
-          if (reason === 'abort') return { reason: 'abort' };
-          if (reason === 'iteration_cap') return { reason: 'iteration_cap' };
           // Invariant: only 'model_end_turn' should map to 'normal'.
           // 'truncated', 'timeout', 'budget_exceeded', 'hook_blocked', and
           // 'max_turns_exceeded' are abnormal termination reasons — mapping them
           // to 'normal' lets combiner rules 6/7 label abnormal sessions as
           // succeeded. Use 'unknown' as a safe non-normal sentinel for any
           // trace reason that is not explicitly known to be clean.
-          if (reason === 'model_end_turn') return { reason: 'normal' };
-          return { reason: 'unknown' };
+          if (reason === 'abort') lastRootClosure = { reason: 'abort' };
+          else if (reason === 'iteration_cap') lastRootClosure = { reason: 'iteration_cap' };
+          else if (reason === 'model_end_turn') lastRootClosure = { reason: 'normal' };
+          else lastRootClosure = { reason: 'unknown' };
         }
       } catch {
         // malformed line — skip
       }
     }
+    return lastRootClosure;
   } catch {
     // IO error
   }

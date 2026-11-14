@@ -20,11 +20,14 @@
  * `total` takes the larger of the two lower bounds so a trace whose root
  * closure was lost (crash before closure, seal written) is not under-reported.
  *
- * Contract: closure events carry no actor id, so the root/subagent split cannot
- * come from closures. `root` is the seal's root figure (falling back to the
- * last closure, which is normally the root's) and `subagent = total - root`.
- * On a multi-cycle REPL trace the root's earlier cycles therefore land in
- * `subagentCostUsd`; `totalCostUsd` is unaffected.
+ * Root/subagent split (#4896): closure events carry an optional `subagentId`
+ * field (stamped since #3932). Root closures lack the field; child closures
+ * carry it as a string. `rootCostUsd` sums every root closure so multi-cycle
+ * REPL traces (each `/clear` emits one root closure) are attributed correctly.
+ * `rootTurnCount` sums `finalTurnCount` across the same root closures.
+ * Compatibility: older traces where child closures also lack `subagentId`
+ * (pre-#3932) are handled by the existing equality heuristic in `result()` for
+ * total computation; the root-cycle sum is best-effort on those traces.
  *
  * @module agent/trace/cost
  */
@@ -78,6 +81,12 @@ export class SessionCostAccumulator {
   private lastClosureCost: number | undefined;
   /** `subagentId` from the last closure event; `null` = root (field absent); `undefined` = no closure yet. */
   private lastClosureSubagentId: string | null | undefined = undefined;
+  /** Sum of cost across all root-cycle closures (no `subagentId`). Used for the root/subagent split on multi-cycle traces (#4896). */
+  private rootCycleSum = 0;
+  /** Sum of `finalTurnCount` across all root-cycle closures. */
+  private rootCycleTurnCount = 0;
+  /** Whether any child closure (with `subagentId`) was seen. When true the trace is new enough to trust the root-cycle sum for the split. */
+  private hasChildClosure = false;
   private readonly tokens: Record<(typeof TOKEN_KEYS)[number], number> = {
     input: 0,
     output: 0,
@@ -100,7 +109,16 @@ export class SessionCostAccumulator {
       this.closureSum += cost;
       this.lastClosureCost = cost;
       // Track provenance: string = child actor, null = root (field absent).
-      this.lastClosureSubagentId = typeof p['subagentId'] === 'string' ? p['subagentId'] : null;
+      const subagentId = typeof p['subagentId'] === 'string' ? p['subagentId'] : null;
+      this.lastClosureSubagentId = subagentId;
+      if (subagentId === null) {
+        // Root closure: accumulate for the multi-cycle root/subagent split.
+        this.rootCycleSum += cost;
+        const turns = finiteNonNeg(p['finalTurnCount']);
+        if (turns !== undefined) this.rootCycleTurnCount += turns;
+      } else {
+        this.hasChildClosure = true;
+      }
       const t = asRecord(p['finalTokens']);
       if (t !== undefined) {
         for (const k of TOKEN_KEYS) this.tokens[k] += finiteNonNeg(t[k]) ?? 0;
@@ -112,6 +130,15 @@ export class SessionCostAccumulator {
       // backstop; treat it as a marker only — do not use its $0 as rootCostUsd.
       this.sealIncomplete = p['incomplete'] === true;
     }
+  }
+
+  /**
+   * Sum of `finalTurnCount` across all root-cycle closures. Used by the receipt
+   * to report a correct total turn count for multi-cycle REPL sessions (#4896).
+   * Zero when no root closure was seen.
+   */
+  get rootTurnCount(): number {
+    return this.rootCycleTurnCount;
   }
 
   result(): SessionCostBreakdown {
@@ -157,7 +184,18 @@ export class SessionCostAccumulator {
       totalCostUsd = Math.max(closureBased, sealTotal);
     }
 
-    const rootCostUsd = this.sealRoot ?? this.lastClosureCost ?? 0;
+    // Contract: rootCostUsd sums every root-cycle closure (no subagentId) when
+    // hasChildClosure is true — meaning at least one closure carried subagentId
+    // (post-#3932 trace). Root closures are unambiguously identified by the
+    // absent field, so rootCycleSum is the correct root total and covers every
+    // REPL cycle including pre-clear cycles.
+    //
+    // Compatibility for older traces (pre-#3932) where child closures also
+    // lack subagentId: hasChildClosure=false, so we fall back to sealRoot
+    // (last cycle only) as before. totalCostUsd is unaffected either way.
+    const rootCostUsd = this.hasChildClosure && this.rootCycleSum > 0
+      ? this.rootCycleSum
+      : (this.sealRoot ?? this.lastClosureCost ?? 0);
     const subagentCostUsd = Math.max(0, totalCostUsd - rootCostUsd);
     return {
       rootCostUsd,

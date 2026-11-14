@@ -40,6 +40,7 @@
  */
 
 import type { TraceEvent } from './types.js';
+import { SessionCostAccumulator } from './cost.js';
 import {
   strAttr, intAttr, doubleAttr,
   SCOPE_NAME, SCOPE_VERSION, GEN_AI_SYSTEM,
@@ -143,12 +144,14 @@ export function traceToOtlp(
   // remain UNSET rather than being falsely reported as successful.
   let sessionStatus: SpanStatus = { code: 0 };
   let sealedSeen = false;
-  let finalCost: number | undefined;
-  let finalTurns: number | undefined;
   let finalTokens: { input?: number; output?: number } | undefined;
+  // #4896: use the shared cost accumulator for root cost and turn count so
+  // multi-cycle REPL traces report the full session total, not just the last cycle.
+  const costAcc = new SessionCostAccumulator();
 
   for (const ev of events) {
     if (ev.ts > lastTs) lastTs = ev.ts;
+    costAcc.add(ev);
     if (ev.kind === 'session_sealed') {
       lastTs = ev.ts;
       sealedSeen = true;
@@ -157,12 +160,14 @@ export function traceToOtlp(
       } else {
         sessionStatus = { code: 2, message: `session ${ev.payload.status}` };
       }
-      finalCost = ev.payload.finalCostUsd;
-      finalTurns = ev.payload.finalTurnCount;
       finalTokens = ev.payload.subagentTokens;
     }
   }
   void sealedSeen; // informational; status already captures the distinction
+
+  const costResult = costAcc.result();
+  const finalCost = costResult.totalCostUsd;
+  const finalTurns = costAcc.rootTurnCount > 0 ? costAcc.rootTurnCount : undefined;
 
   // Root span attributes.
   const rootSpanId = seedSpanId(`session:${sessionId}`);
