@@ -1,11 +1,12 @@
 // Test-only helpers for the journal suites (not exported from index.ts).
 import * as fs from 'node:fs';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach } from 'vitest';
 
 import type { JournalMessage } from '../types.js';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 
 /** Fresh AFK_HOME per test (the global setup gives one per FILE). */
 export function useTmpAfkHome(): { home: () => string } {
@@ -19,7 +20,7 @@ export function useTmpAfkHome(): { home: () => string } {
   afterEach(() => {
     if (prev === undefined) delete process.env['AFK_HOME']; // audit-env-access: allow — test isolation
     else process.env['AFK_HOME'] = prev; // audit-env-access: allow — test isolation
-    rmSync(dir, { recursive: true, force: true });
+    rmSyncRetry(dir);
   });
   return { home: () => dir };
 }

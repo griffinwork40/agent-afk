@@ -74,6 +74,40 @@ export interface CloneFile {
 }
 
 /**
+ * Lines added in the diff of this PR, keyed by relative path.
+ *
+ * Uses three-dot diff (`baseRef...HEAD`) when a merge-base exists, which
+ * isolates exactly the PR's own commits. Falls back to two-dot diff
+ * (`baseRef HEAD`) on shallow clones where the merge-base commit is absent;
+ * on pull_request CI this is equivalent because HEAD is the synthetic merge
+ * commit whose first parent is the base tip.
+ */
+export function addedLinesByFile(baseRef: string): Map<string, Set<number>> {
+  const threeDot = hasMergeBase(baseRef);
+  const diffArgs = threeDot
+    ? ['diff', '--unified=0', '--diff-filter=ACMR', `${baseRef}...HEAD`]
+    : ['diff', '--unified=0', '--diff-filter=ACMR', baseRef, 'HEAD'];
+
+  if (!threeDot) {
+    console.log(
+      `[clone-gate] shallow checkout: no merge base for ${baseRef}; ` +
+        `using two-dot diff (${baseRef} HEAD) — equivalent on pull_request CI.`,
+    );
+  }
+
+  const raw = execFileSync('git', diffArgs, {
+    encoding: 'utf-8',
+    maxBuffer: 50 * 1024 * 1024,
+  });
+
+  const parsed = parseDiffOutput(raw);
+  if (parsed.size === 0) {
+    console.log('[clone-gate] diff has no added lines — all new clones will be suppressed as pre-existing (no overlap possible).');
+  }
+  return parsed;
+}
+
+/**
  * Return true when any line in `frag` appears in the set of added lines from
  * the PR diff.
  */

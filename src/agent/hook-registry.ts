@@ -238,7 +238,10 @@ class HookRegistryImpl implements HookRegistry {
           `hook handler threw during ${context.event}`,
           context.event,
           errorMessage(err),
-          { cause: err },
+          {
+            cause: err,
+            ...(err instanceof HookBlockedError && err.ruleId !== undefined ? { ruleId: err.ruleId } : {}),
+          },
         );
       }
 
@@ -255,6 +258,7 @@ class HookRegistryImpl implements HookRegistry {
           {
             ...(decision.injectContext !== undefined ? { injectContext: decision.injectContext } : {}),
             ...(decision.riskCategory !== undefined ? { riskCategory: decision.riskCategory } : {}),
+            ...(decision.ruleId !== undefined ? { ruleId: decision.ruleId } : {}),
           },
         );
       }

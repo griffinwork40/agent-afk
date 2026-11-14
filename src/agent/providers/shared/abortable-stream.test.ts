@@ -9,8 +9,24 @@
  * signal. The load-bearing case is `throws promptly when a read is parked`.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { abortableStream } from './abortable-stream.js';
+
+// ---------------------------------------------------------------------------
+// PauseController mock — shared across all tests that need pause control.
+// Hoisted so vi.mock sees it before module resolution.
+// ---------------------------------------------------------------------------
+const mockIsPaused = vi.hoisted(() => vi.fn<() => boolean>().mockReturnValue(false));
+const mockCheck = vi.hoisted(() => vi.fn<() => Promise<void>>().mockResolvedValue(undefined));
+
+vi.mock('../../session/pause-controller.js', () => ({
+  PauseController: {
+    instance: () => ({
+      isPaused: mockIsPaused,
+      check: mockCheck,
+    }),
+  },
+}));
 
 async function* fromArray<T>(arr: T[]): AsyncIterable<T> {
   for (const x of arr) yield x;
@@ -35,7 +51,28 @@ function parkedSource(returnSpy?: () => void): AsyncIterable<number> {
   };
 }
 
+/**
+ * Drain the microtask queue so promise chains that have already resolved
+ * proceed to their next `.then()` step before we assert on side-effects.
+ *
+ * Why 10 iterations: the deepest chain in abortable-stream involves
+ * Promise.race (1 hop) → check() settlement (1 hop) → finally block (1 hop)
+ * → yield (1 hop), so 4 hops per pull with a generous 2× safety margin fits
+ * well within 10. If the chain ever deepens, increase this constant and add a
+ * comment explaining why.
+ */
+async function drainMicrotasks(n = 10): Promise<void> {
+  for (let i = 0; i < n; i++) await Promise.resolve();
+}
+
 describe('abortableStream', () => {
+  beforeEach(() => {
+    mockIsPaused.mockReturnValue(false);
+    mockCheck.mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   it('throws promptly when the signal aborts while a read is parked (the interrupt-lag bug)', async () => {
     const ac = new AbortController();
     const gen = abortableStream(parkedSource(), ac.signal);
@@ -175,5 +212,195 @@ describe('abortableStream', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(true).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Stall-watchdog suspend/resume during pause (issue #4638)
+  //
+  // Bug: `StreamStallHandle` timers kept ticking while the session was paused.
+  // If a pause exceeded the stall window (default 20 min), the watchdog fired
+  // and aborted the per-request signal; when the pause resumed the
+  // post-check() `signal.aborted` guard terminated the stream with a spurious
+  // stall error — violating the "nothing is cancelled" contract.
+  //
+  // Fix (PR #4691): `abortable-stream.ts` calls `stallHandle.suspend()` before
+  // blocking on `PauseController.check()` and `stallHandle.resumeTimer()` in
+  // the finally block, guarded by `isPaused()` so hot-path non-pause pulls pay
+  // no extra cost.
+  // -------------------------------------------------------------------------
+
+  it('suspend/resume: stall watchdog is suspended during pause and resumed after (issue #4638)', async () => {
+    vi.useFakeTimers();
+
+    // Simulate: session is paused. check() blocks until resolveCheck() fires.
+    let resolveCheck!: () => void;
+    mockIsPaused.mockReturnValue(true);
+    mockCheck.mockImplementation(() => new Promise<void>((res) => { resolveCheck = res; }));
+
+    const suspendSpy = vi.fn();
+    const resumeTimerSpy = vi.fn();
+    const stallHandle = { suspend: suspendSpy, resumeTimer: resumeTimerSpy };
+
+    // Source: yields value 1 immediately on first pull.
+    // The generator flow for pull #1:
+    //   iterator.next() → value 1 → isPaused()=true → suspend() → check() BLOCKS
+    // The check() promise parks; suspend/resumeTimer fire around it.
+    const ac = new AbortController();
+    const source: AsyncIterable<number> = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => Promise.resolve({ value: 1, done: false } as IteratorResult<number>),
+        };
+      },
+    };
+
+    const gen = abortableStream(source, ac.signal, stallHandle);
+
+    // Start the first consumer pull. The generator will:
+    //   1. await iterator.next() → value 1
+    //   2. isPaused()=true → suspend()
+    //   3. await check() — PARKS HERE (promise pending)
+    const firstPull = gen.next();
+
+    // Drain microtasks so generator reaches and parks inside check().
+    await drainMicrotasks();
+
+    // suspend() must have fired before check() blocked.
+    expect(suspendSpy).toHaveBeenCalledTimes(1);
+    expect(resumeTimerSpy).toHaveBeenCalledTimes(0);
+
+    // Advance fake time well past the 20-min stall window.
+    // The timer was suspended, so it must NOT abort.
+    vi.advanceTimersByTime(25 * 60 * 1_000); // 25 minutes
+
+    // The turn signal must still be live — watchdog was frozen.
+    expect(ac.signal.aborted).toBe(false);
+
+    // Resume the pause — resolveCheck() unblocks check().
+    mockIsPaused.mockReturnValue(false);
+    resolveCheck();
+
+    // Drain microtasks so the finally { resumeTimer() } executes, then
+    // signal.aborted is checked, then `yield result.value` runs.
+    await drainMicrotasks();
+
+    // resumeTimer() must have fired after check() unblocked.
+    expect(resumeTimerSpy).toHaveBeenCalledTimes(1);
+
+    // signal is still live — no spurious abort from the stall watchdog.
+    expect(ac.signal.aborted).toBe(false);
+
+    // The first pull should resolve to value 1.
+    expect(await firstPull).toEqual({ value: 1, done: false });
+
+    // Clean up — abort so the generator's next parked read unblocks.
+    ac.abort();
+  });
+
+  it('suspend/resume: stall watchdog fires once per pull while session stays paused across multiple values (issue #4638)', async () => {
+    vi.useFakeTimers();
+
+    // Simulate: session stays paused for every pull.
+    // Each check() parks and is unblocked manually below.
+    const resolvers: Array<() => void> = [];
+    mockIsPaused.mockReturnValue(true);
+    mockCheck.mockImplementation(
+      () => new Promise<void>((res) => { resolvers.push(res); }),
+    );
+
+    const suspendSpy = vi.fn();
+    const resumeTimerSpy = vi.fn();
+    const stallHandle = { suspend: suspendSpy, resumeTimer: resumeTimerSpy };
+
+    // Source yields three values so we can verify that suspend/resumeTimer are
+    // called once per yielded value, not just once for the whole stream.
+    // Pull N flow: iterator.next() → value N → isPaused()=true → suspend() →
+    //   check() BLOCKS → resolveCheck() → resumeTimer() → yield value N
+    const ac = new AbortController();
+    const source: AsyncIterable<number> = {
+      [Symbol.asyncIterator]() {
+        let call = 0;
+        return {
+          next: () => Promise.resolve(
+            call++ < 3
+              ? ({ value: call, done: false } as IteratorResult<number>)
+              : ({ value: undefined as unknown as number, done: true }),
+          ),
+        };
+      },
+    };
+
+    const gen = abortableStream(source, ac.signal, stallHandle);
+
+    // ── Pull #1 ──────────────────────────────────────────────────────────────
+    const pull1 = gen.next();
+    await drainMicrotasks();
+
+    expect(suspendSpy).toHaveBeenCalledTimes(1);
+    expect(resumeTimerSpy).toHaveBeenCalledTimes(0);
+    expect(resolvers).toHaveLength(1);
+
+    // Unblock check() for pull #1.
+    resolvers[0]!();
+    await drainMicrotasks();
+
+    expect(resumeTimerSpy).toHaveBeenCalledTimes(1);
+    expect(await pull1).toEqual({ value: 1, done: false });
+
+    // ── Pull #2 ──────────────────────────────────────────────────────────────
+    const pull2 = gen.next();
+    await drainMicrotasks();
+
+    expect(suspendSpy).toHaveBeenCalledTimes(2);
+    expect(resumeTimerSpy).toHaveBeenCalledTimes(1);
+    expect(resolvers).toHaveLength(2);
+
+    resolvers[1]!();
+    await drainMicrotasks();
+
+    expect(resumeTimerSpy).toHaveBeenCalledTimes(2);
+    expect(await pull2).toEqual({ value: 2, done: false });
+
+    // ── Pull #3 ──────────────────────────────────────────────────────────────
+    const pull3 = gen.next();
+    await drainMicrotasks();
+
+    expect(suspendSpy).toHaveBeenCalledTimes(3);
+    expect(resumeTimerSpy).toHaveBeenCalledTimes(2);
+    expect(resolvers).toHaveLength(3);
+
+    resolvers[2]!();
+    await drainMicrotasks();
+
+    expect(resumeTimerSpy).toHaveBeenCalledTimes(3);
+    expect(await pull3).toEqual({ value: 3, done: false });
+
+    // Counts must equal the number of paused pulls — not 1 (single-fire bug).
+    expect(suspendSpy).toHaveBeenCalledTimes(3);
+    expect(resumeTimerSpy).toHaveBeenCalledTimes(3);
+
+    ac.abort();
+  });
+
+  it('stall watchdog: suspend/resume NOT called when session is not paused (hot-path guard)', async () => {
+    vi.useFakeTimers();
+
+    // Not paused — isPaused() returns false (default mock).
+    mockIsPaused.mockReturnValue(false);
+    mockCheck.mockResolvedValue(undefined);
+
+    const suspendSpy = vi.fn();
+    const resumeTimerSpy = vi.fn();
+    const stallHandle = { suspend: suspendSpy, resumeTimer: resumeTimerSpy };
+
+    const ac = new AbortController();
+    const gen = abortableStream(fromArray([1, 2, 3]), ac.signal, stallHandle);
+    const out: number[] = [];
+    for await (const v of gen) out.push(v);
+
+    expect(out).toEqual([1, 2, 3]);
+    // Guard: suspend/resumeTimer must NOT be called on a non-paused fast path.
+    expect(suspendSpy).not.toHaveBeenCalled();
+    expect(resumeTimerSpy).not.toHaveBeenCalled();
   });
 });

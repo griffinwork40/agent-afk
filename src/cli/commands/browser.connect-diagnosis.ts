@@ -67,10 +67,10 @@ export function printConnectDiagnosis(
   const probe = probeRealChrome({ channel, platform });
   const advice = adviseRealChrome(probe);
 
-  console.log('');
+  console.log(''); // console-ok
   console.log(palette.heading('Readiness check:'));
   const mark = probe.state === 'ok' ? palette.success('✓') : palette.warning('⚠');
-  console.log(`  ${mark} ${advice.headline}`);
+  console.log(palette.info(`  ${mark} ${advice.headline}`));
   advice.steps.forEach((step, i) => console.log(palette.meta(`    ${i + 1}. ${step}`)));
 
   if (open && advice.openUrl !== undefined && openForUser(advice.openUrl, channel, platform)) {

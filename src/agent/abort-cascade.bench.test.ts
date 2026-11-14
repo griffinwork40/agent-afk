@@ -369,22 +369,22 @@ describe.skipIf(process.platform === 'win32')(
       // Exactly one abort trace event from the root
       expect(abortEvents).toHaveLength(1);
       const abortPayload = abortEvents[0]!.payload;
-      const cascadedTo = abortPayload.cascadedTo as string[];
+      const cascadedTo = abortPayload['cascadedTo'] as string[];
 
       // cascadedTo must list both descendants
       expect(cascadedTo).toHaveLength(2);
       expect(new Set(cascadedTo)).toEqual(new Set(['child', 'grandchild']));
-      expect(abortPayload.origin).toBe('user_signal');
-      expect(abortPayload.reason).toBe('shutdown');
+      expect(abortPayload['origin']).toBe('user_signal');
+      expect(abortPayload['reason']).toBe('shutdown');
 
       // Verify controller states from the child process
       expect(verifyEvent).toBeDefined();
       const vp = verifyEvent!.payload as Record<string, unknown>;
-      expect(vp.rootAborted).toBe(true);
-      expect(vp.childAborted).toBe(true);
-      expect(vp.grandchildAborted).toBe(true);
-      expect(vp.childReason).toBe('shutdown');
-      expect(vp.grandchildReason).toBe('shutdown');
+      expect(vp['rootAborted']).toBe(true);
+      expect(vp['childAborted']).toBe(true);
+      expect(vp['grandchildAborted']).toBe(true);
+      expect(vp['childReason']).toBe('shutdown');
+      expect(vp['grandchildReason']).toBe('shutdown');
 
       results.push({
         scenario: 'linear-chain',
@@ -414,20 +414,20 @@ describe.skipIf(process.platform === 'win32')(
       );
 
       expect(abortEvents).toHaveLength(1);
-      const cascadedTo = abortEvents[0]!.payload.cascadedTo as string[];
+      const cascadedTo = abortEvents[0]!.payload['cascadedTo'] as string[];
       expect(cascadedTo).toHaveLength(5);
       expect(new Set(cascadedTo)).toEqual(new Set(['c0', 'c1', 'c2', 'c3', 'c4']));
 
       const vp = verifyEvent!.payload as Record<string, unknown>;
-      expect(vp.allAborted).toBe(true);
-      expect(vp.allReasonsMatch).toBe(true);
+      expect(vp['allAborted']).toBe(true);
+      expect(vp['allReasonsMatch']).toBe(true);
 
       results.push({
         scenario: 'wide-fan-out',
         descendants: 5,
         cascadedTo: cascadedTo.length,
-        allAborted: vp.allAborted as boolean,
-        reasonThreaded: vp.allReasonsMatch as boolean,
+        allAborted: vp['allAborted'] as boolean,
+        reasonThreaded: vp['allReasonsMatch'] as boolean,
         traceRecorded: abortEvents.length === 1,
       });
     }, 15_000);
@@ -450,20 +450,20 @@ describe.skipIf(process.platform === 'win32')(
       );
 
       expect(abortEvents).toHaveLength(1);
-      const cascadedTo = abortEvents[0]!.payload.cascadedTo as string[];
+      const cascadedTo = abortEvents[0]!.payload['cascadedTo'] as string[];
       expect(cascadedTo).toHaveLength(4);
       expect(new Set(cascadedTo)).toEqual(new Set(['L1', 'L2', 'L3', 'L4']));
 
       const vp = verifyEvent!.payload as Record<string, unknown>;
-      expect(vp.leafAborted).toBe(true);
-      expect(vp.leafReason).toBe('deep-shutdown');
+      expect(vp['leafAborted']).toBe(true);
+      expect(vp['leafReason']).toBe('deep-shutdown');
 
       results.push({
         scenario: 'deep-5-level-chain',
         descendants: 4,
         cascadedTo: cascadedTo.length,
-        allAborted: vp.leafAborted as boolean,
-        reasonThreaded: vp.leafReason === 'deep-shutdown',
+        allAborted: vp['leafAborted'] as boolean,
+        reasonThreaded: vp['leafReason'] === 'deep-shutdown',
         traceRecorded: abortEvents.length === 1,
       });
     }, 15_000);
@@ -487,13 +487,13 @@ describe.skipIf(process.platform === 'win32')(
 
       // The child has no descendants, so cascadedTo = []
       expect(abortEvents).toHaveLength(1);
-      const cascadedTo = abortEvents[0]!.payload.cascadedTo as string[];
+      const cascadedTo = abortEvents[0]!.payload['cascadedTo'] as string[];
       expect(cascadedTo).toHaveLength(0);
 
       // Key invariant: parent is NOT aborted
       const vp = verifyEvent!.payload as Record<string, unknown>;
-      expect(vp.rootAborted).toBe(false);
-      expect(vp.childAborted).toBe(true);
+      expect(vp['rootAborted']).toBe(false);
+      expect(vp['childAborted']).toBe(true);
 
       results.push({
         scenario: 'child-only (no upward cascade)',
@@ -501,7 +501,7 @@ describe.skipIf(process.platform === 'win32')(
         cascadedTo: 0,
         allAborted: true, // child aborted as expected
         reasonThreaded: true, // no upward leak
-        traceRecorded: abortEvents.length === 1 && vp.rootAborted === false,
+        traceRecorded: abortEvents.length === 1 && vp['rootAborted'] === false,
       });
     }, 15_000);
 
@@ -523,20 +523,20 @@ describe.skipIf(process.platform === 'win32')(
       );
 
       expect(abortEvents).toHaveLength(1);
-      const cascadedTo = abortEvents[0]!.payload.cascadedTo as string[];
+      const cascadedTo = abortEvents[0]!.payload['cascadedTo'] as string[];
       expect(cascadedTo).toHaveLength(6);
       expect(new Set(cascadedTo)).toEqual(new Set(['cA', 'cB', 'gA1', 'gA2', 'gB1', 'gB2']));
 
       const vp = verifyEvent!.payload as Record<string, unknown>;
-      expect(vp.allAborted).toBe(true);
-      expect(vp.allReasons).toBe(true);
+      expect(vp['allAborted']).toBe(true);
+      expect(vp['allReasons']).toBe(true);
 
       results.push({
         scenario: 'mixed-tree (2x2)',
         descendants: 6,
         cascadedTo: cascadedTo.length,
-        allAborted: vp.allAborted as boolean,
-        reasonThreaded: vp.allReasons as boolean,
+        allAborted: vp['allAborted'] as boolean,
+        reasonThreaded: vp['allReasons'] as boolean,
         traceRecorded: abortEvents.length === 1,
       });
     }, 15_000);

@@ -36,21 +36,32 @@ any checked-in file. Use the two vars together:
 | `AFK_PROMPT_EXPERIMENT` | Names the active experiment (e.g. `"explore-rewrite"`). |
 | `AFK_PROMPT_EXPERIMENT_ARM` | Arm assignment: `"control"` or `"treatment"`. |
 
-Typical invocation (run each arm 10 times with `afk whatif`):
+Typical invocation. A single `afk whatif --verify` run is already an A/B
+comparison: the **baseline** arm runs with your current environment (both vars
+unset, so `isPromptExperimentActive()` is `false` and the control path runs),
+and the **candidate** arm runs with the change spec applied. Do not launch a
+separate "control" run; it would compare baseline against baseline.
+
+`--env` accepts one `KEY=VALUE` per run, so put both vars in a spec file:
+
+```json
+{
+  "title": "explore-rewrite treatment",
+  "changes": [
+    { "kind": "env", "key": "AFK_PROMPT_EXPERIMENT", "value": "explore-rewrite" },
+    { "kind": "env", "key": "AFK_PROMPT_EXPERIMENT_ARM", "value": "treatment" }
+  ]
+}
+```
 
 ```sh
-# Control arm (baseline prompt)
-afk whatif \
-  --env AFK_PROMPT_EXPERIMENT=explore-rewrite \
-  --env AFK_PROMPT_EXPERIMENT_ARM=control \
-  -- <task>
-
-# Treatment arm (candidate variant)
-afk whatif \
-  --env AFK_PROMPT_EXPERIMENT=explore-rewrite \
-  --env AFK_PROMPT_EXPERIMENT_ARM=treatment \
-  -- <task>
+# Baseline (control) vs candidate (treatment), episodes actually run
+afk whatif --spec explore-rewrite.json --verify --yes --samples 10
 ```
+
+Without `--verify`, `afk whatif` stops after the prediction step and runs no
+episodes. `--samples` sets samples per episode per arm; raise `--max-usd`
+(default 5) if the run needs more budget.
 
 Runtime helpers (`src/agent/prompt-experiment.ts`):
 

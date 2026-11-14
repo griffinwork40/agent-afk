@@ -18,6 +18,7 @@ import {
 } from './receipt.js';
 import type { JournalMessage, JournalRecord } from '../journal/types.js';
 import type { ClosureReason, ToolFailureClass, TraceEvent } from './types.js';
+import type { OutcomesV1 } from '../outcomes/outcomes-v1.schema.js';
 
 // ---------------------------------------------------------------------------
 // Event builders — keep the on-disk envelope ({ ts, seq, kind, payload }).
@@ -285,6 +286,44 @@ describe('generateReceipt — missing/partial metadata', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #4896 multi-cycle REPL trace (two root cycles, no subagents)
+// ---------------------------------------------------------------------------
+
+function rootCycle(cost: number, turns: number): TraceEvent {
+  const s = seq++;
+  return {
+    ts: TS(s + 1), seq: s, kind: 'closure',
+    payload: { reason: 'model_end_turn', finalTurnCount: turns, finalCostUsd: cost, finalTokens: {} },
+  };
+}
+
+function sealedCycle(cost: number, turns: number): TraceEvent {
+  const s = seq++;
+  return {
+    ts: TS(s + 1), seq: s, kind: 'session_sealed',
+    payload: { status: 'succeeded', finalCostUsd: cost, finalTurnCount: turns, closedAt: TS(s + 1) },
+  };
+}
+
+describe('generateReceipt: multi-cycle REPL trace (#4896)', () => {
+  it('issue example: finalCostUsd and turnCount cover both root cycles', () => {
+    const r = generateReceipt([rootCycle(1.0, 4), rootCycle(0.25, 1), sealedCycle(0.25, 1)], META);
+    expect(r.cost.finalCostUsd).toBeCloseTo(1.25);
+    expect(r.cost.turnCount).toBe(5);
+    expect(r.cost.rootCostUsd).toBeCloseTo(1.25);
+    expect(r.cost.subagentCostUsd).toBe(0);
+    expect(r.cost.totalCostUsd).toBeCloseTo(1.25);
+  });
+
+  it('process-exit backstop seal: finalCostUsd and turnCount stay the raw seal values', () => {
+    const r = generateReceipt([sealed('failed', { incomplete: true })], META);
+    expect(r.cost.rootCostUsd).toBeUndefined();
+    expect(r.cost.finalCostUsd).toBe(0.1234);
+    expect(r.cost.turnCount).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Markdown rendering
 // ---------------------------------------------------------------------------
 
@@ -405,7 +444,40 @@ describe('writeRunReceipt + runReceiptSessionEndHook (filesystem)', () => {
     expect(parsed.sessionId).toBe('sess-logical');
     expect(parsed.endReason).toBe('close');
     expect(parsed.toolCalls.errored).toBe(1);
-    expect(parsed.schemaVersion).toBe(2);
+    expect(parsed.schemaVersion).toBe(3);
+  });
+
+  it('writes outcomes: null when the outcomes computation has no cwd', async () => {
+    const tracePath = await writeTrace('run-o', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-no-meta' });
+    const parsed = JSON.parse(await readFile(join(getReceiptsDir(), 'run-o.json'), 'utf8')) as RunReceipt;
+    expect(parsed.schemaVersion).toBe(3);
+    expect(parsed.outcomes).toBeNull();
+  });
+
+  it('writes outcomes from the session cwd when no sidecar exists (non-git cwd)', async () => {
+    const tracePath = await writeTrace('run-c', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-cwd', cwd: home });
+    const parsed = JSON.parse(await readFile(join(getReceiptsDir(), 'run-c.json'), 'utf8')) as RunReceipt;
+    expect(parsed.outcomes).toMatchObject({ schemaVersion: 1, cwd: home, startHead: null, commits: [] });
+  });
+
+  it('stamps the top-level cwd when writeRunReceipt is given one', async () => {
+    const tracePath = await writeTrace('run-cwd-top', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-cwd-top', cwd: home });
+    const parsed = JSON.parse(
+      await readFile(join(getReceiptsDir(), 'run-cwd-top.json'), 'utf8'),
+    ) as RunReceipt;
+    expect(parsed.cwd).toBe(home);
+  });
+
+  it('omits the top-level cwd when writeRunReceipt is given none', async () => {
+    const tracePath = await writeTrace('run-nocwd-top', [closure('model_end_turn'), sealed('succeeded')]);
+    await writeRunReceipt({ tracePath, sessionId: 'sess-nocwd-top' });
+    const parsed = JSON.parse(
+      await readFile(join(getReceiptsDir(), 'run-nocwd-top.json'), 'utf8'),
+    ) as RunReceipt;
+    expect('cwd' in parsed).toBe(false);
   });
 
   it('returns null when the trace file is absent', async () => {
@@ -439,6 +511,12 @@ describe('writeRunReceipt + runReceiptSessionEndHook (filesystem)', () => {
       tracePath,
     });
     expect(existsSync(join(getReceiptsDir(), 'child.json'))).toBe(false);
+  });
+
+  it('hook skips reason reset: the trace stays open and close writes the only receipt (#4884)', async () => {
+    const tracePath = await writeTrace('cleared', [toolDone('bash'), closure('model_end_turn')]);
+    await runReceiptSessionEndHook({ event: 'SessionEnd', sessionId: 's1', reason: 'reset', tracePath });
+    expect(existsSync(join(getReceiptsDir(), 'cleared.json'))).toBe(false);
   });
 
   it('hook respects AFK_RUN_RECEIPT_DISABLED=1', async () => {
@@ -734,8 +812,8 @@ describe('generateReceipt with journalSummary (#4427)', () => {
     expect(receipt.limitations.some((l) => l.includes('No message journal'))).toBe(true);
   });
 
-  it('schemaVersion is 2', () => {
-    expect(RECEIPT_SCHEMA_VERSION).toBe(2);
+  it('schemaVersion is 3', () => {
+    expect(RECEIPT_SCHEMA_VERSION).toBe(3);
   });
 });
 
@@ -778,5 +856,87 @@ describe('renderReceiptMarkdown with journalSummary (#4427)', () => {
   it('omits conversation summary when journalSummary absent', () => {
     const md = renderReceiptMarkdown(RECEIPT_BASE);
     expect(md).not.toContain('Conversation summary');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v3: outcomes
+// ---------------------------------------------------------------------------
+
+const OUTCOMES: OutcomesV1 = {
+  schemaVersion: 1,
+  cwd: '/repo',
+  startHead: 'a'.repeat(40),
+  endHead: 'b'.repeat(40),
+  commits: [{ sha: 'b'.repeat(40), repo: '/repo', subject: 'feat: thing', source: 'git_log' }],
+  prs: [{ url: 'https://github.com/o/r/pull/7', action: 'create' }],
+  filesChanged: ['/repo/x.ts'],
+  filesChangedTruncated: false,
+  schedules: [],
+  services: [],
+  terminalState: 'done',
+};
+
+describe('generateReceipt with outcomes (v3)', () => {
+  it('includes outcomes when provided', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: OUTCOMES });
+    expect(r.schemaVersion).toBe(3);
+    expect(r.outcomes).toEqual(OUTCOMES);
+  });
+
+  it('records null when the computation failed', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: null });
+    expect(r.outcomes).toBeNull();
+  });
+
+  it('omits outcomes when not provided', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l' });
+    expect('outcomes' in r).toBe(false);
+  });
+
+  it('renders an Outcomes section with short sha, PR url and counts', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: OUTCOMES });
+    const md = renderReceiptMarkdown(r);
+    expect(md).toContain('## Outcomes');
+    expect(md).toContain('`bbbbbbb` feat: thing');
+    expect(md).toContain('https://github.com/o/r/pull/7 (create)');
+    expect(md).toContain('**Files changed:** 1');
+    expect(md).toContain('**Terminal state:** done');
+  });
+
+  it('renders no Outcomes section when outcomes is null', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l', outcomes: null });
+    expect(renderReceiptMarkdown(r)).not.toContain('## Outcomes');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Top-level cwd field (additive, schemaVersion stays 3)
+// ---------------------------------------------------------------------------
+
+describe('RunReceipt cwd field', () => {
+  it('includes cwd in the receipt when meta provides it', () => {
+    const r = generateReceipt([sealed('succeeded')], {
+      tracePath: '/t',
+      witnessLabel: 'l',
+      cwd: '/repo/project',
+    });
+    expect(r.cwd).toBe('/repo/project');
+  });
+
+  it('omits cwd when meta does not provide it', () => {
+    const r = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l' });
+    expect('cwd' in r).toBe(false);
+  });
+
+  it('renders the cwd in the Markdown meta line when present', () => {
+    const withCwd = generateReceipt([sealed('succeeded')], {
+      tracePath: '/t',
+      witnessLabel: 'l',
+      cwd: '/repo/project',
+    });
+    expect(renderReceiptMarkdown(withCwd)).toContain('**Cwd:** /repo/project');
+    const withoutCwd = generateReceipt([sealed('succeeded')], { tracePath: '/t', witnessLabel: 'l' });
+    expect(renderReceiptMarkdown(withoutCwd)).not.toContain('**Cwd:**');
   });
 });

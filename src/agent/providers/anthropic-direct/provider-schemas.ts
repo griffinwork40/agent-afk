@@ -85,7 +85,7 @@ export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): Anth
   // test stubs without describeAgentTool fall back to the static schema.
   if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
   if (opts.skillExecutor) schemas.push(skillTool);
-  if (opts.composeExecutor) schemas.push(composeTool);
+  if (opts.composeExecutor) schemas.push(opts.subagentExecutor?.describeComposeTool?.() ?? composeTool);
   // Custom (consumer-registered) tool schemas are appended last so their
   // names never silently shadow a builtin. A custom schema whose name
   // collides with an already-present builtin (or an earlier custom tool) is

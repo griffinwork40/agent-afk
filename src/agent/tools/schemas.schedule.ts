@@ -208,10 +208,19 @@ export const listSchedulesTool: AnthropicToolDef = {
   concurrencySafe: true,
   description:
     'List all scheduled tasks with their IDs, cron expressions, runAt/expiresAt, enabled status, and notify settings. ' +
-    'Returns a JSON array of task configs.',
+    'Returns a JSON array of task configs. Use `name` to filter by name substring, `enabled` to filter by active status.',
   input_schema: {
     type: 'object',
-    properties: {},
+    properties: {
+      name: {
+        type: 'string',
+        description: 'Optional case-insensitive substring filter on task name. Only matching tasks are returned.',
+      },
+      enabled: {
+        type: 'boolean',
+        description: 'Optional filter by enabled status. true = only active tasks, false = only disabled tasks. Omit to return all.',
+      },
+    },
     required: [],
   },
 };

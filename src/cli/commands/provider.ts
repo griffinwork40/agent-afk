@@ -125,7 +125,7 @@ export function registerProviderCommand(program: Command): void {
       if (options.format === 'json') {
         // Top-level OpenAI fields preserved for scripts that predate the xAI
         // section; nested openai/xai blocks are additive.
-        console.log(
+        console.log( // console-ok
           JSON.stringify(
             {
               source: openai.source,
@@ -153,8 +153,8 @@ export function registerProviderCommand(program: Command): void {
       } else {
         const oIcon = openai.exitCode === 0 ? palette.success('✓') : palette.warning('⚠');
         const xIcon = xai.exitCode === 0 ? palette.success('✓') : palette.warning('⚠');
-        console.log(`${oIcon} OpenAI: ${openai.message}`);
-        console.log(`${xIcon} xAI:    ${xai.message}`);
+        console.log(palette.info(`${oIcon} OpenAI: ${openai.message}`));
+        console.log(palette.info(`${xIcon} xAI:    ${xai.message}`));
       }
       // Default exit tracks OpenAI only (historical contract). Use
       // --family xai|any to gate on SuperGrok or either family.
@@ -185,7 +185,7 @@ export function registerProviderCommand(program: Command): void {
         const useBrowser = options.browser === true && options.deviceCode !== true;
         const result = useBrowser
           ? await runXaiBrowserLogin({
-              onStatus: (line) => console.log(line),
+              onStatus: (line) => console.log(palette.info(line)),
               openBrowser: (url) => {
                 // Best-effort open; device-code remains the supported headless path.
                 try {
@@ -204,7 +204,7 @@ export function registerProviderCommand(program: Command): void {
               },
             })
           : await runXaiDeviceCodeLogin({
-              onStatus: (line) => console.log(line),
+              onStatus: (line) => console.log(palette.info(line)),
             });
         if (result.ok) {
           console.log(palette.success(`✓ ${result.message}`));

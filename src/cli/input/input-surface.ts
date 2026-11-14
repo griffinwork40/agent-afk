@@ -182,6 +182,11 @@ export interface InputSurfaceArmOpts {
    */
   onOpenOutputViewer?: () => void;
   /**
+   * Ctrl+X D handler — cycle the cap for future diff output, not existing
+   * scrollback. Forwarded to the compositor; absent without a tool lane.
+   */
+  onCycleDiffCap?: () => void;
+  /**
    * Optional DECSTBM scroll-region guard (typically the active
    * StatusLine). Forwarded to the compositor so `commitAbove`'s
    * scrollback writes use full-screen scroll semantics.
@@ -384,6 +389,7 @@ export class InputSurface {
       ...(opts.onShiftTab ? { onShiftTab: opts.onShiftTab } : {}),
       ...(opts.onOpenEditor ? { onOpenEditor: opts.onOpenEditor } : {}),
       ...(opts.onOpenOutputViewer ? { onOpenOutputViewer: opts.onOpenOutputViewer } : {}),
+      ...(opts.onCycleDiffCap ? { onCycleDiffCap: opts.onCycleDiffCap } : {}),
       history: this.history,
       autocompleteState: this.autocompleteState,
       formatInputBuffer: (segment) => colorizeInputBuffer(segment, this.slashRegistryView),

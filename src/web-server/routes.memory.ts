@@ -11,7 +11,7 @@ import type { ServerResponse } from 'node:http';
 import { MemoryStore } from '../agent/memory/memory-store.js';
 import { sendJson } from './routes.js';
 
-const VALID_CATEGORIES = new Set(['preference', 'convention', 'decision', 'learning']);
+const VALID_CATEGORIES = new Set(['preference', 'convention', 'decision', 'learning', 'episode']);
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 
@@ -58,7 +58,7 @@ export async function handleSearchMemory(
   const store = new MemoryStore();
   try {
     const results = store.search(q, {
-      ...(rawCategory ? { category: rawCategory as 'preference' | 'convention' | 'decision' | 'learning' } : {}),
+      ...(rawCategory ? { category: rawCategory as 'preference' | 'convention' | 'decision' | 'learning' | 'episode' } : {}),
       limit,
     });
     sendJson(res, 200, { results });

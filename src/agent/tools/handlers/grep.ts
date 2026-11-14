@@ -31,6 +31,7 @@ import { createStreamingCap, SCAN_CAP_BYTES, scanCapKillNote } from './_streamin
 import { errorMessage } from '../../../utils/errors.js';
 import { awaitChildExit } from './_await-child-exit.js';
 import { debugLog } from '../../../utils/debug.js';
+import { hasUnescapedBackslashPipe, rewriteBackslashPipe, handlePipeRetry } from './grep.pipe-retry.js';
 
 /** Optional overrides for {@link createGrepHandler}. */
 export interface GrepHandlerOptions {
@@ -51,11 +52,20 @@ interface GrepInput {
   include?: unknown;
 }
 
+/** Keys the runtime may inject into any tool call input (never rejected). */
+const RUNTIME_INJECTED_KEYS = new Set<string>();
+
+/** Keys the grep tool accepts from callers. */
+const ACCEPTED_KEYS = new Set(['pattern', 'path', 'include']);
+
 /**
  * Validate and parse grep tool input.
  * `sessionCwd` is the effective working directory (context.resolveBase
  * or factory cwd — in priority order); used as the default search path
  * when the model omits one.
+ *
+ * Returns an error result object when unknown keys are present or when
+ * `path` and `file_path` conflict; throws for structural issues.
  *
  * @throws if `pattern` is not a string or if path is outside allowed roots
  */
@@ -67,12 +77,43 @@ function parseGrepInput(
   pattern: string;
   path: string;
   include?: string;
-} {
+} | { _error: string } {
   if (typeof input !== 'object' || input === null) {
     throw new Error('Input must be an object');
   }
 
-  const grepInput = input as GrepInput;
+  const raw = input as Record<string, unknown>;
+
+  // Detect unknown keys. file_path is handled specially (alias for path);
+  // all other unknown keys are rejected with a targeted message.
+  const unknownKeys = Object.keys(raw).filter(
+    (k) => !ACCEPTED_KEYS.has(k) && k !== 'file_path' && !RUNTIME_INJECTED_KEYS.has(k),
+  );
+  if (unknownKeys.length > 0) {
+    const key = unknownKeys[0]!;
+    const accepted = [...ACCEPTED_KEYS].join(', ');
+    const hint = key === 'glob' ? ' Use `include` for a file-glob filter.' : '';
+    return {
+      _error: `\`${key}\` is not a grep parameter (accepted: ${accepted}).${hint}`,
+    };
+  }
+
+  // file_path alias: accepted when path is absent.
+  let resolvedFilePath: unknown = raw['path'];
+  if (resolvedFilePath === undefined && raw['file_path'] !== undefined) {
+    resolvedFilePath = raw['file_path'];
+  } else if (resolvedFilePath !== undefined && raw['file_path'] !== undefined) {
+    // Both present: error unless they are identical strings.
+    if (resolvedFilePath !== raw['file_path']) {
+      return {
+        _error:
+          `Both \`path\` ("${String(resolvedFilePath)}") and \`file_path\` ("${String(raw['file_path'])}") were supplied with different values. Remove one.`,
+      };
+    }
+    // Equal — treat as a single path value (path wins, same value).
+  }
+
+  const grepInput: GrepInput = { pattern: raw['pattern'], path: resolvedFilePath, include: raw['include'] };
 
   if (typeof grepInput.pattern !== 'string') {
     throw new Error('Input must have a "pattern" field of type string');
@@ -163,7 +204,11 @@ function buildRgArgs(pattern: string, path: string, include: string | undefined)
 export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): ToolHandler {
   const scanCap = options?.scanCapBytes ?? SCAN_CAP_BYTES;
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
-  const { pattern, path, include } = parseGrepInput(input, context, cwd);
+  const parsed = parseGrepInput(input, context, cwd);
+  if ('_error' in parsed) {
+    return { content: parsed._error, isError: true };
+  }
+  const { pattern, path, include } = parsed;
 
   if (signal.aborted) {
     return { content: 'Search aborted', isError: true };
@@ -203,8 +248,6 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
       resolve(afterKill ? awaitChildExit(proc).then(() => result) : result);
     }
 
-    const args = buildRgArgs(pattern, path, include);
-
     // Effective cwd priority (parity with the bash handler, #441):
     //   1. context?.resolveBase — permission anchor (updated in place on an
     //      in-flight setResolveBase re-anchor)
@@ -214,7 +257,7 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
     // different dir than spawn used, reverting to a raw `spawn <rgPath> ENOENT`
     // (Codex P2 on #471). spawn treats `cwd: undefined` as inherit process.cwd().
     const effectiveCwd = context?.resolveBase ?? cwd;
-    const proc = spawn(rgPath, args, effectiveCwd !== undefined ? { cwd: effectiveCwd } : {});
+    const proc = spawn(rgPath, buildRgArgs(pattern, path, include), effectiveCwd !== undefined ? { cwd: effectiveCwd } : {});
 
     // Invariant: the model never receives more than MODEL_CAP_BYTES, so there
     // is no reason to hold more than that in memory. Both streams feed bounded
@@ -294,8 +337,13 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
       if (scanKilled) return;
 
       if (code === 1) {
-        const message = `No matches found for '${pattern}' in ${path}`;
-        settle({ content: message });
+        if (hasUnescapedBackslashPipe(pattern)) {
+          // Pattern contains `\|` (literal pipe in ripgrep, not alternation).
+          // Re-run once with `\|` → `|`. Never retries more than once.
+          handlePipeRetry(pattern, rgPath, buildRgArgs(rewriteBackslashPipe(pattern), path, include), effectiveCwd, path, signal, scanCap, settle);
+          return;
+        }
+        settle({ content: `No matches found for '${pattern}' in ${path}` });
         return;
       }
 

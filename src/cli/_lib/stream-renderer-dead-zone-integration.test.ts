@@ -81,6 +81,7 @@ describe('dead-zone integration: checkProgressBannerStaleness -> registered prog
       out: { write: () => {} },
       pauseTickInterval: null,
       resizeUnsub: null,
+      lastThinkingAnnotation: '',
     } as unknown as Parameters<typeof checkProgressBannerStaleness>[0];
 
     const overlay = (): string => stripAnsi(captured.at(-1) ?? '');

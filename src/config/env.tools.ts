@@ -75,4 +75,17 @@ export const TOOLS_ENV_REGISTRY = [
     example: '60000',
     category: 'misc',
   },
+  {
+    name: 'AFK_LSP_REPO_MAP_TIMEOUT_MS',
+    description:
+      'Total budget in milliseconds for building the repo-map summary (phase 3 ' +
+      'of #3904, AFK_LSP_DIAGNOSTICS=1). Covers both the LSP workspace/symbol ' +
+      'query and the filesystem fallback scan. Default 8000 ms. Raise for large ' +
+      'monorepos; lower to reduce startup latency when the map is not needed.',
+    type: 'number',
+    required: false,
+    default: '8000',
+    example: '4000',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];

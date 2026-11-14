@@ -153,6 +153,17 @@ export interface StreamStallHandle {
    * watchdog is dormant (the pre-first-byte window belongs to the TTFB bound).
    */
   progress(): void;
+  /**
+   * Pause the stall timer without disposing it. Used by `abortable-stream.ts`
+   * to freeze the watchdog while the session is paused via `afk pause` so
+   * the pause duration is not counted as stall time (issue #762 follow-up).
+   */
+  suspend(): void;
+  /**
+   * Re-arm the stall timer after a {@link suspend}. Treats the resume as a
+   * fresh progress event so the full window restarts from now.
+   */
+  resumeTimer(): void;
   /** Release the timer + listeners. Idempotent; safe to call in a `finally`. */
   dispose(): void;
 }
@@ -185,6 +196,8 @@ export function armStreamStallWatchdog(
       signal: baseSignal,
       timedOut: () => false,
       progress: () => {},
+      suspend: () => {},
+      resumeTimer: () => {},
       dispose: () => {},
     };
   }
@@ -194,6 +207,7 @@ export function armStreamStallWatchdog(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let didTimeout = false;
   let disposed = false;
+  let suspended = false;
 
   const fire = (armedAt: number): void => {
     if (disposed || didTimeout) return;
@@ -213,7 +227,7 @@ export function armStreamStallWatchdog(
   };
 
   const progress = (): void => {
-    if (disposed || didTimeout) return;
+    if (disposed || didTimeout || suspended) return;
     if (timer !== undefined) clearTimeout(timer);
     const armedAt = Date.now();
     const t = setTimeout(() => fire(armedAt), timeoutMs);
@@ -229,10 +243,28 @@ export function armStreamStallWatchdog(
     timer = undefined;
   };
 
+  // Contract: suspend() freezes the timer for `afk pause`; resumeTimer()
+  // re-arms from now so the full window restarts post-resume.
+  const suspend = (): void => {
+    if (disposed || didTimeout || suspended) return;
+    suspended = true;
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+  };
+
+  const resumeTimer = (): void => {
+    if (disposed || didTimeout || !suspended) return;
+    suspended = false;
+    // Treat resume as a fresh progress event — full window from now.
+    progress();
+  };
+
   return {
     signal: linked,
     timedOut: () => didTimeout,
     progress,
+    suspend,
+    resumeTimer,
     dispose,
   };
 }

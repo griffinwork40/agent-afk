@@ -148,6 +148,9 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
     // Agent-type listing is placed after the manifest in the volatile tail so
     // sessions differing only in their agent sets keep a stable prefix (#4217).
     agentTypeListing: args.agentTypeListing ?? '',
+    // Episode recall is placed last in the volatile tail (after # Environment)
+    // so per-session episode sets never invalidate the stable-prefix cache (#4680).
+    episodeRecall: config.episodeRecall ?? '',
     userSystem: args.userSystem,
   });
 

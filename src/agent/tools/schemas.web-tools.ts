@@ -31,11 +31,7 @@ export const sendTelegramTool: AnthropicToolDef = {
     '(Done/Blocked/Asking) and material progress, not running commentary. ' +
     'When running inside the Telegram bot, prefer replying normally — your response already ' +
     'reaches the operator through the bot. Use this tool only from CLI or daemon sessions.\n\n' +
-    'Optionally set `chat` to route to a SPECIFIC chat instead of the default primary target: ' +
-    'pass a numeric chat id (e.g. -1001234567890 for a group) or a chat alias name defined in ' +
-    'afk.config.json `telegram.chatAliases` (e.g. "ops"). An explicitly-targeted chat must be ' +
-    'in the inbound allowlist (AFK_TELEGRAM_ALLOWED_CHAT_IDS) — a non-allowlisted target is ' +
-    'rejected (fail-closed). Omit `chat` for the default behavior (unchanged).\n\n' +
+    'Optionally set `chat` to route to a specific chat instead of the default primary target. ' +
     'For supergroups with topics enabled, set `thread_id` alongside `chat` to send to a ' +
     'specific topic thread.',
   input_schema: {
@@ -170,6 +166,12 @@ export const webRequestTool: AnthropicToolDef = {
         description:
           'Request headers as a string-keyed object. Secret values (Authorization, token patterns) ' +
           'are redacted from traces but sent on the wire.',
+      },
+      remote_idempotency: {
+        type: 'boolean',
+        description: 'Opt in only when the remote API documents Idempotency-Key support. The effect ledger ' +
+          'adds a key for mutations and reuses it after an uncertain response. Existing headers (case-insensitive) ' +
+          'are preserved. Does not automatically retry or guarantee exactly-once delivery.',
       },
       timeout_ms: {
         type: 'number',

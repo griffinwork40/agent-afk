@@ -11,14 +11,24 @@
  * Points HOME at a tmp dir so nothing touches the real ~/.afk.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import type { AgentConfig } from '../../../src/agent/types/config-types.js';
-import { loadHotMemory, injectHotMemory } from '../../../src/agent/memory/memory-loader.js';
+import type { Fact } from '../../../src/agent/memory/types.js';
+import {
+  loadHotMemory,
+  injectHotMemory,
+  parseEpisodeFiles,
+  buildHighFreqFiles,
+  scoreEpisode,
+  formatEpisodeForRecall,
+  injectEpisodeRecall,
+} from '../../../src/agent/memory/memory-loader.js';
 import { useUnsetAfkHome } from '../../../src/__test-utils__/unset-afk-home.js';
+import { rmSyncRetry } from '../../../src/__test-utils__/rm-sync-retry.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
@@ -39,7 +49,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
+  // best-effort: SQLite file handles may linger on Windows CI
+  try { if (existsSync(tmpHome)) rmSyncRetry(tmpHome); } catch { /* EBUSY on CI */ }
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
   else delete process.env['HOME'];
   if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
@@ -200,5 +211,263 @@ describe('injectHotMemory', () => {
     expect(result.maxTurns).toBe(100);
     expect(result.timeoutMs).toBe(5000);
     expect(result.systemPrompt).toBe('Base');
+  });
+});
+
+// ── Episode recall helper unit tests ────────────────────────────────────────
+
+function makeFact(overrides: Partial<Fact> = {}): Fact {
+  return {
+    id: 1,
+    session_id: 'sess-1',
+    created_at: new Date().toISOString(),
+    category: 'learning',
+    content: '[episode:sess-1]\ngoal: fix bug\nfiles: src/foo.ts, src/bar.ts\nnarrative: fixed it',
+    source_surface: 'episode-synthesis',
+    superseded_by: null,
+    confidence: 1,
+    access_count: 0,
+    last_accessed: null,
+    evidence: null,
+    ...overrides,
+  };
+}
+
+describe('parseEpisodeFiles', () => {
+  it('extracts files from the files: line', () => {
+    const content = '[episode:s]\ngoal: x\nfiles: src/a.ts, lib/b.ts\nnarrative: done';
+    expect(parseEpisodeFiles(content)).toEqual(['src/a.ts', 'lib/b.ts']);
+  });
+
+  it('returns empty array when no files line', () => {
+    const content = '[episode:s]\ngoal: x\nnarrative: done';
+    expect(parseEpisodeFiles(content)).toEqual([]);
+  });
+
+  it('trims whitespace from file entries', () => {
+    const content = 'files:  a.ts ,  b.ts  ';
+    expect(parseEpisodeFiles(content)).toEqual(['a.ts', 'b.ts']);
+  });
+});
+
+describe('buildHighFreqFiles', () => {
+  it('returns empty set for empty input', () => {
+    expect(buildHighFreqFiles([])).toEqual(new Set());
+  });
+
+  it('flags files appearing in >30% of episodes', () => {
+    // 4 episodes, package.json in all 4 = 100% > 30%
+    const episodes = [1, 2, 3, 4].map((i) =>
+      makeFact({ id: i, content: `[episode:s${i}]\nfiles: package.json, src/unique${i}.ts` }),
+    );
+    const highFreq = buildHighFreqFiles(episodes);
+    expect(highFreq.has('package.json')).toBe(true);
+    // unique files appear in only 1/4 = 25% — below threshold
+    expect(highFreq.has('src/unique1.ts')).toBe(false);
+  });
+
+  it('does not flag files below the 30% threshold', () => {
+    // 10 episodes, rare.ts in only 2 = 20%
+    const episodes = Array.from({ length: 10 }, (_, i) =>
+      makeFact({
+        id: i,
+        content: `[episode:s${i}]\nfiles: ${i < 2 ? 'rare.ts, ' : ''}common${i}.ts`,
+      }),
+    );
+    const highFreq = buildHighFreqFiles(episodes);
+    expect(highFreq.has('rare.ts')).toBe(false);
+  });
+});
+
+describe('scoreEpisode', () => {
+  it('scores 0 when no matching files and no branch match', () => {
+    const fact = makeFact({ content: '[episode:s]\nfiles: other.ts\nnarrative: x' });
+    const score = scoreEpisode(fact, new Set(['unrelated.ts']), 'main', new Set());
+    expect(score).toBe(0);
+  });
+
+  it('scores +3 per full relative-path match (recent episode, decay ≈ 1)', () => {
+    // Episode stores src/foo.ts and src/bar.ts; caller passes the same full paths.
+    const fact = makeFact({ content: '[episode:s]\nfiles: src/foo.ts, src/bar.ts' });
+    const filePaths = new Set(['src/foo.ts', 'src/bar.ts']);
+    const score = scoreEpisode(fact, filePaths, null, new Set());
+    expect(score).toBeCloseTo(6, 1); // 2 files × 3 (full-path match)
+  });
+
+  it('scores +1 per basename-only match when full path does not match', () => {
+    // Episode stores src/foo.ts; caller has lib/foo.ts — basename matches but
+    // full path does not, so only +1 (weaker collision signal).
+    const fact = makeFact({ content: '[episode:s]\nfiles: src/foo.ts, src/bar.ts' });
+    const filePaths = new Set(['lib/foo.ts', 'lib/bar.ts']);
+    const score = scoreEpisode(fact, filePaths, null, new Set());
+    expect(score).toBeCloseTo(2, 1); // 2 files × 1 (basename-only match)
+  });
+
+  it('full-path match outweighs basename-only match for the same file', () => {
+    // src/utils.ts in episode; caller has both src/utils.ts (full match) and
+    // lib/utils.ts (basename collision). Only src/utils.ts should score (+3),
+    // lib/utils.ts must not add an extra +1 for the same episode file entry.
+    const fact = makeFact({ content: '[episode:s]\nfiles: src/utils.ts' });
+    const filePaths = new Set(['src/utils.ts', 'lib/utils.ts']);
+    const score = scoreEpisode(fact, filePaths, null, new Set());
+    expect(score).toBeCloseTo(3, 1); // full-path match only, no double-count
+  });
+
+  it('skips high-frequency files in scoring', () => {
+    const fact = makeFact({ content: '[episode:s]\nfiles: package.json, src/foo.ts' });
+    const filePaths = new Set(['package.json', 'src/foo.ts']);
+    const highFreq = new Set(['package.json']);
+    const score = scoreEpisode(fact, filePaths, null, highFreq);
+    expect(score).toBeCloseTo(3, 1); // only src/foo.ts counts (full-path match)
+  });
+
+  it('scores +3 for branch name match in content', () => {
+    const fact = makeFact({ content: '[episode:s]\nfiles:\nnarrative: worked on feat/auth branch' });
+    const score = scoreEpisode(fact, new Set(), 'feat/auth', new Set());
+    expect(score).toBeCloseTo(3, 1);
+  });
+
+  it('combines full-path file and branch scores', () => {
+    const fact = makeFact({
+      content: '[episode:s]\nfiles: src/session.ts\nnarrative: fixed on feat/session branch',
+    });
+    const score = scoreEpisode(fact, new Set(['src/session.ts']), 'feat/session', new Set());
+    expect(score).toBeCloseTo(6, 1); // 3 (full-path file) + 3 (branch)
+  });
+
+  it('applies recency decay: a 90-day-old episode is multiplied by the floor (0.1)', () => {
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    const fact = makeFact({
+      content: '[episode:s]\nfiles: src/foo.ts',
+      created_at: ninetyDaysAgo,
+    });
+    const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
+    // Raw score = 3 (full-path match); decay = max(0.1, 1 - 90/90) = max(0.1, 0) = 0.1
+    expect(score).toBeCloseTo(3 * 0.1, 5);
+  });
+
+  it('applies recency decay: a 45-day-old episode is multiplied by 0.5', () => {
+    const fortyFiveDaysAgo = new Date(Date.now() - 45 * 86_400_000).toISOString();
+    const fact = makeFact({
+      content: '[episode:s]\nfiles: src/foo.ts',
+      created_at: fortyFiveDaysAgo,
+    });
+    const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
+    // Raw score = 3; decay = max(0.1, 1 - 45/90) = 0.5
+    expect(score).toBeCloseTo(3 * 0.5, 5);
+  });
+
+  it('applies recency decay to branch-match-only episodes: 45-day-old episode scores ≈ 1.5', () => {
+    // Branch-only match: no files overlap, only the branch name appears in content.
+    // Raw score = 3 (branch match); decay = max(0.1, 1 - 45/90) = 0.5
+    // Final score = 3 × 0.5 = 1.5
+    const fortyFiveDaysAgo = new Date(Date.now() - 45 * 86_400_000).toISOString();
+    const fact = makeFact({
+      content: '[episode:s]\nfiles:\nnarrative: worked on feat/my-branch branch',
+      created_at: fortyFiveDaysAgo,
+    });
+    const score = scoreEpisode(fact, new Set(), 'feat/my-branch', new Set());
+    expect(score).toBeCloseTo(1.5, 5);
+  });
+
+  it('explicit now parameter produces deterministic score independent of wall-clock time', () => {
+    // Use a fixed epoch anchor so the test never drifts with wall-clock time.
+    // created_at = Unix epoch (0); now = exactly 45 days later.
+    // Raw score = 3 (branch match); decay = max(0.1, 1 - 45/90) = 0.5
+    // Final score = 3 × 0.5 = 1.5 — exact, not approximate.
+    const created_at = new Date(0).toISOString();
+    const fixedNow = 45 * 86_400_000;
+    const fact = makeFact({
+      content: '[episode:s]\nfiles:\nnarrative: worked on feat/my-branch branch',
+      created_at,
+    });
+    const score = scoreEpisode(fact, new Set(), 'feat/my-branch', new Set(), fixedNow);
+    expect(score).toBeCloseTo(1.5, 5);
+  });
+
+  it('recent episode (age ~ 0) has decay ≈ 1 and scores full raw value', () => {
+    const fact = makeFact({ content: '[episode:s]\nfiles: src/foo.ts' });
+    const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
+    // created_at defaults to now — decay should be essentially 1.0
+    expect(score).toBeCloseTo(3, 1);
+  });
+
+  it('a very old episode (>90 days) is clamped to the floor multiplier (0.1)', () => {
+    const twoYearsAgo = new Date(Date.now() - 730 * 86_400_000).toISOString();
+    const fact = makeFact({
+      content: '[episode:s]\nfiles: src/foo.ts',
+      created_at: twoYearsAgo,
+    });
+    const score = scoreEpisode(fact, new Set(['src/foo.ts']), null, new Set());
+    // decay = max(0.1, 1 - 730/90) is negative → clamped to 0.1
+    expect(score).toBeCloseTo(3 * 0.1, 5);
+  });
+
+  it('score 0 before decay skips decay multiplication and returns 0', () => {
+    const fact = makeFact({
+      content: '[episode:s]\nfiles: other.ts',
+      created_at: new Date(Date.now() - 10 * 86_400_000).toISOString(),
+    });
+    const score = scoreEpisode(fact, new Set(['unrelated.ts']), null, new Set());
+    expect(score).toBe(0);
+  });
+});
+
+describe('formatEpisodeForRecall', () => {
+  it('strips the [episode:<id>] prefix line', () => {
+    const fact = makeFact({
+      content: '[episode:sess-abc]\ngoal: fix bug\noutcome: done',
+    });
+    const formatted = formatEpisodeForRecall(fact);
+    expect(formatted).not.toContain('[episode:');
+    expect(formatted).toContain('goal: fix bug');
+    expect(formatted).toContain('outcome: done');
+  });
+
+  it('trims leading/trailing whitespace', () => {
+    const fact = makeFact({ content: '[episode:x]\n\ngoal: y\n\n' });
+    const formatted = formatEpisodeForRecall(fact);
+    expect(formatted.startsWith('\n')).toBe(false);
+    expect(formatted.endsWith('\n')).toBe(false);
+  });
+});
+
+describe('injectEpisodeRecall', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('returns config unchanged when AFK_EPISODE_RECALL is not set', () => {
+    vi.stubEnv('AFK_EPISODE_RECALL', '0');
+    const config: AgentConfig = { model: 'sonnet' };
+    // Re-import to pick up env stub
+    const result = injectEpisodeRecall(config);
+    expect(result).toBe(config);
+  });
+
+  it('returns config unchanged when parentSessionId is set (subagent guard)', () => {
+    vi.stubEnv('AFK_EPISODE_RECALL', '1');
+    const config: AgentConfig = { model: 'sonnet', parentSessionId: 'parent-123' };
+    const result = injectEpisodeRecall(config);
+    expect(result).toBe(config);
+  });
+
+  it('returns config unchanged when no relevant episodes found', () => {
+    vi.stubEnv('AFK_EPISODE_RECALL', '1');
+    // Point to an empty tmp memory dir
+    const emptyDir = join(tmpHome, 'empty-mem-' + randomUUID());
+    mkdirSync(emptyDir, { recursive: true });
+    const config: AgentConfig = { model: 'sonnet' };
+    const result = injectEpisodeRecall(config, emptyDir);
+    expect(result).toBe(config);
+  });
+
+  it('does not mutate the original config', () => {
+    vi.stubEnv('AFK_EPISODE_RECALL', '1');
+    const config: AgentConfig = { model: 'sonnet' };
+    const before = JSON.stringify(config);
+    injectEpisodeRecall(config);
+    expect(JSON.stringify(config)).toBe(before);
   });
 });

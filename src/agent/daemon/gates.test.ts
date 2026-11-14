@@ -66,6 +66,37 @@ describe('readLastTickTime', () => {
     );
     expect(await readLastTickTime('t', telemetryPath)).toBe(Date.parse('2026-04-18T09:00:00Z'));
   });
+
+  it('finds a real tick buried behind 15 consecutive skipped records (#4647)', async () => {
+    // The old limit:10 would exhaust the window entirely on 10 skipped records
+    // and return null, causing the cooldown gate to fail open.
+    const realFiredAt = '2026-04-18T08:00:00Z';
+    const skippedRecord = (n: number) =>
+      JSON.stringify({
+        taskId: 't',
+        triggeredAt: `2026-04-18T09:${String(n).padStart(2, '0')}:00Z`,
+        status: 'skipped',
+      });
+    const lines = [
+      JSON.stringify({ taskId: 't', triggeredAt: realFiredAt }), // the real tick
+      ...Array.from({ length: 15 }, (_, i) => skippedRecord(i)), // 15 consecutive skips
+    ];
+    writeFileSync(telemetryPath, lines.join('\n') + '\n');
+    // With limit:50 the real tick is visible; with limit:10 it would be null.
+    expect(await readLastTickTime('t', telemetryPath)).toBe(Date.parse(realFiredAt));
+  });
+
+  it('skips all records with status skipped and returns null when no real tick exists', async () => {
+    const lines = Array.from({ length: 20 }, (_, i) =>
+      JSON.stringify({
+        taskId: 't',
+        triggeredAt: `2026-04-18T09:${String(i).padStart(2, '0')}:00Z`,
+        status: 'skipped',
+      }),
+    );
+    writeFileSync(telemetryPath, lines.join('\n') + '\n');
+    expect(await readLastTickTime('t', telemetryPath)).toBeNull();
+  });
 });
 
 describe('evaluateSessionStartGates', () => {

@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import { join, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { assertNotDenylisted, safeRealpath, _resetWriteDenylistCacheForTests } from './write-denylist.js';
+import { decidePathAccess } from './path-policy.js';
 
 // Invariant: native long names and plain short names must yield the same floor
 // even on a host that has no Windows 8.3 names or /var alias available.
@@ -20,5 +21,7 @@ describe('write denylist canonical spelling', () => {
       return original(path);
     });
     expect(() => assertNotDenylisted(target, 'file checkpoint')).toThrow(/protected path/);
+    expect(decidePathAccess(target, 'write', { allowAll: true }))
+      .toMatchObject({ kind: 'deny', reason: 'credential' });
   });
 });

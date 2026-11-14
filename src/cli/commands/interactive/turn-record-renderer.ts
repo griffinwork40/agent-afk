@@ -28,6 +28,7 @@
  * @module cli/commands/interactive/turn-record-renderer
  */
 
+import { truncateDisplayWidth } from '../../display.js';
 import { palette } from '../../palette.js';
 import { divider } from '../../render/divider.js';
 import { summarizeToolEvents } from '../../summarize-tool-events.js';
@@ -38,25 +39,24 @@ import type { Writer } from '../../slash/types.js';
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Max characters of user/assistant text to display per turn. */
-const MAX_CONTENT_CHARS = 600;
+/** Max display columns of user/assistant text to show per turn. */
+const MAX_CONTENT_COLS = 600;
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Separator line sized to terminal width (max 100). */
+/** Separator line sized to terminal width. */
 function sep(): string {
-  return divider(undefined, 100);
+  return divider();
 }
 
 /**
- * Hard-truncate text to `max` characters, appending an ellipsis indicator
+ * Truncate text to `max` display columns, appending an ellipsis indicator
  * when truncation occurs so the user knows the preview is incomplete.
  */
 function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return text.slice(0, max - 1) + '…';
+  return truncateDisplayWidth(text, max);
 }
 
 /**
@@ -170,7 +170,7 @@ export function renderTurnRecords(
     // ── User block ────────────────────────────────────────────────────────
     out.line(palette.dim('·') + ' ' + palette.user('User'));
     if (userText.length > 0) {
-      indentBlock(truncate(userText, MAX_CONTENT_CHARS), out);
+      indentBlock(truncate(userText, MAX_CONTENT_COLS), out);
     } else {
       out.line(palette.dim('  (empty)'));
     }
@@ -179,7 +179,7 @@ export function renderTurnRecords(
     // ── Assistant block ───────────────────────────────────────────────────
     out.line(palette.dim('·') + ' ' + palette.heading('Assistant'));
     if (assistantText.length > 0) {
-      indentBlock(truncate(assistantText, MAX_CONTENT_CHARS), out);
+      indentBlock(truncate(assistantText, MAX_CONTENT_COLS), out);
     } else {
       out.line(palette.dim('  (empty)'));
     }

@@ -31,6 +31,7 @@ import { parseTerminalState } from '../outcomes/terminal-state.js';
 import type { TraceSignals } from './derive.trace.js';
 import { checkDowngradeSignals } from './derive.downgrade.js';
 import { aggregateToolEvents, dedupeToolEvents } from './derive.aggregate.js';
+import { isPreamble, extractUserContent } from '../session/preamble-strip.js';
 
 // Re-export dedupeToolEvents so external callers (parallel-dispatch, store) keep working.
 export { dedupeToolEvents } from './derive.aggregate.js';
@@ -129,6 +130,7 @@ function deriveOutcome(
       // Only meaningful when kind is 'done'; other kinds are ignored downstream.
       parsedDeferred = parsed.deferred;
       parsedEvidence = parsed.evidence;
+      // worthDoing, notChecked, and undoSteps are display-only, not downgrade signals.
     } else {
       outcome = 'unknown';
       outcomeSource = 'none';
@@ -185,6 +187,55 @@ function classifySessionType(firstPrompt: string, source: string): string {
   return 'task';
 }
 
+/**
+ * Scan turns for the first real user message, skipping pure-boilerplate
+ * records (e.g. `[placeholder-prevent]` harness directives). Uses
+ * `isPreamble` / `extractUserContent` so pure-preamble records yield
+ * `undefined` and the scan continues to the next turn rather than falling
+ * back to raw harness text (#4586).
+ */
+function extractFirstPrompt(turns: StoredSessionInput['turns']): string {
+  for (const t of turns ?? []) {
+    const raw = t.user ?? '';
+    if (!raw) continue;
+    const stripped = isPreamble(raw) ? extractUserContent(raw) : raw;
+    if (stripped) return stripped;
+  }
+  return '';
+}
+
+function buildFrictionDetail(toolErrors: number, toolErrorCategories: Record<string, number>): string {
+  if (toolErrors === 0) return '';
+  return `${toolErrors} tool error(s): ${Object.entries(toolErrorCategories)
+    .map(([k, v]) => `${k}×${v}`)
+    .join(', ')}`;
+}
+
+/**
+ * Populate `facet.token_breakdown` from cost data when available.
+ *
+ * Per-direction fields (input/output/cache_read/cache_creation) are omitted:
+ * StoredSession only carries totalTokens (a scalar sum) and does not persist
+ * per-direction counts. Omitting them avoids zero-filling fields that would
+ * falsely imply actual per-direction measurements.
+ *
+ * Contract (#3879): `cost_usd` is the sidecar ROOT-only cost kept for
+ * back-compat. `total_cost_usd` (root + subagents) and `subagent_cost_usd`
+ * come from the witness trace via `traceSignals`; absent when unreadable.
+ */
+function applyTokenBreakdown(
+  facet: SessionFacet,
+  totalCostUsd: number | null | undefined,
+  traceSignals: DeriveOptions['traceSignals'],
+): void {
+  if (totalCostUsd == null) return;
+  facet.token_breakdown = {
+    cost_usd: totalCostUsd,
+    ...(traceSignals?.totalCostUsd !== undefined ? { total_cost_usd: traceSignals.totalCostUsd } : {}),
+    ...(traceSignals?.subagentCostUsd !== undefined ? { subagent_cost_usd: traceSignals.subagentCostUsd } : {}),
+  };
+}
+
 export function deriveSessionFacet(
   session: StoredSessionInput,
   options: DeriveOptions = {},
@@ -220,7 +271,7 @@ export function deriveSessionFacet(
     );
 
   // --- semantic (heuristic) ---
-  const firstPrompt = turns[0]?.user ?? '';
+  const firstPrompt = extractFirstPrompt(turns);
   const source = session.source ?? 'cli';
   const sessionType = classifySessionType(firstPrompt, source);
 
@@ -263,12 +314,7 @@ export function deriveSessionFacet(
     }
   }
 
-  const frictionDetail =
-    toolErrors > 0
-      ? `${toolErrors} tool error(s): ${Object.entries(toolErrorCategories)
-          .map(([k, v]) => `${k}×${v}`)
-          .join(', ')}`
-      : '';
+  const frictionDetail = buildFrictionDetail(toolErrors, toolErrorCategories);
 
   const summaryHead = session.name ? humanizeName(session.name) : oneLine(firstPrompt, 80);
   const summaryTail = oneLine(lastAssistant || firstPrompt, SUMMARY_CAP);
@@ -293,7 +339,14 @@ export function deriveSessionFacet(
   const facet: SessionFacet = {
     facet_version: FACET_VERSION,
     session_id: sessionId,
-    source: source === 'telegram' ? 'telegram' : source === 'web' ? 'web' : source === 'daemon' ? 'daemon' : 'cli',
+    source,
+    // strict-subset invariant: `surface` excludes 'unknown' (see schema.ts).
+    // `source` is validated by SessionFacetSchema.parse() at the bottom of
+    // deriveFacet() — that call rejects any value outside the surface enum,
+    // so by the time control reaches this line `source` is already known-valid.
+    // Direct assignment is therefore safe; the parse() guard runs after, not
+    // before, this assignment.
+    surface: source, // first-class structural copy for daemon filtering (#4645)
     model: session.model,
     derived_at: (options.derivedAt ?? new Date()).toISOString(),
     derived_from: 'afk-session',
@@ -362,24 +415,7 @@ export function deriveSessionFacet(
       : {}),
   };
 
-  // Populate token_breakdown when cost data is available.
-  // Per-direction fields (input/output/cache_read/cache_creation) are omitted:
-  // StoredSession only carries totalTokens (a scalar sum) and does not persist
-  // per-direction counts. Omitting them avoids zero-filling fields that would
-  // falsely imply actual per-direction measurements.
-  //
-  // Contract (#3879): `cost_usd` is the sidecar's ROOT-only cost, kept for
-  // back-compat. `total_cost_usd` (root + every subagent) and
-  // `subagent_cost_usd` come from the witness trace via `traceSignals`; they
-  // are absent when no trace was readable, never guessed.
-  const ts = options.traceSignals;
-  if (session.totalCostUsd != null) {
-    facet.token_breakdown = {
-      cost_usd: session.totalCostUsd,
-      ...(ts?.totalCostUsd !== undefined ? { total_cost_usd: ts.totalCostUsd } : {}),
-      ...(ts?.subagentCostUsd !== undefined ? { subagent_cost_usd: ts.subagentCostUsd } : {}),
-    };
-  }
+  applyTokenBreakdown(facet, session.totalCostUsd, options.traceSignals);
 
   // Validate on the way out so callers can rely on a well-formed facet.
   return SessionFacetSchema.parse(facet);

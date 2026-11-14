@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { performance } from 'node:perf_hooks';
 
 // --- mocks declared before any imports of the module under test ---
 
@@ -71,28 +72,41 @@ function makeFacet(overrides: Partial<SessionFacet> = {}): SessionFacet {
   } as unknown as SessionFacet;
 }
 
+// A close-time stamp, as saveSession writes it for a sealed session.
+const ENDED_AT = 1_793_645_244_179;
+
+/** A readSync stand-in that fills the buffer with `payload` as sidecar JSON. */
+function headWriter(payload: Record<string, unknown>) {
+  return (_fd: number, buf: Buffer): number => {
+    const text = JSON.stringify(payload);
+    buf.write(text, 0, 'utf8');
+    return text.length;
+  };
+}
+
 /**
  * Wire up mocks so that the sessions dir contains one sidecar whose cwd
  * matches the given cwd, and whose facet is returned by getOrDeriveFacet.
+ *
+ * The sidecar is sealed (carries `endedAt`) unless `sealed: false`, which
+ * models a session that is still running: saveSession omits `endedAt` on
+ * every autosave and writes it only at close time.
  */
 function setupSingleSession(opts: {
   sessionId: string;
   cwd: string;
   facet: SessionFacet;
   mtimeMs?: number;
+  sealed?: boolean;
 }): void {
-  const { sessionId, cwd, facet, mtimeMs = Date.now() - 3 * 60 * 60 * 1000 } = opts;
+  const { sessionId, cwd, facet, mtimeMs = Date.now() - 3 * 60 * 60 * 1000, sealed = true } = opts;
   mockGetSessionsDir.mockReturnValue('/fake/sessions');
   mockReaddirSync.mockReturnValue([`${sessionId}.json`]);
   mockStatSync.mockReturnValue({ mtimeMs });
 
-  // Make readSync write a buffer that contains a cwd field.
+  // Make readSync write a buffer that contains the head fields the scan reads.
   mockReadSync.mockImplementation(
-    (_fd: number, buf: Buffer, _offset: number, _length: number, _pos: number) => {
-      const payload = JSON.stringify({ sessionId, cwd, surface: 'cli' });
-      buf.write(payload, 0, 'utf8');
-      return payload.length;
-    },
+    headWriter({ sessionId, cwd, surface: 'cli', ...(sealed ? { endedAt: ENDED_AT } : {}) }),
   );
 
   mockGetOrDeriveFacet.mockReturnValue(facet);
@@ -181,15 +195,131 @@ describe('renderStartupRecall — suppression', () => {
     expect(result).toBeUndefined();
   });
 
-  it('skips unsealed sessions (no end_time) and returns undefined when no sealed match', () => {
+  it('skips a live session (sidecar has no endedAt) even though its facet has an end_time', () => {
+    // Production shape: deriveSessionFacet fills end_time from savedAt on every
+    // autosave, so a running session's facet always has one. Only the sidecar's
+    // endedAt says the session was closed.
     setupSingleSession({
       sessionId: 'live-session',
       cwd: '/some/project',
-      facet: makeFacet({ end_time: undefined as unknown as string }),
+      facet: makeFacet({ end_time: '2026-10-25T10:30:00.000Z' }),
+      sealed: false,
     });
 
     const result = renderStartupRecall({ ...BASE_OPTS });
     expect(result).toBeUndefined();
+    // A live session is rejected from the head read alone: no facet lookup.
+    expect(mockGetOrDeriveFacet).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a quoted "endedAt" inside turn text as a seal', () => {
+    mockGetSessionsDir.mockReturnValue('/fake/sessions');
+    mockReaddirSync.mockReturnValue(['live-session.json']);
+    mockStatSync.mockReturnValue({ mtimeMs: Date.now() });
+    mockReadSync.mockImplementation(
+      headWriter({
+        cwd: '/some/project',
+        turns: [{ user: 'why does the sidecar say "endedAt": 1793645244179 here?' }],
+      }),
+    );
+    mockGetOrDeriveFacet.mockReturnValue(makeFacet());
+
+    expect(renderStartupRecall({ ...BASE_OPTS })).toBeUndefined();
+    expect(mockGetOrDeriveFacet).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sealed-ness — live peers in the same cwd
+// ---------------------------------------------------------------------------
+
+describe('renderStartupRecall — live peers', () => {
+  it('passes over newer live sessions and recalls the newest sealed one', () => {
+    mockGetSessionsDir.mockReturnValue('/fake/sessions');
+    mockReaddirSync.mockReturnValue(['sealed.json', 'live-a.json', 'live-b.json']);
+    // Newest first after the mtime sort: live-a, live-b, sealed.
+    const mtimes: Record<string, number> = { 'live-a.json': 3000, 'live-b.json': 2000, 'sealed.json': 1000 };
+    mockStatSync.mockImplementation((p: string) => ({
+      mtimeMs: mtimes[p.split(/[\\/]/).pop() ?? ''] ?? 0,
+    }));
+    mockReadSync
+      .mockImplementationOnce(headWriter({ sessionId: 'live-a', cwd: '/some/project' }))
+      .mockImplementationOnce(headWriter({ sessionId: 'live-b', cwd: '/some/project' }))
+      .mockImplementationOnce(headWriter({ sessionId: 'sealed', cwd: '/some/project', endedAt: ENDED_AT }));
+    mockGetOrDeriveFacet.mockReturnValue(makeFacet({ brief_summary: 'the sealed one' }));
+
+    const result = renderStartupRecall({ ...BASE_OPTS });
+    expect(result).toContain('the sealed one');
+    // Only the sealed session costs a facet lookup.
+    expect(mockGetOrDeriveFacet).toHaveBeenCalledTimes(1);
+    expect(mockGetOrDeriveFacet).toHaveBeenCalledWith('sealed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slow-scan diagnostic — developer-only
+// ---------------------------------------------------------------------------
+
+describe('renderStartupRecall — slow-scan diagnostic', () => {
+  /** Spy on both output streams, then make the scan appear to take `elapsedMs`. */
+  function arrangeScanDuration(elapsedMs: number) {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    // Last, so nothing else consumes the two queued readings.
+    vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValueOnce(elapsedMs);
+    return { log, stderr };
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('prints nothing for a slow scan in normal use', () => {
+    vi.stubEnv('AFK_DEBUG', '');
+    vi.stubEnv('DEBUG', '');
+    setupSingleSession({ sessionId: 'sess1', cwd: '/some/project', facet: makeFacet() });
+    const { log, stderr } = arrangeScanDuration(120);
+
+    const result = renderStartupRecall({ ...BASE_OPTS });
+
+    expect(result).toContain('last:');
+    expect(log).not.toHaveBeenCalled();
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it('reports a slow scan, dim and indented, under AFK_DEBUG=1', () => {
+    vi.stubEnv('AFK_DEBUG', '1');
+    setupSingleSession({ sessionId: 'sess1', cwd: '/some/project', facet: makeFacet() });
+    const { log, stderr } = arrangeScanDuration(120);
+
+    renderStartupRecall({ ...BASE_OPTS });
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const line = String(log.mock.calls[0]?.[0]).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(line).toBe('  [startup-recall] findLatestCwdSession took 120ms');
+    // Never a raw stderr write: that bypasses the REPL's console handling.
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it('marks a slow scan that found nothing', () => {
+    vi.stubEnv('AFK_DEBUG', '1');
+    setupSingleSession({ sessionId: 'sess1', cwd: '/some/project', facet: makeFacet(), sealed: false });
+    const { log } = arrangeScanDuration(75);
+
+    expect(renderStartupRecall({ ...BASE_OPTS })).toBeUndefined();
+
+    const line = String(log.mock.calls[0]?.[0]).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(line).toBe('  [startup-recall] findLatestCwdSession took 75ms (no match)');
+  });
+
+  it('stays quiet under AFK_DEBUG=1 when the scan is within budget', () => {
+    vi.stubEnv('AFK_DEBUG', '1');
+    setupSingleSession({ sessionId: 'sess1', cwd: '/some/project', facet: makeFacet() });
+    const { log } = arrangeScanDuration(50);
+
+    renderStartupRecall({ ...BASE_OPTS });
+
+    expect(log).not.toHaveBeenCalled();
   });
 });
 
@@ -368,13 +498,7 @@ describe('renderStartupRecall — getOrDeriveFacet undefined fallthrough', () =>
     // second returns a valid sealed facet — verifies the scan continues.
     mockReaddirSync.mockReturnValue(['first.json', 'second.json']);
     mockStatSync.mockImplementation((_p: string) => ({ mtimeMs: Date.now() }));
-    mockReadSync.mockImplementation(
-      (_fd: number, buf: Buffer, _offset: number, _length: number, _pos: number) => {
-        const payload = JSON.stringify({ cwd: '/some/project' });
-        buf.write(payload, 0, 'utf8');
-        return payload.length;
-      },
-    );
+    mockReadSync.mockImplementation(headWriter({ cwd: '/some/project', endedAt: ENDED_AT }));
     // first.json → undefined (no facet derived); second.json → valid sealed facet.
     mockGetOrDeriveFacet
       .mockReturnValueOnce(undefined)
@@ -394,21 +518,16 @@ describe('renderStartupRecall — MAX_SCAN boundary', () => {
     const files = Array.from({ length: 31 }, (_, i) => `sess${i}.json`);
     mockReaddirSync.mockReturnValue(files);
     mockStatSync.mockImplementation((_p: string) => ({ mtimeMs: Date.now() }));
-    mockReadSync.mockImplementation(
-      (_fd: number, buf: Buffer, _offset: number, _length: number, _pos: number) => {
-        const payload = JSON.stringify({ cwd: '/some/project' });
-        buf.write(payload, 0, 'utf8');
-        return payload.length;
-      },
-    );
+    mockReadSync.mockImplementation(headWriter({ cwd: '/some/project', endedAt: ENDED_AT }));
     // First 30 entries return undefined; the 31st (index 30) returns a valid facet.
     mockGetOrDeriveFacet.mockReturnValue(undefined);
     // The 31st call should never happen because MAX_SCAN=30 slices it out.
 
     const result = renderStartupRecall({ ...BASE_OPTS });
     expect(result).toBeUndefined();
-    // getOrDeriveFacet should have been called at most MAX_SCAN (30) times.
-    expect(mockGetOrDeriveFacet.mock.calls.length).toBeLessThanOrEqual(30);
+    // Every scanned entry is sealed and cwd-matching, so each costs exactly one
+    // lookup: MAX_SCAN (30) calls, and the 31st entry is never reached.
+    expect(mockGetOrDeriveFacet).toHaveBeenCalledTimes(30);
   });
 });
 

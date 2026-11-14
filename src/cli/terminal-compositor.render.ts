@@ -340,7 +340,7 @@ export function renderDropdownRows(self: RenderHost): string[] {
  * Invariant (frame-height stability): when the dropdown is open at all,
  * this function must return a non-null value so the frame's row count
  * stays constant as the user navigates ↑/↓. Many slash commands carry
- * no `hint` field (`/allow-dir`, `/bgsub`, `/changelog`, `/keys`,
+ * no `hint` field (`/allow-dir`, `/bgsub`, `/keys`,
  * `/stats`, `/worktree`, all `/bgsub:*` variants, etc.), and an
  * earlier version returned null in that case "to avoid wasting a row."
  * The cost of that frugality was a frame that oscillated between N and

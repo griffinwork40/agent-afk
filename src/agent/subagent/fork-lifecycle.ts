@@ -16,6 +16,7 @@
 import type { AgentConfig, AgentModelInput } from '../types.js';
 import type { TraceSink } from '../trace/index.js';
 import { emitSubagentLifecycle } from '../trace/emit.js';
+import { tryCredentialSourceForModel } from '../auth/credential-source.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 
 export interface EmitForkStartedArgs {
@@ -64,6 +65,18 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
     typeof effectiveChildModel === 'string'
       ? effectiveChildModel
       : JSON.stringify(effectiveChildModel);
+  // #4882: provider-aware credential id for the child's model (ids only;
+  // never reads the credential store: no process spawn on the fork path;
+  // never throws: observability only, INV-040). The child's real key and
+  // base URL are passed so a key of unknown origin records nothing.
+  const credentialSource =
+    typeof effectiveChildModel === 'string'
+      ? tryCredentialSourceForModel(effectiveChildModel, undefined, {
+        noStoreRead: true,
+        ...(childConfig.apiKey !== undefined ? { configApiKey: childConfig.apiKey } : {}),
+        ...(childConfig.baseUrl !== undefined ? { configBaseUrl: childConfig.baseUrl } : {}),
+      })
+      : undefined;
 
   // Invariant: fire-and-forget — emitSubagentLifecycle is best-effort trace
   // observability. Awaiting here would block forkSubagent's hot path. The
@@ -98,6 +111,7 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
     ...(typeof childConfig.maxToolUseIterations === 'number'
       ? { maxToolUseIterations: childConfig.maxToolUseIterations }
       : {}),
+    ...(credentialSource !== undefined ? { credentialSource } : {}),
     ...(continuation !== undefined
       ? { chainId: continuation.chainId, continuationOf: continuation.continuationOf, continuationIndex: continuation.continuationIndex }
       : {}),

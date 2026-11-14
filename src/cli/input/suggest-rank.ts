@@ -4,8 +4,8 @@
  * Both completion surfaces — the autocomplete dropdown (`filterSlashCandidates`)
  * and the Tier-1 ghost resolver (`getDeterministicGhost`) — historically broke
  * prefix ties alphabetically. With ~100 registered commands and aliases that is
- * almost never the command the user wants: `/re` resolves to `/reauth` ahead of
- * `/refactor`, `/research`, `/resolve`, `/review`, and six others.
+ * almost never the command the user wants: `/re` resolves to `/recover` ahead of
+ * `/refactor`, `/research`, `/resolve`, `/review`, and several others.
  *
  * This module ranks a tie-break bucket by how recently the user actually ran
  * each command, read from the REPL's own input history. Alphabetical order is

@@ -16,10 +16,10 @@ export function registryEnvironment(input: NodeJS.ProcessEnv): NodeJS.ProcessEnv
 }
 
 const targets: Record<string, string> = {
-  cli: 'render-cli-reference.ts', slash: 'render-slash-commands.ts', config: 'render-config-keys.ts',
+  cli: 'render-cli-reference.ts', slash: 'render-slash-commands.ts', config: 'render-config-keys.ts', surface: 'render-public-surface.ts',
 };
 const target = targets[process.argv[2] ?? ''];
-if (!target) throw new Error('Expected cli, slash, or config');
+if (!target) throw new Error('Expected cli, slash, config, or surface');
 const temp = mkdtempSync(join(tmpdir(), 'afk-reference-'));
 const cwd = join(temp, 'cwd');
 mkdirSync(cwd);

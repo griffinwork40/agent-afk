@@ -115,7 +115,7 @@ export function registerBranchCommand(program: Command): void {
         'REASON',
       ].join(' | ');
       console.log(palette.heading(header));
-      console.log('-'.repeat(Math.min(header.length, 120)));
+      console.log(palette.dim('-'.repeat(Math.min(header.length, 120))));
 
       for (const c of result.candidates) {
         const row = [
@@ -125,28 +125,22 @@ export function registerBranchCommand(program: Command): void {
           String(c.commitsAhead).padEnd(6),
           c.reason,
         ].join(' | ');
-        console.log(`${verdictIcon(c)} ${row}`);
+        console.log(palette.info(`${verdictIcon(c)} ${row}`));
       }
 
-      console.log('');
+      console.log(''); // console-ok
 
       const pruneCount = result.candidates.filter((c) => c.verdict === 'prune').length;
       const keepCount  = result.candidates.filter((c) => c.verdict === 'keep').length;
       const errorCount = result.candidates.filter((c) => c.verdict === 'error').length;
 
       if (dryRun) {
-        console.log(
-          `Would prune: ${pruneCount}, Would keep: ${keepCount}` +
-          (errorCount > 0 ? `, Errors: ${errorCount}` : ''),
-        );
+        console.log(palette.info(`Would prune: ${pruneCount}, Would keep: ${keepCount}` + (errorCount > 0 ? `, Errors: ${errorCount}` : '')));
         if (pruneCount > 0) {
           console.log(palette.dim('\nRun with --execute to actually delete these branches.'));
         }
       } else {
-        console.log(
-          `Deleted: ${result.deleted.length}, Kept: ${keepCount}` +
-          (errorCount > 0 ? `, Errors: ${errorCount}` : ''),
-        );
+        console.log(palette.info(`Deleted: ${result.deleted.length}, Kept: ${keepCount}` + (errorCount > 0 ? `, Errors: ${errorCount}` : '')));
       }
 
       const hasErrors = printWarnings(result.warnings);

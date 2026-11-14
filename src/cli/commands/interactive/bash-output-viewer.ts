@@ -29,6 +29,7 @@ import { truncateDisplayWidth } from '../../display.js';
 import { palette } from '../../palette.js';
 import type { PickerHost } from '../../render/picker.js';
 import { getTerminalWidth } from '../../terminal-size.js';
+import { contentBand } from '../../render/measure.js';
 import {
   type ViewerState,
   type ViewerLoadError,
@@ -143,7 +144,7 @@ function buildRows(
     } else if (!state.searchQuery) {
       rendered = palette.dim(rendered);
     }
-    rows.push(truncateDisplayWidth(rendered, displayWidth, ''));
+    rows.push(rendered);
   }
 
   if (state.lines.length === 0) {
@@ -151,7 +152,17 @@ function buildRows(
   }
 
   rows.push(buildFooter(searchMode));
-  return rows;
+  return boundRows(rows, displayWidth);
+}
+
+// The compositor skips clipping these preformatted rows but still adds its
+// content margin. Bound every row (chrome and errors too) to the remaining width.
+function boundRows(rows: readonly string[], width: number): readonly string[] {
+  return rows.map((row) => truncateDisplayWidth(row, width, ''));
+}
+
+function viewerWidth(): number {
+  return contentBand(getTerminalWidth()).width;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +217,7 @@ export function runBashOutputViewer(
       const onAbort = (): void => { if (!done) { done = true; host.exitPickerMode(); resolve(); } };
       if (signal) signal.addEventListener('abort', onAbort, { once: true });
       host.enterPickerMode({
-        renderRows: () => errRows,
+        renderRows: () => boundRows(errRows, viewerWidth()),
         onKey: () => { if (!done) { done = true; if (signal) signal.removeEventListener('abort', onAbort); host.exitPickerMode(); resolve(); } },
         skipBandTruncation: true,
       });
@@ -233,7 +244,7 @@ export function runBashOutputViewer(
     const effectivePath = capturePath ?? '';
 
     const renderRows = (): readonly string[] =>
-      buildRows(state, effectivePath, searchMode, searchBuf, getTerminalWidth());
+      buildRows(state, effectivePath, searchMode, searchBuf, viewerWidth());
 
     const onKey = (
       char: string | undefined,

@@ -71,11 +71,11 @@ import * as ss from './session-send.js';
 import * as sc from './session-config.js';
 import { toModelInfo, toAgentInfo, toContextUsageResponse, toMcpServerStatus } from './provider-type-mappers.js';
 import { applyStopHookWiring } from './agent-session.stop-hook-wiring.js';
+import { observeFallbackNotice } from './agent-session.fallback-observer.js';
 import { bindSessionExecutors, recordSubagentCompletionInTree } from './agent-session.executors.js';
 import { startMcpInit, disconnectOwnedManager } from './agent-session.mcp.js';
 import { buildSessionRunner, buildSessionInitPromise, applyLifecycle } from './agent-session.lifecycle.js';
 import type { McpManager } from '../mcp/manager.js';
-
 
 export class AgentSession implements IAgentSession {
   /**
@@ -210,6 +210,7 @@ export class AgentSession implements IAgentSession {
       resolvedModel: resolveModelId(config.model) ?? configuredModel,
       origin: deriveOrigin(config.surface),
       actor: deriveActor(config.parentSessionId),
+      ...(config.credentialSource !== undefined ? { credentialSource: config.credentialSource } : {}),
     });
 
     // SDK resume rehydration: when the caller passed `resume`/`sessionId` but
@@ -252,6 +253,7 @@ export class AgentSession implements IAgentSession {
    * await / provider-rebuild logic extracted to `agent-session.lifecycle.ts`.
    */
   private initSdkLifecycle(): void {
+    this.ledger.initialize(this.config);
     this.stateManager = applyLifecycle(this.config, {
       setStateManager: (v) => { this.stateManager = v; },
       setInputStream: (v) => { this.inputStream = v; },
@@ -290,7 +292,7 @@ export class AgentSession implements IAgentSession {
       incTurnCount: () => { this.turnCount++; },
       getProviderQuery: () => this.providerQuery,
       getStopWiring: () => this.stopWiring,
-      observeProviderEvent: (e) => this.planExit.planText.observe(e),
+      observeProviderEvent: (e) => { this.planExit.planText.observe(e); observeFallbackNotice(e, () => this.makeConfigDeps()); },
     });
 
     this.initPromise = buildSessionInitPromise({
@@ -444,8 +446,6 @@ export class AgentSession implements IAgentSession {
   async setPermissionMode(mode: PermissionMode): Promise<void> { return sc.setPermissionMode(mode, this.makeConfigDeps()); }
   setSystemPrompt(basePrompt: string | undefined): boolean { return sc.setSystemPrompt(basePrompt, this.makeConfigDeps()); }
   setCwd(cwd: string): void { return sc.setCwd(cwd, this.makeConfigDeps()); }
-  async reauth(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> { return sc.reauth(this.makeConfigDeps()); }
-
   getPrePlanMode(): PermissionMode | undefined { return this.planExit.getPrePlanMode(); }
   // Invariant: called by the REPL after construction to wire a queue-check
   // predicate into exit_plan_mode — when it returns true the handler skips the

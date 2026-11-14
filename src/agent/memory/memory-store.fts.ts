@@ -31,7 +31,7 @@ const FTS5_OPERATORS = new Set(['AND', 'OR', 'NOT']);
  * mid-word (like `foo(bar)`) need quoting; that case is detected inside
  * {@link sanitizeFtsQuery} after stripping boundary parens from a token.
  */
-const FTS5_BAREWORD_SPECIAL = /[-:/.,+^]/;
+const FTS5_BAREWORD_SPECIAL = /[-:/.,+^#']/;
 
 /**
  * Map a Fact[] returned by searchFacts into MemorySearchResult entries.

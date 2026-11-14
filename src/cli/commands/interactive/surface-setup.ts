@@ -17,6 +17,8 @@ import {
   wireCompositorIntoCtx,
   wireSlashCtxCallbacks,
 } from './surface-setup.wiring.js';
+import { cycleDiffCap, diffCapHint } from './tool-lane-diff-cap.js';
+import { palette } from '../../palette.js';
 
 /**
  * Dependencies surface-setup needs from phases that have not been
@@ -126,6 +128,13 @@ export async function setupSurface(
     // Ctrl+O → open $EDITOR seeded with the input buffer, mirroring the
     // /editor slash command. See buildOpenEditorCallback in surface-setup.wiring.ts.
     onOpenEditor: buildOpenEditorCallback(surface, ctx),
+    // Ctrl+X D changes future diff output only; committed scrollback is unchanged.
+    // Read the writer lazily: wireCompositorIntoCtx installs commitAbove after
+    // armCompositor resolves, before the first readLine can invoke this callback.
+    onCycleDiffCap: () => {
+      cycleDiffCap();
+      ctx.completionWriter.fn(palette.dim(diffCapHint()));
+    },
     onOpenOutputViewer: buildOutputViewerCallback(ctx.capturePathRef, () => surface.getCompositor()),
     // StatusLine doubles as DECSTBM scroll-region guard so commitAbove
     // writes survive the persistent bottom-row reservation.

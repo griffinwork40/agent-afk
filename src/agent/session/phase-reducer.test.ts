@@ -217,4 +217,35 @@ describe('phase-reducer', () => {
       reducePhase('ready_for_review', contentChunk(), noMeta(), T0, recent),
     ).toBe('ready_for_review');
   });
+
+  // ── model-fallback notice — no phase change ───────────────────────────────
+  it('model-fallback notice from idle stays idle', () => {
+    const event: OutputEvent = {
+      type: 'notice',
+      text: 'opus hit its usage limit. Continuing on sonnet.',
+      kind: 'model-fallback',
+      fallback: { from: 'opus', to: 'sonnet', reason: 'usage-limit' },
+    };
+    expect(reduce('idle', event)).toBe('idle');
+  });
+
+  it('model-fallback notice from investigating stays investigating', () => {
+    const event: OutputEvent = {
+      type: 'notice',
+      text: 'opus hit its usage limit. Continuing on sonnet.',
+      kind: 'model-fallback',
+      fallback: { from: 'opus', to: 'sonnet', reason: 'usage-limit' },
+    };
+    expect(reduce('investigating', event)).toBe('investigating');
+  });
+
+  it('model-fallback notice from editing stays editing', () => {
+    const event: OutputEvent = {
+      type: 'notice',
+      text: 'opus hit its usage limit. Continuing on sonnet.',
+      kind: 'model-fallback',
+      fallback: { from: 'opus', to: 'sonnet', reason: 'usage-limit' },
+    };
+    expect(reduce('editing', event)).toBe('editing');
+  });
 });

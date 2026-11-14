@@ -68,6 +68,9 @@ const KIND_FIELDS: Record<TerminalKind, ReadonlyArray<readonly [string, keyof Te
     ['', 'whatWasDone'],
     ['Evidence', 'evidence'],
     ['Pending', 'deferred'],
+    ['Worth doing', 'worthDoing'],
+    ['Not checked', 'notChecked'],
+    ['Undo', 'undoSteps'],
   ],
   blocked: [
     ['Blocked by', 'whatBlocks'],

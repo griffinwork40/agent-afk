@@ -31,6 +31,10 @@ Run a single test by name:
 pnpm test -t "sends a message"
 ```
 
+## Docs
+
+For user-facing changes, update a handwritten page under `website/content/docs/`, or add the uncovered public symbol with an honest dated reason to `website/docs-backlog.json`. Run `pnpm docs:report` to see gaps, then `pnpm scan:surface:check`, `pnpm docs:surface:check`, `pnpm docs:refs:check`, and `pnpm docs:links:check`. Regenerate generated references and `docs/public-surface.json` with their `pnpm scan:*` commands rather than editing them directly.
+
 ## TypeScript — strict mode
 
 `tsconfig.json` is maximally strict: `noUnusedLocals`, `noUnusedParameters`,

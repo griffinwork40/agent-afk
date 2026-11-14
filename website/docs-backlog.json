@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "kind": "command",
+      "name": "afk acp",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers the Agent Client Protocol (ACP) JSON-RPC server over stdio yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk episode",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers the episodic-narrative command group yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk episode backfill",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers retroactively synthesizing episodes for existing session journals yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk episode ingest",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers ingesting episode facts into the Q episodes store yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk episode synthesize",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers synthesizing an episode narrative from a sealed session journal yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk events",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers the event ingress producers that feed the pull queue yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk events github",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers polling GitHub for events to enqueue into the pull queue yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk pause",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers freezing all running AFK sessions via pause.lock yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk receipt",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers the run-receipt management command group yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk receipt regenerate",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers rebuilding existing receipts as v2 from the witness trace and journal yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk resume",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers unfreezing paused AFK sessions by removing pause.lock yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "command",
+      "name": "afk trace export-otlp",
+      "reason": "Listed only in the generated CLI reference; no hand-written guide covers converting a sealed witness trace to OTLP/JSON yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "config",
+      "name": "models.subagent",
+      "reason": "Listed only in the generated config-key reference; no hand-written guide covers the default model slot for dispatched subagents yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "config",
+      "name": "tools.usageAwareness",
+      "reason": "Listed only in the generated config-key reference; no hand-written guide covers whether the model sees subscription usage info yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "slash",
+      "name": "/branches",
+      "reason": "Listed only in the generated slash-command reference; no hand-written guide covers listing and switching between rewind branches yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "slash",
+      "name": "/export",
+      "reason": "Listed only in the generated slash-command reference; no hand-written guide covers exporting a session as a self-contained md or html file yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "slash",
+      "name": "/handoffs",
+      "reason": "Listed only in the generated slash-command reference; no hand-written guide covers listing pending daemon handoff questions yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "slash",
+      "name": "/handoffs:answer",
+      "reason": "Listed only in the generated slash-command reference; no hand-written guide covers answering a pending daemon handoff question yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "slash",
+      "name": "/info",
+      "reason": "Listed only in the generated slash-command reference; no hand-written guide covers showing session identity, model, permissions, and recorded usage yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "slash",
+      "name": "/recall",
+      "reason": "Listed only in the generated slash-command reference; no hand-written guide covers inspecting scored episode candidates for the current git context yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "slash",
+      "name": "/usage-awareness",
+      "reason": "Listed only in the generated slash-command reference; no hand-written guide covers toggling whether the model sees subscription usage info yet.",
+      "added": "2026-11-12"
+    },
+    {
+      "kind": "slash",
+      "name": "/where",
+      "reason": "Listed only in the generated slash-command reference; no hand-written guide covers showing the workspace, session, and introspection surface at a glance yet.",
+      "added": "2026-11-12"
+    }
+  ]
+}
