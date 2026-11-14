@@ -60,6 +60,13 @@ export interface SessionIdentity {
 export interface SessionMetadata {
   sessionId?: string;
   model?: string;
+  /**
+   * Set when the session switched to the `models.fallback` model. `model`
+   * above already names the fallback; this keeps what it replaced, why, and
+   * the notice sentence, for surfaces that read a run after the fact (the
+   * daemon) instead of consuming the event stream.
+   */
+  modelFallback?: { from: string; to: string; reason: ModelFallbackReason; text: string };
   permissionMode?: PermissionMode;
   cwd?: string;
   tools?: string[];

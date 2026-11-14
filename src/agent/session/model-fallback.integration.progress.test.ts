@@ -10,7 +10,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const fallbackModel = vi.hoisted(() => ({ value: undefined as string | undefined }));
-vi.mock('./fallback-model.js', () => ({ getConfiguredFallbackModel: () => fallbackModel.value }));
+// Control the configured fallback at its true source (the JSON config read), so
+// the REAL fallback-model.ts runs: getConfiguredFallbackModel, the routing
+// predicate and the injected-first factory are all exercised, not re-implemented.
+vi.mock('../../cli/config/json-tier.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadJsonConfig: () => ({
+    config: fallbackModel.value !== undefined ? { fallbackModel: fallbackModel.value } : {},
+    modelsPartial: {},
+    sourcePath: undefined,
+  }),
+}));
 vi.mock('../../utils/debug.js', () => ({ debugLog: vi.fn() }));
 
 import { AgentSession } from './agent-session.js';

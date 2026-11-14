@@ -80,8 +80,18 @@ function resetTimeOf(error: Error): Date | undefined {
   return info?.resetsAt instanceof Date ? info.resetsAt : undefined;
 }
 
-/** The one-sentence operator notice for a fallback switch (plain text, no markdown). */
-export function fallbackNoticeText(from: string, to: string, reason: ModelFallbackReason, error: Error): string {
+/**
+ * The operator notice for a fallback switch (plain text, no markdown).
+ * `canSwitchBack` is false where there is no `/model` to run (one-shot chat,
+ * the daemon). A rejected model is never offered as something to return to.
+ */
+export function fallbackNoticeText(
+  from: string,
+  to: string,
+  reason: ModelFallbackReason,
+  error: Error,
+  canSwitchBack = true,
+): string {
   let what: string;
   if (reason === 'usage-limit') {
     const resetsAt = resetTimeOf(error);
@@ -92,7 +102,8 @@ export function fallbackNoticeText(from: string, to: string, reason: ModelFallba
   } else {
     what = `${from} is not available`;
   }
-  return `${what}. Continuing on ${to}. Run /model ${from} to switch back.`;
+  const hint = canSwitchBack && reason !== 'model-rejected' ? ` Run /model ${from} to switch back.` : '';
+  return `${what}. Continuing on ${to}.${hint}`;
 }
 
 /**
@@ -241,7 +252,7 @@ export class ModelFallbackController {
       yield { type: 'error', error: request.error };
       return false;
     }
-    yield { type: 'notice', kind: 'model-fallback', fallback: { from, to, reason: request.reason }, text: fallbackNoticeText(from, to, request.reason, request.error) }; // g
+    yield { type: 'notice', kind: 'model-fallback', fallback: { from, to, reason: request.reason }, text: fallbackNoticeText(from, to, request.reason, request.error, host.baseConfig.isNonInteractive !== true) }; // g
     void emitSessionPhase(host.baseConfig.traceWriter, { phase: 'model_fallback', metadata: { fromModel: from, toModel: to, reason: request.reason } }); // h
     debugLog(`ProviderRouter: model fallback ${from} → ${to} (${request.reason})`);
     for (const ev of pre) yield ev;

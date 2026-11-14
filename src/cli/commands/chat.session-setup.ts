@@ -30,6 +30,8 @@ import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowli
 import { parseProvider, getApiKeyForModel, getModel, getDefaultSubagentModel } from '../shared-helpers.js';
 import { credentialSourceId } from '../auth-wizard.describe-source.js';
 import { cliProviderFamily } from '../provider-selection.js';
+import { injectedProviderWiring } from '../provider-fallback-factory.js';
+import type { ModelProvider } from '../../agent/provider.js';
 import type { TraceWriter } from '../../agent/trace/writer.js';
 import { formatSubagentCompletion } from './interactive/progress-banner.js';
 import type { McpManager } from '../../agent/mcp/index.js';
@@ -170,21 +172,22 @@ export async function buildChatSession(
   });
 
   const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
-  const provider = parseProvider(providerRaw, {
+  const familyOf = (m: string): string =>
+    cliProviderFamily(providerRaw, { model: m, ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}) });
+  // ONE build function for the primary and for a `models.fallback` provider,
+  // so a fallback carries the same executors, stores and MCP manager.
+  const buildProvider = (m: string): ModelProvider => parseProvider(providerRaw, {
     subagentExecutor,
     skillExecutor,
     composeExecutor,
     memoryStore: sharedMemoryStore,
     stateStore: sharedStateStore,
-    model: String(model),
+    model: m,
     ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
     ...(mcpManager !== undefined ? { mcpManager } : {}),
   })
     ?? (() => {
-      const family = cliProviderFamily(providerRaw, {
-        model: String(model),
-        ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
-      });
+      const family = familyOf(m);
       const sharedOpts = {
         permissions: { allowedTools: topLevelSurfaceAllowedTools(mcpToolWireNames) },
         subagentExecutor,
@@ -208,6 +211,12 @@ export async function buildChatSession(
         surface: 'cli',
       });
     })();
+  const providerWiring = injectedProviderWiring({
+    model: String(model),
+    explicitProvider: providerRaw,
+    build: buildProvider,
+    familyOf,
+  });
 
   await ensurePluginEntrypointsLoaded();
 
@@ -253,7 +262,7 @@ export async function buildChatSession(
     ...(autoResumeOnUsageLimit !== undefined ? { autoResumeOnUsageLimit } : {}),
     ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
     ...resumeConfig,
-    provider,
+    ...providerWiring,
   })))), traceWriter);
 
   boundSession = session;

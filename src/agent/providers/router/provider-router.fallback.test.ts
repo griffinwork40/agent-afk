@@ -386,6 +386,9 @@ describe('fallback helpers', () => {
     expect(fallbackNoticeText('opus', 'sonnet', 'usage-limit', err)).toBe(`opus hit its usage limit (resets ${time}). Continuing on sonnet. Run /model opus to switch back.`);
     expect(fallbackNoticeText('opus', 'sonnet', 'usage-limit', new Error('x'))).toBe('opus hit its usage limit. Continuing on sonnet. Run /model opus to switch back.');
     expect(fallbackNoticeText('opus', 'sonnet', 'credit-exhausted', new Error('x'))).toBe('opus is out of credit. Continuing on sonnet. Run /model opus to switch back.');
-    expect(fallbackNoticeText('opus', 'sonnet', 'model-rejected', new Error('x'))).toBe('opus is not available. Continuing on sonnet. Run /model opus to switch back.');
+    // A rejected model is never offered as something to switch back to.
+    expect(fallbackNoticeText('opus', 'sonnet', 'model-rejected', new Error('x'))).toBe('opus is not available. Continuing on sonnet.');
+    // No /model exists on a non-interactive surface, so no hint there either.
+    expect(fallbackNoticeText('opus', 'sonnet', 'usage-limit', new Error('x'), false)).toBe('opus hit its usage limit. Continuing on sonnet.');
   });
 });

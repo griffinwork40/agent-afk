@@ -109,8 +109,8 @@ fallback needs no flag and still works for a single-model setup.
 
 ## Fallback model
 
-Set `models.fallback` to one model and an interactive session switches to it,
-and tells you, instead of pausing when the primary cannot serve a turn:
+Set `models.fallback` to one model and a session switches to it, and tells you,
+instead of pausing or failing when the primary cannot serve a turn:
 
 ```bash
 afk config set models.fallback sonnet
@@ -130,9 +130,9 @@ turn yet, for one of three reasons:
 - The Anthropic API account is out of credit.
 - The model id was rejected as unknown, retired, or unavailable.
 
-**Where it works.** Interactive sessions only (`afk interactive`). One-shot
-`afk chat`, the daemon and scheduled runs, Telegram, the web dashboard, and ACP
-sessions do not switch. They behave exactly as they do with no fallback set.
+**Where it works.** Interactive sessions, one-shot `afk chat`, and the daemon
+with its scheduled runs. Telegram, the web dashboard, and ACP sessions do not
+switch yet. They behave exactly as they do with no fallback set.
 
 **What you see.** One notice line at the moment of the switch:
 
@@ -140,7 +140,20 @@ sessions do not switch. They behave exactly as they do with no fallback set.
 opus hit its usage limit (resets 6:00 PM). Continuing on sonnet. Run /model opus to switch back.
 ```
 
-The status line and the session record show the new model.
+The hint to switch back appears only in an interactive session, and never for a
+model that was rejected. Where the line goes depends on the surface:
+
+- **Interactive.** In the conversation. The status line and the session record
+  show the new model.
+- **One-shot `afk chat`.** On stderr, so stdout stays clean. `--format json`
+  adds `servedModel` and `modelFallback` (`from`, `to`, `reason`) beside the
+  requested `model`, and `--format stream-json` emits the notice event.
+- **Daemon and scheduled runs.** In the daemon log, on the run record as
+  `modelFallbackNote`, and in the task notification when one is sent. A run
+  that switched and then succeeded does not notify unless the task's
+  `notifyOn` is `always`.
+
+The switch is also recorded in the session trace as a `model_fallback` phase.
 
 **What it does not do.**
 
@@ -151,6 +164,13 @@ The status line and the session record show the new model.
   context-length errors, refusals, or user interrupts.
 - It is one model, not a chain, and is used at most once per session. If the
   fallback also fails, the usual behaviour for that failure applies.
+- Each scheduled run is its own session. It starts on the primary again and
+  switches again if the primary is still unavailable, so the daemon returns to
+  the primary by itself once it recovers.
+- With `--provider` or `AFK_PROVIDER` set, one-shot `afk chat` and daemon runs
+  never switch, because the provider is fixed for every model. An interactive
+  session does not check this, so give it a fallback the pinned provider can
+  serve.
 - The session stays on the fallback model for the rest of the session. It does
   not return to the primary automatically. Use `/model <primary>` to switch
   back, or start a new session, which begins on the primary again.
@@ -161,7 +181,9 @@ The status line and the session record show the new model.
 subscription model that falls back to a paid API model will bill the API for
 those turns. If the fallback is on a different provider family, the earlier
 conversation is carried as plain text so prior tool calls and reasoning lose
-their structure, and the prompt cache is lost at the switch.
+their structure, and the prompt cache is lost at the switch. Directories
+approved with `/allow-dir` belong to the provider they were approved on, so
+after a switch to a different provider you may be asked again.
 
 To turn the fallback off:
 

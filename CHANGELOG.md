@@ -13,7 +13,7 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 ## [Unreleased]
 
 ### Added
-- models: set a fallback model for interactive sessions with `afk config set models.fallback <model>`. When the primary hits a usage limit, runs out of credit, or is rejected before producing any output, the session continues on the fallback instead of pausing and shows one notice line at the switch. It stays on the fallback until you run `/model <primary>` or start a new session. One-shot chat, daemon, Telegram, web and ACP sessions are not covered yet
+- models: set a fallback model with `afk config set models.fallback <model>`. When the primary hits a usage limit, runs out of credit, or is rejected before producing any output, the session continues on the fallback instead of pausing or failing, and shows one notice line at the switch. Covers interactive sessions, one-shot `afk chat` (notice on stderr; `--format json` adds `servedModel` and `modelFallback`), and daemon and scheduled runs (noted in the log, on the run record, and in the task notification). Telegram, web and ACP sessions are not covered yet
 
 ### Fixed
 - router: a session keeps its id when the provider is rebuilt on another model; switching to a different provider with `/model` used to change the id and leave the message journal under the old one

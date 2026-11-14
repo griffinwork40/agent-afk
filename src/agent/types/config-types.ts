@@ -713,8 +713,13 @@ export interface AgentConfig {
    * should memoize by family so repeated calls for the same family return the
    * same instance — see `createMemoizedProviderFactory` in the REPL bootstrap.
    *
-   * Ignored when `provider` is explicitly set (injected-provider path, used by
-   * Telegram and the daemon, takes precedence). When both are unset, `AgentSession`
+   * Ignored when `provider` is explicitly set (the injected-provider path takes
+   * precedence), with one exception: when a `models.fallback` model is
+   * configured and the session is not a subagent fork, a session given BOTH is
+   * driven through `ProviderRouter` so it can switch to the fallback. The
+   * injected provider still serves its own family; the factory builds the
+   * provider for any other family, so it must wire it the same way (see
+   * `routesInjectedProviderForFallback`). When both are unset, `AgentSession`
    * falls back to the bare `resolveProvider` function which builds providers
    * without executor/MCP wiring — suitable for one-shot and non-interactive paths.
    *

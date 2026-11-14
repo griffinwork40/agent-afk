@@ -43,11 +43,12 @@ Use the sections below. If the same failure returns, change the diagnosis rather
 
 ## My session paused on a usage limit even though I set a fallback
 
-The fallback applies to interactive sessions only. One-shot `afk chat`, the
-daemon and scheduled runs, Telegram, the web dashboard, and ACP sessions never
-switch, whatever is configured.
+The fallback covers interactive sessions, one-shot `afk chat`, and the daemon
+with its scheduled runs. Telegram, the web dashboard, and ACP sessions never
+switch, whatever is configured, and neither do one-shot or daemon runs started
+with `--provider` or `AFK_PROVIDER` set.
 
-In an interactive session it only activates when the primary cannot serve a turn
+On a covered surface it only activates when the primary cannot serve a turn
 _and_ nothing has been sent for that turn yet. If the usage limit was hit after the
 model had already produced output or run a tool in that turn, the session pauses
 as normal. The pause card includes the line:

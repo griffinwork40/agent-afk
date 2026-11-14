@@ -25,6 +25,9 @@ export function observeFallbackNotice(event: ProviderEvent, getConfigDeps: () =>
     event.kind === 'model-fallback' &&
     event.fallback?.to !== undefined
   ) {
-    applyFallbackModel(event.fallback.to, getConfigDeps());
+    const deps = getConfigDeps();
+    applyFallbackModel(event.fallback.to, deps);
+    const modelFallback = { ...event.fallback, text: event.text };
+    deps.getStateManager().setSessionMetadata((prev) => ({ ...prev, modelFallback }));
   }
 }
