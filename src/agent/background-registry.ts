@@ -110,6 +110,8 @@ interface InternalJob extends BackgroundJob {
   onCleanup?: () => Promise<void>;
   /** Post-settlement synchronous callback, forwarded from RegisterArgs. */
   onSettled?: () => void;
+  /** Project key forwarded from RegisterArgs; used to look up the right goal at delivery. */
+  projectKey?: string;
   /** Epoch-ms of the most recent observable activity. Updated on every progress event. */  lastActivityAt: number;
 }
 
@@ -178,6 +180,14 @@ export interface RegisterArgs {
    * Item 4 fix: keeps promoted agents counted until registry settlement.
    */
   onSettled?: () => void;
+  /**
+   * StateStore key identifying the project whose goal should be snapshotted at
+   * dispatch time and compared at delivery time. Derived via
+   * `projectKeyForCwd()` at the dispatch site. When omitted the registry falls
+   * back to the global `'current'` key (preserving pre-existing behaviour for
+   * callers that have no working directory, e.g. daemon tasks).
+   */
+  projectKey?: string;
 }
 
 export interface BackgroundRegistryEvents {
@@ -400,11 +410,12 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       parentSessionId: args.parentSessionId,
       onCleanup: args.onCleanup,
       onSettled: args.onSettled,
+      projectKey: args.projectKey,
       // Snapshot the active goal text at dispatch time so the delivery path
       // can detect whether the operator changed the goal while this job ran.
-      // Uses the global fallback key (no cwd threading needed here — the
-      // same key getGoal() uses when called without a projectKey argument).
-      goalTextAtDispatch: getGoal()?.text,
+      // Uses args.projectKey when provided (project-scoped goal), falling back
+      // to the global 'current' key for callers without a working directory.
+      goalTextAtDispatch: getGoal(args.projectKey)?.text,
     };
     this.jobs.set(jobId, job);
 
@@ -685,6 +696,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       ...(job.parentSessionId !== undefined && { parentSessionId: job.parentSessionId }),
       ...(job.lastActivityAt !== undefined ? { lastActivityAt: job.lastActivityAt } : {}),
       ...(job.goalTextAtDispatch !== undefined ? { goalTextAtDispatch: job.goalTextAtDispatch } : {}),
+      ...(job.projectKey !== undefined ? { projectKey: job.projectKey } : {}),
     };
     return snap;
   }
