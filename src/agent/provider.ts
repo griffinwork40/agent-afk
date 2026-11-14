@@ -145,6 +145,12 @@ export interface ProviderProgress {
   durationMs: number;
 }
 
+/**
+ * Why a provider asked to switch the main session to its fallback model
+ * (`models.fallback`). See the `model.fallback_request` ProviderEvent.
+ */
+export type ModelFallbackReason = 'usage-limit' | 'credit-exhausted' | 'model-rejected';
+
 /** Harness-native event lane emitted by every `ProviderQuery`. */
 export type ProviderEvent =
   | { type: 'session.init'; info: ProviderSessionInfo }
@@ -178,7 +184,9 @@ export type ProviderEvent =
        * lets consumers programmatically distinguish notice classes without
        * substring-matching `text`. Extend as new harness notice classes emerge.
        */
-      kind: 'truncation' | 'refusal' | 'fast-tier' | 'image-omitted';
+      kind: 'truncation' | 'refusal' | 'fast-tier' | 'image-omitted' | 'model-fallback';
+      /** Set on `kind: 'model-fallback'`: the switch the router just made. */
+      fallback?: { from: string; to: string; reason: ModelFallbackReason };
       sessionId?: string;
     }
   | {
@@ -405,6 +413,22 @@ export type ProviderEvent =
       attempt?: number;
     }
   | { type: 'error'; error: Error }
+  | {
+      /**
+       * Contract: a provider retry tier asks to switch to the fallback model.
+       * Emitted INSTEAD of `paused` (or the terminal error), and only when
+       * `AgentConfig.modelFallbackArmed` is true AND nothing has been yielded
+       * for the current turn, so the turn can be replayed on another model
+       * without duplicating output. Consumed by `ProviderRouter`, which
+       * rebuilds on the fallback model, replays the turn, and emits a
+       * `notice` of kind `model-fallback`. It must never reach the session:
+       * any other consumer drops it.
+       */
+      type: 'model.fallback_request';
+      reason: ModelFallbackReason;
+      error: Error;
+      sessionId?: string;
+    }
   | {
       type: 'paused';
       reason: 'usage-limit';

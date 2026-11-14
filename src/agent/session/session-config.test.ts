@@ -18,6 +18,7 @@ vi.mock('./model-resolution.js', () => ({
 
 import {
   setModel,
+  applyFallbackModel,
   setPermissionMode,
   setSystemPrompt,
   setCwd,
@@ -317,5 +318,80 @@ describe('takePendingPlanExitSeed', () => {
     expect(result).toBeUndefined();
     // Seed must have been consumed — no second attempt possible.
     expect(await takePendingPlanExitSeed(deps)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyFallbackModel
+// ---------------------------------------------------------------------------
+
+describe('applyFallbackModel', () => {
+  beforeEach(() => {
+    vi.mocked(resolveModelId).mockImplementation((m) => m as string | undefined);
+  });
+
+  it('updates metadata to the resolved id when the model changed', () => {
+    vi.mocked(resolveModelId).mockReturnValue('claude-haiku-4-5');
+    const { deps, stateManager } = makeMockDeps({ config: { model: 'sonnet' } });
+    applyFallbackModel('haiku', deps);
+    expect(stateManager.getSessionMetadata().model).toBe('claude-haiku-4-5');
+  });
+
+  it('writes exactly one journal mark when the model changed', () => {
+    const markModelSwitch = vi.fn();
+    const { deps } = makeMockDeps({ config: { model: 'sonnet' } });
+    const withJournal: ConfigDeps = {
+      ...deps,
+      getJournal: () => ({ markModelSwitch }) as unknown as JournalLifecycle,
+    };
+    applyFallbackModel('haiku', withJournal);
+    expect(markModelSwitch).toHaveBeenCalledTimes(1);
+    expect(markModelSwitch).toHaveBeenCalledWith('haiku');
+  });
+
+  it('does NOT call the provider setModel', () => {
+    const { deps, providerQuery } = makeMockDeps({ config: { model: 'sonnet' } });
+    applyFallbackModel('haiku', deps);
+    expect(providerQuery.setModel).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the resolved model is already current (idempotent)', () => {
+    vi.mocked(resolveModelId).mockReturnValue('sonnet');
+    const markModelSwitch = vi.fn();
+    const { deps, stateManager } = makeMockDeps({ config: { model: 'sonnet' } });
+    const withJournal: ConfigDeps = {
+      ...deps,
+      getJournal: () => ({ markModelSwitch }) as unknown as JournalLifecycle,
+    };
+    applyFallbackModel('sonnet', withJournal);
+    expect(stateManager.getSessionMetadata().model).toBe('sonnet');
+    expect(markModelSwitch).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when resolveModelId returns undefined', () => {
+    vi.mocked(resolveModelId).mockReturnValue(undefined);
+    const markModelSwitch = vi.fn();
+    const { deps, stateManager } = makeMockDeps({ config: { model: 'sonnet' } });
+    const before = stateManager.getSessionMetadata().model;
+    const withJournal: ConfigDeps = {
+      ...deps,
+      getJournal: () => ({ markModelSwitch }) as unknown as JournalLifecycle,
+    };
+    applyFallbackModel('ghost', withJournal);
+    expect(stateManager.getSessionMetadata().model).toBe(before);
+    expect(markModelSwitch).not.toHaveBeenCalled();
+  });
+
+  it('calling twice with the same model writes the journal mark only once', () => {
+    vi.mocked(resolveModelId).mockReturnValue('claude-haiku-4-5');
+    const markModelSwitch = vi.fn();
+    const { deps } = makeMockDeps({ config: { model: 'sonnet' } });
+    const withJournal: ConfigDeps = {
+      ...deps,
+      getJournal: () => ({ markModelSwitch }) as unknown as JournalLifecycle,
+    };
+    applyFallbackModel('haiku', withJournal);
+    applyFallbackModel('haiku', withJournal);
+    expect(markModelSwitch).toHaveBeenCalledTimes(1);
   });
 });

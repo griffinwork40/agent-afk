@@ -10,6 +10,9 @@ import { StateStore } from '../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
+import type { ModelProvider } from '../../agent/provider.js';
+import { cliProviderFamily } from '../provider-selection.js';
+import { injectedProviderWiring } from '../provider-fallback-factory.js';
 import { createStubParentSession } from '../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
@@ -143,13 +146,17 @@ export function buildDaemonSessionFactory(
     const mcpManager = config.mcpManager;
     const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
 
-    const provider = parseProvider(undefined, {
+    // ONE build function for the task's primary provider and for a
+    // `models.fallback` provider, so a fallback carries the same executors,
+    // stores and MCP manager. Built per session (per task tick), never shared.
+    const routeHints = opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {};
+    const buildProvider = (m: string): ModelProvider => parseProvider(undefined, {
       subagentExecutor,
       skillExecutor,
       composeExecutor,
       memoryStore, stateStore, workspaceStore,
-      model: String(opts.model),
-      ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
+      model: m,
+      ...routeHints,
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     }) ?? new AnthropicDirectProvider({
       permissions: { allowedTools: topLevelSurfaceAllowedTools(mcpToolWireNames) },
@@ -160,13 +167,18 @@ export function buildDaemonSessionFactory(
       surface: 'daemon',
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     });
+    const providerWiring = injectedProviderWiring({
+      model: String(opts.model),
+      build: buildProvider,
+      familyOf: (m) => cliProviderFamily(undefined, { model: m, ...routeHints }),
+    });
 
     const unattendedLimits = resolveUnattendedLimits(
       env.AFK_MAX_TOOL_USE_ITERATIONS, env.AFK_MAX_BUDGET_USD, config,
     );
     const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectEpisodeRecall(injectHotMemory({
       ...config,
-      provider,
+      ...providerWiring,
       // Daemon sessions are headless by default: no human watches to answer
       // ask_question. Pull tasks set isNonInteractive: false in the caller's
       // config (scheduler.ts spawnSession) so they keep the ask_question tool

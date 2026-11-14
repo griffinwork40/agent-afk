@@ -94,6 +94,13 @@ export type LedgerPayload =
   | { kind: 'background_job'; jobId: string; status: string; label?: string }
   /** Plan-mode transition (Wave 0-C / Wave 1). */
   | { kind: 'plan_mode'; mode: string }
+  /**
+   * Model-fallback notice — persisted unlike other `notice` kinds because it
+   * changes which model is doing the work, which a reader of the record must
+   * be able to see (web dashboard, `telegram watch`, daemon run records).
+   * Other notice kinds (truncation, refusal, fast-tier) remain skipped.
+   */
+  | { kind: 'model_fallback'; from: string; to: string; reason: string; text: string }
   // Invariant: the three AFK remote-control records below carry the
   // cross-process elicitation/abort protocol (REPL session <-> Telegram daemon)
   // over the same ledger file. `elicitation` is written by the REPL when the
@@ -194,7 +201,20 @@ export function projectOutputEvent(event: OutputEvent): LedgerPayload | null {
     case 'resumed':
       return { kind: 'resumed' };
     case 'notice':
-      // Display-only harness notice (issue #970). Skipped from the ledger.
+      // History: other notice kinds (truncation, refusal, fast-tier) are
+      // display-only and intentionally skipped from the ledger. model-fallback
+      // is the exception: it changes which model is doing the work, so a
+      // reader of the record (web dashboard, telegram watch, daemon logs) must
+      // be able to see it. Only persist when the fallback payload is present.
+      if (event.kind === 'model-fallback' && event.fallback) {
+        return {
+          kind: 'model_fallback',
+          from: event.fallback.from,
+          to: event.fallback.to,
+          reason: event.fallback.reason,
+          text: event.text,
+        };
+      }
       return null;
     case 'tool-activity':
       return { kind: 'tool_activity', activeCount: event.activeCount, activeToolUseIds: event.activeToolUseIds };

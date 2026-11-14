@@ -26,6 +26,11 @@ import { emitSessionIdAssigned } from './session-id-trace.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
+import {
+  getConfiguredFallbackModel,
+  injectedFirstFactory,
+  routesInjectedProviderForFallback,
+} from './fallback-model.js';
 import { dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError, ensureError} from '../../utils/errors.js';
 import { buildMcpFailureNotice } from '../mcp/failure-notice.js';
@@ -75,9 +80,14 @@ function buildProviderQuery(
   promptIterable: AsyncIterable<ProviderUserTurn>,
   label: string,
 ): ProviderQuery {
-  if (config.provider) {
-    debugLog(`🟢 AgentSession: Creating query session via injected provider=${config.provider.name} (${label})`);
-    return config.provider.query({ prompt: promptIterable, config });
+  // An injected provider is called directly unless the surface also supplied a
+  // factory AND a fallback model is configured (see fallback-model.ts): only
+  // the router can switch models, and only a factory yields an equally wired
+  // provider to switch to.
+  const injected = config.provider;
+  if (injected && !routesInjectedProviderForFallback(config)) {
+    debugLog(`🟢 AgentSession: Creating query session via injected provider=${injected.name} (${label})`);
+    return injected.query({ prompt: promptIterable, config });
   }
   debugLog(`🟢 AgentSession: Creating query session via ProviderRouter (${label})`);
   // When config.providerFactory is set, use it as resolveProvider so every
@@ -85,8 +95,9 @@ function buildProviderQuery(
   // subagentExecutor, skillExecutor, composeExecutor, memoryStore,
   // mcpManager, and permission lists). When absent, fall back to the bare
   // resolveProvider which is suitable for one-shot and test paths.
-  const resolveProviderFn = config.providerFactory
-    ? config.providerFactory
+  const factory = config.providerFactory;
+  const resolveProviderFn = factory
+    ? (injected ? injectedFirstFactory(injected, factory) : factory)
     : (m: string | undefined) =>
         resolveProvider(m, undefined, {
           customTools: config.customTools,
@@ -105,6 +116,9 @@ function buildProviderQuery(
       resolveProvider: resolveProviderFn,
       providerNameForModel: (m) => providerForModel(m),
       resolveApiKey: (m) => resolveCredentialForModel(m),
+      // Read live (per arming check), so a `/config set models.fallback` lands
+      // without a session restart. The router owns eligibility.
+      getFallbackModel: getConfiguredFallbackModel,
     },
   );
 }

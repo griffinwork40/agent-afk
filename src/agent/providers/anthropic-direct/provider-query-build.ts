@@ -176,6 +176,9 @@ export function buildProviderQuery(
     ...(config.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: config.autoResumeOnUsageLimit }
       : {}),
+    // Forward the predicate itself, never its current value: the tier reads
+    // it live via `isModelFallbackArmed` at the moment of decision.
+    ...(config.modelFallbackArmed !== undefined ? { modelFallbackArmed: config.modelFallbackArmed } : {}),
     // Overload-pause surface gate (#762): reuse the EXISTING surface signal
     // (the same value stamped as `origin` on session_init_start) rather than
     // inventing a new one, so a daemon session fails fast on upstream capacity

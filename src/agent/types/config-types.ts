@@ -713,8 +713,13 @@ export interface AgentConfig {
    * should memoize by family so repeated calls for the same family return the
    * same instance — see `createMemoizedProviderFactory` in the REPL bootstrap.
    *
-   * Ignored when `provider` is explicitly set (injected-provider path, used by
-   * Telegram and the daemon, takes precedence). When both are unset, `AgentSession`
+   * Ignored when `provider` is explicitly set (the injected-provider path takes
+   * precedence), with one exception: when a `models.fallback` model is
+   * configured and the session is not a subagent fork, a session given BOTH is
+   * driven through `ProviderRouter` so it can switch to the fallback. The
+   * injected provider still serves its own family; the factory builds the
+   * provider for any other family, so it must wire it the same way (see
+   * `routesInjectedProviderForFallback`). When both are unset, `AgentSession`
    * falls back to the bare `resolveProvider` function which builds providers
    * without executor/MCP wiring — suitable for one-shot and non-interactive paths.
    *
@@ -795,6 +800,21 @@ export interface AgentConfig {
    * surface the error immediately after showing the usage-limit card.
    */
   autoResumeOnUsageLimit?: boolean;
+
+  /**
+   * Set ONLY by `ProviderRouter` when it builds an inner provider for a
+   * session that has a `models.fallback` model to switch to. Tells the retry
+   * tiers to emit `model.fallback_request` instead of parking (`paused`) or
+   * failing, provided nothing has been yielded for the turn yet. Never set by
+   * users, config files, or env.
+   *
+   * The router passes a FUNCTION so the answer is live: an inner provider can
+   * outlive the state it was built under (a same-endpoint `/model` change is
+   * forwarded without a rebuild), and a frozen `true` would then ask to fall
+   * back to the model already in use. Read it only through
+   * `isModelFallbackArmed` (providers/shared/model-fallback-armed.ts).
+   */
+  modelFallbackArmed?: boolean | (() => boolean);
 
   // --- Awareness metadata (Phase 1: get_runtime_state) ---
   // Pure metadata fields surfaced through the `get_runtime_state` tool's

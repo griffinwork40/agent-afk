@@ -153,6 +153,17 @@ export const ALLOWED_PAIRS: ReadonlyArray<AllowedPair> = [
     reason: 'Core→Surface test file: mirrors the production violation tracked in #4457.',
   },
   {
+    file: 'src/agent/session/fallback-model.ts',
+    importContains: 'cli/',
+    reason:
+      'Core→Surface: loadJsonConfig lives in cli/config. Read directly so models.fallback reaches every surface (daemon, Telegram, web) without per-surface wiring. Tracked in #4457.',
+  },
+  {
+    file: 'src/agent/session/fallback-model.test.ts',
+    importContains: 'cli/',
+    reason: 'Core→Surface test file: mirrors the production violation tracked in #4457.',
+  },
+  {
     file: 'src/agent/tools/operator-denied.ts',
     importContains: 'cli/',
     reason: 'Core→Surface: jsonConfigTierPaths lives in cli/config. Tracked in #4457.',

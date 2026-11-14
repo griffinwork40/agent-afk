@@ -32,7 +32,7 @@ import { checkTaskCwdAtRuntime, warnIfBuiltinHasCwd } from './cwd-validator.js';
 export { resolveWorktreePruneRoot } from './worktree-prune-task.js';
 export { daemonTraceLabel } from './session-spawn.js';
 import { spawnDaemonSession, daemonDefaultCwd } from './session-spawn.js';
-import { executeAgentTask, type TaskTurnCompleteArgs } from './scheduler.execute-agent-task.js';
+import { executeAgentTask, type ModelFallbackFields, type TaskTurnCompleteArgs } from './scheduler.execute-agent-task.js';
 import {
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
   evaluateSessionStartGates,
@@ -151,7 +151,7 @@ export interface SchedulerOptions {
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
 type TelemetryStatus = 'success' | 'error' | 'skipped' | 'blocked';
 
-export interface TelemetryRecord extends GateRecoveryFields {
+export interface TelemetryRecord extends GateRecoveryFields, ModelFallbackFields {
   taskId: string;
   command: string;
   trigger: TelemetryTrigger;
