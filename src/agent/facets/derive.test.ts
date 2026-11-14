@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(14); // v14: surface field for structural daemon filtering (#4645)
+    expect(facet.facet_version).toBe(15); // v15: last root closure and root-cycle cost split (#4896)
     expect(facet.derived_from).toBe('afk-session');
   });
 

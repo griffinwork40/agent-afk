@@ -20,11 +20,24 @@
  * `total` takes the larger of the two lower bounds so a trace whose root
  * closure was lost (crash before closure, seal written) is not under-reported.
  *
- * Contract: closure events carry no actor id, so the root/subagent split cannot
- * come from closures. `root` is the seal's root figure (falling back to the
- * last closure, which is normally the root's) and `subagent = total - root`.
- * On a multi-cycle REPL trace the root's earlier cycles therefore land in
- * `subagentCostUsd`; `totalCostUsd` is unaffected.
+ * Contract: root/subagent split (#4896). A REPL session that runs `/clear`
+ * writes one root closure per cycle, so `rootCostUsd` and `rootTurnCount` sum
+ * every closure that belongs to the root. Whether an unstamped closure (no
+ * `subagentId`) belongs to the root depends on the trace:
+ *   1. Some closure carries `subagentId` (stamped since #3932, 2026-10-16):
+ *      unstamped closures are root closures.
+ *   2. The trace shows no subagent activity at all (no `subagent_lifecycle`
+ *      or `background_agent` event, no stamped closure, and a seal with no
+ *      subagent rollup): every closure is a root closure. Every fork emits
+ *      `subagent_lifecycle` `started` into the shared trace before it can
+ *      close (`subagent/fork-lifecycle.ts`, since #466), so a child closure
+ *      never appears without one.
+ *   3. Otherwise (subagent activity, no stamped closure: a pre-#3932 trace,
+ *      or one whose children never closed) the closures cannot be told
+ *      apart. `rootCostUsd` and `rootTurnCount` keep the seal's last-cycle
+ *      figures, as before #4896.
+ * In cases 1 and 2 a root closure lost to a failed write (seal present, last
+ * closure not the root's) adds the seal's root figures, matching `total`.
  *
  * @module agent/trace/cost
  */
@@ -42,12 +55,14 @@ export interface CostTokens {
 
 /** Cost of one witness trace, split into root and subagent spend. */
 export interface SessionCostBreakdown {
-  /** Root actor's cost (its last lifecycle cycle). Absent when `source` is `none`. */
+  /** Root actor's cost over every REPL cycle (see the split contract above). Absent when `source` is `none` or `closures-incomplete`. */
   rootCostUsd?: number;
   /** `totalCostUsd - rootCostUsd`, floored at 0. Absent when `source` is `none`. */
   subagentCostUsd?: number;
   /** Whole-trace spend: root plus every subagent at every depth. */
   totalCostUsd?: number;
+  /** Root turns over every REPL cycle (case 3: the seal's last cycle). Absent when no record carries it. */
+  rootTurnCount?: number;
   /** Tokens summed over every closure event (same scope as `totalCostUsd`). */
   totalTokens?: CostTokens;
   /** Number of `closure` events seen. */
@@ -78,6 +93,14 @@ export class SessionCostAccumulator {
   private lastClosureCost: number | undefined;
   /** `subagentId` from the last closure event; `null` = root (field absent); `undefined` = no closure yet. */
   private lastClosureSubagentId: string | null | undefined = undefined;
+  /** Sum of cost across all root-cycle closures (no `subagentId`). Used for the root/subagent split on multi-cycle traces (#4896). */
+  private rootCycleSum = 0;
+  /** Sum of `finalTurnCount` across all root-cycle closures. */
+  private rootCycleTurnCount = 0;
+  /** Whether any child closure (with `subagentId`) was seen (split case 1). */
+  private hasChildClosure = false;
+  /** Whether any event shows subagent activity; false means split case 2. */
+  private sawSubagentActivity = false;
   private readonly tokens: Record<(typeof TOKEN_KEYS)[number], number> = {
     input: 0,
     output: 0,
@@ -86,9 +109,14 @@ export class SessionCostAccumulator {
   };
   private sealRoot: number | undefined;
   private sealSubagent = 0;
+  private sealTurns: number | undefined;
   private sealIncomplete = false;
 
   add(event: CostEventLike): void {
+    if (event.kind === 'subagent_lifecycle' || event.kind === 'background_agent') {
+      this.sawSubagentActivity = true;
+      return;
+    }
     const p = asRecord(event.payload);
     if (p === undefined) return;
     if (event.kind === 'closure') {
@@ -100,7 +128,17 @@ export class SessionCostAccumulator {
       this.closureSum += cost;
       this.lastClosureCost = cost;
       // Track provenance: string = child actor, null = root (field absent).
-      this.lastClosureSubagentId = typeof p['subagentId'] === 'string' ? p['subagentId'] : null;
+      const subagentId = typeof p['subagentId'] === 'string' ? p['subagentId'] : null;
+      this.lastClosureSubagentId = subagentId;
+      if (subagentId === null) {
+        // Root closure: accumulate for the multi-cycle root/subagent split.
+        this.rootCycleSum += cost;
+        const turns = finiteNonNeg(p['finalTurnCount']);
+        if (turns !== undefined) this.rootCycleTurnCount += turns;
+      } else {
+        this.hasChildClosure = true;
+        this.sawSubagentActivity = true;
+      }
       const t = asRecord(p['finalTokens']);
       if (t !== undefined) {
         for (const k of TOKEN_KEYS) this.tokens[k] += finiteNonNeg(t[k]) ?? 0;
@@ -108,6 +146,8 @@ export class SessionCostAccumulator {
     } else if (event.kind === 'session_sealed') {
       this.sealRoot = finiteNonNeg(p['finalCostUsd']) ?? 0;
       this.sealSubagent = finiteNonNeg(p['subagentCostUsd']) ?? 0;
+      this.sealTurns = finiteNonNeg(p['finalTurnCount']);
+      if (this.sealSubagent > 0 || (finiteNonNeg(p['subagentCount']) ?? 0) > 0) this.sawSubagentActivity = true;
       // sealOnProcessExit() writes incomplete:true with finalCostUsd:0 as a
       // backstop; treat it as a marker only — do not use its $0 as rootCostUsd.
       this.sealIncomplete = p['incomplete'] === true;
@@ -136,6 +176,7 @@ export class SessionCostAccumulator {
 
     const sealTotal = (this.sealRoot ?? 0) + this.sealSubagent;
     let totalCostUsd: number;
+    let rootClosureLost = false;
     if (!hasClosures) {
       totalCostUsd = sealTotal;
     } else if (!hasSeal) {
@@ -149,7 +190,7 @@ export class SessionCostAccumulator {
       // carries a `subagentId` it is a child actor, not the root, so the root
       // closure is lost. Fall back to equality for older traces that lack the
       // field (lastClosureSubagentId === null means root; undefined = no closure).
-      const rootClosureLost =
+      rootClosureLost =
         this.lastClosureSubagentId !== null && this.lastClosureSubagentId !== undefined
           ? true // last closure was a child — root's closure never wrote
           : this.lastClosureCost !== this.sealRoot; // legacy equality heuristic
@@ -157,16 +198,30 @@ export class SessionCostAccumulator {
       totalCostUsd = Math.max(closureBased, sealTotal);
     }
 
-    const rootCostUsd = this.sealRoot ?? this.lastClosureCost ?? 0;
+    const root = this.rootSplit(hasClosures, rootClosureLost);
+    const rootCostUsd = root.cost;
     const subagentCostUsd = Math.max(0, totalCostUsd - rootCostUsd);
     return {
       rootCostUsd,
       subagentCostUsd,
       totalCostUsd,
+      ...(root.turns !== undefined ? { rootTurnCount: root.turns } : {}),
       ...tokens,
       closureCount: this.closureCount,
       source: hasClosures ? (hasSeal ? 'closures+seal' : 'closures') : 'seal',
     };
+  }
+
+  /** Root cost and turns per the split contract in the module comment. */
+  private rootSplit(hasClosures: boolean, rootClosureLost: boolean): { cost: number; turns?: number } {
+    if (!hasClosures) return { cost: this.sealRoot ?? 0, ...(this.sealTurns !== undefined ? { turns: this.sealTurns } : {}) };
+    if (this.hasChildClosure || !this.sawSubagentActivity) {
+      // Cases 1 and 2: every unstamped closure is a root cycle.
+      if (!rootClosureLost) return { cost: this.rootCycleSum, turns: this.rootCycleTurnCount };
+      return { cost: this.rootCycleSum + (this.sealRoot ?? 0), turns: this.rootCycleTurnCount + (this.sealTurns ?? 0) };
+    }
+    // Case 3: ambiguous provenance; keep the seal's last-cycle root figures.
+    return { cost: this.sealRoot ?? this.lastClosureCost ?? 0, ...(this.sealTurns !== undefined ? { turns: this.sealTurns } : {}) };
   }
 
   private tokenTotals(): { totalTokens?: CostTokens } {

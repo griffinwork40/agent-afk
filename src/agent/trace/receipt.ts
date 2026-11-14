@@ -134,6 +134,41 @@ function buildHumanReviewReasons(
   return reasons;
 }
 
+/**
+ * Assemble the `cost` field of a {@link RunReceipt} from accumulator output
+ * and per-event fallback values.
+ *
+ * Extracted from {@link generateReceipt} to keep that function under the
+ * 200-line ceiling.
+ */
+function buildReceiptCost(
+  acc: SessionCostAccumulator,
+  sealedCostUsd: number | undefined,
+  sealedTurnCount: number | undefined,
+  closureCostUsd: number | undefined,
+  closureTurnCount: number | undefined,
+  closureTokens: RunReceipt['cost']['tokens'],
+): RunReceipt['cost'] {
+  const sc = acc.result();
+  // #4896: the seal's finalCostUsd and finalTurnCount cover the last REPL
+  // cycle only. Prefer the accumulator's root figures, which sum every root
+  // cycle. They are absent when the trace has no cost record (source none)
+  // and after a process-exit backstop seal; the raw seal and closure values
+  // cover those cases exactly as before.
+  const finalCostUsd = sc.rootCostUsd ?? sealedCostUsd ?? closureCostUsd;
+  const turnCount = sc.rootTurnCount ?? sealedTurnCount ?? closureTurnCount;
+  return {
+    ...(finalCostUsd !== undefined ? { finalCostUsd } : {}),
+    ...(turnCount !== undefined ? { turnCount } : {}),
+    ...(closureTokens !== undefined ? { tokens: closureTokens } : {}),
+    ...(sc.rootCostUsd !== undefined ? { rootCostUsd: sc.rootCostUsd } : {}),
+    ...(sc.subagentCostUsd !== undefined ? { subagentCostUsd: sc.subagentCostUsd } : {}),
+    ...(sc.totalCostUsd !== undefined ? { totalCostUsd: sc.totalCostUsd } : {}),
+    ...(sc.totalTokens !== undefined ? { totalTokens: sc.totalTokens } : {}),
+    costSource: sc.source,
+  };
+}
+
 /** Build a {@link RunReceipt} from parsed trace events. Pure — no I/O. */
 export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunReceipt {
   const byKind: Partial<Record<TraceEventKind, number>> = {};
@@ -259,9 +294,6 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
     if (Number.isFinite(d) && d >= 0) durationMs = d;
   }
 
-  const finalCostUsd = sealedCostUsd ?? closureCostUsd;
-  const turnCount = sealedTurnCount ?? closureTurnCount;
-
   const reasons = buildHumanReviewReasons(
     status, incomplete, closureReason, erroredNotable, circuitBreakerHits, subagents.failed,
   );
@@ -274,18 +306,9 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
     limitations.push('No session_sealed record was present when this receipt was generated.');
   if (meta.journalSummary === undefined)
     limitations.push('No message journal was available; conversation text and tool call order are absent from this receipt.');
-
-  const sc = costAcc.result();
-  const cost: RunReceipt['cost'] = {
-    ...(finalCostUsd !== undefined ? { finalCostUsd } : {}),
-    ...(turnCount !== undefined ? { turnCount } : {}),
-    ...(closureTokens !== undefined ? { tokens: closureTokens } : {}),
-    ...(sc.rootCostUsd !== undefined ? { rootCostUsd: sc.rootCostUsd } : {}),
-    ...(sc.subagentCostUsd !== undefined ? { subagentCostUsd: sc.subagentCostUsd } : {}),
-    ...(sc.totalCostUsd !== undefined ? { totalCostUsd: sc.totalCostUsd } : {}),
-    ...(sc.totalTokens !== undefined ? { totalTokens: sc.totalTokens } : {}),
-    costSource: sc.source,
-  };
+  const cost = buildReceiptCost(
+    costAcc, sealedCostUsd, sealedTurnCount, closureCostUsd, closureTurnCount, closureTokens,
+  );
 
   const model = meta.model ?? sessionModel;
   const resolvedModel = meta.resolvedModel ?? sessionResolvedModel;
