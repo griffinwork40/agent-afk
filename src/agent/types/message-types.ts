@@ -25,6 +25,10 @@ export interface ResponseMetadata extends Record<string, unknown> {
   durationApiMs?: number;
   /** Estimated cost of the turn in USD */
   totalCostUsd?: number;
+  /** Part of `totalCostUsd` served from subscription overage (#4883); absent = not measured. */
+  overageCostUsd?: number;
+  /** Count of overage-flagged responses in this turn; same presence rule. */
+  overageRequests?: number;
   /** Number of agent turns consumed */
   numTurns?: number;
   /** Whether the turn resulted in an error */

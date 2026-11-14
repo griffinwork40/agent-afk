@@ -42,6 +42,7 @@ export function buildProviderQuery(
     cwd,
     systemPrefix,
     throttleQueue,
+    overageTracker,
     tokenRefresher,
     credentialFromStore,
     queryDispatcher,
@@ -217,6 +218,7 @@ export function buildProviderQuery(
     // Live-throttle mailbox: the SAME instance wired to the client fetch
     // callback above, so the loop's consumer meets the fetch producer.
     ...(throttleQueue !== undefined ? { throttleQueue } : {}),
+    ...(overageTracker !== undefined ? { overageTracker } : {}),
     ...(ctx.fastModeController !== undefined ? { fastModeController: ctx.fastModeController } : {}),
     ...(config.enableFileCheckpointing ? { enableFileCheckpointing: true } : {}),
   });

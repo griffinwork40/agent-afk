@@ -150,6 +150,9 @@ export const SessionPhaseNameSchema = z.enum([
   // Must mirror the SessionPhaseName union in types.session-phase.ts;
   // session-phase.test.ts parity enforces it.
   'prompt_fragment_sizes',
+  // Raw unified rate-limit header evidence for the overage rule (#4883).
+  // Must mirror types.session-phase.ts.
+  'ratelimit_unified_state',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

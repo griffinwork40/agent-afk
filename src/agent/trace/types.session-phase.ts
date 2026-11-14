@@ -345,7 +345,13 @@ export type SessionPhaseName =
   // whose value is `Math.ceil(chars / 4)` — a cheap chars-per-token proxy.
   // Absent fragments (empty strings) are omitted so the record is sparse.
   // Read-path only: the prompt itself is never mutated.
-  | 'prompt_fragment_sizes';
+  | 'prompt_fragment_sizes'
+  // Raw `anthropic-ratelimit-unified-*` evidence for the subscription-overage
+  // rule (#4883), written at first observation and whenever the observed
+  // combination changes, never per request. `metadata`: `status`,
+  // `overageStatus`, `overageInUse`, `representativeClaim` (header values,
+  // short strings, absent headers omitted) and `overage` (the rule's verdict).
+  | 'ratelimit_unified_state';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

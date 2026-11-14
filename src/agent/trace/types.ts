@@ -654,6 +654,16 @@ export interface ClosurePayload {
   reason: ClosureReason;
   finalTurnCount: number;
   finalCostUsd: number;
+  /**
+   * Part of `finalCostUsd` served from Claude subscription overage (#4883):
+   * the sum of the per-response costs whose `anthropic-ratelimit-unified-*`
+   * headers matched the overage rule. Present (possibly 0) only when this
+   * session saw such headers; absent = not measured. Paired with
+   * `overageRequests`. Optional: older traces omit both.
+   */
+  overageCostUsd?: number;
+  /** Count of overage-flagged responses; same presence rule as `overageCostUsd`. */
+  overageRequests?: number;
   finalTokens: {
     input?: number;
     output?: number;

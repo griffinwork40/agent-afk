@@ -178,6 +178,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly hookRegistry?: HookRegistry;
   /** Shared live-throttle mailbox; wired to the client fetch callback. See options doc. */
   private readonly throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
+  private readonly overageTracker?: import('./overage-tracker.js').OverageTracker;
   private readonly fastModeController?: import('../../fast-mode.js').FastModeController;
   /** Inter-round steering callback; set via setBeforeNextRound() from the subagent layer. */
   private beforeNextRound?: () => string | undefined;
@@ -214,6 +215,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.mcpManager = opts.mcpManager;
     if (opts.hookRegistry !== undefined) this.hookRegistry = opts.hookRegistry;
     if (opts.throttleQueue !== undefined) this.throttleQueue = opts.throttleQueue;
+    if (opts.overageTracker !== undefined) this.overageTracker = opts.overageTracker;
     if (opts.fastModeController !== undefined) this.fastModeController = opts.fastModeController;
     if (opts.beforeNextRound !== undefined) this.beforeNextRound = opts.beforeNextRound;
     this.retry = new RetryLayer({
@@ -307,6 +309,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get mcpManager() { return query.mcpManager; },
       get hookRegistry() { return query.hookRegistry; },
       get throttleQueue() { return query.throttleQueue; },
+      get overageTracker() { return query.overageTracker; },
       get fastModeController() { return query.fastModeController; },
       get beforeNextRound() { return query.beforeNextRound; },
       get beforeTurnEnd() { return query.beforeTurnEnd; },

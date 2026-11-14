@@ -129,6 +129,7 @@ export class SessionShutdown {
       finalTurnCount: getTurnCount(),
       finalCostUsd: acct.sessionRunningCostUsd,
       runningTokens: acct.sessionRunningTokens,
+      ...(acct.sessionOverage !== undefined ? { overage: acct.sessionOverage } : {}),
       // Present on forked children only; absent for the root session. Stamped
       // into the closure payload so parseTraceSignals can skip child closures
       // and avoid falsely downgrading the root facet (#3883).

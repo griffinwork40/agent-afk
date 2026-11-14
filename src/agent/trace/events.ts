@@ -239,6 +239,9 @@ export const ClosurePayloadSchema = z.object({
   reason: ClosureReasonSchema,
   finalTurnCount: z.number().int().nonnegative(),
   finalCostUsd: z.number().nonnegative(),
+  // Subscription-overage share of finalCostUsd (#4883). Optional + back-compat.
+  overageCostUsd: z.number().nonnegative().optional(),
+  overageRequests: z.number().int().nonnegative().optional(),
   finalTokens: z.object({
     input: z.number().int().nonnegative().optional(),
     output: z.number().int().nonnegative().optional(),
