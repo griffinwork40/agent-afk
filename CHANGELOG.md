@@ -12,6 +12,9 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Added
+- receipt: top-level `credentialSource`, and the session credential source is now provider-aware (a non-Anthropic model never records an Anthropic tier); new ids `openai:*`, `xai:*`, `anthropic:config`, `local` (#4882)
+
 ## [5.354.0] - 2026-11-13
 
 ### Added
