@@ -842,7 +842,6 @@ describe('classifyBashCommand', () => {
 describe('classifyDestructiveGit', () => {
   const destructive: Array<[string, string]> = [
     ['git checkout main', 'git checkout (branch)'],
-    ['git checkout -b feature', 'git checkout -b (new branch — still destructive)'],
     ['git switch main', 'git switch'],
     ['git reset --hard', 'git reset --hard'],
     ['git clean -fd', 'git clean'],
@@ -874,6 +873,10 @@ describe('classifyDestructiveGit', () => {
     ['git push', 'git push'],
     ['git status', 'git status'],
     ['git log', 'git log'],
+    ['git checkout -b feature', 'git checkout -b (branch creation — allowed)'],
+    ['git checkout -B feature', 'git checkout -B (branch creation — allowed)'],
+    ['git switch -c feature', 'git switch -c (branch creation — allowed)'],
+    ['git switch -C feature', 'git switch -C (branch creation — allowed)'],
   ];
   for (const [cmd, label] of safe) {
     it(`classifies as NOT destructive: ${label}`, () => {
@@ -912,6 +915,10 @@ describe('classifyDestructiveGit', () => {
       ["echo 'git reset --hard' | sh", 'echo pipe to sh'],
       ["printf 'git switch main' | /bin/bash", 'printf pipe to /bin/bash'],
       ["echo 'git stash pop' | /bin/sh", 'echo pipe to /bin/sh'],
+      ["printf 'git checkout main' | zsh", 'printf pipe to zsh'],
+      ["printf 'git checkout main' | ksh", 'printf pipe to ksh'],
+      ["printf 'git checkout main' | sudo bash", 'printf pipe to sudo bash'],
+      ["printf 'git checkout main' | env bash", 'printf pipe to env bash'],
     ];
     for (const [cmd, label] of pipeToShell) {
       it(`blocks pipe-to-shell: ${label}`, () => {

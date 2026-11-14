@@ -40,8 +40,7 @@ export interface ComposeNodeRestrictions {
  * place either provider reads them once `config.provider` is preset. On the
  * AFK_WORKSPACE_DISABLED fallback (no store) a restricted node still gets a
  * constructed provider, because the bare `resolveProvider` fallback honors
- * `config.canUseTool` but not `readOnlyBash`. Unrestricted nodes without a
- * store keep the legacy no-provider path unchanged.
+ * `config.canUseTool` but not `readOnlyBash`.
  *
  * Safety: `buildComposeNodeProvider` deliberately omits `subagentExecutor`
  * and `skillExecutor`, preserving the invariant that compose nodes cannot
@@ -55,8 +54,9 @@ export function resolveComposeNodeProvider(
   restrictions: ComposeNodeRestrictions = {},
 ): { provider: ModelProvider } | Record<string, never> {
   const { canUseTool, namedAgentAllowedTools, readOnlyBash } = restrictions;
-  const restricted = canUseTool !== undefined || readOnlyBash === true;
-  if (workspaceStore === undefined && !restricted) return {};
+  // Always build through buildComposeNodeProvider so blockDestructiveGit: true
+  // is wired unconditionally. The legacy early-return (workspaceStore === undefined
+  // && !restricted → {}) bypassed the gate for unrestricted nodes without a store.
   return {
     provider: buildComposeNodeProvider(nodeModel, workspaceStore, {
       openaiBaseUrl,
