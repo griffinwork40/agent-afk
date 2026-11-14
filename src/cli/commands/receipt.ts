@@ -3,12 +3,16 @@
  *
  * Subcommands:
  *   afk receipt regenerate [--session <id>...] [--all] [--only-v1]
- *                          [--dry-run] [--json]
+ *                          [--force] [--dry-run] [--json]
  *
  * The `regenerate` subcommand rebuilds v1 (or older) receipts on disk as v2
  * receipts by re-reading the original witness trace and the session's message
  * journal — the same inputs `writeRunReceipt` uses at session end — and
  * rewriting the JSON + Markdown files atomically.
+ *
+ * Pass `--force` together with `--all` (or `--session`) to rebuild every
+ * receipt regardless of its current schema version. This is useful after a
+ * derivation fix that does not bump `RECEIPT_SCHEMA_VERSION`.
  *
  * Enumeration strategy (mirrors `src/agent/facets/store.ts`):
  *   1. Read `sessions/<id>/session-meta.json` (O(1), #4429).
@@ -113,6 +117,7 @@ interface RegenerateOptions {
   session: string[];
   all: boolean;
   onlyV1: boolean;
+  force: boolean;
   dryRun: boolean;
   json: boolean;
 }
@@ -161,8 +166,9 @@ async function runRegenerate(opts: RegenerateOptions): Promise<void> {
     return;
   }
 
-  // Apply --only-v1 when --all is used (default) or explicitly requested.
-  const onlyV1 = opts.onlyV1 || opts.all;
+  // Apply --only-v1 when --all is used (default) or explicitly requested,
+  // but --force overrides the version check and rebuilds every receipt.
+  const onlyV1 = !opts.force && (opts.onlyV1 || opts.all);
 
   const results: SessionResult[] = [];
   let regenerated = 0;
@@ -313,6 +319,11 @@ export function registerReceiptCommand(program: Command): void {
     .option(
       '--only-v1',
       'Skip receipts already at the current schema version (implied by --all)',
+      false,
+    )
+    .option(
+      '--force',
+      'Rebuild all receipts regardless of schema version (overrides --only-v1 / --all skipping)',
       false,
     )
     .option('--dry-run', 'Print what would be regenerated without writing', false)
