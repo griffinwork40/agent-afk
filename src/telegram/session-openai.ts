@@ -10,7 +10,7 @@
  * OpenAI-compatible Telegram sessions (PR #202 review H1).
  */
 
-import { OpenAICompatibleProvider } from '../agent/providers/index.js';
+import { buildTelegramProvider } from './session-provider.js';
 import { buildTelegramSession } from './session-builder.js';
 import type { AgentSession } from '../agent/session.js';
 import type { TelegramSessionBuildContext } from './session-context.js';
@@ -18,7 +18,7 @@ import type { TelegramSessionBuildContext } from './session-context.js';
 export async function buildOpenAiTelegramSession(
   ctx: TelegramSessionBuildContext,
 ): Promise<AgentSession> {
-  const { sessionConfig, config, mcpManager, workspaceStore, stateStore } = ctx;
+  const { sessionConfig, config, workspaceStore } = ctx;
 
   // OpenAI-compatible endpoint for this branch's own top-level session
   // (parity with the Anthropic branch's telegramOpenaiBaseUrl).
@@ -30,20 +30,7 @@ export async function buildOpenAiTelegramSession(
       ...(codexOpenaiBaseUrl !== undefined ? { openaiBaseUrl: codexOpenaiBaseUrl } : {}),
       ...(workspaceStore !== undefined ? { workspaceStore } : {}),
     },
-    providerFactory: ({ executors: { subagentExecutor, skillExecutor, composeExecutor } }) =>
-      // permissionMode is intentionally omitted here: AgentSession defaults
-      // to 'default' (post-C2 fix), which is the correct mode for Telegram
-      // sessions that rely on hook-based permission enforcement.
-      // surface:'telegram' prevents the presence file mis-labeling as 'cli'.
-      new OpenAICompatibleProvider({
-        surface: 'telegram',
-        subagentExecutor,
-        skillExecutor,
-        composeExecutor,
-        ...(mcpManager !== undefined ? { mcpManager } : {}),
-        workspaceStore,
-        ...(stateStore !== undefined ? { stateStore } : {}),
-      }),
+    providerFactory: ({ executors }) => buildTelegramProvider(ctx, executors, 'openai-compatible'),
     // OpenAI branch: provider-specific config is only `openaiBaseUrl`.
     // Sets config.openaiBaseUrl -> effectiveBaseURL (openai-compatible/index.ts)
     // so this top-level OpenAI Telegram session reaches the configured shim

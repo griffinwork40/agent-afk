@@ -21,6 +21,7 @@ import {
   type HandlerParams,
 } from './streaming.handlers.js';
 import { handleProgressEvent } from './streaming.progress.js';
+import { routeFromCtx, sendOptions } from './route.js';
 import type { WatchdogState } from './streaming.watchdog.js';
 
 /**
@@ -199,6 +200,15 @@ export async function processInlineEvent(
     state.accumulated += `\n\n💡 ${event.suggestion}`;
     state.answerText += `\n\n💡 ${event.suggestion}`;
     await sendOrEdit(state, ctx, chatId, livePreview());
+    return false;
+  }
+
+  if (event.type === 'notice' && event.kind === 'model-fallback') {
+    // Keep model switches outside the preview: an assistant message replaces
+    // its buffer, and cleanFinal deletes the preview entirely. Explicit routing
+    // also preserves the topic when this turn originated from a callback query.
+    const route = routeFromCtx(ctx);
+    if (route) await ctx.telegram.sendMessage(route.chatId, event.text, sendOptions(route));
     return false;
   }
 
