@@ -27,7 +27,7 @@
  * @module agent/lsp/install
  */
 
-import { access, mkdir, open, unlink } from 'node:fs/promises';
+import { access, mkdir, open, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { EffectStore } from '../effect-ledger/store.js';
 import {
@@ -56,6 +56,13 @@ import { runNpmInstall, sanitizeFailureReason, type NpmExecFn } from './install.
 const LOCK_EXPIRY_MS = 5 * 60 * 1_000; // 5 minutes
 /** Poll interval while waiting for another process's lock. */
 const LOCK_POLL_MS = 500;
+/**
+ * How long an unparseable (empty or partly written) sentinel is tolerated
+ * before it is treated as stale. A live writer fills the file immediately
+ * after `open('wx')`, so content that is still unparseable after this grace
+ * period belongs to a writer that crashed or failed mid-write.
+ */
+const LOCK_CORRUPT_GRACE_MS = 10_000;
 
 interface LockRecord { pid: number; expiresAt: number }
 
@@ -73,17 +80,26 @@ export function installLockPath(language: string, serversDir?: string): string {
  * `finally` block. If `signal` is aborted while waiting, throws an
  * `AbortError`.
  *
- * Injectable `opts` for tests: `serversDir`, `pid`, `nowMs`, `pollMs`.
+ * Injectable `opts` for tests: `serversDir`, `pid`, `nowMs`, `pollMs`,
+ * `corruptGraceMs`.
  */
 export async function acquireInstallLock(
   language: string,
   signal?: AbortSignal,
-  opts?: { serversDir?: string; pid?: number; nowMs?: () => number; pollMs?: number },
+  opts?: {
+    serversDir?: string;
+    pid?: number;
+    nowMs?: () => number;
+    pollMs?: number;
+    corruptGraceMs?: number;
+  },
 ): Promise<() => Promise<void>> {
   const lockFile = installLockPath(language, opts?.serversDir);
   const ownPid = opts?.pid ?? process.pid;
   const now = opts?.nowMs ?? (() => Date.now());
   const pollMs = opts?.pollMs ?? LOCK_POLL_MS;
+  const corruptGraceMs = opts?.corruptGraceMs ?? LOCK_CORRUPT_GRACE_MS;
+  const sleep = (): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, pollMs));
 
   // Ensure the directory exists before writing the sentinel.
   await mkdir(join(lockFile, '..'), { recursive: true });
@@ -95,8 +111,16 @@ export async function acquireInstallLock(
     const record: LockRecord = { pid: ownPid, expiresAt: now() + LOCK_EXPIRY_MS };
     try {
       const fh = await open(lockFile, 'wx');
-      await fh.writeFile(JSON.stringify(record), 'utf8');
-      await fh.close();
+      try {
+        await fh.writeFile(JSON.stringify(record), 'utf8');
+        await fh.close();
+      } catch (writeErr: unknown) {
+        // The sentinel exists but carries no valid record. Remove it so it
+        // cannot wedge later callers, then surface the original error.
+        try { await fh.close(); } catch { /* already closed */ }
+        try { await unlink(lockFile); } catch { /* already removed */ }
+        throw writeErr;
+      }
       // We hold the lock.
       return async (): Promise<void> => {
         try { await unlink(lockFile); } catch { /* already removed */ }
@@ -112,14 +136,21 @@ export async function acquireInstallLock(
     }
 
     // Read existing lock to determine staleness.
-    let existing: LockRecord | null = null;
-    try {
-      const fh = await open(lockFile, 'r');
-      const raw = await fh.readFile('utf8');
-      await fh.close();
-      existing = JSON.parse(raw) as LockRecord;
-    } catch {
-      // File vanished between our failed open('wx') and now — loop and retry.
+    const existing = await readLockRecord(lockFile);
+    if (existing === 'missing') {
+      // File vanished between our failed open('wx') and now — retry the open.
+      continue;
+    }
+
+    if (existing === 'unparseable') {
+      // Empty or partly written sentinel. Never `continue` without a sleep
+      // here: that spins forever on a file a crashed writer left behind.
+      // Past the grace period the writer is gone — treat it as stale.
+      if (await isOlderThan(lockFile, corruptGraceMs)) {
+        try { await unlink(lockFile); } catch { /* already removed by a peer */ }
+        continue;
+      }
+      await sleep();
       continue;
     }
 
@@ -130,7 +161,32 @@ export async function acquireInstallLock(
     }
 
     // Another live process holds the lock — wait and retry.
-    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+    await sleep();
+  }
+}
+
+/** Read the sentinel: its record, `'missing'` (ENOENT), or `'unparseable'`. */
+async function readLockRecord(lockFile: string): Promise<LockRecord | 'missing' | 'unparseable'> {
+  let raw: string;
+  try {
+    const fh = await open(lockFile, 'r');
+    try { raw = await fh.readFile('utf8'); } finally { await fh.close(); }
+  } catch (err: unknown) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unparseable';
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<LockRecord> | null;
+    if (parsed !== null && typeof parsed.expiresAt === 'number') return parsed as LockRecord;
+  } catch { /* fall through */ }
+  return 'unparseable';
+}
+
+/** True when `file` was last modified more than `ageMs` ago (false if gone). */
+async function isOlderThan(file: string, ageMs: number): Promise<boolean> {
+  try {
+    return Date.now() - (await stat(file)).mtimeMs > ageMs;
+  } catch {
+    return false;
   }
 }
 

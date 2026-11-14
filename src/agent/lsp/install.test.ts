@@ -635,6 +635,39 @@ describe('cross-process install lock', () => {
     ).rejects.toMatchObject({ name: 'AbortError' });
   });
 
+  // 3b. An empty sentinel (writer died between open('wx') and writeFile) must
+  // not wedge acquisition: once older than the grace period it is stale.
+  it('recovers from an empty lock file left by a crashed writer', async () => {
+    const lockFile = installLockPath('typescript', tmpDir);
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+    fs.writeFileSync(lockFile, '');
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockFile, old, old);
+
+    const release = await acquireInstallLock('typescript', undefined, { serversDir: tmpDir, pollMs: 10 });
+    const record = JSON.parse(fs.readFileSync(lockFile, 'utf8')) as { pid: number };
+    expect(record.pid).toBe(process.pid);
+    await release();
+  }, 5_000);
+
+  // 3c. A fresh unparseable sentinel is waited on (with a sleep), not spun on,
+  // and the wait still honours abort.
+  it('waits on a fresh partly-written lock file and honours abort', async () => {
+    const lockFile = installLockPath('typescript', tmpDir);
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+    fs.writeFileSync(lockFile, '{"pid":');
+
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+    const started = Date.now();
+    await expect(
+      acquireInstallLock('typescript', controller.signal, { serversDir: tmpDir, pollMs: 20 }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(90);
+    // The fresh file is left for its (possibly live) writer.
+    expect(fs.existsSync(lockFile)).toBe(true);
+  }, 5_000);
+
   // 4. lockFn seam is invoked by ensureInstalledCore.
   it('lockFn is called with the language name and release is called', async () => {
     const def = makeDefinition();
