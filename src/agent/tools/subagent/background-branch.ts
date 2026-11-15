@@ -65,6 +65,13 @@ export interface RunBackgroundBranchArgs {
   isolationTeardown?: { repoRoot: string; worktreePath: string };
   /** How the result reaches the dispatcher; selects the model-facing note. See background-delivery.ts. */
   delivery?: BackgroundDelivery;
+  /**
+   * StateStore key for the project whose goal should be snapshotted at dispatch.
+   * Derived via `projectKeyForCwd()` at the call site and forwarded to the
+   * registry so the right project-scoped goal is captured and later compared.
+   * When omitted the registry falls back to the global goal key.
+   */
+  projectKey?: string;
 }
 
 /**
@@ -86,7 +93,7 @@ export interface RunBackgroundBranchArgs {
  * installs the SubagentManager root abort wiring independently.
  */
 export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promise<ToolResult> {
-  const { handle, registry, prompt, model, parentSessionId, onSettled, budgetRelease, onCleanup, isolationTeardown, delivery } = args;
+  const { handle, registry, prompt, model, parentSessionId, onSettled, budgetRelease, onCleanup, isolationTeardown, delivery, projectKey } = args;
   if (!registry) {
     // Tear down the orphaned handle so the fork isn't leaked.
     // teardown() is the safe no-op when the handle hasn't started.
@@ -123,6 +130,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
       parentSessionId,
       onCleanup,
       ...(budgetRelease !== undefined ? { onSettled: budgetRelease } : {}),
+      ...(projectKey !== undefined ? { projectKey } : {}),
     });
   } catch (e) {
     if (e instanceof BackgroundJobCapError) {

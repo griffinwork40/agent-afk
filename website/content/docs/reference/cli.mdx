@@ -2643,6 +2643,7 @@ Usage: `afk receipt regenerate [options]`
 | `--session <id>` | Regenerate receipt for a specific session id (repeatable) | `[]` |
 | `--all` | Enumerate all sessions under the state directory | `false` |
 | `--only-v1` | Skip receipts already at the current schema version (implied by --all) | `false` |
+| `--force` | Rebuild all receipts regardless of schema version (overrides --only-v1 / --all skipping) | `false` |
 | `--dry-run` | Print what would be regenerated without writing | `false` |
 | `--json` | Emit structured JSON output | `false` |
 | `-h, --help` | display help for command |  |

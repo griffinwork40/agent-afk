@@ -5,8 +5,8 @@
  * No real AFK_HOME reads.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregateTraces } from './traces.js';
@@ -349,6 +349,66 @@ describe('aggregateTraces', () => {
     const result = aggregateTraces({ days: 30, afkHome: tmpRoot });
     expect(result.sessionsWithCost).toBe(1);
     expect(result.totalCostUsd).toBeCloseTo(0.05);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: mtime pre-screen (#4913)
+// ---------------------------------------------------------------------------
+
+describe('aggregateTraces — mtime pre-screen (#4913)', () => {
+  it('getOrDeriveFacet is NOT called for a session whose sidecar mtime predates the window', async () => {
+    const facetsModule = await import('../../agent/facets/index.js');
+    const spy = vi.spyOn(facetsModule, 'getOrDeriveFacet');
+
+    // Write a sidecar for an out-of-window session and backdate its mtime.
+    const oldMs = Date.now() - 40 * 24 * 60 * 60 * 1000; // 40 days ago
+    const filePath = join(tmpRoot, 'state', 'sessions', 'old-prescreen.json');
+    writeFileSync(filePath, JSON.stringify(makeSession({ sessionId: 'old-prescreen', startedAt: oldMs })), 'utf-8');
+    const oldDate = new Date(oldMs);
+    utimesSync(filePath, oldDate, oldDate);
+
+    aggregateTraces({ days: 30, afkHome: tmpRoot });
+
+    // The spy must never have been called with the out-of-window session id.
+    const calledIds = spy.mock.calls.map((c) => c[0]);
+    expect(calledIds).not.toContain('old-prescreen');
+    spy.mockRestore();
+  });
+
+  it('in-window sessions are still included when an out-of-window session is pre-screened', () => {
+    // Out-of-window session with an old mtime.
+    const oldMs = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    const oldPath = join(tmpRoot, 'state', 'sessions', 'old-oos.json');
+    writeFileSync(oldPath, JSON.stringify(makeSession({ sessionId: 'old-oos', startedAt: oldMs })), 'utf-8');
+    const oldDate = new Date(oldMs);
+    utimesSync(oldPath, oldDate, oldDate);
+
+    // In-window session with a recent sidecar.
+    writeSession('in-window', makeSession({
+      sessionId: 'in-window',
+      turns: [{ user: 'hi', assistant: 'ok', toolEvents: [
+        { toolName: 'bash', toolUseId: 'z' },
+      ] }],
+    }));
+
+    const result = aggregateTraces({ days: 30, afkHome: tmpRoot });
+    expect(result.totalTracedSessions).toBe(1);
+    expect(result.toolCallCounts['bash']).toBe(1);
+  });
+
+  it('session modified after cutoff but started before it passes pre-screen and is excluded by facet.start_time', () => {
+    // Sidecar mtime is recent (passes the mtime gate) but startedAt is old
+    // (outside the window). The authoritative facet.start_time check should
+    // exclude it after getOrDeriveFacet is called.
+    const oldStart = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    writeSession('modified-after', makeSession({ sessionId: 'modified-after', startedAt: oldStart }));
+    // mtime is left at "now" (writeSession just wrote the file), so the pre-screen
+    // passes and getOrDeriveFacet is called — but the facet.start_time check
+    // then correctly excludes the session.
+
+    const result = aggregateTraces({ days: 30, afkHome: tmpRoot });
+    expect(result.totalTracedSessions).toBe(0);
   });
 });
 
