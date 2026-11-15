@@ -8,6 +8,9 @@
  * bgsub.test.ts).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as os from 'node:os';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { SubagentHandle, SubagentResult } from '../../../agent/subagent.js';
@@ -422,5 +425,114 @@ describe('buildBgResultInjection — attribute escaping', () => {
     const out = buildBgResultInjection(job);
     expect(out).toContain('&lt;script&gt;');
     expect(out.match(/<\/background-subagent-result>/g)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: isSuperseded respects projectKey (issue #4906)
+//
+// A job dispatched under project A must NOT be marked superseded when only
+// project B's goal changes. Each project's goal is independent.
+// ---------------------------------------------------------------------------
+
+describe('isSuperseded — multi-project projectKey isolation', () => {
+  // Use a temp AFK_HOME so goal-store writes don't touch the real ~/.afk/state.
+  let origAFKHome: string | undefined;
+  let tmpHome: string;
+
+  beforeEach(async () => {
+    origAFKHome = process.env['AFK_HOME'];
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-notifier-goal-test-'));
+    process.env['AFK_HOME'] = tmpHome;
+    // Reset the goal-store singleton so it picks up the new AFK_HOME.
+    const { closeStore } = await import('../../../agent/goals/goal-store.js');
+    closeStore();
+  });
+
+  afterEach(async () => {
+    const { closeStore } = await import('../../../agent/goals/goal-store.js');
+    closeStore();
+    if (origAFKHome !== undefined) {
+      process.env['AFK_HOME'] = origAFKHome;
+    } else {
+      delete process.env['AFK_HOME'];
+    }
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('a job under project A is not superseded when only project B goal changes', async () => {
+    const { setGoal } = await import('../../../agent/goals/goal-store.js');
+    const keyA = 'proj.repo-a-aabbccdd';
+    const keyB = 'proj.repo-b-11223344';
+
+    // Set goal for project A — this is the goal active at dispatch time.
+    setGoal('goal for project A', undefined, keyA);
+    // Set a different goal for project B.
+    setGoal('goal for project B', undefined, keyB);
+
+    // Register a job associated with project A.
+    const registry = new BackgroundAgentRegistry({});
+    const { handle, fireTerminal } = makeBgHandle('sub-proj-a');
+    const job = registry.register({
+      handle,
+      prompt: 'do some work',
+      model: 'sonnet',
+      projectKey: keyA,
+    });
+
+    // Confirm goal text was snapshotted correctly.
+    expect(job.projectKey).toBe(keyA);
+    expect(job.goalTextAtDispatch).toBe('goal for project A');
+
+    // Now change project B's goal — project A's goal is unchanged.
+    setGoal('new goal for project B', undefined, keyB);
+
+    // Fire terminal so the job settles.
+    fireTerminal({
+      id: 'sub-proj-a',
+      status: 'succeeded',
+      message: { content: 'done', role: 'assistant' },
+    } as unknown as SubagentResult);
+
+    // Build the injection for the settled job.
+    const settledJob = registry.list()[0]!;
+    const injection = buildBgResultInjection(settledJob);
+
+    // The result must NOT be annotated as superseded — only project B changed.
+    expect(injection).not.toContain('superseded="true"');
+    expect(injection).not.toContain('previous goal');
+  });
+
+  it('a job under project A IS superseded when project A goal changes', async () => {
+    const { setGoal } = await import('../../../agent/goals/goal-store.js');
+    const keyA = 'proj.repo-a-aabbccdd';
+
+    setGoal('original goal for project A', undefined, keyA);
+
+    const registry = new BackgroundAgentRegistry({});
+    const { handle, fireTerminal } = makeBgHandle('sub-proj-a2');
+    const job = registry.register({
+      handle,
+      prompt: 'do more work',
+      model: 'sonnet',
+      projectKey: keyA,
+    });
+
+    expect(job.goalTextAtDispatch).toBe('original goal for project A');
+
+    // Change project A's goal after dispatch.
+    setGoal('changed goal for project A', undefined, keyA);
+
+    fireTerminal({
+      id: 'sub-proj-a2',
+      status: 'succeeded',
+      message: { content: 'done', role: 'assistant' },
+    } as unknown as SubagentResult);
+
+    const settledJob = registry.list()[0]!;
+    const injection = buildBgResultInjection(settledJob);
+
+    // The result MUST be annotated as superseded.
+    expect(injection).toContain('superseded="true"');
   });
 });

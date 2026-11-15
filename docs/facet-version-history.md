@@ -3,6 +3,23 @@
 Full per-version change log for `FACET_VERSION` in `src/agent/facets/schema.ts`.
 Consumers should filter on `facet_version >= N` to guard against older cached facets.
 
+## v15 (#4896)
+
+Derivation only; no field added or removed. A REPL session that runs `/clear`
+writes one root closure per cycle, so the LAST root closure now decides
+`traceClosureReason`. Previously the first root closure was returned, which on
+a multi-cycle trace is cycle 1's reason (or a child's), not the root cycle that
+actually ended. `token_breakdown.subagent_cost_usd` no longer absorbs the cost
+of earlier root REPL cycles.
+
+## v14 (#4645)
+
+Added optional `surface` field — a first-class structural copy of the sidecar
+`source` field. Downstream consumers (episode daemon gate, surface-aware
+filtering) can use a structural predicate on `surface` instead of a separate
+sidecar read. Values mirror `source`; absent on old cached facets (treat as
+`'cli'` on `facet_version < 14`).
+
 ## v13 (#3879)
 
 - `token_breakdown.total_cost_usd` (root + every subagent at every depth) and

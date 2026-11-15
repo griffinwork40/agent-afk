@@ -25,7 +25,7 @@
 import type { Context } from 'telegraf';
 import type { Telegraf } from 'telegraf';
 import type { IAgentSession } from '../../agent/types.js';
-import { type TelegramRoute, routeKey } from '../route.js';
+import { type TelegramRoute, routeKey, sendOptions } from '../route.js';
 import { autoResumeDirective } from '../../cli/commands/interactive/loop-iteration.injections.js';
 import { hasBgInjections } from '../bg-injection.js';
 
@@ -94,7 +94,7 @@ export function wakeIdleSessionImpl(route: TelegramRoute, deps: WakeIdleDeps): v
     react: () => Promise.resolve(),
     reply: (text: string) => {
       if (bot) {
-        return bot.telegram.sendMessage(chatId, text).catch((e: unknown) => {
+        return bot.telegram.sendMessage(chatId, text, sendOptions(route)).catch((e: unknown) => {
           deps.log('[wakeIdleSession] synthetic-reply forwarding failed:', e);
           return {} as import('telegraf/types').Message.TextMessage;
         });

@@ -21,6 +21,7 @@ pnpm audit:sdk:check                               # CI gate: unlocked SDK symbo
 pnpm audit:env:check                               # CI gate: no raw process.env reads
 pnpm scan:env:check                                # CI gate: env-registry in sync
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color>
+pnpm audit:styledlen:check                         # CI gate: no .length/.padEnd/.padStart on palette-styled strings
 pnpm audit:filesize:check                          # 350-code-line ceiling
 pnpm audit:filesize:update                         # regenerate baseline after a split
 pnpm audit:funcsize:check                          # 200-line function ceiling
