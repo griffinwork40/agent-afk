@@ -1,3 +1,5 @@
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ModelProvider } from '../agent/provider.js';
 import type { TelegramSessionBuildContext } from './session-context.js';
@@ -20,7 +22,7 @@ function context(model: string): TelegramSessionBuildContext {
   return {
     sessionConfig: { model, openaiBaseUrl: 'http://session-openai.test/v1', xaiBaseUrl: 'http://xai.test/v1' },
     config: { baseUrl: 'http://anthropic.test', openaiBaseUrl: 'http://global-openai.test/v1' },
-    sessionCwd: '/workspace', traceWriter: null,
+    sessionCwd: path.join(os.tmpdir(), 'workspace'), traceWriter: null,
     mcpManager: { getMcpToolWireNames: () => ['mcp__test__read'] },
     workspaceStore: {}, stateStore: {},
   } as unknown as TelegramSessionBuildContext;
@@ -84,16 +86,19 @@ describe('Telegram fallback provider wiring', () => {
     vi.stubEnv('OPENAI_API_KEY', 'sk-openai-test');
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
     const provider = build(ctx).factory(model === 'gpt-4o' ? 'claude-haiku-5-5' : 'gpt-4o');
+    const persistedRead = path.join(os.tmpdir(), 'persisted-read');
+    const persistedWrite = path.join(os.tmpdir(), 'persisted-write');
+    const workspace = path.join(os.tmpdir(), 'workspace');
     mocks.seed.mockImplementation((grants: AnthropicDirectProvider) => {
-      grants.addReadRoot('/persisted-read', 'tool');
-      grants.addWriteRoot('/persisted-write', 'tool');
+      grants.addReadRoot(persistedRead, 'tool');
+      grants.addWriteRoot(persistedWrite, 'tool');
     });
     const query = provider.query({
-      config: { model, cwd: '/workspace' }, prompt: (async function* () {})(),
+      config: { model, cwd: workspace }, prompt: (async function* () {})(),
     });
     expect(provider.getGrants()).toMatchObject({
-      readRoots: expect.arrayContaining(['/workspace', '/persisted-read', '/persisted-write']),
-      writeRoots: expect.arrayContaining(['/workspace', '/persisted-write']),
+      readRoots: expect.arrayContaining([workspace, persistedRead, persistedWrite]),
+      writeRoots: expect.arrayContaining([workspace, persistedWrite]),
     });
     void query.close();
   });
@@ -107,7 +112,7 @@ describe('Telegram fallback provider wiring', () => {
     mocks.seed.mockImplementation(() => { order.push('seed'); });
     const provider = build(ctx).factory(model === 'gpt-4o' ? 'claude-haiku-5-5' : 'gpt-4o');
     expect(mocks.seed).not.toHaveBeenCalled();
-    expect(provider.query({ config: { model, cwd: '/workspace' }, prompt: (async function* () {})() })).toBe(inner);
+    expect(provider.query({ config: { model, cwd: path.join(os.tmpdir(), 'workspace') }, prompt: (async function* () {})() })).toBe(inner);
     expect(order).toEqual(['query', 'seed']);
   });
 });

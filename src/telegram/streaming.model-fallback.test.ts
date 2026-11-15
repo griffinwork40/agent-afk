@@ -69,6 +69,22 @@ describe('Telegram model-fallback notices', () => {
     });
   }
 
+  it('keeps streaming when sendMessage rejects for the fallback notice', async () => {
+    const { ctx, sendMessage, onComplete } = (() => {
+      const m = makeCtx('chat');
+      return { ...m, onComplete: vi.fn() };
+    })();
+    sendMessage.mockRejectedValueOnce(new Error('429 Too Many Requests'));
+    const session = makeSession({
+      type: 'notice', kind: 'model-fallback', text: noticeText,
+      fallback: { from: 'opus', to: 'gpt-5.5', reason: 'usage-limit' },
+    });
+
+    await streamResponse(ctx, session, 'go', undefined, { onComplete });
+
+    expect(onComplete).toHaveBeenCalledWith('Final answer', undefined);
+  });
+
   it('keeps generic notices in the existing italic inline preview path', async () => {
     const { ctx, sendMessage, editMessageText } = makeCtx('message');
     const session = makeSession({ type: 'notice', kind: 'truncation', text: 'Output truncated' });

@@ -208,7 +208,7 @@ export async function processInlineEvent(
     // its buffer, and cleanFinal deletes the preview entirely. Explicit routing
     // also preserves the topic when this turn originated from a callback query.
     const route = routeFromCtx(ctx);
-    if (route) await ctx.telegram.sendMessage(route.chatId, event.text, sendOptions(route));
+    if (route) await ctx.telegram.sendMessage(route.chatId, event.text, sendOptions(route)).catch(() => {});
     return false;
   }
 
