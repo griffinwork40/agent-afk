@@ -598,6 +598,7 @@ export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
     taskId: config.id,
     command: config.command,
     trigger: config.trigger ?? 'cron',
+    ...(config.name !== undefined ? { name: config.name } : {}),
     ...(config.executor !== undefined ? { executor: config.executor } : {}),
     ...(includeCron ? { cronExpression: config.cron } : {}),
     ...(config.notifyOn !== undefined ? { notifyOn: config.notifyOn } : {}),
