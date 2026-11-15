@@ -1,5 +1,5 @@
 /** Non-interactive session export using the same renderers as /export. */
-import { Command, Option } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { basename } from 'node:path';
 import { handleCommandError } from '../errors/index.js';
 import { findSession, type FoundSession } from '../session-store.js';
@@ -54,9 +54,12 @@ export function registerExportCommand(program: Command): void {
   program
     .command('export <session>')
     .description('Export a saved session by name, id, witness label, or latest as a self-contained file')
-    .addOption(new Option('--format <format>', 'Output format').choices(['md', 'html']).default('md'))
+    .option('--format <format>', 'Output format (md or html)', 'md')
     .option('--out <path>', 'Destination file (default: AFK_HOME/exports/<session>.md or .html)')
     .action(async (session: string, options: { format: ExportFormat; out?: string }) => {
+      if (options.format !== 'md' && options.format !== 'html') {
+        throw new InvalidArgumentError(`Invalid format "${options.format}". Allowed values: md, html.`);
+      }
       try {
         const outPath = await exportSavedSession(session, options);
         process.stdout.write(`Exported ${options.format.toUpperCase()} → ${outPath}\n`);
