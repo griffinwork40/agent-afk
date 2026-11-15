@@ -40,6 +40,7 @@ import { join } from 'node:path';
 import { getAfkStateDir, getFacetCacheDir } from '../../paths.js';
 import { TraceEventSchema } from '../../agent/trace/events.js';
 import { listSessionIds, getOrDeriveFacet } from '../../agent/facets/index.js';
+import { sidecarPredatesWindow } from './session-prescreen.js';
 import type { InsightsOptions } from '../types.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import type { TraceEvent, HookDecisionPayload } from '../../agent/trace/types.js';
@@ -166,6 +167,9 @@ export function aggregateShadowGitObserve(
 
   const sessionIds = listSessionIds({ sessionsDir });
   for (const sessionId of sessionIds) {
+    // Conservative mtime pre-screen: skip without calling getOrDeriveFacet when
+    // the sidecar mtime predates the cutoff. See session-prescreen.ts. (#4913)
+    if (sidecarPredatesWindow(sessionId, sessionsDir, cutoffMs)) continue;
     const facet = getOrDeriveFacet(sessionId, { sessionsDir, cacheDir });
     if (!facet) continue;
     if (new Date(facet.start_time).getTime() < cutoffMs) continue;

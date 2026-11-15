@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "5.354.0",
+  "version": "5.355.0",
   "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -60,6 +60,9 @@
     "audit:console:check": "tsx scripts/audit-console.ts --check",
     "audit:console:list": "tsx scripts/audit-console.ts --list",
     "audit:console:update": "tsx scripts/audit-console.ts --update",
+    "audit:styledlen": "tsx scripts/check-styled-length.ts",
+    "audit:styledlen:check": "tsx scripts/check-styled-length.ts --check",
+    "audit:styledlen:list": "tsx scripts/check-styled-length.ts --list",
     "audit:width": "tsx scripts/check-terminal-width.ts",
     "audit:width:check": "tsx scripts/check-terminal-width.ts --check",
     "audit:width:list": "tsx scripts/check-terminal-width.ts --list",
