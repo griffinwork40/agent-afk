@@ -173,6 +173,11 @@
     },
     {
       "kind": "command",
+      "name": "afk export",
+      "source": "src/cli/commands/export.ts"
+    },
+    {
+      "kind": "command",
       "name": "afk farm",
       "source": "src/cli/commands/farm.ts"
     },
@@ -2740,6 +2745,21 @@
       "kind": "flag",
       "name": "afk events github --repo",
       "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk export --format",
+      "source": "src/cli/commands/export.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk export --help",
+      "source": "src/cli/commands/export.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk export --out",
+      "source": "src/cli/commands/export.ts"
     },
     {
       "kind": "flag",
