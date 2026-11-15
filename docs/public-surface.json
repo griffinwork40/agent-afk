@@ -173,6 +173,11 @@
     },
     {
       "kind": "command",
+      "name": "afk events serve",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "command",
       "name": "afk farm",
       "source": "src/cli/commands/farm.ts"
     },
@@ -1079,6 +1084,21 @@
     {
       "kind": "env",
       "name": "AFK_EVENTS_GITHUB_POLL_MS",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_EVENTS_WEBHOOK_ALLOW_EXTERNAL",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_EVENTS_WEBHOOK_PORT",
+      "source": "src/config/env.daemon.ts"
+    },
+    {
+      "kind": "env",
+      "name": "AFK_EVENTS_WEBHOOK_SECRET",
       "source": "src/config/env.daemon.ts"
     },
     {
@@ -2739,6 +2759,36 @@
     {
       "kind": "flag",
       "name": "afk events github --repo",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --allow-external",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --command",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --help",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --host",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --port",
+      "source": "src/cli/commands/events.ts"
+    },
+    {
+      "kind": "flag",
+      "name": "afk events serve --secret-env",
       "source": "src/cli/commands/events.ts"
     },
     {
