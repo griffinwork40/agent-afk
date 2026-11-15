@@ -16,6 +16,10 @@
  */
 
 import { wireTelegramExecutors } from './wire-telegram-executors.js';
+import { injectedProviderWiring } from '../cli/provider-fallback-factory.js';
+import { providerForModel } from '../agent/providers/index.js';
+import { seedPersistedGrants } from '../agent/permissions-store.js';
+import { buildTelegramProvider } from './session-provider.js';
 import { finalizeTelegramSession } from './session-lifecycle.js';
 import type { AgentSession } from '../agent/session.js';
 import type { ModelProvider } from '../agent/provider.js';
@@ -91,7 +95,35 @@ export function buildTelegramSession(opts: {
     wireExtras,
   });
 
-  const provider = providerFactory({ executors: wiring.executors });
+  const primary = providerFactory({ executors: wiring.executors });
+  const primaryFamily = providerForModel(String(sessionConfig.model));
+  const providerWiring = injectedProviderWiring({
+    model: String(sessionConfig.model),
+    familyOf: providerForModel,
+    build: (model) => {
+      const family = providerForModel(model);
+      if (family === primaryFamily) return primary;
+      const provider = buildTelegramProvider(ctx, wiring.executors, family);
+      const query = provider.query.bind(provider);
+      provider.query = (args) => {
+        // query() initializes cwd roots synchronously. Restore persisted grants
+        // afterwards, before the iterator can execute any tool calls.
+        const inner = query(args);
+        seedPersistedGrants(provider);
+        return inner;
+      };
+      return provider;
+    },
+  });
 
-  return finalizeTelegramSession(provider, providerConfig, ctx, wiring);
+  // Each endpoint belongs to its own family. Keep destination defaults available
+  // for a cross-family fallback; the router still lets slot endpoints override.
+  const endpoints: ProviderSessionConfig = {
+    ...(ctx.config.baseUrl !== undefined ? { baseUrl: ctx.config.baseUrl } : {}),
+    ...((sessionConfig.openaiBaseUrl ?? ctx.config.openaiBaseUrl) !== undefined
+      ? { openaiBaseUrl: sessionConfig.openaiBaseUrl ?? ctx.config.openaiBaseUrl } : {}),
+    ...(sessionConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: sessionConfig.xaiBaseUrl } : {}),
+    ...providerConfig,
+  };
+  return finalizeTelegramSession(primary, endpoints, ctx, wiring, providerWiring.providerFactory);
 }
