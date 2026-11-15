@@ -36,6 +36,7 @@
     "src/service/launchd.test.ts": { "R4": 9 },
     "src/service/systemd.test.ts": { "R4": 6 },
     "src/utils/atomic-write.test.ts": { "R4": 5 },
+    "tests/check-styled-length.test.ts": { "R4": 1 },
     "tests/check-terminal-width.test.ts": { "R4": 1 }
   }
 }

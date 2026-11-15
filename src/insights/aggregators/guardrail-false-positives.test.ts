@@ -7,8 +7,8 @@
  * @module insights/aggregators/guardrail-false-positives.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -576,6 +576,65 @@ describe('aggregateGuardrailFalsePositives — denialBreakerTaggedFailures (#384
     const z = zeroGuardrailFalsePositiveAggregates();
     expect(z.denialBreakerTaggedFailures).toBe(0);
     expect(z.byRule).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: mtime pre-screen (#4913)
+// ---------------------------------------------------------------------------
+
+describe('aggregateGuardrailFalsePositives — mtime pre-screen (#4913)', () => {
+  it('getOrDeriveFacet is NOT called for a session whose sidecar mtime predates the window', async () => {
+    const facetsModule = await import('../../agent/facets/index.js');
+    const spy = vi.spyOn(facetsModule, 'getOrDeriveFacet');
+
+    const oldMs = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    const filePath = join(tmpRoot, 'state', 'sessions', 'old-gfp.json');
+    writeFileSync(
+      filePath,
+      JSON.stringify({ sessionId: 'old-gfp', model: 'claude-3-5-sonnet', startedAt: oldMs, savedAt: oldMs, totalTurns: 0, turns: [] }),
+      'utf-8',
+    );
+    const oldDate = new Date(oldMs);
+    utimesSync(filePath, oldDate, oldDate);
+
+    aggregateGuardrailFalsePositives(opts());
+
+    const calledIds = spy.mock.calls.map((c) => c[0]);
+    expect(calledIds).not.toContain('old-gfp');
+    spy.mockRestore();
+  });
+
+  it('in-window sessions are still scanned when an out-of-window session is pre-screened', () => {
+    const oldMs = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    const oldPath = join(tmpRoot, 'state', 'sessions', 'old-oos-gfp.json');
+    writeFileSync(
+      oldPath,
+      JSON.stringify({ sessionId: 'old-oos-gfp', model: 'claude-3-5-sonnet', startedAt: oldMs, savedAt: oldMs, totalTurns: 0, turns: [] }),
+      'utf-8',
+    );
+    const oldDate = new Date(oldMs);
+    utimesSync(oldPath, oldDate, oldDate);
+
+    writeSession('in-window-gfp');
+    writeTrace('in-window-gfp', [tripEvent(1), toolCallCompleted(2, 'bash', false)]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.sessionsScanned).toBe(1);
+    expect(result.totalTrips).toBe(1);
+    expect(result.falsePositiveTrips).toBe(1);
+  });
+
+  it('session modified after cutoff but started before it passes pre-screen and is excluded by facet.start_time', () => {
+    const oldStart = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    writeSession('modified-after-gfp', { startedAt: oldStart });
+    // mtime is recent (file was just written), so pre-screen passes, but
+    // facet.start_time is old so the aggregator correctly excludes the session.
+    writeTrace('modified-after-gfp', [tripEvent(1)]);
+
+    const result = aggregateGuardrailFalsePositives(opts());
+    expect(result.sessionsScanned).toBe(0);
+    expect(result.totalTrips).toBe(0);
   });
 });
 

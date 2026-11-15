@@ -153,8 +153,8 @@ function buildReceiptCost(
   // #4896: the seal's finalCostUsd and finalTurnCount cover the last REPL
   // cycle only. Prefer the accumulator's root figures, which sum every root
   // cycle. They are absent when the trace has no cost record (source none)
-  // and after a process-exit backstop seal; the raw seal and closure values
-  // cover those cases exactly as before.
+  // and after a process-exit backstop seal with no attributable root closure
+  // (#4912); the raw seal and closure values cover those cases as before.
   const finalCostUsd = sc.rootCostUsd ?? sealedCostUsd ?? closureCostUsd;
   const turnCount = sc.rootTurnCount ?? sealedTurnCount ?? closureTurnCount;
   return {

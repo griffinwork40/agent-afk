@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -52,11 +53,11 @@ describe('LSP spawn-time exit guardian', () => {
       } finally {
         // Cleanup also runs on regression so a failing guardian test never leaks.
         for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
-        // On Windows, child processes may still hold handles briefly after SIGKILL.
-        // maxRetries + retryDelay lets Node retry on EBUSY without throwing.
-        // Use a generous budget (10 × 500 ms = 5 s) because Windows CI runners
-        // can hold file handles longer than the previous 3 × 200 ms = 600 ms.
-        rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+        // The server and grandchild inherit root as cwd. Windows termination is
+        // asynchronous, so their cwd handles can briefly outlive the kill request.
+        // Node 22 rmSync does not retry an initial rmdir EBUSY; async rm does.
+        // Keep the existing retry settings (linear backoff, up to 27.5 s).
+        await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
       }
     }, 30_000,
   );

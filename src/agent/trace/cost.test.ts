@@ -135,12 +135,20 @@ describe('computeSessionCost', () => {
 
   it('backstop seal (incomplete:true): root absent, subagent = closureSum, source closures-incomplete (#3890 item 2)', () => {
     // sealOnProcessExit writes finalCostUsd:0 + incomplete:true; root closure is
-    // missing — all surviving closures are children, root is unknown.
+    // missing and all surviving closures are stamped children, so root is
+    // unknown. (Unstamped closures in a trace with no subagent evidence are
+    // root cycles; #4912 item 1 covers that case.)
     const backstopSeal: CostEventLike = {
       kind: 'session_sealed',
       payload: { status: 'failed', finalCostUsd: 0, subagentCostUsd: 0, incomplete: true, finalTurnCount: 0, closedAt: ts },
     };
-    const r = computeSessionCost([closure(1.5), closure(0.75), backstopSeal]);
+    const r = computeSessionCost([
+      started('a', 'root'),
+      started('b', 'root'),
+      closureChild(1.5, 'a'),
+      closureChild(0.75, 'b'),
+      backstopSeal,
+    ]);
     expect(r.totalCostUsd).toBeCloseTo(2.25);
     expect(r.rootCostUsd).toBeUndefined();
     expect(r.subagentCostUsd).toBeCloseTo(2.25);
