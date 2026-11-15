@@ -207,12 +207,13 @@ export async function* runIteration(
   controller: AbortController,
   vision: boolean,
   windDown: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
+  synthesisTurns?: OpenAIMessage[],
 ): AsyncGenerator<ProviderEvent, IterationResult | null> {
   ctx.journal.sync(ctx.priorTurns); // commit point: what is about to be sent
   const messages = buildMessages({
     config: ctx.opts.config,
     ...ctx.journal.legacyResumeHistory(),
-    priorTurns: ctx.priorTurns,
+    priorTurns: synthesisTurns ?? ctx.priorTurns,
     vision,
   });
 
