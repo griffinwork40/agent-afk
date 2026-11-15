@@ -58,13 +58,14 @@ export interface StoredSession {
   endedAt?: number;
   /** Why the session ended. Written alongside `endedAt` on every close-time
    *  save. Absent on legacy sidecars. Values:
-   *  - 'sigint'  — user pressed Ctrl+C twice at the idle prompt
-   *  - 'sigterm' — process received SIGTERM (e.g. kill, OS shutdown)
-   *  - 'sighup'  — controlling terminal closed (e.g. SSH disconnect)
-   *  - 'exit-command' — user typed /exit or /quit
-   *  - 'eof'     — stdin received EOF (pipe closed, non-interactive end)
+   *  - 'sigint'         — user pressed Ctrl+C twice at the idle prompt
+   *  - 'sigterm'        — process received SIGTERM (e.g. kill, OS shutdown)
+   *  - 'sighup'         — controlling terminal closed (e.g. SSH disconnect)
+   *  - 'exit-command'   — user typed /exit or /quit
+   *  - 'eof'            — stdin received EOF (pipe closed, non-interactive end)
+   *  - 'task-complete'  — daemon scheduled task finished its single turn
    */
-  exitReason?: 'sigint' | 'sigterm' | 'sighup' | 'exit-command' | 'eof';
+  exitReason?: 'sigint' | 'sigterm' | 'sighup' | 'exit-command' | 'eof' | 'task-complete';
   totalTurns: number;
   totalCostUsd: number;
   /** Count of turns where cost data was unavailable. Optional for backward compat with legacy sidecars. */
