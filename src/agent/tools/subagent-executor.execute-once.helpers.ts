@@ -32,6 +32,7 @@ import type { AgentConfig } from '../types/config-types.js';
 import type { ToolResult } from './types.js';
 import { runBackgroundBranch } from './subagent/background-branch.js';
 import { backgroundTarget } from './subagent/background-delivery.js';
+import { projectKeyForCwd } from '../goals/goal-utils.js';
 import { withCatalogNotice } from './subagent-executor.notices.js';
 import { updateWaveUnit } from '../manifest/write.js';
 import type { TraceSink } from '../trace/index.js';
@@ -341,6 +342,8 @@ export interface RunBackgroundDispatchArgs {
   budgetRelease: (() => void) | undefined;
   isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
   traceWriter: TraceSink | undefined;
+  /** Executor's current working directory; used to derive the project-scoped goal key. */
+  currentCwd: string | undefined;
 }
 
 /**
@@ -351,8 +354,12 @@ export interface RunBackgroundDispatchArgs {
 export function runBackgroundDispatch(args: RunBackgroundDispatchArgs): Promise<ToolResult> {
   const {
     handle, ctx, parsed, childConfig,
-    waveId, callId, budgetRelease, isolationTeardown, traceWriter,
+    waveId, callId, budgetRelease, isolationTeardown, traceWriter, currentCwd,
   } = args;
+
+  // Derive the project-scoped goal key so the registry snapshots and later
+  // compares the goal for the correct project, not the global fallback key.
+  const projectKey = projectKeyForCwd(currentCwd ?? ctx.cwd);
 
   return withCatalogNotice(
     runBackgroundBranch({
@@ -372,6 +379,7 @@ export function runBackgroundDispatch(args: RunBackgroundDispatchArgs): Promise<
           }
         : undefined,
       isolationTeardown,
+      projectKey,
     }),
     childConfig.model,
     traceWriter,

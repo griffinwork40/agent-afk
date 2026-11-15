@@ -15,6 +15,7 @@ import { resolveNamedAgent } from './subagent-executor.execute-once.gates.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { buildChildConfigWithoutNesting, completeChildConfigNesting, type BuildChildConfigArgs } from './subagent/child-config.js';
 import { backgroundTarget } from './subagent/background-delivery.js';
+import { projectKeyForCwd } from '../goals/goal-utils.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import type { StreamCutProbe } from '../subagent/stream-cut-retry.js';
 import { addForegroundNotices } from './subagent-executor.notices.js';
@@ -230,6 +231,7 @@ export async function executeOnce(
       budgetRelease: budgetReceipt?.release,
       isolationTeardown,
       traceWriter: ctx.traceWriter,
+      currentCwd,
     }));
   }
 
@@ -267,6 +269,7 @@ export async function executeOnce(
     ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
     ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
     onPromoted: () => markChainPromoted(handle),
+    projectKey: projectKeyForCwd(currentCwd ?? ctx.cwd),
   });
   if (!promotionTookBudget.value) budgetRelease?.();
   annotateChainResult(result, chain, plan !== undefined, handle); // D6: chain metadata + line on capped/continuation results (structured only on a promotion payload)
