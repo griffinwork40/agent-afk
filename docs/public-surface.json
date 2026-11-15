@@ -1818,6 +1818,11 @@
     },
     {
       "kind": "env",
+      "name": "AFK_TTY_TRACE",
+      "source": "src/config/env.tty-trace.ts"
+    },
+    {
+      "kind": "env",
       "name": "AFK_TURN_SEPARATOR",
       "source": "src/config/env.ui.ts"
     },

@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**273 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**274 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -223,6 +223,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SUBAGENT_LOG` | boolean |  |  | `1` | Opt-in per-subagent conversation log. Writes OutputEvent JSONL to state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and background subagents. Powers /tasks:view replay. OFF by default (raw tool arguments are written without redaction). Set to 1 to enable. |
 | `AFK_TELEGRAM_TRACE` | boolean |  |  | `1` | Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only. |
 | `AFK_TRACE_DISABLED` | boolean |  |  | `1` | Disable the agent trace subsystem entirely. Set to 1 to skip trace file writes. |
+| `AFK_TTY_TRACE` | string |  |  | `~/afk-tty.cast` | Absolute path for the asciinema v2 cast file the interactive REPL writes when stdout is a TTY. Every byte sent to stdout/stderr is tee-d to this file in real time using a sync fd so a crash loses nothing. Terminal resize events are recorded as resize ("r") events. Unset (the default) means off with zero overhead. Use to capture a reproducer for stale-row rendering bugs in tmux/multiplexer sessions. Replay with: pnpm exec tsx scripts/tty-replay.ts <cast> |
 | `AFK_WITNESS_MAX_AGE_DAYS` | number |  | `30` |  | Evict a witness session directory once its newest content is older than this many days. Default 30. |
 | `AFK_WITNESS_MAX_BYTES` | number |  | `2147483648` |  | Aggregate byte cap for the witness tree; oldest session directories are evicted first once exceeded. Default 2147483648 (2 GiB). |
 | `AFK_WITNESS_RETENTION_DISABLE` | boolean |  |  | `1` | Disable the witness-tree retention sweep entirely, so no session directory is ever evicted. |
