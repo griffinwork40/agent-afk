@@ -71,6 +71,17 @@ export function continuationNote(chain: ChainRecord, index: number, allowance: n
     `You have ${allowance} tool-use rounds for this run.]`;
 }
 
+/**
+ * Refusal for a chain that ran in an isolated worktree which is not kept for
+ * it now: a background or promoted run, a failed lock, or a tree already
+ * released (limits, eviction, session end or reset).
+ */
+export function worktreeNotKeptReason(id: string): string {
+  return `continuation chain "${id}" ran in an isolated worktree that was not kept for it ` +
+    '(background or promoted runs, a failed worktree lock, and session end or reset do not keep it), ' +
+    'so it cannot be continued; dispatch a new subagent instead';
+}
+
 /** Upper bound on waiting for the previous run's post-result bookkeeping (journal flush + checkpoint). */
 export const SETTLING_WAIT_MS = 15_000;
 
@@ -108,6 +119,7 @@ async function reservedRefusal(chain: ChainRecord, id: string, recapture?: (cwd:
     return `the previous run on continuation chain "${id}" is still finishing its bookkeeping (journal flush / workspace checkpoint); retry the continuation shortly`;
   }
   if (chain.inFlight) return `a run on continuation chain "${id}" is still in flight`;
+  if (chain.worktreeIsolated === true && chain.isolatedWorktreePath === undefined) return worktreeNotKeptReason(id);
   // Bounded (CHECKPOINT_CAPTURE_DEADLINE_MS): a hung git refuses as unavailable, never wedges `admitting`.
   const drift = await checkWorkspaceDrift(chain, recapture);
   if (drift !== undefined) return drift;

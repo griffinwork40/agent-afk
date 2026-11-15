@@ -138,6 +138,10 @@ forked.` Reasons:
 - an inherited field (`agent_type`, `model`, `cwd`, `isolation`,
   `readRoots`, `writeRoots`) differs from the chain's value;
 - the call sets `host` (remote dispatch);
+- the chain ran in an isolated worktree that is not kept for it (a
+  background or promoted run, a failed worktree lock, or a tree released at
+  session end or reset); dispatch a new subagent instead. See
+  "Worktree-isolated chains" below;
 - the workspace drifted since the chain's last run: branch, HEAD, or
   uncommitted changes (`git status --porcelain` fingerprint) changed.
   Checked for write-capable chains only; read-only chains and non-git cwds
@@ -163,14 +167,45 @@ forked.` Reasons:
 
 ## Worktree-isolated chains
 
-A chain minted with `isolation: "worktree"` is continuable. When the child
-ends and the chain still admits continuations, its worktree is **kept and
-git-locked** (reason: `afk: continuation-chain <id> (worktree kept between
-links)`) rather than torn down. The next continuation link runs in that same
-worktree (`cwd` is overridden with the kept path), so it sees uncommitted
-edits from the previous run.
+A chain minted with `isolation: "worktree"` whose dispatch ran in the
+foreground is continuable. When the child ends and the chain still admits
+continuations, its worktree is **kept and git-locked** (reason: `afk:
+continuation-chain <id> (worktree kept between links)`) rather than torn
+down. The next continuation link runs in that same worktree (`cwd` is
+overridden with the kept path), so it sees uncommitted edits from the
+previous run.
 
-When the chain can no longer be continued (limits exhausted, evicted from the
-256-chain cap, or session end), the worktree is unlocked and handed back to
-the normal teardown sweep: removed if clean, preserved-and-relocked if dirty /
+A chain whose dispatch ran in a created worktree is continuable only while
+that worktree is kept for it. These chains do **not** keep their worktree and
+are therefore not continuable:
+
+- a `mode: "background"` dispatch, and a foreground run promoted to
+  background: the background job tears the tree down when it ends (removed if
+  clean, preserved and relocked if not);
+- a foreground run whose `git worktree lock` failed: the tree is torn down
+  normally.
+
+Their result carries `continuable: false` and no continuation line, and a
+continuation call is refused with: the chain ran in an isolated worktree that
+was not kept for it, so dispatch a new subagent instead. The same refusal
+applies once a kept tree has been released (session end or reset).
+
+A read-only agent dispatched with `isolation: "worktree"` gets no worktree.
+Its chain runs and continues in the parent's cwd as a normal chain.
+
+When the chain can no longer be continued (limits exhausted or evicted from
+the 256-chain cap), the worktree is unlocked and handed back to the normal
+teardown sweep: removed if clean, preserved-and-relocked if dirty /
 commits-ahead / contains non-rebuildable ignored files.
+
+At session end, and at a REPL reset (`/clear`), the session drains its
+subagents and then disposes the registry. Dispose releases every kept
+worktree, including one whose link is still in flight or settling (the drain
+has already aborted it). No worktree is kept for any chain that existed at
+that point: a cancelled foreground link whose teardown runs after dispose
+tears its tree down instead of locking it, and a lock that completes after
+dispose is undone. The registry stays in use after a reset, so chains minted
+later keep their worktrees as usual. The release is asynchronous and
+best-effort: if the process is killed before it finishes, the tree stays
+locked. Recover with `git worktree unlock <path>` (the worktree sweep does
+not auto-unlock the `afk: continuation-chain` reason).

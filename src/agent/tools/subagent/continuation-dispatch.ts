@@ -4,8 +4,8 @@
  * Named helpers called from `executeOnce`; no logic lives inline in
  * assembleChildConfig/runTurnInner. Chains are minted for every local
  * initial `agent` dispatch (remote `host` dispatches return before the fork
- * and never mint). Worktree-isolated chains are minted so metadata names
- * them, but carry no continuation line: D3 refuses continuing them in v1.
+ * and never mint). A worktree-isolated chain is continuable only while its
+ * worktree is kept for it (foreground runs; see isAdvertisable).
  *
  * @module agent/tools/subagent/continuation-dispatch
  */
@@ -182,6 +182,18 @@ export function isContinuableChain(chain: ChainRecord): boolean {
   return isContinuable(chain);
 }
 
+/**
+ * True when a result may invite a continuation: within limits AND, for a
+ * chain whose dispatch ran in a created worktree, that worktree is currently
+ * kept for it. Background and promoted isolated runs never keep their tree,
+ * nor does a failed lock, so those chains are not advertised. The keep hook
+ * and recordChainTerminal use the limits-only `isContinuable` instead: the
+ * hook runs before the path is set (keeping is what sets it).
+ */
+function isAdvertisable(chain: ChainRecord): boolean {
+  return isContinuable(chain) && (chain.worktreeIsolated !== true || chain.isolatedWorktreePath !== undefined);
+}
+
 /** D6 structured chain metadata (snapshot of the chain's current state). */
 function chainMetadata(chain: ChainRecord): NonNullable<ContinuationResultFields['continuation']> {
   return {
@@ -190,7 +202,7 @@ function chainMetadata(chain: ChainRecord): NonNullable<ContinuationResultFields
     maxRounds: chain.limits.maxRounds,
     continuations: chain.continuations,
     maxContinuations: chain.limits.maxContinuations,
-    continuable: isContinuable(chain),
+    continuable: isAdvertisable(chain),
   };
 }
 
@@ -433,7 +445,7 @@ function stampDeliveredResult(r: Res, chain: ChainRecord, always: boolean): void
   const alreadyStamped = out.continuation !== undefined;
   out.continuation = chainMetadata(chain);
   if (alreadyStamped) return;
-  if ((!always && r.incomplete !== true) || !isContinuable(chain) || typeof r.message?.content !== 'string') return;
+  if ((!always && r.incomplete !== true) || !isAdvertisable(chain) || typeof r.message?.content !== 'string') return;
   r.message.content = `${r.message.content}\n\n${formatContinuationLine(chain)}`;
 }
 
@@ -447,6 +459,8 @@ export function wireDispatchChain(args: {
   writeCapable: boolean;
   /** Continuation: reuse the admitted chain (never mint a new one) and mark it wired. */
   plan?: ContinuationPlan | undefined;
+  /** A git worktree was created for this (initial) dispatch. */
+  isolated?: boolean;
 }): ChainRecord | undefined {
   const { ctx, parsed, handle, childConfig, plan } = args;
   const cwd = childConfig.cwd ?? args.currentCwd;
@@ -465,5 +479,6 @@ export function wireDispatchChain(args: {
     ...(plan !== undefined ? { rollbackIfNotStarted: plan.rollback, alwaysLine: true } : {}),
   });
   if (plan !== undefined) plan.wired = true;
+  if (args.isolated === true && chain !== undefined) chain.worktreeIsolated = true;
   return chain;
 }

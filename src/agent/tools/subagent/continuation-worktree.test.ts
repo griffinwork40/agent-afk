@@ -230,9 +230,9 @@ describe('worktree-isolated continuation chains (#4266)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // (5) dispose() fires onEvict for non-in-flight chains with kept worktrees.
+  // (5) dispose() fires onEvict for every chain with a kept worktree.
   // -------------------------------------------------------------------------
-  it('dispose fires onEvict for non-in-flight chains that hold a worktree path', () => {
+  it('dispose fires onEvict for every chain that holds a worktree path, in flight or not', () => {
     const registry = new ContinuationRegistry();
     const evicted: import('../../subagent/continuation-registry.js').ChainRecord[] = [];
     registry.onEvict = (chain) => { evicted.push(chain); };
@@ -246,14 +246,18 @@ describe('worktree-isolated continuation chains (#4266)', () => {
     const noWorktree = registry.createChain({ owner: 'o', rootSessionId: 'r', roundCap: 5, inputs: { writeCapable: false } });
     registry.recordTerminal(noWorktree.chainId, { childId: 'd', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'done' });
 
-    // In-flight chain with a worktree path → NOT evicted on dispose (its terminal still needs the chain).
+    // In-flight chain with a worktree path → ALSO released: the session-end
+    // drain has already aborted the link, and its settle would only release a
+    // chain that is out of budget, so skipping it left the tree locked.
     const inFlight = registry.createChain({ owner: 'o', rootSessionId: 'r', roundCap: 5, inputs: { writeCapable: true, isolation: 'worktree' } });
     inFlight.isolatedWorktreePath = '/repo/.afk-worktrees/in-flight-tree';
     // (inFlight is still inFlight: no recordTerminal call)
 
     registry.dispose();
 
-    expect(evicted).toHaveLength(1);
-    expect(evicted[0]!.chainId).toBe(withWorktree.chainId);
+    expect(evicted.map((c) => c.chainId)).toEqual([withWorktree.chainId, inFlight.chainId]);
+    // The chain stays registered so the in-flight link's terminal still finds it.
+    expect(registry.get(inFlight.chainId)).toBe(inFlight);
+    expect(inFlight.isolatedWorktreePath).toBeUndefined();
   });
 });

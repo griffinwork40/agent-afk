@@ -7,6 +7,11 @@
  * and the path is stored on the chain record so the next continuation can
  * run in the same tree.
  *
+ * Only foreground runs keep their tree. A background or promoted run tears it
+ * down at the job's end, so such a chain is not offered as continuable.
+ * After `ContinuationRegistry.dispose()` (session end or reset) no tree is
+ * kept: the hook and a lock that races dispose both fall back to teardown.
+ *
  * When the chain can no longer be continued (limits exhausted, evicted from
  * the 256-chain cap, or session end), `releaseChainWorktree` unlocks the
  * tree and hands it back to the normal teardown sweep (remove if clean,
@@ -58,7 +63,7 @@ export function buildIsolationTeardownHook(
   if (isolationTeardown === undefined || chain === undefined || registry === undefined) return undefined;
   if (chain.inputs.isolation !== 'worktree') return undefined;
   return async (td) => {
-    if (!isContinuable(chain)) return false;
+    if (!isContinuable(chain) || chain.worktreeReleaseRequested === true) return false;
     return keepWorktreeForChain({ ...td, chainId: chain.chainId, registry });
   };
 }
@@ -83,6 +88,11 @@ export async function keepWorktreeForChain(args: {
       '--reason', `afk: continuation-chain ${chainId} (worktree kept between links)`,
       worktreePath,
     ]);
+    if (registry.get(chainId)?.worktreeReleaseRequested === true) {
+      // Session ended while the lock was being taken: undo it, tear down normally.
+      await defaultExecFile('git', ['-C', repoRoot, 'worktree', 'unlock', worktreePath]).catch(() => undefined);
+      return false;
+    }
     registry.setIsolatedWorktreePath(chainId, worktreePath);
     debugLog(`[isolation] kept worktree ${worktreePath} for chain ${chainId}`);
     return true;

@@ -80,6 +80,20 @@ export interface ChainRecord {
    * or session end). The worktree is git-locked while this is set.
    */
   isolatedWorktreePath?: string;
+  /**
+   * True once a git worktree was actually created for this chain's initial
+   * dispatch (isolation:"worktree" on a write-capable agent). A read-only
+   * agent gets no worktree, so `inputs.isolation` alone cannot tell. While
+   * this is set and `isolatedWorktreePath` is not, the chain is neither
+   * advertised as continuable nor admitted (its tree was not kept).
+   */
+  worktreeIsolated?: true;
+  /**
+   * Set by `dispose()` (session end or reset): no worktree may be kept for
+   * this chain from now on. A teardown hook or lock still running when
+   * dispose fired sees it and tears the tree down instead of keeping it.
+   */
+  worktreeReleaseRequested?: true;
 }
 
 export type AdmissionResult =
@@ -160,15 +174,21 @@ export class ContinuationRegistry {
   }
 
   /**
-   * Release all chains held by the registry (session end). Fires `onEvict`
-   * for every non-in-flight chain that holds a kept worktree, so the caller
-   * can unlock and hand them back to the sweep. In-flight chains are skipped
-   * (their terminal still needs to find them; the process exiting will drop
-   * the git lock naturally). Best-effort: never throws.
+   * Session end (or reset): release every worktree kept for a chain. Fires
+   * `onEvict` for each chain holding a kept worktree, in flight or not: the
+   * drain that runs before dispose has already aborted the subagent tree.
+   * Every chain present is also marked `worktreeReleaseRequested`, so a
+   * teardown hook that runs after this (a cancelled foreground link still in
+   * its finally) tears the tree down instead of locking it again. Chains
+   * stay in the map and chains minted later are unaffected, because the
+   * registry is reused after a REPL reset. The release itself is async and
+   * best-effort: a process killed before it finishes leaves the git lock in
+   * place (recover with `git worktree unlock <path>`). Never throws.
    */
   dispose(): void {
     for (const chain of this.chains.values()) {
-      if (!chain.inFlight && chain.isolatedWorktreePath !== undefined) {
+      chain.worktreeReleaseRequested = true;
+      if (chain.isolatedWorktreePath !== undefined) {
         try { this.onEvict?.(chain); } catch { /* best-effort */ } finally { chain.isolatedWorktreePath = undefined; }
       }
     }
