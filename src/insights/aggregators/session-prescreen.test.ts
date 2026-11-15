@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, utimesSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sidecarPredatesWindow } from './session-prescreen.js';
@@ -42,8 +42,13 @@ describe('sidecarPredatesWindow', () => {
   });
 
   it('returns false when sidecar mtime equals cutoff (boundary — do not skip)', () => {
-    writeSidecar('boundary-sess', cutoffMs);
-    expect(sidecarPredatesWindow('boundary-sess', tmpDir, cutoffMs)).toBe(false);
+    // Use the file's actual mtime as the cutoff so the boundary assertion is
+    // independent of utimes precision. On Node 22, utimesSync can truncate
+    // sub-millisecond fractions causing statSync to return a value slightly
+    // below the requested mtime — a ~50 % coin-flip failure on that runtime.
+    const filePath = writeSidecar('boundary-sess', cutoffMs);
+    const actualMtime = statSync(filePath).mtimeMs;
+    expect(sidecarPredatesWindow('boundary-sess', tmpDir, actualMtime)).toBe(false);
   });
 
   it('returns false when sidecar mtime is after cutoff (recent session)', () => {
