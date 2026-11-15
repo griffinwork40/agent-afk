@@ -16,6 +16,7 @@
  *   - pnpm scan:docs-coverage:check / docs:links:check
  *   - pnpm audit:sdk:check
  *   - pnpm audit:chalk:check
+ *   - pnpm audit:styledlen:check
  *   - pnpm audit:width:check
  *   - pnpm audit:filesize:check      (full-scan; no --changed-vs)
  *   - pnpm audit:funcsize:check      (full-scan; deduped: CI runs it twice)
@@ -55,6 +56,7 @@ export const AUDIT_GATES: readonly string[] = [
   'audit:sdk:check',
   'audit:chalk:check',
   'audit:console:check',
+  'audit:styledlen:check',
   'audit:width:check',
   'audit:filesize:check',
   'audit:funcsize:check',

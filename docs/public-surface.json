@@ -3563,6 +3563,11 @@
     },
     {
       "kind": "flag",
+      "name": "afk receipt regenerate --force",
+      "source": "src/cli/commands/receipt.ts"
+    },
+    {
+      "kind": "flag",
       "name": "afk receipt regenerate --help",
       "source": "src/cli/commands/receipt.ts"
     },

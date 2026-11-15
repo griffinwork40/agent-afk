@@ -345,12 +345,23 @@ describe('renderReceiptMarkdown', () => {
   });
 
   it('renders the root cost as unknown after a process-exit backstop seal (#3890)', () => {
+    // A subagent ran and the surviving closure is unstamped, so it cannot be
+    // attributed to the root (split case 3): the root's spend is unknown.
     const md = renderReceiptMarkdown(
-      generateReceipt([closure('model_end_turn'), sealed('failed', { incomplete: true })], META),
+      generateReceipt([subagentFailed(), closure('model_end_turn'), sealed('failed', { incomplete: true })], META),
     );
     expect(md).toContain('| Cost (USD, total) | 0.1234 |');
     expect(md).toContain('| Cost (USD, root) | unknown');
     expect(md).toContain('| Cost (USD, subagents) | 0.1234 |');
+  });
+
+  it('renders a closed root cycle as root cost after a crash with no subagents (#4912 item 1)', () => {
+    const md = renderReceiptMarkdown(
+      generateReceipt([closure('model_end_turn'), sealed('failed', { incomplete: true })], META),
+    );
+    expect(md).toContain('| Cost (USD, total) | 0.1234 |');
+    expect(md).toContain('| Cost (USD, root) | 0.1234 |');
+    expect(md).toContain('| Cost (USD, subagents) | 0.0000 |');
   });
 
   it('renders a clean run without a review section', () => {
