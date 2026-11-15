@@ -77,5 +77,10 @@ export function sumProviderUsage(a: ProviderUsage, b: ProviderUsage): ProviderUs
   // Cost is cumulative across iterations (unlike cache fields above).
   const cost = sumOptional(a.totalCostUsd, b.totalCostUsd);
   if (cost !== undefined) out.totalCostUsd = cost;
+  // Overage (#4883) is summed per response; absent on both sides stays absent.
+  const overageCost = sumOptional(a.overageCostUsd, b.overageCostUsd);
+  if (overageCost !== undefined) out.overageCostUsd = overageCost;
+  const overageRequests = sumOptional(a.overageRequests, b.overageRequests);
+  if (overageRequests !== undefined) out.overageRequests = overageRequests;
   return out;
 }
