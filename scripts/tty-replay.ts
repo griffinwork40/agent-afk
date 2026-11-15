@@ -150,7 +150,11 @@ const positive = (n: number | undefined): number | undefined =>
   n !== undefined && Number.isFinite(n) && n > 0 ? n : undefined;
 const startCols = positive(colsOverride) ?? positive(header!.width) ?? 80;
 const startRows = positive(rowsOverride) ?? positive(header!.height) ?? 24;
-const term = new Terminal({ cols: startCols, rows: startRows, allowProposedApi: true });
+// convertEol: the recorder tees process.stdout.write, upstream of the tty
+// driver's ONLCR, so console.log's bare `\n` reached the real terminal as
+// CR+LF. Without this, a replayed `\n` keeps the column and later text lands
+// in the wrong place.
+const term = new Terminal({ cols: startCols, rows: startRows, allowProposedApi: true, convertEol: true });
 
 // Invariant (xterm write is async): Terminal.write() only queues data; the
 // parser drains it on a later tick. Each write must be awaited before the next

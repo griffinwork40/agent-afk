@@ -43,6 +43,7 @@ import { getTerminalHeight, getTerminalWidth } from './terminal-size.js';
  */
 export interface FsOps {
   openSync(path: string, flags: string, mode?: number): number;
+  fchmodSync(fd: number, mode: number): void;
   writeSync(fd: number, data: string): number;
   closeSync(fd: number): void;
 }
@@ -177,7 +178,13 @@ export function installTtyTrace(fsOps?: FsOps): void {
   // the recorder uninstalled (no wrappers); the REPL keeps running.
   try {
     _fd = _fs.openSync(expandedPath, 'w', 0o600);
+    // openSync's mode only applies on create; tighten a pre-existing file too.
+    _fs.fchmodSync(_fd, 0o600);
   } catch (err) {
+    if (_fd !== null) {
+      try { _fs.closeSync(_fd); } catch { /* best effort */ }
+      _fd = null;
+    }
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[afk tty-trace] could not open ${expandedPath}: ${msg}\n`);
     return;

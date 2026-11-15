@@ -5,6 +5,9 @@
  * named exports are non-configurable and cannot be spied on in Vitest).
  */
 
+import * as realFs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { FsOps } from '../tty-trace.js';
 import { installTtyTrace, uninstallTtyTrace } from '../tty-trace.js';
@@ -23,6 +26,7 @@ function makeFakeFsOps(): FsOps & { lines: string[]; closed: boolean; throwOnOpe
       if (state.throwOnOpen) throw new Error('EACCES: permission denied');
       return 42;
     },
+    fchmodSync(_fd: number, _mode: number): void {},
     writeSync(_fd: number, data: string): number {
       if (state.throwOnWrite) throw new Error('EIO: write error');
       state.lines.push(data);
@@ -272,6 +276,27 @@ describe('tty-trace', () => {
     const fs = makeFakeFsOps();
     installTtyTrace(fs);
     expect(fs.lastOpenMode).toBe(0o600);
+  });
+
+  // 14b. A pre-existing world-readable file is tightened to 0o600 (real fs)
+  it('tightens a pre-existing 0o644 cast file to 0o600', () => {
+    const dir = realFs.mkdtempSync(path.join(os.tmpdir(), 'afk-tty-trace-'));
+    try {
+      const file = path.join(dir, 'existing.cast');
+      realFs.writeFileSync(file, 'old contents\n', { mode: 0o644 });
+      realFs.chmodSync(file, 0o644); // defeat umask so the file really is 0o644
+      process.env['AFK_TTY_TRACE'] = file;
+      installTtyTrace();
+      uninstallTtyTrace();
+      const contents = realFs.readFileSync(file, 'utf8');
+      expect(contents.startsWith('{"version":2')).toBe(true);
+      // POSIX modes do not apply on Windows; only the mode assertion is guarded.
+      if (process.platform !== 'win32') {
+        expect(realFs.statSync(file).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      realFs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // 15. Idempotent install

@@ -9,6 +9,9 @@
  *     snapshot blank and let a resize apply before earlier bytes were parsed.
  *   - a header of width/height 0 (recorded on a sizeless PTY) made xterm clamp
  *     to 2x1; replay must fall back to 80x24.
+ *   - the recorder captures process.stdout.write before the tty driver's
+ *     ONLCR, so a bare `\n` must replay as CR+LF (convertEol) or the next
+ *     text keeps the previous column.
  */
 
 import * as child_process from 'node:child_process';
@@ -71,6 +74,13 @@ describe('tty-replay', () => {
     const out = replay(cast);
     expect(out).toContain('Terminal snapshot (80×24)');
     expect(out).toMatch(/^ {3}1: hello$/m);
+  });
+
+  it('replays a bare \\n as CR+LF, so the next text starts at column 1', () => {
+    const cast = writeCast({ width: 40, height: 6 }, [[0, 'o', 'first\nsecond\n']]);
+    const out = replay(cast);
+    expect(out).toMatch(/^ {3}1: first$/m);
+    expect(out).toMatch(/^ {3}2: second$/m);
   });
 
   it('honours --cols/--rows and --at', () => {
