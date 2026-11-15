@@ -88,8 +88,9 @@ export async function keepWorktreeForChain(args: {
       '--reason', `afk: continuation-chain ${chainId} (worktree kept between links)`,
       worktreePath,
     ]);
-    if (registry.get(chainId)?.worktreeReleaseRequested === true) {
-      // Session ended while the lock was being taken: undo it, tear down normally.
+    const chain = registry.get(chainId);
+    if (chain === undefined || chain.worktreeReleaseRequested === true) {
+      // Chain evicted or session ended during locking: undo it, tear down normally.
       await defaultExecFile('git', ['-C', repoRoot, 'worktree', 'unlock', worktreePath]).catch(() => undefined);
       return false;
     }

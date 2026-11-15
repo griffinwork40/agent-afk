@@ -5,8 +5,8 @@
  *   - a foreground isolated chain keeps its tree and every link runs there;
  *   - a read-only isolation:"worktree" dispatch gets no tree and continues in
  *     the parent cwd;
- *   - session end or reset (`dispose()`) leaves no tree kept, including for a
- *     link still in flight or a lock that races dispose.
+ *   - session end or reset (`dispose()`) releases ended links immediately and
+ *     running links when they end; a lock racing dispose or eviction is undone.
  *
  * No real model calls and no real git: the worktree primitives and
  * execFileAsync are mocked, as in continuation-worktree.test.ts.
@@ -44,8 +44,8 @@ import type { ToolResult } from '../types.js';
 import { SubagentExecutor, type SubagentExecutorContext } from '../subagent-executor.js';
 import { ContinuationRegistry, type ChainRecord } from '../../subagent/continuation-registry.js';
 import { builtinAgents } from '../../agents/builtins.js';
-import { buildIsolationTeardownHook, keepWorktreeForChain } from './continuation-worktree.js';
-import { isContinuableChain } from './continuation-dispatch.js';
+import { buildIsolationTeardownHook, keepWorktreeForChain, releaseChainWorktree, repoRootFromWorktreePath } from './continuation-worktree.js';
+import { isContinuableChain, recordChainTerminal } from './continuation-dispatch.js';
 
 const ISO = { path: '/repo/.afk-worktrees/iso-agent-tool-1-abc', branch: 'afk/iso', baseRef: 'HEAD', baseSha: 'deadbeef', repoRoot: '/repo' };
 
@@ -207,17 +207,104 @@ describe('session end or reset releases kept worktrees (dispose)', () => {
   const td = { repoRoot: '/repo', worktreePath: ISO.path };
   const isoInputs = { writeCapable: true, isolation: 'worktree' as const };
 
-  it('releases a kept worktree even while a link on the chain is in flight', () => {
+  const terminal = { childId: 'child-1', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' };
+
+  // Same release shape as buildContinuationRegistry in wire-executors.ts.
+  function wireRelease(registry: ContinuationRegistry) {
+    const onEvict = vi.fn((chain: ChainRecord) => {
+      if (chain.isolatedWorktreePath === undefined) return;
+      const repoRoot = repoRootFromWorktreePath(chain.isolatedWorktreePath);
+      if (repoRoot === undefined) return;
+      void releaseChainWorktree({ repoRoot, worktreePath: chain.isolatedWorktreePath, chainId: chain.chainId, registry }).catch(() => undefined);
+    });
+    registry.onEvict = onEvict;
+    return onEvict;
+  }
+
+  async function expectReleasedOnce() {
+    await vi.waitFor(() => expect(teardownIsolatedWorktree).toHaveBeenCalledTimes(1));
+    expect(teardownIsolatedWorktree).toHaveBeenCalledWith(td);
+    expect(execFileAsync.mock.calls.filter((c) => (c[1] as string[]).includes('unlock'))).toHaveLength(1);
+  }
+
+  it('releases an ended child at dispose while its in flight bookkeeping is settling', async () => {
     const registry = new ContinuationRegistry();
-    const released: string[] = [];
-    registry.onEvict = (c) => { released.push(c.isolatedWorktreePath!); };
+    const onEvict = wireRelease(registry);
     const chain = registry.createChain({ owner: 'o', rootSessionId: 'r', roundCap: 5, inputs: isoInputs });
-    registry.setIsolatedWorktreePath(chain.chainId, ISO.path); // link 2 running in the kept tree
+    registry.setIsolatedWorktreePath(chain.chainId, ISO.path);
+    registry.setSettling(chain.chainId, new Promise<void>(() => undefined));
     expect(chain.inFlight).toBe(true);
     registry.dispose();
-    expect(released).toEqual([ISO.path]);
+    expect(onEvict).toHaveBeenCalledTimes(1);
+    expect(chain.worktreeReleaseRequested).toBe(true);
     expect(chain.isolatedWorktreePath).toBeUndefined();
-    expect(registry.get(chain.chainId)).toBe(chain); // its terminal still finds it
+    expect(registry.get(chain.chainId)).toBe(chain);
+    registry.recordTerminal(chain.chainId, terminal);
+    registry.dispose();
+    await expectReleasedOnce();
+    expect(onEvict).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('defers running child release until terminal, exhausted: %s', async (exhausted) => {
+    const registry = new ContinuationRegistry({ maxRounds: 150, maxContinuations: exhausted ? 1 : 3 });
+    const onEvict = wireRelease(registry);
+    const chain = registry.createChain({ owner: 'o', rootSessionId: 'r', roundCap: 5, inputs: isoInputs });
+    registry.recordTerminal(chain.chainId, terminal);
+    registry.setIsolatedWorktreePath(chain.chainId, ISO.path);
+    expect(registry.admitContinuation(chain.chainId, 'o', 5, 5).ok).toBe(true);
+    expect(chain.settling).toBeUndefined();
+    registry.dispose();
+    expect(chain.worktreeReleaseRequested).toBe(true);
+    expect(chain.isolatedWorktreePath).toBe(ISO.path);
+    expect(onEvict).not.toHaveBeenCalled();
+    expect(teardownIsolatedWorktree).not.toHaveBeenCalled();
+    expect(execFileAsync).not.toHaveBeenCalled();
+    await recordChainTerminal({ registry, chain, ...terminal, cwd: undefined });
+    expect(chain.inFlight).toBe(false);
+    expect(chain.isolatedWorktreePath).toBeUndefined();
+    registry.recordTerminal(chain.chainId, terminal);
+    registry.dispose();
+    await expectReleasedOnce();
+    expect(onEvict).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers an admitted but never started link until rollback clears in flight', async () => {
+    const registry = new ContinuationRegistry();
+    const onEvict = wireRelease(registry);
+    const chain = registry.createChain({ owner: 'o', rootSessionId: 'r', roundCap: 5, inputs: isoInputs });
+    registry.recordTerminal(chain.chainId, terminal);
+    registry.setIsolatedWorktreePath(chain.chainId, ISO.path);
+    const admission = registry.admitContinuation(chain.chainId, 'o', 5, 5);
+    expect(admission.ok).toBe(true);
+    if (!admission.ok) throw new Error(admission.reason);
+    registry.dispose();
+    expect(chain.worktreeReleaseRequested).toBe(true);
+    expect(onEvict).not.toHaveBeenCalled();
+    expect(teardownIsolatedWorktree).not.toHaveBeenCalled();
+    expect(execFileAsync).not.toHaveBeenCalled();
+    admission.rollback();
+    expect(chain.inFlight).toBe(false);
+    expect(chain.isolatedWorktreePath).toBeUndefined();
+    admission.rollback();
+    registry.dispose();
+    await expectReleasedOnce();
+    expect(onEvict).toHaveBeenCalledTimes(1);
+  });
+
+  it('undoes a lock if its chain was evicted while locking', async () => {
+    const registry = new ContinuationRegistry(undefined, 1);
+    const chain = registry.createChain({ owner: 'o', rootSessionId: 'r', roundCap: 5, inputs: isoInputs });
+    registry.recordTerminal(chain.chainId, terminal);
+    execFileAsync.mockImplementationOnce(async () => {
+      registry.createChain({ owner: 'o', rootSessionId: 'r', roundCap: 5, inputs: isoInputs });
+      return { stdout: '', stderr: '' };
+    });
+    const kept = await keepWorktreeForChain({ ...td, chainId: chain.chainId, registry });
+    expect(registry.get(chain.chainId)).toBeUndefined();
+    expect(kept).toBe(false);
+    expect(execFileAsync).toHaveBeenLastCalledWith('git', ['-C', '/repo', 'worktree', 'unlock', ISO.path]);
+    if (!kept) await teardownIsolatedWorktree(td);
+    expect(teardownIsolatedWorktree).toHaveBeenCalledWith(td);
   });
 
   it('a teardown hook that runs after dispose (cancelled link) tears down instead of keeping', async () => {

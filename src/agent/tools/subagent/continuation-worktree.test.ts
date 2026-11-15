@@ -232,7 +232,7 @@ describe('worktree-isolated continuation chains (#4266)', () => {
   // -------------------------------------------------------------------------
   // (5) dispose() fires onEvict for every chain with a kept worktree.
   // -------------------------------------------------------------------------
-  it('dispose fires onEvict for every chain that holds a worktree path, in flight or not', () => {
+  it('dispose fires onEvict for every chain with a kept tree whose child has ended', () => {
     const registry = new ContinuationRegistry();
     const evicted: import('../../subagent/continuation-registry.js').ChainRecord[] = [];
     registry.onEvict = (chain) => { evicted.push(chain); };
@@ -246,12 +246,11 @@ describe('worktree-isolated continuation chains (#4266)', () => {
     const noWorktree = registry.createChain({ owner: 'o', rootSessionId: 'r', roundCap: 5, inputs: { writeCapable: false } });
     registry.recordTerminal(noWorktree.chainId, { childId: 'd', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'done' });
 
-    // In-flight chain with a worktree path → ALSO released: the session-end
-    // drain has already aborted the link, and its settle would only release a
-    // chain that is out of budget, so skipping it left the tree locked.
+    // The child has ended but terminal bookkeeping has not cleared inFlight.
+    // Dispose must release this tree rather than wait for bookkeeping.
     const inFlight = registry.createChain({ owner: 'o', rootSessionId: 'r', roundCap: 5, inputs: { writeCapable: true, isolation: 'worktree' } });
     inFlight.isolatedWorktreePath = '/repo/.afk-worktrees/in-flight-tree';
-    // (inFlight is still inFlight: no recordTerminal call)
+    registry.setSettling(inFlight.chainId, new Promise<void>(() => undefined));
 
     registry.dispose();
 

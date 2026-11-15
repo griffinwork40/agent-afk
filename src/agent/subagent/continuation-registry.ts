@@ -174,24 +174,28 @@ export class ContinuationRegistry {
   }
 
   /**
-   * Session end (or reset): release every worktree kept for a chain. Fires
-   * `onEvict` for each chain holding a kept worktree, in flight or not: the
-   * drain that runs before dispose has already aborted the subagent tree.
-   * Every chain present is also marked `worktreeReleaseRequested`, so a
-   * teardown hook that runs after this (a cancelled foreground link still in
-   * its finally) tears the tree down instead of locking it again. Chains
-   * stay in the map and chains minted later are unaffected, because the
-   * registry is reused after a REPL reset. The release itself is async and
-   * best-effort: a process killed before it finishes leaves the git lock in
-   * place (recover with `git worktree unlock <path>`). Never throws.
+   * Session end (or reset): request release of every kept worktree. Fires
+   * `onEvict` now if the child has ended, including while terminal bookkeeping
+   * is settling. A child still running after the bounded drain keeps its tree
+   * until terminal recording or admission rollback clears inFlight.
+   * Every chain present is marked `worktreeReleaseRequested`, so no teardown
+   * hook or pending lock keeps a new tree for it. Chains stay in the map and
+   * chains minted later are unaffected, because a REPL reset reuses the registry.
+   * Release is async and best effort. A process that exits or is killed while
+   * a child still runs or before release finishes leaves the git lock in place.
+   * Recover with `git worktree unlock <path>`. Never throws.
    */
   dispose(): void {
     for (const chain of this.chains.values()) {
       chain.worktreeReleaseRequested = true;
-      if (chain.isolatedWorktreePath !== undefined) {
-        try { this.onEvict?.(chain); } catch { /* best-effort */ } finally { chain.isolatedWorktreePath = undefined; }
-      }
+      this.releaseDisposedWorktree(chain);
     }
+  }
+
+  /** Release only once the child has ended; terminal bookkeeping may still be pending. */
+  private releaseDisposedWorktree(chain: ChainRecord): void {
+    if (chain.worktreeReleaseRequested !== true || (chain.inFlight && chain.settling === undefined) || chain.isolatedWorktreePath === undefined) return;
+    try { this.onEvict?.(chain); } catch { /* best-effort */ } finally { chain.isolatedWorktreePath = undefined; }
   }
 
   /** Mint a chain for an initial dispatch; `roundCap` 0 means uncapped. */
@@ -252,6 +256,7 @@ export class ContinuationRegistry {
       chain.roundsCharged -= allowance;
       chain.continuations -= 1;
       chain.inFlight = false;
+      this.releaseDisposedWorktree(chain);
     };
     return { ok: true, chain, allowance, index, rollback };
   }
@@ -324,6 +329,7 @@ export class ContinuationRegistry {
     }
     chain.checkpoint = update.checkpoint;
     chain.lastEndReason = update.endReason;
+    this.releaseDisposedWorktree(chain);
   }
 }
 

@@ -199,13 +199,16 @@ teardown sweep: removed if clean, preserved-and-relocked if dirty /
 commits-ahead / contains non-rebuildable ignored files.
 
 At session end, and at a REPL reset (`/clear`), the session drains its
-subagents and then disposes the registry. Dispose releases every kept
-worktree, including one whose link is still in flight or settling (the drain
-has already aborted it). No worktree is kept for any chain that existed at
-that point: a cancelled foreground link whose teardown runs after dispose
+subagents and then disposes the registry. Dispose releases kept worktrees
+whose children have ended, including links still marked in flight while
+terminal bookkeeping is settling. The drain is bounded, so a child still
+running keeps its tree until terminal recording or admission rollback clears
+its in flight state. Every chain present is marked for release: no new tree
+is kept for it. A cancelled foreground link whose teardown runs after dispose
 tears its tree down instead of locking it, and a lock that completes after
 dispose is undone. The registry stays in use after a reset, so chains minted
-later keep their worktrees as usual. The release is asynchronous and
-best-effort: if the process is killed before it finishes, the tree stays
-locked. Recover with `git worktree unlock <path>` (the worktree sweep does
-not auto-unlock the `afk: continuation-chain` reason).
+later keep their worktrees as usual. Release is asynchronous and best effort:
+if the process exits or is killed while such a child is still running, or
+before release finishes, the tree stays locked. Recover with
+`git worktree unlock <path>` (the worktree sweep does not automatically unlock
+the `afk: continuation-chain` reason).
