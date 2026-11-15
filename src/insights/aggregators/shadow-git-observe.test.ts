@@ -8,8 +8,8 @@
  * @module insights/aggregators/shadow-git-observe.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -362,6 +362,64 @@ describe('aggregateShadowGitObserve — decision filter', () => {
     const result = aggregateShadowGitObserve(opts());
     expect(result.totalFirings).toBe(1);
     expect(result.sessionsWithFirings).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: mtime pre-screen (#4913)
+// ---------------------------------------------------------------------------
+
+describe('aggregateShadowGitObserve — mtime pre-screen (#4913)', () => {
+  it('getOrDeriveFacet is NOT called for a session whose sidecar mtime predates the window', async () => {
+    const facetsModule = await import('../../agent/facets/index.js');
+    const spy = vi.spyOn(facetsModule, 'getOrDeriveFacet');
+
+    const oldMs = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    const filePath = join(tmpRoot, 'state', 'sessions', 'old-sgo.json');
+    writeFileSync(
+      filePath,
+      JSON.stringify({ sessionId: 'old-sgo', model: 'claude-3-5-sonnet', startedAt: oldMs, savedAt: oldMs, totalTurns: 0, turns: [] }),
+      'utf-8',
+    );
+    const oldDate = new Date(oldMs);
+    utimesSync(filePath, oldDate, oldDate);
+
+    aggregateShadowGitObserve(opts());
+
+    const calledIds = spy.mock.calls.map((c) => c[0]);
+    expect(calledIds).not.toContain('old-sgo');
+    spy.mockRestore();
+  });
+
+  it('in-window sessions are still scanned when an out-of-window session is pre-screened', () => {
+    const oldMs = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    const oldPath = join(tmpRoot, 'state', 'sessions', 'old-oos-sgo.json');
+    writeFileSync(
+      oldPath,
+      JSON.stringify({ sessionId: 'old-oos-sgo', model: 'claude-3-5-sonnet', startedAt: oldMs, savedAt: oldMs, totalTurns: 0, turns: [] }),
+      'utf-8',
+    );
+    const oldDate = new Date(oldMs);
+    utimesSync(oldPath, oldDate, oldDate);
+
+    writeSession('in-window-sgo');
+    writeTrace('in-window-sgo', [shadowGitEvent(1, ['no-verify'])]);
+
+    const result = aggregateShadowGitObserve(opts());
+    expect(result.sessionsScanned).toBe(1);
+    expect(result.totalFirings).toBe(1);
+  });
+
+  it('session modified after cutoff but started before it passes pre-screen and is excluded by facet.start_time', () => {
+    const oldStart = Date.now() - 40 * 24 * 60 * 60 * 1000;
+    writeSession('modified-after-sgo', { startedAt: oldStart });
+    // mtime is recent (file was just written), so pre-screen passes, but
+    // facet.start_time is old so the aggregator excludes the session.
+    writeTrace('modified-after-sgo', [shadowGitEvent(1, ['no-verify'])]);
+
+    const result = aggregateShadowGitObserve(opts());
+    expect(result.sessionsScanned).toBe(0);
+    expect(result.totalFirings).toBe(0);
   });
 });
 
