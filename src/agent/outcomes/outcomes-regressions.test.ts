@@ -142,9 +142,15 @@ describe('PR4540 production regressions', () => {
       slow = new Readable({ read() {}, signal: (options as { signal: AbortSignal }).signal });
       return slow;
     }) as typeof fs.createReadStream);
+    // The total deadline also covers the meta read and a `git rev-parse` spawn
+    // that run BEFORE the journal is opened. At 100ms a slow runner (Windows
+    // CI) spent the whole budget there, the stream was never created, and the
+    // test failed on `slow` being undefined. Leave room for those steps.
+    const timeoutMs = 750;
     const start = Date.now();
-    expect(await getSessionOutcomes('slow-input', { cwd: repo }, { timeoutMs: 100 })).toBeNull();
-    expect(Date.now() - start).toBeLessThan(1500);
+    expect(await getSessionOutcomes('slow-input', { cwd: repo }, { timeoutMs })).toBeNull();
+    expect(Date.now() - start).toBeLessThan(timeoutMs + 1400);
+    expect(slow, 'deadline fired before the journal stream was opened').toBeDefined();
     expect(slow?.destroyed).toBe(true);
   });
 
