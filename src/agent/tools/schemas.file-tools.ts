@@ -199,7 +199,9 @@ export const grepTool: AnthropicToolDef = {
     'files/dirs like .github and .env; the .git directory and binary files are skipped. ' +
     'Output is capped to a ~100KB head+tail view; if a search is truncated, narrow it (a more specific ' +
     'pattern, an `include` glob, or a subdirectory `path`) rather than re-running the same broad query. ' +
-    'Use for finding symbols, strings, or patterns across the codebase.',
+    'Use for finding symbols, strings, or patterns across the codebase. ' +
+    'Patterns use ripgrep regex syntax; see the `pattern` property for the list of metacharacters ' +
+    'and how to escape them.',
   input_schema: {
     type: 'object',
     properties: {

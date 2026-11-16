@@ -42,6 +42,12 @@ describe('hasUnescapedBackslashPipe', () => {
     // JS '\\\\|' → \\| in the actual string
     expect(hasUnescapedBackslashPipe('prefix\\\\|suffix')).toBe(false);
   });
+
+  it('detects \\| when combined with \\\\| in the same pattern', () => {
+    // JS 'a\\|b\\\\|c' → string a\|b\\|c
+    // \| at position 1 is unescaped; \\| is escaped-backslash + bare-pipe
+    expect(hasUnescapedBackslashPipe('a\\|b\\\\|c')).toBe(true);
+  });
 });
 
 describe('rewriteBackslashPipe', () => {
@@ -60,6 +66,12 @@ describe('rewriteBackslashPipe', () => {
 
   it('does not touch a bare |', () => {
     expect(rewriteBackslashPipe('foo|bar')).toBe('foo|bar');
+  });
+
+  it('rewrites \\| but not \\\\| when both appear in the same pattern', () => {
+    // JS 'a\\|b\\\\|c' → string a\|b\\|c
+    // \| → | (rewritten); \\| → \\| (untouched: escaped-backslash + bare-pipe)
+    expect(rewriteBackslashPipe('a\\|b\\\\|c')).toBe('a|b\\\\|c');
   });
 });
 
