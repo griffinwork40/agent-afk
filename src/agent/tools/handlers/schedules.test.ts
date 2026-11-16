@@ -347,6 +347,23 @@ describe('list_schedules handler', () => {
     expect(parsed[0]?.name).toBe('Nightly Backup');
   });
 
+  it.each([
+    ['numeric name', { name: 123 }],
+    ['string enabled', { enabled: 'true' }],
+  ])('ignores a wrongly typed %s filter and returns all tasks', async (_label, input) => {
+    await createScheduleHandler({ name: 'Active Task', command: '/a', cron: '0 1 * * *' }, fakeSignal);
+    await createScheduleHandler({ name: 'Inactive Task', command: '/b', cron: '0 2 * * *', enabled: false }, fakeSignal);
+
+    const result = await listSchedulesHandler(input, fakeSignal);
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content as string) as Array<{ name: string; enabled: boolean }>;
+    expect(parsed).toHaveLength(2);
+    expect(parsed.map(({ name, enabled }) => ({ name, enabled }))).toEqual([
+      { name: 'Active Task', enabled: true },
+      { name: 'Inactive Task', enabled: false },
+    ]);
+  });
+
   it('no matching name filter returns empty array', async () => {
     await createScheduleHandler({ name: 'Some Task', command: '/s', cron: '0 1 * * *' }, fakeSignal);
 
