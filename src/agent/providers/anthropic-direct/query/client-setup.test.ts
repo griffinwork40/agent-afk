@@ -22,6 +22,12 @@ vi.mock('../../../auth/keychain.js', () => ({
   refreshClaudeCodeOauthToken: () => refreshMock(),
 }));
 
+// Base fetch under the tracing wrapper: hermetic, returns canned headers (#4883).
+const baseFetchHeaders: { value: Record<string, string> } = { value: {} };
+vi.mock('../../shared/h1-fetch.js', () => ({
+  h1ModelFetch: async () => new Response('{}', { headers: baseFetchHeaders.value }),
+}));
+
 /** A stand-in client; identity is all these tests compare. */
 function fakeClient(tag: string): Anthropic {
   return { __tag: tag } as unknown as Anthropic;
@@ -149,5 +155,28 @@ describe('setUpQueryClient (#824)', () => {
     // Both clients got a tracing-fetch wrapper (not a bare/undefined fetch).
     expect(typeof fetches[0]).toBe('function');
     expect(typeof fetches[1]).toBe('function');
+  });
+});
+
+describe('setUpQueryClient overage tracker (#4883)', () => {
+  it('feeds response headers to the tracker through the wrapped fetch, even without a trace writer', async () => {
+    let wrapped: typeof fetch | undefined;
+    const setup = setUpQueryClient(
+      baseArgs({
+        factory: (opts) => {
+          wrapped = (opts as { fetch?: typeof fetch }).fetch;
+          return fakeClient('c');
+        },
+      }),
+    );
+    expect(setup.overageTracker).toBeDefined();
+    baseFetchHeaders.value = { 'anthropic-ratelimit-unified-overage-in-use': 'true' };
+    await wrapped!('https://api.anthropic.com/v1/messages', { method: 'POST', body: '{}' });
+    expect(setup.overageTracker!.takeForResponse()).toEqual({ measured: true, overage: true });
+    baseFetchHeaders.value = {};
+  });
+
+  it('is absent in localMode', () => {
+    expect(setUpQueryClient(baseArgs({ localMode: true })).overageTracker).toBeUndefined();
   });
 });

@@ -9,8 +9,7 @@
  * @module telegram/session-xai
  */
 
-import { XaiProvider } from '../agent/providers/xai/index.js';
-import { resolveXaiConstructionAuthMode } from '../agent/providers/xai/force-mode.js';
+import { buildTelegramProvider } from './session-provider.js';
 import { buildTelegramSession } from './session-builder.js';
 import type { AgentSession } from '../agent/session.js';
 import type { TelegramSessionBuildContext } from './session-context.js';
@@ -18,7 +17,7 @@ import type { TelegramSessionBuildContext } from './session-context.js';
 export async function buildXaiTelegramSession(
   ctx: TelegramSessionBuildContext & { providerName: 'xai' | 'xai-oauth' },
 ): Promise<AgentSession> {
-  const { sessionConfig, mcpManager, providerName, stateStore } = ctx;
+  const { sessionConfig, providerName } = ctx;
 
   return buildTelegramSession({
     ctx,
@@ -27,19 +26,7 @@ export async function buildXaiTelegramSession(
       // AFK_OPENAI_BASE_URL and uses resolveXaiEndpoint + optional xaiBaseUrl.
       ...(sessionConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: sessionConfig.xaiBaseUrl } : {}),
     },
-    providerFactory: ({ executors: { subagentExecutor, skillExecutor, composeExecutor } }) => {
-      // Slot/provider-forced oauth vs auto-routed apikey construction.
-      const authMode = resolveXaiConstructionAuthMode(providerName, providerName === 'xai-oauth');
-      return new XaiProvider({
-        surface: 'telegram',
-        subagentExecutor,
-        skillExecutor,
-        composeExecutor,
-        ...(authMode !== undefined ? { authMode } : {}),
-        ...(mcpManager !== undefined ? { mcpManager } : {}),
-        ...(stateStore !== undefined ? { stateStore } : {}),
-      });
-    },
+    providerFactory: ({ executors }) => buildTelegramProvider(ctx, executors, providerName),
     // xAI branch: provider-specific config is only `xaiBaseUrl`.
     // Invariant: do NOT set openaiBaseUrl here (XaiProvider ignores it).
     providerConfig: {

@@ -228,12 +228,12 @@ export function foregroundCompletionResult(
 
 /** No await here: adoption and caller ownership transfer stay in one race continuation. */
 export function adoptForegroundRun(
-  args: Pick<RunForegroundArgs, 'handle' | 'backgroundPrompt' | 'model' | 'parentSessionId' | 'budgetRelease'>,
+  args: Pick<RunForegroundArgs, 'handle' | 'backgroundPrompt' | 'model' | 'parentSessionId' | 'budgetRelease' | 'projectKey'>,
   registry: NonNullable<RunForegroundArgs['registry']>,
   runPromise: RunPromise,
   isoTd: RunForegroundArgs['isolationTeardown'],
 ) {
-  const { handle, backgroundPrompt, model, parentSessionId, budgetRelease } = args;
+  const { handle, backgroundPrompt, model, parentSessionId, budgetRelease, projectKey } = args;
   return registry.adoptRunning({
     handle,
     runPromise,
@@ -249,6 +249,7 @@ export function adoptForegroundRun(
     } : {}),
     // Invariant: budget release belongs to registry settlement, never the foreground return.
     ...(budgetRelease !== undefined ? { onSettled: budgetRelease } : {}),
+    ...(projectKey !== undefined ? { projectKey } : {}),
   });
 }
 

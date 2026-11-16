@@ -155,6 +155,14 @@ export interface RunForegroundArgs {
   promotionTookBudget?: { value: boolean };
   /** Called synchronously once the run is adopted by the background registry (continuation stamping, D6). */
   onPromoted?: () => void;
+  /**
+   * StateStore key for the project whose goal should be snapshotted when this
+   * foreground run is promoted to background. Derived via `projectKeyForCwd()`
+   * at the dispatch site and forwarded to the registry so the correct
+   * project-scoped goal is captured and later compared at delivery time.
+   * When omitted the registry falls back to the global goal key.
+   */
+  projectKey?: string;
 }
 
 /**
@@ -226,7 +234,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           // job outlives the foreground finally that would have torn it down.
           if (isoTd) await lockWorktreeForBackground(isoTd.repoRoot, isoTd.worktreePath);
           // Invariant: adoption is synchronous after the lock await; ownership flips in this continuation.
-          const job = adoptForegroundRun({ handle, backgroundPrompt, model, parentSessionId, budgetRelease }, registry, runPromise, isoTd);
+          const job = adoptForegroundRun({ handle, backgroundPrompt, model, parentSessionId, budgetRelease, projectKey: args.projectKey }, registry, runPromise, isoTd);
           promoted = true;
           args.onPromoted?.();
           // Item 4: signal the caller that the registry owns budgetRelease now.
