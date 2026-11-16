@@ -614,7 +614,8 @@ describe('dispatch identity preparation', () => {
       preflight: async () => { entered(); await gate; return undefined; },
     });
     await ready;
-    expect(lines.join('\n')).toContain('/mint\nmint skill\nargs: the effective args');
+    expect(lines.join('\n')).toContain('/mint · mint skill');
+    expect(lines.join('\n')).not.toContain('args:');
     expect(session.sendMessageStream).not.toHaveBeenCalled();
     release();
     await run;

@@ -254,7 +254,7 @@ function aggregateEvents(allEvents: DegradedEvent[]): GroupSummary[] {
 // ---------------------------------------------------------------------------
 
 export async function runBuiltinToolHealthTask(
-  task: { taskId: string; command: string; cronExpression?: string },
+  task: { taskId: string; command: string; cronExpression?: string; name?: string },
   trigger: TelemetryTrigger,
   options: ToolHealthTaskOptions,
 ): Promise<TelemetryRecord> {
@@ -266,6 +266,7 @@ export async function runBuiltinToolHealthTask(
     trigger,
     ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
     triggeredAt: triggeredAt.toISOString(),
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 
   try {

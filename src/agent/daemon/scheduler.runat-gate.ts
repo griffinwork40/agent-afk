@@ -43,6 +43,7 @@ export function makeMalformedSkipRecord(
     status: 'skipped',
     skipReason: 'malformed',
     errorMessage: `Task ${task.taskId}: stored ${field} is not a valid ISO 8601 date string (got: ${value})`,
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 }
 

@@ -365,17 +365,24 @@ describe('D8 continuation through the agent executor', () => {
     await session.close();
   }, 20000);
 
-  it('non-owner and worktree-isolated chains are refused before any fork', async () => {
+  it('non-owner chain is refused before any fork; worktree-isolated chains are now admitted (#4266)', async () => {
     const seen: Seen[] = [];
     installTransport(seen);
     const { run, registry, session } = await setup();
     const foreign = registry.createChain({ owner: 'someone-else', rootSessionId: 'x', roundCap: 5, inputs: { writeCapable: false } });
     registry.recordTerminal(foreign.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
     expect((await run({ prompt: 'x', continuation_chain_id: foreign.chainId })).content).toContain('owned by another actor');
+    // Worktree-isolated chains are no longer refused at the override check — they
+    // are admitted and proceed to the journal-seed step (which fails here because
+    // there is no real journal for childId 'c', so it safely refuses at seeding).
     const owner = registry.rootActor;
     const iso = registry.createChain({ owner, rootSessionId: 'x', roundCap: 5, inputs: { writeCapable: true, isolation: 'worktree' } });
     registry.recordTerminal(iso.chainId, { childId: 'c', journalUsable: true, roundsUsed: 5, checkpoint: undefined, endReason: 'capped' });
-    expect((await run({ prompt: 'x', continuation_chain_id: iso.chainId })).content).toContain('`isolation: "worktree"` chain is not supported');
+    const isoResult = await run({ prompt: 'x', continuation_chain_id: iso.chainId });
+    // Must not be refused with the old v1 message.
+    expect(isoResult.content).not.toContain('`isolation: "worktree"` chain is not supported');
+    // Seeding fails because the mock child wrote no real journal.
+    expect(isoResult.content).toContain('Nothing was forked');
     expect(seen).toHaveLength(0);
     await session.close();
   }, 20000);

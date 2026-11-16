@@ -30,8 +30,9 @@ import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
 import { prependSetupNotice } from '../worktree/worktree-setup.js';
 import { prependNeedsInputHeader } from './subagent/foreground-handoff.js';
-import { parseDispatchInput, wireDispatchChain, annotateChainResult, markChainPromoted } from './subagent/continuation-dispatch.js';
+import { parseDispatchInput, wireDispatchChain, annotateChainResult, markChainPromoted, isContinuableChain } from './subagent/continuation-dispatch.js';
 import { runContinuation, type ContinuationPlan } from './subagent/continuation-run.js';
+import { buildIsolationTeardownHook } from './subagent/continuation-worktree.js';
 import {
   setupIsolationWorktree,
   forkAndCheckCancel,
@@ -82,6 +83,19 @@ async function usageGate(
       isError: true,
     },
   };
+}
+
+/** Record a finished foreground dispatch on the wave tracker: failed (with a bounded error head) or done. */
+function markWaveUnitOutcome(
+  updateCurrentWaveUnit: ExecuteOnceArgs['updateCurrentWaveUnit'],
+  callId: string,
+  result: ToolResult,
+): void {
+  if (result.isError === true) {
+    updateCurrentWaveUnit(callId, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
+  } else {
+    updateCurrentWaveUnit(callId, 'done');
+  }
 }
 
 export async function executeOnce(
@@ -179,10 +193,10 @@ export async function executeOnce(
   // Pre-dispatch implementation-intent gate (#3754): rejects implementation briefs sent to read-only named agents.
   { const r = checkReadOnlyDispatchIntent(childWriteCapable, namedAgent, parsed.prompt, classifyDispatchIntent); if (r !== undefined) { budgetReceipt?.rollback(); return r; } }
 
-  // isolation:"worktree" — may mutate childConfig.cwd to the worktree path.
+  // isolation:"worktree" — may mutate childConfig.cwd; a continuation reuses the chain's tree.
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
   let setupNotice: string | undefined; // #3601: failed repo-declared setup, surfaced to the parent too
-  if (parsed.isolation === 'worktree') {
+  if (parsed.isolation === 'worktree' && plan === undefined) {
     const isoResult = await setupIsolationWorktree({
       parsed, currentCwd, isolationCounterRef, childConfig,
       childWriteCapable, probe, budgetReceipt, signal: call.signal,
@@ -221,7 +235,7 @@ export async function executeOnce(
     childParentSession.messageJournal = handle.session?.messageJournal;
   }
   updateCurrentWaveUnit(call.id, 'running', undefined, isolationTeardown !== undefined ? childConfig.cwd : undefined);
-  const chain = wireDispatchChain({ ctx, parsed, handle, childConfig, currentCwd, writeCapable: childWriteCapable, plan }); // D2 mint (or reuse the continued chain) + D9 terminal hooks
+  const chain = wireDispatchChain({ ctx, parsed, handle, childConfig, currentCwd, writeCapable: childWriteCapable, plan, isolated: isolationTeardown !== undefined, childManager }); // D2 mint (or reuse the continued chain) + D9 terminal hooks
 
   if (parsed.mode === 'background') {
     return prependSetupNotice(setupNotice, await runBackgroundDispatch({
@@ -250,6 +264,8 @@ export async function executeOnce(
 
   const budgetRelease = budgetReceipt?.release;
   const promotionTookBudget = { value: false };
+  // #4266: a still-continuable isolated chain keeps its worktree locked for the next link.
+  const onIsolationTeardown = buildIsolationTeardownHook(isolationTeardown, chain, ctx.continuationRegistry, isContinuableChain);
   const result = await runForegroundWithPromotion({
     handle,
     signal: call.signal,
@@ -267,6 +283,7 @@ export async function executeOnce(
     promotionTriggers,
     activeForegroundHandles,
     ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
+    ...(onIsolationTeardown !== undefined ? { onIsolationTeardown } : {}),
     ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
     onPromoted: () => markChainPromoted(handle),
     projectKey: projectKeyForCwd(currentCwd ?? ctx.cwd),
@@ -276,10 +293,6 @@ export async function executeOnce(
   prependNeedsInputHeader(result); // F-C1: must run AFTER annotateChainResult stamps result.continuation
   addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, ctx.traceWriter);
   prependSetupNotice(setupNotice, result);
-  if (result.isError === true) {
-    updateCurrentWaveUnit(call.id, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
-  } else {
-    updateCurrentWaveUnit(call.id, 'done');
-  }
+  markWaveUnitOutcome(updateCurrentWaveUnit, call.id, result);
   return result;
 }
