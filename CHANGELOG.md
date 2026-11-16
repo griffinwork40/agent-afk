@@ -12,6 +12,8 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.356.0] - 2026-11-16
+
 ### Added
 - daemon: every schedule telemetry row carries the task name, so schedule history shows a label instead of only the task id (refs #4831) (#4953) (12ac09431)
 - subagents: allow continuing worktree-isolated subagent chains (#4266) (#4285) (ed1df0f75)
