@@ -16,7 +16,7 @@ export function compactQueryHistory(options: {
   retry: RetryLayer;
   initSessionId: string;
   traceWriter?: import('../../trace/index.js').TraceSink;
-  trigger?: import('../../trace/types.js').CompactionTrigger;
+  trigger?: import('../../trace/types.compaction.js').CompactionTrigger;
 }): Promise<ProviderCompactResult> {
   return compactHistory(options).then((result) => {
     // Journal the compaction splice as truncate + re-append of the summary.

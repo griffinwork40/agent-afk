@@ -534,6 +534,8 @@ export interface CompactionSuccess<M> {
   messagesBefore: number;
   messagesAfter: number;
   tokensSavedEstimate: number;
+  /** UTF-16 code units omitted by the transcript cap (not per-tool excerpts). */
+  summarizerInputCharsDropped: number;
 }
 
 /** Injected collaborators for {@link runCompactionCore}. */
@@ -657,7 +659,7 @@ export async function runCompactionCore<M>(
   const olderSlice = messages.slice(0, boundary);
   // The cap bounds only the summarizer input; olderSlice stays whole for the
   // witness archive in onSuccess.
-  const transcript = capTranscriptForSummarizer(renderTranscript(olderSlice, ops), deps.summarizerInputMaxChars);
+  const { transcript, charsDropped } = capTranscriptForSummarizer(renderTranscript(olderSlice, ops), deps.summarizerInputMaxChars);
 
   // `timedOut` is set when the timeout fires (before `abortInFlight()`) and
   // feeds the retry loop's `shouldStop`, so a retry waiting in backoff never
@@ -722,6 +724,7 @@ export async function runCompactionCore<M>(
     messagesBefore,
     messagesAfter,
     tokensSavedEstimate,
+    summarizerInputCharsDropped: charsDropped,
   });
 
   return { compacted: true, messagesBefore, messagesAfter, tokensSavedEstimate };

@@ -493,6 +493,28 @@ describe('abort payload', () => {
 });
 
 describe('compaction payload', () => {
+  it('round-trips optional cap drops and rejects invalid counts in both forms', () => {
+    const common = {
+      trigger: 'manual', summary: 'summary', keptTailCount: 1,
+      keepLastNConfig: 3, messagesBefore: 5, messagesAfter: 2,
+    };
+    const forms = [
+      { schema: CompactionPayloadInputSchema, payload: { ...common, preCompactionMessages: [] } },
+      { schema: CompactionPayloadPersistedSchema, payload: { ...common,
+        preCompactionMessagesRef: { path: 'sidecar.json', sizeBytes: 2, sha256: 'a'.repeat(64) } } },
+    ];
+    for (const { schema, payload } of forms) {
+      expect(schema.parse(payload)).not.toHaveProperty('summarizerInputCharsDropped');
+      for (const count of [0, 901]) {
+        expect(schema.parse({ ...payload, summarizerInputCharsDropped: count }))
+          .toHaveProperty('summarizerInputCharsDropped', count);
+      }
+      for (const count of [-1, 1.5, '901']) {
+        expect(() => schema.parse({ ...payload, summarizerInputCharsDropped: count })).toThrow();
+      }
+    }
+  });
+
   it('input form accepts inline messages array', () => {
     expect(() =>
       CompactionPayloadInputSchema.parse({
