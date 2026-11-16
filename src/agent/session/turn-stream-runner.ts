@@ -18,6 +18,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortError } from '../../utils/errors.js';
 import { debugLog } from '../../utils/debug.js';
+import { buildFatalDone } from './turn-stream-runner.fatal-done.js';
 import { transformProviderEvent, type TransformDeps } from './stream-consumer.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { LedgerLifecycle } from './ledger-lifecycle.js';
@@ -285,6 +286,20 @@ export class TurnStreamRunner {
     const wiring = this.deps.getStopWiring?.();
     if (wiring) wiring.stopDispatchedBySeam = false;
 
+    // Invariant (#4830): exactly one terminal `done` per turn. The normal path
+    // yields `done` from `handleTurnCompleted`. Fatal paths (provider 4xx,
+    // stream stall, connection error, budget ceiling) emit `error` and exit
+    // without a `done`, leaving cost/duration/stopReason unrecorded. The
+    // `finally` block below records a synthetic `done` to the ledger ONLY on
+    // those paths. Contract: live stream consumers keep `error` as their single
+    // terminal (unchanged from main); the ledger gets exactly one `done` per
+    // turn so events.jsonl readers always record cost/duration/stopReason.
+    let doneYielded = false;
+
+    // Record the wall-clock start of this turn so the synthetic `done` can
+    // carry a partial elapsed duration even when the provider never reported one.
+    const turnStartMs = Date.now();
+
     try {
       while (true) {
         const result = await this.deps.getProviderIterator().next();
@@ -295,6 +310,7 @@ export class TurnStreamRunner {
 
         if (output) {
           if (output.type === 'done') {
+            doneYielded = true;
             this.deps.incTurnCount();
             // A completed turn clears a prior error so the seal status
             // reflects the FINAL turn's outcome, not any earlier error.
@@ -346,6 +362,19 @@ export class TurnStreamRunner {
       // takes — closing the generator runs it while `break` does not reach it.
       if (this.deps.getState() === 'streaming') {
         this.deps.setState('idle');
+      }
+      // Invariant (#4830): ledger gets exactly one `done` per turn. When the
+      // loop exits via a fatal path (provider 4xx, stream stall, connection
+      // error, budget ceiling, or any unhandled throw) `doneYielded` is still
+      // false. Record a synthetic `done` to the ledger ONLY — no yield, no
+      // outputBroadcast push — so live stream consumers keep `error` as their
+      // single terminal while events.jsonl readers always see a `done` with
+      // stopReason / durationMs. See turn-stream-runner.fatal-done.ts for the
+      // stopReason mapping.
+      if (!doneYielded) {
+        const elapsed = Date.now() - turnStartMs;
+        const signal = this.deps.getAbortController().signal;
+        this.deps.ledger.recordEvent(buildFatalDone(signal, elapsed));
       }
     }
   }
