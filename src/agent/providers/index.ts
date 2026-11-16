@@ -289,6 +289,13 @@ export function resolveProvider(
     canUseTool?: import('../types/sdk-types.js').CanUseTool;
     executors?: import('../session/session-executors.js').ProviderExecutorOpts;
     mcpManager?: import('../mcp/index.js').McpManager;
+    /**
+     * Destructive-git gate for a forked child that reached this bare fallback
+     * (no injected provider, no factory — e.g. a compose node with the
+     * workspace store disabled). Forwarded to the provider constructor, the
+     * only place either provider reads it.
+     */
+    blockDestructiveGit?: boolean;
   },
 ): ModelProvider {
   const name = providerForModel(model, hints);
@@ -306,6 +313,7 @@ export function resolveProvider(
     // #4063: forward SDK-resolved mcpManager so the provider can bridge
     // MCP tools and report server status correctly.
     ...(mcpManager !== undefined ? { mcpManager } : {}),
+    ...(opts?.blockDestructiveGit === true ? { blockDestructiveGit: true } : {}),
   };
   switch (name) {
     case 'openai-compatible':

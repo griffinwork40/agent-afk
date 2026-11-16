@@ -277,7 +277,7 @@ const GIT_MUTATING_SUBCMDS = new Set([
 ]);
 
 /** Split git argv (tokens after `git`) into the subcommand + its trailing args, skipping global flags. */
-function gitSubcommand(argv: readonly string[]): { sub: string | undefined; rest: readonly string[] } {
+export function gitSubcommand(argv: readonly string[]): { sub: string | undefined; rest: readonly string[] } {
   let i = 0;
   while (i < argv.length) {
     const t = argv[i]!;
@@ -369,6 +369,9 @@ function hiddenGitMutation(tokens: readonly string[]): string | null {
   }
   return null;
 }
+
+// Destructive-git classification extracted to keep this file under the 350-LOC ceiling.
+export { DESTRUCTIVE_GIT_SUBCMDS, destructiveGitSegmentReason, classifyDestructiveGit } from './readonly-bash.destructive-git.js';
 
 /**
  * Tokenize the command and apply the positional (subcommand-anchored) matchers —
