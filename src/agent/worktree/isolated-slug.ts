@@ -25,9 +25,29 @@ export const MAX_TASK_SLUG_LENGTH = 48;
  * Random base36 suffix of {@link ISOLATED_SLUG_SUFFIX_LENGTH} chars. Uses
  * crypto randomness (not a counter) so names stay unique across sessions,
  * whose counters all restart at 1.
+ *
+ * Uses rejection sampling to eliminate modulo bias: bytes >= 252 (252 = 7*36)
+ * are discarded and re-drawn so every accepted byte maps uniformly to [0,35].
+ *
+ * @param bytes - Injectable byte source for testing; defaults to
+ *   `crypto.randomBytes`. Must return a Buffer of length `n`.
  */
-export function randomSlugSuffix(): string {
-  return Array.from(randomBytes(ISOLATED_SLUG_SUFFIX_LENGTH), (b) => (b % 36).toString(36)).join('');
+export function randomSlugSuffix(bytes: (n: number) => Buffer = randomBytes): string {
+  // Contract: 252 = 7 * 36 is the largest multiple of 36 that fits in a byte
+  // (0–255). Bytes in [0, 251] map uniformly to base36; bytes in [252, 255]
+  // are rejected so the distribution stays exactly uniform.
+  const REJECTION_THRESHOLD = 252; // 7 * 36
+  const result: string[] = [];
+  while (result.length < ISOLATED_SLUG_SUFFIX_LENGTH) {
+    const batch = bytes(ISOLATED_SLUG_SUFFIX_LENGTH * 2);
+    for (let i = 0; i < batch.length && result.length < ISOLATED_SLUG_SUFFIX_LENGTH; i++) {
+      const b = batch[i];
+      if (b !== undefined && b < REJECTION_THRESHOLD) {
+        result.push((b % 36).toString(36));
+      }
+    }
+  }
+  return result.join('');
 }
 
 /**

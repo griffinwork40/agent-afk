@@ -35,6 +35,18 @@ describe('randomSlugSuffix', () => {
       expect(randomSlugSuffix()).toMatch(new RegExp(`^[a-z0-9]{${ISOLATED_SLUG_SUFFIX_LENGTH}}$`));
     }
   });
+
+  it('skips bytes >= 252 (rejection threshold) and maps accepted bytes via b % 36', () => {
+    // First batch: two rejected bytes (252, 255) followed by six valid bytes (0–251).
+    // The result must be exactly the base36 encoding of the six valid bytes.
+    const validBytes = [0, 1, 35, 36, 71, 100]; // all < 252
+    const batchBytes = [252, 255, ...validBytes];
+    const fakeBytes = (n: number): Buffer => Buffer.from(batchBytes.slice(0, n));
+    const result = randomSlugSuffix(fakeBytes);
+    const expected = validBytes.map((b) => (b % 36).toString(36)).join('');
+    expect(result).toBe(expected);
+    expect(result).toMatch(new RegExp(`^[a-z0-9]{${ISOLATED_SLUG_SUFFIX_LENGTH}}$`));
+  });
 });
 
 describe('buildIsolatedSlug', () => {
