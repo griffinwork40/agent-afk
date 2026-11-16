@@ -607,6 +607,20 @@ describe('planGitRead (#4878): blame -L <range> (two tokens)', () => {
   });
 });
 
+describe('planGitRead (#4902): SPLIT_VALUED is global — -L rejected on non-blame subcommands', () => {
+  // The SPLIT_VALUED normaliser runs for every subcommand before per-subcommand
+  // checkToken. So `log -L 1,10:f` is normalised to `log -L1,10:f` and then
+  // rejected because `-L` is not in log's allowlist. This test pins that
+  // rejection so a future allowlist addition cannot silently widen -L to log.
+  it('log -L 1,10:f is rejected (SPLIT_VALUED joins tokens, checkToken rejects for log)', () => {
+    expect(planGitRead({ subcommand: 'log', args: ['-L', '1,10:f'] }, CWD).ok).toBe(false);
+  });
+
+  it('diff -L 1,10:f is rejected (SPLIT_VALUED joins tokens, checkToken rejects for diff)', () => {
+    expect(planGitRead({ subcommand: 'diff', args: ['-L', '1,10:f'] }, CWD).ok).toBe(false);
+  });
+});
+
 describe('planGitRead (#4878): log -S <text> (pickaxe, two tokens)', () => {
   it('log -S sometext (two tokens) is normalised and accepted', () => {
     const plan = planGitRead({ subcommand: 'log', args: ['-S', 'sometext', 'HEAD'] }, CWD);
