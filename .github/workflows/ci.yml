@@ -9,6 +9,10 @@ on:
   # Manual runs from the Actions tab.
   workflow_dispatch:
 
+# Build/test jobs only need repository read access, not the repository default scope.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # Never cancel in-progress runs on the default branch — a cancelled main run
