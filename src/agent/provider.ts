@@ -93,6 +93,15 @@ export interface ProviderUsage {
    */
   billing?: BillingUsage;
   totalCostUsd?: number;
+  /**
+   * Cost of the model calls in this usage that were served from subscription
+   * overage (#4883), summed per response. Present (possibly 0) only when at
+   * least one summed response carried `anthropic-ratelimit-unified-*` headers;
+   * absent means "not measured". Paired with `overageRequests`.
+   */
+  overageCostUsd?: number;
+  /** Count of overage-flagged responses; same presence rule as `overageCostUsd`. */
+  overageRequests?: number;
   stopReason?: string | null;
   durationMs?: number;
   durationApiMs?: number;

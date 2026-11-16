@@ -31,6 +31,7 @@ import type { AuthMode } from '../types.js';
 import { makeTracingFetch } from '../tracing-fetch.js';
 import { h1ModelFetch } from '../../shared/h1-fetch.js';
 import { ThrottleQueue } from '../throttle-queue.js';
+import { OverageTracker } from '../overage-tracker.js';
 import { parseQuotaHeaders, recordQuotaSnapshot } from '../../../quota-cache.js';
 import { refreshClaudeCodeOauthToken } from '../../../auth/keychain.js';
 import type { AnthropicClientFactory } from '../provider-options.js';
@@ -58,6 +59,8 @@ export interface ClientSetup {
   client: Anthropic;
   /** Live rate-limit mailbox; undefined when not installed. */
   throttleQueue: ThrottleQueue | undefined;
+  /** Per-session subscription-overage observer (#4883); undefined in localMode. */
+  overageTracker: OverageTracker | undefined;
   /** OAuth CLI-mimicry billing prefix, or null when suppressed. */
   systemPrefix: ContentBlockParam[] | null;
   /** Rebuilds the client against a freshly-refreshed OAuth token. */
@@ -88,9 +91,15 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
   // when tracing is off (`AFK_TRACE_DISABLED=1`); tying it to the trace writer
   // would silently blank the indicator in that configuration. localMode is
   // still excluded: a local shim is not Anthropic and emits no quota headers.
+  // Overage observer (#4883): same `!localMode` gate as the quota capture, and
+  // it rides the SAME guarded `onQuota` hook. It observes BEFORE the quota
+  // snapshot so the cache and status-line path below is byte-for-byte the
+  // same as before; `observe()` never throws.
+  const overageTracker = localMode ? undefined : new OverageTracker(config.traceWriter);
   const quotaObserver = localMode
     ? undefined
     : (headers: Headers): void => {
+        overageTracker?.observe(headers);
         const snapshot = parseQuotaHeaders(headers);
         if (snapshot === undefined) return;
         recordQuotaSnapshot(snapshot);
@@ -187,6 +196,7 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
   return {
     client,
     throttleQueue,
+    overageTracker,
     systemPrefix,
     ...(tokenRefresher !== undefined ? { tokenRefresher } : {}),
   };

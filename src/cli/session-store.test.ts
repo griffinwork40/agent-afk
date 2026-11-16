@@ -656,7 +656,7 @@ describe('session-registry bridge — storedToHandle / bindingsForStored', () =>
     });
 
     it.each([
-      'sigint', 'sigterm', 'sighup', 'exit-command', 'eof',
+      'sigint', 'sigterm', 'sighup', 'exit-command', 'eof', 'task-complete',
     ] as const)('saveSession accepts exitReason value %s', (reason) => {
       const stats = createSessionStats('sonnet');
       recordTurn(stats, 'u', 'a', { sessionId: `reason-${reason}` });

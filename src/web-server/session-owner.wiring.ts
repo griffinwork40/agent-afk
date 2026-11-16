@@ -34,6 +34,7 @@ import type { TraceWriter } from '../agent/trace/index.js';
 import type { TraceSink } from '../agent/trace/writer.js';
 import { makeDeferredParentProxy } from '../agent/session/deferred-parent-proxy.js';
 import { pendingChildBillingStreams } from '../agent/session/manager-shutdown-config.js';
+import { drainThenDispose } from '../agent/subagent/continuation-dispose.js';
 import type { FastModeController } from '../agent/fast-mode.js';
 
 /** Everything `SessionOwner.create` needs beyond the base `AgentConfig`. */
@@ -144,12 +145,12 @@ export async function wireWebSession(
     : rawPrompt;
 
   // -- 9. Drain callback ------------------------------------------------------
-  const drainSubagents: AgentConfig['drainSubagents'] = async (reason) => {
+  const drainSubagents: AgentConfig['drainSubagents'] = (reason) => drainThenDispose(async () => {
     await backgroundRegistry.cancelAll();
     return executors.rootManager.abortAllAndDrain(
       'session_end', 'user_signal', undefined, reason === 'reset',
     );
-  };
+  }, executors.continuationRegistry); // dispose even when the drain rejects (#4266)
 
   // Late-bind helper so callers can wire after session construction.
   const getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'] =

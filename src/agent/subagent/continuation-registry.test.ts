@@ -86,14 +86,16 @@ describe('ContinuationRegistry', () => {
 });
 
 describe('continuation guards', () => {
-  it('refuses override conflicts, worktree chains, and remote host', () => {
+  it('refuses override conflicts and remote host; allows worktree chains (#4266)', () => {
     const reg = new ContinuationRegistry();
     const chain = initialChain(reg);
     expect(checkContinuationOverrides(chain, { agent_type: 'general-purpose' })).toBeUndefined();
     expect(checkContinuationOverrides(chain, { model: 'opus' })).toMatch(/model/);
     expect(checkContinuationOverrides(chain, { host: 'box' })).toMatch(/remote/);
+    // Worktree-isolated chains are now continuable — checkContinuationOverrides
+    // must not refuse them (the worktree is kept between links).
     const iso = reg.createChain({ owner: 'root', rootSessionId: 's', inputs: { ...inputs, isolation: 'worktree' }, roundCap: 10 });
-    expect(checkContinuationOverrides(iso, {})).toMatch(/worktree/);
+    expect(checkContinuationOverrides(iso, {})).toBeUndefined();
   });
 
   it('refuses drift for write-capable chains and allows it for read-only ones', async () => {

@@ -21,6 +21,7 @@ import { wireTrustedSkillEvents, wireProviderGrants, createReplInput, createTurn
 import { buildAgentSession, buildSharedDeps, createBootstrapSharedStores } from './bootstrap-session-builder.js';
 import { registerAll } from '../../slash/index.js';
 import { setTasksIctx } from '../../slash/commands/tasks.js';
+import { withContinuationDispose } from '../../../agent/subagent/continuation-dispose.js';
 
 // Re-exported so `resume-swap.test.ts` (and the mid-session swap closure
 // below) can resolve `buildAgentSession` from this module — the historical
@@ -92,7 +93,7 @@ export async function bootstrapSession(
 
   const {
     trace, backgroundRegistry, detachRegistry, processJobs, bgSummarizer,
-    rootManager, subagentExecutor, skillExecutor, composeExecutor,
+    rootManager, subagentExecutor, skillExecutor, composeExecutor, continuationRegistry,
   } = createBootstrapInfra({
     sessionRef, options, cliConfig, sessionModel, basePrompt, operatorOverlay, effectiveCwd, resumeTarget, bootWarnings,
     workspaceStore: sharedWorkspaceStore,
@@ -156,7 +157,7 @@ export async function bootstrapSession(
     // Cascade-abort and drain in-flight children before the writer seals,
     // so a wave still running when this session ends emits real `cancelled`
     // rows instead of vanishing (#733).
-    ...managerShutdownConfig(rootManager, composeExecutor),
+    ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
     ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
     // Commander's --no-recall sets options.recall = false (negated boolean).
     ...(options.recall === false ? { noRecall: true } : {}),

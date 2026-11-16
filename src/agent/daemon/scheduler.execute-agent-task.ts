@@ -113,13 +113,14 @@ export async function executeAgentTask(
   const startTimeMs = ctx.now();
   const baseRecord: Pick<
     TelemetryRecord,
-    'taskId' | 'command' | 'trigger' | 'cronExpression' | 'triggeredAt'
+    'taskId' | 'command' | 'trigger' | 'cronExpression' | 'triggeredAt' | 'name'
   > = {
     taskId: task.taskId,
     command: redactInlineSecrets(task.command),
     trigger,
     ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
     triggeredAt: triggeredAt.toISOString(),
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
   const policy = resolveTaskRetryPolicy(task);
   // Shared counter incremented by the trace shim on every AFK-gate hard-block

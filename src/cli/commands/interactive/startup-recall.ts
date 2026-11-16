@@ -64,18 +64,21 @@ interface SidecarHead {
   cwd: string | undefined;
   /** True when the head carries `endedAt`, i.e. the session was closed. */
   sealed: boolean;
+  /** Origin surface read from the sidecar head, or undefined for legacy sidecars. */
+  source: string | undefined;
 }
 
 /**
- * Read a sidecar's cwd and sealed-ness from its head. Returns undefined when
- * the file cannot be read.
+ * Read a sidecar's cwd, sealed-ness, and source from its head. Returns
+ * undefined when the file cannot be read.
  *
  * Contract: `sealed` is the sidecar's own `endedAt`, which `saveSession`
  * writes only at close time and always ahead of `turns`, so it falls inside
  * the head. It must not be inferred from the facet: `deriveSessionFacet` fills
  * `end_time` from `savedAt` on every save, so a session that is still running
- * has one too. Surfaces that never close their sidecar (daemon, Telegram) are
- * therefore never recalled, which suits a line about where the user left off.
+ * has one too. Telegram sidecars are never sealed, so they are never recalled.
+ * Daemon sidecars are sealed (after #4841) but are excluded explicitly via the
+ * `source` field — a completed scheduled task is not "where the user left off".
  * A quoted `"endedAt"` inside turn text cannot match: JSON escapes its quotes.
  */
 function readSidecarHead(filePath: string): SidecarHead | undefined {
@@ -92,7 +95,8 @@ function readSidecarHead(filePath: string): SidecarHead | undefined {
     // so the comparison against opts.cwd uses the real path, not raw JSON bytes.
     try { cwd = JSON.parse('"' + raw + '"') as string; } catch { cwd = raw; }
   }
-  return { cwd, sealed: /"endedAt"\s*:\s*\d/.test(head) };
+  const source = head.match(/"source"\s*:\s*"([^"]*)"/)?.[1];
+  return { cwd, sealed: /"endedAt"\s*:\s*\d/.test(head), source };
 }
 
 /**
@@ -156,6 +160,10 @@ function scanForLatestCwdSession(
     if (head === undefined || head.cwd !== cwd) continue;
     // Still running, or never closed: skip before paying for a facet lookup.
     if (!head.sealed) continue;
+    // Daemon runs are sealed (issue #4841) but are not "where the user left
+    // off" — exclude them so the recall line stays meaningful for interactive
+    // sessions only.
+    if (head.source === 'daemon') continue;
 
     try {
       const facet = getOrDeriveFacet(id);

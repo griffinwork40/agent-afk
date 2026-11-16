@@ -140,7 +140,10 @@ export function formatBgResultBody(job: BackgroundJob): string {
  */
 function isSuperseded(job: BackgroundJob): boolean {
   if (job.goalTextAtDispatch === undefined) return false;
-  const current = getGoal();
+  // Use the project key stored at dispatch time so multi-project sessions
+  // compare the job's goal against the correct project's current goal rather
+  // than the global fallback key.
+  const current = getGoal(job.projectKey);
   // Goal cleared or paused after dispatch → result is superseded.
   if (!current || current.status !== 'active') return true;
   return current.text !== job.goalTextAtDispatch;

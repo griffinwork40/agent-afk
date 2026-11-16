@@ -33,12 +33,6 @@
     },
     {
       "kind": "command",
-      "name": "afk events",
-      "reason": "Listed only in the generated CLI reference; no hand-written guide covers the event ingress producers that feed the pull queue yet.",
-      "added": "2026-11-12"
-    },
-    {
-      "kind": "command",
       "name": "afk events github",
       "reason": "Listed only in the generated CLI reference; no hand-written guide covers polling GitHub for events to enqueue into the pull queue yet.",
       "added": "2026-11-12"

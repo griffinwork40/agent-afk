@@ -229,6 +229,56 @@ function modelFallbackItem(record: LedgerRecordLike): TranscriptItem {
 }
 
 /**
+ * Render a `done` ledger record to a transcript item.
+ * Extracted to keep `ledgerRecordToItem` within the 200-line function ceiling.
+ */
+function doneRecordToItem(record: LedgerRecordLike): TranscriptItem {
+  const stopReason = str(record['stopReason']);
+  const stopped = stopReason === 'interrupted';
+  // Fatal stopReasons written by the synthetic ledger-only done (#4830).
+  const fatal =
+    stopReason === 'error' ||
+    stopReason === 'budget_ceiling' ||
+    stopReason === 'stalled';
+  const cost = record['costUsd'];
+  const ms = record['durationMs'];
+  const bits: string[] = [];
+  if (typeof cost === 'number') bits.push(`$${cost.toFixed(4)}`);
+  if (typeof ms === 'number') bits.push(`${(ms / 1000).toFixed(1)}s`);
+  // Token breakdown (Wave 1+)
+  const inputTok = num(record['inputTokens']);
+  const outputTok = num(record['outputTokens']);
+  const cacheRead = num(record['cacheReadTokens']);
+  if (inputTok !== undefined || outputTok !== undefined) {
+    const parts: string[] = [];
+    if (inputTok !== undefined) parts.push(`${inputTok}in`);
+    if (outputTok !== undefined) parts.push(`${outputTok}out`);
+    if (cacheRead !== undefined) parts.push(`${cacheRead}cache`);
+    bits.push(parts.join('/'));
+  }
+  if (stopped) {
+    return {
+      kind: 'stopped',
+      id: nextId('n'),
+      text: bits.length ? `Stopped · ${bits.join(' · ')}` : 'Stopped',
+    };
+  }
+  if (fatal) {
+    const label = `turn failed · ${stopReason}`;
+    return {
+      kind: 'notice',
+      id: nextId('n'),
+      text: bits.length ? `${label} · ${bits.join(' · ')}` : label,
+    };
+  }
+  return {
+    kind: 'notice',
+    id: nextId('n'),
+    text: bits.length ? `turn complete · ${bits.join(' · ')}` : 'turn complete',
+  };
+}
+
+/**
  * Convert one ledger record into a transcript item, optionally patching an
  * existing tool or subagent item when the record is a `tool_result` or a
  * subsequent `subagent_lifecycle` event.
@@ -325,36 +375,7 @@ export function ledgerRecordToItem(
 
     case 'done': {
       settleRunningTools(toolIndex);
-      const stopReason = str(record['stopReason']);
-      const stopped = stopReason === 'interrupted';
-      const cost = record['costUsd'];
-      const ms = record['durationMs'];
-      const bits: string[] = [];
-      if (typeof cost === 'number') bits.push(`$${cost.toFixed(4)}`);
-      if (typeof ms === 'number') bits.push(`${(ms / 1000).toFixed(1)}s`);
-      // Token breakdown (Wave 1+)
-      const inputTok = num(record['inputTokens']);
-      const outputTok = num(record['outputTokens']);
-      const cacheRead = num(record['cacheReadTokens']);
-      if (inputTok !== undefined || outputTok !== undefined) {
-        const parts: string[] = [];
-        if (inputTok !== undefined) parts.push(`${inputTok}in`);
-        if (outputTok !== undefined) parts.push(`${outputTok}out`);
-        if (cacheRead !== undefined) parts.push(`${cacheRead}cache`);
-        bits.push(parts.join('/'));
-      }
-      if (stopped) {
-        return {
-          kind: 'stopped',
-          id: nextId('n'),
-          text: bits.length ? `Stopped · ${bits.join(' · ')}` : 'Stopped',
-        };
-      }
-      return {
-        kind: 'notice',
-        id: nextId('n'),
-        text: bits.length ? `turn complete · ${bits.join(' · ')}` : 'turn complete',
-      };
+      return doneRecordToItem(record);
     }
 
     case 'paused':
