@@ -239,6 +239,11 @@ const WIN32_EXTS = ['.cmd', '.exe', '.bat', '.com'] as const;
  * Find `binName` on PATH (win32: trying .cmd/.exe/.bat/.com). Returns the
  * absolute path, or undefined. Never throws. Exported for the win32
  * shell-free spawn path in client-process.ts.
+ *
+ * Note: PATH order is trusted as-is — the first directory that contains an
+ * executable match wins. On systems where multiple versions of a binary exist
+ * (e.g. a project-local node_modules/.bin ahead of a global install), the
+ * result depends entirely on PATH order (#4309 item 4).
  */
 export function findOnPath(binName: string, platform: NodeJS.Platform = process.platform): string | undefined {
   try {

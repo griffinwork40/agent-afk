@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ServerDefinition, InstallContext } from './server-spec.js';
-import { createEnsureInstalled } from './install.js';
+import { acquireInstallLock, createEnsureInstalled, installLockPath } from './install.js';
 import { createGrantStore } from './install.grants.js';
 import { getLspInstallFootprint } from './install.footprint.js';
 import { resolveNpmCommand, sanitizeFailureReason, MAX_FAILURE_REASON_CHARS, runNpmInstall } from './install.npm.js';
@@ -379,7 +379,7 @@ describe('ensureServerInstalled — policy branches', () => {
     expect(result).toMatchObject({ kind: 'failed', reason: expect.stringContaining('binary not found') });
   });
 
-  // Abort signal propagates.
+  // Abort signal propagates to npm exec.
   it('propagates abort to npm exec', async () => {
     const def = makeDefinition();
     const controller = new AbortController();
@@ -389,10 +389,23 @@ describe('ensureServerInstalled — policy branches', () => {
       calls.push({ signal: opts.signal });
       throw new Error('AbortError');
     };
-    const { ensure } = makeInstall(tmpDir, def, execFn);
+    // Use a no-op lockFn so the pre-aborted signal is not consumed by
+    // acquireInstallLock and instead reaches runNpmInstall (the real target).
+    const noopRelease = async (): Promise<void> => {};
+    const lockFn = async (): Promise<() => Promise<void>> => noopRelease;
+    const grantsPath = path.join(tmpDir, 'grants.json');
+    const grantStore = createGrantStore(grantsPath);
+    await grantStore.persistGrant(def.language, [...def.install!.packages]);
+    const ensure = createEnsureInstalled({
+      grantStore,
+      execFn,
+      ledgerPath: path.join(tmpDir, 'ledger.jsonl'),
+      inFlightMap: new Map(),
+      lockFn,
+    });
     const result = await ensure(
       def,
-      makeCtx({ interactive: true, askConsent: async () => true, signal: controller.signal }),
+      makeCtx({ interactive: false, signal: controller.signal }),
     );
     expect(result).toMatchObject({ kind: 'failed' });
     expect(calls[0]?.signal).toBe(controller.signal);
@@ -549,6 +562,161 @@ describe('effect ledger rows', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Cross-process install lock
+// ---------------------------------------------------------------------------
+
+describe('cross-process install lock', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    (globalThis as any).__lspTestServersDir = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    delete (globalThis as any).__lspTestServersDir;
+  });
+
+  // 1. acquireInstallLock creates a sentinel and release removes it.
+  it('creates sentinel file on acquire and removes it on release', async () => {
+    const release = await acquireInstallLock('typescript', undefined, { serversDir: tmpDir });
+    const lockFile = installLockPath('typescript', tmpDir);
+
+    // Sentinel must exist with valid JSON {pid, expiresAt}.
+    const raw = fs.readFileSync(lockFile, 'utf8');
+    const record = JSON.parse(raw) as { pid: number; expiresAt: number };
+    expect(typeof record.pid).toBe('number');
+    expect(typeof record.expiresAt).toBe('number');
+    expect(record.expiresAt).toBeGreaterThan(Date.now());
+
+    // Release must remove the file.
+    await release();
+    expect(fs.existsSync(lockFile)).toBe(false);
+  });
+
+  // 2. Stale lock is overwritten.
+  it('overwrites a stale lock and acquires without blocking', async () => {
+    const lockFile = installLockPath('typescript', tmpDir);
+    // Pre-write a sentinel with expiresAt in the past.
+    const staleRecord = { pid: 99999, expiresAt: Date.now() - 1000 };
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+    fs.writeFileSync(lockFile, JSON.stringify(staleRecord));
+
+    // nowMs returns a time after the stale expiry — lock should be overwritten.
+    const nowMs = () => Date.now();
+    const release = await acquireInstallLock('typescript', undefined, {
+      serversDir: tmpDir,
+      nowMs,
+      pollMs: 10,
+    });
+
+    // We hold the lock — sentinel should exist with our pid.
+    const raw = fs.readFileSync(lockFile, 'utf8');
+    const record = JSON.parse(raw) as { pid: number; expiresAt: number };
+    expect(record.pid).toBe(process.pid);
+
+    await release();
+  });
+
+  // 3. Abort signal rejects while waiting.
+  it('throws AbortError when signal is pre-aborted', async () => {
+    const lockFile = installLockPath('typescript', tmpDir);
+    // Pre-write a live lock held by a different pid.
+    const liveRecord = { pid: 99998, expiresAt: Date.now() + 5 * 60 * 1000 };
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+    fs.writeFileSync(lockFile, JSON.stringify(liveRecord));
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      acquireInstallLock('typescript', controller.signal, { serversDir: tmpDir, pollMs: 10 }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  // 3b. An empty sentinel (writer died between open('wx') and writeFile) must
+  // not wedge acquisition: once older than the grace period it is stale.
+  it('recovers from an empty lock file left by a crashed writer', async () => {
+    const lockFile = installLockPath('typescript', tmpDir);
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+    fs.writeFileSync(lockFile, '');
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockFile, old, old);
+
+    const release = await acquireInstallLock('typescript', undefined, { serversDir: tmpDir, pollMs: 10 });
+    const record = JSON.parse(fs.readFileSync(lockFile, 'utf8')) as { pid: number };
+    expect(record.pid).toBe(process.pid);
+    await release();
+  }, 5_000);
+
+  // 3c. A fresh unparseable sentinel is waited on (with a sleep), not spun on,
+  // and the wait still honours abort.
+  it('waits on a fresh partly-written lock file and honours abort', async () => {
+    const lockFile = installLockPath('typescript', tmpDir);
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+    fs.writeFileSync(lockFile, '{"pid":');
+
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+    const started = Date.now();
+    await expect(
+      acquireInstallLock('typescript', controller.signal, { serversDir: tmpDir, pollMs: 20 }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(90);
+    // The fresh file is left for its (possibly live) writer.
+    expect(fs.existsSync(lockFile)).toBe(true);
+  }, 5_000);
+
+  // 4. lockFn seam is invoked by ensureInstalledCore.
+  it('lockFn is called with the language name and release is called', async () => {
+    const def = makeDefinition();
+    const grantsPath = path.join(tmpDir, 'grants.json');
+    const grantStore = createGrantStore(grantsPath);
+    await grantStore.persistGrant(def.language, [...def.install!.packages]);
+
+    const releaseFn = vi.fn().mockResolvedValue(undefined);
+    const lockFn = vi.fn().mockResolvedValue(releaseFn);
+
+    const ensure = createEnsureInstalled({
+      grantStore,
+      execFn: makeSuccessExec(tmpDir, def),
+      ledgerPath: path.join(tmpDir, 'ledger.jsonl'),
+      inFlightMap: new Map(),
+      lockFn,
+    });
+
+    const result = await ensure(def, makeCtx());
+    expect(result).toMatchObject({ kind: 'installed', freshInstall: true });
+    expect(lockFn).toHaveBeenCalledWith(def.language, undefined);
+    expect(releaseFn).toHaveBeenCalledTimes(1);
+  });
+
+  // 5. Lock released even when npm install throws.
+  it('calls release even when execFn throws', async () => {
+    const def = makeDefinition();
+    const grantsPath = path.join(tmpDir, 'grants.json');
+    const grantStore = createGrantStore(grantsPath);
+    await grantStore.persistGrant(def.language, [...def.install!.packages]);
+
+    const releaseFn = vi.fn().mockResolvedValue(undefined);
+    const lockFn = vi.fn().mockResolvedValue(releaseFn);
+
+    const ensure = createEnsureInstalled({
+      grantStore,
+      execFn: makeFailExec('simulated npm failure'),
+      ledgerPath: path.join(tmpDir, 'ledger.jsonl'),
+      inFlightMap: new Map(),
+      lockFn,
+    });
+
+    const result = await ensure(def, makeCtx());
+    expect(result).toMatchObject({ kind: 'failed' });
+    expect(releaseFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // getLspInstallFootprint
 // ---------------------------------------------------------------------------
 
@@ -586,6 +754,77 @@ describe('getLspInstallFootprint', () => {
     const result = await getLspInstallFootprint(tmpDir);
     const langs = result.map((r) => r.language);
     expect(langs).toEqual([...langs].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// installLockPath — language validation (#4518 finding 1)
+// ---------------------------------------------------------------------------
+
+describe('installLockPath — language validation', () => {
+  it('rejects path-traversal language strings', () => {
+    expect(() => installLockPath('../etc/passwd')).toThrow('Invalid language identifier');
+    expect(() => installLockPath('foo/bar')).toThrow('Invalid language identifier');
+    expect(() => installLockPath('.hidden')).toThrow('Invalid language identifier');
+    expect(() => installLockPath('')).toThrow('Invalid language identifier');
+  });
+
+  it('accepts valid language identifiers', () => {
+    expect(() => installLockPath('typescript')).not.toThrow();
+    expect(() => installLockPath('python-3')).not.toThrow();
+    expect(() => installLockPath('go_lang')).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// acquireInstallLock — non-EEXIST open('wx') errors (#4518 finding 4)
+// ---------------------------------------------------------------------------
+
+describe('acquireInstallLock — non-EEXIST open errors', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    (globalThis as any).__lspTestServersDir = tmpDir;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    delete (globalThis as any).__lspTestServersDir;
+  });
+
+  it('lockFn throwing EACCES propagates as {kind:"failed"}', async () => {
+    const def = makeDefinition();
+    const grantStore = createGrantStore(path.join(tmpDir, 'grants.json'));
+    await grantStore.persistGrant(def.language, [...def.install!.packages]);
+
+    const eaccesLockFn = async (_language: string, _signal?: AbortSignal) => {
+      const err = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      throw err;
+    };
+
+    const ensure = createEnsureInstalled({
+      grantStore,
+      execFn: makeSuccessExec(tmpDir, def),
+      ledgerPath: path.join(tmpDir, 'ledger.jsonl'),
+      inFlightMap: new Map(),
+      lockFn: eaccesLockFn,
+    });
+
+    const result = await ensure(def, makeCtx());
+    expect(result).toMatchObject({ kind: 'failed', reason: expect.stringContaining('EACCES') });
+  });
+
+  it('acquireInstallLock itself throws on non-EEXIST open error', async () => {
+    // Inject an openFn that throws EACCES, exercising the non-EEXIST error
+    // propagation path on every platform (Windows does not enforce read-only
+    // permission bits on directories, so chmodSync is not portable).
+    const eacces = Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' });
+    const injectOpen = async (_path: string, _flags: string): Promise<never> => { throw eacces; };
+
+    await expect(
+      acquireInstallLock('typescript', undefined, { serversDir: tmpDir, openFn: injectOpen }),
+    ).rejects.toThrow('EACCES');
   });
 });
 

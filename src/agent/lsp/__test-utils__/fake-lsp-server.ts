@@ -40,6 +40,11 @@ export interface FakeServerConfig {
   readFileUri?: string;
   capabilities?: Record<string, unknown>;
   workspaceEdit?: unknown;
+  /**
+   * Like a real server: stamp each `documentChanges[].textDocument.version` in
+   * the rename result with the last version this server received for that uri.
+   */
+  stampVersions?: boolean;
   prepareRename?: unknown;
   documentSymbols?: unknown[];
   workspaceSymbols?: unknown[];
@@ -62,6 +67,11 @@ if (cfg.spawnGrandchild) {
   log({ grandchild: gc.pid });
 }
 const texts = new Map();
+const versions = new Map();
+const stamped = (edit) => !cfg.stampVersions || !edit || !edit.documentChanges ? edit
+  : Object.assign({}, edit, { documentChanges: edit.documentChanges.map((d) => Object.assign({}, d, {
+    textDocument: Object.assign({}, d.textDocument, { version: versions.has(d.textDocument.uri) ? versions.get(d.textDocument.uri) : null }),
+  })) });
 const send = (o) => {
   const body = JSON.stringify(Object.assign({ jsonrpc: '2.0' }, o));
   process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body);
@@ -75,7 +85,7 @@ const handle = (m) => {
   if (m.id === 'apply-1' && !m.method) return send({ id: commandId, result: m.result });
   const results = {
     'textDocument/prepareRename': cfg.prepareRename === undefined ? { defaultBehavior: true } : cfg.prepareRename,
-    'textDocument/rename': cfg.workspaceEdit === undefined ? null : cfg.workspaceEdit,
+    'textDocument/rename': cfg.workspaceEdit === undefined ? null : stamped(cfg.workspaceEdit),
     'textDocument/documentSymbol': cfg.documentSymbols || [],
     'workspace/symbol': cfg.workspaceSymbols || [],
     'textDocument/codeAction': cfg.codeActions || [],
@@ -103,6 +113,7 @@ const handle = (m) => {
     const td = m.params.textDocument;
     const text = m.method === 'textDocument/didOpen' ? td.text : m.params.contentChanges[0].text;
     texts.set(td.uri, text);
+    versions.set(td.uri, td.version);
     if (!cfg.diagnostics && !cfg.echoText) return;
     const params = { uri: td.uri, diagnostics: cfg.echoText ? [{ message: text }] : cfg.diagnostics };
     if (cfg.publishVersion !== false) params.version = td.version;

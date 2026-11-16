@@ -174,6 +174,8 @@ export interface BuildDispatcherDeps {
   /** When true, gate state_put/cas/delete regardless of readOnlyMemory. */
   readOnlyState: boolean;
   readOnlyBash: boolean;
+  /** When true, working-tree-destructive git commands are blocked (all children). */
+  blockDestructiveGit: boolean;
   customTools: readonly CustomToolDef[];
   mcpManager: import('../../mcp/index.js').McpManager | undefined;
   schemas: readonly AnthropicToolDef[];
@@ -198,23 +200,16 @@ export interface BuildDispatcherDeps {
 }
 
 /**
- * Build a per-query tool dispatcher with a bash handler closed over the
- * session's permission mode and working directory — eliminates the
- * process.env race when concurrent sessions run in the same process with
- * different modes, and the `process.cwd()` race when concurrent sessions
- * run in different worktrees (bash/grep would otherwise spawn against
- * the host's `process.cwd()` instead of the session's worktree).
- *
- * The shared read/write root arrays are passed by reference so that grant
- * mutations (via `/allow-dir`) survive across turns without requiring a new
- * dispatcher instance.
+ * Register the memory, workspace and state-store handlers onto `handlers`,
+ * applying each store's read-only / child-session gates. Runs immediately
+ * after the builtins so the registration-order ladder documented in the
+ * module header is preserved.
  */
-export function buildDispatcher(
+function registerStoreHandlers(
+  handlers: Map<string, ToolHandler>,
   deps: BuildDispatcherDeps,
-  permissionMode: string,
-  opts?: BuildDispatcherOptions,
-): SessionToolDispatcher {
-  const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
+  opts: BuildDispatcherOptions | undefined,
+): void {
   // Forked children (any fork signal) get memory_update with target:"hot" rejected
   // structurally by guardChildHotWrites — independent of any hook registry.
   const memoryHandlers = guardChildHotWrites(
@@ -255,6 +250,27 @@ export function buildDispatcher(
       handlers.set(name, handler);
     }
   }
+}
+
+/**
+ * Build a per-query tool dispatcher with a bash handler closed over the
+ * session's permission mode and working directory — eliminates the
+ * process.env race when concurrent sessions run in the same process with
+ * different modes, and the `process.cwd()` race when concurrent sessions
+ * run in different worktrees (bash/grep would otherwise spawn against
+ * the host's `process.cwd()` instead of the session's worktree).
+ *
+ * The shared read/write root arrays are passed by reference so that grant
+ * mutations (via `/allow-dir`) survive across turns without requiring a new
+ * dispatcher instance.
+ */
+export function buildDispatcher(
+  deps: BuildDispatcherDeps,
+  permissionMode: string,
+  opts?: BuildDispatcherOptions,
+): SessionToolDispatcher {
+  const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
+  registerStoreHandlers(handlers, deps, opts);
   if (opts?.runtimeStateSource) {
     handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
   }
@@ -385,6 +401,9 @@ export function buildDispatcher(
     // (set by createChildProviderFactory / buildReadOnlyReconProvider) so a
     // read-only skill's forked child can't run mutating shell commands.
     readOnlyBash: deps.readOnlyBash,
+    // Destructive-git gate: blocks checkout/switch/restore/clean/reset --hard/
+    // stash drop|clear|pop for ALL child sessions.
+    blockDestructiveGit: deps.blockDestructiveGit,
     // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
     ...(opts?.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: opts.spawnedPidRegistry } : {}),
     ...(opts?.toolCallLedger !== undefined ? { toolCallLedger: opts.toolCallLedger } : {}),

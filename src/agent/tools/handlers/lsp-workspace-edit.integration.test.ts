@@ -31,7 +31,9 @@ describe('LSP WorkspaceEdit integration', () => {
     const contents = ['const foo = 1;\n', 'foo();\n', 'foo();\n'];
     await Promise.all(paths.map((p, i) => writeFile(p, contents[i]!)));
     const uri = (p: string) => pathToFileURL(p).toString();
-    const documents = paths.map((p, i) => ({ textDocument: { uri: uri(p), version: 1 }, edits: [{
+    // Versions are placeholders: the fake server stamps the version it last
+    // received (client-wide counter), as a real server would.
+    const documents = paths.map((p, i) => ({ textDocument: { uri: uri(p), version: 0 }, edits: [{
       range: { start: { line: 0, character: i === 0 ? 6 : 0 }, end: { line: 0, character: i === 0 ? 9 : 3 } }, newText: 'longName',
     }] }));
     const workspaceEdit = form === 'changes'
@@ -39,11 +41,18 @@ describe('LSP WorkspaceEdit integration', () => {
       : { documentChanges: documents };
     const script = join(root, 'server.cjs');
     const logFile = join(root, 'server.jsonl');
-    writeFakeLspServer(script, { workspaceEdit, logFile });
+    writeFakeLspServer(script, { workspaceEdit, logFile, stampVersions: true });
     client = await LspClient.start({ definition: TYPESCRIPT_SERVER_DEFINITION, command: process.execPath, args: [script], source: 'override' }, root, { timeoutMs: 5000 });
-    for (const p of paths) await client.syncFile(p);
+    const opened: number[] = [];
+    for (const p of paths) opened.push((await client.syncFile(p))!.version);
     const requestStartedAt = Date.now();
     const response = await client.request('textDocument/rename', { textDocument: { uri: uri(paths[0]!) }, position: { line: 0, character: 6 }, newName: 'longName' }, { timeoutMs: 5000 });
+    if (form === 'documentChanges') {
+      // Numeric versions reach the version check: each matches what the client sent.
+      const stampedVersions = (response as { documentChanges: Array<{ textDocument: { version: number } }> })
+        .documentChanges.map((d) => d.textDocument.version);
+      expect(stampedVersions).toEqual(opened);
+    }
     const state = join(root, 'state');
     const context: ToolHandlerContext = { resolveBase: root, writeRoots: [root], fileCheckpoint: beginCheckpointTurn('session', 'turn', state) };
     const apply = vi.spyOn(engine, 'applyPatch');
@@ -64,7 +73,10 @@ describe('LSP WorkspaceEdit integration', () => {
     const syncs = messagesWithMethod(logFile, 'textDocument/didChange');
     expect(syncs).toHaveLength(3);
     for (const [i, sync] of syncs.entries()) {
-      expect(sync?.params.textDocument.version).toBe(2);
+      // Resync bumps each document past its didOpen version and is what the
+      // client now reports; the counter is client-wide, so no fixed number.
+      expect(sync?.params.textDocument.version).toBeGreaterThan(opened[i]!);
+      expect(sync?.params.textDocument.version).toBe(client.documentVersion(uri(paths[i]!)));
       expect(sync?.params.contentChanges[0].text).toBe(contents[i]!.replace('foo', 'longName'));
     }
     endCheckpointTurn('session', context.fileCheckpoint, state);
