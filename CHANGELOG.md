@@ -12,6 +12,9 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Fixed
+- session: wrap hook and framework context drained in front of a user message in a harness `<framework-context>` envelope, and cut at its closing tag when recovering what the user typed. Run receipts' `journalSummary.firstUserMessage`, session titles, transcripts, rewind and outcome labels no longer report SessionStart hook output (such as a plugin's recent-work digest or `[placeholder-prevent]`) as the request. `firstUserMessage` is stripped before the 500 char cap and omitted when the message holds no user text; journals written before this change keep the previous heuristic
+
 ## [5.355.0] - 2026-11-14
 
 ### Added

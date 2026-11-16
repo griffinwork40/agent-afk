@@ -151,6 +151,18 @@ Shell commands return context as `hookSpecificOutput.additionalContext`. In-proc
 | `SubagentStop` | Foreground `agent` and forked skill callers can append it to the returned tool result in the same turn; other supported parent paths queue it for the next real prompt |
 | `Stop` | Nonblocking context is saved for the next user turn on REPL and Telegram; one-shot surfaces have no next prompt and drop it |
 
+Context queued for the next prompt (`SessionStart`, queued `SubagentStop`, Telegram and web `Stop`, and MCP notices) reaches the model wrapped in a harness envelope, ahead of what the user typed:
+
+```text
+<framework-context>
+...your hook context...
+</framework-context>
+
+what the user typed
+```
+
+Transcripts, session titles, rewind and run receipts cut at the first `</framework-context>` to recover the prompt, so hook output never shows up as the user's request. A literal `</framework-context>` inside hook output is escaped before wrapping.
+
 Multiple nonblocking context strings are joined in registration order. A blocking hook short-circuits the chain, so do not depend on earlier accumulated context surviving a later block. For a `PreToolUse` block, return the needed context on the blocking decision itself. Subagent context is suppressed when the parent is aborting; do not assume every background or compose path delivers it.
 
 ## Ask the agent to continue before finishing

@@ -87,6 +87,7 @@ const MACHINE_TAG_NAMES = [
   'command-message',
   'command-args',
   'bash-passthrough',
+  'framework-context',
 ];
 
 /**

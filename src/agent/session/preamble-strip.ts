@@ -18,8 +18,13 @@
  *
  * `extractUserContent()` peels the known boilerplate sections and returns
  * whatever the user actually typed, or `undefined` when the record is pure
- * boilerplate with no user content. Three strategies, in order:
+ * boilerplate with no user content. Strategies, in order:
  *
+ *   0. Harness envelope: a record that opens with `<framework-context>` is
+ *      cut through the first `</framework-context>` (see
+ *      framework-context-envelope.ts). Authoritative for records written
+ *      since the envelope landed; the strategies below only serve older
+ *      records and are kept byte-identical for them.
  *   1. Bridge-tail marker: "Read any referenced file for deeper context before
  *      acting" — everything after that line is user text.
  *   2. XML-tagged skill dispatch (`<command-name>`/`<command-args>` tags).
@@ -28,18 +33,21 @@
  * @module agent/session/preamble-strip
  */
 
+import { textAfterFrameworkContext } from './framework-context-envelope.js';
+
 /**
  * Detect plugin/skill preamble text injected as a synthetic first user turn.
  * These start with a bracketed tag like `[agent-workflow-amplifiers: unlocked]`
  * or `[skill-routing: active]`, OR with an XML tag like
- * `<preflight-context ...>` or `<command-name>` from skill dispatch.
+ * `<preflight-context ...>` or `<command-name>` from skill dispatch, or with
+ * the harness `<framework-context>` envelope.
  */
 export function isPreamble(text: string): boolean {
   // The kebab-case `[label]` arm covers bare tags with no colon or space,
   // e.g. `[placeholder-prevent]`, which leads every first turn since the
   // placeholder-prevent SessionStart hook landed. It requires a hyphen so a
   // human-typed `[note]` is not mistaken for a preamble.
-  return /^\s*(\[[\w-]+[:\s]|\[[a-z][a-z0-9]*(?:-[a-z0-9]+)+\]|<(preflight-context|command-name)\b)/.test(
+  return /^\s*(\[[\w-]+[:\s]|\[[a-z][a-z0-9]*(?:-[a-z0-9]+)+\]|<(preflight-context|command-name|framework-context)\b)/.test(
     text,
   );
 }
@@ -91,6 +99,13 @@ function extractSkillTitle(text: string): string | undefined {
  * collecting lines after the last bracketed section header.
  */
 export function extractUserContent(text: string): string | undefined {
+  // Strategy 0: the harness envelope marks the boundary explicitly.
+  const afterEnvelope = textAfterFrameworkContext(text);
+  if (afterEnvelope !== undefined) {
+    if (afterEnvelope.startsWith('<command-name>')) return extractSkillTitle(afterEnvelope) ?? afterEnvelope;
+    return afterEnvelope || undefined;
+  }
+
   // Strategy 1: find the bridge-tail marker and take everything after it.
   // The user message is appended either on the same line (after "not full
   // content.") or on the lines that follow.

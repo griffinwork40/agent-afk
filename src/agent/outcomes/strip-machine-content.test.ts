@@ -15,6 +15,11 @@ import type { Turn } from './artifacts.js';
 // ---------------------------------------------------------------------------
 
 describe('stripMachineContent', () => {
+  it('strips a harness <framework-context> envelope whose body opens with correction words', () => {
+    const text = '<framework-context>\nNo, wrong: revert hook note\n</framework-context>\n\nadd a test';
+    expect(stripMachineContent(text)).toBe('add a test');
+  });
+
   it('returns plain human text unchanged', () => {
     const text = 'No, that is wrong. Please revert.';
     expect(stripMachineContent(text)).toBe(text);

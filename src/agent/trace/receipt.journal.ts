@@ -10,6 +10,7 @@
  */
 
 import type { JournalMessage, JournalRecord } from '../journal/types.js';
+import { extractUserContent, isPreamble } from '../session/preamble-strip.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,7 +18,11 @@ import type { JournalMessage, JournalRecord } from '../journal/types.js';
 
 /** Journal-derived content summary added in receipt v2. */
 export interface JournalSummary {
-  /** Text of the first user message (truncated to 500 chars). */
+  /**
+   * What the user typed in the first user message: framework context drained
+   * in front of it is stripped before the 500-char cap. Omitted when the
+   * message holds no user-authored text.
+   */
   firstUserMessage?: string;
   /** Text of the last assistant message (truncated to 500 chars). */
   lastAssistantMessage?: string;
@@ -37,7 +42,7 @@ export interface JournalSummary {
 
 const JOURNAL_TEXT_CAP = 500;
 
-function extractText(msg: JournalMessage | undefined): string | undefined {
+function joinText(msg: JournalMessage | undefined): string | undefined {
   if (msg === undefined) return undefined;
   const parts: string[] = [];
   for (const b of msg.content) {
@@ -45,10 +50,29 @@ function extractText(msg: JournalMessage | undefined): string | undefined {
     else if (b.type === 'text_ref') parts.push(b.preview);
   }
   const joined = parts.join('');
-  if (joined.length === 0) return undefined;
-  return joined.length > JOURNAL_TEXT_CAP
-    ? joined.slice(0, JOURNAL_TEXT_CAP) + '\u2026'
-    : joined;
+  return joined.length === 0 ? undefined : joined;
+}
+
+function capText(text: string | undefined): string | undefined {
+  if (text === undefined || text.length === 0) return undefined;
+  return text.length > JOURNAL_TEXT_CAP
+    ? text.slice(0, JOURNAL_TEXT_CAP) + '\u2026'
+    : text;
+}
+
+function extractText(msg: JournalMessage | undefined): string | undefined {
+  return capText(joinText(msg));
+}
+
+/**
+ * The user-authored part of the first user message. Strips framework context
+ * from the FULL text before capping, so long hook output cannot crowd the
+ * typed prompt out of the 500-char window. Pure boilerplate yields undefined.
+ */
+function extractUserText(msg: JournalMessage | undefined): string | undefined {
+  const joined = joinText(msg);
+  if (joined === undefined) return undefined;
+  return capText(isPreamble(joined) ? extractUserContent(joined) : joined);
 }
 
 /**
@@ -138,13 +162,11 @@ export function extractJournalSummary(
     }
   }
 
+  const firstUserText = textDisabled ? undefined : extractUserText(firstUser);
+  const lastAssistantText = textDisabled ? undefined : extractText(lastAssistant);
   return {
-    ...(!textDisabled && extractText(firstUser) !== undefined
-      ? { firstUserMessage: extractText(firstUser)! }
-      : {}),
-    ...(!textDisabled && extractText(lastAssistant) !== undefined
-      ? { lastAssistantMessage: extractText(lastAssistant)! }
-      : {}),
+    ...(firstUserText !== undefined ? { firstUserMessage: firstUserText } : {}),
+    ...(lastAssistantText !== undefined ? { lastAssistantMessage: lastAssistantText } : {}),
     toolNames: [...toolNamesSeen],
     toolUseCount,
     messageCount: messages.length,

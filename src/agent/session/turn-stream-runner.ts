@@ -19,6 +19,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortError } from '../../utils/errors.js';
 import { debugLog } from '../../utils/debug.js';
 import { transformProviderEvent, type TransformDeps } from './stream-consumer.js';
+import { wrapFrameworkContext } from './framework-context-envelope.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { LedgerLifecycle } from './ledger-lifecycle.js';
 import type { OutputBroadcast } from './output-broadcast.js';
@@ -160,7 +161,9 @@ export class TurnStreamRunner {
 
   /**
    * Drain queued framework context, prepending it to the outbound content
-   * (FIFO). Clears the queue so context is delivered exactly once.
+   * (FIFO) inside the harness-owned `<framework-context>` envelope so readers
+   * can split it from what the user typed. Clears the queue so context is
+   * delivered exactly once.
    */
   withPendingContext(
     content: string | ContentBlockParam[],
@@ -168,7 +171,11 @@ export class TurnStreamRunner {
     const { getPendingFrameworkContext, setPendingFrameworkContext } = this.deps;
     const pending = getPendingFrameworkContext();
     if (pending.length === 0) return content;
-    const prefix = pending.join('\n\n');
+    const prefix = wrapFrameworkContext(pending.join('\n\n'));
+    if (prefix.length === 0) {
+      setPendingFrameworkContext([]);
+      return content;
+    }
     setPendingFrameworkContext([]);
     if (typeof content === 'string') return `${prefix}\n\n${content}`;
     return [{ type: 'text', text: prefix }, ...content];
