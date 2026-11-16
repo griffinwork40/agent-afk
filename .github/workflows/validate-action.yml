@@ -14,6 +14,10 @@ on:
       - 'tests/github-action.test.ts'
   workflow_dispatch:
 
+# Action validation only needs repository read access.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # Mirror ci.yml policy: never cancel in-progress runs on the default branch
