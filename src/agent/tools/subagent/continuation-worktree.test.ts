@@ -81,7 +81,7 @@ function mockHandle(): Partial<SubagentHandle> {
     cancel: vi.fn().mockResolvedValue(undefined),
     teardown: vi.fn().mockResolvedValue(undefined),
     getLastStopInjectContext: vi.fn().mockReturnValue(undefined),
-    session: { messageJournal: { length: 3, flush: vi.fn().mockResolvedValue(undefined) } },
+    session: { messageJournal: { length: 3, flush: vi.fn().mockResolvedValue(undefined) } } as unknown as SubagentHandle['session'],
   };
 }
 

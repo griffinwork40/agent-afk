@@ -85,6 +85,19 @@ async function usageGate(
   };
 }
 
+/** Record a finished foreground dispatch on the wave tracker: failed (with a bounded error head) or done. */
+function markWaveUnitOutcome(
+  updateCurrentWaveUnit: ExecuteOnceArgs['updateCurrentWaveUnit'],
+  callId: string,
+  result: ToolResult,
+): void {
+  if (result.isError === true) {
+    updateCurrentWaveUnit(callId, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
+  } else {
+    updateCurrentWaveUnit(callId, 'done');
+  }
+}
+
 export async function executeOnce(
   call: ToolCall,
   args: ExecuteOnceArgs,
@@ -280,10 +293,6 @@ export async function executeOnce(
   prependNeedsInputHeader(result); // F-C1: must run AFTER annotateChainResult stamps result.continuation
   addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, ctx.traceWriter);
   prependSetupNotice(setupNotice, result);
-  if (result.isError === true) {
-    updateCurrentWaveUnit(call.id, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
-  } else {
-    updateCurrentWaveUnit(call.id, 'done');
-  }
+  markWaveUnitOutcome(updateCurrentWaveUnit, call.id, result);
   return result;
 }
