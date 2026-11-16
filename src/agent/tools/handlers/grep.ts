@@ -52,7 +52,13 @@ interface GrepInput {
   include?: unknown;
 }
 
-/** Keys the runtime may inject into any tool call input (never rejected). */
+/**
+ * Keys the runtime may inject into any tool call input (never rejected).
+ * Currently unused: pre-dispatch hooks replace the whole input object via
+ * `updatedInput` rather than injecting individual keys. This set is an
+ * explicit extension point — any key the runtime adds to a grep call that
+ * should pass through validation without an "unknown key" error belongs here.
+ */
 const RUNTIME_INJECTED_KEYS = new Set<string>();
 
 /** Keys the grep tool accepts from callers. */
@@ -90,11 +96,11 @@ function parseGrepInput(
     (k) => !ACCEPTED_KEYS.has(k) && k !== 'file_path' && !RUNTIME_INJECTED_KEYS.has(k),
   );
   if (unknownKeys.length > 0) {
-    const key = unknownKeys[0]!;
     const accepted = [...ACCEPTED_KEYS].join(', ');
-    const hint = key === 'glob' ? ' Use `include` for a file-glob filter.' : '';
+    const keyList = unknownKeys.map((k) => `\`${k}\``).join(', ');
+    const hint = unknownKeys.includes('glob') ? ' Use `include` for a file-glob filter.' : '';
     return {
-      _error: `\`${key}\` is not a grep parameter (accepted: ${accepted}).${hint}`,
+      _error: `${keyList} ${unknownKeys.length === 1 ? 'is' : 'are'} not grep parameter${unknownKeys.length === 1 ? '' : 's'} (accepted: ${accepted}).${hint}`,
     };
   }
 
