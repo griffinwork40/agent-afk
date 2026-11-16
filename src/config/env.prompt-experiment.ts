@@ -25,9 +25,9 @@ export const PROMPT_EXPERIMENT_ENV_REGISTRY = [
       'session to "control" or "treatment" (10 episodes per arm, matching the ' +
       'narration-directive A/B template — see docs/prompt-tuning-protocol.md). ' +
       'Unset or empty = no experiment active; all sessions see the default prompt. ' +
-      'Use only with `afk whatif --env AFK_PROMPT_EXPERIMENT=<name> ' +
-      '--env AFK_PROMPT_EXPERIMENT_ARM=control|treatment` for isolated episode runs — ' +
-      'never set persistently in afk.env. ' +
+      'Use with a spec file: `afk whatif --spec <name>.json --verify --yes --samples 10` ' +
+      '(put both AFK_PROMPT_EXPERIMENT and AFK_PROMPT_EXPERIMENT_ARM as `kind:"env"` ' +
+      'entries in the spec) — never set persistently in afk.env. ' +
       'See docs/prompt-tuning-protocol.md for the full gate-first protocol and hard ' +
       'veto list before using this var.',
     type: 'string',

@@ -58,6 +58,19 @@
  * @module agent/prompt-experiment
  */
 
+/**
+ * ## Wiring status
+ *
+ * `isPromptExperimentActive` and `getPromptVariant` have no production callers
+ * yet: the prompt-assembly path (`src/agent/providers/anthropic-direct/query/
+ * prompt-assembly.ts`) does not branch on them. This is intentional — the
+ * protocol landed ahead of its first consumer (issue #4450, closed by #4468).
+ *
+ * The first consumer should import these helpers inside the system-prompt
+ * assembly step and gate the variant text on `isPromptExperimentActive(name)`.
+ * Until then, all sessions see the default prompt regardless of whether
+ * `AFK_PROMPT_EXPERIMENT` is set.
+ */
 import { env } from '../config/env.js';
 
 /**
