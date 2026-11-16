@@ -92,6 +92,19 @@ export async function awaitPluginInit(timeoutMs: number): Promise<void> {
   await Promise.race([initBarrier, timer]);
 }
 
+/**
+ * True when a discovered entry is one of the skill registry's own skills
+ * (built-in, user, project, or imported) rather than a plugin candidate.
+ *
+ * Contract: `session.supportedCommands()` returns registry skills and plugin
+ * skills in one list, so the dispatch and listing siblings must both ask this
+ * one question the same way. An entry with no `source` is NOT a registry
+ * entry: it keeps the plugin handling it has always had.
+ */
+export function isRegistrySource(source: SkillManifestEntry['source'] | undefined): boolean {
+  return source === 'builtin' || source === 'user' || source === 'project' || source === 'imported';
+}
+
 /** Strip the `<plugin>:` namespace prefix from a skill name. */
 export function bareName(name: string): string {
   return name.includes(':') ? name.split(':').pop()! : name;
