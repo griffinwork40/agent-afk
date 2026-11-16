@@ -37,6 +37,7 @@ export function makeOverlapSkipRecord(
     durationMs: 0,
     status: 'skipped',
     skipReason: 'overlap',
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 }
 
@@ -60,6 +61,7 @@ export function makeBudgetSkipRecord(
     status: 'skipped',
     skipReason: 'budget-over',
     errorMessage: describeBudgetSkip(skip, nowMs),
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 }
 
@@ -85,6 +87,7 @@ export function makeTelemetryUnwritableSkipRecord(
     status: 'skipped',
     skipReason: 'telemetry-unwritable',
     errorMessage: `Telemetry file not writable: ${redactInlineSecrets(errorDescription)}`,
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 }
 
@@ -107,6 +110,7 @@ export function makeSessionStartSkipRecord(
     durationMs: 0,
     status: 'skipped',
     ...(decision.skipReason !== undefined ? { skipReason: decision.skipReason } : {}),
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 }
 
@@ -129,6 +133,7 @@ export function makeExpiredSkipRecord(
     status: 'skipped',
     skipReason: 'expired',
     errorMessage: `Task expired at ${task.expiresAt ?? '(unknown)'}`,
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 }
 
@@ -151,6 +156,7 @@ export function makeNotYetSkipRecord(
     status: 'skipped',
     skipReason: 'not-yet',
     errorMessage: `runAt ${task.runAt ?? '(unknown)'} not yet reached`,
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 }
 
@@ -261,5 +267,6 @@ export function makeCwdErrorRecord(
     durationMs: 0,
     status: 'error',
     errorMessage: redactInlineSecrets(cwdError),
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 }
