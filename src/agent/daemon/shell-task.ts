@@ -74,7 +74,7 @@ export interface ShellTaskOptions {
  * scheduler resolves the precedence before calling runShellTask).
  */
 export async function runShellTask(
-  task: { taskId: string; command: string; cronExpression?: string; cwd?: string },
+  task: { taskId: string; command: string; cronExpression?: string; cwd?: string; name?: string },
   trigger: TelemetryTrigger,
   options: ShellTaskOptions,
 ): Promise<TelemetryRecord> {
@@ -83,13 +83,14 @@ export async function runShellTask(
   const timeoutMs = parseInt(env.AFK_DAEMON_SHELL_TIMEOUT_MS ?? '', 10) || 2_700_000;
   const baseRecord: Pick<
     TelemetryRecord,
-    'taskId' | 'command' | 'trigger' | 'cronExpression' | 'triggeredAt'
+    'taskId' | 'command' | 'trigger' | 'cronExpression' | 'triggeredAt' | 'name'
   > = {
     taskId: task.taskId,
     command: redactInlineSecrets(task.command),
     trigger,
     ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
     triggeredAt: triggeredAt.toISOString(),
+    ...(task.name !== undefined ? { name: task.name } : {}),
   };
 
   const { shell, shellArgs } = resolvedShellAndArgs();

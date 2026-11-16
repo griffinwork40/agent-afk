@@ -10,6 +10,7 @@
 import { AgentSession } from '../../agent/session.js';
 import { makeDeferredParentProxy } from '../../agent/session/deferred-parent-proxy.js';
 import { managerShutdownConfig } from '../../agent/session/manager-shutdown-config.js';
+import { withContinuationDispose } from '../../agent/subagent/continuation-dispose.js';
 import { wireExecutors } from '../../agent/session/wire-executors.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
@@ -63,7 +64,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
   const { proxy: deferredParent, bind: bindParent } = makeDeferredParentProxy();
 
   const apiKey = getApiKeyForModel(model);
-  const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
+  const { rootManager, subagentExecutor, skillExecutor, composeExecutor, continuationRegistry } = wireExecutors({
     surface: 'cli',
     parentSession: deferredParent,
     apiKey,
@@ -100,7 +101,7 @@ export async function buildAcpSession(opts: AcpSessionOptions): Promise<AcpSessi
       model,
       surface: 'cli',
       apiKey,
-      ...managerShutdownConfig(rootManager, composeExecutor),
+      ...withContinuationDispose(managerShutdownConfig(rootManager, composeExecutor), continuationRegistry),
       maxTurns,
       isNonInteractive: true,
       permissionMode,

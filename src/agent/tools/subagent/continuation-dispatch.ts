@@ -4,8 +4,8 @@
  * Named helpers called from `executeOnce`; no logic lives inline in
  * assembleChildConfig/runTurnInner. Chains are minted for every local
  * initial `agent` dispatch (remote `host` dispatches return before the fork
- * and never mint). Worktree-isolated chains are minted so metadata names
- * them, but carry no continuation line: D3 refuses continuing them in v1.
+ * and never mint). A worktree-isolated chain is continuable only while its
+ * worktree is kept for it (foreground runs; see isAdvertisable).
  *
  * @module agent/tools/subagent/continuation-dispatch
  */
@@ -20,6 +20,7 @@ import {
   type WorkspaceCheckpoint,
 } from '../../subagent/continuation-registry.js';
 import { captureCheckpointWithin, captureWorkspaceCheckpoint } from '../../subagent/continuation-guards.js';
+import { releaseChainWorktree, repoRootFromWorktreePath } from './continuation-worktree.js';
 import { randomBytes } from 'node:crypto';
 import type { ContinuationPlan } from './continuation-run.js';
 import { emitSessionPhase } from '../../trace/emit.js';
@@ -138,19 +139,59 @@ export async function recordChainTerminal(args: ChainTerminalArgs): Promise<Work
     checkpoint,
     endReason: args.endReason,
   });
+  // Fix: when the chain transitions to non-continuable and it held a kept
+  // worktree (link 2+ exhausted its limit), release the worktree now.
+  // Without this, the worktree stays git-locked indefinitely — the
+  // buildIsolationTeardownHook path is not reached on link 2+ because
+  // continuationInput omits the isolation field, leaving isolationTeardown
+  // undefined and the hook unset.
+  if (!isContinuable(chain) && chain.isolatedWorktreePath !== undefined) {
+    const worktreePath = chain.isolatedWorktreePath;
+    // Resolve repoRoot: afk worktrees live at <repoRoot>/.afk-worktrees/<slug>.
+    const repoRoot = repoRootFromWorktreePath(worktreePath);
+    if (repoRoot === undefined) return checkpoint;
+    void releaseChainWorktree({
+      repoRoot,
+      worktreePath,
+      chainId: chain.chainId,
+      registry,
+    }).catch(() => { /* best-effort: never throw from terminal bookkeeping */ });
+  }
   return checkpoint;
 }
 
 /**
- * True when a continuation would be admitted on limits and isolation: worktree
- * chains are refused in v1 (D3), and an exhausted continuation count (incl.
- * MAX_CONTINUATIONS=0) or aggregate round budget would be refused (D4), so
- * the result line must not invite one.
+ * True when a continuation would be admitted on limits: an exhausted
+ * continuation count (incl. MAX_CONTINUATIONS=0) or aggregate round budget
+ * would be refused (D4), so the result line must not invite one.
+ * Worktree-isolated chains are now continuable (the worktree is kept and
+ * locked between links).
  */
 function isContinuable(chain: ChainRecord): boolean {
-  return chain.inputs.isolation !== 'worktree' &&
-    chain.continuations < chain.limits.maxContinuations &&
+  return chain.continuations < chain.limits.maxContinuations &&
     chain.roundsCharged < chain.limits.maxRounds;
+}
+
+/**
+ * Exported for the executor's isolation teardown hook: true when the chain
+ * will admit at least one more continuation. Callers that need to decide
+ * whether to keep or release a worktree use this instead of replicating the
+ * limit arithmetic.
+ */
+export function isContinuableChain(chain: ChainRecord): boolean {
+  return isContinuable(chain);
+}
+
+/**
+ * True when a result may invite a continuation: within limits AND, for a
+ * chain whose dispatch ran in a created worktree, that worktree is currently
+ * kept for it. Background and promoted isolated runs never keep their tree,
+ * nor does a failed lock, so those chains are not advertised. The keep hook
+ * and recordChainTerminal use the limits-only `isContinuable` instead: the
+ * hook runs before the path is set (keeping is what sets it).
+ */
+function isAdvertisable(chain: ChainRecord): boolean {
+  return isContinuable(chain) && (chain.worktreeIsolated !== true || chain.isolatedWorktreePath !== undefined);
 }
 
 /** D6 structured chain metadata (snapshot of the chain's current state). */
@@ -161,7 +202,7 @@ function chainMetadata(chain: ChainRecord): NonNullable<ContinuationResultFields
     maxRounds: chain.limits.maxRounds,
     continuations: chain.continuations,
     maxContinuations: chain.limits.maxContinuations,
-    continuable: isContinuable(chain),
+    continuable: isAdvertisable(chain),
   };
 }
 
@@ -238,6 +279,8 @@ export function instrumentHandleForChain(
     rollbackIfNotStarted?: () => void;
     /** D6b: continuation results always carry the line. */
     alwaysLine?: boolean;
+    /** The link's depth-2+ manager; torn down before the handle (see wrapLinkTeardown). */
+    childManager?: { teardownAll(): Promise<void> } | undefined;
   },
 ): void {
   if (terminal.registry === undefined || terminal.chain === undefined) return;
@@ -282,6 +325,31 @@ export function instrumentHandleForChain(
     if (terminal.rollbackIfNotStarted !== undefined) { done = true; terminal.rollbackIfNotStarted(); return; }
     record(undefined, 'not_started');
   });
+  if (chain.inputs.isolation === 'worktree') wrapLinkTeardown(h, registry, chain.chainId, terminal.childManager);
+}
+
+/**
+ * Invariant: every run mode ends in `handle.teardown()` (foreground finally,
+ * or the background registry's markTerminal for background and promoted
+ * runs). Wrapped here, it tears the link's nested manager down first and then
+ * resolves the chain's pending link teardown, which every worktree release
+ * awaits. The run's terminal record (and so exhaustion release) fires before
+ * teardown, so the pending entry is registered now, before the run starts.
+ */
+function wrapLinkTeardown(h: Record<string, unknown>, registry: ContinuationRegistry, chainId: string, childManager: { teardownAll(): Promise<void> } | undefined): void {
+  const orig = h['teardown'];
+  if (typeof orig !== 'function') return;
+  const bound = (orig as (...a: unknown[]) => Promise<void>).bind(h);
+  let resolve!: () => void;
+  registry.trackLinkTeardown(chainId, new Promise<void>((r) => { resolve = r; }));
+  h['teardown'] = async (...a: unknown[]) => {
+    try {
+      await childManager?.teardownAll().catch(() => undefined);
+      return await bound(...a);
+    } finally {
+      resolve();
+    }
+  };
 }
 
 /**
@@ -404,7 +472,7 @@ function stampDeliveredResult(r: Res, chain: ChainRecord, always: boolean): void
   const alreadyStamped = out.continuation !== undefined;
   out.continuation = chainMetadata(chain);
   if (alreadyStamped) return;
-  if ((!always && r.incomplete !== true) || !isContinuable(chain) || typeof r.message?.content !== 'string') return;
+  if ((!always && r.incomplete !== true) || !isAdvertisable(chain) || typeof r.message?.content !== 'string') return;
   r.message.content = `${r.message.content}\n\n${formatContinuationLine(chain)}`;
 }
 
@@ -418,6 +486,10 @@ export function wireDispatchChain(args: {
   writeCapable: boolean;
   /** Continuation: reuse the admitted chain (never mint a new one) and mark it wired. */
   plan?: ContinuationPlan | undefined;
+  /** A git worktree was created for this (initial) dispatch. */
+  isolated?: boolean;
+  /** The child's depth-2+ manager (undefined when the child cannot nest). */
+  childManager?: { teardownAll(): Promise<void> } | undefined;
 }): ChainRecord | undefined {
   const { ctx, parsed, handle, childConfig, plan } = args;
   const cwd = childConfig.cwd ?? args.currentCwd;
@@ -434,7 +506,9 @@ export function wireDispatchChain(args: {
     journalUsable: () => ((handle.session?.messageJournal as { length?: number } | undefined)?.length ?? 0) > 0,
     flushJournal: async () => { await (handle.session?.messageJournal as { flush?: () => Promise<void> } | undefined)?.flush?.(); },
     ...(plan !== undefined ? { rollbackIfNotStarted: plan.rollback, alwaysLine: true } : {}),
+    childManager: args.childManager,
   });
   if (plan !== undefined) plan.wired = true;
+  if (args.isolated === true && chain !== undefined) chain.worktreeIsolated = true;
   return chain;
 }

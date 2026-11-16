@@ -24,7 +24,7 @@ describe('renderer skill identity', () => {
     }
     const intros = out.line.mock.calls.filter(([line]) => String(line).includes('Check changes'));
     expect(intros).toHaveLength(2);
-    expect(intros[0]![0]).toContain('args: src/index.ts');
+    expect(stripAnsi(String(intros[0]![0]))).not.toContain('args:');
     expect(intros[0]![0]).not.toContain('\x1b');
   });
   // Regression (#2895 duplicate preview): the identity is committed to
@@ -41,7 +41,7 @@ describe('renderer skill identity', () => {
       await renderer.arm();
       const intros = compositor.commitAbove.mock.calls.filter(([text]) => stripAnsi(String(text)).includes('/review'));
       expect(intros).toHaveLength(1);
-      expect(stripAnsi(String(intros[0]![0]))).toContain('Check changes');
+      expect(stripAnsi(String(intros[0]![0])).replace(/\n/g, ' ')).toContain('Check changes');
       renderer.process({ type: 'progress', progress: { taskId: 't', description: 'Working', totalTokens: 0, toolUses: 1, durationMs: 10 } });
       renderer.notifyFirstContent();
       await Promise.resolve();

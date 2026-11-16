@@ -30,7 +30,7 @@ import { getReceiptsDir } from '../../paths.js';
 import { env } from '../../config/env.js';
 import type { HookHandler } from '../hooks.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
-import { SessionCostAccumulator } from './cost.js';
+import { SessionCostAccumulator, totalCostFields } from './cost.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import { loadJournalMessages, readJournalRecords } from '../journal/reader.js';
 import { extractJournalSummary } from './receipt.journal.js';
@@ -153,8 +153,8 @@ function buildReceiptCost(
   // #4896: the seal's finalCostUsd and finalTurnCount cover the last REPL
   // cycle only. Prefer the accumulator's root figures, which sum every root
   // cycle. They are absent when the trace has no cost record (source none)
-  // and after a process-exit backstop seal; the raw seal and closure values
-  // cover those cases exactly as before.
+  // and after a process-exit backstop seal with no attributable root closure
+  // (#4912); the raw seal and closure values cover those cases as before.
   const finalCostUsd = sc.rootCostUsd ?? sealedCostUsd ?? closureCostUsd;
   const turnCount = sc.rootTurnCount ?? sealedTurnCount ?? closureTurnCount;
   return {
@@ -163,7 +163,7 @@ function buildReceiptCost(
     ...(closureTokens !== undefined ? { tokens: closureTokens } : {}),
     ...(sc.rootCostUsd !== undefined ? { rootCostUsd: sc.rootCostUsd } : {}),
     ...(sc.subagentCostUsd !== undefined ? { subagentCostUsd: sc.subagentCostUsd } : {}),
-    ...(sc.totalCostUsd !== undefined ? { totalCostUsd: sc.totalCostUsd } : {}),
+    ...totalCostFields(sc),
     ...(sc.totalTokens !== undefined ? { totalTokens: sc.totalTokens } : {}),
     costSource: sc.source,
   };

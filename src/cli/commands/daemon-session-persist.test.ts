@@ -35,4 +35,41 @@ describe('makeDaemonTurnPersister', () => {
       assistant: 'summary',
     });
   });
+
+  // Regression for issue #4841: daemon sidecars must be sealed (endedAt set)
+  // so a completed run is distinguishable from a live or crashed one.
+  it('seals the sidecar with endedAt and exitReason task-complete after the turn (issue #4841)', () => {
+    const before = Date.now();
+    const persist = makeDaemonTurnPersister('sonnet');
+    persist({
+      task: { taskId: 'nightly-job', command: 'do the thing', trigger: 'cron' },
+      sessionId: 'daemon-sealed-1',
+      cwd: '/repo',
+      userInput: 'do the thing',
+      response: { role: 'assistant', content: 'done', timestamp: new Date(), metadata: { totalCostUsd: 0.01 } },
+    });
+    const after = Date.now();
+    const sidecarPath = path.join(getSessionsDir(), 'daemon-sealed-1.json');
+    const sc = JSON.parse(fs.readFileSync(sidecarPath, 'utf8')) as Record<string, unknown>;
+    expect(typeof sc['endedAt']).toBe('number');
+    expect(sc['endedAt'] as number).toBeGreaterThanOrEqual(before);
+    expect(sc['endedAt'] as number).toBeLessThanOrEqual(after);
+    expect(sc['exitReason']).toBe('task-complete');
+  });
+
+  // endedAt must appear before turns in the JSON so the startup-recall head
+  // read (first 1 KiB) can detect sealed-ness without loading the full file.
+  it('writes endedAt before turns in the sidecar JSON (issue #4841)', () => {
+    const persist = makeDaemonTurnPersister('sonnet');
+    persist({
+      task: { taskId: 'head-order-job', command: 'check order', trigger: 'cron' },
+      sessionId: 'daemon-head-order-1',
+      cwd: '/repo',
+      userInput: 'check order',
+      response: { role: 'assistant', content: 'ok', timestamp: new Date(), metadata: { totalCostUsd: 0 } },
+    });
+    const text = fs.readFileSync(path.join(getSessionsDir(), 'daemon-head-order-1.json'), 'utf8');
+    expect(text.indexOf('"endedAt"')).toBeGreaterThan(-1);
+    expect(text.indexOf('"endedAt"')).toBeLessThan(text.indexOf('"turns"'));
+  });
 });

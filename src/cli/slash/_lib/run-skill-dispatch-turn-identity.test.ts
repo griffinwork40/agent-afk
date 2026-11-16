@@ -58,7 +58,7 @@ function expectCleanup(f: ReturnType<typeof fixture>) {
   expect(f.ctx.stats.totalTurns).toBe(0);
   const intros = f.c.commitAbove.mock.calls.filter(([s]) => stripAnsi(s).includes('Check changes'));
   expect(intros).toHaveLength(1);
-  expect(stripAnsi(intros[0]![0])).toContain('src/index.ts');
+  expect(stripAnsi(intros[0]![0])).not.toContain('args:');
 }
 
 describe('identity-bearing dispatch abnormal exits', () => {

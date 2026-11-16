@@ -277,6 +277,49 @@ describe('MessageHandler.wakeIdleSession (#3839)', () => {
     notifier.dispose();
   });
 
+  it('forwards error reply to the correct topic thread when route has a threadId (#4910)', async () => {
+    // Simulate a synthetic-turn error on a topic-routed session: the reply
+    // callback must call sendMessage with message_thread_id so the message
+    // lands in the correct topic instead of General.
+    const sm = makeSessionManager('idle');
+    const handler = makeHandler(sm);
+
+    // Capture the sendMessage mock from the handler's bot handle.
+    // makeHandler wires bot.telegram.sendMessage as a vi.fn().
+    const bot = (handler as unknown as { bot: { telegram: { sendMessage: ReturnType<typeof vi.fn> } } }).bot;
+    const sendMessage = bot.telegram.sendMessage;
+    sendMessage.mockResolvedValue({} as import('telegraf/types').Message.TextMessage);
+
+    // Build a topic route (threadId = 42).
+    const topicRoute = { chatId: 7000, threadId: 42 };
+
+    // Trigger wakeIdleSessionImpl by calling the internal helper directly so
+    // we can intercept the synthetic ctx.reply without needing a full bg job.
+    const { wakeIdleSessionImpl } = await import('./message.wake-idle.js');
+    let capturedReply!: (text: string) => Promise<unknown>;
+    const deps = {
+      isClaimed: () => false,
+      sessionManager: { getSessionIfExists: () => ({ state: 'idle', sessionId: 'topic-test' }) },
+      messageQueues: new Map(),
+      processOne: async (_route: unknown, ctx: { reply: (t: string) => Promise<unknown> }) => {
+        capturedReply = ctx.reply.bind(ctx);
+      },
+      log: vi.fn(),
+      bot: bot as unknown as import('telegraf').Telegraf,
+    };
+
+    wakeIdleSessionImpl(topicRoute, deps as Parameters<typeof wakeIdleSessionImpl>[1]);
+    // processOne is async fire-and-forget; wait for it to run.
+    await vi.waitFor(() => expect(capturedReply).toBeDefined());
+
+    // Invoke the synthetic reply to simulate an error notification.
+    await capturedReply('Something went wrong');
+
+    expect(sendMessage).toHaveBeenCalledWith(7000, 'Something went wrong', { message_thread_id: 42 });
+
+    void handler; // suppress unused warning
+  });
+
   it('does NOT fire when messages are already queued', async () => {
     const sm = makeSessionManager('streaming'); // session busy so we can enqueue
     const handler = makeHandler(sm);

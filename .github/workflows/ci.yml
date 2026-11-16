@@ -114,6 +114,15 @@ jobs:
         # decrease. Regenerate the baseline with `pnpm audit:console:update`.
         run: pnpm audit:console:check
 
+      - name: Audit styled-string length discipline (no .length/.padEnd/.padStart on palette results)
+        # `check-styled-length.ts` enforces that `.length`, `.padEnd`, and `.padStart`
+        # are never called on the RESULT of a `palette.*` call. Those operations count
+        # ANSI escape bytes as visible columns, breaking column-aligned terminal layouts.
+        # The wrapping-bug class was fixed in PR #4617 across 9 files; this gate prevents
+        # it from recurring. Use displayWidth/padDisplayRight/padDisplayLeft from
+        # src/cli/display.ts for column measurement on styled strings.
+        run: pnpm audit:styledlen:check
+
       - name: Audit terminal-width discipline (no raw process.stdout.columns outside terminal-size.ts)
         # `check-terminal-width.ts` enforces that terminal width is only read
         # through `getTerminalWidth()` from `src/cli/terminal-size.ts`. Raw

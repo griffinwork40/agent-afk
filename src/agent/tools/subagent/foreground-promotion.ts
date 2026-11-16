@@ -35,6 +35,29 @@ import { withProvenanceHeader } from './foreground-promotion.provenance.js';
 import { errorMessage } from '../../../utils/errors.js';
 export { withProvenanceHeader };
 
+/**
+ * Extracted from `runForegroundWithPromotion` finally block (200-line ceiling).
+ *
+ * Tears down the child's isolated worktree after a non-promoted foreground run.
+ * When `onTeardown` is provided (continuation chain), the hook decides: it
+ * returns `true` to keep the worktree locked for the next link, or `false` to
+ * fall through to normal teardown. A dirty / commits-ahead / ignored-local-state
+ * tree is preserved and relocked (WIP is never destroyed). Best-effort: never
+ * throws (runs inside a finally block).
+ */
+async function runIsolationTeardown(
+  isolationTeardown: { repoRoot: string; worktreePath: string } | undefined,
+  onTeardown?: (td: { repoRoot: string; worktreePath: string }) => Promise<boolean>,
+): Promise<void> {
+  if (!isolationTeardown) return;
+  const td = isolationTeardown;
+  const kept = onTeardown !== undefined ? await onTeardown(td) : false;
+  if (!kept) {
+    const outcome = await teardownIsolatedWorktree({ repoRoot: td.repoRoot, worktreePath: td.worktreePath });
+    if (outcome.preserved) reportPreservedForegroundWorktree(td.worktreePath, outcome);
+  }
+}
+
 /** Identity of a subagent that was promoted from foreground to background. */
 export interface PromotedSubagentInfo {
   jobId: string;
@@ -106,6 +129,15 @@ export interface RunForegroundArgs {
    */
   isolationTeardown?: { repoRoot: string; worktreePath: string };
   /**
+   * Optional hook for continuation-chain worktree ownership. Called in the
+   * finally block INSTEAD of the normal `teardownIsolatedWorktree` when
+   * `isolationTeardown` is set. When it returns `true`, the hook kept the
+   * worktree (locked for the chain) and teardown must be skipped; when it
+   * returns `false`, teardown proceeds normally. Never throws (callers must
+   * ensure this). Unused for promoted jobs (promotion owns the tree).
+   */
+  onIsolationTeardown?: (td: { repoRoot: string; worktreePath: string }) => Promise<boolean>;
+  /**
    * Item 4: optional delegation-budget release callback. When set and the
    * foreground run is promoted to background, this callback is deferred to
    * the registry's `onSettled` hook so the concurrent slot stays charged
@@ -123,6 +155,14 @@ export interface RunForegroundArgs {
   promotionTookBudget?: { value: boolean };
   /** Called synchronously once the run is adopted by the background registry (continuation stamping, D6). */
   onPromoted?: () => void;
+  /**
+   * StateStore key for the project whose goal should be snapshotted when this
+   * foreground run is promoted to background. Derived via `projectKeyForCwd()`
+   * at the dispatch site and forwarded to the registry so the correct
+   * project-scoped goal is captured and later compared at delivery time.
+   * When omitted the registry falls back to the global goal key.
+   */
+  projectKey?: string;
 }
 
 /**
@@ -194,7 +234,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           // job outlives the foreground finally that would have torn it down.
           if (isoTd) await lockWorktreeForBackground(isoTd.repoRoot, isoTd.worktreePath);
           // Invariant: adoption is synchronous after the lock await; ownership flips in this continuation.
-          const job = adoptForegroundRun({ handle, backgroundPrompt, model, parentSessionId, budgetRelease }, registry, runPromise, isoTd);
+          const job = adoptForegroundRun({ handle, backgroundPrompt, model, parentSessionId, budgetRelease, projectKey: args.projectKey }, registry, runPromise, isoTd);
           promoted = true;
           args.onPromoted?.();
           // Item 4: signal the caller that the registry owns budgetRelease now.
@@ -308,20 +348,10 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       const injectContext = handle.getLastStopInjectContext?.();
       appendInjectContext(toolResult, injectContext);
 
-      // isolation:"worktree" teardown — remove the child's worktree now that it
-      // has finished. A dirty / commits-ahead / ignored-local-state tree is
-      // preserved and locked (WIP and non-rebuildable ignored files are never
-      // destroyed); the promoted path skips this (guarded by !promoted) so a
-      // still-running detached job keeps its tree. Best-effort:
-      // teardownIsolatedWorktree never throws, so it cannot break the finally.
       // Invariant: isolated worktree teardown follows stop-context append; promoted jobs skip it.
-      if (args.isolationTeardown) {
-        const { repoRoot, worktreePath } = args.isolationTeardown;
-        const outcome = await teardownIsolatedWorktree({ repoRoot, worktreePath });
-        if (outcome.preserved) {
-          reportPreservedForegroundWorktree(worktreePath, outcome);
-        }
-      }
+      // When onIsolationTeardown is provided (continuation chain), it decides
+      // whether to keep the worktree (locked for the next link) or tear down.
+      await runIsolationTeardown(args.isolationTeardown, args.onIsolationTeardown);
     }
   }
 }

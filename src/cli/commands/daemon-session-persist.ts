@@ -34,6 +34,7 @@ export function makeDaemonTurnPersister(model: AgentModelInput): (args: TaskTurn
       },
     });
     saver.saveTurn(userInput, response.content, response.metadata);
+    saver.close('task-complete');
   };
 }
 

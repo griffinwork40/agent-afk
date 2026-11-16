@@ -86,6 +86,35 @@ describe('ledgerRecordToItem — non-visual records', () => {
     expect(ledgerRecordToItem({ kind: 'resumed' })?.kind).toBe('notice');
   });
 
+  it('renders a fatal done (stopReason=error) as a failure notice', () => {
+    const item = ledgerRecordToItem({ kind: 'done', stopReason: 'error', durationMs: 500 });
+    if (item?.kind !== 'notice') throw new Error('expected notice');
+    expect(item.text).toContain('turn failed');
+    expect(item.text).toContain('error');
+    expect(item.text).toContain('0.5s');
+  });
+
+  it('renders a fatal done (stopReason=budget_ceiling) as a failure notice', () => {
+    const item = ledgerRecordToItem({ kind: 'done', stopReason: 'budget_ceiling', durationMs: 1000 });
+    if (item?.kind !== 'notice') throw new Error('expected notice');
+    expect(item.text).toContain('turn failed');
+    expect(item.text).toContain('budget_ceiling');
+  });
+
+  it('renders a fatal done (stopReason=stalled) as a failure notice', () => {
+    const item = ledgerRecordToItem({ kind: 'done', stopReason: 'stalled' });
+    if (item?.kind !== 'notice') throw new Error('expected notice');
+    expect(item.text).toContain('turn failed');
+    expect(item.text).toContain('stalled');
+  });
+
+  it('still renders a normal done as turn complete', () => {
+    const item = ledgerRecordToItem({ kind: 'done', stopReason: 'end_turn', durationMs: 2000 });
+    if (item?.kind !== 'notice') throw new Error('expected notice');
+    expect(item.text).toContain('turn complete');
+    expect(item.text).not.toContain('turn failed');
+  });
+
   it('formats cost and duration into the done notice', () => {
     const item = ledgerRecordToItem({ kind: 'done', costUsd: 0.1234, durationMs: 3000 });
     if (item?.kind !== 'notice') throw new Error('expected notice');

@@ -45,6 +45,12 @@ export interface SessionAutosaver {
     metadata: ResponseMetadata | undefined,
     toolEvents?: ToolEvent[],
   ): void;
+  /**
+   * Seal the sidecar by writing `endedAt` = now. Call once after the last
+   * `saveTurn` — for the daemon this is immediately after the single turn
+   * completes. Never throws (best-effort, same contract as `saveTurn`).
+   */
+  close(exitReason?: import('./session-store.js').StoredSession['exitReason']): void;
 }
 
 export function createSessionAutosaver(opts: SessionAutosaverOptions): SessionAutosaver {
@@ -66,6 +72,16 @@ export function createSessionAutosaver(opts: SessionAutosaverOptions): SessionAu
         // Keyed by session id; with none known yet the turn stays in memory and
         // is flushed by the first later turn that carries one (Telegram parity).
         if (stats.sessionId) saveSession(stats);
+      } catch (err) {
+        if (!reported) {
+          reported = true;
+          opts.onError?.(err);
+        }
+      }
+    },
+    close(exitReason) {
+      try {
+        if (stats.sessionId) saveSession(stats, undefined, { closeTime: true, exitReason });
       } catch (err) {
         if (!reported) {
           reported = true;

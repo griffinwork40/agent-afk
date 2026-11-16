@@ -248,7 +248,7 @@ describe('Skill identity raw pipe acceptance', () => {
     expect(stderr).toBe('');
     expect(stdout).not.toContain('\x1b');
     expect(stdout.match(/PIPE_PURPOSE_DIAGNOSE/g)).toHaveLength(1);
-    expect(stdout).toContain('args: auth module');
+    expect(stdout).not.toContain('args:');
     expect(stdout).toContain('PIPE_CONTENT');
     expect(stdout.indexOf('PIPE_PURPOSE_DIAGNOSE')).toBeLessThan(stdout.indexOf('PIPE_CONTENT'));
   }, 30_000);

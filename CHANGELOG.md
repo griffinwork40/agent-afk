@@ -12,6 +12,44 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+## [5.356.0] - 2026-11-16
+
+### Added
+- daemon: every schedule telemetry row carries the task name, so schedule history shows a label instead of only the task id (refs #4831) (#4953) (12ac09431)
+- subagents: allow continuing worktree-isolated subagent chains (#4266) (#4285) (ed1df0f75)
+- events: HMAC-verified GitHub webhook receiver, `afk events serve` (#3896) (#4519) (3fc5f11e1)
+- tty-trace: opt-in `AFK_TTY_TRACE` recorder and replay for REPL stale-row bugs (#4929) (75bddd083)
+- receipt: `cost.overageCostUsd` and `cost.overageRequests`, the whole-session cost and count of Anthropic responses served from Claude subscription overage (extra usage billed at API rates under the OAuth login), summed from per-response costs and present (possibly 0) only when `anthropic-ratelimit-unified-*` headers were seen; closure events carry the per-session totals and a new `ratelimit_unified_state` session phase records the raw unified header values when they change (#4883) (#4899) (46392a94f)
+- receipt: `cost.overageIncomplete: true` marks `overageCostUsd` and `overageRequests` as lower bounds when the closure set did not account for the whole session cost (`costSource` `closures-incomplete`, or a total filled in from seal figures after a lost root closure or an unclosed child) or the overage sum had to be clamped to `totalCostUsd`; never emitted as `false`. Unified rate-limit header values are normalised to their first comma-separated token, and the `ratelimit_unified_state` record is no longer rewritten when only the representative claim changes (#4883) (#4899) (46392a94f)
+
+### Fixed
+- session: a turn that ends fatally now records a `done` event in the ledger, so every turn has exactly one (#4830) (#4952) (37d822d7d)
+- daemon: seal session sidecars with `endedAt` after each run (#4841) (#4951) (347103350)
+- telegram: enable model fallback for Telegram sessions (#4911) (#4920) (775d954ea)
+- telegram: pass `message_thread_id` to the wake-idle synthetic reply for topic-routed supergroups (#4910) (#4921) (db39c90c5)
+- receipt: correct cost split after crash, late child closure, unsealed trace (#4912) (#4919) (de233d9b1)
+- receipt: add `--force` to receipt regenerate, fix finding-#1 tests, add facet v14/v15 docs (#4914) (#4916) (6af364c40)
+- add mtime pre-screen to skip getOrDeriveFacet for out-of-window sessions (#4913) (#4917) (e4f2b34aa)
+- bound oversized arguments for pressure synthesis (#4905) (#4924) (5c30dfef9)
+- thread projectKey through background job goal snapshot and superseded check (#4906) (#4922) (ecc1f4c26)
+- ci: add check-styled-length gate for `.length`/`.padEnd`/`.padStart` on palette-styled strings (#4907) (#4923) (5e2e1a13a)
+- test: give the slow-journal deadline test room for the git spawn (#4956) (55a632e6a)
+- test: make session-prescreen boundary test independent of utimes precision (#4937) (f0412f3a2)
+- test: retry initial EBUSY during LSP exit test cleanup (#4915) (#4918) (60389a79b)
+
+### Changed
+- banner: remove the newsletter URL from the welcome banner (#4928) (b8c11ece7)
+- deps: bump jsdom from 30.1.3 to 31.0.0 (#4949) (530cef2c2)
+- deps: bump the prod-minor-patch group: @anthropic-ai/sdk 1.8.0, better-sqlite3 13.1.1, commander 15.1.0, dotenv 18.0.10, marked 18.2.0, openai 7.55.0, playwright 1.65.0, undici 8.12.4 (#4947) (34249430b)
+- deps: bump the fumadocs group across 1 directory with 3 updates (#4942) (9b368f2c1)
+- deps: bump next from 16.4.5 to 16.4.6 in /website (#4944) (1ec6c0cf2)
+- deps: bump lucide-react (#4943) (49b0d488e)
+- deps: bump jsdom from 30.1.3 to 31.0.0 in /dashboard (#4946) (eba6a7106)
+- dev-deps: bump the dashboard-dev-minor-patch group across 1 directory with 4 updates (#4945) (687bb2359)
+- dev-deps: bump jscpd (#4948) (4671dd969)
+
+## [5.355.0] - 2026-11-14
+
 ### Added
 - models: set a fallback model with `afk config set models.fallback <model>`. When the primary hits a usage limit, runs out of credit, or is rejected before producing any output, the session continues on the fallback instead of pausing or failing, and shows one notice line at the switch. Covers interactive sessions, one-shot `afk chat` (notice on stderr; `--format json` adds `servedModel` and `modelFallback`), and daemon and scheduled runs (noted in the log, on the run record, and in the task notification). Telegram, web and ACP sessions are not covered yet (#4892) (b663d8344)
 - receipt: top-level `credentialSource`, and the session credential source is now provider-aware (a non-Anthropic model never records an Anthropic tier); new ids `openai:*`, `xai:*`, `anthropic:config`; a base URL override records `local` only for a clearly self-hosted host (loopback, RFC1918, link-local, 100.64/10, fc00::/7, a single-label name, `.local`/`.lan`/`.internal`/`.home.arpa`/`.ts.net`), `custom-endpoint` for any other non-official host (billing unknown), and the provider's official API host resolves normally; the fork path never reads the credential store (#4882) (#4895) (035232859)

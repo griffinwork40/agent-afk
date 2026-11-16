@@ -88,8 +88,14 @@ import { z } from 'zod';
  * closure now decides `traceClosureReason`, and
  * `token_breakdown.subagent_cost_usd` no longer absorbs the cost of earlier
  * root REPL cycles.
+ *
+ * v16 (#4912): derivation only, no field added or removed.
+ * `token_breakdown.subagent_cost_usd` no longer counts closed root REPL cycles
+ * as subagent spend when the process crashed (backstop seal), and
+ * `total_cost_usd` no longer counts the last root cycle twice when a child
+ * closure lands after the root's final closure.
  */
-export const FACET_VERSION = 15;
+export const FACET_VERSION = 16;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
