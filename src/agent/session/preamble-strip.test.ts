@@ -3,6 +3,7 @@ import {
   extractPreDrainUserContent, extractUserContent, isPreDrainPreamble, isPreamble, stripPreDrainPreamble, stripPreamble,
 } from './preamble-strip.js';
 import { prependFrameworkContext, wrapFrameworkContext } from './framework-context-envelope.js';
+import { buildSwitchNotice } from '../providers/router/provider-router.switch.js';
 
 describe('preamble-strip', () => {
   it('detects bracketed and XML preamble openers', () => {
@@ -172,11 +173,15 @@ describe('preamble-strip: exact tag (Rule A), pre-drain text (Rule B), remainder
     expect(stripPreDrainPreamble('[skill-routing: active]\nfix it')).toBe('fix it');
   });
 
-  it('reads the remainder exactly like a message with no hook context', () => {
-    const notice = '[System context — not from the user. Your model was switched at the start of this turn: a → b.]';
-    for (const typed of [`${notice}\n\nhello`, 'plain prose', '<command-name>/review</command-name>\n<command-args>32</command-args>']) {
-      expect(stripPreamble(`${envelope('ctx')}\n\n${typed}`)).toBe(stripPreamble(typed));
-    }
+  it('reads the remainder with the harness-shape rules only', () => {
+    const notice = buildSwitchNotice('a', 'b', undefined, 'anthropic');
+    const cases: Array<[string, string]> = [
+      [`${notice}\n\nhello`, 'hello'],
+      ['plain prose', 'plain prose'],
+      ['<command-name>/review</command-name>\n<command-args>32</command-args>', '/review 32'],
+      ['[skill-routing: active]\nfix it', '[skill-routing: active]\nfix it'],
+    ];
+    for (const [typed, expected] of cases) expect(stripPreamble(`${envelope('ctx')}\n\n${typed}`)).toBe(expected);
   });
 
   it('never discards the remainder when the legacy strategies find nothing in it', () => {
@@ -186,5 +191,50 @@ describe('preamble-strip: exact tag (Rule A), pre-drain text (Rule B), remainder
     expect(extractPreDrainUserContent(reply)).toBeUndefined();
     expect(extractUserContent(`${envelope('ctx')}\n\n${reply}`)).toBe(reply);
     expect(stripPreamble(`${envelope('ctx')}\n\n${reply}`)).toBe(reply);
+  });
+});
+
+describe('preamble-strip: the remainder after the envelope peels only harness shapes', () => {
+  const sent = (rest: string): string => `${wrapFrameworkContext('hook context')}\n\n${rest}`;
+  const manifest = '<preflight-context skill="review" pr="32">\nresolved PR 32\n</preflight-context>';
+
+  it.each([
+    '[in reply to the assistant: "x"] Why did this fail?\nAlso check logs',
+    '[bug: login]\n- step one\n- step two',
+    'See the bridge. Read any referenced file for deeper context before acting, then fix it',
+    '<framework-context>example</framework-context> actual request',
+  ])('returns typed text whole: %s', (typed) => {
+    expect(extractUserContent(sent(typed))).toBe(typed);
+    expect(stripPreamble(sent(typed))).toBe(typed);
+  });
+
+  it('drops the router switch notice built by buildSwitchNotice', () => {
+    const notice = buildSwitchNotice('model-a', 'model-b', 'anthropic', 'openai');
+    expect(extractUserContent(sent(`${notice}\n\nfix the test`))).toBe('fix the test');
+    expect(stripPreamble(sent(`${notice}\n\nfix the test`))).toBe('fix the test');
+  });
+
+  it('renders manifest plus breadcrumb plus dispatch instruction as /review 32', () => {
+    const breadcrumb = '<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args>32</command-args>';
+    expect(extractUserContent(sent(`${manifest}\n${breadcrumb}\nRun the review skill.`))).toBe('/review 32');
+  });
+
+  it('returns prose typed after a preflight manifest', () => {
+    expect(extractUserContent(sent(`${manifest}\n\nwhat changed in this PR?`))).toBe('what changed in this PR?');
+  });
+
+  it('returns undefined when nothing follows the envelope', () => {
+    expect(extractUserContent(wrapFrameworkContext('hook context'))).toBeUndefined();
+  });
+
+  it('keeps the legacy path for text with no envelope', () => {
+    expect(extractUserContent('[in reply to the assistant: "x"] Why did this fail?\nAlso check logs')).toBe('Also check logs');
+  });
+
+  it('protects user text whose opening tag is split across content blocks', () => {
+    const blocks = [{ type: 'text' as const, text: '<framework-' }, { type: 'text' as const, text: 'context>mine</framework-context> ask' }];
+    const out = prependFrameworkContext([], blocks) as { type: string; text: string }[];
+    expect(out).toHaveLength(3);
+    expect(extractUserContent(out.map((b) => b.text).join(''))).toBe('<framework-context>mine</framework-context> ask');
   });
 });

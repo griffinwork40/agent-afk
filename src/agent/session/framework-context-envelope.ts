@@ -39,13 +39,15 @@ export function prependFrameworkContext(
   pending: readonly string[],
   content: string | ContentBlockParam[],
 ): string | ContentBlockParam[] {
-  // Readers join every text block, so the guard must judge the joined text.
-  const joined = typeof content === 'string'
-    ? content
-    : content.map((block) => (block.type === 'text' ? block.text : '')).join('\n');
+  // Readers join text blocks with '\n' or '' (receipt joinText), so the guard
+  // judges both joins: a tag split across blocks must still be protected.
+  const texts = typeof content === 'string'
+    ? [content]
+    : content.map((block) => (block.type === 'text' ? block.text : ''));
+  const opensWithTag = [texts.join('\n'), texts.join('')]
+    .some((joined) => joined.trimStart().startsWith(FRAMEWORK_CONTEXT_OPEN));
   const prefix = wrapFrameworkContext(pending.join('\n\n'))
-    || (joined.trimStart().startsWith(FRAMEWORK_CONTEXT_OPEN)
-      ? `${FRAMEWORK_CONTEXT_OPEN}\n\n${FRAMEWORK_CONTEXT_CLOSE}` : '');
+    || (opensWithTag ? `${FRAMEWORK_CONTEXT_OPEN}\n\n${FRAMEWORK_CONTEXT_CLOSE}` : '');
   if (!prefix) return content;
   if (typeof content === 'string') return `${prefix}\n\n${content}`;
   return [{ type: 'text', text: prefix }, ...content];

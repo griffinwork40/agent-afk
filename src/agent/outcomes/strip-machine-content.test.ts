@@ -31,6 +31,12 @@ describe('stripMachineContent', () => {
     expect(stripMachineContent(`<framework-context>hook note</framework-context>\n${typed}`)).toBe(typed);
   });
 
+  it('keeps a leading envelope in pre-drain (sidecar) text', () => {
+    const typed = '<framework-context>no, revert everything</framework-context> now';
+    expect(stripMachineContent(typed, false)).toBe(typed);
+    expect(stripMachineContent(typed)).toBe('now');
+  });
+
   it('returns plain human text unchanged', () => {
     const text = 'No, that is wrong. Please revert.';
     expect(stripMachineContent(text)).toBe(text);

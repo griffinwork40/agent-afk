@@ -4,7 +4,7 @@
  * Covers:
  *   - No registry → pass-through (shouldSkip=false, content unchanged)
  *   - Registry with no handlers → pass-through
- *   - injectContext returned → prepended to content (string and block paths)
+ *   - injectContext returned → returned for queueing; content unchanged (string and block paths)
  *   - HookBlockedError → shouldSkip=true with notice
  *   - HookHandlerTimeoutError → shouldSkip=true with notice
  *   - AbortError → propagates unchanged
@@ -99,18 +99,19 @@ describe('dispatchTelegramUserPromptSubmit – empty registry', () => {
 // ---------------------------------------------------------------------------
 
 describe('dispatchTelegramUserPromptSubmit – injectContext injection', () => {
-  it('prepends injectContext to a string prompt', async () => {
+  it('returns injectContext for queueing and leaves a string prompt unchanged', async () => {
     const registry = createHookRegistry();
     registry.register('UserPromptSubmit', async () => ({
       injectContext: '[policy note]',
     }));
     const result = await dispatchTelegramUserPromptSubmit('user text', registry);
     expect(result.shouldSkip).toBe(false);
-    expect(result.content).toBe('[policy note]\n\nuser text');
+    expect(result.content).toBe('user text');
+    expect(result.injectContext).toBe('[policy note]');
     expect(result.userText).toBe('user text');
   });
 
-  it('prepends injectContext as a leading text block in content arrays', async () => {
+  it('returns injectContext for queueing and leaves content arrays unchanged', async () => {
     const registry = createHookRegistry();
     registry.register('UserPromptSubmit', async () => ({
       injectContext: '[framework note]',
@@ -120,9 +121,8 @@ describe('dispatchTelegramUserPromptSubmit – injectContext injection', () => {
     ];
     const result = await dispatchTelegramUserPromptSubmit(original, registry);
     expect(result.shouldSkip).toBe(false);
-    const blocks = result.content as ContentBlockParam[];
-    expect(blocks[0]).toEqual({ type: 'text', text: '[framework note]\n\n' });
-    expect(blocks[1]).toBe(original[0]);
+    expect(result.content).toBe(original);
+    expect(result.injectContext).toBe('[framework note]');
   });
 
   it('leaves content unchanged when no injection returned', async () => {
@@ -130,6 +130,7 @@ describe('dispatchTelegramUserPromptSubmit – injectContext injection', () => {
     registry.register('UserPromptSubmit', async () => ({}));
     const result = await dispatchTelegramUserPromptSubmit('text', registry);
     expect(result.content).toBe('text');
+    expect(result.injectContext).toBeUndefined();
   });
 });
 
@@ -281,6 +282,8 @@ function makeCtx(chatId: number, text: string): Context {
   } as unknown as Context;
 }
 
+const inputRef = { pushUserMessage: vi.fn(), queueFrameworkContext: vi.fn() };
+
 function makeSession(hookRegistry?: ReturnType<typeof createHookRegistry>): IAgentSession {
   return {
     state: 'idle',
@@ -288,6 +291,7 @@ function makeSession(hookRegistry?: ReturnType<typeof createHookRegistry>): IAge
     getSessionMetadata: () => ({ sessionId: 'sid-123', permissionMode: 'default' }),
     sendMessageStream: vi.fn(async function* () { yield { type: 'done', metadata: {} }; }),
     sendMessage: vi.fn(),
+    getInputStreamRef: vi.fn(() => inputRef),
   } as unknown as IAgentSession;
 }
 
@@ -304,6 +308,7 @@ describe('MessageHandler – UserPromptSubmit wiring', () => {
   beforeEach(() => {
     mockStreamResponse.mockClear();
     mockStreamResponse.mockResolvedValue(undefined);
+    inputRef.queueFrameworkContext.mockClear();
   });
 
   it('dispatches UserPromptSubmit before streamResponse', async () => {
@@ -359,9 +364,10 @@ describe('MessageHandler – UserPromptSubmit wiring', () => {
     const replyText = reply.mock.calls[0]?.[0] as string;
     expect(replyText).toContain('blocked by hook');
     expect(replyText).toContain('test block');
+    expect(inputRef.queueFrameworkContext).not.toHaveBeenCalled();
   });
 
-  it('prepends injectContext to the outbound message', async () => {
+  it('queues injectContext for the envelope instead of prepending it', async () => {
     const registry = createHookRegistry();
     registry.register('UserPromptSubmit', async () => ({
       injectContext: '[injected prefix]',
@@ -382,7 +388,8 @@ describe('MessageHandler – UserPromptSubmit wiring', () => {
     expect(mockStreamResponse).toHaveBeenCalledTimes(1);
     // The second argument to streamResponse is the session; third is the content.
     const contentArg = mockStreamResponse.mock.calls[0]?.[2] as string;
-    expect(contentArg).toContain('[injected prefix]');
+    expect(contentArg).not.toContain('[injected prefix]');
     expect(contentArg).toContain('user text');
+    expect(inputRef.queueFrameworkContext.mock.calls).toEqual([['[injected prefix]']]);
   });
 });

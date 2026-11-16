@@ -22,9 +22,10 @@
  *
  *   0. Harness envelope: a record that opens with the exact token
  *      `<framework-context>` is cut through the first `</framework-context>`
- *      (see framework-context-envelope.ts), and the remainder is read by the
- *      strategies below as if no context had been drained. The strategies
- *      below also serve older records and are kept byte-identical for them.
+ *      (see framework-context-envelope.ts). The remainder loses only a switch
+ *      notice, a preflight manifest and a skill breadcrumb; the strategies
+ *      below never run on it. They serve older records and are kept
+ *      byte-identical for them.
  *
  * Rule B: an envelope can exist only in text recorded after the drain
  * (journal, provider history, ledger `text`). Text recorded before it (ledger
@@ -39,6 +40,7 @@
  */
 
 import { textAfterFrameworkContext } from './framework-context-envelope.js';
+import { peelSwitchNotice } from './model-switch-notice.js';
 
 /** Legacy opener shapes: bracketed or XML tags, never the harness envelope. */
 const LEGACY_PREAMBLE_RE = /^\s*(\[[\w-]+[:\s]|\[[a-z][a-z0-9]*(?:-[a-z0-9]+)+\]|<(preflight-context|command-name)\b)/;
@@ -115,16 +117,27 @@ function extractSkillTitle(text: string): string | undefined {
  */
 export function extractUserContent(text: string): string | undefined {
   // Strategy 0: the harness envelope marks the boundary explicitly. Exactly
-  // one envelope is peeled; the remainder is read as a message that never had
-  // hook context (Rule C), so a later envelope stays user text. Everything
-  // after the envelope is the caller's side of the message, so the legacy
-  // strategies may shorten it (manifest to title, switch notice dropped) but
-  // never discard it: a Telegram `[in reply to ...] question` stays whole.
+  // one envelope is peeled, so a later envelope stays user text. The rest is
+  // read by extractRemainderUserContent alone (Rule C), never by the legacy
+  // strategies: a Telegram `[in reply to ...] question` stays whole.
   const afterEnvelope = textAfterFrameworkContext(text);
   if (afterEnvelope === undefined) return extractPreDrainUserContent(text);
-  if (!afterEnvelope) return undefined;
-  if (!isPreDrainPreamble(afterEnvelope)) return afterEnvelope;
-  return extractPreDrainUserContent(afterEnvelope) ?? afterEnvelope;
+  return afterEnvelope ? extractRemainderUserContent(afterEnvelope) : undefined;
+}
+
+/**
+ * Read the text after one harness envelope. Hook context is always queued, so
+ * only harness shapes with an exact frame can precede the caller's text: the
+ * router's switch notice, one complete preflight manifest, and a skill
+ * breadcrumb (rendered as "/<skill> <args>"). Everything else is returned
+ * whole; the legacy bridge-marker and bracket-header strategies never run.
+ */
+function extractRemainderUserContent(rest: string): string | undefined {
+  let text = peelSwitchNotice(rest.trim()).trim();
+  const manifest = /^<preflight-context\b[^>]*>[\s\S]*?<\/preflight-context>/.exec(text);
+  if (manifest) text = text.slice(manifest[0].length).trim();
+  if (text.startsWith('<command-name>')) return extractSkillTitle(text) ?? text;
+  return text || undefined;
 }
 
 /**
@@ -207,7 +220,7 @@ export function extractPreDrainUserContent(text: string): string | undefined {
 export function stripPreamble(text: string): string {
   const afterEnvelope = textAfterFrameworkContext(text);
   if (afterEnvelope === undefined) return stripPreDrainPreamble(text);
-  return afterEnvelope ? stripPreDrainPreamble(afterEnvelope) : text;
+  return (afterEnvelope && extractRemainderUserContent(afterEnvelope)) || text;
 }
 
 /** {@link stripPreamble} for text recorded BEFORE the drain. */

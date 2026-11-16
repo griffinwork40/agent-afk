@@ -117,6 +117,14 @@ describe('collectRealTurns', () => {
     expect(eps[0]!.prompt).toContain('France');
   });
 
+  it('prefers the pre-drain input over the drained text', async () => {
+    const text = '<framework-context>\nhook\n</framework-context>\n\n[in reply to x] question here';
+    const input = '<framework-context>typed by the user</framework-context> please';
+    await writeSession('sess-input', [JSON.stringify({ v: 1, ts: Date.now(), kind: 'user', text, input }) + '\n']);
+    const eps = await collectRealTurns({ limit: 10, sessionsDir: tmpDir });
+    expect(eps.map((e) => e.prompt)).toEqual([input]);
+  });
+
   it('skips short prompts (< 15 chars)', async () => {
     await writeSession('sess1', [ledgerLine('user', 'hi')]);
     const eps = await collectRealTurns({ limit: 10, sessionsDir: tmpDir });

@@ -143,10 +143,12 @@ const MACHINE_BLOCK_PATTERNS: RegExp[] = [
  * Returns the cleaned text with surrounding whitespace trimmed.
  * Pure function — suitable for unit testing.
  */
-export function stripMachineContent(text: string): string {
+export function stripMachineContent(text: string, postDrain = true): string {
   // Peel the harness boundary before tag regexes can consume its closing tag.
   // Later framework envelopes are user text, not generic machine blocks.
-  let cleaned = textAfterFrameworkContext(text) ?? text;
+  // Sidecar turns are recorded before the drain (postDrain false): a leading
+  // envelope there was typed by the user and stays.
+  let cleaned = (postDrain ? textAfterFrameworkContext(text) : undefined) ?? text;
   for (const pattern of MACHINE_BLOCK_PATTERNS) {
     // Reset lastIndex since patterns use /g flag
     pattern.lastIndex = 0;
@@ -418,13 +420,13 @@ export function lfVerification(turns: Turn[], now: string): Vote | null {
  * Machine-injected content (harness preambles, relay blocks, bracketed prefixes)
  * is stripped before checking so automated content does not produce false positives.
  */
-export function lfInSessionCorrection(turns: Turn[], now: string): Vote | null {
+export function lfInSessionCorrection(turns: Turn[], now: string, postDrain = true): Vote | null {
   for (let i = 1; i < turns.length; i++) {
     const turn = turns[i];
     if (turn === undefined) continue;
     const raw = turn.user ?? '';
     // Strip machine-injected blocks before correction-keyword detection
-    const user = stripMachineContent(raw);
+    const user = stripMachineContent(raw, postDrain);
     if (user.length === 0) continue; // entire turn was machine content
     if (hasCorrectionLanguage(user)) {
       return {
@@ -492,6 +494,7 @@ export function runImmediateLFs(
   turns: Turn[],
   loadClosure: LoadClosure,
   now: string = new Date().toISOString(),
+  postDrain = true,
 ): ImmediateLFResult {
   const votes: Vote[] = [];
 
@@ -507,7 +510,7 @@ export function runImmediateLFs(
   if (verify !== null) votes.push(verify);
 
   // in_session_correction
-  const correction = lfInSessionCorrection(turns, now);
+  const correction = lfInSessionCorrection(turns, now, postDrain);
   if (correction !== null) votes.push(correction);
 
   // self_report

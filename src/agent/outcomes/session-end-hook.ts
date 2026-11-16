@@ -228,6 +228,7 @@ async function _runImmediatePass(
     turns,
     () => closure,
     now,
+    source !== 'sidecar', // sidecar turns hold pre-drain text
   );
 
   // Determine state / settles_after

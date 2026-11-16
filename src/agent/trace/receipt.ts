@@ -33,9 +33,7 @@ import { parseJsonlLines } from '../../utils/jsonl.js';
 import { SessionCostAccumulator, totalCostFields } from './cost.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import { loadJournalMessages, readJournalRecords } from '../journal/reader.js';
-import { hydrateMessage } from '../journal/hydrate.js';
-import { readBlob } from '../journal/blobs.js';
-import { extractJournalSummary } from './receipt.journal.js';
+import { extractJournalSummary, hydrateReadableText } from './receipt.journal.js';
 import { getSessionOutcomes } from '../outcomes/session-outcomes.js';
 import {
   BENIGN_FAILURE_CLASSES,
@@ -398,9 +396,9 @@ export async function writeRunReceipt(
     .filter((record) => record.message.role === 'user')
     .sort((a, b) => a.index - b.index)[0];
   // Hydrate only when every text blob is readable: a missing-blob stand-in
-  // would hide a leading envelope, so keep the previews instead.
-  const readable = firstUser?.message.content.every((b) => b.type !== 'text_ref' || readBlob(b.ref) !== null);
-  if (firstUser && readable && !textDisabled) firstUser.message = hydrateMessage(firstUser.message);
+  // would hide a leading envelope, so keep the previews instead. Each blob
+  // is read once, and not at all when text is disabled.
+  if (firstUser && !textDisabled) firstUser.message = hydrateReadableText(firstUser.message);
   const journalSummary = opts.sessionId !== undefined
     ? extractJournalSummary(loadJournalMessages(opts.sessionId), textDisabled, rawRecords)
     : undefined;

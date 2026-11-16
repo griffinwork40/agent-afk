@@ -86,9 +86,9 @@ export async function runOneTurn(
   // consumeLastPauseDuration(). This site fires for the top-level turn start.
   const pauseMs = PauseController.instance().consumeLastPauseDuration();
   const pauseNote = pauseMs !== undefined ? formatPauseNote(pauseMs) : undefined;
-  if (pauseNote) {
-    runText = pauseNote + '\n\n' + runText;
-  }
+  // The note is harness context, not typed text: queue it so it rides this
+  // turn inside the framework-context envelope instead of leading the prompt.
+  if (pauseNote) ctx.session.current.queueFrameworkContext(pauseNote);
 
   const { verdictLedger, loopStageBar, mascotBar, healthRail } = footer;
   const capture: TerminalCapture = { kind: undefined, doneHasEvidence: undefined, doneClassification: undefined };

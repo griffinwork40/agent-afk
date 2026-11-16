@@ -4,8 +4,9 @@
  * Extracted from `runInputLoop` to keep that grandfathered function under the
  * 200-line ceiling. The wiring supplies `getHasNextTurn: () => true` (the REPL
  * always has a next prompt) and routes injectContext into
- * `pendingStopInjection`, which the main loop drains at the top of each
- * iteration. Blocked/timeout notices are rendered via `completionWriter`.
+ * `pendingStopInjection`, which the main loop queues on the session sending
+ * the next turn (`queueFrameworkContext`), so it rides inside the harness
+ * envelope. Blocked/timeout notices are rendered via `completionWriter`.
  *
  * @module cli/commands/interactive/loop-iteration.stop-wiring
  */

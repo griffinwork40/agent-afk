@@ -22,13 +22,30 @@ import type { InteractiveCtx } from './shared.js';
  *
  * `shouldContinue` — a handler blocked or timed out; caller should `continue`
  *   to the next loop iteration (the turn is dropped).
- * `runText` — the prompt text to use for this turn, possibly extended by a
- *   handler-returned `injectContext` prefix. Equals the input `runText` when
- *   no injection was returned.
+ * `injectContext` — handler-returned context. The caller queues it on the
+ *   session that sends the turn, never prepends it to the prompt text.
  */
 export interface UpsResult {
   shouldContinue: boolean;
-  runText: string;
+  injectContext?: string;
+}
+
+/** The narrow session surface that delivers hook context inside the envelope. */
+export interface HookContextQueue {
+  queueFrameworkContext(text: string): void;
+}
+
+/**
+ * Queue pending Stop context, then UserPromptSubmit context, on the session
+ * about to send the turn, so both ride that turn inside one harness envelope.
+ */
+export function queueTurnHookContext(
+  session: HookContextQueue,
+  stopContext: string | undefined,
+  upsContext: string | undefined,
+): void {
+  if (stopContext) session.queueFrameworkContext(stopContext);
+  if (upsContext) session.queueFrameworkContext(upsContext);
 }
 
 /**
@@ -37,11 +54,11 @@ export interface UpsResult {
  * Returns `{ shouldContinue: true }` when the turn must be dropped (block or
  * timeout). Rethrows `AbortError` and all unexpected errors unchanged.
  *
- * @param runText  The prompt text about to be submitted.
+ * @param runText  The prompt text about to be submitted (never Stop context).
  * @param ctx      Interactive session context.
  */
 export async function dispatchUserPromptSubmit(runText: string, ctx: InteractiveCtx): Promise<UpsResult> {
-  if (!ctx.hookRegistry) return { shouldContinue: false, runText };
+  if (!ctx.hookRegistry) return { shouldContinue: false };
   try {
     const upsCtx: UserPromptSubmitContext = {
       event: 'UserPromptSubmit',
@@ -49,8 +66,9 @@ export async function dispatchUserPromptSubmit(runText: string, ctx: Interactive
       sessionId: ctx.stats.sessionId,
     };
     const upsDecision = await ctx.hookRegistry.dispatch(upsCtx);
-    const merged = upsDecision.injectContext ? upsDecision.injectContext + runText : runText;
-    return { shouldContinue: false, runText: merged };
+    return upsDecision.injectContext
+      ? { shouldContinue: false, injectContext: upsDecision.injectContext }
+      : { shouldContinue: false };
   } catch (err) {
     if (err instanceof HookBlockedError) {
       ctx.replRenderer.writeLine(
@@ -58,7 +76,7 @@ export async function dispatchUserPromptSubmit(runText: string, ctx: Interactive
           (err.reason ? palette.dim(`: ${sanitizeForDisplay(err.reason)}`) : ''),
       );
       ctx.statusLine.rearm();
-      return { shouldContinue: true, runText };
+      return { shouldContinue: true };
     }
     if (err instanceof HookHandlerTimeoutError) {
       ctx.replRenderer.writeLine(
@@ -66,7 +84,7 @@ export async function dispatchUserPromptSubmit(runText: string, ctx: Interactive
           palette.dim(`: handler timed out after ${err.timeoutMs}ms`),
       );
       ctx.statusLine.rearm();
-      return { shouldContinue: true, runText };
+      return { shouldContinue: true };
     }
     throw err; // AbortError and unexpected errors propagate.
   }

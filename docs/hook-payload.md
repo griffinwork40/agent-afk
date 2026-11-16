@@ -59,7 +59,7 @@ for now; file a feature request if your use case needs it.
 
 | Field | Type | Description |
 |---|---|---|
-| `prompt` | `string` | The raw text the user submitted before the model processes it. |
+| `prompt` | `string` | The raw text the user submitted before the model processes it. It never includes hook context: pending `Stop` context and this hook's own `additionalContext` are delivered inside the `<framework-context>` envelope on the same turn. |
 
 ### `PreToolUse`
 
@@ -366,7 +366,7 @@ A hook command may write a JSON object to stdout. Recognised fields:
 | `decision: "approve"` | Explicitly approve (skips remaining handlers in the chain). |
 | `continue: false` | Alias for `decision: "block"`. |
 | `reason: "…"` | Human-readable explanation emitted when blocking. |
-| `hookSpecificOutput.additionalContext` | For `Stop` hooks: a string prepended to the next turn's prompt (queued context, including `SessionStart`, is wrapped in a `<framework-context>` envelope ahead of the user's text). For `PreToolUse`: appended to the final tool result even when the hook allows execution, including later gate denials and handler errors. Non-blocking notes use a `[PreToolUse context]` banner, survive tool-output capping, and are counted in a separate delivery `hook_decision` event only when attached to a returned result. A dispatch that carries no decision, reason, approval outcome, or injected context writes no `hook_decision` row; it is counted in the session's `hook_summary` event instead. |
+| `hookSpecificOutput.additionalContext` | For `Stop` hooks: a string queued for the next turn's prompt. For `UserPromptSubmit`: a string queued for the turn being submitted. Queued context, including `SessionStart`, is wrapped in one `<framework-context>` envelope ahead of the user's text. For `PreToolUse`: appended to the final tool result even when the hook allows execution, including later gate denials and handler errors. Non-blocking notes use a `[PreToolUse context]` banner, survive tool-output capping, and are counted in a separate delivery `hook_decision` event only when attached to a returned result. A dispatch that carries no decision, reason, approval outcome, or injected context writes no `hook_decision` row; it is counted in the session's `hook_summary` event instead. |
 | `hookSpecificOutput.updatedInput` | **`PreToolUse` only.** A plain JSON object that replaces the tool's input before execution. The rewritten input still goes through the same permission gates and tool-schema validation. Multiple hooks chain in registration order; the last non-blocking hook's value wins. Arrays, primitives, and `null` are ignored. |
 
 Exit code semantics:

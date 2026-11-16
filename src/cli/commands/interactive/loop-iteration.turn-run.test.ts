@@ -28,6 +28,7 @@ vi.mock('../../../agent/session/pause-controller.js', () => ({
       consumeLastPauseDuration: pauseConsumeLastPauseDurationSpy,
     }),
   },
+  formatPauseNote: (ms: number) => `[pause note ${ms}]`,
 }));
 
 vi.mock('./turn-handler.js', () => ({
@@ -323,5 +324,37 @@ describe('runOneTurn — abort rejection propagation', () => {
 
     // runTurn must not have been called — the abort happened before the turn started.
     expect(runTurnMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pause note delivery: queued as framework context, never part of the prompt
+// ---------------------------------------------------------------------------
+
+describe('runOneTurn — pause note rides the framework-context queue', () => {
+  const runTurnMock = vi.mocked(runTurn);
+
+  beforeEach(() => {
+    pauseCheckSpy.mockClear();
+    pauseCheckSpy.mockResolvedValue(undefined);
+    pauseConsumeLastPauseDurationSpy.mockClear();
+    runTurnMock.mockClear();
+    runTurnMock.mockResolvedValue(undefined);
+  });
+
+  it('queues the note on the sending session and leaves the prompt text as typed', async () => {
+    pauseConsumeLastPauseDurationSpy.mockReturnValue(120_000);
+    const ctx = makeCtx(makeAbortSignal());
+    const queueFrameworkContext = vi.fn();
+    Object.assign(ctx.session.current, { queueFrameworkContext });
+
+    await runOneTurn(
+      'hello', [], ctx, makeTurnState(), makeFooter() as never, makeTranscript() as never,
+      makeSurface() as never, vi.fn(), undefined, [false], 'hello',
+    );
+
+    expect(queueFrameworkContext).toHaveBeenCalledExactlyOnceWith('[pause note 120000]');
+    expect(runTurnMock.mock.calls[0]![0]).toMatchObject({ text: 'hello' });
+    pauseConsumeLastPauseDurationSpy.mockReturnValue(undefined);
   });
 });

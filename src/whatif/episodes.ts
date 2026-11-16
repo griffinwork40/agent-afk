@@ -15,7 +15,7 @@ import * as path from 'node:path';
 import { parseRecord } from '../agent/session-ledger-reader.js';
 import { getSessionsDir } from '../paths.js';
 import { redactInlineSecrets } from '../agent/session/prompt-dump.js';
-import { extractUserContent } from '../agent/session/preamble-strip.js';
+import { extractPreDrainUserContent, extractUserContent } from '../agent/session/preamble-strip.js';
 import type { Episode, Prediction } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -221,11 +221,14 @@ export async function collectRealTurns(opts: CollectOpts): Promise<Episode[]> {
       const rec = parseRecord(rawLine);
       if (!rec || rec.kind !== 'user') continue;
 
-      const rawText: string = (rec as { kind: string; text: string }).text;
+      const { text: rawText, input } = rec as { kind: string; text: string; input?: string };
       if (!rawText) continue;
 
-      // Strip preamble.
-      const stripped = extractUserContent(rawText) ?? rawText;
+      // Strip preamble. Prefer `input` (recorded before the drain, so no
+      // envelope can lead it) the way session-source.ts titles sessions.
+      const stripped = input !== undefined
+        ? (extractPreDrainUserContent(input) ?? input)
+        : (extractUserContent(rawText) ?? rawText);
       // Redact secrets.
       const redacted = redactInlineSecrets(stripped);
 

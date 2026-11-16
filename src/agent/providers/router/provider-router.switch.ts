@@ -11,6 +11,7 @@
 
 import type { ProviderUserTurn } from '../../provider.js';
 import { splitFrameworkContext } from '../../session/framework-context-envelope.js';
+import { SWITCH_NOTICE_PREFIX, SWITCH_NOTICE_SUFFIX } from '../../session/model-switch-notice.js';
 
 /**
  * Flatten a user-turn content value to plain text for the shadow history.
@@ -55,10 +56,10 @@ export function buildSwitchNotice(
       ? ` (provider ${previousFamily} → ${currentFamily})`
       : '';
   return (
-    `[System context — not from the user. Your model was switched at the start of this turn: ` +
+    `${SWITCH_NOTICE_PREFIX}` +
     `${previousModel} → ${currentModel}${familyClause}. Earlier turns in this conversation were produced ` +
     `by ${previousModel}; the history carried across the switch is plain text only, so any prior tool ` +
-    `calls and extended reasoning are now prose — treat their structure as lost, not authoritative.]`
+    `calls and extended reasoning are now prose — ${SWITCH_NOTICE_SUFFIX}`
   );
 }
 

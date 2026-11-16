@@ -7,7 +7,8 @@
  *
  *   - `decision: 'block'` / `HookBlockedError` → drop the turn (`shouldSkip: true`).
  *   - `HookHandlerTimeoutError`                → drop the turn (`shouldSkip: true`).
- *   - `injectContext` from a handler           → prepended to the outbound content.
+ *   - `injectContext` from a handler           → returned for the caller to queue
+ *     on the session, so it rides the turn inside the framework envelope.
  *   - `AbortError` and unexpected errors        → re-thrown unchanged.
  *
  * On Telegram there is no readline prompt to rearm after a block, and the
@@ -20,16 +21,14 @@ import type { ContentBlockParam, DocumentBlockParam } from '@anthropic-ai/sdk/re
 import type { HookRegistry, UserPromptSubmitContext } from '../../agent/hooks.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { HookHandlerTimeoutError } from '../../agent/hook-registry.js';
-import { prependToContent } from '../bg-injection.js';
 
 /**
  * Result of {@link dispatchTelegramUserPromptSubmit}.
  *
  * `shouldSkip`  — a handler blocked or timed out; the caller should drop the
  *   turn (reply with `blockNotice` when present, then return early).
- * `content`     — the outbound content for this turn, possibly prefixed with a
- *   handler-returned `injectContext` string. Equal to the input content when
- *   no injection was returned.
+ * `content`     — the outbound content for this turn, always the input content.
+ * `injectContext` — handler-returned context, for `queueFrameworkContext`.
  * `blockNotice` — human-readable block reason, present when `shouldSkip` is true.
  * `userText`    — plain text extracted from `content` for session-turn recording.
  *   Joined from text blocks for content-block arrays; the raw string otherwise.
@@ -37,6 +36,7 @@ import { prependToContent } from '../bg-injection.js';
 export interface TelegramUpsResult {
   shouldSkip: boolean;
   content: string | ContentBlockParam[];
+  injectContext?: string;
   blockNotice?: string;
   userText: string;
 }
@@ -88,8 +88,7 @@ export async function dispatchTelegramUserPromptSubmit(
   try {
     const decision = await registry.dispatch(ctx);
     const injection = decision.injectContext;
-    const prefixed = injection ? prependToContent(injection + '\n\n', content) : content;
-    return { shouldSkip: false, content: prefixed, userText };
+    return { shouldSkip: false, content, userText, ...(injection ? { injectContext: injection } : {}) };
   } catch (err) {
     if (err instanceof HookBlockedError) {
       const notice = err.reason

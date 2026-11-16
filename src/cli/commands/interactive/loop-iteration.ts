@@ -23,7 +23,7 @@ import { autoResumeDirective } from './loop-iteration.injections.js';
 import { drainLoopNotifications } from './loop-iteration.drain.js';
 import { handleShellPassthrough } from './loop-iteration.shell-branch.js';
 import { handleSlashCommand, runPluginPreflight } from './loop-iteration.slash-branch.js';
-import { dispatchUserPromptSubmit } from './loop-iteration.hooks.js';
+import { dispatchUserPromptSubmit, queueTurnHookContext } from './loop-iteration.hooks.js';
 import { wireReplStopHook } from './loop-iteration.stop-wiring.js';
 import { runOneTurn } from './loop-iteration.turn-run.js';
 import { createVersionNotice } from './version-notice.js';
@@ -248,17 +248,17 @@ export async function runInputLoop(
     // processJobNotifier is passed as the optional extra source so background
     // process job results are injected between bg-subagent and peer messages.
     runText = applyDeferPeers(runText, queuedHumanTurn, surface, footer.shellPassthrough, bgResultNotifier, peerNotifier, admissionQueue, processJobNotifier);
-    if (pendingStopInjection !== undefined) {
-      runText = pendingStopInjection + '\n\n' + runText;
-      pendingStopInjection = undefined;
-    }
+    // Stop context is consumed here: a turn UserPromptSubmit drops loses it.
+    const stopContext = pendingStopInjection;
+    pendingStopInjection = undefined;
     // Idempotent: covers a session swapped in since the last turn.
     ctx.session.current.wireStopHook?.(stopWiring);
 
-    // Pre-turn UserPromptSubmit hook.
+    // Pre-turn UserPromptSubmit hook; its prompt never carries Stop context.
     const ups = await dispatchUserPromptSubmit(runText, ctx);
     if (ups.shouldContinue) continue;
-    runText = ups.runText;
+    // Hook text rides this turn inside the envelope, on the session sending it.
+    queueTurnHookContext(ctx.session.current, stopContext, ups.injectContext);
 
     // Execute the model turn.
     // Contract: pass `text` (raw, pre-injection) as rawUserText so the presence
@@ -271,6 +271,6 @@ export async function runInputLoop(
 
     // Stop is dispatched by the session layer (turn-stream-runner.ts) via
     // wireStopHook(). The REPL no longer dispatches Stop itself. injectContext
-    // is routed into pendingStopInjection by the stopWiring callbacks above.
+    // is held in pendingStopInjection and queued on the next turn's session.
   }
 }

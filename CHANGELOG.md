@@ -14,6 +14,7 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ### Fixed
 - session: wrap hook and framework context drained in front of a user message in a harness `<framework-context>` envelope, and cut at its closing tag when recovering what the user typed. Run receipts' `journalSummary.firstUserMessage`, session titles, transcripts, rewind and outcome labels no longer report SessionStart hook output (such as a plugin's recent-work digest or `[placeholder-prevent]`) as the request. `firstUserMessage` is stripped before the 500 char cap and omitted when the message holds no user text; journals written before this change keep the previous heuristic
+- hooks: `UserPromptSubmit` context (REPL and Telegram) and REPL `Stop` context now ride the turn inside the `<framework-context>` envelope instead of being prepended to the typed text, so it can no longer be read back as the user's request. REPL `UserPromptSubmit` hooks no longer receive pending `Stop` context in `prompt`, matching Telegram and web. After the envelope, readers peel only the model switch notice, a preflight manifest and a skill breadcrumb, so a message that opens with a bracket, such as a Telegram reply quote, is kept whole. The REPL note about a resumed pause is delivered inside the envelope too
 
 ## [5.355.0] - 2026-11-14
 

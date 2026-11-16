@@ -10,6 +10,7 @@
  */
 
 import type { JournalMessage, JournalRecord } from '../journal/types.js';
+import { readBlob } from '../journal/blobs.js';
 import { extractUserContent, isPreamble } from '../session/preamble-strip.js';
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,22 @@ function joinText(msg: JournalMessage | undefined): string | undefined {
   }
   const joined = parts.join('');
   return joined.length === 0 ? undefined : joined;
+}
+
+/**
+ * Inline every spilled text block of `msg`, reading each blob exactly once.
+ * When any blob is unreadable the message is returned unchanged: a stand-in
+ * would hide a leading envelope, so the previews are kept instead.
+ */
+export function hydrateReadableText(msg: JournalMessage): JournalMessage {
+  const content: JournalMessage['content'] = [];
+  for (const b of msg.content) {
+    if (b.type !== 'text_ref') { content.push(b); continue; }
+    const data = readBlob(b.ref);
+    if (data === null) return msg;
+    content.push({ type: 'text', text: data.toString('utf8') });
+  }
+  return { ...msg, content };
 }
 
 function capText(text: string | undefined): string | undefined {

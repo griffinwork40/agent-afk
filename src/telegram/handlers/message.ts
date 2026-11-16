@@ -546,6 +546,8 @@ export class MessageHandler {
       const ups = await dispatchTelegramUserPromptSubmit(content, session.hookRegistry, session.getSessionMetadata?.().sessionId);
       if (ups.shouldSkip) { if (ups.blockNotice) await ctx.reply(ups.blockNotice).catch(() => {}); return; }
       content = ups.content;
+      // Hook text rides this turn inside the framework envelope, never as typed text.
+      if (ups.injectContext) session.getInputStreamRef().queueFrameworkContext?.(ups.injectContext);
       // Keep the "typing..." indicator alive for the whole (often multi-minute)
       // streamed turn; a one-shot chat action would expire after ~5s.
       await withTypingIndicator(ctx, () =>

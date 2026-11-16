@@ -135,6 +135,12 @@ import { createHookRegistry } from '../../../agent/hooks.js';
 import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
 import { TERMINAL_STATE_GATE_CORRECTION } from './terminal-state-gate.js';
 
+/** Texts queued for the framework envelope on the current session, in order. */
+function queued(ctx: InteractiveCtx): string[] {
+  const fn = (ctx.session.current as unknown as { queueFrameworkContext: ReturnType<typeof vi.fn> }).queueFrameworkContext;
+  return fn.mock.calls.map((c) => String(c[0]));
+}
+
 function makeCtx(overrides?: Partial<InteractiveCtx>): InteractiveCtx {
   return {
     session: {
@@ -143,6 +149,7 @@ function makeCtx(overrides?: Partial<InteractiveCtx>): InteractiveCtx {
         waitForInitialization: vi.fn(async () => ({})),
         takePendingPlanExitSeed: vi.fn(async () => undefined),
         wireStopHook: vi.fn(),
+        queueFrameworkContext: vi.fn(),
       },
     },
     stats: {
@@ -596,8 +603,9 @@ describe('runReplLoop -- Stop hook wiring (session-layer dispatch)', () => {
 
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
     const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
-    expect(secondText).toContain('CORRECTION: substantiate your Done');
-    expect(secondText.trimEnd().endsWith('second turn')).toBe(true);
+    // Stop context is queued for the envelope, never prepended to typed text.
+    expect(secondText).toBe('second turn');
+    expect(queued(ctx)).toEqual(['CORRECTION: substantiate your Done']);
   });
 
   it('routes onStopBlocked to completionWriter for display', async () => {
@@ -666,7 +674,7 @@ describe('runReplLoop — UserPromptSubmit hook integration', () => {
     expect(lines.some((l) => l.includes('blocked by hook'))).toBe(true);
   });
 
-  it('UserPromptSubmit injectContext hook prepends context to runText before runTurn', async () => {
+  it('UserPromptSubmit injectContext is queued for the envelope, not prepended to runText', async () => {
     const registry = createHookRegistry();
     registry.register('UserPromptSubmit', async () => ({
       injectContext: '[PREFIX] ',
@@ -682,7 +690,68 @@ describe('runReplLoop — UserPromptSubmit hook integration', () => {
 
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
     const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
-    expect(firstArg.text).toBe('[PREFIX] base prompt');
+    expect(firstArg.text).toBe('base prompt');
+    expect(queued(ctx)).toEqual(['[PREFIX] ']);
+  });
+
+  it('queues Stop then UserPromptSubmit context once, and hooks see only the typed prompt', async () => {
+    const registry = createHookRegistry();
+    const prompts: string[] = [];
+    registry.register('UserPromptSubmit', async (c) => {
+      prompts.push((c as { prompt: string }).prompt);
+      return { injectContext: 'ups note' };
+    });
+    surfaceState.readLineQueue = [
+      { text: 'first', attachments: [] },
+      { text: 'second', attachments: [] },
+      { text: 'third', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+    const ctx = makeCtx({ hookRegistry: registry });
+    vi.mocked(runTurn).mockImplementationOnce(async () => {
+      const wireStopHook = vi.mocked((ctx.session.current as Record<string, unknown>).wireStopHook as ReturnType<typeof vi.fn>);
+      (wireStopHook.mock.calls[0]?.[0] as { onStopInjectContext?: (t: string) => void }).onStopInjectContext?.('stop note');
+    });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+    expect(prompts).toEqual(['first', 'second', 'third']);
+    expect(queued(ctx)).toEqual(['ups note', 'stop note', 'ups note', 'ups note']);
+  });
+
+  it('a blocked UserPromptSubmit drops pending Stop context instead of leaking it', async () => {
+    const registry = createHookRegistry();
+    let calls = 0;
+    registry.register('UserPromptSubmit', async () => (++calls === 2 ? { decision: 'block' as const } : {}));
+    surfaceState.readLineQueue = [
+      { text: 'first', attachments: [] },
+      { text: 'blocked', attachments: [] },
+      { text: 'third', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+    const ctx = makeCtx({ hookRegistry: registry });
+    vi.mocked(runTurn).mockImplementationOnce(async () => {
+      const wireStopHook = vi.mocked((ctx.session.current as Record<string, unknown>).wireStopHook as ReturnType<typeof vi.fn>);
+      (wireStopHook.mock.calls[0]?.[0] as { onStopInjectContext?: (t: string) => void }).onStopInjectContext?.('stop note');
+    });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
+    expect(queued(ctx)).toEqual([]);
+  });
+
+  it('queues pending Stop context on a session swapped in between turns', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'first', attachments: [] },
+      { text: 'second', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+    const ctx = makeCtx();
+    const swapped = { ...ctx.session.current, wireStopHook: vi.fn(), queueFrameworkContext: vi.fn() };
+    vi.mocked(runTurn).mockImplementationOnce(async () => {
+      const wireStopHook = vi.mocked((ctx.session.current as Record<string, unknown>).wireStopHook as ReturnType<typeof vi.fn>);
+      (wireStopHook.mock.calls[0]?.[0] as { onStopInjectContext?: (t: string) => void }).onStopInjectContext?.('stop note');
+      ctx.session.current = swapped as never;
+    });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+    expect(swapped.queueFrameworkContext.mock.calls.map((c) => c[0])).toEqual(['stop note']);
   });
 
   it('UserPromptSubmit allow (no return) hook fires and passes through to runTurn unchanged', async () => {
@@ -795,8 +864,8 @@ describe('runReplLoop — terminal-state gate integration (#565)', () => {
     const firstText = (vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string }).text;
     const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
     expect(firstText).toBe('ship it');
-    expect(secondText).toContain(TERMINAL_STATE_GATE_CORRECTION);
-    expect(secondText.trimEnd().endsWith('next turn')).toBe(true);
+    expect(secondText).toBe('next turn');
+    expect(queued(ctx)).toEqual([TERMINAL_STATE_GATE_CORRECTION]);
   });
 
   it('the registered gate stays silent outside autonomous mode (human watching)', async () => {
@@ -854,6 +923,7 @@ describe('runReplLoop — terminal-state gate integration (#565)', () => {
     const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
     expect(secondText).toBe('second done');
     expect(secondText).not.toContain(TERMINAL_STATE_GATE_CORRECTION);
+    expect(queued(ctx)).toEqual([]);
   });
 });
 

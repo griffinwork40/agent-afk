@@ -15,7 +15,8 @@ vi.mock('./momentum-ticker.js', () => ({ MomentumTicker: class { start() {} stop
 vi.mock('./loop-iteration.drain.js', () => ({ drainLoopNotifications: vi.fn() }));
 vi.mock('./loop-iteration.first-turn.js', () => ({ runFirstTurnHookIfNeeded: vi.fn() }));
 vi.mock('./loop-iteration.hooks.js', () => ({
-  dispatchUserPromptSubmit: async (runText: string) => ({ runText }),
+  dispatchUserPromptSubmit: async () => ({ shouldContinue: false }),
+  queueTurnHookContext: () => undefined,
 }));
 vi.mock('./version-notice.js', () => ({ createVersionNotice: () => () => undefined }));
 vi.mock('../../slash/plugin-skills.js', () => ({
