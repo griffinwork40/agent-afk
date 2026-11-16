@@ -91,14 +91,19 @@ function renderMessage(msg: OpenAIMessage): string {
     }
   } else if (Array.isArray(msg.content)) {
     if (msg.role === 'tool') {
-      // Collect all text parts, join, excerpt once.
+      // Collect all text parts, join with newline to preserve part boundaries,
+      // then excerpt once — matching the Anthropic renderer and bounding the
+      // total to TOOL_RESULT_EXCERPT_CHARS regardless of part count.
       const joined = msg.content
         .filter((p) => p.type === 'text')
         .map((p) => (p as { type: 'text'; text: string }).text)
-        .join('');
+        .join('\n');
       if (joined.length > 0) lines.push(excerptHeadTail(joined, TOOL_RESULT_EXCERPT_CHARS));
-      // Non-text parts (image_url) are not expected on tool messages but are
-      // silently ignored rather than rendered, since they carry no textual value.
+      // Retain a placeholder for image parts so image-only or mixed arrays
+      // don't silently render as an empty body.
+      for (const p of msg.content) {
+        if (p.type === 'image_url') lines.push('[image]');
+      }
     } else {
       for (const part of msg.content) {
         if (part.type === 'text') lines.push((part as { type: 'text'; text: string }).text);

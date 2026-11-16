@@ -56,6 +56,39 @@ describe('openaiCompactionOps.renderMessage', () => {
     expect(r).toContain('[image]');
   });
 
+  it('preserves boundaries between multipart tool-result text parts (B1 regression)', () => {
+    // 'Exit code: 1' and '0 tests passed' must NOT merge into 'Exit code: 10 tests passed'.
+    const msg: OpenAIMessage = {
+      role: 'tool',
+      tool_call_id: 'c',
+      content: [
+        { type: 'text', text: 'Exit code: 1' },
+        { type: 'text', text: '0 tests passed' },
+      ],
+    };
+    const r = openaiCompactionOps.renderMessage(msg);
+    expect(r).toContain('Exit code: 1');
+    expect(r).toContain('0 tests passed');
+    // The two parts must be separated — the joined text must NOT contain the
+    // concatenated token 'Exit code: 10 tests passed'.
+    expect(r).not.toContain('Exit code: 10 tests passed');
+  });
+
+  it('renders [image] placeholder for image parts in tool-array content (N1 regression)', () => {
+    const msg: OpenAIMessage = {
+      role: 'tool',
+      tool_call_id: 'c',
+      content: [
+        { type: 'text', text: 'some text' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+      ],
+    };
+    const r = openaiCompactionOps.renderMessage(msg);
+    expect(r).toContain('some text');
+    expect(r).toContain('[image]');
+  });
+
+
   it('joins multi-part tool content and excerpts once (not N × TOOL_RESULT_EXCERPT_CHARS)', () => {
     // Build a tool message with two text parts each just under the excerpt
     // threshold. If excerpted separately each would pass through whole, giving
