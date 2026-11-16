@@ -365,6 +365,7 @@ describe('NdjsonTraceWriter', () => {
         trigger: 'manual',
         preCompactionMessages,
         summary: 'summary text',
+        summarizerInputCharsDropped: 901,
         keptTailCount: 1,
         keepLastNConfig: 3,
         messagesBefore: 4,
@@ -378,6 +379,7 @@ describe('NdjsonTraceWriter', () => {
     const event = events[0];
     expect(event?.kind).toBe('compaction');
     if (event?.kind !== 'compaction') throw new Error('unreachable');
+    expect(event.payload.summarizerInputCharsDropped).toBe(901);
     const ref = event.payload.preCompactionMessagesRef;
     expect(ref.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(ref.sizeBytes).toBeGreaterThan(0);

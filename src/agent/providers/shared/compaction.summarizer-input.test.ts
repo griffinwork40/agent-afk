@@ -35,13 +35,14 @@ describe('excerptHeadTail', () => {
 
 describe('capTranscriptForSummarizer', () => {
   it('returns the transcript unchanged when under budget or uncapped', () => {
-    expect(capTranscriptForSummarizer('abc', 10)).toBe('abc');
-    expect(capTranscriptForSummarizer('abc', undefined)).toBe('abc');
+    expect(capTranscriptForSummarizer('abc', 10)).toEqual({ transcript: 'abc', charsDropped: 0 });
+    expect(capTranscriptForSummarizer('abc', undefined)).toEqual({ transcript: 'abc', charsDropped: 0 });
+    expect(capTranscriptForSummarizer('abc', 3)).toEqual({ transcript: 'abc', charsDropped: 0 });
   });
 
   it('drops the middle, keeps the opening and the newest, and marks the omission', () => {
     const transcript = 'OPENING ' + 'o'.repeat(500) + ' MIDDLE ' + 'o'.repeat(500) + ' NEWEST';
-    const out = capTranscriptForSummarizer(transcript, 100);
+    const { transcript: out } = capTranscriptForSummarizer(transcript, 100);
     expect(out).toContain('[Transcript middle omitted');
     expect(out.startsWith(transcript.slice(0, 20))).toBe(true);
     expect(out.startsWith('OPENING')).toBe(true);
@@ -51,8 +52,9 @@ describe('capTranscriptForSummarizer', () => {
   });
 
   it('reports the exact number of dropped characters', () => {
-    const out = capTranscriptForSummarizer('x'.repeat(1_000), 100);
+    const { transcript: out, charsDropped } = capTranscriptForSummarizer('x'.repeat(1_000), 100);
     expect(out).toContain('900 characters dropped');
+    expect(charsDropped).toBe(900);
   });
 });
 
@@ -104,31 +106,34 @@ describe('surrogate pairs at the cut points', () => {
   it('capTranscriptForSummarizer: emoji across the opening cut keeps no half pair and an exact dropped count', () => {
     // maxChars 100: opening cut at 20, newest cut at 1000 - 80 = 920.
     const text = emojiAcross(1_000, 20);
-    const out = capTranscriptForSummarizer(text, 100);
+    const { transcript: out, charsDropped } = capTranscriptForSummarizer(text, 100);
+    expect(charsDropped).toBe(901);
     expect(hasUnpairedSurrogate(out)).toBe(false);
     const dropped = Number(CAP_MARKER.exec(out)?.[1]);
     const opening = out.slice(0, out.indexOf('\n\n['));
     const newest = out.slice(out.lastIndexOf(']\n\n') + 3);
     expect(opening.length + dropped + newest.length).toBe(text.length);
-    expect(out.length).toBeLessThanOrEqual(capTranscriptForSummarizer('a'.repeat(1_000), 100).length);
+    expect(out.length).toBeLessThanOrEqual(capTranscriptForSummarizer('a'.repeat(1_000), 100).transcript.length);
   });
 
   it('capTranscriptForSummarizer: emoji across the newest cut keeps no half pair and an exact dropped count', () => {
     const text = emojiAcross(1_000, 920);
-    const out = capTranscriptForSummarizer(text, 100);
+    const { transcript: out, charsDropped } = capTranscriptForSummarizer(text, 100);
+    expect(charsDropped).toBe(901);
     expect(hasUnpairedSurrogate(out)).toBe(false);
     const dropped = Number(CAP_MARKER.exec(out)?.[1]);
     const opening = out.slice(0, out.indexOf('\n\n['));
     const newest = out.slice(out.lastIndexOf(']\n\n') + 3);
     expect(opening.length + dropped + newest.length).toBe(text.length);
-    expect(out.length).toBeLessThanOrEqual(capTranscriptForSummarizer('a'.repeat(1_000), 100).length);
+    expect(out.length).toBeLessThanOrEqual(capTranscriptForSummarizer('a'.repeat(1_000), 100).transcript.length);
   });
 
   it('never emits a half pair for any budget on emoji-dense input', () => {
     const text = 'x' + '\u{1F600}'.repeat(300) + 'y';
     for (let budget = 1; budget < 120; budget++) {
       const ex = excerptHeadTail(text, budget);
-      const cap = capTranscriptForSummarizer(text, budget);
+      const { transcript: cap, charsDropped } = capTranscriptForSummarizer(text, budget);
+      expect(charsDropped).toBe(Number(CAP_MARKER.exec(cap)?.[1]));
       expect(hasUnpairedSurrogate(ex)).toBe(false);
       expect(hasUnpairedSurrogate(cap)).toBe(false);
       expect(ex.replace(EXCERPT_MARKER, '').length).toBeLessThanOrEqual(budget + 2);
@@ -142,7 +147,7 @@ describe('surrogate pairs at the cut points', () => {
     expect(excerptHeadTail(text, 100)).toBe(
       `${text.slice(0, headLen)} [... ${text.length - 100} chars elided ...] ${text.slice(text.length - 60)}`,
     );
-    expect(capTranscriptForSummarizer(text, 100)).toBe(
+    expect(capTranscriptForSummarizer(text, 100).transcript).toBe(
       text.slice(0, 20) +
         `\n\n[Transcript middle omitted: ${text.length - 100} characters dropped to fit the ` +
         'summarizer context budget. The opening above and the newest content below are kept.]\n\n' +

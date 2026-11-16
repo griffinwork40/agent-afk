@@ -156,17 +156,20 @@ const CAP_OPENING_SHARE = 0.2;
  * because it holds the current state. A marker states what was omitted. Only
  * affects the summarizer input; the archived older slice is untouched.
  */
-export function capTranscriptForSummarizer(transcript: string, maxChars: number | undefined): string {
-  if (maxChars === undefined || transcript.length <= maxChars) return transcript;
+export function capTranscriptForSummarizer(
+  transcript: string, maxChars: number | undefined,
+): { transcript: string; charsDropped: number } {
+  if (maxChars === undefined || transcript.length <= maxChars) return { transcript, charsDropped: 0 };
   const openingLen = Math.floor(maxChars * CAP_OPENING_SHARE);
   const newestLen = maxChars - openingLen;
   const openingEnd = pairSafeHeadEnd(transcript, openingLen);
   const newestStart = pairSafeTailStart(transcript, transcript.length - newestLen);
   const dropped = newestStart - openingEnd;
-  return (
-    transcript.slice(0, openingEnd) +
-    `\n\n[Transcript middle omitted: ${dropped} characters dropped to fit the ` +
-    'summarizer context budget. The opening above and the newest content below are kept.]\n\n' +
-    transcript.slice(newestStart)
-  );
+  return {
+    charsDropped: dropped,
+    transcript: transcript.slice(0, openingEnd) +
+      `\n\n[Transcript middle omitted: ${dropped} characters dropped to fit the ` +
+      'summarizer context budget. The opening above and the newest content below are kept.]\n\n' +
+      transcript.slice(newestStart),
+  };
 }

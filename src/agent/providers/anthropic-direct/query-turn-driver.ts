@@ -85,7 +85,7 @@ export interface TurnDriverContext {
   /** Synthetic terminal for an interrupted turn that yielded none of its own. */
   makeInterruptedTurnEvent(): ProviderEvent;
   /** Summarize older turns; invoked at the auto-compaction turn boundary. */
-  compact(trigger?: import('../../trace/types.js').CompactionTrigger): Promise<ProviderCompactResult>;
+  compact(trigger?: import('../../trace/types.compaction.js').CompactionTrigger): Promise<ProviderCompactResult>;
 }
 
 /** The `session.init` payload for this session. */

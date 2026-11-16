@@ -37,7 +37,7 @@ import { randomUUID } from 'node:crypto';
 
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import type { TraceSink } from '../../trace/index.js';
-import type { CompactionTrigger } from '../../trace/types.js';
+import type { CompactionTrigger } from '../../trace/types.compaction.js';
 import type {
   ProviderQuery,
   ProviderEvent,

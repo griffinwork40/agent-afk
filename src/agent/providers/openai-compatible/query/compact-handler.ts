@@ -20,7 +20,7 @@
  */
 
 import OpenAI from 'openai';
-import type { CompactionTrigger } from '../../../../agent/trace/types.js';
+import type { CompactionTrigger } from '../../../../agent/trace/types.compaction.js';
 import type { ProviderCompactResult, ProviderUsage } from '../../../provider.js';
 import { autoCompactLimitFor } from '../../../model-limits.js';
 import {
