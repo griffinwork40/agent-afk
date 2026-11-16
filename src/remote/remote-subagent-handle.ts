@@ -134,6 +134,7 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
   readonly session: IAgentSession;
   private _status: SubagentStatus = 'idle';
   private _durationMs: number | undefined;
+  private _inFlight: Promise<unknown> | null = null;
   private readonly _controller: AbortController;
   private readonly _request: RemoteRunRequest;
   private readonly _deps: RemoteRunDeps;
@@ -175,29 +176,35 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
 
     this._status = 'running';
     const start = Date.now();
-    try {
-      const outcome = await runRemoteAgent(this._request, this._controller.signal, this._deps);
-      this._durationMs = Date.now() - start;
+    const p = (async () => {
+      try {
+        const outcome = await runRemoteAgent(this._request, this._controller.signal, this._deps);
+        this._durationMs = Date.now() - start;
 
-      if (outcome.kind === 'aborted') {
-        this._status = 'cancelled';
-        throw new Error(`remote agent aborted (host=${this._request.target})`);
+        if (outcome.kind === 'aborted') {
+          this._status = 'cancelled';
+          throw new Error(`remote agent aborted (host=${this._request.target})`);
+        }
+        if (outcome.kind === 'error' || outcome.kind === 'lost') {
+          this._status = 'failed';
+          // Include remoteDetail in the error message (mirrors runToResult() and remote-agent.ts handler)
+          const detail = outcome.remoteDetail ? `: ${outcome.remoteDetail}` : '';
+          throw new Error(`${outcome.reason}${detail}`);
+        }
+        // kind === 'done'
+        this._status = 'succeeded';
+        const content: string = outcome.message;
+        return { content, role: 'assistant' } as Message;
+      } catch (err) {
+        this._durationMs = Date.now() - start;
+        if (this._status === 'running') this._status = 'failed';
+        throw err;
+      } finally {
+        this._inFlight = null;
       }
-      if (outcome.kind === 'error' || outcome.kind === 'lost') {
-        this._status = 'failed';
-        // Include remoteDetail in the error message (mirrors runToResult() and remote-agent.ts handler)
-        const detail = outcome.remoteDetail ? `: ${outcome.remoteDetail}` : '';
-        throw new Error(`${outcome.reason}${detail}`);
-      }
-      // kind === 'done'
-      this._status = 'succeeded';
-      const content: string = outcome.message;
-      return { content, role: 'assistant' } as Message;
-    } catch (err) {
-      this._durationMs = Date.now() - start;
-      if (this._status === 'running') this._status = 'failed';
-      throw err;
-    }
+    })();
+    this._inFlight = p;
+    return p;
   }
 
   /**
@@ -217,33 +224,39 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
 
     this._status = 'running';
     const start = Date.now();
-    try {
-      const outcome = await runRemoteAgent(this._request, this._controller.signal, this._deps);
-      this._durationMs = Date.now() - start;
+    const p = (async () => {
+      try {
+        const outcome = await runRemoteAgent(this._request, this._controller.signal, this._deps);
+        this._durationMs = Date.now() - start;
 
-      if (outcome.kind === 'aborted') {
-        this._status = 'cancelled';
-        return buildResultFromError<string>(this.id, 'cancelled', new Error(`remote agent aborted (host=${this._request.target})`), createEmptyTrace());
+        if (outcome.kind === 'aborted') {
+          this._status = 'cancelled';
+          return buildResultFromError<string>(this.id, 'cancelled', new Error(`remote agent aborted (host=${this._request.target})`), createEmptyTrace());
+        }
+        if (outcome.kind === 'error' || outcome.kind === 'lost') {
+          this._status = 'failed';
+          // Include remoteDetail in the error message (mirrors remote-agent.ts handler)
+          const detail = outcome.remoteDetail ? `: ${outcome.remoteDetail}` : '';
+          const err = new Error(`${outcome.reason}${detail}`);
+          const partial = outcome.partial;
+          const result = buildResultFromError<string>(this.id, 'failed', err, createEmptyTrace());
+          if (partial !== undefined && partial !== '') result.partialOutput = partial;
+          return result;
+        }
+        // kind === 'done'
+        this._status = 'succeeded';
+        const msg: Message = { content: outcome.message, role: 'assistant' } as Message;
+        return buildResultFromMessage<string>(this.id, 'succeeded', msg, undefined, createEmptyTrace());
+      } catch (err) {
+        this._durationMs = Date.now() - start;
+        if (this._status === 'running') this._status = 'failed';
+        return buildResultFromError<string>(this.id, 'failed', err, createEmptyTrace());
+      } finally {
+        this._inFlight = null;
       }
-      if (outcome.kind === 'error' || outcome.kind === 'lost') {
-        this._status = 'failed';
-        // Include remoteDetail in the error message (mirrors remote-agent.ts handler)
-        const detail = outcome.remoteDetail ? `: ${outcome.remoteDetail}` : '';
-        const err = new Error(`${outcome.reason}${detail}`);
-        const partial = outcome.partial;
-        const result = buildResultFromError<string>(this.id, 'failed', err, createEmptyTrace());
-        if (partial !== undefined && partial !== '') result.partialOutput = partial;
-        return result;
-      }
-      // kind === 'done'
-      this._status = 'succeeded';
-      const msg: Message = { content: outcome.message, role: 'assistant' } as Message;
-      return buildResultFromMessage<string>(this.id, 'succeeded', msg, undefined, createEmptyTrace());
-    } catch (err) {
-      this._durationMs = Date.now() - start;
-      if (this._status === 'running') this._status = 'failed';
-      return buildResultFromError<string>(this.id, 'failed', err, createEmptyTrace());
-    }
+    })();
+    this._inFlight = p;
+    return p;
   }
 
   // R1: .catch() is required — if onResult throws, or if a bug allows an
@@ -251,9 +264,13 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
   // would leak into the daemon and leave the handle stuck in 'running'.
   // External constraint: Node process-level 'unhandledRejection' — any
   // naked void promise that rejects terminates the process in strict mode.
+  //
+  // onProgress is a no-op for remote handles: the SSH transport does not
+  // stream per-event output back to the caller in this implementation.
   runInBackground(
     prompt: string,
     onResult?: (result: SubagentResult<string>) => void,
+    _onProgress?: (event: import('../agent/types/session-types.js').OutputEvent) => void,
   ): void {
     void this.runToResult(prompt).then((result) => {
       onResult?.(result);
@@ -268,9 +285,17 @@ export class RemoteSubagentHandle implements SubagentHandle<string> {
     // Aborting the controller propagates the abort signal into runRemoteAgent,
     // which then sends `kill <pid>` on the remote (best-effort).
     this._controller.abort('cancelled');
+    // Await the in-flight run so callers that await cancel() observe a fully
+    // settled state (status no longer 'running') before proceeding. The
+    // AbortController signal causes runRemoteAgent to resolve quickly, so this
+    // does not block indefinitely. Swallow any error — it has already been
+    // reflected in _status by the run promise's own catch branch.
+    if (this._inFlight) await this._inFlight.catch(() => undefined);
   }
 
-  async teardown(): Promise<void> {
+  async teardown(
+    _options?: { deferInjectContextToCaller?: boolean },
+  ): Promise<void> {
     // For a remote handle, teardown is a no-op — there is no local session
     // to close. If the handle is still running, cancel it.
     if (this._status === 'running') await this.cancel();
