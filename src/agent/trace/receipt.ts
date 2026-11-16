@@ -33,6 +33,7 @@ import { parseJsonlLines } from '../../utils/jsonl.js';
 import { SessionCostAccumulator, totalCostFields } from './cost.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import { loadJournalMessages, readJournalRecords } from '../journal/reader.js';
+import { hydrateMessage } from '../journal/hydrate.js';
 import { extractJournalSummary } from './receipt.journal.js';
 import { getSessionOutcomes } from '../outcomes/session-outcomes.js';
 import {
@@ -389,12 +390,15 @@ export async function writeRunReceipt(
   if (events.length === 0) return null;
 
   const paths = receiptPathsFor(opts.tracePath);
+  const textDisabled = env.AFK_RUN_RECEIPT_TEXT_DISABLED === '1';
+  const rawRecords = opts.sessionId !== undefined ? readJournalRecords(opts.sessionId) : [];
+  // Raw records survive compaction but still contain spilled text references.
+  const firstUser = rawRecords.filter((record) => record.kind === 'append')
+    .filter((record) => record.message.role === 'user')
+    .sort((a, b) => a.index - b.index)[0];
+  if (firstUser && !textDisabled) firstUser.message = hydrateMessage(firstUser.message);
   const journalSummary = opts.sessionId !== undefined
-    ? extractJournalSummary(
-        loadJournalMessages(opts.sessionId),
-        env.AFK_RUN_RECEIPT_TEXT_DISABLED === '1',
-        readJournalRecords(opts.sessionId),
-      )
+    ? extractJournalSummary(loadJournalMessages(opts.sessionId), textDisabled, rawRecords)
     : undefined;
   const outcomes = opts.sessionId !== undefined
     ? await getSessionOutcomes(opts.sessionId, opts.cwd !== undefined ? { cwd: opts.cwd } : {})

@@ -1,25 +1,20 @@
-/**
- * Harness-owned envelope around framework context drained into a user message.
- *
- * Contract: hook output (SessionStart `injectContext`, plugin
- * `additionalContext`, MCP notices, SubagentStop and Telegram/web Stop
- * context) is queued by the session and drained in front of the next
- * outbound user message by `TurnStreamRunner.withPendingContext`, the single
- * drain site for every surface and provider. It wraps the drained text as
- *
- *   <framework-context>
- *   ...drained text...
- *   </framework-context>
- *
- *   <user content>
- *
- * so every consumer can recover what the user typed by cutting through the
- * FIRST closing tag, instead of inferring the boundary from plugin wording.
- * Hook output is untrusted text, so any literal closing tag inside it is
- * neutralized before wrapping; the first closing tag is always the boundary.
- *
- * @module agent/session/framework-context-envelope
- */
+// Contract: queued framework context is drained into one harness envelope
+// before the next outbound user message by TurnStreamRunner.withPendingContext.
+// This includes hook output, plugin additionalContext and MCP notices.
+//
+//   <framework-context>
+//   ...drained text...
+//   </framework-context>
+//
+//   <user content>
+//
+// Consumers recover what the user typed by cutting through the FIRST closing
+// tag. Hook output is untrusted, so literal closing tags in it are neutralized.
+// When user content itself opens with the tag and no context is queued, an
+// empty harness envelope protects that text from being mistaken for context.
+// Exactly one envelope is peeled; any subsequent envelope belongs to the user.
+
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 
 export const FRAMEWORK_CONTEXT_OPEN = '<framework-context>';
 export const FRAMEWORK_CONTEXT_CLOSE = '</framework-context>';
@@ -32,32 +27,36 @@ export function neutralizeFrameworkContext(text: string): string {
   return text.replace(CLOSE_TAG_VARIANTS_RE, '&lt;/framework-context&gt;');
 }
 
-/**
- * Wrap drained framework context in the envelope. Returns '' for empty or
- * whitespace-only input so callers never emit an empty envelope.
- */
+/** Wrap nonblank drained context; blank input alone needs no envelope. */
 export function wrapFrameworkContext(text: string): string {
   const body = text.trim();
   if (body.length === 0) return '';
   return `${FRAMEWORK_CONTEXT_OPEN}\n${neutralizeFrameworkContext(body)}\n${FRAMEWORK_CONTEXT_CLOSE}`;
 }
 
+/** Prepend one harness envelope when context exists or user text needs protection. */
+export function prependFrameworkContext(
+  pending: readonly string[],
+  content: string | ContentBlockParam[],
+): string | ContentBlockParam[] {
+  const firstText = typeof content === 'string' ? content : content.find((block) => block.type === 'text')?.text;
+  const prefix = wrapFrameworkContext(pending.join('\n\n'))
+    || (firstText?.trimStart().startsWith(FRAMEWORK_CONTEXT_OPEN)
+      ? `${FRAMEWORK_CONTEXT_OPEN}\n\n${FRAMEWORK_CONTEXT_CLOSE}` : '');
+  if (!prefix) return content;
+  if (typeof content === 'string') return `${prefix}\n\n${content}`;
+  return [{ type: 'text', text: prefix }, ...content];
+}
+
 /**
- * When `text` opens with the envelope, return everything after it, trimmed
- * (possibly ''). Consecutive leading envelopes are all peeled, so a second
- * producer adopting the envelope cannot leak its context as user text. An
- * unterminated envelope (e.g. a truncated preview of a huge
- * message) yields '': nothing after the opening tag can be trusted as
- * user-authored. Returns undefined only when `text` does not open with an
- * envelope.
+ * Return the trimmed text after exactly one leading harness envelope.
+ * An unterminated envelope (such as a truncated journal preview) yields ''.
+ * Return undefined only when text does not open with an envelope.
  */
 export function textAfterFrameworkContext(text: string): string | undefined {
-  let rest = text.trimStart();
+  const rest = text.trimStart();
   if (!rest.startsWith(FRAMEWORK_CONTEXT_OPEN)) return undefined;
-  while (rest.startsWith(FRAMEWORK_CONTEXT_OPEN)) {
-    const closeIdx = rest.indexOf(FRAMEWORK_CONTEXT_CLOSE);
-    if (closeIdx < 0) return '';
-    rest = rest.slice(closeIdx + FRAMEWORK_CONTEXT_CLOSE.length).trimStart();
-  }
-  return rest.trim();
+  const closeIdx = rest.indexOf(FRAMEWORK_CONTEXT_CLOSE);
+  if (closeIdx < 0) return '';
+  return rest.slice(closeIdx + FRAMEWORK_CONTEXT_CLOSE.length).trim();
 }

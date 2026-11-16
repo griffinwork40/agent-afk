@@ -17,6 +17,9 @@ import {
   type RunReceipt,
 } from './receipt.js';
 import type { JournalMessage, JournalRecord } from '../journal/types.js';
+import { createMessageJournal } from '../journal/writer.js';
+import { readJournalRecords } from '../journal/reader.js';
+import { wrapFrameworkContext } from '../session/framework-context-envelope.js';
 import type { ClosureReason, ToolFailureClass, TraceEvent } from './types.js';
 import type { OutcomesV1 } from '../outcomes/outcomes-v1.schema.js';
 
@@ -456,6 +459,22 @@ describe('writeRunReceipt + runReceiptSessionEndHook (filesystem)', () => {
     expect(parsed.endReason).toBe('close');
     expect(parsed.toolCalls.errored).toBe(1);
     expect(parsed.schemaVersion).toBe(3);
+  });
+
+  it('hydrates the original spilled user message even after compaction', async () => {
+    const sessionId = 'sess-spilled';
+    const journal = createMessageJournal({ getSessionId: () => sessionId });
+    journal.append(0, { role: 'user', content: [{ type: 'text', text: `${wrapFrameworkContext('hook '.repeat(7000))}\n\nreview the fix` }] });
+    journal.truncate(0, 'compact');
+    journal.append(0, { role: 'user', content: [{ type: 'text', text: 'compaction summary' }] });
+    await journal.close();
+    const original = readJournalRecords(sessionId).find((record) => record.kind === 'append');
+    expect(original?.kind === 'append' && original.message.content[0]?.type).toBe('text_ref');
+    const tracePath = await writeTrace('run-spilled', [closure('model_end_turn'), sealed('succeeded')]);
+    const result = await writeRunReceipt({ tracePath, sessionId });
+    const parsed = JSON.parse(await readFile(result!.jsonPath, 'utf8')) as RunReceipt;
+    expect(parsed.journalSummary?.firstUserMessage).toBe('review the fix');
+    expect(parsed.journalSummary?.messageCount).toBe(1);
   });
 
   it('writes outcomes: null when the outcomes computation has no cwd', async () => {

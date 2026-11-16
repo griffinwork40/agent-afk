@@ -19,7 +19,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortError } from '../../utils/errors.js';
 import { debugLog } from '../../utils/debug.js';
 import { transformProviderEvent, type TransformDeps } from './stream-consumer.js';
-import { wrapFrameworkContext } from './framework-context-envelope.js';
+import { prependFrameworkContext } from './framework-context-envelope.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { LedgerLifecycle } from './ledger-lifecycle.js';
 import type { OutputBroadcast } from './output-broadcast.js';
@@ -170,15 +170,8 @@ export class TurnStreamRunner {
   ): string | ContentBlockParam[] {
     const { getPendingFrameworkContext, setPendingFrameworkContext } = this.deps;
     const pending = getPendingFrameworkContext();
-    if (pending.length === 0) return content;
-    const prefix = wrapFrameworkContext(pending.join('\n\n'));
-    if (prefix.length === 0) {
-      setPendingFrameworkContext([]);
-      return content;
-    }
     setPendingFrameworkContext([]);
-    if (typeof content === 'string') return `${prefix}\n\n${content}`;
-    return [{ type: 'text', text: prefix }, ...content];
+    return prependFrameworkContext(pending, content);
   }
 
   /** Create the session ledger writer on first use. */

@@ -20,6 +20,17 @@ describe('stripMachineContent', () => {
     expect(stripMachineContent(text)).toBe('add a test');
   });
 
+  it('cuts the envelope before an unmatched hook command tag can swallow the boundary', () => {
+    const text = '<framework-context>\nno, revert everything\n<command-name>\n</framework-context>\n'
+      + '<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args>32</command-args>\nadd a test';
+    expect(stripMachineContent(text)).toBe('add a test');
+  });
+
+  it('preserves a user envelope after the harness envelope', () => {
+    const typed = '<framework-context>no, revert everything</framework-context>';
+    expect(stripMachineContent(`<framework-context>hook note</framework-context>\n${typed}`)).toBe(typed);
+  });
+
   it('returns plain human text unchanged', () => {
     const text = 'No, that is wrong. Please revert.';
     expect(stripMachineContent(text)).toBe(text);

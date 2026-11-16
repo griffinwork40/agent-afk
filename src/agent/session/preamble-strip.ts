@@ -102,7 +102,9 @@ export function extractUserContent(text: string): string | undefined {
   // Strategy 0: the harness envelope marks the boundary explicitly.
   const afterEnvelope = textAfterFrameworkContext(text);
   if (afterEnvelope !== undefined) {
-    if (afterEnvelope.startsWith('<command-name>')) return extractSkillTitle(afterEnvelope) ?? afterEnvelope;
+    if (afterEnvelope.startsWith('<command-name>') || afterEnvelope.startsWith('<preflight-context')) {
+      return extractSkillTitle(afterEnvelope) ?? afterEnvelope;
+    }
     return afterEnvelope || undefined;
   }
 

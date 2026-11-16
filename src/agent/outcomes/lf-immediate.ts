@@ -20,6 +20,7 @@ import {
 } from './verification-patterns.js';
 import { classifyBashCommand } from '../tools/readonly-bash.js';
 import { parseTerminalState } from './terminal-state.js';
+import { textAfterFrameworkContext } from '../session/framework-context-envelope.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -87,7 +88,6 @@ const MACHINE_TAG_NAMES = [
   'command-message',
   'command-args',
   'bash-passthrough',
-  'framework-context',
 ];
 
 /**
@@ -144,7 +144,9 @@ const MACHINE_BLOCK_PATTERNS: RegExp[] = [
  * Pure function — suitable for unit testing.
  */
 export function stripMachineContent(text: string): string {
-  let cleaned = text;
+  // Peel the harness boundary before tag regexes can consume its closing tag.
+  // Later framework envelopes are user text, not generic machine blocks.
+  let cleaned = textAfterFrameworkContext(text) ?? text;
   for (const pattern of MACHINE_BLOCK_PATTERNS) {
     // Reset lastIndex since patterns use /g flag
     pattern.lastIndex = 0;

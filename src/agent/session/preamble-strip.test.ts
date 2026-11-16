@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { extractUserContent, isPreamble, stripPreamble } from './preamble-strip.js';
-import { wrapFrameworkContext } from './framework-context-envelope.js';
+import { prependFrameworkContext, wrapFrameworkContext } from './framework-context-envelope.js';
 
 describe('preamble-strip', () => {
   it('detects bracketed and XML preamble openers', () => {
@@ -111,6 +111,25 @@ describe('extractUserContent — harness <framework-context> envelope', () => {
     // Content-block turns are joined with a separator; block 0 is the envelope.
     const text = `${envelope(hookContext)} <command-name>/god</command-name>\n<command-message>god</command-message>\n<command-args>ship it</command-args> Use the skill tool.`;
     expect(extractUserContent(text)).toBe('/god ship it');
+  });
+
+  it('renders a slash dispatch with a preflight manifest after the envelope', () => {
+    const manifest = '<preflight-context source="review">resolved PR 32</preflight-context>';
+    const breadcrumb = '<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args>32</command-args>';
+    expect(extractUserContent(`${envelope(hookContext)}\n\n${manifest}\n${breadcrumb}\nUse the skill tool.`)).toBe('/review 32');
+  });
+
+  it('preserves a command tag mentioned later in ordinary typed prose', () => {
+    const typed = 'Explain <command-name>/review</command-name> please';
+    expect(extractUserContent(`${envelope(hookContext)}\n\n${typed}`)).toBe(typed);
+  });
+
+  it.each([{ pending: [] }, { pending: ['hook context'] }])('preserves user envelope text with queued context $pending', ({ pending }) => {
+    for (const typed of ['<framework-context>example</framework-context> actual request', '<framework-context>unterminated']) {
+      const sent = prependFrameworkContext(pending, typed) as string;
+      expect(stripPreamble(sent)).toBe(typed);
+      expect(extractUserContent(sent)).toBe(typed);
+    }
   });
 
   it('returns undefined for pure context with no user text', () => {
