@@ -12,6 +12,9 @@ The `/changelog` slash command omits the hash (entries are formatted without it)
 
 ## [Unreleased]
 
+### Changed
+- API: `NoticeKind` includes `'model-fallback'` for automatic main-session model switches. Consumers with exhaustive notice-kind switches must handle this variant (#4904).
+
 ## [5.355.0] - 2026-11-14
 
 ### Added
